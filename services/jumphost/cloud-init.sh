@@ -165,7 +165,7 @@ write_files:
       ufw default deny incoming
       ufw default allow outgoing
       ufw allow from 127.0.0.1 to any port 22 proto tcp
-      if [ ${#ALLOWED_CIDRS[@]} -gt 0 ]; then
+      if [ "${#ALLOWED_CIDRS[@]}" -gt 0 ]; then
         for cidr in "${ALLOWED_CIDRS[@]}"; do
           ufw allow from "$cidr" to any port 22 proto tcp || true
         done
