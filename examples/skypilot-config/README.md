@@ -1,4 +1,4 @@
-# SkyPilot + Nebius: Private Clusters via Jump Host
+# Example of SkyPilot Private Clusters via Jump Host
 
 This example demonstrates how to use a project-scoped SkyPilot configuration (`.sky.yaml`) to:
 
