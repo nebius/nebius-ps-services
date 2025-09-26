@@ -4,7 +4,7 @@ This example demonstrates how to use a project-scoped SkyPilot configuration (`.
 
 - Launch Nebius clusters that only use internal (private) IPs
 - Reach those nodes easily through a jump host using `ssh_proxy_command`
-- Keep provider/account/region settings (Tenant/Project/Region) neatly scoped per project
+- Keep provider/account/region settings (Tenant/Region/Project) neatly scoped per project
 - Make SSH key usage explicit and deterministic on the jump host
 
 The pattern is great for teams: developers can `ssh cluster-name` without worrying about public IPs, while ops teams keep connectivity controlled through a central jump host.
@@ -30,15 +30,13 @@ In `.sky.yaml`, we set:
   - You connect to them via a proxy (jump host) using `ssh_proxy_command`.
 
 - `use_static_ip_address: false`
-  - Only applies when public IPs are used (we aren’t). `false` would be ephemeral; `true` would be static. It’s irrelevant when `use_internal_ips: true`.
+  - Do not assign public IP address.
 
 This combination ensures nodes are not exposed with public addresses. The jump host is the single ingress path.
 
 ### 2) Easy SSH via jump host
 
 - `ssh_proxy_command` is passed to SSH as `-o ProxyCommand`. We set it to use an existing jump host and the user’s explicit SSH key:
-
-  "ssh -W %h:%p -o IdentityFile=~/.ssh/id_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes nebius-user@<JUMP_PUBLIC_IP>"
 
   - `-W %h:%p` forwards stdin/stdout to the destination host and port (SSH proxy).
   - `-o IdentityFile=~/.ssh/id_ed25519` selects the exact key to use for the jump host.
@@ -81,11 +79,8 @@ Key fields used in this example:
 - `nebius.tenant_id` and `nebius.domain` — Your Nebius account context and API endpoint.
 - `nebius.use_internal_ips: true` — Only internal IPs; no public IPs on nodes.
 - `nebius.use_static_ip_address: false` — Only relevant if public IPs are enabled; ignored here.
-- `nebius.ssh_proxy_command` — Proxy through a jump host with an explicit key:
-
-  ssh -W %h:%p -o IdentityFile=~/.ssh/id_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes nebius-user@<JUMP_PUBLIC_IP>
-
-- `nebius.region_configs.us-central1.project_id` — The specific Nebius project to use in `us-central1`.
+- `nebius.ssh_proxy_command` — Proxy through a jump host with an explicit key.
+- `nebius.region_configs` — The specific Nebius region and project id.
 
 ---
 
@@ -100,7 +95,7 @@ Key fields used in this example:
 2) Launch a cluster
 
 - From this project directory, run your normal SkyPilot workflows (examples):
-  - sky launch -c cluster7 mytask.yaml
+  - `sky launch -c cluster7 mytask.yaml`
   - Reuse clusters with `-c <name>`
 
 3) Connect via SSH
@@ -132,12 +127,3 @@ You will connect to the Head node of the cluster.
 - Consider enabling `LogLevel VERBOSE` and `SyslogFacility AUTHPRIV` in sshd on jump and targets for better key fingerprint logging.
 - Disable SSH agent forwarding if not needed; restrict port forwarding on the jump host as appropriate.
 
----
-
-## Per-project `.sky.yaml`
-
-- Encourages reproducible and shareable infrastructure defaults
-- Avoids “works on my machine” mismatches between developers
-- Keeps sensitive or environment-specific values (tenant/project/region, IP policy) out of ad-hoc CLI arguments
-
-With this pattern, you get private Nebius clusters, a clean jump-host-based access path, and a zero-friction `ssh <cluster>` experience for your team.
