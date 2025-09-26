@@ -1,4 +1,4 @@
-# Jump Host (SSH Bastion) on Nebius using cloud-init
+# Jump Host Setup on Nebius using cloud-init
 
 This project provides a hardened cloud-init configuration to create a minimal SSH bastion (jump host) VM on Nebius:
 
@@ -179,7 +179,7 @@ sudo ss -lntp | grep :22
 - Root login via SSH is disabled.
 - UFW defaults to deny inbound.
 - fail2ban reduces brute force attempts.
-- unattended-upgrades applies security updates; a systemd timer logs when a reboot is needed.
+- Unattended-upgrades applies security updates; a systemd timer logs when a reboot is needed.
 
 
 ## License
