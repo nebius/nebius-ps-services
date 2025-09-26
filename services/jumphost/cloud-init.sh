@@ -10,11 +10,11 @@
 users:
   - name: nebius-user
     gecos: Nebius User
-    sudo: ALL=(ALL) NOPASSWD:ALL
+    groups: [sudo]
     shell: /bin/bash
     lock_passwd: true
     ssh_authorized_keys:
-      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMUB6J6tKYKcBrUDonsc58FP45tpha+G/6WLyjrnbgfe rezab@NB-HFG29X2X56
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINotARealKeyExamplePlaceholder== user@example.com
 
 package_update: true
 package_upgrade: true
@@ -137,7 +137,7 @@ write_files:
     owner: root:root
     permissions: '0440'
     content: |
-      ALL ALL=(ALL) NOPASSWD:ALL
+      %sudo ALL=(ALL) NOPASSWD:ALL
 
   - path: /usr/local/bin/setup-bastion.sh
     owner: root:root

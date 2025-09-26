@@ -1,10 +1,10 @@
 nebius:
-  tenant_id: tenant-e00f3wdfzwfjgbcyfv
+  tenant_id: tenant-EXAMPLE_ID # Replace with your actual tenant ID
   domain: api.nebius.cloud:443
   use_internal_ips: true # Use only private/internal IPs for cluster VMs; combine with ssh_proxy_command (jump host) to reach them.
   use_static_ip_address: false # Controls static external IPs only if public IPs are used; false = ephemeral public IP. Irrelevant when use_internal_ips is true.
   # change it in below to your jumphost public IP : nebius-user@JUMP_PUBLIC_IP
-  ssh_proxy_command: "ssh -W %h:%p -o IdentityFile=~/.ssh/id_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes nebius-user@204.12.171.146"
+  ssh_proxy_command: "ssh -W %h:%p -o IdentityFile=~/.ssh/id_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes nebius-user@<JUMP_PUBLIC_IP>"
   region_configs:
     us-central1:
-      project_id: project-u00d66skpr006vy5b69cvm
+  project_id: project-EXAMPLE_ID # Replace with your actual project ID
