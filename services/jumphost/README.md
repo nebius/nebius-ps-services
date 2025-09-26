@@ -1,6 +1,6 @@
 # Jump Host (SSH Bastion) on Nebius using cloud-init
 
-This project provides a hardened cloud-init configuration to create a minimal SSH bastion (jump host) VM on Nebius. It:
+This project provides a hardened cloud-init configuration to create a minimal SSH bastion (jump host) VM on Nebius:
 
 - Creates a non-root admin user (`nebius-user`) with passwordless sudo
 - Enforces SSH key authentication (no passwords, no root login)
@@ -29,7 +29,7 @@ The allowlist of client IPs for SSH is driven by `/etc/bastion_allowed_cidrs` (o
 
 ## Prepare the cloud-init
 
-1) Replace the placeholder example under `users[0].ssh_authorized_keys` in `cloud-init.sh` with YOUR public SSH key (do not paste the private key). To print your public key:
+1) Replace the placeholder example under `users.ssh_authorized_keys` in `cloud-init.sh` with YOUR public SSH key (do not paste the private key). To print your public key:
 
 ```bash
 cat ~/.ssh/id_ed25519.pub
@@ -56,10 +56,6 @@ echo "$(curl -4 -s https://ifconfig.me)/32"
 - Paste the entire contents of `cloud-init.sh`.
 - Complete the VM creation.
 
-Notes:
-- Some consoles validate user-data. If there’s an error, check YAML indentation; this repo keeps the file valid.
-- Ensure the Nebius network security group/firewall allows inbound TCP 22 from your IP/CIDR, in addition to the VM’s own UFW rules.
-
 
 ## First connection (from your laptop)
 
@@ -80,7 +76,7 @@ If you get a timeout:
 ssh -J nebius-user@<JUMP_IP> target-user@<TARGET_PRIVATE_IP>
 ```
 
-- ProxyJump in your SSH config (`~/.ssh/config`) for convenience:
+- ProxyJump in your laptop SSH config (`~/.ssh/config`) for convenience:
 
 ```
 Host jumphost
@@ -99,13 +95,6 @@ Then simply:
 ssh target
 ```
 
-- Dynamic SOCKS proxy (optional) to tunnel other TCP traffic via the jump host:
-
-```bash
-ssh -D 1080 -N -q nebius-user@<JUMP_IP>
-```
-
-
 ## Admin: add a new user and key
 
 1) Create the user on the jump host (SSH in first as `nebius-user`):
@@ -119,7 +108,7 @@ sudo chmod 700 /home/alice/.ssh
 sudo chmod 600 /home/alice/.ssh/authorized_keys
 ```
 
-2) Optionally grant sudo (careful on bastions):
+2) Optionally grant sudo:
 
 ```bash
 sudo usermod -aG sudo alice
