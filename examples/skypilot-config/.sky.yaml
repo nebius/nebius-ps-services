@@ -7,4 +7,4 @@ nebius:
   ssh_proxy_command: "ssh -W %h:%p -o IdentityFile=~/.ssh/id_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes nebius-user@<JUMP_PUBLIC_IP>"
   region_configs:
     us-central1:
-  project_id: project-EXAMPLE_ID # Replace with your actual project ID
+      project_id: project-EXAMPLE_ID # Replace with your actual project ID
