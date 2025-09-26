@@ -1,0 +1,25 @@
+name: test-mytask
+envs:
+  VAR1: value1
+  VAR2: value2
+resources:
+  cloud: nebius
+  region: us-central1
+  cpus: 8
+  memory: 32+
+  disk_size: 50
+
+num_nodes: 2
+workdir: .
+
+setup: |
+  # Install a simple utility to verify provisioning
+  sudo apt-get update -y
+  sudo apt-get install -y htop
+
+run: |
+  echo "Environment vars: VAR1=$VAR1 VAR2=$VAR2"
+  echo "Checking htop installation..."
+  htop --version
+  echo "System info:"
+  uname -a
