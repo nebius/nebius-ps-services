@@ -1,0 +1,40 @@
+name: vm-task
+envs:
+  VAR1: value1
+  VAR2: value2
+resources:
+  cloud: nebius
+  region: us-central1
+  cpus: 8
+  memory: 32+
+  disk_size: 50
+file_mounts:
+  # Mount local ~/test to /opt/my-appfiles on the VMs using Nebius Object Storage
+  /opt/my-appfiles:
+    name: my-appfiles
+    store: nebius
+    source: ~/test
+    mode: COPY
+    persistent: true
+  # Mount a Nebius bucket to /mnt/datacache on the VMs
+  /mnt/datacache:
+    source: nebius://reza-bucket-us-central1-proj2
+    persistent: true
+    mode: MOUNT_CACHED
+
+num_nodes: 2
+
+# copy local ~/test to ~/sky_workdir on the VMs
+workdir: ~/test
+
+setup: |
+  # Install a simple utility to verify provisioning
+  sudo apt-get update -y
+  sudo apt-get install -y htop
+
+run: |
+  echo "Environment vars: VAR1=$VAR1 VAR2=$VAR2"
+  echo "Checking htop installation..."
+  htop --version
+  echo "System info:"
+  uname -a

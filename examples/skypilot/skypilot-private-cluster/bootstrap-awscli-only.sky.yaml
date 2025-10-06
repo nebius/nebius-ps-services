@@ -1,0 +1,84 @@
+# Purpose: Install AWS CLI v2 on the VM and mount your local ~/.aws profiles
+#
+# When to use: ONLY if your workload runs AWS CLI commands inside the VM and
+# needs your ~/.aws profiles (for Nebius Object Storage or AWS). SkyPilot file
+# mounts using nebius:// do NOT require this.
+#
+# What it does:
+# - Mounts your local ~/.aws/config and ~/.aws/credentials into the VM
+# - Installs AWS CLI v2 (official installer; x86_64/arm64 aware)
+# - Does NOT export env vars — use explicit --profile (e.g., `aws s3 ls --profile nebius`)
+#
+# Usage:
+#   sky launch -c <cluster-name> skypilot-private-cluster/bootstrap-awscli-only.sky.yaml
+
+# Mount your global ~/.aws into the VM's ~/.aws.
+file_mounts:
+  ~/.aws/config: ~/.aws/config
+  ~/.aws/credentials: ~/.aws/credentials
+
+setup: |
+  # Install AWS CLI v2 using official methods
+  if ! command -v aws >/dev/null 2>&1; then
+    set -e
+    ARCH=$(uname -m)
+    OS_FAMILY="unknown"
+    if command -v apt-get >/dev/null 2>&1; then
+      OS_FAMILY="debian"
+    elif command -v yum >/dev/null 2>&1 || command -v dnf >/dev/null 2>&1; then
+      OS_FAMILY="rhel"
+    elif [ -f /etc/alpine-release ]; then
+      OS_FAMILY="alpine"
+    fi
+
+    install_awscli_zip() {
+      local arch="$1"
+      local url
+      case "$arch" in
+        aarch64|arm64) url="https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" ;;
+        *)              url="https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" ;;
+      esac
+      local tmpdir
+      tmpdir=$(mktemp -d)
+      cd "$tmpdir"
+      curl -sSL "$url" -o awscliv2.zip
+      unzip -q awscliv2.zip
+      sudo ./aws/install
+      cd - >/dev/null
+      rm -rf "$tmpdir"
+    }
+
+    case "$OS_FAMILY" in
+      debian)
+        sudo apt-get update -y
+        sudo apt-get install -y unzip curl
+        install_awscli_zip "$ARCH"
+        ;;
+      rhel)
+        sudo yum -y install unzip curl || sudo dnf -y install unzip curl || true
+        install_awscli_zip "$ARCH"
+        ;;
+      alpine)
+        # Alpine via apk + pip as last resort (AWS CLI v2 official binary not for musl)
+        sudo apk add --no-cache python3 py3-pip groff less curl
+        pip3 install --break-system-packages --upgrade awscli || pip3 install --upgrade awscli || true
+        ;;
+      *)
+        # Fallback: ensure unzip/curl if apt-get exists, then use zip installer
+        if command -v apt-get >/dev/null 2>&1; then
+          sudo apt-get update -y && sudo apt-get install -y unzip curl
+        fi
+        install_awscli_zip "$ARCH" || true
+        ;;
+    esac
+  fi
+
+run: |
+  # Optional sanity checks on the VM. Safe to remove.
+  set -x
+  aws --version || true
+  aws configure list-profiles || true
+  # Example: Nebius S3 via profile
+  aws s3 ls --profile nebius || true
+  # Example: Real AWS via your own profile
+  # aws s3 ls --profile your-aws-profile || true
