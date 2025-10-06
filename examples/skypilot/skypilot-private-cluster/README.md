@@ -93,19 +93,17 @@ This project uses environment variables for sensitive configuration. Quick start
 
 - Ensure the jump host is reachable at `<JUMP_PUBLIC_IP>` and you can log in with your chosen key:
   - Place your key at `~/.ssh/id_ed25519` (or set the path you use in `.sky.yaml`).
-  - Add the jump host to `~/.ssh/known_hosts` (required because StrictHostKeyChecking=yes). If you have logged in one time to it, it's added already.
+  - Add the jump host to `~/.ssh/known_hosts` (required because StrictHostKeyChecking=yes). If you have logged in one time to the jumphost from your laptop directly it's added already.
 
-2) Launch a cluster
+3) Make sure you have set your environment variables properly in .env file for the Tenant/Region/Project and jump host IP address.
+
+4) Launch a cluster
 
 - From this project directory, run your normal SkyPilot workflows (examples):
   - `sky launch -c cluster7 mytask.yaml`
   - Reuse clusters with `-c <name>`
 
-Environment handling:
-- Prefer `nebius://` paths. If you must use the AWS CLI locally, pass `--profile` explicitly (for example, `--profile nebius-us-central1`).
-- For Nebius compute itself, SkyPilot uses `~/.nebius/credentials.json` and does not require AWS credentials.
-
-3) Connect via SSH
+5) Connect via SSH
 
 - After a cluster is up, run:
 
