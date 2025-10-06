@@ -37,6 +37,10 @@ Notes:
 - When you use Nebius object storage `nebius://` in YAML; you don’t need AWS config bootstrap on the VM.
 - If you use AWS CLI (locally or on the VM), pass an explicit profile, for example `--profile nebius-us-central1`.
 
+---
+
+## Features
+
 This example demonstrates how to use a project-scoped SkyPilot configuration (`.sky.yaml`) to:
 
 - Install SkyPilot and setup required Nebius credentials
@@ -45,34 +49,20 @@ This example demonstrates how to use a project-scoped SkyPilot configuration (`.
 - Keep provider/account/region settings (Tenant/Region/Project) neatly scoped per project
 - Make SSH key usage explicit and deterministic on the jump host
 - Regional isolation only: creates region-scoped AWS profiles like `nebius-us-central1`.
-  - Profile-level endpoint: configures a profile-level `endpoint_url` in `~/.aws/config` for the `nebius` and `nebius-<region>` profiles. Note: this overrides non‑S3 AWS APIs for that profile (e.g., AWS STS checks may fail). That’s expected if you’re not using AWS.
-  - Global AWS profile for Nebius S3: configures `~/.aws` with profiles `nebius` and region-scoped `nebius-<region>` so `sky check nebius` and tools that read `~/.aws` work reliably. The optional bootstrap can mount your global `~/.aws` into the VM; no project-local mirroring.
-  - Auto-load on cd: `.envrc` loads only `.env` for this project.
+- Profile-level endpoint: configures a profile-level `endpoint_url` in `~/.aws/config` for the `nebius` and `nebius-<region>` profiles. Note: this overrides non‑S3 AWS APIs for that profile (e.g., AWS STS checks may fail). That’s expected if you’re not using AWS.
+- Global AWS profile for Nebius S3: configures `~/.aws` with profiles `nebius` and region-scoped `nebius-<region>` so `sky check nebius` and tools that read `~/.aws` work reliably. The optional bootstrap can mount your global `~/.aws` into the VM.
+- Auto-load on cd: `.envrc` loads only `.env` for this project.
 The pattern is great for teams: developers can `ssh cluster-name` without worrying about public IPs, while ops teams keep connectivity controlled through a central jump host.
  **Note:** `.env` is gitignored. Never commit your real credentials. Only `.env.placeholder` (a safe template) is tracked in the repo.
 
+---
+
 ### Storage guidance
 
-- Prefer `nebius://` storage paths in your Sky YAML to avoid requiring AWS provider checks.
-- For Nebius compute itself, SkyPilot uses `~/.nebius/credentials.json` and does not require AWS credentials.
+- Use `nebius://` storage paths in your Sky YAML for connectiong to the Nebius cloud object storage to avoid requiring AWS provider checks.
+- For Nebius compute itself, SkyPilot uses `~/.nebius/credentials.json`.
 - If you run the AWS CLI locally against Nebius S3, pass an explicit profile (for example: `--profile nebius-us-central1`). Setting a profile-level `endpoint_url` may cause `sky check aws` or AWS STS calls to fail; that’s expected and harmless if you’re not using AWS.
 - Optional bootstrap: `bootstrap-awscli-only.sky.yaml` mounts your global `~/.aws` and installs `awscli` on the VM. Use it only if your workloads execute the AWS CLI inside the VM. It does not export any env vars; use explicit `--profile` in your commands on the VM.
-To install SkyPilot with Nebius support, run the provided script (idempotent, safe to re-run):
-
-If your workload needs to access Nebius S3 from the VM using the AWS CLI, use the optional bootstrap documented below. If your YAML only uses `nebius://` paths and you don’t call `aws` on the VM, you can skip that step.
-Regional isolation for S3:
-  - The setup creates a base profile `nebius` and region-specific profiles like `nebius-us-central1` in `~/.aws`.
-  - Switching regions: set `REGION_ID` in `.env`, rerun `./nebiaus-sa-setup.sh` to refresh profiles, or switch to another project folder.
-Check Nebius Object Storage via AWS CLI (use explicit `--profile`):
-```sh
-source ~/venvs/skypilot-env/bin/activate
-```
-
-After install, verify your setup:
-
-```sh
-sky check nebius
-```
 
 ---
 
@@ -84,7 +74,7 @@ This project uses environment variables for sensitive configuration. Quick start
   ```sh
   ./nebiaus-sa-setup.sh
   ```
-  - If `.env` has placeholder values (e.g., `tenant-EXAMPLE_ID`, `project-EXAMPLE_ID`), the script exits with an error. Open `./.env`, set real values for `TENANT_ID`, `PROJECT_ID`, `REGION_ID`, and `JUMP_HOST_IP`, then rerun `./nebiaus-sa-setup.sh`.
+- If `.env` has placeholder values (e.g., `tenant-EXAMPLE_ID`, `project-EXAMPLE_ID`), the script exits with an error. Open `./.env`, set real values for `TENANT_ID`, `PROJECT_ID`, `REGION_ID`, and `JUMP_HOST_IP`, then rerun `./nebiaus-sa-setup.sh`.
 
 - Auto-load on cd (recommended): the setup script configures direnv and runs `direnv allow` when possible so `.env` loads automatically. If direnv isn't available, you can enable it later; otherwise use the manual fallback below.
 
@@ -149,7 +139,6 @@ SkyPilot automatically reads `.sky.yaml` when you run `sky` commands inside this
 - If StrictHostKeyChecking blocks you, connect once directly to the jump host to add it to `known_hosts`.
 - SkyPilot auto-generates SSH config under `~/.sky/generated/ssh` when you launch or start clusters. If entries look stale after changes, run a SkyPilot stop/start command to refresh them, then try SSH again.
 - Switching regions: set `REGION_ID` in `.env`, rerun `./nebiaus-sa-setup.sh` to refresh profiles; for VM-side AWS CLI, always pass `--profile`.
-  - SkyPilot provisions Nebius instances with only internal/private IPs.
-
-  - You connect to them via a proxy (jump host) using `ssh_proxy_command`.
+- SkyPilot provisions Nebius instances with only internal/private IPs.
+- You connect to them via a proxy (jump host) using `ssh_proxy_command`.
 
