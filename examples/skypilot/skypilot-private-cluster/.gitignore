@@ -1,0 +1,3 @@
+# Ignore environment and config files with secrets
+.env
+.sky.yaml
