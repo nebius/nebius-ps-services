@@ -6,8 +6,9 @@ resources:
   cloud: nebius
   region: us-central1
   cpus: 8
-  memory: 32+
+  memory: 32
   disk_size: 50
+
 file_mounts:
   # Mount local ~/test to /opt/my-appfiles on the VMs using Nebius Object Storage
   /opt/my-appfiles:
