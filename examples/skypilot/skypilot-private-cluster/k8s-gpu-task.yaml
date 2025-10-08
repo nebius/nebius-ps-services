@@ -1,0 +1,27 @@
+# SkyPilot tasks targeting an existing Kubernetes cluster on Nebius
+# k8s-gpu-smoke  — validates GPU access with nvidia-smi
+#
+# Notes:
+# In this task two pods will be launched, each requesting 1 GPU, 1 Head node and 1 Worker node for the SkyPilot cluster.
+name: k8s-gpu-smoke
+resources:
+  cloud: kubernetes
+  image_id: docker:nvcr.io/nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
+  accelerators: H200:1
+  cpus: 8
+  memory: 32
+num_nodes: 2
+run: |
+  set -euo pipefail
+  echo "GPU smoke test on Kubernetes - $(date -Is)"
+  nvidia-smi
+  echo "GPU inventory:"
+  nvidia-smi -L
+  echo "GPU summary:"
+  nvidia-smi --query-gpu=name,uuid,driver_version,memory.total,memory.free,temperature.gpu,utilization.gpu --format=csv
+
+# in case you want to customize the underlying Pod spec
+# config:
+#   kubernetes:
+#     pod_config:
+#       spec:

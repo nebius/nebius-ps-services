@@ -95,15 +95,15 @@ This project uses environment variables for sensitive configuration. Quick start
   - Place your key at `~/.ssh/id_ed25519` (or set the path you use in `.sky.yaml`).
   - Add the jump host to `~/.ssh/known_hosts` (required because StrictHostKeyChecking=yes). If you have logged in one time to the jumphost from your laptop directly it's added already.
 
-3) Make sure you have set your environment variables properly in .env file for the Tenant/Region/Project and jump host IP address.
+2) Make sure you have set your environment variables properly in .env file for the Tenant/Region/Project and jump host IP address.
 
-4) Launch a cluster
+3) Launch a cluster
 
 - From this project directory, run your normal SkyPilot workflows (examples):
   - `sky launch -c cluster7 mytask.yaml`
   - Reuse clusters with `-c <name>`
 
-5) Connect via SSH
+4) Connect via SSH
 
 - After a cluster is up, run:
 
