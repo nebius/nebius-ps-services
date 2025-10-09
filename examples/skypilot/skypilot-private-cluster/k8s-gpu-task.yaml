@@ -11,8 +11,18 @@ resources:
   cpus: 8
   memory: 32
 num_nodes: 2
+
+# Make sure MY_VAR1, MY_TOKEN1 and MY_TOKEN2 are already exported in your shell
+# Launch it like this: --secret MY_TOKEN1 --secret MY_TOKEN2 --env MY_VAR1
+envs:
+  MY_VAR1: null
+secrets:
+  MY_TOKEN1: null
+  MY_TOKEN2: null
 run: |
   set -euo pipefail
+  echo "Do not print secrets, this is just a test: $MY_TOKEN1 and $MY_TOKEN2"
+  echo "my env var is: $MY_VAR1"
   echo "GPU smoke test on Kubernetes - $(date -Is)"
   nvidia-smi
   echo "GPU inventory:"
