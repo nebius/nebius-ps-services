@@ -23,7 +23,7 @@ if ! command -v envsubst >/dev/null 2>&1; then
     exit 1
   fi
 fi
-
+source .env
 # Check required env vars
 : "${REGION_ID:?REGION_ID must be set in your environment (.env).}"
 : "${PROJECT_ID:?PROJECT_ID must be set in your environment (.env).}"
