@@ -17,7 +17,7 @@ envs:
   HUGGINGFACE_HUB_CACHE: /model-weights/hf_home/hub
   HF_HUB_ENABLE_HF_TRANSFER: "1"
   TMPDIR: /tmp/vllm
-  DEBUG: "1" # set to "1" to enable debug logs
+  DEBUG: "0" # set to "1" to enable debug logs
   # Silence pip root-user warning (containerized install only)
   PIP_ROOT_USER_ACTION: ignore
   # Optional NCCL/IB toggles if it is not available in the infrastructure.
@@ -27,7 +27,9 @@ envs:
   VLLM_DTYPE: bfloat16
   # Do NOT use VLLM_PORT for API server port; per vLLM docs it's reserved for internal use.
   SERVER_PORT: "8000"
+  # Maximum context window size (tokens) for prompt + output per request
   VLLM_MAX_MODEL_LEN: "8192"
+  # Maximum number of concurrent inference sequences (controls concurrency)
   VLLM_MAX_NUM_SEQS: "256"
   # Minimal, 1:1 env -> flag mapping
   # BLOOM uses ALiBi; avoid FA3. Force a safe backend by default.

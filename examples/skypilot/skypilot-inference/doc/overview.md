@@ -1,94 +1,185 @@
+
+
 # Serving LLMs with vLLM: A Practical Inference Guide
 
-This guide teaches the essentials of serving large language models (LLMs) with vLLM. It explains inference basics, model artifacts, vLLM’s core ideas, how vLLM executes requests, and how to prepare and configure models for production inference.
+This guide teaches the essentials of serving large language models (LLMs) with vLLM. It builds from foundational neural network concepts, through transformers and attention, to practical inference workflows, vLLM features, and operational guidance.
 
 ---
 
-## 1) What is Inference?
+## 1. Neural Network Foundations
 
-Inference is using a trained model to produce outputs for new inputs. For LLMs, that means generating text (completions, answers, or chat replies) from a prompt or conversation history.
+### What is a Neural Network?
+A neural network is a computer program made up of layers of simple units called neurons. Each layer processes information, building up understanding step by step. Early layers find simple features (like word patterns), while deeper layers combine these to understand more abstract ideas (like the meaning of a sentence).
 
-- Input: prompt text (completions) or role-structured messages (chat)
-- Output: generated tokens streamed or returned as a full response
-- Two important phases at runtime are as follows:
-  - Prefill: process the whole prompt/history to initialize state
-  - Decode: generate tokens step-by-step using cached attention state
+In reality, a "neuron" is just a mathematical function with some numbers (called weights) that it uses to process input. All the neurons and their weights are stored as arrays of numbers in memory (RAM or GPU memory). When you load a neural network onto a GPU, you are copying all these weights and the code for the layers onto the GPU so it can do the calculations quickly.
 
-Key benchmarking metrics for LLM inference:
+When a model is very large, it may not fit on a single GPU. In that case, the model is split across multiple GPUs or even multiple computers (nodes). The system divides the layers or parts of the layers between devices. Neurons on different GPUs communicate by sending their outputs (arrays of numbers) over high-speed connections like NVLink or PCIe. This is managed by the deep learning framework (like PyTorch), which handles all the details.
 
-- **Latency**: Measures how quickly the model responds. Two common units:
-  - *Time to first output token*: How long it takes from sending your prompt to receiving the first generated token (the start of the model’s reply).
-  - *Time to full response*: How long it takes to receive the entire generated output (all output tokens).
-  - Lower latency means faster, more interactive responses.
+When you use a neural network for inference (getting answers from a trained model), the data flows through the layers in one direction—this is called a "forward pass." During training, the network learns by comparing its output to the correct answer and adjusting its internal settings (using a "backward pass"). Inference only needs the forward pass, which is much faster and uses less memory than training.
 
-- **Throughput**: Measures how much work the system can handle. Common units:
-  - *Requests per second (RPS)*: How many separate prompts or queries the system can process per second.
-  - *Tokens per second (TPS)*: How many output tokens the model can generate per second (across all requests).
-  - Higher throughput means more users or longer outputs can be served efficiently.
+### Embeddings, Weights, and Quantization
 
-- **Concurrency**: Number of requests or users served at the same time. Important for real-world deployments.
+**Embeddings:**
+- When text is tokenized, each token is mapped to a numeric vector called an embedding.
+- Embedding values are typically small real numbers (often between -1 and 1), initialized and learned during training.
+- Only the embedding weights (the embedding matrix) are saved in the model; prompt-specific embeddings are computed fresh for each request.
 
-- **Memory usage**: Amount of GPU/CPU memory consumed during inference. Affects how many requests or how large a context you can serve.
+**Weights:**
+- Weights are the learned parameters of the neural network, stored as arrays of numbers (usually float32 or float16 by default).
+- Only the weights are saved after training; no prompt-specific tokens or embeddings are stored.
 
-These metrics help you compare different models, hardware setups, and serving configurations. For most users, latency (especially time to first output token) and throughput (tokens per second) are the most important for user experience and scaling.
-
-
-### How LLM Inference Works: Step-by-Step Workflow
-
-To help you understand the process, here’s a simple workflow for how large language model (LLM) inference works.
-
-1. **Input Preparation**: You provide a prompt (text or chat history) to the model.
-2. **Tokenization**: The model converts your text into input tokens (numbers representing words or pieces of words). These are the tokens that represent your question or prompt.
-3. **Prefill Phase**: The model processes all input tokens to set up its internal state (memory for context).
-4. **Decoding Phase**: The model generates output tokens one by one, these are the new tokens that form its answer or completion.
-5. **Sampling**: At each step, the model considers many possible next output tokens, each with a probability score. It does not generate all of them—instead, it uses the sampling parameters (like temperature, top_k, top_p) to pick one token from the most likely candidates. This is what makes the output creative or focused, depending on your settings. (See below for details.)
-6. **Detokenization**: The output tokens are converted back into readable text.
-7. **Output**: The final text (completion or chat reply) is returned to you.
-
-Some settings (like sampling parameters) affect how creative or focused the output is. The workflow repeats steps 4–6 until the desired number of tokens is generated or a stop condition is met.
-Note: “input tokens” are the tokens created from your prompt; “output tokens” are the new tokens generated by the model as its response.
+**Quantization:**
+- Quantization reduces the precision of weights (e.g., from float32 to INT8, INT4, or FP8), saving memory and speeding up inference.
+- This allows larger models to fit on limited hardware, but may slightly reduce output quality. vLLM supports quantized weights (INT8, INT4, FP8, GPTQ, AWQ, etc.).
+- Quantization is a trade-off: lower precision means more efficiency, but potentially less accuracy.
 
 ---
 
-### Terminology and building blocks:
-- Tokens and tokenizers: deterministic mapping between text and token IDs
-- Context window: (maximum tokens per prompt; e.g., if a model has a context window of 2,000 tokens, it can process up to 2,000 tokens in your prompt or conversation history.
-- Sampling: temperature, top_p/top_k, max_tokens, penalties, stop sequences
-
-**Sampling parameters**
-
-- **temperature**: Controls randomness. Low temperature (e.g., 0.1) makes the model more predictable and focused; high temperature (e.g., 1.0) makes it more creative and varied. Used in the decoding phase.
-- **top_p**: Also called nucleus sampling. The 'p' stands for probability. The model considers only the smallest set of tokens whose combined probability is at least p (e.g., 0.9), then picks from them. For example, if top_p=0.8, the model will only consider tokens whose combined probability is at least 80%.
-- **top_k**: The 'k' stands for the number of tokens. The model considers only the top k most likely tokens (e.g., top 50) and picks from them. For example, if top_k=5, the model will only consider the 5 most likely tokens at each step.
-- **max_tokens**: The maximum number of tokens the model will generate in its output. Used to limit the length of the response. Set before decoding starts.
-- **penalties**: These adjust the likelihood of repeating words or phrases. For example, a repetition penalty discourages the model from repeating itself. Applied during decoding.
-- **stop sequences**: Specific words or phrases that, if generated, will cause the model to stop generating further output. Used to end the response early if needed. Checked during decoding.
-
-All these settings are used in the **decoding phase** of inference, which is when the model is generating new tokens one by one.
-- Streaming: send tokens as they are generated for interactivity
-- KV cache: reuse past attention states for O(1) per-token decode cost
-- Batching: group requests to amortize compute and maximize GPU utilization
-
-KV cache, paging, and batching at a glance:
-- Without caching, each new token would re-attend the full prompt/history
-- vLLM implements a paged KV cache (PagedAttention) that:
-  - Allocates fixed-size memory blocks on demand per sequence
-  - Shares prefix blocks across requests (prefix caching)
-  - Enables continuous batching and fair preemption
-
-Costs and limits:
-- Memory ~ concurrent sequences × effective context × hidden size × dtype
-- Larger batches and context improve throughput but may raise latency and memory use
+## 2. Transformers and Attention
 
 ### What is a Transformer?
-- A Transformer is a neural network architecture built around self‑attention and feed‑forward layers, arranged in repeated blocks. It does not “transform text to numbers” directly—that’s tokenization. Instead, text is tokenized to IDs, embedded as vectors, then processed by stacked attention + MLP blocks to model dependencies across the sequence.
-- Why it matters for inference: Transformers enable strong long‑range context handling via attention. Prefill cost scales roughly O(L²) with prompt length L, while decode is O(1) per new token with a KV cache. Serving Transformers benefits from specialized attention kernels, KV paging, and continuous batching (vLLM’s strengths). Non‑Transformer architectures (e.g., classic RNNs) don’t use attention the same way and have different scaling/serving characteristics.
+A Transformer is a type of neural network designed to understand and generate sequences of text, like sentences or conversations. It is especially good at handling context—meaning it can "pay attention" to all the words in your prompt, not just the most recent ones.
 
-### Context defined
-- Context (or context window) is the span of tokens the model can consider at once. It includes your prompt, system instructions, chat history, and any assistant output fed back for continuity. If total tokens exceed the model’s maximum context length, the earliest tokens must be truncated or summarized. Larger context supports richer tasks (RAG, long chats) but consumes more memory and increases prefill latency.
+**Why is this powerful?**
+- The Transformer can generate coherent, context-aware responses because it can relate every word in the prompt to every other word, no matter how far apart they are.
+- This is what allows it to answer questions, continue stories, or hold conversations in a way that feels natural.
 
-### Vocabulary (vocab) defined
+**Self-Attention:**
+- For each token, the model decides how much to "pay attention" to every other token. This helps it understand the meaning of the whole sentence, not just each word in isolation.
+
+**Positional Encoding:**
+- Since neural networks don’t naturally understand sequence order, positional encoding adds extra information so the model knows which token comes first, second, third, and so on. Different models use different methods for positional encoding, such as ALiBi (used by BLOOM) or RoPE (used by Qwen and LLaMA).
+
+**Attention, at a glance:**
+- Attention lets a token “look back” at the prompt and prior tokens to decide what to generate next. In Transformer LLMs, self‑attention computes, for each token, weighted combinations of all earlier token representations. This enables long‑range dependencies and contextual reasoning that n‑gram or fixed‑window models cannot capture.
+- You cannot change a model’s attention mechanism at serve time; you only choose the implementation kernel (backend) compatible with it. See “Attention backends: how to choose”.
+
+**Does attention mean the AI memorizes context?**
+- Not exactly. Attention lets the model dynamically focus on relevant parts of the context window (prompt, history, instructions) for each output token. It does not store or recall information like human memory, but it can “integrate” previous context by weighting and combining it at each step. The KV cache is a technical optimization that lets the model reuse these computed weights efficiently, so it can generate long outputs without reprocessing the entire prompt every time.
+
+---
+
+## 3. LLM Inference Workflow
+
+### Step-by-Step Workflow
+
+1. **Input Preparation:** You provide a prompt (text or chat history) to the model.
+2. **Tokenization:** The model uses its tokenizer to split your text into tokens (words, subwords, or special symbols), and maps each token to a unique token ID (an integer).
+3. **Embedding Lookup:** Each token ID is used to look up a learned embedding vector from the model's embedding matrix. These vectors represent the tokens in a way the neural network can process.
+4. **Prefill Phase:** The model processes all input embeddings to set up its internal state (memory for context), using its neural network layers (including attention).
+5. **Decoding Phase:** The model generates output tokens one by one. For each step, it uses the current context to predict the next token.
+6. **Sampling:** At each decoding step, the model assigns probability scores to possible next tokens. It uses sampling parameters (like `temperature`, `top_k`, `top_p`) to select one token from the most likely candidates. This controls how creative or focused the output is.
+7. **Detokenization:** The output token IDs are converted back into readable text using the tokenizer's vocabulary.
+8. **Output:** The final text (completion or chat reply) is returned to you.
+
+The workflow repeats steps 5–7 until the desired number of tokens is generated or a stop condition is met.
+
+**Key benchmarking metrics for LLM inference:**
+- **Latency**: How quickly the model responds (time to first output token, time to full response)
+- **Throughput**: How much work the system can handle (requests per second, tokens per second)
+- **Concurrency**: Number of requests or users served at the same time
+- **Memory usage**: Amount of GPU/CPU memory consumed during inference
+
+---
+
+## 4. Example: Prompting with "how are you?" (with KV Cache in action)
+
+Suppose you prompt the model with "how are you?" and want it to reply "I am fine". Here’s what the Transformer does, with the KV cache explained at each step:
+
+1. **Tokenization:** The prompt is split into tokens ("how", "are", "you", "?").
+2. **Embedding:** Each token is mapped to a numeric vector (embedding). The tokenizer converts each token to a token ID (an integer). The embedding layer uses this token ID as an index to look up a row in the embedding matrix (a table of learned vectors). The result is the embedding vector for that token.
+3. **Layer Processing:** The embedding vectors are then passed into the next layer(s) of the neural network (such as self-attention or a hidden layer). In these layers, the embedding vectors are multiplied by weights (and combined with biases and activation functions) to produce new representations.
+4. **Self-Attention and KV Cache (Prefill Phase):**
+   - The Transformer looks at all tokens in the prompt at once. For each token, it decides how much to "pay attention" to every other token.
+   - As it processes the prompt ["how", "are", "you", "?"], the model computes key and value tensors for each token in the attention layers and stores them in the KV cache. This cache now holds the context for the entire prompt.
+5. **Layer Processing:** The model passes these representations through many layers, each refining its understanding of the prompt and building up context.
+6. **Decoding and KV Cache (Token Generation Loop):**
+   - The model predicts the next token ("I") by considering the entire prompt and what it has learned about language. It uses the KV cache to efficiently access the context for ["how", "are", "you", "?"].
+   - The new token ("I") is appended to the sequence, and its key and value tensors are added to the KV cache.
+   - To predict the next token ("am"), the model only needs to process the new token ("I") and can reuse the cached keys/values for the previous tokens. This is much faster than recomputing everything.
+   - This process repeats: each new token ("am", then "fine", then <eos>) is generated by looking at the cached context plus the new token, updating the KV cache at each step.
+
+**Summary:**
+- The KV cache allows the model to avoid recomputing attention for the entire sequence at every step. Instead, it only processes the new token and reuses all previous computations, making generation fast and efficient.
+- If you add new input (e.g., extend the conversation), the model processes the new tokens, updates the KV cache, and continues generating efficiently.
+
+---
+
+## 5. Additional Concepts
+
+### Context Window
+- The context window is the span of tokens the model can consider at once. It includes your prompt, system instructions, chat history, and any assistant output fed back for continuity. If total tokens exceed the model’s maximum context length, the earliest tokens must be truncated or summarized. Larger context supports richer tasks (RAG, long chats) but consumes more memory and increases prefill latency.
+
+### Vocabulary (Vocab)
 - “Vocab” is the set of tokens the tokenizer can emit. Larger vocabularies (e.g., ~150k in Qwen) can encode some languages/scripts more efficiently, potentially reducing token counts for the same text. Different tokenizers (BPE, SentencePiece, tiktoken‑derived) segment text differently; this affects token counts, latency, and cost. Always use the tokenizer intended for the model and be cautious when switching variants.
+
+
+### Positional Encoding Defined
+
+**Positional encoding** is how a model keeps track of the order of words or tokens in your input. Since neural networks don’t naturally understand sequence order, positional encoding adds extra information so the model knows which token comes first, second, third, and so on. This helps the model make sense of sentences and conversations, not just the words themselves.
+
+
+Different models use different methods for positional encoding, such as ALiBi (used by BLOOM) or RoPE (used by Qwen and LLaMA). You don’t need to set this yourself—the model is trained with a specific method, and it affects which attention backend you can use for serving.
+
+---
+
+## Example: Step-by-Step Workflow from Prompt to Answer
+
+Let's walk through how a neural network (NN) predicts an answer, using the prompt "how are you?" and the expected answer "I am fine". We'll first explain the layers in a simple NN, then show a concrete example.
+
+### Neural Network Layers (Simple Example)
+
+A basic neural network has:
+
+- **Input layer:** Receives the input data (e.g., token embeddings for each word).
+- **Hidden layer(s):** Transforms the input using learned weights and activation functions. Can be one or more layers.
+- **Output layer:** Produces the final prediction (e.g., the next token or word).
+
+Suppose we have:
+- 4 input neurons (for 4 input features/tokens)
+- 4 hidden neurons
+- 1 output neuron (for simplicity)
+
+![Simple Neural Network](../image/simple_nn.png)
+
+### Step-by-Step Example
+
+1. **Tokenization:**
+  - The prompt "how are you?" is split into tokens: ["how", "are", "you", "?"]
+  - Each token is converted to a numeric vector (embedding), e.g., [0.1, 0.2, 0.3, 0.4]
+
+2. **Input Layer:**
+  - Each input neuron receives one value from the token embeddings. For our example, let's use 4 values: [0.1, 0.2, 0.3, 0.4]
+
+3. **Hidden Layer:**
+  - Each hidden neuron computes a weighted sum of all input neurons, adds a bias, and applies an activation function (like ReLU or tanh).
+  - For example, Hidden Neuron 1: `h1 = activation(w1_1*0.1 + w1_2*0.2 + w1_3*0.3 + w1_4*0.4 + b1)`
+  - This is done for all 4 hidden neurons, each with its own set of weights and bias.
+
+4. **Output Layer:**
+  - The output neuron takes the outputs from all hidden neurons, computes a weighted sum, adds a bias, and applies an activation function.
+  - For example: `output = activation(v1*h1 + v2*h2 + v3*h3 + v4*h4 + b_out)`
+  - The output is a score for the next token (e.g., the probability of "I").
+
+5. **Prediction:**
+  - The model selects the token with the highest score as the next word (e.g., "I").it
+
+6. **Repeat for Next Token:**
+  - The new input is now ["how", "are", "you", "?", "I"]. The process repeats: the model encodes the new sequence, passes it through the network, and predicts the next token (e.g., "am").
+  - This continues until the model outputs "fine" and then a stop token.
+
+### Summary Table (Toy Example)
+
+| Step | Input Tokens                 | Input Values      | Output Token |
+|------|------------------------------|-------------------|--------------|
+| 1    | how, are, you, ?             | 0.1, 0.2, 0.3, 0.4| I            |
+| 2    | how, are, you, ?, I          | ...               | am           |
+| 3    | how, are, you, ?, I, am      | ...               | fine         |
+| 4    | how, are, you, ?, I, am, fine| ...               | <eos>        |
+
+*Note: In real LLMs, the network is much deeper and more complex, and the input values are high-dimensional embeddings, not just single numbers. But the principle is the same: each layer transforms the input, and the output layer predicts the next token based on all previous tokens.*
+
+---
 
 ### Attention defined
 
@@ -100,7 +191,7 @@ Not exactly. Attention lets the model dynamically focus on relevant parts of the
 
 **Attention, at a glance**
 - What it is and why it matters: Attention lets a token “look back” at the prompt and prior tokens to decide what to generate next. In Transformer LLMs, self‑attention computes, for each token, weighted combinations of all earlier token representations. This enables long‑range dependencies and contextual reasoning that n‑gram or fixed‑window models cannot capture.
-- Positional encodings: models bake this in during training and it constrains backend choice.
+- Positional encodings: models bake this in during training and it constrains backend choice:
   - ALiBi: additive linear bias by distance; used by BLOOM-176B.
   - RoPE: rotary embeddings; common in LLaMA/Qwen; sometimes extended for long context.
 - Important: you cannot change a model’s attention mechanism at serve time; you only choose the implementation kernel (backend) compatible with it. See “Attention backends: how to choose”.
@@ -253,6 +344,7 @@ curl -s http://<HOST>:8000/v1/completions -H 'Content-Type: application/json' -d
 
 ## 6) Preparing and Configuring Models for Inference
 
+
 Make these choices before going live:
 - Model and revision: pick weights; ensure tokenizer matches
 - Dtype: bfloat16 recommended on H100/H200; fp16 where appropriate
@@ -262,9 +354,22 @@ Make these choices before going live:
 - Limits: `--max-model-len`, `--max-num-seqs` to fit memory and target latency
 - KV cache: plan memory footprint; consider KV quantization if supported
 - Chat template: required for chat if tokenizer has none; pass via `--chat-template`
-- Quantization: choose GPTQ/AWQ/INT8/INT4/FP8 variants if compatible
+- Quantization: Choose a quantization method (GPTQ, AWQ, INT8, INT4, FP8) to reduce memory usage and enable serving larger models on limited hardware. Quantization compresses model weights to lower precision, trading off some accuracy for speed and efficiency. Pick the method based on your hardware and model support:
+  - INT8/INT4: best for aggressive memory savings, may reduce output quality
+  - FP8: supported on latest GPUs (H100/H200), balances speed and accuracy
+  - GPTQ/AWQ: advanced quantization for specific models, check compatibility
+  - You must select quantization before starting the server; it cannot be changed dynamically during inference. Quantization can improve throughput and reduce latency, but may affect output quality.
 - Eager vs graphs: start with eager; enable CUDA graphs after validation
 - Observability: enable metrics and set logging level appropriately
+
+**GPU Hardware Checklist for Model Serving:**
+- GPU memory (VRAM): must be sufficient for model weights, context window, and concurrency
+- Supported dtype: check if your GPU supports bfloat16 (H100/H200), fp16, or INT8/FP8 for quantization
+- CUDA version: host driver CUDA must be >= container build CUDA
+- Accelerator type: ensure compatibility with inference engine (NVIDIA CUDA, AMD ROCm, etc.)
+- Interconnect: for multi-GPU, high-bandwidth NVLink or PCIe is recommended
+- Attention backend support: verify kernel compatibility (SDPA, FlashAttention, Triton)
+
 
 Minimal readiness checklist:
 - Weights/tokenizer verified; dtype set (bf16 on Hopper)
@@ -272,6 +377,8 @@ Minimal readiness checklist:
 - TP size equals number of local GPUs; health probe returns models
 - Max context and concurrency tuned; no OOMs during warmup/tests
 - Chat template provided when required; 200 responses for both endpoints
+- Quantization method selected and compatible with model/hardware
+- GPU hardware meets memory, dtype, and backend requirements
 
 Driver/Runtime compatibility (CUDA):
 - Host driver CUDA version must be >= container’s build CUDA version

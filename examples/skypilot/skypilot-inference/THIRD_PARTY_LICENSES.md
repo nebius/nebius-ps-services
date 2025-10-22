@@ -1,4 +1,4 @@
-# THIRD_PARTY_LICENSES.md
+## THIRD_PARTY_LICENSES
 
 This project uses the following third-party models and tools. Please review their respective licenses and usage policies. No model weights have been modified, and all usage is for demonstration and non-commercial inference only.
 

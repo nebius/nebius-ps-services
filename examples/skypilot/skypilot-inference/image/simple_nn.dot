@@ -1,0 +1,53 @@
+digraph SimpleNN {
+    rankdir=LR;
+    splines=line;
+    node [shape=circle, style=filled, fillcolor=lightblue, fontname="Arial"];
+
+    // Input prompt (single source)
+    Prompt [label="Prompt:\nHow are you?", shape=box, fillcolor=lightyellow, style=filled, fontname="Arial"];
+
+    // Input layer
+    subgraph cluster_input {
+        label="Input Layer (4 neurons)";
+        style=dashed;
+        I1 [label="Input 1"];
+        I2 [label="Input 2"];
+        I3 [label="Input 3"];
+        I4 [label="Input 4"];
+    }
+
+    // Hidden layer
+    subgraph cluster_hidden {
+        label="Hidden Layer (4 neurons)";
+        style=dashed;
+        H1 [label="H1"];
+        H2 [label="H2"];
+        H3 [label="H3"];
+        H4 [label="H4"];
+    }
+
+    // Output layer
+    subgraph cluster_output {
+        label="Output Layer (1 neuron)";
+        style=dashed;
+        O1 [label="Output"];
+    }
+
+    // Prompt to all input neurons
+    Prompt -> I1;
+    Prompt -> I2;
+    Prompt -> I3;
+    Prompt -> I4;
+
+    // Input to Hidden (fully connected)
+    I1 -> H1; I1 -> H2; I1 -> H3; I1 -> H4;
+    I2 -> H1; I2 -> H2; I2 -> H3; I2 -> H4;
+    I3 -> H1; I3 -> H2; I3 -> H3; I3 -> H4;
+    I4 -> H1; I4 -> H2; I4 -> H3; I4 -> H4;
+
+    // Hidden to Output (fully connected)
+    H1 -> O1;
+    H2 -> O1;
+    H3 -> O1;
+    H4 -> O1;
+}
