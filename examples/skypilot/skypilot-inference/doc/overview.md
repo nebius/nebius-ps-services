@@ -1,5 +1,3 @@
-
-
 # Serving LLMs with vLLM: A Practical Inference Guide
 
 This guide teaches the essentials of serving large language models (LLMs) with vLLM. It builds from foundational neural network concepts, through transformers and attention, to practical inference workflows, vLLM features, and operational guidance.
@@ -123,7 +121,7 @@ Different models use different methods for positional encoding, such as ALiBi (u
 
 ---
 
-## Example: Step-by-Step Workflow from Prompt to Answer
+### Example: Step-by-Step Workflow from Prompt to Answer
 
 Let's walk through how a neural network (NN) predicts an answer, using the prompt "how are you?" and the expected answer "I am fine". We'll first explain the layers in a simple NN, then show a concrete example.
 
@@ -198,7 +196,7 @@ Not exactly. Attention lets the model dynamically focus on relevant parts of the
 
 ---
 
-## 3) Models: Architecture and Artifacts
+## 6. Models: Architecture and Artifacts
 
 When you download a model (e.g., from Hugging Face), you get more than weights:
 - Weights (safetensors shards + index): the learned parameters (dominant size)
@@ -226,7 +224,7 @@ Operational implications:
 - Token counts drive latency and cost; tokenizers differ across models
 - Ensure tokenizer and weights are from the same repo/revision
 
-### Licenses: what to check
+## 7. Licenses: what to check
 - License type: fully open source, research‑only, or restricted/commercial. Examples here: BLOOM RAIL (open with use constraints), Tongyi Qianwen license (commercial allowed with terms).
 - Commercial use: verify if allowed and under what conditions; some require registration or approval for commercial deployments.
 - Redistribution and derivatives: check whether you can redistribute weights, fine‑tuned variants, or quantized artifacts.
@@ -259,7 +257,7 @@ Choosing between them for an inference task
 
 ---
 
-## 4) vLLM: Core Concepts and Features
+## 8. vLLM: Core Concepts and Features
 
 vLLM is an inference engine optimized for high throughput and efficiency:
 - PagedAttention (paged KV cache) and prefix caching
@@ -298,7 +296,7 @@ CUDA graphs and compile mode:
 
 ---
 
-## 5) How vLLM Works (Request Flow and API)
+### How vLLM Works (Request Flow and API)
 
 High-level flow:
 1) Load tokenizer/assets and weights; initialize tensor-parallel ranks
@@ -342,7 +340,7 @@ curl -s http://<HOST>:8000/v1/completions -H 'Content-Type: application/json' -d
 
 ---
 
-## 6) Preparing and Configuring Models for Inference
+## 9. Preparing and Configuring Models for Inference
 
 
 Make these choices before going live:
@@ -386,7 +384,7 @@ Driver/Runtime compatibility (CUDA):
 
 ---
 
-## 7) Operational Notes and Troubleshooting
+## 10. Operational Notes and Troubleshooting
 
 Common issue: BLOOM + ALiBi with FlashAttention v3 (FA3)
 - Symptom: first request crashes with `AssertionError: Alibi is not supported in FA3`
@@ -408,7 +406,3 @@ Security and production hygiene
 
 ---
 
-Appendix: Quick Reference
-- Key flags: `--tensor-parallel-size`, `--dtype`, `--download-dir`, `--max-model-len`, `--max-num-seqs`, `--chat-template`
-- Where to look in logs: selected attention backend, CUDA graphs capture, health/ready
-- Helpful envs (varies by build): `VLLM_ATTENTION_BACKEND`, `VLLM_DISABLE_CUDA_GRAPHS`, `VLLM_COMPILE_MODE`
