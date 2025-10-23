@@ -206,18 +206,34 @@ When you download a model (e.g., from Hugging Face), you get more than weights:
 - Adapters (optional): LoRA/PEFT weights for fine-tuned variants
 - Custom code (rare): trust_remote_code
 
-Tokenizer pipeline (why it matters):
-1) Normalize text → 2) Pre-tokenize → 3) Subword segmentation (BPE/SP/WordPiece)
-4) Post-process (BOS/EOS) → 5) Map to IDs; reverse for detokenization
+### How a model artifacts get loaded into the CPU/GPU memory
+
+When you load a model for inference, the Python framework (like Hugging Face Transformers) performs these steps:
+
+1. **Load model config:** Reads the model's architecture and hyperparameters from a config file (e.g., `config.json`). This defines the structure of the neural network (number of layers, hidden size, attention type, etc.).
+2. **Load tokenizer assets:** Loads the tokenizer file, which is a dictionary mapping each unique token (word or subword) from the training data to a unique token ID. This ensures that text is split and mapped to IDs exactly as during training.
+3. **Tokenize input:** The tokenizer splits your input text into tokens and converts them to token IDs using the loaded vocabulary.
+4. **Embedding lookup:** Each token ID is used to look up its embedding vector from the embedding matrix (part of the model weights). This converts the sequence of token IDs into a sequence of numeric vectors that the neural network can process.
+5. **Ready for NN layers:** The embedding vectors are then passed through the neural network layers for inference (forward pass).
+
+This process ensures that the model structure, vocabulary, and embeddings are all consistent with how the model was trained, so inference works as expected.
 
 Minimal example (Hugging Face Transformers):
 ```python
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, AutoConfig
 model_id = "bigscience/bloom"
-tok = AutoTokenizer.from_pretrained(model_id)
-ids = tok.encode("Write a short poem about the moon.", add_special_tokens=True)
-print(ids)
-print(tok.decode(ids))
+# Load model config (architecture and hyperparameters)
+config = AutoConfig.from_pretrained(model_id)
+print("Model config:", config)
+print("Number of layers:", getattr(config, 'num_hidden_layers', 'N/A'))
+print("Hidden size (neurons per layer):", getattr(config, 'hidden_size', 'N/A'))
+
+# Load tokenizer (vocab and tokenization rules)
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+text = "Write a short poem about the moon."
+token_ids = tokenizer.encode(text, add_special_tokens=True)
+print("Token IDs:", token_ids)
+print("Decoded text:", tokenizer.decode(token_ids))
 ```
 
 Operational implications:
