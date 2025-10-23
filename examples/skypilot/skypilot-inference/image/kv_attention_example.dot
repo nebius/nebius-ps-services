@@ -49,10 +49,10 @@ digraph KVAttention {
   SM [label="Softmax\n(scores)", shape=parallelogram, style=filled, fillcolor="#ffe0e0"]
 
   // Weighted sum
-    WS [label="Weighted sum:\nSoftmax(score0) × V0 +\nSoftmax(score1) × V1 +\nSoftmax(score2) × V2\n\nWeightedSum = Σ w_i V_i", shape=note, style=filled, fillcolor="#e0ffe0"]
+  WS [label="Weighted sum:\nSoftmax(score0) × V0 +\nSoftmax(score1) × V1 +\nSoftmax(score2) × V2\n\nWeightedSum = Σ w_i V_i", shape=note, style=filled, fillcolor="#e0ffe0"]
 
   // Logits and output token
-    LOGITS [label="Project to logits:\nlogits = WeightedSum × W_vocab\n(1 score per vocab token)", shape=box, style=filled, fillcolor="#e0f7fa"]
+  LOGITS [label="Project to logits:\nlogits = WeightedSum × W_vocab\n(1 score per vocab token)", shape=box, style=filled, fillcolor="#e0f7fa"]
   ARGMAX [label="Select output token:\noutput_id = argmax(logits)", shape=box, style=filled, fillcolor="#f0e0fa"]
   DETOK [label="Detokenize:\noutput_text = tokenizer.decode(output_id)", shape=box, style=filled, fillcolor="#f0fff0"]
 
@@ -94,58 +94,37 @@ digraph KVAttention {
   DETOK -> OUT0
   OUT0 -> OUT1 [style=dashed, label="next output"]
 
-  // Legend and formulas
-  // Place Descriptions and Legend side by side using rank=same and invisible edge
-  subgraph cluster_legends {
-    label="";
-    color=white;
-    rank=same;
-    descriptions [label=<
-      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4" ALIGN="LEFT">
-        <TR><TD><B>Descriptions</B></TD></TR>
-        <TR><TD ALIGN="LEFT">KV cache stores all Keys/Values</TD></TR>
-        <TR><TD ALIGN="LEFT">For new token, Query is compared (dot product) with all Keys</TD></TR>
-        <TR><TD ALIGN="LEFT">Softmax turns scores into weights</TD></TR>
-        <TR><TD ALIGN="LEFT">Output is weighted sum of Values</TD></TR>
-          <TR><TD ALIGN="LEFT">Logits: WeightedSum × W_vocab</TD></TR>
-        <TR><TD ALIGN="LEFT">Output token: argmax(logits)</TD></TR>
-        <TR><TD ALIGN="LEFT">Detokenize: tokenizer.decode(output_id)</TD></TR>
-        <TR><TD ALIGN="LEFT">(Repeat for each token)</TD></TR>
-      </TABLE>
-    >, shape=box, style=dotted, fontsize=10];
-    legend [label=<
-      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4" ALIGN="LEFT">
-        <TR><TD><B>Legend</B></TD></TR>
-        <TR><TD ALIGN="LEFT" BGCOLOR="#ffe4b2">Input Token</TD></TR>
-        <TR><TD ALIGN="LEFT" BGCOLOR="#c2ffc2">Output Token</TD></TR>
-        <TR><TD ALIGN="LEFT" BGCOLOR="#b2e4ff">Embedding</TD></TR>
-        <TR><TD ALIGN="LEFT" BGCOLOR="#ffd1dc">Query</TD></TR>
-        <TR><TD ALIGN="LEFT" BGCOLOR="#e6b2ff">Key</TD></TR>
-        <TR><TD ALIGN="LEFT" BGCOLOR="#b2ffb2">Value</TD></TR>
-        <TR><TD ALIGN="LEFT" BGCOLOR="#e0e0ff">Dot (Attention Score)</TD></TR>
-        <TR><TD ALIGN="LEFT" BGCOLOR="#ffe0e0">Softmax</TD></TR>
-        <TR><TD ALIGN="LEFT" BGCOLOR="#e0f7fa">Logits</TD></TR>
-        <TR><TD ALIGN="LEFT" BGCOLOR="#f0e0fa">Argmax</TD></TR>
-        <TR><TD ALIGN="LEFT" BGCOLOR="#f0fff0">Detokenization</TD></TR>
-      </TABLE>
-    >, shape=box, style=dotted, fontsize=10];
-      descriptions -> legend [style=invis];
-    legend [label=<
-      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4" ALIGN="LEFT">
-        <TR><TD><B>Legend</B></TD><TD><B>Formula</B></TD></TR>
-        <TR><TD ALIGN="LEFT" BGCOLOR="#ffe4b2">Input Token</TD><TD ALIGN="LEFT"></TD></TR>
-        <TR><TD ALIGN="LEFT" BGCOLOR="#c2ffc2">Output Token</TD><TD ALIGN="LEFT"></TD></TR>
-        <TR><TD ALIGN="LEFT" BGCOLOR="#b2e4ff">Embedding</TD><TD ALIGN="LEFT"></TD></TR>
-        <TR><TD ALIGN="LEFT" BGCOLOR="#ffd1dc">Query</TD><TD ALIGN="LEFT">Q = xW_Q</TD></TR>
-        <TR><TD ALIGN="LEFT" BGCOLOR="#e6b2ff">Key</TD><TD ALIGN="LEFT">K = xW_K</TD></TR>
-        <TR><TD ALIGN="LEFT" BGCOLOR="#b2ffb2">Value</TD><TD ALIGN="LEFT">V = xW_V</TD></TR>
-        <TR><TD ALIGN="LEFT" BGCOLOR="#e0e0ff">Dot (Attention Score)</TD><TD ALIGN="LEFT">score_i = Q · K_i</TD></TR>
-        <TR><TD ALIGN="LEFT" BGCOLOR="#ffe0e0">Softmax</TD><TD ALIGN="LEFT">w_i = exp(score_i) / Σ_j exp(score_j)</TD></TR>
-        <TR><TD ALIGN="LEFT" BGCOLOR="#e0ffe0">Weighted sum</TD><TD ALIGN="LEFT">Σ_i w_i V_i</TD></TR>
-        <TR><TD ALIGN="LEFT" BGCOLOR="#e0f7fa">Logits</TD><TD ALIGN="LEFT">logits = WeightedSum × W_vocab</TD></TR>
-        <TR><TD ALIGN="LEFT" BGCOLOR="#f0e0fa">Argmax</TD><TD ALIGN="LEFT">output_id = argmax(logits)</TD></TR>
-        <TR><TD ALIGN="LEFT" BGCOLOR="#f0fff0">Detokenization</TD><TD ALIGN="LEFT">output_text = tokenizer.decode(output_id)</TD></TR>
-      </TABLE>
-    >, shape=box, style=dotted, fontsize=10];
-  }
+  // --- Legend and Descriptions (top right) ---
+  legend [label=<
+    <TABLE BORDER="1" CELLBORDER="1" CELLSPACING="0" BGCOLOR="#ffffff">
+      <TR><TD COLSPAN="2"><B>Legend: Color Coding</B></TD></TR>
+      <TR><TD BGCOLOR="#ffe4b2">Input Token</TD><TD>how, are, you</TD></TR>
+      <TR><TD BGCOLOR="#b2e4ff">Embedding</TD><TD>Token vector</TD></TR>
+      <TR><TD BGCOLOR="#ffd1dc">Query</TD><TD>Q (attention)</TD></TR>
+      <TR><TD BGCOLOR="#e6b2ff">Key</TD><TD>K (attention)</TD></TR>
+      <TR><TD BGCOLOR="#b2ffb2">Value</TD><TD>V (attention)</TD></TR>
+      <TR><TD BGCOLOR="#e0e0ff">Dot Product</TD><TD>Q·K = score</TD></TR>
+      <TR><TD BGCOLOR="#ffe0e0">Softmax</TD><TD>Attention weights</TD></TR>
+      <TR><TD BGCOLOR="#e0ffe0">Weighted Sum</TD><TD>Σ w_i V_i</TD></TR>
+      <TR><TD BGCOLOR="#e0f7fa">Logits</TD><TD>Project to vocab</TD></TR>
+      <TR><TD BGCOLOR="#f0e0fa">Argmax</TD><TD>Pick output token</TD></TR>
+      <TR><TD BGCOLOR="#f0fff0">Detokenize</TD><TD>Convert to text</TD></TR>
+      <TR><TD BGCOLOR="#c2ffc2">Output Token</TD><TD>"I", "am"</TD></TR>
+    </TABLE>
+  >, shape=plaintext, width=0, height=0, fontsize=22, fontname="Arial"]
+
+  descriptions [label=<
+    <TABLE BORDER="1" CELLBORDER="1" CELLSPACING="0" BGCOLOR="#ffffff">
+      <TR><TD COLSPAN="2"><B>Descriptions</B></TD></TR>
+      <TR><TD ALIGN="LEFT"><B>Dot(Q, K)</B></TD><TD ALIGN="LEFT">Dot product of query and key vectors (similarity score)</TD></TR>
+      <TR><TD ALIGN="LEFT"><B>Softmax</B></TD><TD ALIGN="LEFT">Normalizes scores to probabilities (weights)</TD></TR>
+      <TR><TD ALIGN="LEFT"><B>Weighted sum</B></TD><TD ALIGN="LEFT">Each value vector V is weighted by its attention score</TD></TR>
+      <TR><TD ALIGN="LEFT"><B>Project to logits</B></TD><TD ALIGN="LEFT">Weighted sum is projected to vocabulary size (one score per token)</TD></TR>
+      <TR><TD ALIGN="LEFT"><B>Argmax</B></TD><TD ALIGN="LEFT">Selects the token with the highest score</TD></TR>
+      <TR><TD ALIGN="LEFT"><B>Detokenize</B></TD><TD ALIGN="LEFT">Converts token ID to readable text</TD></TR>
+    </TABLE>
+  >, shape=plaintext, width=0, height=0, fontsize=20, fontname="Arial"]
+
+  // Place legend and descriptions at the top right
+  legend -> descriptions [style=invis]
 }

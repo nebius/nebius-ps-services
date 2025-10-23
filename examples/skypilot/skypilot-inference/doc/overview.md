@@ -235,7 +235,7 @@ Modern LLMs use the Transformer architecture, which relies on self-attention and
 - See the diagram above for a step-by-step visualization of this process.
 
 
-## 6. Models: Architecture and Artifacts
+## 6. Models Architecture and Artifacts
 
 When you download a model (e.g., from Hugging Face), you get more than weights:
 - Weights (safetensors shards + index): the learned parameters (dominant size)
