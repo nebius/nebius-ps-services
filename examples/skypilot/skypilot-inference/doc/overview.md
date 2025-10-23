@@ -7,9 +7,9 @@ This guide teaches the essentials of serving large language models (LLMs) with v
 ## 1. Neural Network Foundations
 
 ### What is a Neural Network?
-A neural network is a computer program made up of layers of simple units called neurons. Each layer processes information, building up understanding step by step. Early layers find simple features (like word patterns), while deeper layers combine these to understand more abstract ideas (like the meaning of a sentence).
+A neural network is a computer program made up of layers of simple units called neurons. Each layer processes information, `building up understanding step by step`. Early layers find simple features (like word patterns), while deeper layers combine these to understand more abstract ideas (like the meaning of a sentence).
 
-In reality, a "neuron" is just a mathematical function with some numbers (called weights) that it uses to process input. All the neurons and their weights are stored as arrays of numbers in memory (RAM or GPU memory). When you load a neural network onto a GPU, you are copying all these weights and the code for the layers onto the GPU so it can do the calculations quickly.
+All the neurons and their weights are stored as arrays of numbers in memory (RAM or GPU memory). When you load a neural network onto a GPU, you are copying all these weights and the code for the layers onto the GPU so it can do the calculations quickly.
 
 When a model is very large, it may not fit on a single GPU. In that case, the model is split across multiple GPUs or even multiple computers (nodes). The system divides the layers or parts of the layers between devices. Neurons on different GPUs communicate by sending their outputs (arrays of numbers) over high-speed connections like NVLink or PCIe. This is managed by the deep learning framework (like PyTorch), which handles all the details.
 
@@ -42,18 +42,19 @@ A Transformer is a type of neural network designed to understand and generate se
 - The Transformer can generate coherent, context-aware responses because it can relate every word in the prompt to every other word, no matter how far apart they are.
 - This is what allows it to answer questions, continue stories, or hold conversations in a way that feels natural.
 
+**Positional Encoding:**
+- Since neural networks don’t naturally understand sequence order, positional encoding adds extra information so the model knows which token comes first, second, third, and so on. Positional Encoding is a mathematical technique used inside the model to give each token information about its position in the sequence (so the model knows the order of words). Examples: ALiBi, RoPE.
+Different models use different methods for positional encoding, such as ALiBi (used by BLOOM) or RoPE (used by Qwen and LLaMA). The `positional encoding` method is chosen during model training and is part of the model’s architecture. But the `attention backend` is chosen at inference time and must be compatible with the model’s positional encoding. For example, some backends (like FlashAttention) only work with certain positional encodings (like RoPE), while others (like Torch SDPA) are more flexible.
+
 **Self-Attention:**
 - For each token, the model decides how much to "pay attention" to every other token. This helps it understand the meaning of the whole sentence, not just each word in isolation.
 
-**Positional Encoding:**
-- Since neural networks don’t naturally understand sequence order, positional encoding adds extra information so the model knows which token comes first, second, third, and so on. Different models use different methods for positional encoding, such as ALiBi (used by BLOOM) or RoPE (used by Qwen and LLaMA).
-
 **Attention, at a glance:**
-- Attention lets a token “look back” at the prompt and prior tokens to decide what to generate next. In Transformer LLMs, self‑attention computes, for each token, weighted combinations of all earlier token representations. This enables long‑range dependencies and contextual reasoning that n‑gram or fixed‑window models cannot capture.
+- Attention lets a token “look back” at the prompt and prior tokens to decide what to generate next. In Transformer LLMs, self‑attention computes, for each token, weighted combinations of all earlier token representations. This enables long‑range dependencies and contextual reasoning that fixed‑window models cannot capture.
 - You cannot change a model’s attention mechanism at serve time; you only choose the implementation kernel (backend) compatible with it. See “Attention backends: how to choose”.
-
-**Does attention mean the AI memorizes context?**
-- Not exactly. Attention lets the model dynamically focus on relevant parts of the context window (prompt, history, instructions) for each output token. It does not store or recall information like human memory, but it can “integrate” previous context by weighting and combining it at each step. The KV cache is a technical optimization that lets the model reuse these computed weights efficiently, so it can generate long outputs without reprocessing the entire prompt every time.
+- Attention lets the model dynamically focus on relevant parts of the context window (prompt, history, instructions) for each output token. It does not store or recall information like human memory, but it can “integrate” previous context by weighting and combining it at each step. The KV cache is a technical optimization that lets the model reuse these computed weights efficiently, so it can generate long outputs without reprocessing the entire prompt every time.
+- The KV cache is primarily an inference-time optimization. During inference, the KV cache stores key/value tensors for previously processed tokens, so the model can generate new tokens efficiently without recomputing attention for the whole sequence.
+- Attention Backend is the software implementation (kernel) used to compute the attention mechanism efficiently on your hardware during inference. Examples: Torch SDPA, FlashAttention, Triton.
 
 ---
 
@@ -61,10 +62,11 @@ A Transformer is a type of neural network designed to understand and generate se
 
 ### Step-by-Step Workflow
 
+0. **Model and Weights Loading:** Before inference begins, the model architecture and its learned weights are loaded from disk (or remote storage) into CPU/GPU memory. This step happens once, before any prompts are processed. Basically the model should be loaded and all the layers state ready to receive the input tokens (in fact embeddings).
 1. **Input Preparation:** You provide a prompt (text or chat history) to the model.
-2. **Tokenization:** The model uses its tokenizer to split your text into tokens (words, subwords, or special symbols), and maps each token to a unique token ID (an integer).
-3. **Embedding Lookup:** Each token ID is used to look up a learned embedding vector from the model's embedding matrix. These vectors represent the tokens in a way the neural network can process.
-4. **Prefill Phase:** The model processes all input embeddings to set up its internal state (memory for context), using its neural network layers (including attention).
+2. **Tokenization:** The model uses its tokenizer to split your text into tokens (words, subwords, or special symbols), and maps each token to a unique token ID (an integer) using the tokenizer and vocab files from the model artifacts. 
+3. **Embedding Lookup:** Each token ID is used to look up a learned embedding vector from the model's `embedding matrix` that is saved as the model artifacts as well. These vectors represent the tokens in a way the neural network can process them in the neurons. 
+4. **Prefill Phase:** The "Prefill Phase" is when the model processes your input tokens which are already converted to embeddings through its layers (using the already-loaded weights) to set up its internal state for generation of output tokens.
 5. **Decoding Phase:** The model generates output tokens one by one. For each step, it uses the current context to predict the next token.
 6. **Sampling:** At each decoding step, the model assigns probability scores to possible next tokens. It uses sampling parameters (like `temperature`, `top_k`, `top_p`) to select one token from the most likely candidates. This controls how creative or focused the output is.
 7. **Detokenization:** The output token IDs are converted back into readable text using the tokenizer's vocabulary.
@@ -82,7 +84,7 @@ The workflow repeats steps 5–7 until the desired number of tokens is generated
 
 ## 4. Example: Prompting with "how are you?" (with KV Cache in action)
 
-Suppose you prompt the model with "how are you?" and want it to reply "I am fine". Here’s what the Transformer does, with the KV cache explained at each step:
+Suppose you prompt the model with "how are you?" and it will reply "I am fine". Here’s what the Transformer does:
 
 1. **Tokenization:** The prompt is split into tokens ("how", "are", "you", "?").
 2. **Embedding:** Each token is mapped to a numeric vector (embedding). The tokenizer converts each token to a token ID (an integer). The embedding layer uses this token ID as an index to look up a row in the embedding matrix (a table of learned vectors). The result is the embedding vector for that token.
@@ -90,6 +92,13 @@ Suppose you prompt the model with "how are you?" and want it to reply "I am fine
 4. **Self-Attention and KV Cache (Prefill Phase):**
    - The Transformer looks at all tokens in the prompt at once. For each token, it decides how much to "pay attention" to every other token.
    - As it processes the prompt ["how", "are", "you", "?"], the model computes key and value tensors for each token in the attention layers and stores them in the KV cache. This cache now holds the context for the entire prompt.
+  - In a Transformer, each attention layer is a neural network layer that contains parameters (weights) and performs the self-attention operation. It is made up of multiple "heads," each with its own set of weights, and processes the input embeddings using matrix multiplications and softmax.
+
+  **Attention scores, softmax, and the KV cache:**
+  - For each token, the model computes an "attention score" for every other token by taking the dot product of their query and key vectors.
+  - The softmax function turns these raw scores into normalized weights (probabilities that sum to 1), letting the model blend information from all tokens in a learnable way.
+  - During inference, the KV cache stores the key and value vectors for previous tokens. This allows the model to quickly compute new attention scores and softmax weights for each new token, without recalculating everything for the whole sequence.
+
 5. **Layer Processing:** The model passes these representations through many layers, each refining its understanding of the prompt and building up context.
 6. **Decoding and KV Cache (Token Generation Loop):**
    - The model predicts the next token ("I") by considering the entire prompt and what it has learned about language. It uses the KV cache to efficiently access the context for ["how", "are", "you", "?"].
@@ -195,6 +204,36 @@ Not exactly. Attention lets the model dynamically focus on relevant parts of the
 - Important: you cannot change a model’s attention mechanism at serve time; you only choose the implementation kernel (backend) compatible with it. See “Attention backends: how to choose”.
 
 ---
+
+### Advanced Inference: Transformers with Attention and KV Cache
+
+Modern LLMs use the Transformer architecture, which relies on self-attention and the KV cache for efficient, context-aware generation. The process is visualized in the diagram below:
+
+![Neural Network with KV Cache](../image/kv_attention_example.png)
+
+**How it works:**
+
+1. **KV Cache Calculation (Prefill Phase):**
+  - When you send a prompt (e.g., "how are you"), the model processes all input tokens in parallel.
+  - For each token, it computes Key and Value vectors and stores them in the KV cache. This cache holds the context for the entire prompt and is ready before any output tokens are generated.
+
+2. **Token Generation (Decoding Phase):**
+  - For each new output token, the following steps happen on the fly:
+    - **Query:** The model computes a Query vector for the current position.
+    - **Dot Product (Attention Score):** The Query is compared (dot product) with all stored Keys in the KV cache, producing attention scores.
+    - **Softmax:** The scores are normalized into attention weights (probabilities).
+    - **Weighted Sum:** The model computes a weighted sum of all Value vectors using these weights, blending information from the prompt and previous outputs.
+    - **Project to Logits:** The result is projected onto the vocabulary space (via a linear layer), producing a logit (score) for every possible output token.
+    - **Argmax or Sampling:** The model selects the next token by either picking the highest logit (argmax) or sampling from the probability distribution (for more creative outputs).
+    - **Detokenization:** The selected token ID is converted back to text.
+  - The new token's Key and Value are added to the KV cache, and the process repeats for the next output token.
+
+**Key points:**
+- The KV cache is calculated once for the prompt and reused for all output tokens, making generation efficient.
+- Query, attention scores, softmax, and weighted sum are computed dynamically for each output token.
+- Projecting to logits and selecting the next token (argmax or sampling) are the final steps before detokenization.
+- See the diagram above for a step-by-step visualization of this process.
+
 
 ## 6. Models: Architecture and Artifacts
 
