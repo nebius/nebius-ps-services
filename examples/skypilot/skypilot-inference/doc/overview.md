@@ -4,7 +4,7 @@ This guide teaches the essentials of serving large language models (LLMs) with v
 
 ---
 
-## 1. Neural Network Foundations
+## Neural Network Foundations
 
 ### What is a Neural Network?
 A neural network is a computer program made up of layers of simple units called neurons. Each layer processes information, `building up understanding step by step`. Early layers find simple features (like word patterns), while deeper layers combine these to understand more abstract ideas (like the meaning of a sentence).
@@ -33,7 +33,7 @@ When you use a neural network for inference (getting answers from a trained mode
 
 ---
 
-## 2. Transformers and Attention
+## Transformers and Attention
 
 ### What is a Transformer?
 A Transformer is a type of neural network designed to understand and generate sequences of text, like sentences or conversations. It is especially good at handling context—meaning it can "pay attention" to all the words in your prompt, not just the most recent ones.
@@ -56,9 +56,27 @@ Different models use different methods for positional encoding, such as ALiBi (u
 - The KV cache is primarily an inference-time optimization. During inference, the KV cache stores key/value tensors for previously processed tokens, so the model can generate new tokens efficiently without recomputing attention for the whole sequence.
 - Attention Backend is the software implementation (kernel) used to compute the attention mechanism efficiently on your hardware during inference. Examples: Torch SDPA, FlashAttention, Triton.
 
+### Attention backends: how to choose
+You select an implementation kernel compatible with the model’s attention and your hardware:
+- Torch SDPA (baseline): robust and widely compatible (ALiBi, RoPE). Use when unsure or if other kernels are unstable.
+- FlashAttention v2/v3: fastest on NVIDIA when supported; requires compatible head dims and positional encodings (not ALiBi). Great fit for RoPE models like Qwen.
+- Triton attention: good alternative on NVIDIA for ALiBi models when you want more speed than SDPA.
+- FlashInfer and other backends: specialized high-performance options depending on build. Verify support matrix for your device.
+
+Decision guide
+- If model uses ALiBi (e.g., BLOOM-176B): pick Torch SDPA or Triton; avoid FA3. Confirm in logs the kernel actually selected.
+- If model uses RoPE and your build includes FlashAttention: pick flash-attn; fall back to SDPA if unsupported.
+- On instability during warmup or capture: force SDPA and eager mode first; introduce faster kernels incrementally.
+
+Quick mapping (positional encoding → backends)
+- ALiBi: Torch SDPA (safe), Triton (often faster than SDPA), avoid FA3.
+- RoPE (standard dims): FlashAttention v2/v3 (fastest on NVIDIA), else SDPA.
+- RoPE (nonstandard head dims/build limits): SDPA fallback.
+- Unknown/experimental: start with SDPA; verify logs before switching.
+
 ---
 
-## 3. LLM Inference Workflow
+## LLM Inference Workflow
 
 ### Step-by-Step Workflow
 
@@ -82,7 +100,7 @@ The workflow repeats steps 5–7 until the desired number of tokens is generated
 
 ---
 
-## 4. Example: Prompting with "how are you?" (with KV Cache in action)
+## Example: Prompting with "how are you?" (with KV Cache in action)
 
 Suppose you prompt the model with "how are you?" and it will reply "I am fine". Here’s what the Transformer does:
 
@@ -112,25 +130,24 @@ Suppose you prompt the model with "how are you?" and it will reply "I am fine". 
 
 ---
 
-## 5. Additional Concepts
+## Additional Concepts
 
-### Context Window
+**Context Window**
 - The context window is the span of tokens the model can consider at once. It includes your prompt, system instructions, chat history, and any assistant output fed back for continuity. If total tokens exceed the model’s maximum context length, the earliest tokens must be truncated or summarized. Larger context supports richer tasks (RAG, long chats) but consumes more memory and increases prefill latency.
 
-### Vocabulary (Vocab)
+**Vocabulary (Vocab)**
 - “Vocab” is the set of tokens the tokenizer can emit. Larger vocabularies (e.g., ~150k in Qwen) can encode some languages/scripts more efficiently, potentially reducing token counts for the same text. Different tokenizers (BPE, SentencePiece, tiktoken‑derived) segment text differently; this affects token counts, latency, and cost. Always use the tokenizer intended for the model and be cautious when switching variants.
-
-
-### Positional Encoding Defined
 
 **Positional encoding** is how a model keeps track of the order of words or tokens in your input. Since neural networks don’t naturally understand sequence order, positional encoding adds extra information so the model knows which token comes first, second, third, and so on. This helps the model make sense of sentences and conversations, not just the words themselves.
 
-
 Different models use different methods for positional encoding, such as ALiBi (used by BLOOM) or RoPE (used by Qwen and LLaMA). You don’t need to set this yourself—the model is trained with a specific method, and it affects which attention backend you can use for serving.
+
+**CUDA graphs:**
+CUDA graphs are a performance optimization feature in NVIDIA GPUs. They allow you to record a sequence of GPU operations (such as neural network computations) and replay them efficiently, reducing the overhead of launching individual operations. This is especially useful for deep learning inference, where the same computation graph is executed repeatedly for different inputs. By capturing the computation as a CUDA graph, you can speed up model inference and improve throughput. CUDA graphs do not change the model's logic or attention mechanism—they simply make the execution faster and more efficient on supported hardware.
 
 ---
 
-### Example: Step-by-Step Workflow from Prompt to Answer
+## Example: Step-by-Step Workflow from Prompt to Answer
 
 Let's walk through how a neural network (NN) predicts an answer, using the prompt "how are you?" and the expected answer "I am fine". We'll first explain the layers in a simple NN, then show a concrete example.
 
@@ -194,15 +211,13 @@ Suppose we have:
 **Attention explained (human analogy):**
 Imagine reading a book and trying to answer a question about the story. Your brain doesn’t just focus on the last sentence—you recall relevant details from earlier pages, weighing which memories matter most for your answer. In AI, attention is the mechanism that lets a model do something similar: for each new word it generates, it looks back at all previous words (context), deciding which parts are most important for the next step. This is not true memorization, but dynamic focus—like how you might remember a plot twist or a character’s name when needed, but not every word you’ve read.
 
-**Does attention mean the AI memorizes context?**
-Not exactly. Attention lets the model dynamically focus on relevant parts of the context window (prompt, history, instructions) for each output token. It does not store or recall information like human memory, but it can “integrate” previous context by weighting and combining it at each step. The KV cache is a technical optimization that lets the model reuse these computed weights efficiently, so it can generate long outputs without reprocessing the entire prompt every time.
-
 **Attention, at a glance**
 - What it is and why it matters: Attention lets a token “look back” at the prompt and prior tokens to decide what to generate next. In Transformer LLMs, self‑attention computes, for each token, weighted combinations of all earlier token representations. This enables long‑range dependencies and contextual reasoning that n‑gram or fixed‑window models cannot capture.
 - Positional encodings: models bake this in during training and it constrains backend choice:
   - ALiBi: additive linear bias by distance; used by BLOOM-176B.
   - RoPE: rotary embeddings; common in LLaMA/Qwen; sometimes extended for long context.
 - Important: you cannot change a model’s attention mechanism at serve time; you only choose the implementation kernel (backend) compatible with it. See “Attention backends: how to choose”.
+
 
 ---
 
@@ -235,14 +250,14 @@ Modern LLMs use the Transformer architecture, which relies on self-attention and
 - Projecting to logits and selecting the next token (argmax or sampling) are the final steps before detokenization.
 - See the diagram above for a step-by-step visualization of this process.
 
-## 6. Models Architecture and Artifacts
+## Models Architecture and Artifacts
 
 When you download a model (e.g., from Hugging Face), you get more than weights:
 - Weights (safetensors shards + index): the learned parameters during training
 - Config (config.json): architecture hyperparameters and positional strategy
 - Tokenizer assets: tokenizer.json, tokenizer_config.json, vocab/merges, specials
 - Generation defaults (optional): generation_config.json. When you load a model with Transformers, these defaults are automatically applied unless you override them in your code. This helps ensure consistent, reproducible generation behavior across different environments and makes it easier to use the model as intended by its authors.
-- Adapters (optional): LoRA/PEFT weights for fine-tuned variants
+- Adapters (optional): Small sets of extra weights (such as LoRA or PEFT) that let you fine-tune a large model for a specific task without retraining all its parameters. LoRA (Low-Rank Adaptation) and PEFT (Parameter-Efficient Fine-Tuning) are popular techniques that add or modify a few layers or parameters, making it much cheaper and faster to adapt a model. Community adapters are pre-made fine-tuning weights shared by others for tasks like sentiment analysis, chat, or code generation. You can load these adapters on top of a base model to quickly switch its behavior for different use cases. In simple terms: Adapters are extra weights you can load into your model to change or specialize its behavior for new tasks, without retraining the whole model. For example, you can add an adapter to make a general language model better at answering medical questions or writing poetry.
 - Custom code (rare): trust_remote_code=True. You should only enable trust_remote_code for models from sources you trust, as this code runs with full permissions and could be unsafe.
 
 ### How a model artifacts get loaded into the CPU/GPU memory
@@ -281,7 +296,7 @@ print("Decoded text:", tokenizer.decode(token_ids))
 - Token counts drive latency and cost; tokenizers differ across models
 - Ensure tokenizer and weights are from the same model repo/revision
 
-## 7. Licenses: what to check
+## Licenses: what to check
 - License type: fully open source, research‑only, or restricted/commercial. Examples here: BLOOM RAIL (open with use constraints), Tongyi Qianwen license (commercial allowed with terms).
 - Commercial use: verify if allowed and under what conditions; some require registration or approval for commercial deployments might be needed.
 - Redistribution and derivatives: check whether you can redistribute weights, fine‑tuned variants, or quantized artifacts.
@@ -291,124 +306,102 @@ print("Decoded text:", tokenizer.decode(token_ids))
 ### Model profiles and selection: BLOOM-176B vs Qwen-72B
 Use official model cards for authoritative specs; below are practitioner notes with links.
 
-- BLOOM-176B (bigscience/bloom)
+- **BLOOM-176B (bigscience/bloom)**
   - Size and memory: 176B parameters; BF16/FP16 weights alone are ~352 GB. Expect multi-node tensor parallelism and/or quantization for serving.
-  - Context and positions: trained with ~2k context and ALiBi positional bias. ALiBi impacts backend choice (avoid FA3; prefer Torch SDPA or Triton).
+  - Context and positions: trained with ~2k context and ALiBi positional bias. ALiBi impacts Attention backend choice (avoid FA3; prefer Torch SDPA or Triton). Torch SDPA tested and worked.
   - Tokenizer and prompts: HF fast tokenizer; no built-in chat template, You need to provide a chat template for chat-style prompts. A chat template has been provided in this repo in /template folder.
-  - Languages: multilingual; check card for coverage. License: BigScience BLOOM RAIL 1.0.
-  - Card: https://huggingface.co/bigscience/bloom
+  - License: Ensure review it; BigScience BLOOM RAIL 1.0.
+  - Read the Model Card: https://huggingface.co/bigscience/bloom
 
-- Qwen-72B (Qwen/Qwen-72B)
-  - Size and memory: 72B parameters. Authors note BF16/FP16 chat requires on the order of ~144 GB total GPU memory (e.g., 2×A100-80G or 5×V100-32G); INT4 variants can fit ≈48 GB. Plan TP workers for vLLM accordingly.
-  - Context and positions: supports 32k context via extended RoPE; backend kernels like FlashAttention v2/v3 are typically supported; SDPA is a safe fallback.
-  - Tokenizer and prompts: tiktoken-derived large vocab (~152k). Some Transformers flows require trust_remote_code; ensure your runtime matches the model version. Chat variants may provide templates. We did not need the chat template in this repo example.
-  - License: Tongyi Qianwen license; Ensure review it for commercial use terms.
-  - Card: https://huggingface.co/Qwen/Qwen-72B (newer: Qwen1.5-72B)
+- **Qwen-72B (Qwen/Qwen-72B)**
+  - Size and memory: 72B parameters. Authors note that BF16/FP16 requires with ~144 GB total GPU memory (e.g., 2×A100-80G or 5×V100-32G); INT4 variants can fit ≈48 GB. Plan TP workers for vLLM accordingly.
+  - Context and positions: supports 32k context via extended RoPE; backend kernels like FlashAttention v2 is supported; SDPA is a safe fallback for the backend.
+  - Tokenizer and prompts: tiktoken-derived large vocab (>150k). Some Transformers flows require trust_remote_code; ensure your runtime supports the model transformer version. Chat variants may provide templates. We did not need the chat template in this repo example.
+  - License: Ensure review it; Tongyi Qianwen license;
+  - Read the Model Card: https://huggingface.co/Qwen/Qwen-72B (newer: Qwen1.5-72B)
 
-Choosing between them for an inference task
+**Choosing between them for an inference task**
 - Hardware fit: check total VRAM and interconnect; BLOOM-176B generally needs multi-node TP or heavy quantization. Qwen-72B is easier to deploy on fewer high-memory GPUs or with INT4.
-- Context needs: if you require >8k context, Qwen-72B’s 32k support is advantageous. BLOOM typically serves around 2k unless specialized. See context-defined.
+- Context size needs: if you require >8k context, Qwen-72B’s 32k support is advantageous. BLOOM typically serves around 2k unless specialized. See context-defined.
 - Language/compatibility: ensure tokenizer and chat templates align with your inputs; Qwen’s large vocab helps multilingual inputs; BLOOM is broadly multilingual too.
-- Backend compatibility: BLOOM’s ALiBi favors Torch SDPA/Triton; Qwen with RoPE can leverage FlashAttention for best throughput when available.
-- License and ecosystem: verify your use case aligns with each model’s license; consider community adapters and quantized checkpoints.
+- Backend compatibility: BLOOM’s ALiBi favors Torch SDPA/Triton; Qwen with RoPE can leverage FlashAttention for best throughput.
+- License and ecosystem: verify your use case aligns with each model’s license.
 
 ---
 
-## 8. vLLM: Core Concepts and Features
+## vLLM: Core Concepts and Features
 
-vLLM is an inference engine optimized for high throughput and efficiency:
-- PagedAttention (paged KV cache) and prefix caching
+**vLLM** is a fast, open-source library for serving and running large language models (LLMs) with high efficiency and throughput. It is designed to make LLM inference easy, scalable, and cost-effective for both research and production. vLLM achieves state-of-the-art performance by using advanced memory management (PagedAttention), continuous batching, and optimized GPU kernels. It supports seamless integration with Hugging Face models, streaming outputs, and an OpenAI-compatible API server. vLLM runs on a wide range of hardware (NVIDIA, AMD, Intel, PowerPC, TPU) and supports distributed inference with tensor, pipeline, data, and expert parallelism.
+
+**Key features**:
+- PagedAttention (efficient KV cache management)
 - Continuous batching of incoming requests
-- Optimized attention backends (FlashAttention/FlashInfer/SDPA/TRITON_ATTN)
-- Speculative decoding, chunked/disaggregated prefill
-- Quantization support (GPTQ, AWQ, INT4/INT8/FP8; KV quant when available)
-- Multi-LoRA, multimodal support
-- OpenAI-compatible API server (completions/chat/models)
-- Metrics and logging for production ops
+- Optimized attention backends (FlashAttention, FlashInfer, SDPA, Triton)
+- Fast model execution with CUDA/HIP graphs
+- Quantization support (GPTQ, AWQ, INT4, INT8, FP8)
+- Speculative decoding and chunked/disaggregated prefill
+- Prefix caching for repeated prompts
+- Multi-LoRA and multimodal model support
+- Streaming outputs
+- OpenAI-compatible API server (completions, chat, models)
+- Metrics and logging for production
 
-Supported hardware: NVIDIA (CUDA), AMD (HIP/ROCm), Intel, PowerPC, TPU; pick images/builds compatible with your accelerator.
+**Parallelism in vLLM:**
+vLLM supports several types of parallelism to scale LLM inference across multiple GPUs and nodes:
+- **Tensor Parallelism (TP):** Splits the model's tensor computations (such as matrix multiplications in each layer) across multiple GPUs. Each GPU handles a slice of the computation for every layer. TP is not strictly one-to-one with GPUs, but for most users and typical LLM deployments, matching TP size to GPU count is the standard and recommended approach, but advanced setups may use more flexible mappings. TP is the most common way to scale very large models that cannot fit on a single GPU.
+- **Model Parallelism:** Splits different layers or blocks of the model across GPUs or nodes. Each device holds a part of the model and passes activations between devices. This is useful for extremely large models.
+- **Data Parallelism:** Each GPU runs a full copy of the model and processes different batches of input data. Gradients or outputs are synchronized as needed. This is more common during training, but can be used for high-throughput inference.
+- **Expert Parallelism:** Used for Mixture-of-Experts (MoE) models, where different "experts" (sub-networks) are distributed across devices. Each expert processes only the relevant part of the input, and vLLM coordinates routing and aggregation.
 
-### Attention backends: how to choose
-You select an implementation kernel compatible with the model’s attention and your hardware:
-- Torch SDPA (baseline): robust and widely compatible (ALiBi, RoPE). Use when unsure or if other kernels are unstable.
-- FlashAttention v2/v3: fastest on NVIDIA when supported; requires compatible head dims and positional encodings (not ALiBi). Great fit for RoPE models like Qwen.
-- Triton attention: good alternative on NVIDIA for ALiBi models when you want more speed than SDPA.
-- FlashInfer and other backends: specialized high-performance options depending on build. Verify support matrix for your device.
+Internally, vLLM manages these parallelism strategies using efficient scheduling, memory management, and communication primitives (such as NCCL for GPU-to-GPU transfers). You can configure tensor parallel size and other options to match your hardware and workload. For most LLMs, tensor parallelism is set to the number of GPUs per node, but advanced deployments may combine multiple strategies for optimal scaling.
 
-Decision guide
-- If model uses ALiBi (e.g., BLOOM-176B): pick Torch SDPA or Triton; avoid FA3. Confirm in logs the kernel actually selected.
-- If model uses RoPE and your build includes FlashAttention: pick flash-attn; fall back to SDPA if unsupported.
-- On instability during warmup or capture: force SDPA and eager mode first; introduce faster kernels incrementally.
-
-Quick mapping (positional encoding → backends)
-- ALiBi: Torch SDPA (safe), Triton (often faster than SDPA), avoid FA3.
-- RoPE (standard dims): FlashAttention v2/v3 (fastest on NVIDIA), else SDPA.
-- RoPE (nonstandard head dims/build limits): SDPA fallback.
-- Unknown/experimental: start with SDPA; verify logs before switching.
-
-CUDA graphs and compile mode:
-- Capturing CUDA graphs reduces launch overhead after warmup
-- Some stacks are sensitive; eager mode is the robust baseline
-- You can disable graphs (e.g., enforce eager) and re-enable after validation
-
----
+Supported hardware: NVIDIA (CUDA), AMD (HIP/ROCm), Intel, PowerPC, TPU, and more. Choose builds/images compatible with your accelerator.
 
 ### How vLLM Works (Request Flow and API)
 
-High-level flow:
-1) Load tokenizer/assets and weights; initialize tensor-parallel ranks
-2) Start OpenAI-compatible server on the configured host/port
-3) For each request: tokenize → schedule/batch → prefill/decode → detokenize
-4) Stream or return final text; update/reuse KV blocks for subsequent tokens
+**High-level flow**:
 
-Completions (classic prompt → continuation):
-```json
-{
-  "model": "bigscience/bloom",
-  "prompt": "Complete: The benefits of tensor parallelism are",
-  "max_tokens": 64,
-  "temperature": 0.7,
-  "stream": true
-}
-```
+- **Load tokenizer assets and weights and initialize tensor-parallel ranks (TP)**: The model and tokenizer are loaded into memory, and tensor parallelism is set up across available GPUs.
+- **Start OpenAI-compatible server on the configured host/port**: vLLM launches its API server, ready to accept requests.
+- **Workflow For each request**: tokenize → schedule/batch → prefill/decode → detokenize: Incoming requests are tokenized, batched/scheduled for efficient GPU usage, processed through prefill and decode phases, and then detokenized to produce output text.
+- **Stream or return final text and update the KV cache for the subsequent tokens**: Results are streamed or returned, and the KV cache is updated for efficient generation of further tokens.
 
-Chat completions (role-structured messages → assistant reply):
-```json
-{
-  "model": "bigscience/bloom",
-  "messages": [
-    {"role": "user", "content": "Write a one-line haiku about GPUs."}
-  ],
-  "max_tokens": 64,
-  "temperature": 0.7,
-  "stream": true
-}
-```
+### Example Curl commands for vLLM OpenAI-compatible APIs
 
-Chat templates (Transformers ≥ 4.44):
-- If a tokenizer lacks a built-in chat template (e.g., BLOOM), you must provide one
-- Use a simple Jinja template that formats messages into a single prompt
-
-Health check and examples:
-```
+**Health check:**
+```bash
 curl -fsS http://<HOST>:8000/v1/models
-curl -s http://<HOST>:8000/v1/completions -H 'Content-Type: application/json' -d '{"model":"bigscience/bloom","prompt":"Write a short poem about the moon.","max_tokens":64}'
+```
+
+**Completions (classic prompt):**
+```bash
+curl -s http://<HOST>:8000/v1/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"bigscience/bloom","prompt":"Write a short poem about the moon.","max_tokens":64}'
+```
+
+**Chat (role-structured messages):**
+```bash
+curl -s http://<HOST>:8000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"bigscience/bloom","messages":[{"role":"user","content":"Write a one-line haiku about GPUs."}],"max_tokens":64}'
 ```
 
 ---
 
-## 9. Preparing and Configuring Models for Inference
+## Preparing and Configuring Models for Inference
 
-
-Make these choices before going live:
+**Checklist before going live**:
 - Model and revision: pick weights; ensure tokenizer matches
+- GPU memory (VRAM): must be sufficient for model weights, context window, and concurrency
+- CUDA version: host driver CUDA must be >= container build CUDA
 - Dtype: bfloat16 recommended on H100/H200; fp16 where appropriate
-- Attention backend: pick a kernel compatible with positional encoding
+- Attention backend support: verify kernel compatibility with positional encoding (SDPA, FlashAttention, Triton)
 - For BLOOM/ALiBi, prefer Torch SDPA or Triton attention; avoid FA3
 - Parallelism: set `--tensor-parallel-size` to GPUs per node
 - Limits: `--max-model-len`, `--max-num-seqs` to fit memory and target latency
 - KV cache: plan memory footprint; consider KV quantization if supported
-- Chat template: required for chat if tokenizer has none; pass via `--chat-template`
+- Chat template: If the model or tokenizer does not provide a built-in chat template, you must supply one manually (e.g., via `--chat-template`).
 - Quantization: Choose a quantization method (GPTQ, AWQ, INT8, INT4, FP8) to reduce memory usage and enable serving larger models on limited hardware. Quantization compresses model weights to lower precision, trading off some accuracy for speed and efficiency. Pick the method based on your hardware and model support:
   - INT8/INT4: best for aggressive memory savings, may reduce output quality
   - FP8: supported on latest GPUs (H100/H200), balances speed and accuracy
@@ -417,49 +410,25 @@ Make these choices before going live:
 - Eager vs graphs: start with eager; enable CUDA graphs after validation
 - Observability: enable metrics and set logging level appropriately
 
-**GPU Hardware Checklist for Model Serving:**
-- GPU memory (VRAM): must be sufficient for model weights, context window, and concurrency
-- Supported dtype: check if your GPU supports bfloat16 (H100/H200), fp16, or INT8/FP8 for quantization
-- CUDA version: host driver CUDA must be >= container build CUDA
-- Accelerator type: ensure compatibility with inference engine (NVIDIA CUDA, AMD ROCm, etc.)
-- Interconnect: for multi-GPU, high-bandwidth NVLink or PCIe is recommended
-- Attention backend support: verify kernel compatibility (SDPA, FlashAttention, Triton)
-
-
-Minimal readiness checklist:
-- Weights/tokenizer verified; dtype set (bf16 on Hopper)
-- Attention backend confirmed in logs (no FA3 for ALiBi models)
-- TP size equals number of local GPUs; health probe returns models
-- Max context and concurrency tuned; no OOMs during warmup/tests
-- Chat template provided when required; 200 responses for both endpoints
-- Quantization method selected and compatible with model/hardware
-- GPU hardware meets memory, dtype, and backend requirements
-
-Driver/Runtime compatibility (CUDA):
-- Host driver CUDA version must be >= container’s build CUDA version
-- Validate with `nvidia-smi` (host) and `torch.version.cuda` (container)
-
 ---
 
-## 10. Operational Notes and Troubleshooting
+## Operational Notes and Troubleshooting
 
-Common issue: BLOOM + ALiBi with FlashAttention v3 (FA3)
+**Common issue**: BLOOM + ALiBi with FlashAttention v3 (FA3)
 - Symptom: first request crashes with `AssertionError: Alibi is not supported in FA3`
 - Fix: force Torch SDPA (e.g., `--attention-backend torch-sdpa` or `-O.attention_backend=TORCH_SDPA`); keep eager mode if unstable
 - Note: Some builds may still route to FA internally; verify backend in logs
-
-CUDA graphs stability
+**CUDA graphs stability**
 - If warmup or capture crashes, disable graphs (enforce eager), align driver/toolkit to image, then re-enable progressively
-
-Health checks
+**CUDA graphs and compile mode**
+- Capturing CUDA graphs reduces launch overhead after warmup
+- Some stacks are sensitive; eager mode is the robust baseline
+- You can disable graphs (e.g., enforce eager) and re-enable after validation
+**Health checks**
 - Probe `/v1/models`; only proceed when server is bound and healthy
-
-Performance tuning
+**Performance tuning**
 - Increase batch/concurrency for throughput; monitor latency and KV memory
-- Stream responses to improve perceived latency
-
-Security and production hygiene
-- Add TLS, auth, rate limits; expose metrics; set resource limits; avoid anonymous public endpoints
+**Security and production hygiene**
+- Add TLS, authentication, rate limits; expose metrics; set resource limits; avoid exposing your model server to the public internet without authentication or access controls.
 
 ---
-
