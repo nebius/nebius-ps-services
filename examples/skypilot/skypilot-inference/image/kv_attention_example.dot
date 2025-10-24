@@ -3,7 +3,9 @@
 
 digraph KVAttention {
   rankdir=LR;
-  node [shape=box, fontname="Arial"];
+  graph [fontsize=36, fontname="Arial", size="36,24!"];
+  node [shape=box, fontname="Arial", fontsize=32, width=2, height=1.2];
+  edge [fontsize=28, fontname="Arial"];
 
   // Tokens
 
@@ -111,7 +113,7 @@ digraph KVAttention {
       <TR><TD BGCOLOR="#f0fff0">Detokenize</TD><TD>Convert to text</TD></TR>
       <TR><TD BGCOLOR="#c2ffc2">Output Token</TD><TD>"I", "am"</TD></TR>
     </TABLE>
-  >, shape=plaintext, width=0, height=0, fontsize=22, fontname="Arial"]
+  >, shape=plaintext, width=6, height=2.5, fontsize=40, fontname="Arial"]
 
   descriptions [label=<
     <TABLE BORDER="1" CELLBORDER="1" CELLSPACING="0" BGCOLOR="#ffffff">
@@ -123,7 +125,7 @@ digraph KVAttention {
       <TR><TD ALIGN="LEFT"><B>Argmax</B></TD><TD ALIGN="LEFT">Selects the token with the highest score</TD></TR>
       <TR><TD ALIGN="LEFT"><B>Detokenize</B></TD><TD ALIGN="LEFT">Converts token ID to readable text</TD></TR>
     </TABLE>
-  >, shape=plaintext, width=0, height=0, fontsize=20, fontname="Arial"]
+  >, shape=plaintext, width=6, height=2.5, fontsize=36, fontname="Arial"]
 
   // Place legend and descriptions at the top right
   legend -> descriptions [style=invis]
