@@ -153,10 +153,11 @@ Suppose we have:
 
 1. **Tokenization:**
   - The prompt "how are you?" is split into tokens: ["how", "are", "you", "?"]
-  - Each token is converted to a numeric vector (embedding), e.g., [0.1, 0.2, 0.3, 0.4]
-
+  - Each token is mapped to a token ID (an integer) in this phase.
+  
 2. **Input Layer:**
-  - Each input neuron receives one value from the token embeddings. For our example, let's use 4 values: [0.1, 0.2, 0.3, 0.4]
+  - In the Input layer (embedding layer), each token ID is used to look up its embedding vector (e.g., [0.1, 0.2, 0.3, 0.4]) from the embedding matrix.
+  - The output of the Input layer is the embedding vectors for each token—these are the numeric representations ready for deeper layers. They are not activations; activations are produced by hidden layers after further processing.
 
 3. **Hidden Layer:**
   - Each hidden neuron computes a weighted sum of all input neurons, adds a bias, and applies an activation function (like ReLU or tanh).
@@ -169,15 +170,15 @@ Suppose we have:
   - The output is a score for the next token (e.g., the probability of "I").
 
 5. **Prediction:**
-  - The model selects the token with the highest score as the next word (e.g., "I").it
+  - The model selects the token with the highest score as the next word (e.g., "I").
 
 6. **Repeat for Next Token:**
   - The new input is now ["how", "are", "you", "?", "I"]. The process repeats: the model encodes the new sequence, passes it through the network, and predicts the next token (e.g., "am").
   - This continues until the model outputs "fine" and then a stop token.
 
-### Summary Table (Toy Example)
+### Summary Table
 
-| Step | Input Tokens                 | Input Values      | Output Token |
+| Step | Input Tokens                 | Input Embedding   | Output Token |
 |------|------------------------------|-------------------|--------------|
 | 1    | how, are, you, ?             | 0.1, 0.2, 0.3, 0.4| I            |
 | 2    | how, are, you, ?, I          | ...               | am           |
@@ -234,16 +235,15 @@ Modern LLMs use the Transformer architecture, which relies on self-attention and
 - Projecting to logits and selecting the next token (argmax or sampling) are the final steps before detokenization.
 - See the diagram above for a step-by-step visualization of this process.
 
-
 ## 6. Models Architecture and Artifacts
 
 When you download a model (e.g., from Hugging Face), you get more than weights:
-- Weights (safetensors shards + index): the learned parameters (dominant size)
+- Weights (safetensors shards + index): the learned parameters during training
 - Config (config.json): architecture hyperparameters and positional strategy
 - Tokenizer assets: tokenizer.json, tokenizer_config.json, vocab/merges, specials
-- Generation defaults (optional): generation_config.json
+- Generation defaults (optional): generation_config.json. When you load a model with Transformers, these defaults are automatically applied unless you override them in your code. This helps ensure consistent, reproducible generation behavior across different environments and makes it easier to use the model as intended by its authors.
 - Adapters (optional): LoRA/PEFT weights for fine-tuned variants
-- Custom code (rare): trust_remote_code
+- Custom code (rare): trust_remote_code=True. You should only enable trust_remote_code for models from sources you trust, as this code runs with full permissions and could be unsafe.
 
 ### How a model artifacts get loaded into the CPU/GPU memory
 
@@ -257,7 +257,9 @@ When you load a model for inference, the Python framework (like Hugging Face Tra
 
 This process ensures that the model structure, vocabulary, and embeddings are all consistent with how the model was trained, so inference works as expected.
 
-Minimal example (Hugging Face Transformers):
+You can run the code snippet below to view the model config (layers and neurons). This step does not require a GPU or any neural network computation, it only reads configuration data into CPU memory.
+
+**Minimal example (Hugging Face Transformers)**:
 ```python
 from transformers import AutoTokenizer, AutoConfig
 model_id = "bigscience/bloom"
@@ -275,16 +277,16 @@ print("Token IDs:", token_ids)
 print("Decoded text:", tokenizer.decode(token_ids))
 ```
 
-Operational implications:
+**Operational implications**:
 - Token counts drive latency and cost; tokenizers differ across models
-- Ensure tokenizer and weights are from the same repo/revision
+- Ensure tokenizer and weights are from the same model repo/revision
 
 ## 7. Licenses: what to check
 - License type: fully open source, research‑only, or restricted/commercial. Examples here: BLOOM RAIL (open with use constraints), Tongyi Qianwen license (commercial allowed with terms).
-- Commercial use: verify if allowed and under what conditions; some require registration or approval for commercial deployments.
+- Commercial use: verify if allowed and under what conditions; some require registration or approval for commercial deployments might be needed.
 - Redistribution and derivatives: check whether you can redistribute weights, fine‑tuned variants, or quantized artifacts.
 - Attribution and restrictions: some licenses include RAIL‑style acceptable‑use clauses or attribution requirements.
-- Practical guidance: read the model card’s license section and linked license text; follow any registration steps if required by the provider. When in doubt, consult your legal/compliance team.
+- Practical guidance: read the model card’s license section and linked license text; follow any registration steps if required by the provider. The simplest way is to create a License file in your root of the repository for it and link it to the source model's license file. When in doubt, consult your legal/compliance team.
 
 ### Model profiles and selection: BLOOM-176B vs Qwen-72B
 Use official model cards for authoritative specs; below are practitioner notes with links.
@@ -292,15 +294,15 @@ Use official model cards for authoritative specs; below are practitioner notes w
 - BLOOM-176B (bigscience/bloom)
   - Size and memory: 176B parameters; BF16/FP16 weights alone are ~352 GB. Expect multi-node tensor parallelism and/or quantization for serving.
   - Context and positions: trained with ~2k context and ALiBi positional bias. ALiBi impacts backend choice (avoid FA3; prefer Torch SDPA or Triton).
-  - Tokenizer and prompts: HF fast tokenizer; no built-in chat template—provide one for chat-style prompts.
+  - Tokenizer and prompts: HF fast tokenizer; no built-in chat template, You need to provide a chat template for chat-style prompts. A chat template has been provided in this repo in /template folder.
   - Languages: multilingual; check card for coverage. License: BigScience BLOOM RAIL 1.0.
   - Card: https://huggingface.co/bigscience/bloom
 
 - Qwen-72B (Qwen/Qwen-72B)
-  - Size and memory: 72B parameters. Authors note BF16/FP16 chat requires on the order of ~144 GB total GPU memory (e.g., 2×A100-80G or 5×V100-32G); INT4 variants can fit ≈48 GB. Plan TP accordingly.
+  - Size and memory: 72B parameters. Authors note BF16/FP16 chat requires on the order of ~144 GB total GPU memory (e.g., 2×A100-80G or 5×V100-32G); INT4 variants can fit ≈48 GB. Plan TP workers for vLLM accordingly.
   - Context and positions: supports 32k context via extended RoPE; backend kernels like FlashAttention v2/v3 are typically supported; SDPA is a safe fallback.
-  - Tokenizer and prompts: tiktoken-derived large vocab (~152k). Some Transformers flows require trust_remote_code; ensure your runtime matches the model version. Chat variants may provide templates.
-  - License: Tongyi Qianwen license; review for commercial use terms.
+  - Tokenizer and prompts: tiktoken-derived large vocab (~152k). Some Transformers flows require trust_remote_code; ensure your runtime matches the model version. Chat variants may provide templates. We did not need the chat template in this repo example.
+  - License: Tongyi Qianwen license; Ensure review it for commercial use terms.
   - Card: https://huggingface.co/Qwen/Qwen-72B (newer: Qwen1.5-72B)
 
 Choosing between them for an inference task
