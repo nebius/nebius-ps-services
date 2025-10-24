@@ -418,16 +418,21 @@ curl -s http://<HOST>:8000/v1/chat/completions \
 - Symptom: first request crashes with `AssertionError: Alibi is not supported in FA3`
 - Fix: force Torch SDPA (e.g., `--attention-backend torch-sdpa` or `-O.attention_backend=TORCH_SDPA`); keep eager mode if unstable
 - Note: Some builds may still route to FA internally; verify backend in logs
+
 **CUDA graphs stability**
 - If warmup or capture crashes, disable graphs (enforce eager), align driver/toolkit to image, then re-enable progressively
+
 **CUDA graphs and compile mode**
 - Capturing CUDA graphs reduces launch overhead after warmup
 - Some stacks are sensitive; eager mode is the robust baseline
 - You can disable graphs (e.g., enforce eager) and re-enable after validation
+
 **Health checks**
 - Probe `/v1/models`; only proceed when server is bound and healthy
+
 **Performance tuning**
 - Increase batch/concurrency for throughput; monitor latency and KV memory
+
 **Security and production hygiene**
 - Add TLS, authentication, rate limits; expose metrics; set resource limits; avoid exposing your model server to the public internet without authentication or access controls.
 
