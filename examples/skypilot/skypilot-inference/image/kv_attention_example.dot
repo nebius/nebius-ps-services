@@ -1,0 +1,132 @@
+// Graphviz diagram: KV cache and attention score calculation for 3 tokens
+// Save as: kv_attention_example.dot
+
+digraph KVAttention {
+  rankdir=LR;
+  graph [fontsize=36, fontname="Arial", size="36,24!"];
+  node [shape=box, fontname="Arial", fontsize=32, width=2, height=1.2];
+  edge [fontsize=28, fontname="Arial"];
+
+  // Tokens
+
+  // Color definitions
+
+  // Tokens
+  // Force vertical order: how (top), are (middle), you (bottom)
+  T0 [label="Input Token 0: how", style=filled, fillcolor="#ffe4b2", pos="0,3!"]
+  T1 [label="Input Token 1: are", style=filled, fillcolor="#ffe4b2", pos="0,2!"]
+  T2 [label="Input Token 2: you", style=filled, fillcolor="#ffe4b2", pos="0,1!"]
+
+  // Embeddings
+  E0 [label="Embedding 0\n[vector]", shape=ellipse, style=filled, fillcolor="#b2e4ff"]
+  E1 [label="Embedding 1\n[vector]", shape=ellipse, style=filled, fillcolor="#b2e4ff"]
+  E2 [label="Embedding 2\n[vector]", shape=ellipse, style=filled, fillcolor="#b2e4ff"]
+
+  // QKV
+  Q0 [label="Query 0\n[vector]", shape=ellipse, style=filled, fillcolor="#ffd1dc"]
+  K0 [label="Key 0\n[vector]", shape=ellipse, style=filled, fillcolor="#e6b2ff"]
+  V0 [label="Value 0\n[vector]", shape=ellipse, style=filled, fillcolor="#b2ffb2"]
+
+  Q1 [label="Query 1\n[vector]", shape=ellipse, style=filled, fillcolor="#ffd1dc"]
+  K1 [label="Key 1\n[vector]", shape=ellipse, style=filled, fillcolor="#e6b2ff"]
+  V1 [label="Value 1\n[vector]", shape=ellipse, style=filled, fillcolor="#b2ffb2"]
+
+  Q2 [label="Query 2\n[vector]", shape=ellipse, style=filled, fillcolor="#ffd1dc"]
+  K2 [label="Key 2\n[vector]", shape=ellipse, style=filled, fillcolor="#e6b2ff"]
+  V2 [label="Value 2\n[vector]", shape=ellipse, style=filled, fillcolor="#b2ffb2"]
+
+  // KV Cache
+  subgraph cluster_kvcache {
+    label="KV Cache (after 3 tokens)";
+    style=dashed;
+    K0; V0; K1; V1; K2; V2;
+  }
+
+  // Attention score calculation for Token 2
+  Q2K0 [label="Dot(Q2, K0)\n= score 0", shape=diamond, style=filled, fillcolor="#e0e0ff"]
+  Q2K1 [label="Dot(Q2, K1)\n= score 1", shape=diamond, style=filled, fillcolor="#e0e0ff"]
+  Q2K2 [label="Dot(Q2, K2)\n= score 2", shape=diamond, style=filled, fillcolor="#e0e0ff"]
+
+  // Softmax
+  SM [label="Softmax\n(scores)", shape=parallelogram, style=filled, fillcolor="#ffe0e0"]
+
+  // Weighted sum
+  WS [label="Weighted sum:\nSoftmax(score0) × V0 +\nSoftmax(score1) × V1 +\nSoftmax(score2) × V2\n\nWeightedSum = Σ w_i V_i", shape=note, style=filled, fillcolor="#e0ffe0"]
+
+  // Logits and output token
+  LOGITS [label="Project to logits:\nlogits = WeightedSum × W_vocab\n(1 score per vocab token)", shape=box, style=filled, fillcolor="#e0f7fa"]
+  ARGMAX [label="Select output token:\noutput_id = argmax(logits)", shape=box, style=filled, fillcolor="#f0e0fa"]
+  DETOK [label="Detokenize:\noutput_text = tokenizer.decode(output_id)", shape=box, style=filled, fillcolor="#f0fff0"]
+
+  // Output tokens
+  OUT0 [label="Output Token 0: I", style=filled, fillcolor="#c2ffc2"]
+  OUT1 [label="Output Token 1: am", style=filled, fillcolor="#c2ffc2"]
+
+  // Connections
+  // Explicitly order input token connections for top-down: how, are, you
+  T0 -> E0 -> Q0
+  E0 -> K0
+  E0 -> V0
+  T1 -> E1 -> Q1
+  E1 -> K1
+  E1 -> V1
+  T2 -> E2 -> Q2
+  E2 -> K2
+  E2 -> V2
+
+  // Q2 attention calculation
+  Q2 -> Q2K0
+  K0 -> Q2K0
+  Q2 -> Q2K1
+  K1 -> Q2K1
+  Q2 -> Q2K2
+  K2 -> Q2K2
+
+  Q2K0 -> SM
+  Q2K1 -> SM
+  Q2K2 -> SM
+
+  SM -> WS
+  V0 -> WS
+  V1 -> WS
+  V2 -> WS
+  WS -> LOGITS
+  LOGITS -> ARGMAX
+  ARGMAX -> DETOK
+  DETOK -> OUT0
+  OUT0 -> OUT1 [style=dashed, label="next output"]
+
+  // --- Legend and Descriptions (top right) ---
+  legend [label=<
+    <TABLE BORDER="1" CELLBORDER="1" CELLSPACING="0" BGCOLOR="#ffffff">
+      <TR><TD COLSPAN="2"><B>Legend: Color Coding</B></TD></TR>
+      <TR><TD BGCOLOR="#ffe4b2">Input Token</TD><TD>how, are, you</TD></TR>
+      <TR><TD BGCOLOR="#b2e4ff">Embedding</TD><TD>Token vector</TD></TR>
+      <TR><TD BGCOLOR="#ffd1dc">Query</TD><TD>Q (attention)</TD></TR>
+      <TR><TD BGCOLOR="#e6b2ff">Key</TD><TD>K (attention)</TD></TR>
+      <TR><TD BGCOLOR="#b2ffb2">Value</TD><TD>V (attention)</TD></TR>
+      <TR><TD BGCOLOR="#e0e0ff">Dot Product</TD><TD>Q·K = score</TD></TR>
+      <TR><TD BGCOLOR="#ffe0e0">Softmax</TD><TD>Attention weights</TD></TR>
+      <TR><TD BGCOLOR="#e0ffe0">Weighted Sum</TD><TD>Σ w_i V_i</TD></TR>
+      <TR><TD BGCOLOR="#e0f7fa">Logits</TD><TD>Project to vocab</TD></TR>
+      <TR><TD BGCOLOR="#f0e0fa">Argmax</TD><TD>Pick output token</TD></TR>
+      <TR><TD BGCOLOR="#f0fff0">Detokenize</TD><TD>Convert to text</TD></TR>
+      <TR><TD BGCOLOR="#c2ffc2">Output Token</TD><TD>"I", "am"</TD></TR>
+    </TABLE>
+  >, shape=plaintext, width=6, height=2.5, fontsize=40, fontname="Arial"]
+
+  descriptions [label=<
+    <TABLE BORDER="1" CELLBORDER="1" CELLSPACING="0" BGCOLOR="#ffffff">
+      <TR><TD COLSPAN="2"><B>Descriptions</B></TD></TR>
+      <TR><TD ALIGN="LEFT"><B>Dot(Q, K)</B></TD><TD ALIGN="LEFT">Dot product of query and key vectors (similarity score)</TD></TR>
+      <TR><TD ALIGN="LEFT"><B>Softmax</B></TD><TD ALIGN="LEFT">Normalizes scores to probabilities (weights)</TD></TR>
+      <TR><TD ALIGN="LEFT"><B>Weighted sum</B></TD><TD ALIGN="LEFT">Each value vector V is weighted by its attention score</TD></TR>
+      <TR><TD ALIGN="LEFT"><B>Project to logits</B></TD><TD ALIGN="LEFT">Weighted sum is projected to vocabulary size (one score per token)</TD></TR>
+      <TR><TD ALIGN="LEFT"><B>Argmax</B></TD><TD ALIGN="LEFT">Selects the token with the highest score</TD></TR>
+      <TR><TD ALIGN="LEFT"><B>Detokenize</B></TD><TD ALIGN="LEFT">Converts token ID to readable text</TD></TR>
+    </TABLE>
+  >, shape=plaintext, width=6, height=2.5, fontsize=36, fontname="Arial"]
+
+  // Place legend and descriptions at the top right
+  legend -> descriptions [style=invis]
+}
