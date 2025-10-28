@@ -20,6 +20,14 @@ This project uses the following third-party models and tools. Please review thei
 
 ---
 
+## vLLM
+- Tool: [vLLM](https://github.com/vllm-project/vllm)
+- License: [Apache License 2.0](https://github.com/vllm-project/vllm/blob/main/LICENSE)
+- Summary: Open source, high-throughput inference engine for large language models. Commercial and non-commercial use allowed. Attribution required. See full license for details.
+- Usage in this project: Used as the inference engine for serving LLMs for demonstration purposes only. No modifications made.
+
+---
+
 ## SkyPilot
 - Tool: [SkyPilot](https://github.com/skypilot-org/skypilot)
 - License: [Apache License 2.0](https://github.com/skypilot-org/skypilot/blob/master/LICENSE)

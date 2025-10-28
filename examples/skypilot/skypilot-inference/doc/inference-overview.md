@@ -1,4 +1,4 @@
-# Serving LLMs with vLLM: A Practical Inference Guide
+# A Practical Inference Guide and Serving LLMs with vLLM
 
 This guide teaches the essentials of serving large language models (LLMs) with vLLM. It builds from foundational neural network concepts, through transformers and attention, to practical inference workflows, vLLM features, and operational guidance.
 
@@ -7,13 +7,13 @@ This guide teaches the essentials of serving large language models (LLMs) with v
 ## Neural Network Foundations
 
 ### What is a Neural Network?
-A neural network is a computer program made up of layers of simple units called neurons. Each layer processes information, `building up understanding step by step`. Early layers find simple features (like word patterns), while deeper layers combine these to understand more abstract ideas (like the meaning of a sentence).
+A neural network is a computer program made up of layers of simple units called neurons. Each layer processes information, **building up understanding step by step**. Early layers find simple features (like word patterns), while deeper layers combine these to understand more abstract ideas (like the meaning of a sentence).
 
 All the neurons and their weights are stored as arrays of numbers in memory (RAM or GPU memory). When you load a neural network onto a GPU, you are copying all these weights and the code for the layers onto the GPU so it can do the calculations quickly.
 
 When a model is very large, it may not fit on a single GPU. In that case, the model is split across multiple GPUs or even multiple computers (nodes). The system divides the layers or parts of the layers between devices. Neurons on different GPUs communicate by sending their outputs (arrays of numbers) over high-speed connections like NVLink or PCIe. This is managed by the deep learning framework (like PyTorch), which handles all the details.
 
-When you use a neural network for inference (getting answers from a trained model), the data flows through the layers in one direction—this is called a "forward pass." During training, the network learns by comparing its output to the correct answer and adjusting its internal settings (using a "backward pass"). Inference only needs the forward pass, which is much faster and uses less memory than training.
+When you use a neural network for inference (getting answers from a trained model), the data flows through the layers in one direction—this is called a "forward pass". During training, the network learns by comparing its output to the correct answer and adjusting its internal settings (using a "backward pass"). Inference only needs the forward pass, which is much faster and uses less memory than training.
 
 ### Embeddings, Weights, and Quantization
 
@@ -145,6 +145,8 @@ Different models use different methods for positional encoding, such as ALiBi (u
 **CUDA graphs:**
 CUDA graphs are a performance optimization feature in NVIDIA GPUs. They allow you to record a sequence of GPU operations (such as neural network computations) and replay them efficiently, reducing the overhead of launching individual operations. This is especially useful for deep learning inference, where the same computation graph is executed repeatedly for different inputs. By capturing the computation as a CUDA graph, you can speed up model inference and improve throughput. CUDA graphs do not change the model's logic or attention mechanism—they simply make the execution faster and more efficient on supported hardware.
 
+**Warmup**
+The first few requests may be slower due to model loading, memory allocation, or kernel compilation. Warmup ensures that subsequent measurements reflect steady-state (realistic) performance, not one-time initialization overhead.
 ---
 
 ## Example: Step-by-Step Workflow from Prompt to Answer
@@ -314,9 +316,9 @@ Use official model cards for authoritative specs; below are practitioner notes w
   - Read the Model Card: https://huggingface.co/bigscience/bloom
 
 - **Qwen-72B (Qwen/Qwen-72B)**
-  - Size and memory: 72B parameters. Authors note that BF16/FP16 requires with ~144 GB total GPU memory (e.g., 2×A100-80G or 5×V100-32G); INT4 variants can fit ≈48 GB. Plan TP workers for vLLM accordingly.
+  - Size and memory: 72B parameters. Authors note that BF16/FP16 requires with ~144 GB total GPU memory; INT4 variants can fit ≈48 GB GPU memory. So plan number of GPUs accordingly.
   - Context and positions: supports 32k context via extended RoPE; backend kernels like FlashAttention v2 is supported; SDPA is a safe fallback for the backend.
-  - Tokenizer and prompts: tiktoken-derived large vocab (>150k). Some Transformers flows require trust_remote_code; ensure your runtime supports the model transformer version. Chat variants may provide templates. We did not need the chat template in this repo example.
+  - Tokenizer and prompts: tiktoken-derived large vocab (>150k). Some Transformers flows require trust_remote_code; ensure your runtime supports the model transformer version. Chat variants may provide templates. We don't need the chat template for this model.
   - License: Ensure review it; Tongyi Qianwen license;
   - Read the Model Card: https://huggingface.co/Qwen/Qwen-72B (newer: Qwen1.5-72B)
 
@@ -348,10 +350,10 @@ Use official model cards for authoritative specs; below are practitioner notes w
 
 **Parallelism in vLLM:**
 vLLM supports several types of parallelism to scale LLM inference across multiple GPUs and nodes:
-- **Tensor Parallelism (TP):** Splits the model's tensor computations (such as matrix multiplications in each layer) across multiple GPUs. Each GPU handles a slice of the computation for every layer. TP is not strictly one-to-one with GPUs, but for most users and typical LLM deployments, matching TP size to GPU count is the standard and recommended approach, but advanced setups may use more flexible mappings. TP is the most common way to scale very large models that cannot fit on a single GPU.
-- **Model Parallelism:** Splits different layers or blocks of the model across GPUs or nodes. Each device holds a part of the model and passes activations between devices. This is useful for extremely large models.
-- **Data Parallelism:** Each GPU runs a full copy of the model and processes different batches of input data. Gradients or outputs are synchronized as needed. This is more common during training, but can be used for high-throughput inference.
-- **Expert Parallelism:** Used for Mixture-of-Experts (MoE) models, where different "experts" (sub-networks) are distributed across devices. Each expert processes only the relevant part of the input, and vLLM coordinates routing and aggregation.
+- **Tensor Parallelism (TP):** Splits the model's tensor computations (such as matrix multiplications in each layer) across multiple GPUs. Each GPU handles a slice of the computation for every layer. TP is not strictly one-to-one with GPUs, but for most users and typical LLM deployments, matching TP size to GPU count is the standard and recommended approach, but advanced setups may use more flexible mappings. TP is the most common way to scale very large models that cannot fit on a single GPU. `--tensor-parallel-size` (set to number of GPUs per node, e.g. `--tensor-parallel-size=4`).
+- **Model Parallelism:** Splits different layers or blocks of the model across GPUs/nodes. Each device holds a part of the model and passes activations between devices. This is useful for extremely large models. vLLM does not natively support pipeline/model parallelism (splitting layers across GPUs/nodes) in the same way as Megatron-LM or DeepSpeed. Most vLLM deployments use tensor parallelism for scaling. `--pipeline-parallel-size <int>` (Experimental) For pipeline parallelism, but not widely used.
+- **Data Parallelism:** Each GPU runs a full copy of the model and processes different batches of input data. Gradients or outputs are synchronized as needed. This is more common during training, vLLM is focused on inference, not training. Data parallelism (multiple copies of the model processing different batches) is not a primary feature, and you can run multiple vLLM servers for scaling inferenceing throughput.
+- **Expert Parallelism:** Used for Mixture-of-Experts (MoE) models, where different "experts" (sub-networks) are distributed across devices. Each expert processes only the relevant part of the input, and vLLM coordinates routing and aggregation. vLLM supports Mixture-of-Experts (MoE) models, where expert parallelism is used. This is more advanced and model-specific. A Mixture-of-Experts (MoE) model contains multiple expert sub-models (networks), each specialized for certain types of input or tasks. The model dynamically routes tokens to the most relevant expert(s) for efficient and specialized processing.
 
 Internally, vLLM manages these parallelism strategies using efficient scheduling, memory management, and communication primitives (such as NCCL for GPU-to-GPU transfers). You can configure tensor parallel size and other options to match your hardware and workload. For most LLMs, tensor parallelism is set to the number of GPUs per node, but advanced deployments may combine multiple strategies for optimal scaling.
 
@@ -365,75 +367,5 @@ Supported hardware: NVIDIA (CUDA), AMD (HIP/ROCm), Intel, PowerPC, TPU, and more
 - **Start OpenAI-compatible server on the configured host/port**: vLLM launches its API server, ready to accept requests.
 - **Workflow For each request**: tokenize → schedule/batch → prefill/decode → detokenize: Incoming requests are tokenized, batched/scheduled for efficient GPU usage, processed through prefill and decode phases, and then detokenized to produce output text.
 - **Stream or return final text and update the KV cache for the subsequent tokens**: Results are streamed or returned, and the KV cache is updated for efficient generation of further tokens.
-
-### Example Curl commands for vLLM OpenAI-compatible APIs
-
-**Health check:**
-```bash
-curl -fsS http://<HOST>:8000/v1/models
-```
-
-**Completions (classic prompt):**
-```bash
-curl -s http://<HOST>:8000/v1/completions \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"bigscience/bloom","prompt":"Write a short poem about the moon.","max_tokens":64}'
-```
-
-**Chat (role-structured messages):**
-```bash
-curl -s http://<HOST>:8000/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"bigscience/bloom","messages":[{"role":"user","content":"Write a one-line haiku about GPUs."}],"max_tokens":64}'
-```
-
----
-
-## Preparing and Configuring Models for Inference
-
-**Checklist before going live**:
-- Model and revision: pick weights; ensure tokenizer matches
-- GPU memory (VRAM): must be sufficient for model weights, context window, and concurrency
-- CUDA version: host driver CUDA must be >= container build CUDA
-- Dtype: bfloat16 recommended on H100/H200; fp16 where appropriate
-- Attention backend support: verify kernel compatibility with positional encoding (SDPA, FlashAttention, Triton)
-- For BLOOM/ALiBi, prefer Torch SDPA or Triton attention; avoid FA3
-- Parallelism: set `--tensor-parallel-size` to GPUs per node
-- Limits: `--max-model-len`, `--max-num-seqs` to fit memory and target latency
-- KV cache: plan memory footprint; consider KV quantization if supported
-- Chat template: If the model or tokenizer does not provide a built-in chat template, you must supply one manually (e.g., via `--chat-template`).
-- Quantization: Choose a quantization method (GPTQ, AWQ, INT8, INT4, FP8) to reduce memory usage and enable serving larger models on limited hardware. Quantization compresses model weights to lower precision, trading off some accuracy for speed and efficiency. Pick the method based on your hardware and model support:
-  - INT8/INT4: best for aggressive memory savings, may reduce output quality
-  - FP8: supported on latest GPUs (H100/H200), balances speed and accuracy
-  - GPTQ/AWQ: advanced quantization for specific models, check compatibility
-  - You must select quantization before starting the server; it cannot be changed dynamically during inference. Quantization can improve throughput and reduce latency, but may affect output quality.
-- Eager vs graphs: start with eager; enable CUDA graphs after validation
-- Observability: enable metrics and set logging level appropriately
-
----
-
-## Operational Notes and Troubleshooting
-
-**Common issue**: BLOOM + ALiBi with FlashAttention v3 (FA3)
-- Symptom: first request crashes with `AssertionError: Alibi is not supported in FA3`
-- Fix: force Torch SDPA (e.g., `--attention-backend torch-sdpa` or `-O.attention_backend=TORCH_SDPA`); keep eager mode if unstable
-- Note: Some builds may still route to FA internally; verify backend in logs
-
-**CUDA graphs stability**
-- If warmup or capture crashes, disable graphs (enforce eager), align driver/toolkit to image, then re-enable progressively
-
-**CUDA graphs and compile mode**
-- Capturing CUDA graphs reduces launch overhead after warmup
-- Some stacks are sensitive; eager mode is the robust baseline
-- You can disable graphs (e.g., enforce eager) and re-enable after validation
-
-**Health checks**
-- Probe `/v1/models`; only proceed when server is bound and healthy
-
-**Performance tuning**
-- Increase batch/concurrency for throughput; monitor latency and KV memory
-
-**Security and production hygiene**
-- Add TLS, authentication, rate limits; expose metrics; set resource limits; avoid exposing your model server to the public internet without authentication or access controls.
 
 ---
