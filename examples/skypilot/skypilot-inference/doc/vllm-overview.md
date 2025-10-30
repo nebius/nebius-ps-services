@@ -6,28 +6,22 @@ This article provides a comprehensive, hands-on guide to deploying and operating
 
 ---
 
-## Preparing and Configuring Models for Inference
+## Model Preparation and Configuration: Best Practices
 
-**Checklist before deployment**:
-- Model and revision: select the correct model weights (files) and make sure the tokenizer files are from the same model version. This ensures text is split and mapped to token IDs exactly as during training.
-- GPU memory (VRAM): must be sufficient for model weights, context window, and concurrency
-- CUDA version: host driver CUDA must be >= container build CUDA
-- Dtype: bfloat16 recommended on H100/H200; fp16 where appropriate
-- Attention backend support: verify kernel compatibility with positional encoding (SDPA, FlashAttention, Triton)
-- For BLOOM/ALiBi, prefer Torch SDPA or Triton attention; avoid FA3
-- Parallelism: set `--tensor-parallel-size` to GPUs per node
-- Limits: `--max-model-len`, `--max-num-seqs` to fit memory and target latency
-- KV cache: plan memory footprint; consider KV quantization if supported
-- Chat template: If the model or tokenizer does not provide a built-in chat template, you must supply one manually (e.g., via `--chat-template`).
-- Quantization: Choose a quantization method (GPTQ, AWQ, INT8, INT4, FP8) to reduce memory usage and enable serving larger models on limited hardware. Quantization compresses model weights to lower precision, trading off some accuracy for speed and efficiency. Pick the method based on your hardware and model support:
-  - INT8/INT4: best for aggressive memory savings, may reduce output quality
-  - FP8: supported on latest GPUs (H100/H200), balances speed and accuracy
-  - GPTQ/AWQ: advanced quantization for specific models, check compatibility
-  - You must select quantization before starting the server; it cannot be changed dynamically during inference. Quantization can improve throughput and reduce latency, but may affect output quality.
-- Eager vs graphs: start with eager mode (the default, where each operation is executed immediately and errors are easier to debug); enable CUDA graphs after validation for better performance. Eager mode is more robust and helps diagnose issues, while CUDA graphs can improve throughput once the setup is stable. You can enforce eager mode with the `--enforce-eager` flag if you encounter instability or crashes with CUDA graphs. To enable CUDA graphs in vLLM, use the `-O.use_cudagraph=true` flag when starting the server.
-- By default, if you do not specify --enforce-eager or set -O.cudagraph_mode=NONE, vLLM will attempt to use CUDA Graphs for performance, provided the model and environment support it. CUDA Graph mode will be enabled by default unless you explicitly disable it.
-- Note on Docker Images for vLLM: For most use cases, the official `vllm/vllm-openai` Docker image is recommended, it is maintained, tested, and suitable for standard LLM inference. Build a custom image only if you need extra dependencies, custom vLLM code, or must comply with enterprise security requirements. When customizing, start FROM the official image for best compatibility.
-- Observability: enable metrics and set logging level appropriately
+Before deploying vLLM, ensure your model and environment are properly configured for optimal performance and stability. Use this checklist:
+
+- **Model and revision:** Select the correct model weights and matching tokenizer files to ensure tokenization consistency.
+- **GPU memory (VRAM):** Must be sufficient for model weights, context window, and concurrency.
+- **CUDA version:** Host driver CUDA must be >= container build CUDA.
+- **Dtype:** `bfloat16` recommended on H100/H200; `fp16` where appropriate.
+- **Attention backend:** Verify kernel compatibility (SDPA, FlashAttention, Triton). For BLOOM/ALiBi, prefer Torch SDPA or Triton; avoid FA3.
+- **Parallelism:** Set `--tensor-parallel-size` to GPUs per node.
+- **Limits:** Tune `--max-model-len` and `--max-num-seqs` for memory and latency targets.
+- **KV cache:** Plan memory footprint; consider KV quantization if supported.
+- **Chat template:** If not provided by the model, supply via `--chat-template` (required for chat API).
+- **Quantization:** Choose (GPTQ, AWQ, INT8, INT4, FP8) for memory savings. Must be set at server start; cannot change dynamically.
+- **Eager vs graphs:** Start with eager mode (`--enforce-eager`); enable CUDA graphs (`-O.use_cudagraph=true`) after validation for performance.
+- **Observability:** Enable metrics and set logging level as needed.
 
 ---
 
@@ -84,7 +78,7 @@ This will:
 Use the provided test script to validate the OpenAI-compatible endpoint:
 ```sh
 ./test-vllm.sh --port-forward --port <port> --pod <head-pod-name> -n <ns>
-./test-vllm.sh --test all
+./test-vllm.sh --port <port> --test all
 ```
 **Note:** Port forwarding keeps running, so for testing you will need to open up a second terminal.
 This script supports health checks, completions, chat, and interactive modes. See the README for more usage examples.
@@ -234,26 +228,6 @@ Run context: 1000 prompts, `--random-input-len=4000`, `--random-output-len=4000`
 | Median ITL (ms) | 34.73 | Median ITL (p50). |
 | P99 ITL (ms) | 373.22 | 99th percentile ITL; tail spacing between tokens. |
 
-
----
-
-## Model Preparation and Configuration: Best Practices
-
-Before deploying vLLM, ensure your model and environment are properly configured for optimal performance and stability. Use this checklist:
-
-- **Model and revision:** Select the correct model weights and matching tokenizer files to ensure tokenization consistency.
-- **GPU memory (VRAM):** Must be sufficient for model weights, context window, and concurrency.
-- **CUDA version:** Host driver CUDA must be >= container build CUDA.
-- **Dtype:** `bfloat16` recommended on H100/H200; `fp16` where appropriate.
-- **Attention backend:** Verify kernel compatibility (SDPA, FlashAttention, Triton). For BLOOM/ALiBi, prefer Torch SDPA or Triton; avoid FA3.
-- **Parallelism:** Set `--tensor-parallel-size` to GPUs per node.
-- **Limits:** Tune `--max-model-len` and `--max-num-seqs` for memory and latency targets.
-- **KV cache:** Plan memory footprint; consider KV quantization if supported.
-- **Chat template:** If not provided by the model, supply via `--chat-template` (required for chat API).
-- **Quantization:** Choose (GPTQ, AWQ, INT8, INT4, FP8) for memory savings. Must be set at server start; cannot change dynamically.
-- **Eager vs graphs:** Start with eager mode (`--enforce-eager`); enable CUDA graphs (`-O.use_cudagraph=true`) after validation for performance.
-- **Observability:** Enable metrics and set logging level as needed.
-
 ---
 
 ## Example: Using the vLLM OpenAI-Compatible API
@@ -289,18 +263,15 @@ curl -s http://127.0.0.1:8010/v1/chat/completions \
 - Note: Some builds may still route to FA internally; verify backend in logs
 
 **CUDA graphs stability**
-- If warmup or capture crashes, disable graphs (enforce eager), align driver/toolkit to image, then re-enable progressively
-
-**CUDA graphs and compile mode**
-- Capturing CUDA graphs reduces launch overhead after warmup
+- If warmup or Cuda capture crashes, disable Cuda graphs (enforce eager mode)
 - Some stacks are sensitive; eager mode can be used for the baseline
-- You can disable graphs (e.g., enforce eager) and re-enable after validation
+- You can disable graphs (e.g., enforce eager) and re-enable it after validation
 
 **Health checks**
 - Probe `/v1/models`; only proceed when server is bound and healthy
 
 **Performance tuning**
-- Increase batch/concurrency for throughput; monitor latency and KV memory
+- Increase concurrency for throughput; monitor latency and KV memory
 
 **Security and production hygiene**
 - Add TLS, authentication, rate limits; expose metrics; set resource limits; avoid exposing your model server to the public internet without authentication or access controls.
