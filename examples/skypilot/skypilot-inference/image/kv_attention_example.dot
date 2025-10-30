@@ -2,6 +2,9 @@
 // Save as: kv_attention_example.dot
 
 digraph KVAttention {
+  // Keep left-to-right layout for the overall diagram. The KV cache will be
+  // visualized as a vertical HTML table inside its cluster so the rest of the
+  // graph remains LR while the KV list appears top-to-bottom.
   rankdir=LR;
   graph [fontsize=36, fontname="Arial", size="36,24!"];
   node [shape=box, fontname="Arial", fontsize=32, width=2, height=1.2];
@@ -11,35 +14,55 @@ digraph KVAttention {
 
   // Color definitions
 
-  // Tokens
-  // Force vertical order: how (top), are (middle), you (bottom)
-  T0 [label="Input Token 0: how", style=filled, fillcolor="#ffe4b2", pos="0,3!"]
-  T1 [label="Input Token 1: are", style=filled, fillcolor="#ffe4b2", pos="0,2!"]
-  T2 [label="Input Token 2: you", style=filled, fillcolor="#ffe4b2", pos="0,1!"]
+  // Prompt box (horizontal)
+  PromptBox [label="Prompt: how are you", shape=box, style=filled, fillcolor="#fff7cc", fontname="Arial", fontsize=36, width=3, height=1.2];
+
+  // Input Tokens as HTML table for enforced order
+  InputTokens [
+    label=<
+      <TABLE BORDER="1" CELLBORDER="1" CELLSPACING="0" BGCOLOR="#ffe4b2">
+        <TR><TD PORT="how">how</TD></TR>
+        <TR><TD PORT="are">are</TD></TR>
+        <TR><TD PORT="you">you</TD></TR>
+      </TABLE>
+    >,
+    shape=plaintext
+  ];
+
+  // Connect prompt to input tokens
+  PromptBox -> InputTokens [label="tokenize", fontsize=28];
 
   // Embeddings
-  E0 [label="Embedding 0\n[vector]", shape=ellipse, style=filled, fillcolor="#b2e4ff"]
-  E1 [label="Embedding 1\n[vector]", shape=ellipse, style=filled, fillcolor="#b2e4ff"]
-  E2 [label="Embedding 2\n[vector]", shape=ellipse, style=filled, fillcolor="#b2e4ff"]
+  E0 [label="Embedding 0\n[how]", shape=ellipse, style=filled, fillcolor="#b2e4ff"]
+  E1 [label="Embedding 1\n[are]", shape=ellipse, style=filled, fillcolor="#b2e4ff"]
+  E2 [label="Embedding 2\n[you]", shape=ellipse, style=filled, fillcolor="#b2e4ff"]
 
   // QKV
-  Q0 [label="Query 0\n[vector]", shape=ellipse, style=filled, fillcolor="#ffd1dc"]
-  K0 [label="Key 0\n[vector]", shape=ellipse, style=filled, fillcolor="#e6b2ff"]
-  V0 [label="Value 0\n[vector]", shape=ellipse, style=filled, fillcolor="#b2ffb2"]
+  // QKV
+  // KVs for prompt tokens are visualized inside the `KVTable` node within
+  // the KV Cache cluster (see `cluster_kvcache` below). Edges use the
+  // KVTable's ports (k0/v0, k1/v1, k2/v2) so the rest of the graph keeps
+  // left-to-right layout while the KV cache displays vertically.
 
-  Q1 [label="Query 1\n[vector]", shape=ellipse, style=filled, fillcolor="#ffd1dc"]
-  K1 [label="Key 1\n[vector]", shape=ellipse, style=filled, fillcolor="#e6b2ff"]
-  V1 [label="Value 1\n[vector]", shape=ellipse, style=filled, fillcolor="#b2ffb2"]
-
-  Q2 [label="Query 2\n[vector]", shape=ellipse, style=filled, fillcolor="#ffd1dc"]
-  K2 [label="Key 2\n[vector]", shape=ellipse, style=filled, fillcolor="#e6b2ff"]
-  V2 [label="Value 2\n[vector]", shape=ellipse, style=filled, fillcolor="#b2ffb2"]
+  // Query for output token (decoding phase)
+  Qgen [label="Query (for next output token)", shape=ellipse, style=filled, fillcolor="#ffd1dc"]
 
   // KV Cache
   subgraph cluster_kvcache {
-    label="KV Cache (after 3 tokens)";
-    style=dashed;
-    K0; V0; K1; V1; K2; V2;
+  label="KV Cache (after 3 tokens)";
+  style=dashed;
+  // A single HTML table node visualizes the KV cache vertically. Each row
+  // has a PORT so edges can attach to the corresponding Key/Value.
+  KVTable [shape=plaintext, label=<
+    <TABLE BORDER="1" CELLBORDER="1" CELLSPACING="10" CELLPADDING="12" BGCOLOR="#ffffff">
+      <TR><TD PORT="k0" BGCOLOR="#e6b2ff"><FONT POINT-SIZE="36"><B>Key 0</B></FONT><BR/><FONT POINT-SIZE="40">[how]</FONT></TD></TR>
+      <TR><TD PORT="v0" BGCOLOR="#b2ffb2"><FONT POINT-SIZE="36"><B>Value 0</B></FONT><BR/><FONT POINT-SIZE="40">[how]</FONT></TD></TR>
+      <TR><TD PORT="k1" BGCOLOR="#e6b2ff"><FONT POINT-SIZE="36"><B>Key 1</B></FONT><BR/><FONT POINT-SIZE="40">[are]</FONT></TD></TR>
+      <TR><TD PORT="v1" BGCOLOR="#b2ffb2"><FONT POINT-SIZE="36"><B>Value 1</B></FONT><BR/><FONT POINT-SIZE="40">[are]</FONT></TD></TR>
+      <TR><TD PORT="k2" BGCOLOR="#e6b2ff"><FONT POINT-SIZE="36"><B>Key 2</B></FONT><BR/><FONT POINT-SIZE="40">[you]</FONT></TD></TR>
+      <TR><TD PORT="v2" BGCOLOR="#b2ffb2"><FONT POINT-SIZE="36"><B>Value 2</B></FONT><BR/><FONT POINT-SIZE="40">[you]</FONT></TD></TR>
+    </TABLE>
+  >];
   }
 
   // Attention score calculation for Token 2
@@ -63,40 +86,47 @@ digraph KVAttention {
   OUT1 [label="Output Token 1: am", style=filled, fillcolor="#c2ffc2"]
 
   // Connections
-  // Explicitly order input token connections for top-down: how, are, you
-  T0 -> E0 -> Q0
-  E0 -> K0
-  E0 -> V0
-  T1 -> E1 -> Q1
-  E1 -> K1
-  E1 -> V1
-  T2 -> E2 -> Q2
-  E2 -> K2
-  E2 -> V2
+  // Connect input tokens (table cells) to embeddings
+  InputTokens:how -> E0
+  InputTokens:are -> E1
+  InputTokens:you -> E2
+  // Only K and V are stored in the cache
+  // Attach embeddings to the KVTable ports (visual Key/Value rows)
+  E0 -> KVTable:k0
+  E0 -> KVTable:v0
+  E1 -> KVTable:k1
+  E1 -> KVTable:v1
+  E2 -> KVTable:k2
+  E2 -> KVTable:v2
 
-  // Q2 attention calculation
-  Q2 -> Q2K0
-  K0 -> Q2K0
-  Q2 -> Q2K1
-  K1 -> Q2K1
-  Q2 -> Q2K2
-  K2 -> Q2K2
+  // Q (for output token) attention calculation
+  Qgen -> Q2K0
+  KVTable:k0 -> Q2K0
+  Qgen -> Q2K1
+  KVTable:k1 -> Q2K1
+  Qgen -> Q2K2
+  KVTable:k2 -> Q2K2
 
   Q2K0 -> SM
   Q2K1 -> SM
   Q2K2 -> SM
 
   SM -> WS
-  V0 -> WS
-  V1 -> WS
-  V2 -> WS
+  KVTable:v0 -> WS
+  KVTable:v1 -> WS
+  KVTable:v2 -> WS
   WS -> LOGITS
   LOGITS -> ARGMAX
   ARGMAX -> DETOK
   DETOK -> OUT0
   OUT0 -> OUT1 [style=dashed, label="next output"]
+  // Token generation loop: the produced output is fed back into the KV cache
+  // and the decoding steps repeat to produce the next token. Connect the
+  // loop to the Query node to show the next decoding step uses the updated
+  // cache to compute the next Query.
+  OUT0 -> Qgen [style=dashed, label="Token Generation Loop", fontsize=24, color="#666666", constraint=false];
 
-  // --- Legend and Descriptions (top right) ---
+  // --- Legend and Descriptions (top left) ---
   legend [label=<
     <TABLE BORDER="1" CELLBORDER="1" CELLSPACING="0" BGCOLOR="#ffffff">
       <TR><TD COLSPAN="2"><B>Legend: Color Coding</B></TD></TR>
@@ -124,6 +154,47 @@ digraph KVAttention {
       <TR><TD ALIGN="LEFT"><B>Project to logits</B></TD><TD ALIGN="LEFT">Weighted sum is projected to vocabulary size (one score per token)</TD></TR>
       <TR><TD ALIGN="LEFT"><B>Argmax</B></TD><TD ALIGN="LEFT">Selects the token with the highest score</TD></TR>
       <TR><TD ALIGN="LEFT"><B>Detokenize</B></TD><TD ALIGN="LEFT">Converts token ID to readable text</TD></TR>
+  <TR><TD ALIGN="LEFT"><B>Attention</B></TD><TD ALIGN="LEFT">softmax((Q·K^T)/√d_k) V</TD></TR>
+  <TR><TD ALIGN="LEFT"><B>Query (Q)</B></TD><TD ALIGN="LEFT">Query vector: what we search for (current decoder/query vector). Q = x · W_Q</TD></TR>
+  <TR><TD ALIGN="LEFT"><B>Key (K)</B></TD><TD ALIGN="LEFT">Key vector: address/signature of a context token. K = x · W_K</TD></TR>
+  <TR><TD ALIGN="LEFT"><B>Value (V)</B></TD><TD ALIGN="LEFT">Value vector: content retrieved when a Key matches. V = x · W_V</TD></TR>
+    </TABLE>
+  >, shape=plaintext, width=6, height=2.5, fontsize=36, fontname="Arial"]
+
+  // Place legend and descriptions at the top left
+  legend -> descriptions [style=invis]
+  legend [label=<
+    <TABLE BORDER="1" CELLBORDER="1" CELLSPACING="0" BGCOLOR="#ffffff">
+      <TR><TD COLSPAN="2"><B>Legend: Color Coding</B></TD></TR>
+      <TR><TD BGCOLOR="#ffe4b2">Input Token</TD><TD>how, are, you</TD></TR>
+      <TR><TD BGCOLOR="#b2e4ff">Embedding</TD><TD>Token vector</TD></TR>
+      <TR><TD BGCOLOR="#ffd1dc">Query</TD><TD>Q (attention)</TD></TR>
+      <TR><TD BGCOLOR="#e6b2ff">Key</TD><TD>K (attention)</TD></TR>
+      <TR><TD BGCOLOR="#b2ffb2">Value</TD><TD>V (attention)</TD></TR>
+      <TR><TD BGCOLOR="#e0e0ff">Dot Product</TD><TD>Q·K = score</TD></TR>
+      <TR><TD BGCOLOR="#ffe0e0">Softmax</TD><TD>Attention weights</TD></TR>
+      <TR><TD BGCOLOR="#e0ffe0">Weighted Sum</TD><TD>Σ w_i V_i</TD></TR>
+      <TR><TD BGCOLOR="#e0f7fa">Logits</TD><TD>Project to vocab</TD></TR>
+      <TR><TD BGCOLOR="#f0e0fa">Argmax</TD><TD>Pick output token</TD></TR>
+      <TR><TD BGCOLOR="#f0fff0">Detokenize</TD><TD>Convert to text</TD></TR>
+      <TR><TD BGCOLOR="#c2ffc2">Output Token</TD><TD>"I", "am"</TD></TR>
+      
+    </TABLE>
+  >, shape=plaintext, width=6, height=2.5, fontsize=40, fontname="Arial"]
+
+  descriptions [label=<
+    <TABLE BORDER="1" CELLBORDER="1" CELLSPACING="0" BGCOLOR="#ffffff">
+      <TR><TD COLSPAN="2"><B>Descriptions</B></TD></TR>
+      <TR><TD ALIGN="LEFT"><B>Dot(Q, K)</B></TD><TD ALIGN="LEFT">Dot product of query and key vectors (similarity score)</TD></TR>
+      <TR><TD ALIGN="LEFT"><B>Softmax</B></TD><TD ALIGN="LEFT">Normalizes scores to probabilities (weights)</TD></TR>
+      <TR><TD ALIGN="LEFT"><B>Weighted sum</B></TD><TD ALIGN="LEFT">Each value vector V is weighted by its attention score</TD></TR>
+      <TR><TD ALIGN="LEFT"><B>Project to logits</B></TD><TD ALIGN="LEFT">Weighted sum is projected to vocabulary size (one score per token)</TD></TR>
+      <TR><TD ALIGN="LEFT"><B>Argmax</B></TD><TD ALIGN="LEFT">Selects the token with the highest score</TD></TR>
+      <TR><TD ALIGN="LEFT"><B>Detokenize</B></TD><TD ALIGN="LEFT">Converts token ID to readable text</TD></TR>
+  <TR><TD ALIGN="LEFT"><B>Attention</B></TD><TD ALIGN="LEFT">softmax((Q·K^T)/√d_k) V</TD></TR>
+  <TR><TD ALIGN="LEFT"><B>Query (Q)</B></TD><TD ALIGN="LEFT">Query vector: what we search for (current decoder/query vector). Q = x · W_Q</TD></TR>
+  <TR><TD ALIGN="LEFT"><B>Key (K)</B></TD><TD ALIGN="LEFT">Key vector: address/signature of a context token. K = x · W_K</TD></TR>
+  <TR><TD ALIGN="LEFT"><B>Value (V)</B></TD><TD ALIGN="LEFT">Value vector: content retrieved when a Key matches. V = x · W_V</TD></TR>
     </TABLE>
   >, shape=plaintext, width=6, height=2.5, fontsize=36, fontname="Arial"]
 

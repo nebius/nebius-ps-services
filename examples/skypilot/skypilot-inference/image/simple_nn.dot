@@ -6,25 +6,31 @@ digraph SimpleNN {
     // Input prompt (single source)
     Prompt [label="Prompt:\nHow are you?", shape=box, fillcolor=lightyellow, style=filled, fontname="Arial"];
 
-    // Input layer
-    subgraph cluster_input {
-        label="Input Layer (4 neurons)";
-        style=dashed;
-        I1 [label="Input 1"];
-        I2 [label="Input 2"];
-        I3 [label="Input 3"];
-        I4 [label="Input 4"];
-    }
+    // Tokenizer box
+    Tokenizer [label="Tokenizer", shape=box, fillcolor=lightgrey, style=filled, fontname="Arial"];
 
-    // Hidden layer
-    subgraph cluster_hidden {
-        label="Hidden Layer (4 neurons)";
-        style=dashed;
-        H1 [label="H1"];
-        H2 [label="H2"];
-        H3 [label="H3"];
-        H4 [label="H4"];
-    }
+    // Detokenizer box
+    Detokenizer [label="Detokenizer", shape=box, fillcolor=lightgrey, style=filled, fontname="Arial"];
+
+    // Input layer (circles, ordered bottom to top)
+    I4 [label="Input 4", shape=circle, fillcolor=lightblue, style=filled, fontname="Arial"];
+    I3 [label="Input 3", shape=circle, fillcolor=lightblue, style=filled, fontname="Arial"];
+    I2 [label="Input 2", shape=circle, fillcolor=lightblue, style=filled, fontname="Arial"];
+    I1 [label="Input 1", shape=circle, fillcolor=lightblue, style=filled, fontname="Arial"];
+    {rank=same; I4; I3; I2; I1;}
+    I4 -> I3 [style=invis];
+    I3 -> I2 [style=invis];
+    I2 -> I1 [style=invis];
+
+    // Hidden layer (circles, ordered bottom to top)
+    H4 [label="H4", shape=circle, fillcolor=lightblue, style=filled, fontname="Arial"];
+    H3 [label="H3", shape=circle, fillcolor=lightblue, style=filled, fontname="Arial"];
+    H2 [label="H2", shape=circle, fillcolor=lightblue, style=filled, fontname="Arial"];
+    H1 [label="H1", shape=circle, fillcolor=lightblue, style=filled, fontname="Arial"];
+    {rank=same; H4; H3; H2; H1;}
+    H4 -> H3 [style=invis];
+    H3 -> H2 [style=invis];
+    H2 -> H1 [style=invis];
 
     // Output layer
     subgraph cluster_output {
@@ -33,11 +39,14 @@ digraph SimpleNN {
         O1 [label="Output"];
     }
 
-    // Prompt to all input neurons
-    Prompt -> I1;
-    Prompt -> I2;
-    Prompt -> I3;
-    Prompt -> I4;
+    // Prompt to Tokenizer
+    Prompt -> Tokenizer [label="text prompt"];
+
+    // Tokenizer to all input neurons (token-ids)
+    Tokenizer -> I4 [label="token-id 4"];
+    Tokenizer -> I3 [label="token-id 3"];
+    Tokenizer -> I2 [label="token-id 2"];
+    Tokenizer -> I1 [label="token-id 1"];
 
     // Input to Hidden (fully connected)
     I1 -> H1; I1 -> H2; I1 -> H3; I1 -> H4;
@@ -50,4 +59,11 @@ digraph SimpleNN {
     H2 -> O1;
     H3 -> O1;
     H4 -> O1;
+
+    // Output neuron to Detokenizer
+    O1 -> Detokenizer [label="output token-id"];
+
+    // Optionally, show detokenizer output as text
+    Detokenizer -> OutputText [label="text output", style=dotted];
+    OutputText [label="Output:\nI'm fine!", shape=box, fillcolor=lightyellow, style=filled, fontname="Arial"];
 }
