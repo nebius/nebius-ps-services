@@ -106,7 +106,7 @@ A basic neural network has:
 - **Output layer:** Produces the final prediction (e.g., the next token or word).
 
 Suppose we have:
-- 4 input neurons (for 4 input features/tokens)
+- 4 input neurons (for 4 input tokens)
 - 4 hidden neurons
 - 1 output neuron (for simplicity)
 
