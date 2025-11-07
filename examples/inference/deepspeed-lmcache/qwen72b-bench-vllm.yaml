@@ -1,0 +1,101 @@
+name: qwen72b-vllm-bench
+
+resources:
+  cloud: kubernetes
+  image_id: docker:vllm/vllm-openai:v0.11.0
+  accelerators: H200:8
+  cpus: 80
+  memory: 1Ti
+num_nodes: 1
+
+envs:
+  MODEL_ID: Qwen/Qwen2.5-72B-Instruct
+  HF_HOME: /model-weights/hf_home
+  HUGGINGFACE_HUB_CACHE: /model-weights/hf_home/hub
+  VLLM_DTYPE: bfloat16
+  VLLM_MAX_MODEL_LEN: "8192"
+  VLLM_MAX_NUM_SEQS: "256"
+  VLLM_ATTENTION_BACKEND: FLASH_ATTN
+  VLLM_INPUT_LEN: "32"
+
+secrets:
+  HF_TOKEN: ""
+
+volumes:
+  /model-weights: model-weights
+
+config:
+  kubernetes:
+    pod_config:
+      spec:
+        nodeSelector:
+          nvidia.com/gpu.present: "true"
+        containers:
+        - name: skypilot-container
+          imagePullPolicy: IfNotPresent
+
+setup: |
+  set -Eeuo pipefail
+  echo "[bench setup] Installing rsync if missing..." >&2
+  if ! command -v rsync >/dev/null 2>&1; then
+    if [ -f /etc/os-release ] && grep -qi 'ubuntu\|debian' /etc/os-release; then
+      apt-get update && apt-get install -y rsync
+    elif [ -f /etc/alpine-release ]; then
+      apk add --no-cache rsync
+    else
+      echo "[fatal] Unknown base image; please install rsync manually." >&2
+      exit 1
+    fi
+  fi
+  echo "[bench setup] Checking GPU and Python..." >&2
+  if ! command -v nvidia-smi >/dev/null 2>&1; then
+    echo "[fatal] nvidia-smi missing; GPU runtime not available." >&2
+    exit 1
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "[fatal] python3 missing." >&2
+    exit 1
+  fi
+  if ! awk '$2=="/model-weights"{found=1} END{exit !found}' /proc/mounts; then
+    echo "Error: /model-weights is not a mounted volume (PVC not bound/attached)." >&2
+    exit 1
+  fi
+  # Check if model weights are present
+  MODEL_SAFE="${MODEL_ID//\//--}"
+  MODEL_CACHE_DIR="${HUGGINGFACE_HUB_CACHE}/models--${MODEL_SAFE}"
+  if [ ! -d "$MODEL_CACHE_DIR" ]; then
+    echo "[fatal] Model weights not found in $MODEL_CACHE_DIR. Please run the serving job first to download weights." >&2
+    exit 1
+  fi
+  export HUGGINGFACE_HUB_TOKEN="${HF_TOKEN:-}"
+
+run: |
+  set -Eeuo pipefail
+  export PYTHONUNBUFFERED=1
+  export HUGGINGFACE_HUB_TOKEN="${HF_TOKEN:-}"
+  export PYTHONWARNINGS="${PYTHONWARNINGS:-ignore:.*pynvml.*:FutureWarning}"
+  NUM_SHARDS=${SKYPILOT_NUM_GPUS_PER_NODE:-1}
+  DTYPE=${VLLM_DTYPE:-bfloat16}
+  VLLM_MAX_MODEL_LEN=${VLLM_MAX_MODEL_LEN:-8192}
+  VLLM_MAX_NUM_SEQS=${VLLM_MAX_NUM_SEQS:-256}
+  MODEL_ID=${MODEL_ID}
+  CACHE_DIR=${HUGGINGFACE_HUB_CACHE}
+  echo "[bench] Running vLLM benchmark for $MODEL_ID..." >&2
+  vllm bench latency \
+    --model "$MODEL_ID" \
+    --tensor-parallel-size "$NUM_SHARDS" \
+    --dtype "$DTYPE" \
+    --max-model-len "$VLLM_MAX_MODEL_LEN" \
+    --max-num-seqs "$VLLM_MAX_NUM_SEQS" \
+    --download-dir "$CACHE_DIR" \
+    -O.attention_backend="$VLLM_ATTENTION_BACKEND"
+
+  vllm bench throughput \
+    --model "$MODEL_ID" \
+    --tensor-parallel-size "$NUM_SHARDS" \
+    --dtype "$DTYPE" \
+    --max-model-len "$VLLM_MAX_MODEL_LEN" \
+    --max-num-seqs "$VLLM_MAX_NUM_SEQS" \
+    --input-len "$VLLM_INPUT_LEN" \
+    --download-dir "$CACHE_DIR" \
+    -O.attention_backend="$VLLM_ATTENTION_BACKEND"
