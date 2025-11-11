@@ -1,0 +1,25 @@
+# Environment and secret-bearing files
+.env
+.env.*
+*.env
+.secrets
+.secrets.*
+
+# Local tooling and caches
+.direnv/
+.python-version
+.venv/
+__pycache__/
+
+# Logs and rendered/generated artifacts
+*.log
+*.rendered.yaml
+*.generated.yaml
+*.local.yaml
+
+# Sky config (keep template tracked)
+.sky.yaml
+!template.sky.yaml
+!.template.env
+
+# Repo-specific ignores
