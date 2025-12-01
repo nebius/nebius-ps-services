@@ -1,0 +1,83 @@
+digraph NebiusVPNGW {
+  rankdir=LR;
+  graph [fontsize=10, labelloc=t, label="Nebius VM-based VPN Gateway – Architecture Overview", fontname="Helvetica"];
+  node  [shape=box, style=rounded, fontname="Helvetica"];
+  edge  [fontname="Helvetica"];
+
+  // Operator / Orchestrator
+  subgraph cluster_operator {
+    label = "Operator Laptop / CI";
+    style=rounded;
+    color=gray60;
+
+    orchestrator [label="Orchestrator CLI\n(nebius-vpngw)\n\n- Reads YAML config\n- Merges peer configs\n- Plans per-VM config\n- Idempotent apply", shape=box];
+
+    cfg_yaml [label="nebius-vpngw-config.yaml\n(source of truth)", shape=note];
+    peer_files [label="Peer config file(s)\n(GCP/AWS/Azure/Cisco)", shape=note];
+
+    orchestrator -> cfg_yaml [dir=back, arrowtail=none, style=dashed, label="read"];
+    orchestrator -> peer_files [dir=back, arrowtail=none, style=dashed, label="read"];
+  }
+
+  // Nebius Cloud environment
+  subgraph cluster_nebius {
+    label = "Nebius Cloud";
+    style=rounded; color=gray40;
+
+    subgraph cluster_vpc {
+      label = "VPC (Hub)"; style=rounded; color=gray50;
+
+      subgraph cluster_vpn_subnet {
+        label = "VPN Subnet"; style=rounded; color=gray60;
+
+        gw0 [label="GW VM 0\nUbuntu 22.04\n- strongSwan\n- FRR (bgpd)\n- nebius-vpngw-agent", shape=box];
+        gw1 [label="GW VM 1 (optional)\nUbuntu 22.04\n- strongSwan\n- FRR (bgpd)\n- nebius-vpngw-agent", shape=box, color=gray65];
+
+        { rank=same; gw0; gw1 }
+      }
+
+      subgraph cluster_workloads {
+        label = "Workload Subnets"; style=rounded; color=gray60;
+        app1 [label="App VM(s)", shape=box];
+      }
+
+      rt [label="Route Table\n- Prefix -> next_hop\n- No ECMP", shape=box];
+
+      app1 -> rt [dir=none, style=invis];
+    }
+  }
+
+  // External peers
+  subgraph cluster_peers {
+    label = "External Peers"; style=rounded; color=gray50;
+    gcp   [label="GCP HA VPN", shape=box];
+    aws   [label="AWS S2S VPN", shape=box];
+    azure [label="Azure VPN GW", shape=box];
+    onprem[label="On‑prem (Cisco)", shape=box];
+  }
+
+  // SDK & SSH flows
+  sdk [label="Nebius SDK\n(Compute/VPC)", shape=component];
+  ssh [label="SSH/SCP", shape=component];
+
+  orchestrator -> sdk [label="Create/Recreate VMs\nManage routes", color=black];
+  orchestrator -> ssh [label="Push per-VM resolved config\nTrigger agent reload", color=black];
+  ssh -> gw0 [label="/etc/nebius-vpngw/\nconfig-resolved.yaml\n+ reload", color=black];
+  ssh -> gw1 [label="(if instance_count>1)", style=dashed, color=gray50];
+
+  // Routing table next-hop to active gateway
+  rt -> gw0 [label="next_hop = GW0 (active)", color=black];
+  rt -> gw1 [label="next_hop = GW1 (failover)", style=dashed, color=gray50];
+
+  // IPsec/BGP tunnels
+  gcp   -> gw0 [label="IPsec/IKEv2\nBGP (APIPA)", color=steelblue4];
+  aws   -> gw0 [label="IPsec/IKEv2\nBGP or static", color=steelblue4];
+  azure -> gw0 [label="IPsec/IKEv2\nBGP or static", color=steelblue4];
+  onprem-> gw0 [label="IPsec\nstatic (or BGP)", color=steelblue4];
+
+  // Agent responsibilities
+  agent_legend [label="Agent (on GW VM)\n- Read resolved config\n- Render strongSwan & FRR configs\n- Idempotent apply\n- Persist last-applied hash", shape=box, color=gray60];
+  gw0 -> agent_legend [style=dotted, arrowhead=none, color=gray60];
+
+  // Rank constraint moved inside cluster_vpn_subnet
+}
