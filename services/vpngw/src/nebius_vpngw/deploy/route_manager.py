@@ -18,7 +18,45 @@ class RouteManager:
         - for bgp mode, skip (dynamic on FRR and cloud side)
         """
         print("[RouteManager] Reconcile routes")
+        # Best-effort SDK wiring; continue to log-only if not present
+        try:
+            import nebius.sdk as sdk  # type: ignore
+
+            client = sdk.SDK()
+            vpc = getattr(client, "vpc")()
+            route_api = getattr(vpc, "route", None) or getattr(vpc, "routes", None)
+        except Exception:
+            # Attempt legacy SDK paths
+            try:
+                from nebius import pysdk  # type: ignore
+                client = pysdk.Client()
+                vpc = getattr(client, "vpc")()
+                route_api = getattr(vpc, "route", None) or getattr(vpc, "routes", None)
+            except Exception as e:
+                route_api = None
+                print(f"[RouteManager] SDK not available; logging only: {e}")
+
+        import yaml
         for inst in plan.iter_instance_configs():
-            # The per-instance YAML is serialized; parse to inspect static routes if needed
-            # For scaffold, just log
-            print(f"[RouteManager] Instance {inst.instance_index} routes: idempotent ensure")
+            try:
+                cfg = yaml.safe_load(inst.config_yaml) or {}
+            except Exception:
+                cfg = {}
+            for conn in cfg.get("connections", []):
+                mode = conn.get("routing_mode") or (cfg.get("defaults", {}).get("routing", {}).get("mode") or "bgp")
+                if mode != "static":
+                    continue
+                for tun in conn.get("tunnels", []):
+                    if tun.get("ha_role", "active") != "active":
+                        continue
+                    prefixes = ((tun.get("static_routes") or {}).get("remote_prefixes") or [])
+                    for pfx in prefixes:
+                        if route_api and hasattr(route_api, "ensure"):
+                            try:
+                                # Placeholder ensure signature; adapt to real SDK
+                                route_api.ensure(destination=pfx, next_hop=inst.external_ip, project_id=self.project_id)
+                                print(f"[RouteManager] Ensured route {pfx} -> {inst.external_ip}")
+                            except Exception as e:
+                                print(f"[RouteManager] ensure failed for {pfx}: {e}")
+                        else:
+                            print(f"[RouteManager] Would ensure route {pfx} -> {inst.external_ip}")

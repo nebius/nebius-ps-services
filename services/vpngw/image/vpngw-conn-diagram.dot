@@ -1,20 +1,28 @@
 digraph VPNConnections {
   rankdir=LR;
-  graph [fontsize=11, labelloc=t, label="Site-to-Site VPN: Nebius (Site A) ↔ GCP (Site B)\nConnections with Embedded IPsec Tunnel Details", fontname="Helvetica"];
+  graph [fontsize=11, labelloc=t, label="Site-to-Site VPN: Nebius (Site A) ↔ GCP (Site B)\nConnections with Embedded IPsec Tunnel Details", fontname="Helvetica", nodesep=0.7, ranksep=1.2];
   node  [shape=box, style=rounded, fontname="Helvetica"];
-  edge  [fontname="Helvetica", arrowsize=0.7];
+  edge  [fontname="Helvetica", arrowsize=0.7, fontsize=9];
 
   // Left site: Nebius VPN Gateway with two public IPs
   subgraph cluster_site_nebius {
     label = "Site A: Nebius";
     style = rounded; color = gray50;
 
-    nebius_gw  [label="Nebius VPN Gateway\nInstance: vpngw\nASN: 65010"];
-    neb_if0[label="neb-if0\nPublic IP: 84.2.2.10"];
-    neb_if1[label="neb-if1\nPublic IP: 84.2.2.11"];
+    nebius_gw  [shape=box, label="Nebius VPN Gateway\nInstance: vpngw\nASN: 65010"];
+    // Interface boxes attached to gateway, with public IPs inside
+    neb_if0[label="neb-if0\nPublic IP: 84.2.2.10", shape=box, style=rounded];
+    neb_if1[label="neb-if1\nPublic IP: 84.2.2.11", shape=box, style=rounded];
 
-    nebius_gw -> neb_if0 [arrowhead=none, style=dotted, label="address #1"];
-    nebius_gw -> neb_if1 [arrowhead=none, style=dotted, label="address #2"];
+    // Attach interfaces to the gateway (no arrows)
+    nebius_gw -> neb_if0 [arrowhead=none];
+    nebius_gw -> neb_if1 [arrowhead=none];
+
+    // Internal subnet advertised from Nebius
+    nebius_subnet [label="Nebius Subnet\n10.10.0.0/16", shape=box, style=rounded, color=gray60];
+    { rank=same; nebius_gw; nebius_subnet }
+
+    // Keep gateway compact; connect tunnels directly from ports
 
     { rank=same; neb_if0; neb_if1 }
   }
@@ -28,20 +36,21 @@ digraph VPNConnections {
     gcp_if1 [label="gcp-if1\nExternal IP: 35.1.1.2\nASN: 16550"];
 
     { rank=same; gcp_if0; gcp_if1 }
+
+    // Internal subnet advertised from GCP
+    gcp_subnet [label="GCP Subnet\n10.20.0.0/16", shape=box, style=rounded, color=steelblue3];
   }
 
   // Site-to-site connections (each edge encapsulates the Connection and its Tunnel)
   // Ensure left-to-right site order
   nebius_gw -> gcp_if0 [style=invis, weight=100];
 
-  neb_if0 -> gcp_if0 [color=steelblue4,
-    label="conn neb-if0 ↔ gcp-if0\nTunnel neb-if0↔gcp-if0 (IPsec)\nAPIPA 169.254.100.0/30  (Nebius .2 ↔ .1 GCP)\nIKEv2 AES256/SHA256  DPD 10/30\nBGP 16550 ↔ 65010  Advertise 10.10.0.0/16"];
+  neb_if0 -> gcp_if0 [color=steelblue4, label="", minlen=2, labeldistance=2,
+    xlabel="conn neb-if0 ↔ gcp-if0\nTunnel neb-if0↔gcp-if0 (IPsec)\nAPIPA 169.254.100.0/30  (Nebius .2 ↔ .1 GCP)\nIKEv2 AES256/SHA256  DPD 10/30\nBGP: Nebius → GCP advertises 10.10.0.0/16\nBGP: GCP → Nebius advertises 10.20.0.0/16"];
 
-  neb_if1 -> gcp_if1 [color=steelblue4,
-    label="conn neb-if1 ↔ gcp-if1\nTunnel neb-if1↔gcp-if1 (IPsec)\nAPIPA 169.254.101.0/30  (Nebius .2 ↔ .1 GCP)\nIKEv2 AES256/SHA256  DPD 10/30\nBGP 16550 ↔ 65010  Advertise 10.10.0.0/16"];
+  neb_if1 -> gcp_if1 [color=steelblue4, label="", minlen=2, labeldistance=2,
+    xlabel="conn neb-if1 ↔ gcp-if1\nTunnel neb-if1↔gcp-if1 (IPsec)\nAPIPA 169.254.101.0/30  (Nebius .2 ↔ .1 GCP)\nIKEv2 AES256/SHA256  DPD 10/30\nBGP: Nebius → GCP advertises 10.10.0.0/16\nBGP: GCP → Nebius advertises 10.20.0.0/16"];
 
-  // Minimal legend for clarity
-  legend [shape=note, fontsize=10,
-    label="Site A = Nebius  |  Site B = GCP\nEach labeled edge represents one Connection, containing a single IPsec Tunnel.\nDotted lines show Nebius GW bound to its two public IPs."];
+  // Legend removed per request; title is sufficient
 }
  

@@ -1,30 +1,13 @@
+#############################################
+# Deprecated pyproject.toml (moved to root) #
+#############################################
+
+# The active project configuration now lives at:
+#   ../pyproject.toml
+# This stub remains only because file deletion failed in automation.
+# Do NOT run 'poetry' commands from this directory.
+
 [tool.poetry]
-name = "nebius-vpngw"
-version = "0.1.0"
-description = "Nebius VM-based VPN Gateway orchestrator and agent"
-authors = ["Nebius <dev@nebius.com>"]
-readme = "README.md"
-packages = [{ include = "nebius_vpngw", from = "src" }]
-
-[tool.poetry.dependencies]
-python = ">=3.10,<3.13"
-PyYAML = "^6.0.1"
-paramiko = "^3.5.0"
-rich = "^13.9.2"
-typer = {version = "^0.12.5", extras=["all"]}
-pydantic = "^2.9.2"
-
-# Nebius SDK placeholder; replace with actual package name when available
-nebius-pysdk = "^0.0.0"
-
-[tool.poetry.group.dev.dependencies]
-pytest = "^8.3.3"
-ruff = "^0.6.9"
-
-[tool.poetry.scripts]
-nebius-vpngw = "nebius_vpngw.cli:app"
-nebius-vpngw-agent = "nebius_vpngw.agent.main:main"
-
-[build-system]
-requires = ["poetry-core>=1.9.0"]
-build-backend = "poetry.core.masonry.api"
+name = "deprecated-nebius-vpngw-src-layout"
+version = "0.0.0"
+description = "Deprecated stub; use repository root pyproject.toml"

@@ -1,0 +1,95 @@
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+.build/
+build/
+dist/
+.eggs/
+*.egg-info/
+*.egg
+wheels/
+
+# Virtual environments
+.env/
+.venv/
+venv/
+env/
+venv.bak/
+
+# Tool caches
+.pytest_cache/
+.coverage*
+.cache/
+.mypy_cache/
+.ruff_cache/
+
+# Logs & runtime
+*.log
+*.pid
+*.out
+*.err
+
+# IDE/editor settings
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS/macOS artifacts
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+.fseventsd
+
+# Graphviz rendered outputs (keep source .dot files)
+image/*.svg
+image/*.png
+
+# Security / secrets / credentials patterns
+*.psk
+*.secret
+*.secrets
+*.token
+*.key
+*.pem
+*.crt
+*.csr
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+
+# Local configuration containing secrets (do not commit)
+nebius-vpngw-config.yaml
+*.local.yaml
+*.override.yaml
+
+# Generated resolved configs / state snapshots (agent)
+config-resolved.yaml
+last-applied.json
+
+# StrongSwan & FRR runtime configs (if pulled locally—avoid accidental commit)
+ipsec.conf
+ipsec.secrets
+bgpd.conf
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.orig
+
+# PyInstaller / binary build artifacts
+/dist/nebius-vpngw
+*.spec
+
+# Misc
+.poetry/
+.python-version

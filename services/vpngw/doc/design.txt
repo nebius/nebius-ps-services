@@ -1,559 +1,158 @@
-1.	Architecture overview
-2.	Nebius topology & routing model
-3.	VPN gateway VM architecture (packages, versions, roles)
-4.	Configuration model (full YAML schema with comments)
-5.	Scripts & CLI interface (how to call it, arguments, flows)
-6.	Peer config import behavior (GCP/AWS/Azure)
-7.	Routing modes: BGP + static
-8.	HA & SLA modes (instance_count = 1 vs >1)
-9.	Idempotency & lifecycle
- 
-1. Architecture overview
-Goal
-Build a generic, VM-based Site-to-Site VPN Gateway for Nebius AI Cloud that:
-•	Runs on Nebius Compute VMs.
-•	Uses IPsec tunnel mode with:
-o	IKEv2 (default) and IKEv1 (legacy support),
-o	PSK authentication,
-o	AES-256 encryption,
-o	SHA-256 / SHA-384 / SHA-512 integrity,
-o	DH groups 14 / 20 / 24,
-o	Configurable Phase I / II SA lifetimes.
-•	Supports BGP (preferred) and static routing.
-•	Works with:
-o	GCP HA VPN,
-o	AWS Site-to-Site VPN,
-o	Azure VPN Gateway,
-o	On-prem routers (Cisco, etc.).
-•	Has two main deployment modes:
-o	Single VM + multiple tunnels (tunnel HA / active-active, VM is SPOF),
-o	Gateway group (N VMs) with health-based route switching for VM-level HA.
-•	Is fully driven by a YAML config file and optional peer config file(s) exported from cloud VPN services.
-Main components
-1.	Config & Orchestrator (Python CLI, run on operator laptop/CI)
-o	Reads --local-config-file (YAML).
-o	Reads zero or more --peer-config-file (downloaded from GCP/AWS/Azure portals).
-o	Parses and normalizes vendor-specific peer configs into generic tunnel specs.
-o	Merges:
-	YAML,
-	Peer config,
-	Defaults,
-to build a resolved deployment plan.
-o	Uses Nebius Python SDK (pysdk) to:
-	Create/delete VMs (InstanceServiceClient / InstanceSpec, NetworkInterfaceSpec, PublicIPAddress).
-	Optionally manage routing tables and routes (RouteTable, Route).
-2.	Gateway VM image (Nebius Compute)
-o	Base OS: Ubuntu 22.04 LTS (or similar, pinned in docs).
-o	Packages (installed via cloud-init on first boot only):
-	strongswan (IPsec IKEv1/v2),
-	frr (FRRouting, BGP),
-	python3, pip, virtualenv,
-	nebius-vpngw-agent (your Python agent service).
-o	Cloud-init is used only for:
-	Base packages,
-	Systemd unit for the agent,
-	Creating /etc/nebius-vpngw/ directory structure.
-o	No static tunnel config in cloud-init (config must be re-appliable at runtime).
-3.	Gateway Agent (Python, running on each VM)
-o	Reads local config file (pushed over SSH or via some config channel).
-o	Builds final per-VM configuration:
-	strongSwan config (ipsec.conf, ipsec.secrets),
-	FRR config (bgpd.conf).
-o	Applies changes idempotently:
-	Regenerates configs,
-	Uses ipsec reload / swanctl --load-all,
-	Uses systemctl reload frr or FRR vtysh commands.
-o	Stores last applied config hash (/etc/nebius-vpngw/last-applied.json) for change detection.
-4.	HA / Health controller (can be part of orchestrator or separate process)
-o	Uses Nebius SDK to:
-	Check VM health (status, maybe BGP/tunnel status via agent API in future).
-	Update VPC routing routes’ next_hop.allocation_id or default gateway, to point to the correct gateway VM.
-o	Implements active/disable semantics based on ha_role and health.
- 
-2. Nebius topology & routing model
-Nebius Virtual Networks model: networks, subnets, allocations, routing tables.
-Key points for this design:
-•	You have a hub VPC (network) with:
-o	VPN gateway subnet: where gateway VMs live.
-o	Workload subnets: where application VMs live.
-•	Each subnet uses a routing table that defines routes like:
-•	destination CIDR → next_hop
-Where next_hop is either:
-o	allocation_id of a VM / NAT / LB, or
-o	default_egress_gateway: true.
-•	There is no ECMP in Nebius route tables → one next hop per prefix.
-•	Therefore:
-o	For outbound traffic from Nebius to remote networks, only one gateway VM is used per prefix (active gateway).
-o	Multi-tunnel HA and load sharing is done:
-	Inside the gateway VM(s) (FRR ECMP between tunnels),
-	Or on the cloud side (GCP/AWS/Azure ECMP / BGP).
-We do not use custom NAT gateway or LB in v1.
- 
-3. VPN gateway VM architecture
-VM spec
-•	VM is created via Nebius Compute API (InstanceServiceClient.Create) using InstanceSpec.
-•	You will model VM specs in YAML and map to:
-o	platform,
-o	cores,
-o	memory_gb,
-o	disk_gb,
-o	boot_disk.image_id / image_family,
-o	network_interfaces[*].subnet_id + public_ip_address.
-OS & packages
-•	Base image: Ubuntu 22.04 LTS (or similar, pinned in the design).
-•	Packages installed via cloud-init:
-o	strongswan (>= 5.9.x),
-o	frr (>= 9.x),
-o	python3, pip,
-o	Your Python agent package / code.
-Services on VM
-•	strongswan:
-o	IKEv2 default, IKEv1 allowed for legacy routers.
-o	IPsec tunnel mode; VTI interfaces or direct XFRM policies.
-•	frr:
-o	bgpd only (for BGP), in v1.
-o	BGP sessions per tunnel when routing_mode: bgp.
-•	nebius-vpngw-agent (systemd service):
-o	Reads /etc/nebius-vpngw/config-resolved.yaml for this VM.
-o	Applies strongSwan/FRR configs.
-o	Idempotent; can be triggered remotely (e.g., orchestrator SCPs config then runs systemctl reload nebius-vpngw-agent).
- 
-4. Configuration model – Final YAML schema
-The  single YAML file that serves as the ONLY user-facing config already created as “nebius-vpngw-config.yaml”
-•	You pass this file via --local-config-file.
-•	It describes:
-o	Gateway group (VMs, external IPs, VM spec),
-o	Global defaults,
-o	Gateway parameters,
-o	Connections & tunnels,
-o	Routing modes,
-o	HA roles.
-Note: Comments explain semantics & how they interact with peer-config files (--peer-config-file).
-Key behaviors of the config file “nebius-vpngw-config.yaml”
-•	Any field set to null or empty array will be filled via:
-1.	Tunnel-level explicit values (if set),
-2.	Connection-level values,
-3.	Peer config file values,
-4.	Global defaults.
-•	If, after merging, a mandatory field is still missing (e.g., remote_public_ip from peer config, psk, inner_cidr), the orchestrator aborts with a clear error.
- 
-5. Scripts & CLI interface
-Implementation language
-•	Python 3, using:
-o	nebius.pysdk for Nebius API.
-o	PyYAML for YAML parsing.
-o	paramiko or asyncssh (or your favourite) for SSH’ing into VMs to deliver config and trigger agent reload.
-Script layout
-1.	nebius_vpngw.py (main orchestrator CLI)
-2.	nebius_vpngw_agent.py (agent running on VM; managed by systemd)
-3.	A Python package structure, e.g.:
-4.	nebius_vpngw/
-5.	  __init__.py
-6.	  cli.py                # argument parsing, calls orchestrator functions
-7.	  config_loader.py      # YAML + peer-config merge logic
-8.	  peer_parsers/
-9.	    gcp.py
-10.	    aws.py
-11.	    azure.py
-12.	    cisco.py
-13.	  deploy/
-14.	    vm_manager.py       # Nebius VM create/get/delete via pysdk
-15.	    route_manager.py    # Nebius VPC routing table management
-16.	    ssh_push.py         # push config to VMs, trigger agent reload
-17.	  agent/
-18.	    main.py             # code for nebius-vpngw-agent on the VM
-19.	    strongswan_renderer.py
-20.	    frr_renderer.py
-21.	    state_store.py
-Main CLI: nebius_vpngw.py
-Arguments:
-•	--local-config-file PATH (required)
-•	--peer-config-file PATH (optional, repeatable)
-•	--recreate-gw (optional flag)
-o	If set, delete and recreate gateway VMs before applying config.
-•	--project-id ID / --folder-id ID / --zone as needed for Nebius SDK (or read from env/CLI config).
-•	--dry-run (optional) – render what would happen without applying.
-Example call (GCP HA + BGP, single VM):
-python nebius_vpngw.py \
-  --local-config-file ./nebius-vpngw-config.yaml \
-  --peer-config-file ./gcp-ha-vpn-config.txt
-Example call (two VMs, static + BGP, recreate):
-python nebius_vpngw.py \
-  --local-config-file ./nebius-vpngw-config.yaml \
-  --peer-config-file ./gcp-ha-vpn-config.txt \
-  --peer-config-file ./aws-vpn-config.txt \
-  --recreate-gw \
-  --project-id my-project \
-  --zone eu-north1-a
-High-level flow inside nebius_vpngw.py
-1.	Parse CLI args.
-2.	Load YAML config into Python object.
-3.	Load each --peer-config-file:
-o	Auto-detect vendor from content or use YAML vendor hints.
-o	Use vendor-specific parser to produce normalized tunnel specs.
-4.	For each connection/tunnel:
-o	Merge:
-	YAML,
-	Normalized tunnel specs,
-	Global defaults,
-o	Check constraints (quotas, missing mandatory fields, allowed DH groups, etc.).
-5.	Using Nebius SDK (SDK + InstanceServiceClient):
-o	Check if gateway VMs already exist by name.
-o	If --recreate-gw:
-	Delete them, wait for completion.
-	Create new VMs per gateway_group.vm_spec / external_ips.
-o	If not --recreate-gw:
-	If VMs do not exist → create them.
-	If VMs do exist → log and continue to config push.
-6.	For each gateway instance:
-o	Build per-instance resolved config (subset of tunnels where gateway_instance_index matches).
-o	Serialize to /etc/nebius-vpngw/config-resolved.yaml (via SSH/SCP).
-o	Trigger systemctl reload nebius-vpngw-agent on that VM.
-7.	Optionally manage Nebius VPC routing:
-o	Use RouteTable and Route services to set next_hop.allocation_id for remote prefixes to the active gateway VM.
- 
-6. Peer config import behavior (GCP/AWS/Azure)
-Input
-•	--peer-config-file path/to/file.txt (can be provided multiple times).
-Each file is expected to be an unmodified peer configuration template downloaded from:
-•	GCP HA VPN’s “Download configuration” for a given VPN gateway.
-•	AWS Site-to-Site VPN “Download configuration” for customer gateway device.
-•	Azure VPN Gateway vendor sample configuration.
-Parsing layer
-Each file is parsed by a vendor-specific module (e.g., peer_parsers.gcp, peer_parsers.aws, peer_parsers.azure) into a Normalized TunnelSpec with fields like:
-•	remote_public_ip
-•	psk
-•	inner_local_ip, inner_remote_ip, inner_cidr
-•	remote_asn
-•	ike_encryption, ike_hash, ike_dh_group, ike_lifetime
-•	esp_encryption, esp_hash, esp_pfs_group, esp_lifetime
-The orchestrator then:
-•	Matches TunnelSpec with YAML tunnels based on:
-o	vendor,
-o	Number of tunnels,
-o	Potential IP hints (if present).
-•	Fills any null/empty fields in YAML with values from TunnelSpec, unless YAML explicitly overrides.
-If after merging some mandatory values are still missing → error.
- 
-7. Routing modes: BGP and static
-Per our design:
-•	Global default: defaults.routing.mode: bgp or static.
-•	Per-connection override: connections[*].routing_mode.
-•	Per-tunnel override: connections[*].tunnels[*].routing_mode.
-BGP mode
-•	When effective routing_mode: bgp:
-o	The agent:
-	Configures bgpd with:
-	neighbor <remote_bgp_ip> remote-as <remote_asn>,
-	Advertised local_prefixes,
-	Optional prefix limits and filters.
-	Configures IPsec tunnel as VTI/device for BGP.
-o	Cloud side (GCP/AWS/Azure) uses BGP for dynamic failover/ECMP as per their best practices.
-Static mode
-•	When effective routing_mode: static:
-o	The agent:
-	Does not configure BGP for this tunnel.
-	Configures IPsec tunnel as VTI or policy.
-	Adds static routes:
-	remote_prefixes → inner_remote_ip via tunnel (on the gateway VM).
-o	Peer side must have symmetric static routes.
-This lets you support older/static-only devices while keeping cloud peers BGP-based.
- 
-8. HA & SLA modes
-instance_count: 1 – single VM, multi-tunnel
-•	Gateway group has 1 VM.
-•	You can configure multiple tunnels on that VM:
-•	instance_count: 1
-•	external_ips:
-•	  - 203.0.113.10
-•	
-•	connections:
-•	  - name: "gcp-ha-vpn"
-•	    ...
-•	    tunnels:
-•	      - name: "t1"
-•	        gateway_instance_index: 0
-•	        local_public_ip_index: 0
-•	        ha_role: active
-•	      - name: "t2"
-•	        gateway_instance_index: 0
-•	        local_public_ip_index: 0
-•	        ha_role: active
-•	Behavior:
-o	From Nebius side:
-	Workloads have a route GCP_CIDR → GW0_internal_IP.
-	FRR on GW0 can do ECMP across both tunnels.
-o	From cloud side (GCP/AWS/Azure):
-	Cloud routers can do ECMP across both tunnels.
-•	Result:
-o	Active/active tunnels, higher throughput & path redundancy.
-o	VM itself is still single point of failure → not a true 99.99% gateway SLA, but good for many use cases.
-instance_count > 1 – multiple VMs, VM-level HA
-•	Gateway group has N VMs (commonly 2).
-•	Tunnels are assigned to instances via gateway_instance_index.
-•	ha_role: active | disable controls which tunnels are live.
-Example (2 VMs, one tunnel per VM, GW0 active, GW1 disabled):
-gateway_group:
-  instance_count: 2
-  external_ips:
-    - "203.0.113.10"   # GW0
-    - "203.0.113.11"   # GW1
+Nebius VPN Gateway (VM-based) — Architecture & Design
 
-connections:
-  - name: "gcp-ha-vpn"
-    vendor: "gcp"
-    routing_mode: bgp
-    bgp:
-      enabled: true
-      remote_asn: 64514
-    tunnels:
-      - name: "gcp-ha-tunnel-1"
-        gateway_instance_index: 0
-        local_public_ip_index: 0
-        ha_role: active
+Version: v0.1 (scaffold-aligned)
 
-      - name: "gcp-ha-tunnel-2"
-        gateway_instance_index: 1
-        local_public_ip_index: 1
-        ha_role: disable
-•	Nebius routing table:
-o	GCP_CIDR → GW0_internal_IP.
-•	HA controller:
-o	Monitors GW0 (VM health, tunnel/BGP state).
-o	On failure:
-	Updates route: GCP_CIDR → GW1_internal_IP.
-	Flips GW1 tunnel ha_role: disable → active and applies config.
-•	This pattern aligns with cloud guidance about dual customer gateways for HA.
- 
-9. Idempotency & lifecycle
-Cloud-init vs runtime changes
-•	Cloud-init:
-o	Used only for immutable basics:
-	OS packages,
-	Systemd service install,
-	Baseline directories.
-o	Not used for per-tunnel/per-connection config.
-•	Runtime config application:
-o	Orchestrator can be run multiple times with updated YAML / peer configs.
-o	Each run:
-	Computes resolved config,
-	Pushes per-VM config,
-	Agent compares with last-applied config,
-	Regenerates strongSwan & FRR config,
-	Reloads services (no VM reboot, no cloud-init rerun).
-VM creation & recreation
-•	On each run, orchestrator does:
-1.	Lookup VMs by name (gateway_group.name + index), using InstanceServiceClient.GetByName / List.
-2.	If --recreate-gw:
-	Delete VMs (if exist).
-	Create VMs fresh with InstanceServiceClient.Create and InstanceSpec built from YAML.
-3.	If not --recreate-gw:
-	If VM not found → create.
-	If VM exists → leave running, just update config.
-Route updates
-•	Route management is idempotent:
-o	For each remote prefix:
-	Find or create a route in the relevant route table,
-	Ensure next_hop.allocation_id is set to the desired gateway VM’s allocation ID,
-	If unchanged, do nothing.
-•	Uses VPC RouteTable / Route services via pysdk.
- 
-That’s the full design:
-•	Clear architecture,
-•	Fully specified YAML with comments,
-•	Routing modes (BGP + static),
-•	HA behavior,
-•	Nebius VM + routing integration via Python Nebius SDK,
-•	Strong separation between bootstrap (cloud-init) and runtime reconfig (agent).
-If you hand this to a human dev or an AI code assistant, they should have everything they need to implement:
-1.	The orchestrator (nebius_vpngw.py),
-2.	The agent (nebius-vpngw-agent),
-3.	Vendor peer-config parsers,
-4.	Nebius VM / route management using pysdk.
+Summary
+- VM-based Site‑to‑Site VPN gateway for Nebius AI Cloud.
+- IPsec (strongSwan) + BGP (FRR) or static routing.
+- YAML‑driven desired state with optional peer config import (GCP/AWS/Azure/Cisco).
+- Idempotent agent running on each gateway VM; orchestrator CLI applies changes.
 
-Notes:
-1. Is nebius-vpngw-agent always running?
-Yes.
-In the design, the agent runs as a systemd service on each gateway VM:
-•	Service name: nebius-vpngw-agent.service
-•	Starts on boot (WantedBy=multi-user.target)
-•	Keeps running in the background
-It’s not a “one-shot apply-and-exit” script; it’s a long-lived process that:
-•	Watches for new config being dropped locally on the VM
-•	Applies changes in an idempotent way
-•	Can expose health/status later (if you want)
- 
-2. What is the agent used for?
-Main purposes:
-2.1. Apply configuration to strongSwan + FRR
-The agent is the only thing that:
-•	Takes a resolved VPN config file (for that VM), e.g.:
-•	/etc/nebius-vpngw/config-resolved.yaml
-•	Converts it to:
-o	ipsec.conf, ipsec.secrets (strongSwan),
-o	bgpd.conf (FRR),
-•	Applies them by:
-o	ipsec reload / swanctl --load-all
-o	systemctl reload frr or vtysh-based reload
-It owns the config generation logic, so you don’t spread that logic between your laptop and the VM.
-2.2. Idempotent reconciliation
-The agent should:
-•	Read config-resolved.yaml
-•	Generate an in-memory representation (Python dict)
-•	Compare it to the last applied config (stored in something like /etc/nebius-vpngw/last-applied.json or a hash file)
-•	If there’s no change → do nothing
-•	If there is a change → regenerate configs and reload services
-That’s what gives you idempotency on the VM:
-you can push the same config multiple times and it won’t flap tunnels unnecessarily.
-2.3. Optional: expose state / health (future)
-Later, you can extend the agent to:
-•	Expose a tiny HTTP or Unix socket endpoint for:
-o	Status of tunnels,
-o	Status of BGP sessions,
-o	Health info for HA logic.
-Not needed for v1, but the always-running nature makes this easy.
+1) High‑Level Architecture
+Components
+- Orchestrator CLI (`nebius-vpngw`): runs on operator laptop/CI. Reads the local YAML and optional peer configs, merges to a resolved plan, ensures VMs, pushes per‑VM configs over SSH, and triggers the agent reload.
+- Gateway VM (Nebius Compute): Ubuntu LTS base; packages: strongSwan, FRR, Python runtime, and the always‑running agent.
+- Agent (`nebius-vpngw-agent`): reads a per‑VM resolved config, renders strongSwan/FRR configs, applies them idempotently, and records last‑applied state.
+- Optional HA Route Controller: updates VPC route next‑hop to switch between gateways when using multi‑VM setups.
 
-3.2. Orchestrator runs on your laptop
-You run:
-python nebius_vpngw.py \
-  --local-config-file ./nebius-vpngw-config.yaml \
-  --peer-config-file ./gcp-ha-vpn-config.txt
-The orchestrator:
-1.	Loads your YAML and peer config(s).
-2.	Merges everything into a resolved config.
-3.	For each VM in the gateway_group:
-o	Extracts just the subset of tunnels and settings for that VM.
-o	Produces a per-VM resolved config (a smaller YAML/JSON).
-Example path on the VM:
-/etc/nebius-vpngw/config-resolved.yaml
-3.3. Pushing config to the VM
-The orchestrator uses SSH/SCP (or another channel) to:
-1.	Copy the per-VM config file to the VM:
-2.	scp config-resolved-gw0.yaml nebius-vm-0:/etc/nebius-vpngw/config-resolved.yaml
-3.	Then tell the agent to reload:
-4.	ssh nebius-vm-0 "sudo systemctl reload nebius-vpngw-agent"
-Inside the VM:
-•	Agent is always running and either:
-o	Reacts to the systemctl reload (via SIGHUP handler), or
-o	Periodically polls the config file and detects changes.
-In either case, the agent:
-•	Reads config-resolved.yaml,
-•	Compares to last-applied,
-•	Applies only if changed.
-So:
-The agent never contacts GitHub or your laptop.
-Your laptop orchestrator pushes the new config file in and pokes the agent to reconcile.
- 
-4. Is it idempotent?
-Yes, by design.
-Idempotency happens at two levels:
-4.1. Orchestrator (on your laptop)
-•	You can run nebius_vpngw.py multiple times with the same inputs.
-•	It will:
-o	See that VMs already exist (if --recreate-gw is not set) and not recreate them.
-o	Recompute resolved configs and push them.
-•	The pushed per-VM config might be identical to last time — that’s fine.
-4.2. Agent (on the VM)
-•	Stores a representation (or hash) of the last applied config.
-•	On reload:
-o	If new config == last config → do nothing.
-o	If different:
-	Rewrite ipsec.conf, ipsec.secrets, bgpd.conf from scratch.
-	Reload strongSwan / FRR in a controlled way.
-Because configs are always generated from scratch from the resolved YAML and never mutated in-place, replaying the same config always yields the same outcome.
-So yes:
-The agent is idempotent: you can push the same config a hundred times and it will not flap tunnels unless something really changed.
- 
-5. One-line mental model
-•	GitHub + YAML → “Desired state”
-•	Orchestrator on your laptop → “Translate desired state + peer configs → per-VM resolved config, push to VM, trigger agent”
-•	Agent on VM (always running) → “Reconcile resolved config into strongSwan + FRR runtime, idempotently”
-If you want, I can write a short “Agent responsibility” section you can paste straight into your design doc, summarizing:
-•	Always running as a daemon,
-•	Reads local config file,
-•	Applies to strongSwan/FRR,
-•	Idempotent,
-•	Triggered by orchestrator pushing changes.
-state_store.py is a small but important module inside the nebius-vpngw-agent.
-It provides the agent with persistent, idempotent awareness of what configuration was last successfully applied.
-Here’s the clean, final definition you should include in your design doc.
- 
-state_store.py — Purpose & Responsibilities
-1. What it is
-A tiny internal component used by the VPN Gateway Agent.
-It manages a persistent local state file that records the last successfully applied configuration on the VM.
-This enables:
-•	Idempotency (don’t flap tunnels if nothing changed)
-•	Safe roll-forward (apply new config only when needed)
-•	Debuggability (operator can see what was applied last)
- 
-2. What problem it solves
-When the orchestrator re-pushes configuration to a gateway VM, the agent must decide:
-•	“Has anything actually changed?”
-•	“Do I need to regenerate strongSwan/FRR configs?”
-•	“Do I need to reload services or leave everything running?”
-Without storing the last-applied state, the agent would:
-•	Reload IPsec/BGP every time, which could:
-o	flap tunnels,
-o	drop connections,
-o	break BGP sessions temporarily,
-o	cause packet loss.
-state_store.py prevents this by allowing the agent to compare the new config with the last applied one.
- 
-3. What it stores
-The module maintains a file like:
-/etc/nebius-vpngw/last-applied.json
-It stores:
-{
-  "config_hash": "<sha256-of-resolved-config>",
-  "timestamp": "2025-02-14T13:40:12Z",
-  "resolved_config": {
-     ...optional snapshot of structured data...
-  }
-}
-You can store the full config or just its hash:
-•	If you store just the hash → very lightweight
-•	If you store full config → easier for debugging / future drift detection
-Your choice — the module supports both.
- 
-4. What operations it provides
-Example interface (conceptual):
-class StateStore:
-    def load_last_applied(self) -> dict | None:
-        """Load last applied config hash or full config."""
-    
-    def save_last_applied(self, resolved_config: dict):
-        """Persist new last-applied state (hash+timestamp)."""
+Goals
+- IKEv2 (default) with optional IKEv1; PSK auth; AES‑256; SHA‑256/384/512; DH 14/20/24; configurable lifetimes.
+- BGP preferred; static routing supported per tunnel/connection.
+- Works with GCP HA VPN, AWS Site‑to‑Site VPN, Azure VPN Gateway, and on‑prem routers.
+- Two deployment modes:
+  - Single VM with multiple tunnels (active/active at tunnel level; VM is SPOF).
+  - Gateway group (N VMs) with route switching for VM‑level HA.
 
-    def is_changed(self, resolved_config: dict) -> bool:
-        """Return True if the new config differs from last-applied."""
-This is exactly what the agent needs.
- 
-5. How the agent uses it
-Inside the agent workflow:
-Step 1: Load desired config
-Read /etc/nebius-vpngw/config-resolved.yaml.
-Step 2: Ask state_store if changed
-if not state_store.is_changed(resolved_config):
-    log("No changes detected; skipping reload")
-    return
-Step 3: Apply config
-•	Render new strongSwan + FRR configs
-•	Reload services
-Step 4: Persist new state
-state_store.save_last_applied(resolved_config)
-This locks in the new configuration as “last known good”.
- 
-6. Why this makes everything safe and idempotent
-Because:
-•	Running the orchestrator repeatedly does not cause repeated reloading or tunnel flapping.
-•	The agent only acts when needed.
-•	If the VM restarts, the last applied config is still known.
-•	Debuggers/ops teams can see exactly what config was previously applied.
-This is exactly how mature systems like Kubernetes controllers, network orchestrators, and cloud-router agents operate.
-7. Final design statement for your document
-state_store.py is the persistence layer for the VPN Gateway Agent.
-It records the “last applied configuration” (as a hash or full dump) so the agent can detect whether the newly provided configuration has changed.
-This enables strict idempotency, prevents unnecessary reloads of strongSwan/FRR, improves runtime stability, and makes debugging significantly easier.
+Current code alignment
+- Package layout under `src/nebius_vpngw` matches design (cli, config loader, peer parsers, deploy managers, agent with state store/renderer stubs).
+- VM/route/SSH managers are scaffolds; replace with Nebius SDK and SSH implementations to make it fully functional.
+
+2) Nebius Topology & Routing Model
+- Single VPC network selected by `network_id` (optional). If omitted, the orchestrator resolves the default VPC network.
+- One dedicated gateway subnet named `vpngw-subnet` (CIDR /27) created if missing under the selected network; workload subnets remain separate.
+
+**Current Platform Limitation (MVP):**
+- Each gateway VM supports **1 NIC only** (platform constraint).
+- The single NIC attaches to `vpngw-subnet` with **1 public IP allocation**.
+- **All VPN tunnels share the same public IP**; peers differentiate tunnels by IKE/IPsec identifiers (phase1-id, phase2-id).
+- This enables active/active tunnel redundancy while running on a single VM (VM remains SPOF).
+
+**Future Migration Path (Multi-VM HA):**
+- Deploy `instance_count=2` (or more) VMs.
+- Each VM gets 1 NIC with 1 public IP allocation.
+- Map one tunnel per VM using `gateway_instance_index` in tunnel config.
+- Assign `ha_role: active|standby` to control which tunnels are active per VM.
+- Use route controller to update VPC route next-hop on VM failure (failover from active to standby VM).
+- This provides VM-level redundancy with tunnel isolation across instances.
+
+**Route tables** are per subnet: `destination → next_hop` (allocation or default egress). No ECMP in route tables (one next hop per prefix). Load‑sharing happens within the gateway (FRR across tunnels) and/or on the peer side via BGP/ECMP.
+- v1 does not use an external NAT/LB.
+
+3) Gateway VM Architecture
+VM spec (expressed in YAML, mapped by orchestrator)
+- Platform, cores, memory, disk, base image (Ubuntu 22.04 LTS).
+- Networking: two NICs on `vpngw-subnet` (created/ensured), each with exactly one public IP allocation attached. Private IPs are auto-assigned by the subnet.
+
+Packages & services
+- strongSwan (>=5.9), FRR (>=9), Python 3.x.
+- `nebius-vpngw-agent` as a systemd service (continuous daemon, SIGHUP reload).
+- Bootstrap via cloud‑init (packages, unit file, directory skeleton) — tunnel config is applied at runtime by the agent.
+
+4) Configuration Model (YAML)
+Single user‑facing file: `nebius-vpngw-config.yaml`.
+- Sections: `gateway_group`, `defaults`, `gateway`, `connections[*].tunnels[*]` with `ha_role`, `routing_mode`, crypto proposals, and APIPA inner IPs.
+- Networking fields:
+  - `network_id` (optional): target VPC network. If omitted, defaults to the environment’s default network.
+  - Implicit `vpngw-subnet` (/27): orchestrator ensures it exists and attaches both NICs there.
+  - `external_ips`: optional list of public IP allocation IDs. If missing or empty, the orchestrator creates two allocations and attaches them to eth0/eth1.
+- Merge precedence when building the resolved config:
+  1. Tunnel‑level explicit values
+  2. Connection‑level values
+  3. Peer‑config values (from `--peer-config-file`)
+  4. Global defaults
+- Mandatory fields missing after merge → hard error with clear message.
+- Environment placeholders `${VAR}` are expanded; missing vars are reported together.
+
+5) CLI & Flows
+Command
+- Console script: `nebius-vpngw` (also available as `python -m nebius_vpngw`).
+- First‑run convenience: if `--local-config-file` is omitted and `./nebius-vpngw-config.yaml` is absent, the CLI copies a packaged template into CWD and exits — edit it, then re‑run.
+
+Options
+- `--local-config-file PATH` (required unless auto‑created on first run)
+- `--peer-config-file PATH` (repeatable)
+- `--recreate-gw` (delete and recreate VMs before apply)
+- `--project-id`, `--zone` (for Nebius SDK integration)
+- `--dry-run` (show resolved summary without applying)
+
+Typical flow
+1. Parse args; load YAML; expand `${VAR}`; parse 0..N peer configs.
+2. Merge to a resolved deployment plan; validate constraints; normalize `external_ips` to `[]` when absent.
+3. Ensure network selection (`network_id` or default) and create/ensure `vpngw-subnet` (/27).
+4. Ensure gateway VMs (create or reuse; `--recreate-gw` forces replacement) with two NICs on `vpngw-subnet`; create/attach two public IP allocations when not provided.
+5. For each VM, build a per‑VM config and push via SSH, then `systemctl reload nebius-vpngw-agent`.
+6. If enabled, reconcile static routes in VPC.
+
+6) Peer Config Import (GCP/AWS/Azure/Cisco)
+- Parser modules normalize vendor templates into per‑tunnel specs: PSK, inner IPs/CIDR, remote ASN, proposals, public endpoints.
+- The merger auto‑matches peer tunnels to YAML tunnels using vendor, ASN, local/remote IP hints, and public IP alignment.
+- Only missing values are filled; topology expressed in YAML is never overridden.
+
+7) Routing Modes
+- Global default: `defaults.routing.mode` = `bgp` or `static`; can be overridden per connection/tunnel.
+- BGP: agent renders `bgpd.conf` with neighbors per active tunnel and advertises `gateway.local_prefixes` (timers/limits configurable).
+- Static: agent skips BGP and installs static routes via the tunnel on the VM; peer must mirror static routes.
+
+8) HA & SLA Modes
+- Single VM (instance_count=1): multiple active tunnels; ECMP within the VM and/or on peer side; VM is SPOF.
+- Multi‑VM (instance_count>1): assign tunnels via `gateway_instance_index`; `ha_role: active|disable` selects live tunnels per VM. HA controller can switch VPC routes to the standby VM on failure.
+
+9) Idempotency & Lifecycle
+Bootstrap vs runtime
+- Cloud‑init: immutable basics only (packages, unit, dirs). No tunnel config in cloud‑init.
+- Runtime: orchestrator can be re‑run any time; agent compares desired config with `last-applied.json` and only reloads when it changed.
+
+VM lifecycle
+- Lookup by deterministic name (`<group>-<index>`). `--recreate-gw` deletes/recreates; otherwise create‑if‑missing and push config.
+
+Route reconciliation
+- Idempotent ensure of VPC routes for static mode; skip for BGP mode.
+
+10) State Management (practical guidance)
+Question: “Should we keep and track state, or just apply YAML changes?”
+
+Recommendation
+- Keep it simple and safe: use minimal, VM‑local state in the agent (already implemented as `/etc/nebius-vpngw/last-applied.json`) to avoid unnecessary reloads. Keep the orchestrator effectively stateless: derive desired state from YAML + live discovery (by names) each run.
+
+Why
+- Pros of minimal state: idempotent applies, no tunnel flapping, restart‑safe, easy debugging of “last applied”.
+- Avoid heavy external state: resource drift is best handled by reconciling actuals vs desired on every run; names are sufficient keys for Nebius resources.
+
+When additional state may help
+- Large fleets where caching resource IDs significantly reduces API calls (keep as an optimization cache, not source of truth).
+- Advanced HA logic (tracking last healthy VM) — still prefer deriving from live signals.
+
+Bottom line
+- Keep the VM‑local state for last‑applied config (agent). Make the orchestrator reconcile from YAML + discovery. This matches the current code and keeps operations lean and predictable.
+
+11) Implementation Status (this repo)
+- CLI (`src/nebius_vpngw/cli.py`) and config merger (`config_loader.py`) are functional, including env expansion and peer‑merge heuristics.
+- Agent (`agent/main.py`) renders scaffold configs for strongSwan/FRR and persists `last-applied.json`.
+- Managers under `deploy/` (VM, SSH, routes) are scaffolds that log intended actions; integrate Nebius SDK and SSH to make them operational.
+- Entry points are defined in `pyproject.toml`: `nebius-vpngw`, `nebius-vpngw-agent`, `build-binary`.
+- First‑run template creation is implemented: run `nebius-vpngw` without `--local-config-file` to scaffold `./nebius-vpngw-config.yaml`.
+
+Delta (current iteration)
+- Networking model consolidated:
+  - Single VPC network via `network_id` (optional) or default.
+  - Orchestrator ensures `vpngw-subnet` (/27) exists under the selected network.
+  - Two NICs per VM attached to `vpngw-subnet`, each with one public IP allocation created/attached when not provided.
+- Config loader normalizes `external_ips=None` to `[]` to avoid errors.
+- SSH key handling clarified: use explicit path fields; private key path is optional for local SSH convenience; never store private key contents in YAML.
+- CLI and templates updated to reflect `network_id` and the single‑subnet, two‑NIC model.
+
+12) Diagrams & References
+- Architecture diagram sources: `image/vpngw-architecture.dot`, `image/vpngw-conn-diagram.dot` (render with Graphviz).
+- See `README.md` for Quick Start, packaging, and build instructions. Run Poetry from the repository root (pyproject at top level).
 
 

@@ -1,0 +1,52 @@
+[project]
+name = "nebius-vpngw"
+version = "0.1.0"
+description = "Nebius VM-based VPN Gateway orchestrator and agent"
+readme = "README.md"
+authors = [ { name = "Reza. B.", email = "rezab@nebius.com" } ]
+requires-python = ">=3.10,<3.13"
+license = { file = "LICENSE" }
+classifiers = [
+	"License :: Copyright 2025 Nebius B.V.",
+	"Programming Language :: Python :: 3",
+	"Programming Language :: Python :: 3 :: Only"
+]
+dependencies = [
+	"PyYAML>=6.0.1,<7.0.0",
+	"paramiko>=3.5.0,<4.0.0",
+	"rich>=13.9.2,<14.0.0",
+	"click>=8.1.7,<8.2.0",
+	"typer>=0.12.5,<0.13.0",
+	"pydantic>=2.9.2,<3.0.0",
+	"nebius"
+]
+
+[project.scripts]
+nebius-vpngw = "nebius_vpngw.__main__:main"
+nebius-vpngw-agent = "nebius_vpngw.agent.main:main"
+build-binary = "nebius_vpngw.build:build_binary"
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.13"
+PyYAML = ">=6.0.1,<7.0.0"
+paramiko = ">=3.5.0,<4.0.0"
+rich = ">=13.9.2,<14.0.0"
+click = ">=8.1.7,<8.2.0"
+typer = ">=0.12.5,<0.13.0"
+pydantic = ">=2.9.2,<3.0.0"
+nebius = "*"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.3"
+ruff = "^0.6.9"
+pyinstaller = "^6.0.0"
+
+[tool.poetry]
+# Retain tool.poetry table for packaging-specific settings not covered by PEP 621.
+# (Dependencies, groups, packages, include remain here.)
+packages = [{ include = "nebius_vpngw", from = "src" }]
+include = ["src/nebius_vpngw/nebius-vpngw-config-template.yaml"]
+
+[build-system]
+requires = ["poetry-core>=1.9.0"]
+build-backend = "poetry.core.masonry.api"

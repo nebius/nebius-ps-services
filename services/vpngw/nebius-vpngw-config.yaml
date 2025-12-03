@@ -2,6 +2,9 @@
 # Master configuration for Nebius VM-based VPN Gateway.
 
 version: 1  # Config schema version for future migrations.
+tenant_id: "tenant-e00f3wdfzwfjgbcyfv"
+project_id: "project-e01pje50pr00tpkfby32zp"
+region_id: "eu-west1" # e.g., us-central1 | eu-north1 | eu-north2 | eu-west1
 
 ###############################################################################
 # Gateway group: how many VMs, where, and their external IPs
@@ -15,35 +18,19 @@ gateway_group:
   # - >1: gateway HA via multiple VMs; routing table points to one at a time.
   instance_count: 1
 
-  # Nebius region / zone for the gateway VMs.
-  region: "eu-north1-a"
-
   # VM hardware and OS specification.
   vm_spec:
-    # Nebius platform / machine type (see Compute docs).
-    platform: "standard-v2"
-    cores: 2
-    memory_gb: 4
-    disk_gb: 50
-
-    # Base image. You can use an image_family or explicit image_id.
-    image_family: "ubuntu-22-04-lts"
-    # image_id: "..."  # if you want a custom image.
-
+    platform: "cpu-d3" # e.g., cpu-e2 | cpu-d3 ; see Nebius docs for options: https://docs.nebius.com/compute/virtual-machines/types
+    preset: "32vcpu-128gb" # see Nebius docs for preset options: https://docs.nebius.com/compute/virtual-machines/types
+    disk_boot_image: ubuntu24.04-driverless
+    disk_gb: 200
+    disk_type: network_ssd
+    disk_block_bytes: 4096
     # SSH access / metadata as needed.
-    ssh_public_key: "ssh-ed25519 AAAA... user@host"
-
-    # Subnet IDs for network interfaces.
-    # Typically all gateway VMs go into a dedicated VPN subnet.
-    vpn_subnet_id: "vpcsubnet-xxx"
-
-  # Public IPv4 addresses to be associated with gateway interfaces.
-  # Semantics:
-  # - external_ips[0] → first NIC's public IP on each VM or VM0 (depending on deployment).
-  # - external_ips[1] → second NIC's public IP, etc.
-  # The provisioning layer maps each entry to a NIC's PublicIPAddress spec.
+    ssh_public_key_path: "~/.ssh/id_ed25519.pub"
+    ssh_private_key_path: "~/.ssh/id_ed25519"
+    network_id: "${NETWORK_ID}" # optional; can be omitted to use default-network
   external_ips:
-    - "203.0.113.10"
     # - "203.0.113.11"  # Uncomment if you need a second public IP.
 
 ###############################################################################

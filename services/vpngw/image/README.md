@@ -22,42 +22,15 @@ First, ensure Graphviz is installed:
 
 ```zsh
 brew install graphviz
+dot -Tpng image/vpngw-architecture.dot -o image/vpngw-architecture.png
+dot -Tsvg image/vpngw-architecture.dot -o image/vpngw-architecture.svg
+dot -Tpng image/vpngw-conn-diagram.dot -o image/vpngw-conn-diagram.png
+dot -Tsvg image/vpngw-conn-diagram.dot -o image/vpngw-conn-diagram.svg
 ```
 
-Render PNG (raster):
+## PNG fallback at high DPI
 
-```zsh
-dot -Tpng vpngw-architecture.dot -o vpngw-architecture.png
-```
-
-Render SVG (vector, high-res for web/blogs):
-
-```zsh
-dot -Tsvg vpngw-architecture.dot -o vpngw-architecture.svg
-```
-
-Open the PNG (Preview on macOS):
-
-```zsh
-open vpngw-architecture.png
-```
-
-### Connections/Tunnels Diagram
-
-Render PNG (raster):
-
-```zsh
-dot -Tpng vpngw-conn-diagram.dot -o vpngw-conn-diagram.png
-```
-
-Render SVG (vector, high-res for web/blogs):
-
-```zsh
-dot -Tsvg vpngw-conn-diagram.dot -o vpngw-conn-diagram.svg
-```
-
-Open the PNG (Preview on macOS):
-
-```zsh
-open vpngw-conn-diagram.png
+```shell
+dot -Tpng -Gdpi=600 image/vpngw-architecture.dot -o image/vpngw-architecture-600dpi.png
+dot -Tpng -Gdpi=600 image/vpngw-conn-diagram.dot -o image/vpngw-conn-diagram-600dpi.png
 ```

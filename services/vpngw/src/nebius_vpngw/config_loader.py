@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import re
 import typing as t
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
-import re
 
 
 @dataclass
@@ -56,9 +57,121 @@ class ResolvedDeploymentPlan:
         return "\n".join(lines)
 
 
+_ENV_PATTERN = re.compile(r"\$\{([A-Za-z0-9_]+)\}")
+_INT_PATTERN = re.compile(r"^-?\d+$")
+
+
+def _expand_env_value(val: str, missing: set[str]) -> str:
+    """Expand ${VAR} placeholders in a single string.
+
+    Multiple placeholders per string are supported. If an environment variable
+    is missing its name is added to ``missing`` and the placeholder is left
+    unchanged. Returning the original string when no placeholders are found is
+    intentional to avoid touching unrelated values.
+    """
+    def repl(match: re.Match[str]) -> str:
+        name = match.group(1)
+        env_val = os.environ.get(name)
+        if env_val is None or env_val == "":
+            missing.add(name)
+            return match.group(0)  # keep placeholder for later diagnostics
+        return env_val
+
+    return _ENV_PATTERN.sub(repl, val)
+
+
+def _expand_env(obj: t.Any, missing: set[str]) -> t.Any:
+    """Recursively expand ${VAR} placeholders in a loaded YAML structure."""
+    if isinstance(obj, dict):
+        return {k: _expand_env(v, missing) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_expand_env(v, missing) for v in obj]
+    if isinstance(obj, str):
+        return _expand_env_value(obj, missing)
+    return obj
+
+
+def _to_int(val: t.Any) -> t.Optional[int]:
+    """Return integer if val represents an int, else None.
+
+    Accept ints directly or strings of digits (with optional leading -).
+    """
+    if isinstance(val, int):
+        return val
+    if isinstance(val, str) and _INT_PATTERN.match(val.strip()):
+        try:
+            return int(val.strip())
+        except Exception:
+            return None
+    return None
+
+
 def load_local_config(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        raw = yaml.safe_load(f) or {}
+    missing: set[str] = set()
+    expanded = _expand_env(raw, missing)
+    # Allow optional placeholders: if NETWORK_ID is missing and the value
+    # is an unresolved placeholder, drop the field to fall back to default network.
+    try:
+        if "NETWORK_ID" in missing:
+            gg0 = (expanded.get("gateway_group") or {})
+            vm0 = (gg0.get("vm_spec") or {})
+            nid = vm0.get("network_id")
+            if isinstance(nid, str) and nid.strip() == "${NETWORK_ID}":
+                vm0.pop("network_id", None)
+                gg0["vm_spec"] = vm0
+                expanded["gateway_group"] = gg0
+                missing.discard("NETWORK_ID")
+        # Treat unresolved placeholders in external_ips as "not provided":
+        # drop any entries that remain as ${VAR} and clear those vars from missing.
+        gg1 = (expanded.get("gateway_group") or {})
+        ext1 = list((gg1.get("external_ips") or []))
+        new_ext: list[str] = []
+        for ip in ext1:
+            if isinstance(ip, str) and _ENV_PATTERN.fullmatch(ip or ""):
+                # Placeholder remained; mark its name as non-mandatory
+                m = _ENV_PATTERN.match(ip)
+                if m:
+                    missing.discard(m.group(1))
+                # Skip adding to the list
+                continue
+            if ip:
+                new_ext.append(ip)
+        if new_ext != ext1:
+            gg1["external_ips"] = new_ext
+            expanded["gateway_group"] = gg1
+    except Exception:
+        # Ignore and let normal missing handling report variables
+        pass
+    if missing:
+        # Surface all missing vars at once to help the user export them.
+        raise ValueError(
+            "Missing environment variables for placeholders: "
+            + ", ".join(sorted(missing))
+        )
+    # Optional convenience: read SSH public key from a path if provided
+    try:
+        gg = expanded.get("gateway_group", {}) or {}
+        vm_spec = gg.get("vm_spec", {}) or {}
+        ssh_key_path = vm_spec.get("ssh_public_key_path")
+        ssh_key_inline = vm_spec.get("ssh_public_key")
+        if ssh_key_path and not ssh_key_inline:
+            p = Path(str(ssh_key_path)).expanduser()
+            if not p.exists():
+                raise ValueError(f"SSH public key file not found: {p}")
+            key_text = p.read_text(encoding="utf-8").strip()
+            # Insert content into ssh_public_key and drop the *_path field
+            vm_spec["ssh_public_key"] = key_text
+            if "ssh_public_key_path" in vm_spec:
+                del vm_spec["ssh_public_key_path"]
+            gg["vm_spec"] = vm_spec
+            expanded["gateway_group"] = gg
+    except Exception as e:
+        # Re-raise as ValueError to provide a clear message to CLI
+        raise ValueError(str(e))
+
+    return expanded
 
 
 def _detect_vendor(text: str) -> str:
@@ -129,8 +242,8 @@ def _score_peer_tunnel(
     if pv and conn_vendor and pv == conn_vendor:
         score += 6
     # ASN match
-    p_asn = peer_tun.get("remote_asn") or peer_tun.get("asn")
-    if isinstance(p_asn, int) and conn_remote_asn and p_asn == conn_remote_asn:
+    p_asn = _to_int(peer_tun.get("remote_asn") or peer_tun.get("asn"))
+    if p_asn is not None and conn_remote_asn and p_asn == conn_remote_asn:
         score += 6
     # Public IP alignment
     y_local_pub = _resolved_local_public_ip(local_cfg, yaml_tun)
@@ -170,7 +283,8 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: t.List[Path]) -> Resolv
     gg = local_cfg.get("gateway_group", {})
     instance_count = int(gg.get("instance_count", 1))
     name = gg.get("name", "nebius-vpn-gw")
-    region = gg.get("region", "eu-north1-a")
+    # Prefer gateway_group.region, else top-level region_id, else a sane default
+    region = gg.get("region") or (local_cfg.get("region_id") or "eu-north1-a")
     external_ips = gg.get("external_ips", [])
     vm_spec = gg.get("vm_spec", {})
 
@@ -185,9 +299,11 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: t.List[Path]) -> Resolv
     # Build per-instance configs by filtering tunnels for each instance
     per_instance: t.List[InstanceResolvedConfig] = []
     flat_peer_tunnels = _normalize_peer_specs(peer_specs)
+    # Ensure external_ips is a list to avoid NoneType errors when computing length
+    ext_ips = external_ips or []
     for idx in range(instance_count):
         hostname = f"{name}-{idx}"
-        ip = external_ips[idx] if idx < len(external_ips) else ""
+        ip = ext_ips[idx] if idx < len(ext_ips) else ""
         connections = local_cfg.get("connections", [])
 
         # Merge peer-derived values into tunnels that have null/empty fields
@@ -197,7 +313,7 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: t.List[Path]) -> Resolv
             conn_tunnels = conn.get("tunnels", [])
             # Connection-level hints
             conn_bgp = (conn.get("bgp") or {})
-            conn_remote_asn = conn_bgp.get("remote_asn") if isinstance(conn_bgp.get("remote_asn"), int) else None
+            conn_remote_asn = _to_int(conn_bgp.get("remote_asn"))
             inferred_remote_asn: t.Optional[int] = conn_remote_asn
 
             merged_tunnels = []
@@ -216,8 +332,8 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: t.List[Path]) -> Resolv
                 peer_tun = flat_peer_tunnels[best_idx] if best_idx is not None else {}
                 if best_idx is not None:
                     used_indices.add(best_idx)
-                    if inferred_remote_asn is None and isinstance(peer_tun.get("remote_asn"), int):
-                        inferred_remote_asn = peer_tun.get("remote_asn")
+                    if inferred_remote_asn is None:
+                        inferred_remote_asn = _to_int(peer_tun.get("remote_asn"))
                 tun = dict(tun)  # copy
                 # Merge essential fields
                 tun["psk"] = _merge_fields(tun.get("psk"), peer_tun.get("psk"))
@@ -274,8 +390,24 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: t.List[Path]) -> Resolv
             )
         )
 
-    # Determine if we should manage routes (future flag; default False)
+    # Determine if we should manage routes: enable if any connection/tunnel uses static routing
     manage_routes = False
+    try:
+        defaults_mode = (local_cfg.get("defaults", {}).get("routing", {}) or {}).get("mode") or "bgp"
+        for conn in (local_cfg.get("connections") or []):
+            conn_mode = (conn.get("routing_mode") or defaults_mode) or "bgp"
+            if conn_mode == "static":
+                manage_routes = True
+                break
+            for tun in (conn.get("tunnels") or []):
+                tun_mode = (tun.get("routing_mode") or conn_mode) or defaults_mode
+                if tun_mode == "static":
+                    manage_routes = True
+                    break
+            if manage_routes:
+                break
+    except Exception:
+        manage_routes = False
 
     return ResolvedDeploymentPlan(
         gateway_group=gateway_group, per_instance=per_instance, manage_routes=manage_routes
