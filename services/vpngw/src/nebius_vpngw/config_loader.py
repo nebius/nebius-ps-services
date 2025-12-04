@@ -287,6 +287,20 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: t.List[Path]) -> Resolv
     region = gg.get("region") or (local_cfg.get("region_id") or "eu-north1-a")
     external_ips = gg.get("external_ips", [])
     vm_spec = gg.get("vm_spec", {})
+    
+    # Validate and normalize num_nics configuration
+    # CURRENT PLATFORM LIMITATION: Only 1 NIC per instance is supported
+    # Future: When platform supports multi-NIC, this validation can be relaxed
+    num_nics = int(vm_spec.get("num_nics", 1))
+    if num_nics < 1:
+        raise ValueError("num_nics must be at least 1")
+    if num_nics > 1:
+        raise ValueError(
+            f"num_nics={num_nics} requested, but current Nebius platform only supports 1 NIC per instance. "
+            "Set num_nics=1 in your config. When multi-NIC support is available, you can increase this value."
+        )
+    # Ensure num_nics is in vm_spec for downstream processing
+    vm_spec["num_nics"] = num_nics
 
     gateway_group = GatewayGroupSpec(
         name=name,

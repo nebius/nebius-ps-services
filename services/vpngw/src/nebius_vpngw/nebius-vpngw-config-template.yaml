@@ -1,6 +1,37 @@
 # nebius-vpngw-config-template.yaml
 # Template configuration for Nebius VM-based VPN Gateway.
 # Fill placeholders with environment-specific values. Do NOT commit secrets.
+#
+# ============================================================================
+# LOCAL PREFIX ADVERTISEMENT STRATEGY
+# ============================================================================
+#
+# Define Nebius-side subnets (local_prefixes) that should be advertised to VPN peers.
+# This template uses a hierarchical approach with gateway-level defaults and optional overrides:
+#
+# 1. GATEWAY LEVEL (Single Source of Truth):
+#    gateway.local_prefixes: ["10.0.0.0/16", "10.1.0.0/16"]
+#    - Define ALL Nebius-side subnets here (VPC CIDRs, workload subnets, etc.)
+#    - Used by both BGP and static routing modes
+#
+# 2. BGP MODE (Connection Level):
+#    connection.bgp.advertise_local_prefixes: true/false
+#    - true (default): Advertise ALL gateway.local_prefixes to this BGP peer
+#    - false: Establish BGP session but don't send routes (receive-only mode)
+#    - All active tunnels in this connection advertise the same prefixes
+#
+# 3. STATIC MODE (Tunnel Level - Optional Override):
+#    tunnel.static_routes.local_prefixes: ["10.0.0.0/16"]
+#    - If omitted/empty: Uses gateway.local_prefixes (RECOMMENDED)
+#    - If specified: Override for tunnel-specific routing
+#    - Use case: Split traffic across tunnels (tunnel1→subnet A, tunnel2→subnet B)
+#
+# Examples:
+#   BGP to GCP: advertise_local_prefixes=true → advertises all gateway.local_prefixes
+#   Static to Cisco: local_prefixes omitted → uses gateway.local_prefixes
+#   Static split: tunnel1.local_prefixes=["10.0.0.0/17"], tunnel2=["10.0.128.0/17"]
+#
+# ============================================================================
 
 version: 1
 
@@ -18,6 +49,46 @@ region_id: "${REGION_ID}" # e.g., us-central1 | eu-north1 | eu-north2 | eu-west1
 gateway_group:
   name: "nebius-vpn-gw"
   instance_count: 1
+
+  # Per-instance external IPs (optional, indexed by instance, each line for one instance)
+  # Structure: Array of arrays, where each element maps to an instance (by index)
+  # - external_ips[0] = list of IPs for instance 0 (maps to NICs: [eth0, eth1, ...])
+  # - external_ips[1] = list of IPs for instance 1
+  # - etc.
+  #
+  # Mapping:
+  # - With num_nics=1: external_ips[i][0] → instance i, eth0
+  # - With num_nics=2: external_ips[i][0] → instance i, eth0
+  #                    external_ips[i][1] → instance i, eth1
+  #
+  # Behavior:
+  # - If omitted or empty: Auto-create allocations for all instances (1 per NIC)
+  # - If provided: Use existing allocation IPs (must exist in project)
+  # - If insufficient entries: Auto-create for missing instances/NICs
+  #
+  # Examples:
+  # Single VM (instance_count=1, num_nics=1):
+  #   external_ips:
+  #     - ["1.2.3.4"]           # Instance 0, NIC 0
+  #
+  # Multi-VM HA (instance_count=2, num_nics=1):
+  #   external_ips:
+  #     - ["1.2.3.4"]           # Instance 0, NIC 0
+  #     - ["5.6.7.8"]           # Instance 1, NIC 0
+  #
+  # Future multi-NIC (instance_count=1, num_nics=2):
+  #   external_ips:
+  #     - ["1.2.3.4", "1.2.3.5"]  # Instance 0, NIC 0 and NIC 1
+  #
+  # Future multi-VM + multi-NIC (instance_count=2, num_nics=2):
+  #   external_ips:
+  #     - ["1.2.3.4", "1.2.3.5"]  # Instance 0, NIC 0 and NIC 1
+  #     - ["5.6.7.8", "5.6.7.9"]  # Instance 1, NIC 0 and NIC 1
+  #
+  # external_ips:
+  #   - ["${GW_INSTANCE_0_NIC_0_IP}"]  # Instance 0 IPs
+  #   - ["${GW_INSTANCE_1_NIC_0_IP}"]  # Instance 1 IPs
+
   # VM specification.
   vm_spec:
     platform: "cpu-d3" # e.g., cpu-e2 | cpu-d3 ; see Nebius docs for options: https://docs.nebius.com/compute/virtual-machines/types
@@ -26,21 +97,27 @@ gateway_group:
     disk_gb: 200
     disk_type: network_ssd
     disk_block_bytes: 4096
-    # SSH access / metadata as needed.
+
+    # Network interface configuration
+    # CURRENT PLATFORM LIMITATION: Only 1 NIC per instance is supported.
+    # When platform supports multiple NICs, you can increase this value.
+    # Each NIC (eth0, eth1, etc.) will be attached to vpngw-subnet with one public IP allocation.
+    # Public IPs are configured via gateway_group.external_ips (see above for per-instance mapping).
+    # If gateway_group.external_ips not provided, allocations are auto-created (1 per NIC per instance).
+    num_nics: 1 # Default: 1 (platform limitation); Future: 2 for redundant tunnels on separate NICs
+
+    # SSH access
     # You can provide the public key content directly OR point to a local file path.
     # Option A (inline content):
     # ssh_public_key: "${SSH_PUBLIC_KEY}" # e.g., ssh-ed25519 AAAA... user@host
     # Option B (path to your ~/.ssh public key). If provided and ssh_public_key is empty,
     # the orchestrator will read this file and inline its contents automatically.
-    # Explicit key paths (recommended): only paths, never key contents.
-    ssh_public_key_path: "~/.ssh/id_ed25519.pub" # public key injected to VM
-    ssh_private_key_path: "~/.ssh/id_ed25519" # private key used locally for SSH
-    # Optional SSH username used by the orchestrator (Paramiko).
+    # Explicit key paths (recommended): Use only paths, never key contents.
     # If ssh_private_key_path is omitted, the orchestrator falls back to your SSH agent
     # and default key discovery (e.g., ~/.ssh/id_ed25519, id_rsa).
     # ssh_username: "ubuntu"
-
-
+    ssh_public_key_path: "~/.ssh/id_ed25519.pub" # public key injected to VM
+    ssh_private_key_path: "~/.ssh/id_ed25519" # private key used locally for SSH
     # Network/subnet configuration for the VM NICs.
     # Optional: VPC network to create/locate the gateway subnet in.
     # If omitted or left as an unresolved placeholder, the orchestrator will use the network named "default-network".
@@ -48,22 +125,27 @@ gateway_group:
     # network_id: "${NETWORK_ID}"  # optional; falls back to default-network
     # The orchestrator ensures a single gateway subnet named "vpngw-subnet" (/27)
     # inside the chosen network (network_id or default-network), and attaches
-    # two NICs (eth0, eth1) for each VM to that subnet.
-
-    # Public IPv4 addresses to be associated with gateway interfaces (existing allocations).
-    # Optional: provide two entries (one per NIC). If omitted or placeholders remain unresolved,
-    # the orchestrator will create two allocations under "vpngw-subnet" and attach them to eth0/eth1.
-    # external_ips:
-    # - "${GW_PUBLIC_IP_0}"  # optional: existing allocation IP for eth0
-    # - "${GW_PUBLIC_IP_1}"  # optional: existing allocation IP for eth1
+    # the configured number of NICs (num_nics) for each VM to that subnet.
+    #
+    # NOTE: Public IP allocation is configured at gateway_group.external_ips level
+    # (see above) to support per-instance IP assignment in multi-VM setups.
 
     ###############################################################################
     # Gateway-wide parameters (BGP ASN, local prefixes, quotas)
     ###############################################################################
 gateway:
+  # Local BGP ASN for this gateway
   local_asn: 65010
+
+  # Local prefixes (Nebius-side subnets) - SINGLE SOURCE OF TRUTH
+  # These are the networks on the Nebius side that should be advertised to peers.
+  # For BGP: These prefixes are advertised via BGP to all connections where advertise_local_prefixes=true
+  # For Static: These are used as leftsubnet in IPsec unless overridden per-tunnel
+  # Examples: VPC subnet CIDRs, workload subnets, etc.
   local_prefixes:
-  - 10.0.0.0/16
+  - 10.0.0.0/16 # Example: Main VPC CIDR
+  # - 10.1.0.0/16  # Example: Additional subnet
+
   quotas:
     max_connections: 16
     max_tunnels: 32
@@ -111,6 +193,25 @@ defaults:
 ###############################################################################
 # Connections: each logical relationship to a single remote VPN gateway
 ###############################################################################
+#
+# LOCAL PREFIX ADVERTISEMENT STRATEGY:
+#
+# 1. Gateway-level (SINGLE SOURCE OF TRUTH):
+#    gateway.local_prefixes = ["10.0.0.0/16", "10.1.0.0/16"]
+#    - All Nebius-side subnets that should be advertised
+#
+# 2. BGP Mode:
+#    connection.bgp.advertise_local_prefixes = true/false
+#    - true: Advertise ALL gateway.local_prefixes to this BGP peer
+#    - false: Establish BGP session but don't advertise routes (receive-only)
+#
+# 3. Static Mode:
+#    tunnel.static_routes.local_prefixes = ["10.0.0.0/16"] (optional)
+#    - If specified: Override gateway.local_prefixes for this specific tunnel
+#    - If omitted: Use gateway.local_prefixes automatically
+#    - Use case: Split traffic across tunnels (tunnel1 advertises 10.0.x, tunnel2 advertises 10.1.x)
+#
+###############################################################################
 connections:
 ###########################################################################
 # Example 1: GCP HA VPN using BGP
@@ -118,86 +219,64 @@ connections:
 - name: "gcp-ha-vpn"
   description: "Primary HA VPN to GCP"
   vendor: "gcp"
-  routing_mode: bgp
+  routing_mode: bgp # Use BGP for dynamic routing
 
   bgp:
     enabled: true
     remote_asn: ${GCP_REMOTE_ASN} # e.g., 64514
+    # advertise_local_prefixes: Controls whether to advertise gateway.local_prefixes via BGP
+    # true = advertise all prefixes from gateway.local_prefixes to this peer
+    # false = do not advertise (BGP session established but no routes sent)
     advertise_local_prefixes: true
 
-  crypto:
-    use_defaults_crypto: false
+  # crypto: null means use global defaults (aes256-sha256/384/512)
 
   tunnels:
   - name: "gcp-ha-tunnel-1"
     gateway_instance_index: 0
     local_public_ip_index: 0
     ha_role: "active"
-    ike_version: null
+    ike_version: null # Use defaults (IKEv2)
+    remote_public_ip: ${GCP_TUNNEL_1_REMOTE_PUBLIC_IP} # e.g., "35.242.x.x" - GCP VPN gateway public IP
     psk: ${GCP_TUNNEL_1_PSK} # REQUIRED secret via env/secret store
     inner_cidr: ${GCP_TUNNEL_1_INNER_CIDR} # e.g., "169.254.10.0/30"
     inner_local_ip: ${GCP_TUNNEL_1_LOCAL_IP} # e.g., "169.254.10.1"
     inner_remote_ip: ${GCP_TUNNEL_1_REMOTE_IP} # e.g., "169.254.10.2"
-    crypto:
-      ike_proposals: []
-      esp_proposals: []
-      ike_lifetime_seconds: null
-      esp_lifetime_seconds: null
-    routing_mode: null
-    static_routes:
-      remote_prefixes: []
-      local_prefixes: []
-    bgp:
-      local_ip: null
-      remote_ip: null
-      local_asn: null
-      remote_asn: null
-      advertise_local_prefixes: null
+    # crypto: null means use connection-level or global defaults
+    # routing_mode: null means inherit from connection (bgp)
+    # bgp: tunnel-specific BGP config (optional; inherits from connection if omitted)
 
   - name: "gcp-ha-tunnel-2"
     gateway_instance_index: 0
     local_public_ip_index: 0
     ha_role: "active"
-    ike_version: null
+    ike_version: null # Use defaults (IKEv2)
+    remote_public_ip: ${GCP_TUNNEL_2_REMOTE_PUBLIC_IP} # e.g., "35.220.x.x" - GCP VPN gateway public IP
     psk: ${GCP_TUNNEL_2_PSK} # REQUIRED secret via env/secret store
     inner_cidr: ${GCP_TUNNEL_2_INNER_CIDR}
     inner_local_ip: ${GCP_TUNNEL_2_LOCAL_IP}
     inner_remote_ip: ${GCP_TUNNEL_2_REMOTE_IP}
-    crypto:
-      ike_proposals: []
-      esp_proposals: []
-      ike_lifetime_seconds: null
-      esp_lifetime_seconds: null
-    routing_mode: null
-    static_routes:
-      remote_prefixes: []
-      local_prefixes: []
-    bgp:
-      local_ip: null
-      remote_ip: null
-      local_asn: null
-      remote_asn: null
-      advertise_local_prefixes: null
+    # crypto: null means use connection-level or global defaults
 
-###########################################################################
-# Example 2: On-prem Cisco router using static routing
-###########################################################################
+    ###########################################################################
+    # Example 2: On-prem Cisco router using static routing
+    ###########################################################################
 - name: "onprem-static"
   description: "On-prem DC using static routing"
   vendor: "cisco"
-  routing_mode: static
+  routing_mode: static # Use static routes (no BGP)
 
+  # bgp: Not used for static routing connections
   bgp:
     enabled: false
-    remote_asn: null
-    advertise_local_prefixes: false
 
   tunnels:
   - name: "onprem-static-tunnel-1"
     gateway_instance_index: 0
     local_public_ip_index: 0
     ha_role: "active"
-    ike_version: 1
+    ike_version: 1 # IKEv1 for older Cisco routers
+    remote_public_ip: ${ONPREM_TUNNEL_1_REMOTE_PUBLIC_IP} # e.g., "203.0.113.5" - On-prem router public IP
     psk: ${ONPREM_TUNNEL_1_PSK} # REQUIRED secret via env/secret store
     inner_cidr: ${ONPREM_TUNNEL_1_INNER_CIDR}
     inner_local_ip: ${ONPREM_TUNNEL_1_LOCAL_IP}
@@ -211,14 +290,27 @@ connections:
       esp_lifetime_seconds: 3600
     routing_mode: static
     static_routes:
+      # Remote prefixes: Networks on the peer side (e.g., on-prem subnets)
       remote_prefixes:
-      - "172.16.0.0/12"
-      - "192.168.0.0/16"
+      - "172.16.0.0/12" # On-prem network 1
+      - "192.168.0.0/16" # On-prem network 2
+      # Local prefixes (OPTIONAL): Override gateway.local_prefixes for this specific tunnel
+      # DEFAULT BEHAVIOR: If omitted or empty, automatically uses gateway.local_prefixes
+      # OVERRIDE: Specify prefixes to advertise only specific subnets via this tunnel
+      #
+      # Common scenarios:
+      # 1. Use default (RECOMMENDED): Omit this field or set to []
+      #    Result: Advertises gateway.local_prefixes (10.0.0.0/16)
+      #
+      # 2. Tunnel-specific routing: Specify different prefixes per tunnel
+      #    Example: tunnel1 advertises 10.0.0.0/17, tunnel2 advertises 10.0.128.0/17
+      #
+      # 3. Explicit same as gateway: Redundant but clear
+      #    local_prefixes: ["10.0.0.0/16"]
+      #
+      # For this example, we'll use the default (comment out to use gateway.local_prefixes):
+      # local_prefixes: []
+      #
+      # Or explicitly override:
       local_prefixes:
-      - "10.0.0.0/16"
-    bgp:
-      local_ip: null
-      remote_ip: null
-      local_asn: null
-      remote_asn: null
-      advertise_local_prefixes: false
+      - "10.0.0.0/16" # Explicit: advertise this prefix (matches gateway default)

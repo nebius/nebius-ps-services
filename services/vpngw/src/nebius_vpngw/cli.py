@@ -123,15 +123,124 @@ def apply(
     ssh = SSHPush()
     routes = RouteManager(project_id=proj_id)
 
+    # Check for destructive changes BEFORE making any changes
+    print("[bold]Analyzing configuration changes...[/bold]")
+    changes = vm_mgr.check_changes(plan.gateway_group)
+    
+    has_destructive = False
+    has_safe = False
+    has_no_change = True
+    
+    for inst_name, diff in changes:
+        if diff.requires_recreation():
+            has_destructive = True
+            has_no_change = False
+            print(f"[red]{inst_name}:[/red]")
+            print(diff.format_warning())
+        elif diff.has_changes():
+            has_safe = True
+            has_no_change = False
+            print(f"[yellow]{inst_name}:[/yellow]")
+            print(diff.format_warning())
+        else:
+            print(f"[green]{inst_name}: No infrastructure changes[/green]")
+    
+    # If destructive changes detected and --recreate-gw not provided, abort
+    if has_destructive and not recreate_gw:
+        print("\n[red]⚠️  ERROR: Destructive changes require VM recreation[/red]")
+        print("[yellow]To proceed with VM recreation, run:[/yellow]")
+        print(f"  nebius-vpngw apply --recreate-gw")
+        raise typer.Exit(code=1)
+    
+    # Warn if --recreate-gw provided but no changes detected (unnecessary recreation)
+    if has_no_change and recreate_gw:
+        print("\n[yellow]⚠️  WARNING: No configuration changes detected[/yellow]")
+        print("[yellow]VM recreation will use identical specifications (unnecessary downtime).[/yellow]")
+        print("\nDo you want to proceed? [y/N]: ", end="")
+        import sys
+        response = input().strip().lower()
+        if response not in ("y", "yes"):
+            print("[green]Aborted. No changes made.[/green]")
+            raise typer.Exit(code=0)
+        print("[yellow]Proceeding with VM recreation (user confirmed)...[/yellow]")
+    elif has_destructive and recreate_gw:
+        print("\n[yellow]⚠️  This will:[/yellow]")
+        print("[yellow]  • Delete existing VM(s) and boot disk(s)[/yellow]")
+        print("[yellow]  • Recreate VM(s) with new specifications[/yellow]")
+        print("[yellow]  • Cause downtime for all VPN tunnels[/yellow]")
+        print("[yellow]  • Preserve and reassign public IP allocations[/yellow]")
+        print("")
+        import sys
+        sys.stdout.write("\033[1mProceed with VM recreation? [y/N]:\033[0m ")
+        sys.stdout.flush()
+        response = input().strip().lower()
+        if response not in ("y", "yes"):
+            print("[green]Aborted. No changes made.[/green]")
+            raise typer.Exit(code=0)
+        print("[yellow]Proceeding with destructive changes...[/yellow]")
+    elif recreate_gw:
+        print("\n[yellow]Proceeding with VM recreation for safe changes (--recreate-gw flag provided)...[/yellow]")
+
     print("[bold]Ensuring gateway VMs exist...[/bold]")
-    vm_mgr.ensure_group(plan.gateway_group, recreate=recreate_gw)
+    vm_ips = vm_mgr.ensure_group(plan.gateway_group, recreate=recreate_gw)
+
+    # Wait for VMs to be network-reachable and verify bootstrap
+    if vm_ips:
+        print("[bold]Waiting for VMs to become reachable...[/bold]")
+        all_reachable = True
+        for vm_name, vm_ip in vm_ips.items():
+            if not vm_mgr.wait_for_vm_network(vm_name, vm_ip, timeout=180):
+                all_reachable = False
+        
+        if all_reachable:
+            print("[bold]Verifying VM bootstrap and package installation...[/bold]")
+            all_healthy = True
+            for vm_name, vm_ip in vm_ips.items():
+                health = vm_mgr.check_vm_health(vm_name, vm_ip)
+                if health['cloud_init_complete'] and health['strongswan_installed'] and health['frr_installed']:
+                    print(f"[green]{vm_name} ({vm_ip}): {health['message']}[/green]")
+                elif health['reachable']:
+                    print(f"[yellow]{vm_name} ({vm_ip}): {health['message']}[/yellow]")
+                    all_healthy = False
+                else:
+                    print(f"[red]{vm_name} ({vm_ip}): {health['message']}[/red]")
+                    all_healthy = False
+            
+            # If VMs are not fully healthy (e.g., SSH not ready), wait additional time
+            if not all_healthy:
+                import time
+                print("[yellow]Waiting for SSH to become available...[/yellow]")
+                max_ssh_wait = 120  # Wait up to 2 minutes for SSH
+                ssh_wait_interval = 10
+                for attempt in range(max_ssh_wait // ssh_wait_interval):
+                    time.sleep(ssh_wait_interval)
+                    all_ssh_ready = True
+                    for vm_name, vm_ip in vm_ips.items():
+                        health = vm_mgr.check_vm_health(vm_name, vm_ip)
+                        if not health['reachable']:
+                            all_ssh_ready = False
+                            break
+                    if all_ssh_ready:
+                        print(f"[green]✓ All VMs SSH ready (waited {(attempt + 1) * ssh_wait_interval}s)[/green]")
+                        break
+                    print(f"[dim]SSH not ready, waiting... ({(attempt + 1) * ssh_wait_interval}s elapsed)[/dim]")
+                else:
+                    print("[yellow]Warning: SSH did not become ready within timeout, attempting config push anyway...[/yellow]")
+        else:
+            print("[yellow]Some VMs did not become reachable within timeout[/yellow]")
 
     print("[bold]Pushing per-VM resolved configs and reloading agent...[/bold]")
     for inst_cfg in plan.iter_instance_configs():
-        target = (inst_cfg.external_ip or "").strip()
+        # Use discovered IP from vm_ips first, then fall back to config
+        target = vm_ips.get(inst_cfg.hostname) or (inst_cfg.external_ip or "").strip()
         if not target:
-            print(f"[yellow]Skipping SSH for {inst_cfg.hostname}: no external IP yet.[/yellow]")
-            continue
+            # Last resort: try to query the VM
+            discovered_ip = vm_mgr.get_vm_public_ip(inst_cfg.hostname)
+            if discovered_ip:
+                target = discovered_ip
+            else:
+                print(f"[dim]Skipping config push for {inst_cfg.hostname}: No IP address available[/dim]")
+                continue
         ssh.push_config_and_reload(target, inst_cfg, local_cfg)
 
     if plan.should_manage_routes:
