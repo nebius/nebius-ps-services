@@ -4,8 +4,8 @@ import typing as t
 import textwrap
 import importlib.resources as resources
 
-from ..config_loader import GatewayGroupSpec, InstanceResolvedConfig
-from .vm_diff import VMDiffAnalyzer, VMSpec, ChangeType
+from ..config_loader import GatewayGroupSpec
+from .vm_diff import VMDiffAnalyzer, VMSpec
 
 
 class VMManager:
@@ -565,7 +565,7 @@ class VMManager:
                         existing.append(vm_obj)
                 
                 if not existing:
-                    print(f"[VMManager] No existing VMs found")
+                    print("[VMManager] No existing VMs found")
                 else:
                     print(f"[VMManager] Found {len(existing)} existing VM(s) for recreation")
 
@@ -633,13 +633,13 @@ class VMManager:
                                 except Exception as e:
                                     print(f"[VMManager] Failed to delete VM {inst_name}: {e}")
                     else:
-                        print(f"[VMManager] ERROR: Cannot delete VMs - InstanceServiceClient not available")
+                        print("[VMManager] ERROR: Cannot delete VMs - InstanceServiceClient not available")
                         raise RuntimeError("Cannot proceed with --recreate-gw: VM deletion failed")
                     
                     # Wait for VM deletions to fully propagate before deleting disks
                     if existing:
                         import time
-                        print(f"[VMManager] Waiting for VM deletions to complete...")
+                        print("[VMManager] Waiting for VM deletions to complete...")
                         time.sleep(15)
                     
                     # Step 2: Delete boot disks (with retry since disk detachment can take time)
@@ -685,25 +685,40 @@ class VMManager:
                     # Additional wait to ensure allocations are fully detached and disks fully deleted
                     if existing:
                         import time
-                        print(f"[VMManager] Waiting for allocations to fully detach and disk deletions to complete...")
+                        print("[VMManager] Waiting for allocations to fully detach and disk deletions to complete...")
                         time.sleep(15)  # Wait for disk deletion to fully propagate
 
                 # Ensure each instance
                 for i in range(spec.instance_count):
                     inst_name = f"{spec.name}-{i}"
-                    # Check if exists
-                    ok = False
+                    # Check if exists (skip creation if recreate=False)
+                    vm_exists = False
                     try:
-                        if instance_api is not None and hasattr(instance_api, "get_by_name"):
+                        # Try SDK client first (more reliable)
+                        vm_obj = self._get_vm_by_name(client, inst_name)
+                        if vm_obj is not None:
+                            vm_exists = True
+                        # Fallback to legacy instance_api if SDK check failed
+                        elif instance_api is not None and hasattr(instance_api, "get_by_name"):
                             try:
                                 inst = instance_api.get_by_name(name=inst_name, project_id=self.project_id)
                             except TypeError:
                                 inst = instance_api.get_by_name(name=inst_name)
-                            ok = inst is not None
+                            vm_exists = inst is not None
                     except Exception:
-                        ok = False
-                    if ok:
-                        print(f"[VMManager] Exists: {inst_name}")
+                        vm_exists = False
+                    
+                    if vm_exists and not recreate:
+                        print(f"[VMManager] VM {inst_name} already exists (recreate=False), skipping creation")
+                        # Get public IP for reporting
+                        vm_ip = self.get_vm_public_ip(inst_name)
+                        if vm_ip:
+                            vm_ips[inst_name] = vm_ip
+                            print(f"[VMManager] {inst_name} IP: {vm_ip}")
+                        continue
+                    elif vm_exists and recreate:
+                        # This should not happen - VMs should have been deleted above
+                        print(f"[VMManager] WARNING: VM {inst_name} still exists after deletion (race condition?)")
                         continue
 
                     # Step 1: Ensure boot disk exists (following CLI pattern)
@@ -715,8 +730,6 @@ class VMManager:
                     # Preset-based CPU/mem; fall back to cores/memory_gb if preset missing
                     platform = spec.vm_spec.get("platform") or "cpu-d3"
                     preset = spec.vm_spec.get("preset")
-                    cores = spec.vm_spec.get("cores")
-                    memory_gb = spec.vm_spec.get("memory_gb")
                     # Boot disk/image fields per template
                     boot_image = spec.vm_spec.get("disk_boot_image") or spec.vm_spec.get("image_family") or "ubuntu24.04-driverless"
                     disk_gb = spec.vm_spec.get("disk_gb", 200)
@@ -747,7 +760,6 @@ class VMManager:
                             DiskServiceClient,
                             CreateDiskRequest,
                             DiskSpec,
-                            SourceImageFamily,
                             ImageServiceClient,
                             GetImageLatestByFamilyRequest,
                         )  # type: ignore
@@ -880,7 +892,7 @@ class VMManager:
                                                     continue
                                             except Exception:
                                                 # Disk no longer found - deletion complete, retry creation
-                                                print(f"[VMManager] Disk deletion complete, retrying creation...")
+                                                print("[VMManager] Disk deletion complete, retrying creation...")
                                                 try:
                                                     op = dsc.create(req).wait()
                                                     try:
@@ -912,10 +924,10 @@ class VMManager:
                                                 break
                                         else:
                                             # Timeout waiting for deletion
-                                            print(f"[VMManager] Timeout waiting for disk deletion to complete")
+                                            print("[VMManager] Timeout waiting for disk deletion to complete")
                                     else:
                                         # Not recreating - just refetch existing disk
-                                        print(f"[VMManager] Disk already exists, refetching ID...")
+                                        print("[VMManager] Disk already exists, refetching ID...")
                                         if self.project_id:
                                             try:
                                                 if hasattr(dsc, "get_by_name"):
@@ -934,7 +946,7 @@ class VMManager:
                                             except Exception as refetch_err:
                                                 print(f"[VMManager] Refetch failed: {refetch_err}")
                                         else:
-                                            print(f"[VMManager] Cannot refetch: project_id is None")
+                                            print("[VMManager] Cannot refetch: project_id is None")
                                 else:
                                     print(f"[VMManager] boot disk create failed: {e}")
                     except Exception:
@@ -1207,7 +1219,6 @@ class VMManager:
                             NetworkInterfaceSpec,
                             IPAddress,
                             PublicIPAddress,
-                            IPAlias,
                             AttachedDiskSpec,
                             ExistingDisk,
                         )  # type: ignore

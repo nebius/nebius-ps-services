@@ -232,8 +232,23 @@ class VMDiffAnalyzer:
         )
     
     @staticmethod
-    def _normalize_disk_type(disk_type: str) -> str:
-        """Normalize disk type for comparison."""
+    def _normalize_disk_type(disk_type: t.Union[str, int]) -> str:
+        """Normalize disk type for comparison.
+        
+        Handles both string names and numeric enum values from Nebius API.
+        """
+        # Handle numeric enum values from Nebius API
+        # Common mappings: 1 = NETWORK_SSD, 2 = NETWORK_HDD, 3 = NETWORK_SSD_IO_M3
+        if isinstance(disk_type, int):
+            disk_type_map = {
+                1: "NETWORK_SSD",
+                2: "NETWORK_HDD",
+                3: "NETWORK_SSD_IO_M3",
+                4: "NETWORK_SSD_NONREPLICATED",
+            }
+            return disk_type_map.get(disk_type, "NETWORK_SSD")
+        
+        # Handle string values
         dt = str(disk_type).upper()
         # Map aliases to canonical values
         if dt in {"SSD", "NVME"}:

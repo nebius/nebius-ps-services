@@ -1,69 +1,91 @@
 # Nebius VPN Gateway (VM-based)
 
-A modular Python-based orchestrator and agent to provision Nebius Compute VMs as Site-to-Site IPsec VPN gateways compatible with GCP HA VPN, AWS Site-to-Site VPN, Azure VPN Gateway, and on-prem routers.
+A modular Python-based orchestrator and agent to provision Nebius VMs as Site-to-Site IPsec VPN gateways (compatible with GCP HA VPN, AWS Site-to-Site VPN, Azure VPN Gateway, and on-premises routers)
 
 ## Features
 
-- IPsec (strongSwan) with IKEv2/IKEv1, AES-256, SHA-256/384/512, DH 14/20/24
-- BGP (FRR) and static routing modes
-- Single-VM and multi-VM gateway groups
-- YAML-driven configuration plus optional peer config import
-- Idempotent agent applying configs on the VM
-
-## Project Layout
-
-- `nebius-vpngw-config.yaml`: main user-facing config
-- `src/nebius_vpngw/cli.py`: orchestrator CLI (`nebius-vpngw`)
-- `src/nebius_vpngw/config_loader.py`: YAML and peer-merge logic
-- `src/nebius_vpngw/peer_parsers/`: vendor parsers (GCP/AWS/Azure/Cisco)
-- `src/nebius_vpngw/deploy/`: VM, route, and SSH push managers
-- `src/nebius_vpngw/agent/`: always-running agent on each VM
+- **IPsec (strongSwan)**: IKEv2/IKEv1, AES-256, SHA-256/384/512, DH groups 14/20/24
+- **Routing modes**: BGP (FRR) and static routing
+- **High availability**: Single-VM or multi-VM gateway groups
+- **Configuration**: YAML-driven with optional peer config import from cloud providers
+- **Automation**: Idempotent agent automatically applies and maintains configurations
 
 ## Quick Start
 
-Prereqs (macOS):
+### Prerequisites
 
 - Python 3.10–3.12
-- `graphviz` (for diagrams; optional)
-- Poetry (maintainers only)
+- Nebius account
 
-Install and run CLI (pip, recommended for users):
+### Installation
 
-```zsh
+Install using pip (recommended):
+
+```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -U pip wheel
 pip install -e .
-python -c "import nebius.sdk as sdk; print('Nebius SDK OK:', sdk)"
+poetry build
 nebius-vpngw --help
 ```
 
-Install and run CLI (Poetry, for maintainers):
+### Configuration
 
-```zsh
-poetry install
-poetry run python -c "import nebius.sdk as sdk; print('Nebius SDK OK:', sdk)"
-poetry run nebius-vpngw --help
-# or run as module under Poetry
-poetry run python -m nebius_vpngw --help
+On first run, the CLI automatically creates a template configuration file:
+
+```bash
+nebius-vpngw
+# Creates ./nebius-vpngw-config.yaml from template
 ```
 
-### Run
+Edit the configuration file with your environment details:
 
-Dry-run (renders actions without applying):
-
-```zsh
-nebius-vpngw --local-config-file ./nebius-vpngw-config.yaml --dry-run
+```yaml
+# nebius-vpngw-config.yaml (minimal example)
+gateway_group:
+  name: vpngw
+  vm_spec:
+    count: 1
+    ssh_public_key_path: "~/.ssh/id_ed25519.pub"
+  # Optional: specify VPC network (defaults to your default network)
+  # network_id: ${NETWORK_ID}
+  # Optional: specify public IP allocations (auto-created if omitted)
+  # external_ips: []
 ```
 
-Apply (provisions gateway VMs and pushes config):
+**Important**: Do not commit sensitive values. Use environment variables for secrets:
 
-```zsh
-# Ensure auth context (examples)
+```yaml
+tunnels:
+  - name: gcp-tunnel-1
+    psk: ${GCP_TUNNEL_1_PSK}  # Set via: export GCP_TUNNEL_1_PSK="your-secret"
+```
+
+### Authentication
+
+Set up Nebius API credentials:
+
+```bash
 export TENANT_ID="your-tenant-id"
 export PROJECT_ID="your-project-id"
 export REGION_ID="eu-north1"
+export NEBIUS_IAM_TOKEN="$(your_token_command)"
+```
 
+Alternatively, use service account authentication with the `--sa` flag (CLI will create/reuse the service account automatically).
+
+### Deploy Your First Gateway
+
+Preview changes (dry-run):
+
+```bash
+nebius-vpngw --local-config-file ./nebius-vpngw-config.yaml --dry-run
+```
+
+Deploy gateway VMs and configure tunnels:
+
+```bash
 nebius-vpngw \
   --local-config-file ./nebius-vpngw-config.yaml \
   --sa nb-vpngw-sa \
@@ -71,286 +93,463 @@ nebius-vpngw \
   --zone "${REGION_ID}-a"
 ```
 
-Networking defaults (v1):
+Check tunnel status:
 
-- Single VPC network selected via `network_id` (optional). If omitted, the orchestrator resolves your environment’s default network.
-- One gateway subnet named `vpngw-subnet` with CIDR `/27` is ensured/created under the selected network.
-- Each gateway VM is provisioned with two NICs (eth0, eth1) attached to `vpngw-subnet`.
-- Each NIC gets one public IP allocation. If `external_ips` are not provided in YAML, the orchestrator creates two allocations and attaches them.
-
-### First run bootstrap
-
-- If you run `nebius-vpngw` without `--local-config-file`, the CLI checks for `./nebius-vpngw-config.yaml`.
-- If missing, it auto-creates one by copying the packaged `nebius-vpngw-config-template.yaml` into the current directory and exits.
-- Edit the file to fill environment-specific values and secrets, then re-run.
-
-Secrets guidance:
-
-- Do not commit `nebius-vpngw-config.yaml`. Prefer environment variables for placeholders (e.g., `${GCP_TUNNEL_1_PSK}`) or a secret manager.
-- Only the template file is distributed with the wheel.
-
-SSH public key convenience:
-
-- You can either embed `gateway_group.vm_spec.ssh_public_key` (inline) or set `gateway_group.vm_spec.ssh_public_key_path: "~/.ssh/id_ed25519.pub"`.
-- If `ssh_public_key_path` is provided and `ssh_public_key` is empty/missing, the CLI reads the file and inlines its contents automatically.
-- Optional: set `gateway_group.vm_spec.ssh_username` (default: `ubuntu`) and `gateway_group.vm_spec.ssh_private_key_path` (default: use your SSH agent) for pushing configs over SSH.
-
-Networking-specific YAML fields:
-
-- `gateway_group.network_id` (optional): target VPC network. If missing, defaults to the environment’s default network.
-- `gateway_group.external_ips` (optional): list of public IP allocation IDs; when absent or empty, two allocations are created and attached to eth0/eth1.
-
-### Nebius API authentication (service account)
-
-- Create a Service Account with appropriate permissions on your `project_id` and obtain an access token (see SA setup script linked in examples).
-- Configure these context variables via environment or YAML placeholders:
-  - `TENANT_ID` → `${TENANT_ID}`
-  - `PROJECT_ID` → `${PROJECT_ID}`
-  - `REGION_ID` → `${REGION_ID}`
-- Recommended: export as env vars, reference them in YAML as `${...}`.
-
-Token requirement (PyPI SDK):
-
-- The PyPI Nebius SDK reads an IAM token from `NEBIUS_IAM_TOKEN` by default.
-- When you pass `--sa`, the CLI will attempt to create/reuse a Service Account and export `NEBIUS_IAM_TOKEN` in the environment for this run.
-- Alternatively, you can set it manually:
-
-```zsh
-export NEBIUS_IAM_TOKEN="$(your_token_command_or_value)"
+```bash
+nebius-vpngw status --local-config-file ./nebius-vpngw-config.yaml
 ```
 
-Minimal config (YAML) for quick start:
+## Usage
+
+### CLI Commands
+
+**View tunnel status and system health:**
+
+```bash
+nebius-vpngw status --local-config-file ./nebius-vpngw-config.yaml
+```
+
+**Deploy or update gateway configuration:**
+
+```bash
+nebius-vpngw apply --local-config-file ./nebius-vpngw-config.yaml
+```
+
+**Import peer configuration from cloud provider:**
+
+```bash
+nebius-vpngw apply \
+  --local-config-file ./nebius-vpngw-config.yaml \
+  --peer-config-file ./gcp-ha-vpn-config.txt \
+  --peer-config-file ./aws-vpn-config.txt
+```
+
+Peer config files automatically populate missing tunnel details (PSKs, IPs, crypto proposals) without changing your topology.
+
+**Preview changes without applying:**
+
+```bash
+nebius-vpngw --local-config-file ./nebius-vpngw-config.yaml --dry-run
+```
+
+### CLI Options
+
+**Authentication:**
+
+- `--sa <name>`: Create/use service account with Editor permissions
+- Without `--sa`: Uses Nebius CLI default profile credentials
+
+**Networking:**
+
+- Gateway VMs are created with two NICs (eth0, eth1) in `vpngw-subnet` (auto-created, /27 CIDR)
+- Two public IPs are allocated (one per NIC) unless specified via `gateway_group.external_ips`
+- If `network_id` is omitted, the default VPC network is used
+
+**Destructive changes:**
+
+Some configuration changes require VM recreation (e.g., changing CPU, memory, boot disk type):
+
+```bash
+nebius-vpngw apply --recreate-gw --local-config-file ./nebius-vpngw-config.yaml
+```
+
+**Warning**: Recreation causes downtime. Public IPs are preserved and reassigned.
+
+### SSH Configuration
+
+Configure SSH access in your YAML:
 
 ```yaml
-# nebius-vpngw-config.yaml (minimal)
 gateway_group:
-  name: vpngw
   vm_spec:
-    count: 1
-    ssh_public_key_path: "~/.ssh/id_ed25519.pub"
-  # optional: if omitted, default network is used
-  # network_id: ${NETWORK_ID}
-  # optional: create two allocations if omitted/empty
-  # external_ips: []
+    ssh_public_key_path: "~/.ssh/id_ed25519.pub"  # Auto-reads file content
+    ssh_username: ubuntu  # Default: ubuntu
+    ssh_private_key_path: "~/.ssh/id_ed25519"  # Optional, uses SSH agent if omitted
 ```
 
-Minimal Python example with `nebius.sdk`:
+The CLI automatically reads `ssh_public_key_path` and embeds the public key in the VM configuration.
 
-```python
-import os
-import nebius.sdk as sdk
+## Monitoring and Troubleshooting
 
-tenant_id = os.environ["TENANT_ID"]
-project_id = os.environ["PROJECT_ID"]
-region_id = os.environ.get("REGION_ID", "eu-north1")
+### Checking Tunnel Status
 
-client = sdk.SDK(tenant_id=tenant_id, project_id=project_id, region_id=region_id)
+View active tunnels and system health:
 
-# Example: list VPC networks (API surface may vary by SDK version)
-vpc = client.vpc()
-for net in vpc.network.list(parent_id=project_id):
-  print(net)
+```bash
+nebius-vpngw status --local-config-file ./nebius-vpngw-config.yaml
 ```
 
-Note: ensure your SA token is available to the SDK per pysdk instructions (e.g., env or config file). Refer to the official API reference.
+**Output includes:**
 
+- Tunnel status table: name, gateway VM, state (ESTABLISHED/CONNECTING), peer IP, encryption, uptime
+- Service health: `nebius-vpngw-agent`, `strongswan-starter`, `frr` status
 
-Reproducibility tip:
+Example:
 
-```zsh
-poetry lock
-git add poetry.lock && git commit -m "Lock dependencies"
+```text
+                           VPN Gateway Status
+┏━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━┓
+┃ Tunnel               ┃ Gateway VM  ┃ Status       ┃ Peer IP         ┃ Encryption                   ┃ Uptime    ┃
+┡━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━┩
+│ gcp-classic-tunnel-0 │ vpngw-vm-0  │ ESTABLISHED  │ 34.155.169.244  │ AES_GCM_16_128/...           │ 5 minutes │
+└──────────────────────┴─────────────┴──────────────┴─────────────────┴──────────────────────────────┴───────────┘
 ```
 
-## Install
+### Configuration Files on Gateway VMs
 
-This project uses Poetry.
+**IPsec (strongSwan):**
 
-```zsh
-# pyproject.toml is at repository root
-poetry install
-# Activate the virtualenv (Poetry >=2.x removed the default shell command):
-eval "$(poetry env activate zsh)"
-# Now run the CLI
-nebius-vpngw --help
+- `/etc/ipsec.conf` - Tunnel configuration (auto-generated by agent)
+- `/etc/ipsec.secrets` - Pre-shared keys
+- `/etc/strongswan.conf` - Daemon settings
 
-# Optional: restore legacy 'poetry shell' behavior by installing the plugin
-# poetry self add poetry-plugin-shell
-# poetry shell
+**BGP (FRR):**
+
+- `/etc/frr/frr.conf` - BGP configuration (auto-generated by agent)
+- `/etc/frr/daemons` - Enabled daemons
+
+**Agent:**
+
+- `/etc/nebius-vpngw-agent.yaml` - Instance-specific config
+- `/var/log/nebius-vpngw-agent.log` - Agent logs
+
+**Services:**
+
+- `nebius-vpngw-agent.service` - Config renderer and service manager
+- `strongswan-starter.service` - IPsec daemon
+- `frr.service` - Routing daemon
+
+### Common Issues
+
+#### Tunnel Not Establishing
+
+**Symptoms:** Status shows `CONNECTING` or no connection
+
+**Check IPsec status:**
+
+```bash
+ssh ubuntu@<gateway-ip> 'sudo ipsec statusall'
 ```
 
-Alternatively with `pip` (editable mode):
+**Common errors and fixes:**
 
-```zsh
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
-python -c "import nebius.sdk as sdk; print('Nebius SDK OK:', sdk)"
+| Error | Cause | Solution |
+|-------|-------|----------|
+| `no IKE config found` | Wrong local IP | For responder mode: use `left=%any`. For initiator mode: use `left=<external-ip>` |
+| `INVALID_SYNTAX` | Crypto mismatch | Update `ike_proposal` and `esp_proposal` to match peer. GCP example: `aes256-sha256-modp2048` |
+| `AUTHENTICATION_FAILED` | Wrong PSK | Verify PSK is identical (case-sensitive). Check env var: `echo $GCP_TUNNEL_PSK` |
+
+**Verify XFRM policies installed:**
+
+```bash
+ssh ubuntu@<gateway-ip> 'sudo ip xfrm policy'
+# Should show: 10.49.0.0/16 <-> 10.10.0.0/24 (your configured subnets)
 ```
 
-Troubleshooting:
+**Check firewall rules:**
 
-- If you see `ModuleNotFoundError: No module named 'nebius.pysdk'`, your environment still references the GitHub SDK layout. This package targets the PyPI Nebius SDK (`nebius.sdk`). Ensure the virtualenv is active and reinstall via pip as shown above.
+- Allow UDP 500 (IKE) and 4500 (NAT-T) from peer IP
+- Allow ESP (IP protocol 50) if not using NAT-T
 
-## CLI Usage
+**View logs:**
 
-```zsh
-# Default invocation (apply is implicit)
-nebius-vpngw \
-  --local-config-file ./nebius-vpngw-config.yaml \
-  --dry-run
-
-# Apply with peer configs (explicit subcommand also works)
-nebius-vpngw \
-  --local-config-file ./nebius-vpngw-config.yaml \
-  --peer-config-file ./doc/gcp-ha-vpn-config.txt \
-  --peer-config-file ./doc/aws-vpn-config.txt \
-  --sa nb-vpngw-sa \
-  --project-id my-project \
-  --zone eu-north1-a
-
-Tip: Supplying multiple `--peer-config-file` values lets the orchestrator merge details from several peers (e.g., one GCP and one AWS) into the YAML-defined connections. Vendor is auto-detected when possible, but files are treated generically — they only populate missing fields (PSKs, APIPA IPs, crypto, remote ASN) and never change your topology.
-
-Service Account option (`--sa`):
-- If you pass `--sa <name>`, the CLI will attempt to ensure a Service Account of that name exists (with Editor permissions) and obtain a token via the Nebius SDK. If it cannot, it falls back to using the Nebius CLI default profile.
-- If you omit `--sa`, the Nebius SDK initialization relies on your local Nebius CLI config (default profile). See https://docs.nebius.com/cli/quickstart.
-
-Public IPs (dynamic vs static allocations):
-- Default: Two static public IP allocations are attached — one per NIC (eth0, eth1). If `external_ips` is omitted/empty, the orchestrator creates and attaches them under `vpngw-subnet`.
-- Specific allocations: Provide two allocation IDs via `gateway_group.external_ips` to attach existing allocations. The orchestrator validates their region/network alignment.
-- Region alignment: Allocations and `vpngw-subnet` must be in the VM’s region.
-
-Agent service on VM:
-- Install the agent binary and systemd unit (packaged at `nebius_vpngw/systemd/nebius-vpngw-agent.service`), then enable/start:
- 
-  ```zsh
-  sudo cp /path/to/nebius-vpngw-agent /usr/bin/
-  sudo cp $(python -c 'import importlib.resources as r; print(r.files("nebius_vpngw").joinpath("systemd/nebius-vpngw-agent.service"))') /etc/systemd/system/
-  sudo systemctl daemon-reload
-  sudo systemctl enable --now nebius-vpngw-agent
-  ```
-
-
-## Build Executable
-
-Build a standalone binary using Poetry (recommended):
-
-```zsh
-poetry install
-poetry run build-binary
-# Binary created under `dist/nebius-vpngw`
+```bash
+ssh ubuntu@<gateway-ip> 'sudo journalctl -u strongswan-starter -n 100'
 ```
 
-Advanced (optional): raw PyInstaller invocation if you need custom flags:
+#### Configuration Not Updating
 
-```zsh
-poetry run pyinstaller -F -n nebius-vpngw src/nebius_vpngw/__main__.py
+**Verify agent received config:**
+
+```bash
+ssh ubuntu@<gateway-ip> 'cat /etc/nebius-vpngw-agent.yaml'
 ```
 
-## Distribution Options
+**Check agent is running:**
 
-This project supports two distribution modes to fit different audiences:
+```bash
+ssh ubuntu@<gateway-ip> 'sudo systemctl status nebius-vpngw-agent'
+ssh ubuntu@<gateway-ip> 'sudo journalctl -u nebius-vpngw-agent -n 50'
+```
 
-- Python package (recommended for dev/ops teams)
-- Single-file binary via PyInstaller (for non-Python users)
+**If you modified agent code:**
 
-### Python Package (Dev/Ops, reproducible installs)
+```bash
+# Rebuild wheel before deploying
+poetry build
+nebius-vpngw --local-config-file ./nebius-vpngw-config.yaml
+```
 
-- Why: Deterministic environments using `poetry.lock`; easy install and updates.
-- Entry points: Defined in `tool.poetry.scripts`.
+#### BGP Session Not Establishing
 
-Commands (macOS / zsh):
+**Check BGP status:**
 
-```zsh
-# Create/refresh lock for reproducible builds
-poetry lock
+```bash
+ssh ubuntu@<gateway-ip> 'sudo vtysh -c "show bgp summary"'
+```
 
-# Install in a virtualenv managed by Poetry
-poetry install
+**Common fixes:**
 
-# Run the CLIs from the virtualenv
+- Ensure BGP enabled: Check `/etc/frr/daemons` has `bgpd=yes`
+- Configure tunnel IPs: BGP mode requires `inner_cidr`, `inner_local_ip`, `inner_remote_ip` in YAML
+- Verify ASNs: `local_asn` and `remote_asn` must match peer configuration
+
+**View FRR logs:**
+
+```bash
+ssh ubuntu@<gateway-ip> 'sudo journalctl -u frr -n 100'
+```
+
+### Debug Logging
+
+Enable detailed IPsec logging for troubleshooting:
+
+```bash
+ssh ubuntu@<gateway-ip>
+sudo nano /etc/strongswan.conf
+```
+
+Add this section:
+
+```ini
+charon {
+    filelog {
+        stderr {
+            default = 1
+            ike = 2
+            cfg = 2
+            knl = 2
+        }
+    }
+}
+```
+
+Restart and view logs:
+
+```bash
+sudo systemctl restart strongswan-starter
+sudo journalctl -u strongswan-starter -f
+```
+
+**Note:** Debug logging is verbose and may impact performance. Disable after troubleshooting.
+
+### Manual Verification Commands
+
+```bash
+# IPsec status
+sudo ipsec status                  # Brief
+sudo ipsec statusall              # Detailed
+sudo ipsec reload                 # Reload config without restart
+
+# XFRM (Linux kernel IPsec)
+sudo ip xfrm policy               # View policies
+sudo ip xfrm state                # View security associations
+
+# BGP (if using BGP mode)
+sudo vtysh -c "show bgp summary"
+sudo vtysh -c "show ip route bgp"
+
+# Services
+sudo systemctl status nebius-vpngw-agent
+sudo systemctl status strongswan-starter
+sudo systemctl status frr
+
+# Logs
+sudo journalctl -u nebius-vpngw-agent -n 100
+sudo journalctl -u strongswan-starter -n 100
+sudo journalctl -u frr -n 100
+
+# Connectivity
+ping <peer-subnet-ip>
+```
+
+## Project Structure
+
+```text
+├── nebius-vpngw-config.yaml              # Main user configuration
+├── src/nebius_vpngw/
+│   ├── cli.py                            # CLI orchestrator (nebius-vpngw)
+│   ├── config_loader.py                  # YAML parser and peer config merger
+│   ├── agent/
+│   │   ├── main.py                       # On-VM agent
+│   │   ├── frr_renderer.py               # BGP config renderer
+│   │   └── strongswan_renderer.py        # IPsec config renderer
+│   ├── deploy/
+│   │   ├── vm_manager.py                 # VM lifecycle management
+│   │   ├── route_manager.py              # VPC route management
+│   │   └── ssh_push.py                   # Config deployment over SSH
+│   └── peer_parsers/
+│       ├── gcp.py                        # GCP HA VPN parser
+│       ├── aws.py                        # AWS Site-to-Site VPN parser
+│       ├── azure.py                      # Azure VPN Gateway parser
+│       └── cisco.py                      # Cisco IOS parser
+```
+
+## Development
+
+This section is for contributors and maintainers.
+
+### Setup Development Environment
+
+Install with Poetry (recommended for development):
+
+```bash
+poetry install --with dev
 poetry run nebius-vpngw --help
-poetry run nebius-vpngw-agent --help
+```
 
-# Optional: install system-wide via pipx (isolated environment)
+Or activate the virtualenv:
+
+```bash
+eval "$(poetry env activate zsh)"
+nebius-vpngw --help
+```
+
+### Code Quality
+
+**Linting and formatting with Ruff:**
+
+```bash
+# Check for issues
+poetry run ruff check .
+
+# Auto-fix safe issues
+poetry run ruff check . --fix
+
+# Format code (Black-compatible)
+poetry run ruff format .
+```
+
+**Pre-commit hooks (optional):**
+
+```yaml
+# .pre-commit-config.yaml
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+      - id: ruff-format
+```
+
+Install hooks:
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+### Building and Distribution
+
+#### Python Package (Wheel)
+
+Build distributable package:
+
+```bash
+poetry build
+# Creates: dist/nebius-vpngw-0.1.0-py3-none-any.whl
+```
+
+Install with pipx (system-wide isolated environment):
+
+```bash
 pipx install .
 nebius-vpngw --help
 ```
 
-Notes:
+**Lock dependencies for reproducibility:**
 
-- Commit `poetry.lock` to version control.
-- For library-like usage you may choose not to commit the lock, but for apps/services it’s best practice to commit it.
+```bash
+poetry lock
+git add poetry.lock && git commit -m "Lock dependencies"
+```
 
-### Single-File Binary (Non-Python users)
+#### Single-File Binary (PyInstaller)
 
-- Why: One executable, no Python required on target hosts.
-- Tool: PyInstaller.
-- Requirements: Test on a clean macOS, codesign/notarize if distributing externally, bundle any required assets.
+Build standalone executable (no Python required on target system):
 
-Build commands:
-
-```zsh
-# Ensure dependencies are installed in the Poetry venv
+```bash
 poetry install
-
-# Build single-file binary
-poetry run build-binary  # uses [tool.poetry.scripts] build-binary entry
-
-# Result: dist/nebius-vpngw
-ls -la dist
-
-# Or raw PyInstaller (equivalent)
-poetry run pyinstaller -F -n nebius-vpngw src/nebius_vpngw/__main__.py
-
-# If your CLI loads modules/plugins dynamically, you may need:
-#   --hidden-import some_module
-# If your app needs assets (e.g., diagram templates), bundle them:
-#   --add-data "image/*:image"
+poetry run build-binary
+# Creates: dist/nebius-vpngw
 ```
 
-macOS distribution checklist:
+**Advanced PyInstaller options:**
 
-- Codesign the binary with a valid Apple Developer ID.
-- Notarize the signed binary with Apple (required for Gatekeeper).
-- Verify on a clean macOS VM before sharing.
-
-Example codesign/notarize (placeholder):
-
-```zsh
-# Sign (replace with your identity)
-codesign --force --options runtime --sign "Developer ID Application: Your Org (TEAMID)" dist/nebius-vpngw
-
-# Verify signature
-codesign --verify --deep --strict dist/nebius-vpngw
-spctl --assess --verbose=4 dist/nebius-vpngw
-
-# Notarize (requires xcrun altool/notarytool setup)
-# xcrun notarytool submit dist/nebius-vpngw --keychain-profile "notary-profile" --wait
+```bash
+# Custom build with hidden imports and bundled assets
+poetry run pyinstaller -F -n nebius-vpngw \
+  --hidden-import some_module \
+  --add-data "image/*:image" \
+  src/nebius_vpngw/__main__.py
 ```
 
-Troubleshooting:
+**macOS distribution checklist:**
 
-- If the binary fails to locate resources, add `--add-data` for required files and access them via `importlib.resources` or relative paths.
-- If Rich/Typer styles don’t render correctly in minimal terminals, try setting `TERM=xterm-256color`.
-- If you need custom PyInstaller arguments, run the underlying command directly (see `nebius_vpngw/build.py`).
-Or use Poetry to create wheel/sdist:
+1. **Codesign:**
 
-```zsh
+   ```bash
+   codesign --force --options runtime \
+     --sign "Developer ID Application: Your Org (TEAMID)" \
+     dist/nebius-vpngw
+   ```
+
+2. **Verify:**
+
+   ```bash
+   codesign --verify --deep --strict dist/nebius-vpngw
+   spctl --assess --verbose=4 dist/nebius-vpngw
+   ```
+
+3. **Notarize:**
+
+   ```bash
+   xcrun notarytool submit dist/nebius-vpngw \
+     --keychain-profile "notary-profile" --wait
+   ```
+
+**Troubleshooting binary builds:**
+
+- Resources not found: Add `--add-data` and use `importlib.resources`
+- Styling issues: Set `TERM=xterm-256color`
+- Custom flags: Edit `nebius_vpngw/build.py` directly
+
+### Agent Development
+
+The agent runs on gateway VMs and renders IPsec/FRR configurations.
+
+**Agent workflow:**
+
+1. Build wheel: `poetry build` → Creates `dist/nebius_vpngw-0.0.0-py3-none-any.whl`
+2. Deploy: CLI uploads wheel to VMs via SSH and installs it
+
+**After modifying agent code:**
+
+```bash
+# Clean old artifacts
+rm -rf src/dist/ src/build/ src/nebius_vpngw.egg-info/
+
+# Rebuild wheel
 poetry build
-# dist/nebius-vpngw-0.1.0-py3-none-any.whl
+
+# Deploy to VMs
+nebius-vpngw --local-config-file ./nebius-vpngw-config.yaml
 ```
 
-## Agent Service
+**Note:** The wheel is NOT installed in your local virtualenv—only on remote VMs.
 
-On the gateway VM, install and run the agent (scaffold):
+**Agent service on gateway VM:**
 
-- Console script: `nebius-vpngw-agent`
-- Reads `/etc/nebius-vpngw/config-resolved.yaml`
-- Writes strongSwan (`/etc/ipsec.conf`, `/etc/ipsec.secrets`) and FRR (`/etc/frr/bgpd.conf`) configs
-- Idempotent via `/etc/nebius-vpngw/last-applied.json`
+```bash
+# Install agent binary and systemd unit
+sudo cp /path/to/nebius-vpngw-agent /usr/bin/
+sudo cp /path/to/nebius-vpngw-agent.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now nebius-vpngw-agent
+```
 
-Example systemd unit (to add later):
+**Example systemd unit:**
 
 ```ini
 [Unit]
@@ -366,75 +565,36 @@ Restart=always
 WantedBy=multi-user.target
 ```
 
-## Development
+The agent:
 
-Install development dependencies (pytest, ruff, pyinstaller) using Poetry's group:
+- Reads `/etc/nebius-vpngw-agent.yaml` (pushed by orchestrator)
+- Renders `/etc/ipsec.conf`, `/etc/ipsec.secrets`, `/etc/frr/frr.conf`
+- Maintains idempotency via `/etc/nebius-vpngw/last-applied.json`
 
-```zsh
-# Include the dev group
-poetry install --with dev
+### Troubleshooting Development Setup
 
-# Or if already installed without dev, add it:
-poetry install --with dev --sync
+**`ModuleNotFoundError: No module named 'nebius.pysdk'`**
+
+You're using the old GitHub SDK. This package targets the PyPI SDK:
+
+```bash
+source .venv/bin/activate
+pip uninstall nebius-pysdk  # Remove old SDK
+pip install -e .            # Reinstall with correct SDK (nebius.sdk)
 ```
 
-Run the test suite:
+**Verify SDK installation:**
 
-```zsh
-poetry run pytest -q
-# Focus on a single test file
-poetry run pytest tests/test_config_loading.py::test_load_config_env_token -q
-```
-
-Lint and format with Ruff:
-
-```zsh
-# Static analysis (errors + style)
-poetry run ruff check .
-
-# Auto-fix (safe fixes only) then re-check
-poetry run ruff check . --fix
-
-# Format (Black-compatible mode)
-poetry run ruff format .
-```
-
-Suggested pre-commit configuration (optional):
-
-```yaml
-# .pre-commit-config.yaml
-repos:
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.6.9
-    hooks:
-      - id: ruff
-        args: ["--fix"]
-      - id: ruff-format
-  - repo: https://github.com/pytest-dev/pytest
-    rev: 8.3.3
-    hooks:
-      - id: pytest
-        additional_dependencies: []
-```
-
-Then:
-
-```zsh
-pip install pre-commit
-pre-commit install
-```
-
-Environment-variable placeholders in the YAML (`${VAR}`) must be set before running tests that load configs. For local iteration you can export dummy values:
-
-```zsh
-export GCP_TUNNEL_1_PSK=dummy AWS_TUNNEL_1_PSK=dummy TENANT_ID=tenant PROJECT_ID=project REGION_ID=eu-north1
+```python
+import nebius.sdk as sdk
+print("Nebius SDK OK:", sdk)
 ```
 
 ## Notes
 
-- Vendor peer parsers are placeholders; integrate real parsing as needed.
-- VM/route managers are stubs; wire to Nebius SDK when available.
-- The scaffold emphasizes modularity and idempotency per the design.
+- Vendor peer parsers are extensible; add custom parsers in `peer_parsers/` as needed
+- The architecture emphasizes modularity and idempotency
+- Agent renders configs declaratively and reloads services only when changes are detected
 
 ## License
 

@@ -135,6 +135,8 @@ gateway_group:
     ###############################################################################
 gateway:
   # Local BGP ASN for this gateway
+  # local_asn is only used when BGP is enabled. 
+  # For static routing you can leave it in the config (it will be ignored) 
   local_asn: 65010
 
   # Local prefixes (Nebius-side subnets) - SINGLE SOURCE OF TRUTH
@@ -143,7 +145,7 @@ gateway:
   # For Static: These are used as leftsubnet in IPsec unless overridden per-tunnel
   # Examples: VPC subnet CIDRs, workload subnets, etc.
   local_prefixes:
-  - 10.0.0.0/16 # Example: Main VPC CIDR
+  - 10.0.0.0/16 # Example: Main VPC CIDR; should contain your Nebius-side subnets
   # - 10.1.0.0/16  # Example: Additional subnet
 
   quotas:
@@ -183,7 +185,7 @@ defaults:
     timeout_seconds: 120
 
   routing:
-    mode: bgp
+    mode: bgp # Default routing mode: bgp | static
     bgp:
       hold_time_seconds: 90
       keepalive_seconds: 30
@@ -233,9 +235,12 @@ connections:
 
   tunnels:
   - name: "gcp-ha-tunnel-1"
-    gateway_instance_index: 0
-    local_public_ip_index: 0
-    ha_role: "active"
+    gateway_instance_index: 0 # Which VM instance (0-based index) should handle this tunnel
+    # local_public_ip_index: Optional - index into gateway_group.external_ips[gateway_instance_index]
+    # For HA VPN with 2 tunnels per interface, specify which NIC's IP to use.
+    # If omitted or if external_ips not configured, external IP is auto-discovered/allocated.
+    # local_public_ip_index: 0
+    ha_role: "active" # For HA VPN: "active" or "standby" (only relevant for GCP HA VPN, not Classic VPN)
     ike_version: null # Use defaults (IKEv2)
     remote_public_ip: ${GCP_TUNNEL_1_REMOTE_PUBLIC_IP} # e.g., "35.242.x.x" - GCP VPN gateway public IP
     psk: ${GCP_TUNNEL_1_PSK} # REQUIRED secret via env/secret store
@@ -247,9 +252,9 @@ connections:
     # bgp: tunnel-specific BGP config (optional; inherits from connection if omitted)
 
   - name: "gcp-ha-tunnel-2"
-    gateway_instance_index: 0
-    local_public_ip_index: 0
-    ha_role: "active"
+    gateway_instance_index: 0 # Same instance, different tunnel
+    # local_public_ip_index: 0 # Optional - see comment above
+    ha_role: "active" # For HA VPN (not used for Classic VPN)
     ike_version: null # Use defaults (IKEv2)
     remote_public_ip: ${GCP_TUNNEL_2_REMOTE_PUBLIC_IP} # e.g., "35.220.x.x" - GCP VPN gateway public IP
     psk: ${GCP_TUNNEL_2_PSK} # REQUIRED secret via env/secret store
@@ -259,8 +264,44 @@ connections:
     # crypto: null means use connection-level or global defaults
 
     ###########################################################################
-    # Example 2: On-prem Cisco router using static routing
+    # Example 1b: GCP Classic VPN using static routing
     ###########################################################################
+- name: "gcp-classic-vpn"
+  description: "GCP Classic VPN with static routing"
+  vendor: "gcp"
+  routing_mode: static # Classic VPN does NOT support BGP
+
+  # bgp: Not used for Classic VPN
+  bgp:
+    enabled: false
+
+  tunnels:
+  - name: "gcp-classic-tunnel-1"
+    gateway_instance_index: 0 # Which VM instance handles this tunnel
+    # local_public_ip_index: NOT NEEDED for Classic VPN (only one tunnel per gateway)
+    # ha_role: NOT NEEDED for Classic VPN (not an HA setup)
+    ike_version: 2 # IKEv2 (GCP Classic VPN default)
+    remote_public_ip: ${GCP_CLASSIC_REMOTE_PUBLIC_IP} # e.g., "34.155.169.244" - GCP Classic VPN gateway public IP
+    psk: ${GCP_CLASSIC_PSK} # REQUIRED secret via env/secret store
+    # inner_cidr/inner_local_ip/inner_remote_ip: NOT NEEDED for static routing (no BGP tunnel IPs)
+    crypto:
+      # GCP Classic VPN defaults (compatible with strongSwan)
+      ike_proposals:
+      - "aes256-sha256-modp2048"
+      esp_proposals:
+      - "aes256-sha256"
+      ike_lifetime_seconds: 28800 # 8 hours
+      esp_lifetime_seconds: 3600 # 1 hour
+    static_routes:
+      # Remote prefixes: GCP VPC subnet(s) you want to reach
+      remote_prefixes:
+      - "10.10.0.0/24" # Example: GCP VPC subnet
+      # local_prefixes: Optional override (omit to use gateway.local_prefixes automatically)
+      # local_prefixes: []
+
+      ###########################################################################
+      # Example 2: On-prem Cisco router using static routing
+      ###########################################################################
 - name: "onprem-static"
   description: "On-prem DC using static routing"
   vendor: "cisco"
@@ -272,12 +313,14 @@ connections:
 
   tunnels:
   - name: "onprem-static-tunnel-1"
-    gateway_instance_index: 0
-    local_public_ip_index: 0
-    ha_role: "active"
+    gateway_instance_index: 0 # Which VM instance handles this tunnel
+    # local_public_ip_index: Optional - only needed if you have multiple external IPs configured
+    # local_public_ip_index: 0
+    # ha_role: Not relevant for static routing (used only for HA VPN BGP routing)
     ike_version: 1 # IKEv1 for older Cisco routers
     remote_public_ip: ${ONPREM_TUNNEL_1_REMOTE_PUBLIC_IP} # e.g., "203.0.113.5" - On-prem router public IP
     psk: ${ONPREM_TUNNEL_1_PSK} # REQUIRED secret via env/secret store
+    # inner_cidr/inner_local_ip/inner_remote_ip: Only needed for BGP mode (VTI tunnel IPs)
     inner_cidr: ${ONPREM_TUNNEL_1_INNER_CIDR}
     inner_local_ip: ${ONPREM_TUNNEL_1_LOCAL_IP}
     inner_remote_ip: ${ONPREM_TUNNEL_1_REMOTE_IP}

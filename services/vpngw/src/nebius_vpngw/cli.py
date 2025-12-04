@@ -20,38 +20,36 @@ app = typer.Typer(add_completion=False, help="Nebius VM-based VPN Gateway orches
 def _default(
     ctx: typer.Context,
     local_config_file: t.Optional[Path] = typer.Option(None, exists=True, readable=True, help="Path to nebius-vpngw-config.yaml"),
-    peer_config_file: t.List[Path] = typer.Option([], exists=True, readable=True, help="Vendor peer config file(s)"),
-    recreate_gw: bool = typer.Option(False, help="Delete and recreate gateway VMs before applying"),
-    sa: t.Optional[str] = typer.Option(None, help="If provided, ensure a Service Account with this name and use it for auth"),
     project_id: t.Optional[str] = typer.Option(None, help="Nebius project/folder identifier"),
     zone: t.Optional[str] = typer.Option(None, help="Nebius zone for gateway VMs"),
-    dry_run: bool = typer.Option(False, help="Render actions without applying"),
 ):
-    """Default action: behaves like `apply` if no subcommand is provided."""
+    """Default action: shows status if config exists, creates template if not."""
     if ctx.invoked_subcommand is None:
-        # If no local config provided, check for default in CWD and auto-create from template if missing.
+        # If no local config provided, check for default in CWD
         if local_config_file is None:
             default_path = Path.cwd() / "nebius-vpngw-config.yaml"
             if not default_path.exists():
+                # No config found - create template and exit
                 try:
                     template_rel = "nebius-vpngw-config-template.yaml"
                     with resources.as_file(resources.files("nebius_vpngw").joinpath(template_rel)) as tpl_path:
                         shutil.copyfile(tpl_path, default_path)
                     print(f"[green]Created default config at[/green] {default_path}")
                     print("[bold]Please edit the file to fill environment-specific values and secrets, then re-run.[/bold]")
+                    print("\n[bold]Available commands:[/bold]")
+                    print("  [cyan]nebius-vpngw status[/cyan]  - Show VPN tunnel status")
+                    print("  [cyan]nebius-vpngw apply[/cyan]   - Deploy/update gateway configuration")
                     raise typer.Exit(code=0)
                 except Exception as e:
                     print(f"[red]Failed to create default config:[/red] {e}")
                     raise typer.Exit(code=1)
             local_config_file = default_path
-        return apply(
+        
+        # Config exists - show status by default
+        return status(
             local_config_file=local_config_file,
-            peer_config_file=peer_config_file,
-            recreate_gw=recreate_gw,
-            sa=sa,
             project_id=project_id,
             zone=zone,
-            dry_run=dry_run,
         )
 
 
@@ -128,7 +126,6 @@ def apply(
     changes = vm_mgr.check_changes(plan.gateway_group)
     
     has_destructive = False
-    has_safe = False
     has_no_change = True
     
     for inst_name, diff in changes:
@@ -138,7 +135,6 @@ def apply(
             print(f"[red]{inst_name}:[/red]")
             print(diff.format_warning())
         elif diff.has_changes():
-            has_safe = True
             has_no_change = False
             print(f"[yellow]{inst_name}:[/yellow]")
             print(diff.format_warning())
@@ -149,7 +145,7 @@ def apply(
     if has_destructive and not recreate_gw:
         print("\n[red]⚠️  ERROR: Destructive changes require VM recreation[/red]")
         print("[yellow]To proceed with VM recreation, run:[/yellow]")
-        print(f"  nebius-vpngw apply --recreate-gw")
+        print("  nebius-vpngw apply --recreate-gw")
         raise typer.Exit(code=1)
     
     # Warn if --recreate-gw provided but no changes detected (unnecessary recreation)
@@ -248,6 +244,235 @@ def apply(
         routes.reconcile(plan)
 
     print("[green]Apply completed successfully.[/green]")
+
+
+@app.command()
+def status(
+    local_config_file: Path = typer.Option(..., exists=True, readable=True, help="Path to nebius-vpngw-config.yaml"),
+    project_id: t.Optional[str] = typer.Option(None, help="Nebius project/folder identifier"),
+    zone: t.Optional[str] = typer.Option(None, help="Nebius zone for gateway VMs"),
+):
+    """Show status of VPN tunnels and gateway health."""
+    from rich.console import Console
+    from rich.table import Table
+    import subprocess
+    import re
+    
+    console = Console()
+    
+    print("[bold]Loading local YAML config...[/bold]")
+    local_cfg = load_local_config(local_config_file)
+    plan: ResolvedDeploymentPlan = merge_with_peer_configs(local_cfg, [])
+    
+    # Resolve context from CLI args or config
+    tenant_id = (local_cfg.get("tenant_id") or "").strip() or None
+    proj_id = project_id or (local_cfg.get("project_id") or "").strip() or None
+    region_id = (local_cfg.get("region_id") or "").strip() or None
+    
+    # Get token for API access
+    auth_token = None
+    if not os.environ.get("NEBIUS_IAM_TOKEN"):
+        try:
+            from .vpngw_sa import ensure_cli_access_token
+            tok = ensure_cli_access_token()
+            if tok:
+                os.environ["NEBIUS_IAM_TOKEN"] = tok
+        except Exception:
+            pass
+    
+    vm_mgr = VMManager(project_id=proj_id, zone=zone or plan.gateway_group.region, auth_token=auth_token, tenant_id=tenant_id, region_id=region_id)
+    
+    print("[bold]Collecting gateway VM status...[/bold]")
+    vm_ips = {}
+    for inst_cfg in plan.iter_instance_configs():
+        ip = vm_mgr.get_vm_public_ip(inst_cfg.hostname)
+        if ip:
+            vm_ips[inst_cfg.hostname] = ip
+        else:
+            print(f"[yellow]Warning: Could not find IP for {inst_cfg.hostname}[/yellow]")
+    
+    # Create status table
+    table = Table(title="VPN Gateway Status", show_header=True, header_style="bold cyan")
+    table.add_column("Tunnel", style="white")
+    table.add_column("Gateway VM", style="white")
+    table.add_column("Status", style="white")
+    table.add_column("Peer IP", style="white")
+    table.add_column("Encryption", style="white")
+    table.add_column("Uptime", style="white")
+    
+    # Check each gateway VM's tunnels
+    for inst_cfg in plan.iter_instance_configs():
+        target = vm_ips.get(inst_cfg.hostname)
+        if not target:
+            continue
+        
+        # Run ipsec status command
+        try:
+            result = subprocess.run(
+                ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10", f"ubuntu@{target}", "sudo ipsec statusall"],
+                capture_output=True,
+                text=True,
+                timeout=15
+            )
+            
+            if result.returncode != 0:
+                table.add_row(
+                    "All tunnels",
+                    inst_cfg.hostname,
+                    "[red]ERROR[/red]",
+                    "-",
+                    "-",
+                    f"Failed to get status: {result.stderr.strip()}"
+                )
+                continue
+            
+            output = result.stdout
+            
+            # Parse IPsec status output
+            # Look for patterns like: "gcp-classic-tunnel-0[193]: ESTABLISHED 5 minutes ago, 10.48.0.13[10.48.0.13]...34.155.169.244[34.155.169.244]"
+            tunnel_pattern = re.compile(r'(\S+)\[\d+\]:\s+(\w+)\s+(.+?),\s+[\d.]+\[[\d.]+\]\.\.\.((\d+\.\d+\.\d+\.\d+)\[')
+            
+            tunnels = {}
+            for match in tunnel_pattern.finditer(output):
+                tunnel_name = match.group(1)
+                status = match.group(2)
+                uptime = match.group(3)
+                peer_ip = match.group(4)
+                tunnels[tunnel_name] = {
+                    'status': status,
+                    'uptime': uptime,
+                    'peer_ip': peer_ip,
+                    'encryption': 'Unknown'
+                }
+            
+            # Parse encryption from IKE proposal lines
+            # Pattern: "IKE proposal: AES_GCM_16_128/PRF_AES128_XCBC/MODP_2048"
+            ike_pattern = re.compile(r'(\S+)\[\d+\]:.*?IKE proposal:\s+(\S+)')
+            for match in ike_pattern.finditer(output):
+                tunnel_name = match.group(1)
+                encryption = match.group(2)
+                if tunnel_name in tunnels:
+                    tunnels[tunnel_name]['encryption'] = encryption
+            
+            # Add rows to table
+            if tunnels:
+                for tunnel_name, info in tunnels.items():
+                    status_text = info['status']
+                    if status_text == "ESTABLISHED":
+                        status_display = "[green]ESTABLISHED[/green]"
+                    elif status_text == "CONNECTING":
+                        status_display = "[yellow]CONNECTING[/yellow]"
+                    else:
+                        status_display = f"[red]{status_text}[/red]"
+                    
+                    table.add_row(
+                        tunnel_name,
+                        inst_cfg.hostname,
+                        status_display,
+                        info['peer_ip'],
+                        info['encryption'],
+                        info['uptime']
+                    )
+            else:
+                # No tunnels found in output
+                if "no matching" in output.lower() or "no active" in output.lower():
+                    table.add_row(
+                        "No tunnels",
+                        inst_cfg.hostname,
+                        "[yellow]NONE[/yellow]",
+                        "-",
+                        "-",
+                        "-"
+                    )
+                else:
+                    table.add_row(
+                        "Unknown",
+                        inst_cfg.hostname,
+                        "[red]PARSE ERROR[/red]",
+                        "-",
+                        "-",
+                        "Could not parse ipsec output"
+                    )
+        
+        except subprocess.TimeoutExpired:
+            table.add_row(
+                "All tunnels",
+                inst_cfg.hostname,
+                "[red]TIMEOUT[/red]",
+                "-",
+                "-",
+                "SSH command timed out"
+            )
+        except Exception as e:
+            table.add_row(
+                "All tunnels",
+                inst_cfg.hostname,
+                "[red]ERROR[/red]",
+                "-",
+                "-",
+                str(e)
+            )
+    
+    console.print(table)
+    
+    # Show service health
+    print("\n[bold]Checking system services...[/bold]")
+    service_table = Table(show_header=True, header_style="bold cyan")
+    service_table.add_column("Gateway VM", style="white")
+    service_table.add_column("Agent", style="white")
+    service_table.add_column("StrongSwan", style="white")
+    service_table.add_column("FRR", style="white")
+    
+    for inst_cfg in plan.iter_instance_configs():
+        target = vm_ips.get(inst_cfg.hostname)
+        if not target:
+            continue
+        
+        services = {
+            'nebius-vpngw-agent': 'Unknown',
+            'strongswan': 'Unknown',  # Check process, not systemd service
+            'frr': 'Unknown'
+        }
+        
+        for service_name in services.keys():
+            try:
+                # Special handling for strongSwan - check if charon daemon is running
+                if service_name == 'strongswan':
+                    result = subprocess.run(
+                        ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10", f"ubuntu@{target}", 
+                         "pgrep -x charon >/dev/null && echo active || echo inactive"],
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                        shell=False
+                    )
+                else:
+                    result = subprocess.run(
+                        ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10", f"ubuntu@{target}", 
+                         f"systemctl is-active {service_name}"],
+                        capture_output=True,
+                        text=True,
+                        timeout=10
+                    )
+                
+                if result.stdout.strip() == "active":
+                    services[service_name] = "[green]active[/green]"
+                elif result.stdout.strip() == "inactive":
+                    services[service_name] = "[yellow]inactive[/yellow]"
+                else:
+                    services[service_name] = f"[red]{result.stdout.strip()}[/red]"
+            
+            except Exception:
+                services[service_name] = "[red]error[/red]"
+        
+        service_table.add_row(
+            inst_cfg.hostname,
+            services['nebius-vpngw-agent'],
+            services['strongswan'],
+            services['frr']
+        )
+    
+    console.print(service_table)
 
 
 # init_config command removed; auto-creation occurs on first run without --local-config-file

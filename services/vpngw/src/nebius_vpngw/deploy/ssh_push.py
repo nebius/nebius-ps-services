@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import subprocess
-import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -229,4 +228,7 @@ class SSHPush:
         except Exception as e:
             print(f"[SSHPush] Failed to verify service status: {e}")
 
-        client.close()
+        try:
+            client.close()
+        except Exception:
+            pass  # Ignore Paramiko cleanup warnings

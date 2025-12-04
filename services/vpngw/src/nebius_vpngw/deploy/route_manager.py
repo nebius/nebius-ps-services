@@ -19,22 +19,18 @@ class RouteManager:
         """
         print("[RouteManager] Reconcile routes")
         # Best-effort SDK wiring; continue to log-only if not present
+        route_api = None
         try:
             import nebius.sdk as sdk  # type: ignore
 
             client = sdk.SDK()
-            vpc = getattr(client, "vpc")()
-            route_api = getattr(vpc, "route", None) or getattr(vpc, "routes", None)
-        except Exception:
-            # Attempt legacy SDK paths
-            try:
-                from nebius import pysdk  # type: ignore
-                client = pysdk.Client()
-                vpc = getattr(client, "vpc")()
-                route_api = getattr(vpc, "route", None) or getattr(vpc, "routes", None)
-            except Exception as e:
-                route_api = None
-                print(f"[RouteManager] SDK not available; logging only: {e}")
+            vpc = getattr(client, "vpc", None)
+            if vpc:
+                vpc_client = vpc()
+                route_api = getattr(vpc_client, "route", None) or getattr(vpc_client, "routes", None)
+        except Exception as e:
+            print(f"[RouteManager] SDK not available; logging only: {e}")
+            route_api = None
 
         import yaml
         for inst in plan.iter_instance_configs():
@@ -51,12 +47,14 @@ class RouteManager:
                         continue
                     prefixes = ((tun.get("static_routes") or {}).get("remote_prefixes") or [])
                     for pfx in prefixes:
+                        # Use external_ip if available, otherwise show hostname
+                        next_hop = inst.external_ip or f"gateway:{inst.hostname}"
                         if route_api and hasattr(route_api, "ensure"):
                             try:
                                 # Placeholder ensure signature; adapt to real SDK
-                                route_api.ensure(destination=pfx, next_hop=inst.external_ip, project_id=self.project_id)
-                                print(f"[RouteManager] Ensured route {pfx} -> {inst.external_ip}")
+                                route_api.ensure(destination=pfx, next_hop=next_hop, project_id=self.project_id)
+                                print(f"[RouteManager] Ensured route {pfx} -> {next_hop}")
                             except Exception as e:
                                 print(f"[RouteManager] ensure failed for {pfx}: {e}")
                         else:
-                            print(f"[RouteManager] Would ensure route {pfx} -> {inst.external_ip}")
+                            print(f"[RouteManager] Would ensure route {pfx} -> {next_hop}")

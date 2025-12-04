@@ -54,7 +54,7 @@ class FRRRenderer:
                 if tun.get("ha_role", "active") != "active":
                     continue
                 tbgp = tun.get("bgp", {}) or {}
-                local_ip = tbgp.get("local_ip") or tun.get("inner_local_ip")
+                _local_ip = tbgp.get("local_ip") or tun.get("inner_local_ip")  # Reserved for future use
                 remote_ip = tbgp.get("remote_ip") or tun.get("inner_remote_ip")
                 rasn = tbgp.get("remote_asn") or remote_asn
                 if not (remote_ip and rasn):

@@ -1,284 +1,84 @@
-# nebius-vpngw-config.yaml
-# Master configuration for Nebius VM-based VPN Gateway.
-
-version: 1  # Config schema version for future migrations.
+# GCP Classic VPN Test Configuration
+# Testing with static routing (GCP Classic VPN does not support BGP)
+version: 1
 tenant_id: "tenant-e00f3wdfzwfjgbcyfv"
-project_id: "project-e01pje50pr00tpkfby32zp"
+project_id: "project-e01y6xs5pr00gsdsyay8wq"
 region_id: "eu-west1" # e.g., us-central1 | eu-north1 | eu-north2 | eu-west1
 
-###############################################################################
-# Gateway group: how many VMs, where, and their external IPs
-###############################################################################
 gateway_group:
-  # A logical name for this group of VPN gateway instances.
   name: "nebius-vpn-gw"
-
-  # Number of VM instances to create/manage.
-  # - 1: single VM, typically with multiple tunnels (e.g., GCP HA, active/active tunnels).
-  # - >1: gateway HA via multiple VMs; routing table points to one at a time.
   instance_count: 1
 
-  # VM hardware and OS specification.
+  # Per-instance external IPs (optional)
+  # Omit to auto-create allocations for testing
+  # Uncomment to use specific allocation IPs:
+  # external_ips:
+  #   - ["1.2.3.4"]  # Instance 0, NIC 0
+
   vm_spec:
-    platform: "cpu-d3" # e.g., cpu-e2 | cpu-d3 ; see Nebius docs for options: https://docs.nebius.com/compute/virtual-machines/types
-    preset: "32vcpu-128gb" # see Nebius docs for preset options: https://docs.nebius.com/compute/virtual-machines/types
+    platform: "cpu-d3"
+    preset: "32vcpu-128gb"
     disk_boot_image: ubuntu24.04-driverless
     disk_gb: 200
     disk_type: network_ssd
     disk_block_bytes: 4096
-    # SSH access / metadata as needed.
+    num_nics: 1
     ssh_public_key_path: "~/.ssh/id_ed25519.pub"
     ssh_private_key_path: "~/.ssh/id_ed25519"
-    network_id: "${NETWORK_ID}" # optional; can be omitted to use default-network
-  external_ips:
-    # - "203.0.113.11"  # Uncomment if you need a second public IP.
+    network_id: "${NETWORK_ID}"
 
-###############################################################################
-# Gateway-wide parameters (BGP ASN, local prefixes, quotas)
-###############################################################################
 gateway:
-  # Local BGP ASN used by this gateway group.
-  # May be overridden at connection/tunnel level if necessary.
-  local_asn: 65010
-
-  # Local CIDR blocks (in Nebius VPC) that can be advertised to peers.
-  # Used as default export set for BGP and static routing sanity checks.
+  local_asn: 65010 # Not used for static routing, but required in config
+  # Local prefixes: Nebius-side subnets to advertise to GCP
+  # Replace with your actual Nebius VPC CIDR(s)
   local_prefixes:
-    - 10.0.0.0/16
-
+  - 10.49.0.0/16 # Example: Replace with your Nebius VPC subnet
   quotas:
-    # Maximum number of logical connections (groups of tunnels) on this gateway.
-    max_connections: 16
-
-    # Maximum number of tunnels across all connections.
-    max_tunnels: 32
-
-    # Optional total bandwidth cap (Mbps) for all tunnels combined.
-    # Implementation may use traffic shaping on the VM; leave null to disable.
+    max_connections: 1
+    max_tunnels: 2
     max_total_bandwidth_mbps: null
 
-###############################################################################
-# Global defaults for VPN behavior, crypto, DPD, and routing
-###############################################################################
 defaults:
-  # Global VPN type. Only "ipsec" is supported in v1.
   vpn_type: ipsec
-
-  # Default IKE version. Tunnels may override.
   ike_version: 2
-
-  # Allow legacy IKEv1 if a tunnel explicitly requests ike_version: 1.
   allow_ikev1: true
-
   auth:
-    # Authentication method. v1 supports only PSK.
     method: psk
-
   crypto:
-    # Default IKE (phase 1) proposals.
-    # Format: encryption-integrity-dhgroup
-    ike_proposals:
-      - "aes256-sha256-modp2048"
-      - "aes256-sha384-ecp384"
-      - "aes256-sha512-modp2048_256"
-
-    # Default IKE SA lifetime in seconds.
-    # Peer configs may override this unless a tunnel explicitly sets it.
-    ike_lifetime_seconds: 28800  # 8 hours
-
-    # Default ESP (phase 2) proposals for data SAs.
-    esp_proposals:
-      - "aes256-sha256"
-      - "aes256-sha384"
-      - "aes256-sha512"
-
-    # Default ESP SA lifetime in seconds.
-    esp_lifetime_seconds: 3600   # 1 hour
-
-    # Allowed DH groups; peer configs must be compatible with these.
-    dh_groups:
-      - 14
-      - 20
-      - 24
-
+    # GCP Classic VPN default ciphers (compatible)
+    ike_proposals: [ "aes256-sha256-modp2048" ]
+    ike_lifetime_seconds: 28800 # 8 hours (GCP default: 8h)
+    esp_proposals: [ "aes256-sha256" ]
+    esp_lifetime_seconds: 3600 # 1 hour (GCP default: 1h)
+    dh_groups: [ 14 ] # modp2048 (GCP default)
   dpd:
-    # Dead Peer Detection interval in seconds.
     interval_seconds: 30
-
-    # Time without responses before peer is considered dead.
     timeout_seconds: 120
-
   routing:
-    # Global default routing mode: "bgp" or "static".
-    mode: bgp
+    mode: static # Changed from 'bgp' to 'static' for GCP Classic VPN
 
-    bgp:
-      # Default BGP hold time and keepalive (seconds).
-      hold_time_seconds: 90
-      keepalive_seconds: 30
-
-      # Enable BGP graceful restart by default.
-      graceful_restart: true
-
-      # Default maximum number of prefixes accepted from a peer.
-      max_prefixes: 1000
-
-###############################################################################
-# Connections: each logical relationship to a single remote VPN gateway
-###############################################################################
+# GCP Classic VPN Connection
 connections:
-  ###########################################################################
-  # Example 1: GCP HA VPN using BGP
-  ###########################################################################
-  - name: "gcp-ha-vpn"
-    # Free-form description.
-    description: "Primary HA VPN to GCP"
+- name: "gcp-classic-vpn-test"
+  description: "GCP Classic VPN with static routing"
+  vendor: "gcp"
+  routing_mode: static # GCP Classic VPN does not support BGP
 
-    # Vendor hint; used to select the correct parser for --peer-config-file.
-    vendor: "gcp"   # "gcp" | "aws" | "azure" | "cisco" | "generic"
+  tunnels:
+  - name: "gcp-classic-tunnel-0"
+    gateway_instance_index: 0
+    ha_role: "active"
+    ike_version: 2 # IKEv2 (GCP default)
+    remote_public_ip: "34.155.169.244" # Your GCP VPN Gateway public IP
+    psk: "${GCP_TUNNEL_PSK}" # Set via environment variable: export GCP_TUNNEL_PSK="your-shared-secret"
 
-    # Connection-level routing mode. If omitted, defaults.routing.mode is used.
-    # For GCP HA VPN we typically use BGP.
-    routing_mode: bgp
-
-    # BGP settings for this connection.
-    bgp:
-      enabled: true
-
-      # Remote ASN (GCP Cloud Router ASN). If a peer-config file has this value,
-      # that will override this field unless explicitly set here.
-      remote_asn: 64514
-
-      # If true, advertise gateway.local_prefixes by default.
-      advertise_local_prefixes: true
-
-    # Connection-level crypto overrides (optional).
-    crypto:
-      # If true, ignore peer-config's crypto proposals and use defaults.crypto.
-      # If false, prefer peer-config crypto when present.
-      use_defaults_crypto: false
-
-    # Tunnels for this connection. For GCP HA VPN, typically 2.
-    tunnels:
-      - name: "gcp-ha-tunnel-1"
-
-        # Index of the gateway instance that owns this tunnel (0-based).
-        # For instance_count = 1, always 0. For instance_count = 2, can be 0 or 1.
-        gateway_instance_index: 0
-
-        # Index into gateway_group.external_ips. Defines which public IP is used
-        # as the local endpoint for this tunnel.
-        local_public_ip_index: 0  # external_ips[0] = 203.0.113.10
-
-        # HA role for this tunnel.
-        # - "active": tunnel is configured and brought up.
-        # - "disable": tunnel is configured in YAML but not created/used.
-        ha_role: "active"
-
-        # IKE version override for this tunnel. If null, use connection or global default.
-        ike_version: null
-
-        # Pre-shared key for this tunnel. If null, peer-config file must provide it.
-        # In production, store securely (e.g., in KMS/secret manager).
-        psk: null
-
-        # Inner /30 network for this tunnel (for BGP or static routing).
-        # If null, values are taken from peer-config if available.
-        inner_cidr: null         # e.g., "169.254.10.0/30"
-        inner_local_ip: null     # e.g., "169.254.10.1"
-        inner_remote_ip: null    # e.g., "169.254.10.2"
-
-        # Crypto overrides for this tunnel. If empty/null, use connection defaults,
-        # then peer-config, then global defaults.
-        crypto:
-          ike_proposals: []           # e.g., ["aes256-sha256-modp2048"]
-          esp_proposals: []           # e.g., ["aes256-sha256"]
-          ike_lifetime_seconds: null  # override or null for default/peer-config
-          esp_lifetime_seconds: null
-
-        # Per-tunnel routing mode override. If null, connection.routing_mode is used.
-        routing_mode: null            # "bgp" | "static" | null
-
-        # Static routes for this tunnel, used only if routing_mode == "static".
-        static_routes:
-          remote_prefixes: []         # e.g., ["10.100.0.0/16"]
-          local_prefixes: []          # override gateway.local_prefixes if needed
-
-        # BGP per-tunnel overrides.
-        bgp:
-          local_ip: null              # e.g., 169.254.10.1
-          remote_ip: null             # e.g., 169.254.10.2
-          local_asn: null             # override gateway.local_asn
-          remote_asn: null            # override connection.bgp.remote_asn
-          advertise_local_prefixes: null
-
-      - name: "gcp-ha-tunnel-2"
-        gateway_instance_index: 0
-        local_public_ip_index: 0
-        ha_role: "active"
-        ike_version: null
-        psk: null
-        inner_cidr: null
-        inner_local_ip: null
-        inner_remote_ip: null
-        crypto:
-          ike_proposals: []
-          esp_proposals: []
-          ike_lifetime_seconds: null
-          esp_lifetime_seconds: null
-        routing_mode: null
-        static_routes:
-          remote_prefixes: []
-          local_prefixes: []
-        bgp:
-          local_ip: null
-          remote_ip: null
-          local_asn: null
-          remote_asn: null
-          advertise_local_prefixes: null
-
-  ###########################################################################
-  # Example 2: On-prem Cisco router using static routing
-  ###########################################################################
-  - name: "onprem-static"
-    description: "On-prem DC using static routing"
-    vendor: "cisco"
-
-    # Use static routing for this connection.
-    routing_mode: static
-
-    bgp:
-      enabled: false
-      remote_asn: null
-      advertise_local_prefixes: false
-
-    tunnels:
-      - name: "onprem-static-tunnel-1"
-        gateway_instance_index: 0
-        local_public_ip_index: 0
-        ha_role: "active"
-        ike_version: 1         # Legacy IKEv1 if needed
-        psk: "SuperSecretPsk123!"
-        inner_cidr: "169.254.20.0/30"
-        inner_local_ip: "169.254.20.1"
-        inner_remote_ip: "169.254.20.2"
-        crypto:
-          ike_proposals:
-            - "aes256-sha256-modp2048"
-          esp_proposals:
-            - "aes256-sha256"
-          ike_lifetime_seconds: 28800
-          esp_lifetime_seconds: 3600
-        routing_mode: static
-        static_routes:
-          remote_prefixes:
-            - "172.16.0.0/12"
-            - "192.168.0.0/16"
-          local_prefixes:
-            - "10.0.0.0/16"
-        bgp:
-          local_ip: null
-          remote_ip: null
-          local_asn: null
-          remote_asn: null
-          advertise_local_prefixes: false
+    # Static routing configuration
+    static_routes:
+      # Remote prefixes: GCP VPC subnet(s) that you want to reach
+      # Replace with your actual GCP VPC CIDR(s)
+      remote_prefixes:
+      - "10.10.0.0/24" # Example: Replace with your GCP VPC subnet
+      # Local prefixes: Optional override (omit to use gateway.local_prefixes)
+      # Uncomment to override for this specific tunnel:
+      # local_prefixes:
+      #   - "10.0.0.0/16"

@@ -1290,3 +1290,263 @@ specifications. All message objects are constructed using proper SDK classes,
 ensuring type safety, API compatibility, and production reliability.
 
 End of Section 17.
+
+18) Agent Deployment and Package Build Workflow
+
+Overview
+--------
+The Nebius VPN Gateway uses a two-tier architecture for code deployment:
+- **Orchestrator CLI** (`nebius-vpngw`): Runs on operator's laptop/CI (installed in local virtualenv)
+- **Agent daemon** (`nebius-vpngw-agent`): Runs on gateway VMs (deployed via wheel package)
+
+The orchestrator and agent are distributed from the same Python package but installed
+in different locations. Understanding the build and deployment workflow is critical
+for ensuring that code changes are properly deployed to VMs.
+
+Package Distribution Model
+---------------------------
+1. **Local Development Environment (Operator)**
+   - Install: `pip install -e .` or `poetry install`
+   - Location: Operator's virtualenv (e.g., `~/venvs/vpngw/`)
+   - Usage: Run `nebius-vpngw` CLI to manage VMs
+   - Updates: Immediate (editable install)
+
+2. **Gateway VMs (Production)**
+   - Install: `pip install <wheel>` via SSH push
+   - Location: VM's system Python (`/usr/bin/nebius-vpngw-agent`)
+   - Usage: Agent daemon reads config, renders strongSwan/FRR
+   - Updates: Only when wheel is rebuilt and redeployed
+
+Key Insight: The operator's local virtualenv and the VM's Python environment are
+completely separate. Changes to agent code require rebuilding and redeploying the
+wheel package to VMs.
+
+Deployment Workflow (Step-by-Step)
+-----------------------------------
+┌─────────────────────────────────────────────────────────────────────┐
+│ Step 1: Modify Agent Code                                          │
+├─────────────────────────────────────────────────────────────────────┤
+│ • Edit files in src/nebius_vpngw/agent/                           │
+│ • Example: Fix bug in main.py signal handling                      │
+│ • Changes are immediately available in local virtualenv (editable) │
+└─────────────────────────────────────────────────────────────────────┘
+                         ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│ Step 2: Build Wheel Package                                        │
+├─────────────────────────────────────────────────────────────────────┤
+│ Clean old artifacts:                                                │
+│   rm -rf src/dist/ src/build/ src/nebius_vpngw.egg-info/          │
+│                                                                     │
+│ Build fresh wheel (choose one method):                             │
+│   poetry build                    # Recommended with Poetry        │
+│   python -m build --wheel         # Alternative with build module  │
+│   pip wheel --no-deps -w dist .   # Alternative with pip           │
+│                                                                     │
+│ Result: dist/nebius_vpngw-0.0.0-py3-none-any.whl                  │
+│                                                                     │
+│ Note: Wheel is NOT installed into local virtualenv—it's only       │
+│       packaged for deployment to VMs.                              │
+└─────────────────────────────────────────────────────────────────────┘
+                         ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│ Step 3: Deploy to VMs                                              │
+├─────────────────────────────────────────────────────────────────────┤
+│ Set environment variables:                                          │
+│   export GCP_TUNNEL_PSK="your-secret"                              │
+│   export NETWORK_ID="vpcnetwork-xxxxx"                             │
+│                                                                     │
+│ Run orchestrator:                                                   │
+│   nebius-vpngw --local-config-file ./nebius-vpngw-config.yaml     │
+│                                                                     │
+│ Orchestrator actions:                                               │
+│   1. Read wheel from dist/ directory                               │
+│   2. SSH to each gateway VM                                        │
+│   3. Upload wheel to VM (/tmp/nebius_vpngw-*.whl)                 │
+│   4. Install wheel: pip install --force-reinstall <wheel>          │
+│   5. Install agent wrapper: /usr/bin/nebius-vpngw-agent           │
+│   6. Push config: /etc/nebius-vpngw/config-resolved.yaml          │
+│   7. Reload agent: systemctl reload nebius-vpngw-agent            │
+└─────────────────────────────────────────────────────────────────────┘
+                         ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│ Step 4: Agent Receives Updated Code                                │
+├─────────────────────────────────────────────────────────────────────┤
+│ On VM:                                                              │
+│   • Old agent process (PID 4097) receives SIGHUP                   │
+│   • Agent reloads config from /etc/nebius-vpngw/config-resolved.yaml│
+│   • New code (e.g., while True loop) is now active                 │
+│   • Agent renders ipsec.conf, bgpd.conf, ipsec.secrets             │
+│   • Agent persists state to last-applied.json                      │
+│   • Agent stays running (new behavior from fixed code)             │
+└─────────────────────────────────────────────────────────────────────┘
+
+SSH Push Implementation (src/nebius_vpngw/deploy/ssh_push.py)
+--------------------------------------------------------------
+The SSHPush class handles wheel deployment automatically:
+
+```python
+def _build_wheel(self) -> Optional[Path]:
+    """Build the nebius-vpngw wheel package if not already built."""
+    # Check for existing wheel in dist/
+    dist_dir = project_root / "dist"
+    if dist_dir.exists():
+        wheels = list(dist_dir.glob("nebius_vpngw-*.whl"))
+        if wheels:
+            print(f"[SSHPush] Using existing wheel: {wheels[0].name}")
+            return wheels[0]
+    
+    # Build fresh wheel using python -m build
+    print("[SSHPush] Building nebius-vpngw wheel package...")
+    result = subprocess.run(
+        ["python3", "-m", "build", "--wheel"],
+        cwd=project_root,
+        capture_output=True,
+    )
+    # ... (checks for success and returns wheel path)
+
+def push_and_reload(self, vm_ip: str, config: dict) -> None:
+    """Deploy package and config to VM, reload agent."""
+    # 1. Build/find wheel
+    wheel_path = self._build_wheel()
+    
+    # 2. Upload wheel via SFTP
+    sftp.put(str(wheel_path), f"/tmp/{wheel_path.name}")
+    
+    # 3. Install on VM
+    ssh.exec_command(f"pip3 install --force-reinstall /tmp/{wheel_path.name}")
+    
+    # 4. Install agent wrapper script
+    ssh.exec_command("ln -sf $(which nebius-vpngw-agent) /usr/bin/")
+    
+    # 5. Push config
+    sftp.put("/tmp/config.yaml", "/etc/nebius-vpngw/config-resolved.yaml")
+    
+    # 6. Reload agent
+    ssh.exec_command("systemctl reload nebius-vpngw-agent")
+```
+
+Common Pitfalls and Solutions
+------------------------------
+❌ **Pitfall 1: Editing agent code but not rebuilding wheel**
+   - Symptom: Changes not reflected on VMs after deployment
+   - Cause: Orchestrator uploads old wheel from dist/
+   - Solution: Always rebuild wheel after code changes
+
+✅ **Solution:**
+   ```bash
+   rm -rf src/dist/ src/build/ src/nebius_vpngw.egg-info/
+   poetry build
+   nebius-vpngw --local-config-file ./nebius-vpngw-config.yaml
+   ```
+
+❌ **Pitfall 2: Confusion between local venv and VM Python**
+   - Symptom: "It works locally but not on VMs"
+   - Cause: Local editable install vs VM wheel install
+   - Solution: Remember they're separate environments
+
+✅ **Solution:**
+   - Local: `pip install -e .` → changes take effect immediately
+   - VMs: Must rebuild wheel and redeploy
+
+❌ **Pitfall 3: Using cached wheel after bug fixes**
+   - Symptom: Bug persists on VMs after local fix
+   - Cause: dist/ contains old wheel from previous build
+   - Solution: Clean dist/ before rebuilding
+
+✅ **Solution:**
+   ```bash
+   rm -rf src/dist/  # Force fresh build
+   poetry build
+   ```
+
+Development Best Practices
+---------------------------
+1. **Test Locally First**
+   - Run `poetry install` for editable install
+   - Test changes with `nebius-vpngw` CLI locally
+   - Verify config rendering works correctly
+
+2. **Rebuild Wheel for VM Deployment**
+   - Clean old build artifacts: `rm -rf src/dist/`
+   - Build fresh wheel: `poetry build`
+   - Verify wheel exists: `ls -lh dist/`
+
+3. **Deploy and Verify**
+   - Deploy: `nebius-vpngw --local-config-file ...`
+   - SSH to VM: `ssh ubuntu@<vm-ip>`
+   - Check agent status: `sudo systemctl status nebius-vpngw-agent`
+   - View agent logs: `sudo journalctl -u nebius-vpngw-agent -n 50`
+   - Verify rendered configs:
+     - `sudo cat /etc/ipsec.conf`
+     - `sudo cat /etc/frr/bgpd.conf`
+
+4. **Iterate Quickly**
+   - For rapid iteration, use SSH push without full VM recreation
+   - Only rebuild wheel when agent code changes
+   - Config-only changes don't require wheel rebuild
+
+Integration with CI/CD
+-----------------------
+Recommended CI workflow:
+
+```yaml
+# .github/workflows/deploy.yml
+- name: Build wheel package
+  run: |
+    poetry install
+    rm -rf src/dist/ src/build/
+    poetry build
+    
+- name: Deploy to staging VMs
+  run: |
+    export GCP_TUNNEL_PSK="${{ secrets.GCP_TUNNEL_PSK }}"
+    poetry run nebius-vpngw --local-config-file ./staging.yaml
+    
+- name: Verify agent health
+  run: |
+    ssh ubuntu@staging-vm "sudo systemctl is-active nebius-vpngw-agent"
+```
+
+Wheel Versioning Strategy
+--------------------------
+Current: `nebius_vpngw-0.0.0-py3-none-any.whl` (development)
+
+Future versioning options:
+1. **Semantic Versioning**: Update version in pyproject.toml for releases
+2. **Git-based Versioning**: Use git describe or commit SHA in version
+3. **Timestamp Versioning**: Append build timestamp for uniqueness
+
+Example versioning update:
+```toml
+# pyproject.toml
+[tool.poetry]
+name = "nebius-vpngw"
+version = "0.1.0"  # Increment for releases
+```
+
+Summary
+-------
+**Key Takeaways:**
+1. Agent code changes require wheel rebuild before deployment
+2. Local virtualenv and VM Python are separate environments
+3. Always clean dist/ before rebuilding to avoid stale wheels
+4. Use `poetry build` or `python -m build --wheel` to rebuild
+5. The orchestrator automatically uploads and installs the wheel on VMs
+6. Verify deployment success by checking agent status on VMs
+
+**Quick Reference Commands:**
+```bash
+# Rebuild wheel after code changes
+rm -rf src/dist/ src/build/ src/nebius_vpngw.egg-info/
+poetry build
+
+# Deploy to VMs
+export GCP_TUNNEL_PSK="your-secret"
+nebius-vpngw --local-config-file ./nebius-vpngw-config.yaml
+
+# Verify on VM
+ssh ubuntu@<vm-ip> 'sudo systemctl status nebius-vpngw-agent'
+ssh ubuntu@<vm-ip> 'sudo journalctl -u nebius-vpngw-agent -n 20'
+```
+
+End of Section 18.

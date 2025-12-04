@@ -48,7 +48,14 @@ def main() -> None:
     # Daemon: wait for reloads
     signal.signal(signal.SIGHUP, handle_reload)
     print("[Agent] Running; await SIGHUP for reload")
-    signal.pause()
+    
+    # Loop signal.pause() to handle the case where it returns after signal handling
+    while True:
+        try:
+            signal.pause()
+        except KeyboardInterrupt:
+            print("[Agent] Received interrupt, exiting")
+            break
 
 
 if __name__ == "__main__":

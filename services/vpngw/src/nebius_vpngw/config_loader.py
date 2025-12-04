@@ -379,8 +379,17 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: t.List[Path]) -> Resolv
                 merged_tunnels.append(tun)
 
             # Filter tunnels assigned to this instance
-            inst_tunnels = [t for t in merged_tunnels if int(t.get("gateway_instance_index", 0)) == idx]
-            if inst_tunnels:
+            inst_tunnels_raw = [t for t in merged_tunnels if int(t.get("gateway_instance_index", 0)) == idx]
+            if inst_tunnels_raw:
+                # Inject the actual external IP into each tunnel's local_public_ip if not already set
+                inst_tunnels = []
+                for t in inst_tunnels_raw:
+                    t_copy = dict(t)  # Make a copy to avoid modifying shared tunnel dict
+                    lip = t_copy.get("local_public_ip")
+                    if lip in (None, ""):
+                        t_copy["local_public_ip"] = ip
+                    inst_tunnels.append(t_copy)
+                
                 new_conn = dict(conn)
                 # Fill connection-level BGP remote_asn if missing
                 if inferred_remote_asn is not None:

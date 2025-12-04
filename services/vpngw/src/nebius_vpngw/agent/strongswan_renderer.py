@@ -42,8 +42,8 @@ class StrongSwanRenderer:
                 # Tunnel IPs and endpoints
                 local_public_ip = tun.get("local_public_ip")  # Optional; auto-detected if omitted
                 remote_public_ip = tun.get("remote_public_ip")  # Required for right=
-                inner_local_ip = tun.get("inner_local_ip")
-                inner_remote_ip = tun.get("inner_remote_ip")
+                _inner_local_ip = tun.get("inner_local_ip")  # Reserved for future BGP use
+                _inner_remote_ip = tun.get("inner_remote_ip")  # Reserved for future BGP use
                 inner_cidr = tun.get("inner_cidr")
                 psk = tun.get("psk")
 
@@ -71,7 +71,12 @@ class StrongSwanRenderer:
                     continue
 
                 # Local/Remote endpoints
-                conn_lines.append("    left=%any")  # Auto-detect local IP
+                if local_public_ip:
+                    # VM has internal IP, use %any for local and set leftid to external IP
+                    conn_lines.append("    left=%any")
+                    conn_lines.append(f"    leftid={local_public_ip}")
+                else:
+                    conn_lines.append("    left=%any")  # Auto-detect local IP
                 conn_lines.append(f"    right={remote_public_ip}")
                 
                 # Authentication

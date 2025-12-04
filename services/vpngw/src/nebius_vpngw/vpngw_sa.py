@@ -1,4 +1,8 @@
 from __future__ import annotations
+import typing as t
+import subprocess
+import json
+import shlex
 
 """
 Service Account management for Nebius VPNGW.
@@ -13,11 +17,6 @@ Notes:
 - Replace placeholder calls with concrete IAM APIs from `nebius.pysdk` when wiring
   to the actual backend.
 """
-
-import typing as t
-import subprocess
-import json
-import shlex
 
 
 def _init_client(tenant_id: str | None, project_id: str | None, region_id: str | None):
@@ -112,7 +111,6 @@ def ensure_service_account_and_token(
     # Grant Editor role if possible
     try:
         if sa is not None:
-            roles = getattr(iam, "roles", None) or getattr(iam, "role", None)
             bindings = getattr(iam, "bindings", None) or getattr(iam, "role_binding", None)
             editor_role_id = "roles/editor"
             if bindings and hasattr(bindings, "grant"):
