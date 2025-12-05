@@ -184,6 +184,12 @@ nebius-vpngw status --local-config-file ./nebius-vpngw-config.yaml
 - Tunnel status table: name, gateway VM, state (ESTABLISHED/CONNECTING), peer IP, encryption, uptime
 - Service health: `nebius-vpngw-agent`, `strongswan-starter`, `frr` status
 
+### Refreshing the Gateway Config
+
+- `nebius-vpngw apply` always pushes the resolved YAML config and reloads the agent, even when no diff is detected. This doubles as a safe “restart with current config”.
+- Infra safety: it checks VM diffs first; if destructive changes are needed it stops unless you pass `--recreate-gw`. If there’s truly no change, infra is left untouched.
+- Agent idempotency: the agent won’t rewrite strongSwan/FRR files if the desired config matches last applied, so repeated applies are safe for refreshes.
+
 Example:
 
 ```text

@@ -24,6 +24,41 @@ Use --local-config-file to specify a different config file if needed.
 )
 
 
+def _resolve_local_config(
+    local_config_file: t.Optional[Path],
+    *,
+    create_if_missing: bool,
+    exit_after_create: bool,
+) -> Path:
+    """Resolve config path, optionally creating a template and exiting."""
+    if local_config_file is not None:
+        return local_config_file
+
+    default_path = Path.cwd() / "nebius-vpngw-config.yaml"
+    if default_path.exists():
+        return default_path
+
+    if not create_if_missing:
+        print(f"[red]Error: Config file not found at {default_path}[/red]")
+        print("[yellow]Run 'nebius-vpngw' first to create a template config.[/yellow]")
+        raise typer.Exit(code=1)
+
+    try:
+        template_rel = "nebius-vpngw-config-template.yaml"
+        with resources.as_file(resources.files("nebius_vpngw").joinpath(template_rel)) as tpl_path:
+            shutil.copyfile(tpl_path, default_path)
+        print(f"[green]Created default config at[/green] {default_path}")
+        print("[bold]Please edit the file to fill environment-specific values and secrets, then re-run.[/bold]")
+    except Exception as e:
+        print(f"[red]Failed to create default config:[/red] {e}")
+        raise typer.Exit(code=1)
+
+    if exit_after_create:
+        raise typer.Exit(code=0)
+
+    return default_path
+
+
 @app.callback(invoke_without_command=True)
 def _default(
     ctx: typer.Context,
@@ -33,26 +68,11 @@ def _default(
 ):
     """Default action: shows status if config exists, creates template if not."""
     if ctx.invoked_subcommand is None:
-        # If no local config provided, check for default in CWD
-        if local_config_file is None:
-            default_path = Path.cwd() / "nebius-vpngw-config.yaml"
-            if not default_path.exists():
-                # No config found - create template and exit
-                try:
-                    template_rel = "nebius-vpngw-config-template.yaml"
-                    with resources.as_file(resources.files("nebius_vpngw").joinpath(template_rel)) as tpl_path:
-                        shutil.copyfile(tpl_path, default_path)
-                    print(f"[green]Created default config at[/green] {default_path}")
-                    print("[bold]Please edit the file to fill environment-specific values and secrets, then re-run.[/bold]")
-                    print("\n[bold]Available commands:[/bold]")
-                    print("  [cyan]nebius-vpngw status[/cyan]  - Show VPN tunnel status")
-                    print("  [cyan]nebius-vpngw apply[/cyan]   - Deploy/update gateway configuration")
-                    raise typer.Exit(code=0)
-                except Exception as e:
-                    print(f"[red]Failed to create default config:[/red] {e}")
-                    raise typer.Exit(code=1)
-            local_config_file = default_path
-        
+        local_config_file = _resolve_local_config(
+            local_config_file,
+            create_if_missing=True,
+            exit_after_create=True,
+        )
         # Config exists - show status by default
         return status(
             local_config_file=local_config_file,
@@ -63,7 +83,7 @@ def _default(
 
 @app.command()
 def apply(
-    local_config_file: Path = typer.Option(..., exists=True, readable=True, help="Path to nebius-vpngw-config.yaml"),
+    local_config_file: t.Optional[Path] = typer.Option(None, exists=True, readable=True, help="Path to nebius-vpngw-config.yaml"),
     peer_config_file: t.List[Path] = typer.Option([], exists=True, readable=True, help="Vendor peer config file(s)"),
     recreate_gw: bool = typer.Option(False, help="Delete and recreate gateway VMs before applying"),
     sa: t.Optional[str] = typer.Option(None, help="If provided, ensure a Service Account with this name and use it for auth"),
@@ -72,6 +92,12 @@ def apply(
     dry_run: bool = typer.Option(False, help="Render actions without applying"),
 ):
     """Apply desired state to Nebius: create/update gateway VMs and push config."""
+    local_config_file = _resolve_local_config(
+        local_config_file,
+        create_if_missing=True,
+        exit_after_create=True,
+    )
+
     print("[bold]Loading local YAML config...[/bold]")
     local_cfg = load_local_config(local_config_file)
 
@@ -268,13 +294,12 @@ def status(
     
     console = Console()
     
-    # Use default config if not provided
-    if local_config_file is None:
-        local_config_file = Path.cwd() / "nebius-vpngw-config.yaml"
-        if not local_config_file.exists():
-            print(f"[red]Error: Config file not found at {local_config_file}[/red]")
-            print("[yellow]Run 'nebius-vpngw' first to create a template config.[/yellow]")
-            raise typer.Exit(code=1)
+    # Use default config if not provided (do not auto-create for status)
+    local_config_file = _resolve_local_config(
+        local_config_file,
+        create_if_missing=False,
+        exit_after_create=False,
+    )
     
     print("[bold]Loading local YAML config...[/bold]")
     local_cfg = load_local_config(local_config_file)

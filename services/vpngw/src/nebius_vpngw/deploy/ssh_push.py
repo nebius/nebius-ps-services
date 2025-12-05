@@ -214,17 +214,36 @@ class SSHPush:
                 stdin, stdout, stderr = client.exec_command("sudo systemctl status nebius-vpngw-agent --no-pager -l", timeout=10)
                 detailed_status = stdout.read().decode()
                 print(f"[SSHPush] Service status:\n{detailed_status}")
-            
-            # Verify VPN services
-            vpn_services = ["strongswan-starter", "frr"]
-            for svc in vpn_services:
-                stdin, stdout, stderr = client.exec_command(f"sudo systemctl is-active {svc}", timeout=10)
+
+            # Verify strongSwan (account for different service names) and FRR
+            strongswan_checks = [
+                ("strongswan-starter", "sudo systemctl is-active strongswan-starter"),
+                ("strongswan-swanctl", "sudo systemctl is-active strongswan-swanctl"),
+                ("charon", "pgrep -x charon >/dev/null && echo active || echo inactive"),
+            ]
+            strongswan_statuses = []
+            strongswan_ok = False
+            for name, cmd in strongswan_checks:
+                stdin, stdout, stderr = client.exec_command(cmd, timeout=10)
                 rc = stdout.channel.recv_exit_status()
                 svc_status = stdout.read().decode().strip()
+                strongswan_statuses.append(f"{name}={svc_status or rc}")
                 if rc == 0 and svc_status == "active":
-                    print(f"[SSHPush] ✓ {svc} is running")
-                else:
-                    print(f"[SSHPush] ✗ {svc} is NOT running (status: {svc_status})")
+                    print(f"[SSHPush] ✓ strongSwan is running ({name})")
+                    strongswan_ok = True
+                    break
+            if not strongswan_ok:
+                joined = ", ".join(strongswan_statuses)
+                print(f"[SSHPush] ✗ strongSwan appears inactive (checked: {joined})")
+
+            # FRR check
+            stdin, stdout, stderr = client.exec_command("sudo systemctl is-active frr", timeout=10)
+            rc = stdout.channel.recv_exit_status()
+            svc_status = stdout.read().decode().strip()
+            if rc == 0 and svc_status == "active":
+                print("[SSHPush] ✓ frr is running")
+            else:
+                print(f"[SSHPush] ✗ frr is NOT running (status: {svc_status})")
         except Exception as e:
             print(f"[SSHPush] Failed to verify service status: {e}")
 
