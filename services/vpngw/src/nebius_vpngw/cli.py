@@ -13,7 +13,15 @@ from .deploy.vm_manager import VMManager
 from .deploy.ssh_push import SSHPush
 from .deploy.route_manager import RouteManager
 
-app = typer.Typer(add_completion=False, help="Nebius VM-based VPN Gateway orchestrator")
+app = typer.Typer(
+    add_completion=False,
+    help="""
+Nebius VM-based VPN Gateway orchestrator
+
+By default, the CLI looks for 'nebius-vpngw-config.yaml' in your current directory.
+Use --local-config-file to specify a different config file if needed.
+"""
+)
 
 
 @app.callback(invoke_without_command=True)
@@ -248,7 +256,7 @@ def apply(
 
 @app.command()
 def status(
-    local_config_file: Path = typer.Option(..., exists=True, readable=True, help="Path to nebius-vpngw-config.yaml"),
+    local_config_file: t.Optional[Path] = typer.Option(None, exists=True, readable=True, help="Path to nebius-vpngw-config.yaml"),
     project_id: t.Optional[str] = typer.Option(None, help="Nebius project/folder identifier"),
     zone: t.Optional[str] = typer.Option(None, help="Nebius zone for gateway VMs"),
 ):
@@ -259,6 +267,14 @@ def status(
     import re
     
     console = Console()
+    
+    # Use default config if not provided
+    if local_config_file is None:
+        local_config_file = Path.cwd() / "nebius-vpngw-config.yaml"
+        if not local_config_file.exists():
+            print(f"[red]Error: Config file not found at {local_config_file}[/red]")
+            print("[yellow]Run 'nebius-vpngw' first to create a template config.[/yellow]")
+            raise typer.Exit(code=1)
     
     print("[bold]Loading local YAML config...[/bold]")
     local_cfg = load_local_config(local_config_file)
@@ -329,8 +345,10 @@ def status(
             output = result.stdout
             
             # Parse IPsec status output
-            # Look for patterns like: "gcp-classic-tunnel-0[193]: ESTABLISHED 5 minutes ago, 10.48.0.13[10.48.0.13]...34.155.169.244[34.155.169.244]"
-            tunnel_pattern = re.compile(r'(\S+)\[\d+\]:\s+(\w+)\s+(.+?),\s+[\d.]+\[[\d.]+\]\.\.\.((\d+\.\d+\.\d+\.\d+)\[')
+            # Look for patterns like: "gcp-classic-tunnel-0[202]: ESTABLISHED 8 minutes ago, 10.48.0.13[10.48.0.13]...34.155.169.244[34.155.169.244]"
+            tunnel_pattern = re.compile(r'(\S+)\[\d+\]:\s+(\w+)\s+(.+?),\s+[\d.]+\[[\d.]+\]\.\.\.(\d+\.\d+\.\d+\.\d+)\[')
+
+
             
             tunnels = {}
             for match in tunnel_pattern.finditer(output):
