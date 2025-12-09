@@ -1,0 +1,207 @@
+# nebius-vpngw-config-template.config.yaml
+# Template config for Nebius VM-based VPN Gateway.
+# Sections: gateway_group (infra), gateway (routing identity/prefixes), defaults (behavior), connections (peers+tunnels).
+# Override order: tunnel > connection > defaults; gateway.local_prefixes is the single source of truth for Nebius prefixes.
+# Placeholders: ${VAR} require exported env vars; literals are fine when you prefer in-file values.
+# Keep secrets out of git-tracked files.
+
+version: 1
+
+###############################################################################
+# Nebius tenant/project/region context (top-level)
+tenant_id: "${TENANT_ID}"
+project_id: "${PROJECT_ID}"
+region_id: "${REGION_ID}" # e.g., us-central1 | eu-north1 | eu-north2 | eu-west1
+
+###############################################################################
+# Gateway group: how many VMs, where, and their external IPs
+###############################################################################
+
+gateway_group:
+  name: "nebius-vpn-gw"
+  instance_count: 1
+
+  # external_ips (optional): list per instance; each inner list maps to NICs for that VM.
+  # Omit/empty ⇒ auto-allocate 1 IP per NIC; provide ⇒ use existing allocations; gaps are auto-filled.
+  # Single NIC + two HA tunnels: leave empty to auto-allocate one public IP and set local_public_ip_index: 0 on each tunnel.
+  # Example:
+  # external_ips:
+  #   - ["1.2.3.4"]  # instance 0, eth0
+  #   - ["5.6.7.8"]  # instance 1, eth0
+
+  # VM specification.
+  vm_spec:
+    platform: "cpu-d3" # e.g., cpu-e2 | cpu-d3
+    preset: "32vcpu-128gb" # see Nebius docs for preset options
+    disk_boot_image: ubuntu24.04-driverless
+    disk_gb: 200
+    disk_type: network_ssd
+    disk_block_bytes: 4096
+
+    # Networking: platform currently supports 1 NIC; increase when multi-NIC is available.
+    # Public IPs map from gateway_group.external_ips; omissions are auto-allocated.
+    num_nics: 1
+
+    # SSH access. If ssh_public_key_path is set and ssh_public_key is empty, the key is inlined automatically.
+    ssh_public_key_path: "~/.ssh/id_ed25519.pub"
+    ssh_private_key_path: "~/.ssh/id_ed25519"
+    # network_id: "my-vpc-network-id"  # optional; omit to use default network
+
+    ###############################################################################
+    # Gateway-wide parameters (BGP ASN, local prefixes, quotas)
+    ###############################################################################
+gateway:
+  # Local BGP ASN for this gateway (use a private ASN 64512–65534 that isn't used elsewhere in your network)
+  # local_asn is only used when BGP is enabled. 
+  # For static routing you can leave it in the config (it will be ignored) 
+  local_asn: 65010
+
+  # Local prefixes (Nebius-side subnets) - SINGLE SOURCE OF TRUTH
+  # These are the networks on the Nebius side that should be advertised to peers.
+  # For BGP: These prefixes are advertised via BGP to all connections where advertise_local_prefixes=true
+  # For Static: These are used as leftsubnet in IPsec unless overridden per-tunnel
+  # Examples: VPC subnet CIDRs, workload subnets, etc.
+  local_prefixes:
+  - 10.0.0.0/16 # Example: Main VPC CIDR; should contain your Nebius-side subnets
+  # - 10.1.0.0/16  # Example: Additional subnet
+
+  quotas:
+    max_connections: 16
+    max_tunnels: 32
+    max_total_bandwidth_mbps: null
+
+###############################################################################
+# Global defaults for VPN behavior, crypto, DPD, and routing
+###############################################################################
+defaults:
+  vpn_type: ipsec
+  ike_version: 2
+  allow_ikev1: true
+
+  auth:
+    method: psk
+
+  crypto:
+    ike_proposals:
+    - "aes256-sha256-modp2048"          # GCP HA VPN supported
+    - "aes256gcm16-prfsha256-modp2048"  # GCP HA VPN supported
+    - "aes256-sha1-modp1024"            # Compatibility fallback
+    ike_lifetime_seconds: 28800
+    esp_proposals:
+    - "aes256-sha256-modp2048"          # GCP HA VPN supported
+    - "aes256gcm16-modp2048"            # GCP HA VPN supported
+    - "aes256-sha1-modp1024"            # Compatibility fallback
+    esp_lifetime_seconds: 3600
+    dh_groups:
+    - 14
+    - 19
+    - 20
+
+  dpd:
+    interval_seconds: 30
+    timeout_seconds: 120
+
+  routing:
+    mode: bgp # Default routing mode: bgp | static
+    bgp:
+      router_id: null      # Optional: set a stable, unique router-id (e.g., 169.254.50.1 or Nebius internal IP range); leave null to let FRR pick one
+      hold_time_seconds: 60   # Match peer timers (e.g., GCP default hold 60s, keepalive 20s)
+      keepalive_seconds: 20   # Best practice: align with peer gateway values
+      graceful_restart: true
+      max_prefixes: 1000
+
+# Connections: one per peer. Override order: tunnel > connection > defaults.
+# BGP advertises gateway.local_prefixes when advertise_local_prefixes=true.
+# Static mode uses gateway.local_prefixes unless tunnel.static_routes.local_prefixes overrides.
+# Single-NIC/Same-IP: set local_public_ip_index: 0 on each tunnel to reuse the VM's first public IP.
+###############################################################################
+connections:
+- name: "gcp-ha-vpn"
+  description: "Primary HA VPN to GCP"
+  vendor: "gcp"
+  routing_mode: bgp
+
+  # Remote prefixes: place here once per connection (applies to all tunnels)
+  remote_prefixes: []
+
+  bgp:
+    enabled: true
+    remote_asn: 64514
+    advertise_local_prefixes: true
+
+  tunnels:
+  - name: "gcp-ha-tunnel-1"
+    gateway_instance_index: 0
+    local_public_ip_index: 0
+    ha_role: "active"   # Set to "passive" to keep this tunnel down (useful for troubleshooting)
+    ike_version: null
+    remote_public_ip: "35.242.0.10"
+    psk: ${GCP_TUNNEL_1_PSK}
+    inner_cidr: "169.254.10.0/30"
+    inner_local_ip: "169.254.10.1"
+    inner_remote_ip: "169.254.10.2"
+
+  - name: "gcp-ha-tunnel-2"
+    gateway_instance_index: 0
+    local_public_ip_index: 0
+    ha_role: "active"   # Set to "passive" to keep this tunnel down
+    ike_version: null
+    remote_public_ip: "35.220.0.10"
+    psk: ${GCP_TUNNEL_2_PSK}
+    inner_cidr: "169.254.11.0/30"
+    inner_local_ip: "169.254.11.1"
+    inner_remote_ip: "169.254.11.2"
+- name: "gcp-classic-vpn"
+  description: "GCP Classic VPN with static routing"
+  vendor: "gcp"
+  routing_mode: static
+
+  # Remote prefixes: place here once per connection (applies to all tunnels)
+  remote_prefixes: []
+
+  bgp:
+    enabled: false
+
+  tunnels:
+  - name: "gcp-classic-tunnel-1"
+    gateway_instance_index: 0
+    ike_version: 2
+    remote_public_ip: "34.155.169.244"
+    psk: ${GCP_CLASSIC_PSK}
+    crypto:
+      ike_proposals:
+      - "aes256-sha256-modp2048"
+      esp_proposals:
+      - "aes256-sha256"
+      ike_lifetime_seconds: 28800
+      esp_lifetime_seconds: 3600
+    static_routes:
+      # local_prefixes:  # Static-only override; otherwise gateway.local_prefixes is used
+      # - "10.0.0.0/16"
+- name: "onprem-static"
+  description: "On-prem DC using static routing"
+  vendor: "cisco"
+  routing_mode: static
+
+  bgp:
+    enabled: false
+
+  tunnels:
+  - name: "onprem-static-tunnel-1"
+    gateway_instance_index: 0
+    ike_version: 1
+    remote_public_ip: "203.0.113.5"
+    psk: ${ONPREM_TUNNEL_1_PSK}
+    inner_cidr: "169.254.20.0/30"
+    inner_local_ip: "169.254.20.1"
+    inner_remote_ip: "169.254.20.2"
+    crypto:
+      ike_proposals:
+      - "aes256-sha256-modp2048"
+      esp_proposals:
+      - "aes256-sha256"
+      ike_lifetime_seconds: 28800
+      esp_lifetime_seconds: 3600
+    static_routes:
+      # local_prefixes:  # Static-only override; otherwise gateway.local_prefixes is used
+      # - "10.0.0.0/16"

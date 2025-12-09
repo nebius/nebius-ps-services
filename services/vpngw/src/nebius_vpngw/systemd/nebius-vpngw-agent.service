@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/nebius-vpngw-agent
+ExecStart=/usr/bin/python3 -m nebius_vpngw.agent.main
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=3

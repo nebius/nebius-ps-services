@@ -36,13 +36,13 @@ On first run, the CLI automatically creates a template configuration file:
 
 ```bash
 nebius-vpngw
-# Creates ./nebius-vpngw-config.yaml from template
+# Creates ./nebius-vpngw-config.config.yaml from template
 ```
 
 Edit the configuration file with your environment details:
 
 ```yaml
-# nebius-vpngw-config.yaml (minimal example)
+# nebius-vpngw-config.config.yaml (minimal example)
 gateway_group:
   name: vpngw
   vm_spec:
@@ -80,14 +80,14 @@ Alternatively, use service account authentication with the `--sa` flag (CLI will
 Preview changes (dry-run):
 
 ```bash
-nebius-vpngw --local-config-file ./nebius-vpngw-config.yaml --dry-run
+nebius-vpngw --local-config-file ./nebius-vpngw-config.config.yaml --dry-run
 ```
 
 Deploy gateway VMs and configure tunnels:
 
 ```bash
 nebius-vpngw \
-  --local-config-file ./nebius-vpngw-config.yaml \
+  --local-config-file ./nebius-vpngw-config.config.yaml \
   --sa nb-vpngw-sa \
   --project-id "$PROJECT_ID" \
   --zone "${REGION_ID}-a"
@@ -96,7 +96,7 @@ nebius-vpngw \
 Check tunnel status:
 
 ```bash
-nebius-vpngw status --local-config-file ./nebius-vpngw-config.yaml
+nebius-vpngw status --local-config-file ./nebius-vpngw-config.config.yaml
 ```
 
 ## Usage
@@ -106,20 +106,20 @@ nebius-vpngw status --local-config-file ./nebius-vpngw-config.yaml
 **View tunnel status and system health:**
 
 ```bash
-nebius-vpngw status --local-config-file ./nebius-vpngw-config.yaml
+nebius-vpngw status --local-config-file ./nebius-vpngw-config.config.yaml
 ```
 
 **Deploy or update gateway configuration:**
 
 ```bash
-nebius-vpngw apply --local-config-file ./nebius-vpngw-config.yaml
+nebius-vpngw apply --local-config-file ./nebius-vpngw-config.config.yaml
 ```
 
 **Import peer configuration from cloud provider:**
 
 ```bash
 nebius-vpngw apply \
-  --local-config-file ./nebius-vpngw-config.yaml \
+  --local-config-file ./nebius-vpngw-config.config.yaml \
   --peer-config-file ./gcp-ha-vpn-config.txt \
   --peer-config-file ./aws-vpn-config.txt
 ```
@@ -129,7 +129,7 @@ Peer config files automatically populate missing tunnel details (PSKs, IPs, cryp
 **Preview changes without applying:**
 
 ```bash
-nebius-vpngw --local-config-file ./nebius-vpngw-config.yaml --dry-run
+nebius-vpngw --local-config-file ./nebius-vpngw-config.config.yaml --dry-run
 ```
 
 ### CLI Options
@@ -150,7 +150,7 @@ nebius-vpngw --local-config-file ./nebius-vpngw-config.yaml --dry-run
 Some configuration changes require VM recreation (e.g., changing CPU, memory, boot disk type):
 
 ```bash
-nebius-vpngw apply --recreate-gw --local-config-file ./nebius-vpngw-config.yaml
+nebius-vpngw apply --recreate-gw --local-config-file ./nebius-vpngw-config.config.yaml
 ```
 
 **Warning**: Recreation causes downtime. Public IPs are preserved and reassigned.
@@ -176,7 +176,7 @@ The CLI automatically reads `ssh_public_key_path` and embeds the public key in t
 View active tunnels and system health:
 
 ```bash
-nebius-vpngw status --local-config-file ./nebius-vpngw-config.yaml
+nebius-vpngw status --local-config-file ./nebius-vpngw-config.config.yaml
 ```
 
 **Output includes:**
@@ -283,7 +283,7 @@ ssh ubuntu@<gateway-ip> 'sudo journalctl -u nebius-vpngw-agent -n 50'
 ```bash
 # Rebuild wheel before deploying
 poetry build
-nebius-vpngw --local-config-file ./nebius-vpngw-config.yaml
+nebius-vpngw --local-config-file ./nebius-vpngw-config.config.yaml
 ```
 
 #### BGP Session Not Establishing
@@ -372,7 +372,7 @@ ping <peer-subnet-ip>
 ## Project Structure
 
 ```text
-├── nebius-vpngw-config.yaml              # Main user configuration
+├── nebius-vpngw-config.config.yaml              # Main user configuration
 ├── src/nebius_vpngw/
 │   ├── cli.py                            # CLI orchestrator (nebius-vpngw)
 │   ├── config_loader.py                  # YAML parser and peer config merger
@@ -540,7 +540,7 @@ rm -rf src/dist/ src/build/ src/nebius_vpngw.egg-info/
 poetry build
 
 # Deploy to VMs
-nebius-vpngw --local-config-file ./nebius-vpngw-config.yaml
+nebius-vpngw --local-config-file ./nebius-vpngw-config.config.yaml
 ```
 
 **Note:** The wheel is NOT installed in your local virtualenv—only on remote VMs.

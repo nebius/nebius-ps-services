@@ -12,7 +12,7 @@ digraph NebiusVPNGW {
 
     orchestrator [label="Orchestrator CLI\n(nebius-vpngw)\n\n- Reads YAML config\n- Merges peer configs\n- Plans per-VM config\n- Idempotent apply", shape=box];
 
-    cfg_yaml [label="nebius-vpngw-config.yaml\n(source of truth)", shape=note];
+    cfg_yaml [label="nebius-vpngw-config.config.yaml\n(source of truth)", shape=note];
     peer_files [label="Peer config file(s)\n(GCP/AWS/Azure/Cisco)", shape=note];
 
     orchestrator -> cfg_yaml [dir=back, arrowtail=none, style=dashed, label="read"];

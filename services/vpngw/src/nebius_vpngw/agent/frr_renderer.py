@@ -1,12 +1,40 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from typing import Dict, Any, List
 
 BGPD_CONF = Path("/etc/frr/bgpd.conf")
+FRR_CONF = Path("/etc/frr/frr.conf")
+DAEMONS_FILE = Path("/etc/frr/daemons")
 
 
 class FRRRenderer:
+    def _ensure_bgpd_enabled(self) -> bool:
+        """Ensure bgpd daemon is enabled; minimal edit of /etc/frr/daemons."""
+        if not DAEMONS_FILE.exists():
+            print("[FRR] WARNING: /etc/frr/daemons not found; creating with bgpd=yes")
+            DAEMONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            DAEMONS_FILE.write_text("bgpd=yes\n", encoding="utf-8")
+            return True
+
+        text = DAEMONS_FILE.read_text(encoding="utf-8").splitlines()
+        seen = False
+        new_lines: List[str] = []
+        for line in text:
+            if line.strip().startswith("bgpd="):
+                new_lines.append("bgpd=yes")
+                seen = True
+            else:
+                new_lines.append(line)
+        if not seen:
+            new_lines.append("bgpd=yes")
+        if new_lines != text:
+            DAEMONS_FILE.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+            print("[FRR] Enabled bgpd in /etc/frr/daemons")
+            return True
+        return False
+
     def render_and_apply(self, cfg: Dict[str, Any]) -> None:
         """Render FRR bgpd.conf for BGP tunnels and prefix advertisement.
 
@@ -14,6 +42,7 @@ class FRRRenderer:
         Advertises gateway.local_prefixes to neighbors where connection.bgp.advertise_local_prefixes=true.
         Supports hold/keepalive and graceful-restart defaults.
         """
+        daemons_changed = self._ensure_bgpd_enabled()
         BGPD_CONF.parent.mkdir(parents=True, exist_ok=True)
 
         gateway = cfg.get("gateway", {})
@@ -22,8 +51,9 @@ class FRRRenderer:
         gateway_local_prefixes: List[str] = gateway.get("local_prefixes", [])
         
         d_bgp = cfg.get("defaults", {}).get("routing", {}).get("bgp", {})
-        hold = d_bgp.get("hold_time_seconds", 90)
-        keep = d_bgp.get("keepalive_seconds", 30)
+        hold = d_bgp.get("hold_time_seconds", 60)
+        keep = d_bgp.get("keepalive_seconds", 20)
+        router_id = d_bgp.get("router_id")
         graceful = d_bgp.get("graceful_restart", True)
         max_prefixes_default = d_bgp.get("max_prefixes", 1000)
 
@@ -33,6 +63,8 @@ class FRRRenderer:
             f" bgp keepalive {keep}",
             f" bgp holdtime {hold}",
         ]
+        if router_id:
+            lines.append(f" bgp router-id {router_id}")
         if graceful:
             lines.append(" bgp graceful-restart")
 
@@ -72,6 +104,19 @@ class FRRRenderer:
         for pfx in sorted(advertised_prefixes):
             lines.append(f" network {pfx}")
 
-        BGPD_CONF.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        print(f"[FRR] Wrote bgpd.conf with {len(advertised_prefixes)} advertised prefix(es)")
-        # In production: run `systemctl reload frr` or vtysh commands
+        rendered = "\n".join(lines) + "\n"
+        BGPD_CONF.write_text(rendered, encoding="utf-8")
+        print(f"[FRR] Wrote bgp config with {len(advertised_prefixes)} advertised prefix(es)")
+        # Reload bgpd to apply config (soft reload if only bgp changed; restart if daemons changed)
+        cmd = ["systemctl", "restart" if daemons_changed else "reload", "frr"]
+        try:
+            subprocess.run(
+                cmd,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=20,
+            )
+        except Exception:
+            pass

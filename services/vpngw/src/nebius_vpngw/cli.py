@@ -13,12 +13,15 @@ from .deploy.vm_manager import VMManager
 from .deploy.ssh_push import SSHPush
 from .deploy.route_manager import RouteManager
 
+DEFAULT_CONFIG_FILENAME = "nebius-vpngw-config.config.yaml"
+DEFAULT_TEMPLATE_FILENAME = "nebius-vpngw-config-template.config.yaml"
+
 app = typer.Typer(
     add_completion=False,
     help="""
 Nebius VM-based VPN Gateway orchestrator
 
-By default, the CLI looks for 'nebius-vpngw-config.yaml' in your current directory.
+By default, the CLI looks for 'nebius-vpngw-config.config.yaml' in your current directory.
 Use --local-config-file to specify a different config file if needed.
 """
 )
@@ -34,7 +37,7 @@ def _resolve_local_config(
     if local_config_file is not None:
         return local_config_file
 
-    default_path = Path.cwd() / "nebius-vpngw-config.yaml"
+    default_path = Path.cwd() / DEFAULT_CONFIG_FILENAME
     if default_path.exists():
         return default_path
 
@@ -44,8 +47,7 @@ def _resolve_local_config(
         raise typer.Exit(code=1)
 
     try:
-        template_rel = "nebius-vpngw-config-template.yaml"
-        with resources.as_file(resources.files("nebius_vpngw").joinpath(template_rel)) as tpl_path:
+        with resources.as_file(resources.files("nebius_vpngw").joinpath(DEFAULT_TEMPLATE_FILENAME)) as tpl_path:
             shutil.copyfile(tpl_path, default_path)
         print(f"[green]Created default config at[/green] {default_path}")
         print("[bold]Please edit the file to fill environment-specific values and secrets, then re-run.[/bold]")
@@ -62,7 +64,7 @@ def _resolve_local_config(
 @app.callback(invoke_without_command=True)
 def _default(
     ctx: typer.Context,
-    local_config_file: t.Optional[Path] = typer.Option(None, exists=True, readable=True, help="Path to nebius-vpngw-config.yaml"),
+    local_config_file: t.Optional[Path] = typer.Option(None, exists=True, readable=True, help=f"Path to {DEFAULT_CONFIG_FILENAME}"),
     project_id: t.Optional[str] = typer.Option(None, help="Nebius project/folder identifier"),
     zone: t.Optional[str] = typer.Option(None, help="Nebius zone for gateway VMs"),
 ):
@@ -83,13 +85,15 @@ def _default(
 
 @app.command()
 def apply(
-    local_config_file: t.Optional[Path] = typer.Option(None, exists=True, readable=True, help="Path to nebius-vpngw-config.yaml"),
+    local_config_file: t.Optional[Path] = typer.Option(None, exists=True, readable=True, help=f"Path to {DEFAULT_CONFIG_FILENAME}"),
     peer_config_file: t.List[Path] = typer.Option([], exists=True, readable=True, help="Vendor peer config file(s)"),
     recreate_gw: bool = typer.Option(False, help="Delete and recreate gateway VMs before applying"),
     sa: t.Optional[str] = typer.Option(None, help="If provided, ensure a Service Account with this name and use it for auth"),
     project_id: t.Optional[str] = typer.Option(None, help="Nebius project/folder identifier"),
     zone: t.Optional[str] = typer.Option(None, help="Nebius zone for gateway VMs"),
     dry_run: bool = typer.Option(False, help="Render actions without applying"),
+    add_route: bool = typer.Option(False, help="(Experimental) Ensure VPC routes to VPN gateway for remote_prefixes"),
+    list_route: bool = typer.Option(False, help="List VPC routes for subnets matching gateway.local_prefixes"),
 ):
     """Apply desired state to Nebius: create/update gateway VMs and push config."""
     local_config_file = _resolve_local_config(
@@ -153,7 +157,7 @@ def apply(
 
     vm_mgr = VMManager(project_id=proj_id, zone=zone or plan.gateway_group.region, auth_token=auth_token, tenant_id=tenant_id, region_id=region_id)
     ssh = SSHPush()
-    routes = RouteManager(project_id=proj_id)
+    routes = RouteManager(project_id=proj_id, auth_token=auth_token)
 
     # Check for destructive changes BEFORE making any changes
     print("[bold]Analyzing configuration changes...[/bold]")
@@ -273,7 +277,13 @@ def apply(
                 continue
         ssh.push_config_and_reload(target, inst_cfg, local_cfg)
 
-    if plan.should_manage_routes:
+    if list_route:
+        print("[bold]Listing VPC routes for local_prefixes...[/bold]")
+        routes.list_routes(plan, local_cfg)
+    if add_route:
+        print("[bold]Ensuring VPC routes to VPN gateway for remote_prefixes...[/bold]")
+        routes.add_routes(plan, local_cfg)
+    elif plan.should_manage_routes:
         print("[bold]Reconciling VPC routes...[/bold]")
         routes.reconcile(plan)
 
@@ -282,7 +292,7 @@ def apply(
 
 @app.command()
 def status(
-    local_config_file: t.Optional[Path] = typer.Option(None, exists=True, readable=True, help="Path to nebius-vpngw-config.yaml"),
+    local_config_file: t.Optional[Path] = typer.Option(None, exists=True, readable=True, help=f"Path to {DEFAULT_CONFIG_FILENAME}"),
     project_id: t.Optional[str] = typer.Option(None, help="Nebius project/folder identifier"),
     zone: t.Optional[str] = typer.Option(None, help="Nebius zone for gateway VMs"),
 ):
@@ -291,6 +301,7 @@ def status(
     from rich.table import Table
     import subprocess
     import re
+    import json
     
     console = Console()
     
@@ -326,26 +337,69 @@ def status(
     print("[bold]Collecting gateway VM status...[/bold]")
     vm_ips = {}
     for inst_cfg in plan.iter_instance_configs():
-        ip = vm_mgr.get_vm_public_ip(inst_cfg.hostname)
+        ip = vm_mgr.get_vm_public_ip(inst_cfg.hostname) or (inst_cfg.external_ip or "").strip()
         if ip:
             vm_ips[inst_cfg.hostname] = ip
         else:
-            print(f"[yellow]Warning: Could not find IP for {inst_cfg.hostname}[/yellow]")
+            print(
+                f"[yellow]Warning: Could not find IP for {inst_cfg.hostname}. "
+                "Ensure project_id is correct and/or set gateway_group.external_ips if discovery is blocked.[/yellow]"
+            )
     
     # Create status table
     table = Table(title="VPN Gateway Status", show_header=True, header_style="bold cyan")
     table.add_column("Tunnel", style="white")
     table.add_column("Gateway VM", style="white")
     table.add_column("Status", style="white")
+    table.add_column("BGP", style="white")
     table.add_column("Peer IP", style="white")
     table.add_column("Encryption", style="white")
     table.add_column("Uptime", style="white")
+
+    # Build mapping of tunnel -> BGP peer IP per instance (for BGP status lookup)
+    tunnel_bgp_map: dict[str, dict[str, str]] = {}
+    defaults_mode = (local_cfg.get("defaults", {}).get("routing", {}) or {}).get("mode") or "bgp"
+    for conn in (local_cfg.get("connections") or []):
+        conn_mode = (conn.get("routing_mode") or defaults_mode) or "bgp"
+        if conn_mode != "bgp":
+            continue
+        for tun in (conn.get("tunnels") or []):
+            try:
+                inst_idx = int(tun.get("gateway_instance_index", 0))
+            except Exception:
+                inst_idx = 0
+            hostname = f"{plan.gateway_group.name}-{inst_idx}"
+            tunnel_bgp_map.setdefault(hostname, {})
+            peer_ip = tun.get("inner_remote_ip")
+            if peer_ip:
+                tunnel_bgp_map[hostname][tun.get("name") or f"tunnel{inst_idx}"] = str(peer_ip)
     
     # Check each gateway VM's tunnels
     for inst_cfg in plan.iter_instance_configs():
         target = vm_ips.get(inst_cfg.hostname)
         if not target:
             continue
+
+        # Pull BGP neighbor states (if any BGP tunnels on this instance)
+        bgp_states: dict[str, str] = {}
+        if tunnel_bgp_map.get(inst_cfg.hostname):
+            try:
+                bgp_out = subprocess.run(
+                    ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10", f"ubuntu@{target}",
+                     "sudo vtysh -c 'show bgp ipv4 unicast summary json'"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                if bgp_out.returncode == 0 and bgp_out.stdout:
+                    data = json.loads(bgp_out.stdout)
+                    peers = (data.get("ipv4Unicast") or {}).get("peers") or {}
+                    for ip, info in peers.items():
+                        state = info.get("state") or info.get("state_name") or info.get("stateName")
+                        if state:
+                            bgp_states[ip] = state
+            except Exception:
+                pass
         
         # Run ipsec status command
         try:
@@ -361,6 +415,7 @@ def status(
                     "All tunnels",
                     inst_cfg.hostname,
                     "[red]ERROR[/red]",
+                    "-",
                     "-",
                     "-",
                     f"Failed to get status: {result.stderr.strip()}"
@@ -385,7 +440,8 @@ def status(
                     'status': status,
                     'uptime': uptime,
                     'peer_ip': peer_ip,
-                    'encryption': 'Unknown'
+                    'encryption': 'Unknown',
+                    'bgp': '-',
                 }
             
             # Parse encryption from IKE proposal lines
@@ -396,6 +452,25 @@ def status(
                 encryption = match.group(2)
                 if tunnel_name in tunnels:
                     tunnels[tunnel_name]['encryption'] = encryption
+
+            # Fallback: parse simplified connection lines if no SAs matched yet
+            # Example: "gcp-ha-tunnel-1:  %any...34.157.15.187  IKEv2, dpddelay=30s"
+            if not tunnels:
+                conn_line_pattern = re.compile(r'^(\S+):\s+%any\.\.\.(\d+\.\d+\.\d+\.\d+)', re.MULTILINE)
+                for match in conn_line_pattern.finditer(output):
+                    tunnels[match.group(1)] = {
+                        'status': 'CONNECTING',
+                        'uptime': '-',
+                        'peer_ip': match.group(2),
+                        'encryption': 'Unknown',
+                        'bgp': '-',
+                    }
+
+            # Attach BGP states where we know the peer IP from config
+            for tname, tinfo in tunnels.items():
+                peer_cfg_ip = tunnel_bgp_map.get(inst_cfg.hostname, {}).get(tname)
+                if peer_cfg_ip and peer_cfg_ip in bgp_states:
+                    tinfo['bgp'] = bgp_states[peer_cfg_ip]
             
             # Add rows to table
             if tunnels:
@@ -412,6 +487,7 @@ def status(
                         tunnel_name,
                         inst_cfg.hostname,
                         status_display,
+                        info.get('bgp', '-'),
                         info['peer_ip'],
                         info['encryption'],
                         info['uptime']
@@ -425,6 +501,7 @@ def status(
                         "[yellow]NONE[/yellow]",
                         "-",
                         "-",
+                        "-",
                         "-"
                     )
                 else:
@@ -434,14 +511,19 @@ def status(
                         "[red]PARSE ERROR[/red]",
                         "-",
                         "-",
+                        "-",
                         "Could not parse ipsec output"
                     )
+                    # Show a trimmed snippet to aid debugging
+                    snippet = "\n".join(output.splitlines()[:20])
+                    print(f"[yellow]{inst_cfg.hostname} ipsec status output (first lines):[/yellow]\n{snippet}\n")
         
         except subprocess.TimeoutExpired:
             table.add_row(
                 "All tunnels",
                 inst_cfg.hostname,
                 "[red]TIMEOUT[/red]",
+                "-",
                 "-",
                 "-",
                 "SSH command timed out"
@@ -451,6 +533,7 @@ def status(
                 "All tunnels",
                 inst_cfg.hostname,
                 "[red]ERROR[/red]",
+                "-",
                 "-",
                 "-",
                 str(e)
@@ -498,12 +581,30 @@ def status(
                         timeout=10
                     )
                 
-                if result.stdout.strip() == "active":
+                status_raw = result.stdout.strip()
+                if status_raw == "active":
                     services[service_name] = "[green]active[/green]"
-                elif result.stdout.strip() == "inactive":
+                elif status_raw == "inactive":
                     services[service_name] = "[yellow]inactive[/yellow]"
                 else:
-                    services[service_name] = f"[red]{result.stdout.strip()}[/red]"
+                    services[service_name] = f"[red]{status_raw}[/red]"
+                    # Fetch last few lines of systemctl status for context
+                    try:
+                        detail_cmd = f"systemctl status {service_name} --no-pager -n 20"
+                        if service_name == "strongswan":
+                            detail_cmd = "systemctl status strongswan-starter --no-pager -n 20 || systemctl status strongswan --no-pager -n 20"
+                        detail = subprocess.run(
+                            ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10", f"ubuntu@{target}", detail_cmd],
+                            capture_output=True,
+                            text=True,
+                            timeout=10,
+                            shell=False,
+                        )
+                        snippet = (detail.stdout or detail.stderr or "").strip()
+                        if snippet:
+                            print(f"[yellow]{inst_cfg.hostname} {service_name} status:[/yellow]\n{snippet}\n")
+                    except Exception:
+                        pass
             
             except Exception:
                 services[service_name] = "[red]error[/red]"

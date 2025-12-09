@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -34,57 +36,75 @@ class SSHPush:
         if self._wheel_path and self._wheel_path.exists():
             return self._wheel_path
 
-        # Find project root (where pyproject.toml is)
-        current = Path(__file__).resolve()
+        # Find project root (where pyproject.toml is). Prefer cwd if running from source tree,
+        # else fall back to the installed module location.
         project_root = None
-        for parent in current.parents:
-            if (parent / "pyproject.toml").exists():
-                project_root = parent
-                break
+        cwd = Path.cwd()
+        if (cwd / "pyproject.toml").exists():
+            project_root = cwd
+        else:
+            current = Path(__file__).resolve()
+            for parent in current.parents:
+                if (parent / "pyproject.toml").exists():
+                    project_root = parent
+                    break
 
         if not project_root:
             print("[SSHPush] WARNING: Could not find project root with pyproject.toml")
             return None
 
         dist_dir = project_root / "dist"
-        
-        # Check if wheel already exists
+
+        # Always attempt to build latest wheel if pyproject is present
+        if (project_root / "pyproject.toml").exists():
+            built = False
+            # Prefer poetry build when available
+            poetry = shutil.which("poetry")
+            if poetry:
+                print("[SSHPush] Building wheel via poetry...")
+                try:
+                    result = subprocess.run(
+                        [poetry, "build", "-f", "wheel"],
+                        cwd=project_root,
+                        capture_output=True,
+                        text=True,
+                        timeout=90,
+                    )
+                    if result.returncode == 0:
+                        built = True
+                    else:
+                        print(f"[SSHPush] poetry build failed: {result.stderr}")
+                except Exception as e:
+                    print(f"[SSHPush] poetry build error: {e}")
+            if not built:
+                print("[SSHPush] Building nebius-vpngw wheel package with python -m build...")
+                try:
+                    result = subprocess.run(
+                        [sys.executable, "-m", "build", "--wheel"],
+                        cwd=project_root,
+                        capture_output=True,
+                        text=True,
+                        timeout=90,
+                    )
+                    if result.returncode != 0:
+                        print(f"[SSHPush] Wheel build failed: {result.stderr}")
+                except FileNotFoundError:
+                    print("[SSHPush] WARNING: 'build' module not found. Install with: pip install build")
+                except Exception as e:
+                    print(f"[SSHPush] Wheel build error: {e}")
+
+        # Reuse newest existing wheel (works with poetry build or python -m build)
         if dist_dir.exists():
-            wheels = list(dist_dir.glob("nebius_vpngw-*.whl"))
+            wheels = sorted(dist_dir.glob("nebius_vpngw-*.whl"), key=lambda p: p.stat().st_mtime, reverse=True)
             if wheels:
                 self._wheel_path = wheels[0]
-                print(f"[SSHPush] Using existing wheel: {self._wheel_path.name}")
-                return self._wheel_path
-
-        # Build the wheel
-        print("[SSHPush] Building nebius-vpngw wheel package...")
-        try:
-            result = subprocess.run(
-                ["python3", "-m", "build", "--wheel"],
-                cwd=project_root,
-                capture_output=True,
-                text=True,
-                timeout=60
-            )
-            if result.returncode != 0:
-                print(f"[SSHPush] Wheel build failed: {result.stderr}")
-                return None
-
-            # Find the built wheel
-            wheels = list(dist_dir.glob("nebius_vpngw-*.whl"))
-            if wheels:
-                self._wheel_path = wheels[0]
-                print(f"[SSHPush] Built wheel: {self._wheel_path.name}")
+                print(f"[SSHPush] Using wheel: {self._wheel_path.name}")
                 return self._wheel_path
             else:
-                print("[SSHPush] Wheel build completed but file not found")
+                print("[SSHPush] No wheel found in dist/ after build attempt")
                 return None
-
-        except FileNotFoundError:
-            print("[SSHPush] WARNING: 'build' module not found. Install with: pip install build")
-            return None
-        except Exception as e:
-            print(f"[SSHPush] Wheel build error: {e}")
+        else:
+            print("[SSHPush] dist/ directory not found; wheel not built")
             return None
 
     def push_config_and_reload(self, ssh_target: str, inst_cfg: InstanceResolvedConfig, local_cfg: dict) -> None:
@@ -120,41 +140,42 @@ class SSHPush:
         wheel_path = self._build_wheel()
         if wheel_path and wheel_path.exists():
             try:
-                sftp = client.open_sftp()
-                remote_wheel = f"/tmp/{wheel_path.name}"
-                sftp.put(str(wheel_path), remote_wheel)
-                sftp.close()
-                print(f"[SSHPush] Uploaded {wheel_path.name}")
+                with client.open_sftp() as sftp:
+                    remote_wheel = f"/tmp/{wheel_path.name}"
+                    sftp.put(str(wheel_path), remote_wheel)
+                    print(f"[SSHPush] Uploaded {wheel_path.name}")
 
                 # Install/upgrade the wheel
-                install_cmd = f"sudo pip3 install --force-reinstall --break-system-packages {remote_wheel} || sudo pip3 install --force-reinstall {remote_wheel}"
+                install_cmd = (
+                    f"sudo pip3 install --force-reinstall --ignore-installed --break-system-packages {remote_wheel} "
+                    f"|| sudo pip3 install --force-reinstall --ignore-installed {remote_wheel}"
+                )
                 stdin, stdout, stderr = client.exec_command(install_cmd, get_pty=True, timeout=60)
                 rc = stdout.channel.recv_exit_status()
                 if rc == 0:
                     print("[SSHPush] Package installed/upgraded successfully")
-                    # Create Python wrapper script for the agent (entry points may not be set up)
-                    wrapper_script = (
-                        "#!/usr/bin/python3\n"
-                        "import sys\n"
-                        "from nebius_vpngw.agent.main import main\n"
-                        "if __name__ == \"__main__\":\n"
-                        "    sys.exit(main())\n"
-                    )
+                    # Install/refresh systemd unit so ExecStart points to python -m entrypoint
+                    service_unit = """[Unit]
+Description=Nebius VPNGW Agent
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -m nebius_vpngw.agent.main
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+"""
                     try:
-                        sftp = client.open_sftp()
-                        with sftp.file("/tmp/nebius-vpngw-agent-wrapper", "w") as f:
-                            f.write(wrapper_script)
-                        sftp.close()
-                        # Install wrapper script
-                        wrapper_cmds = [
-                            "sudo mv /tmp/nebius-vpngw-agent-wrapper /usr/bin/nebius-vpngw-agent",
-                            "sudo chmod +x /usr/bin/nebius-vpngw-agent",
-                        ]
-                        for wcmd in wrapper_cmds:
-                            client.exec_command(wcmd, timeout=10)
-                        print("[SSHPush] Agent wrapper script installed")
+                        with client.open_sftp() as sftp:
+                            with sftp.file("/tmp/nebius-vpngw-agent.service", "w") as f:
+                                f.write(service_unit)
+                            print("[SSHPush] Staged systemd unit update")
                     except Exception as e:
-                        print(f"[SSHPush] Failed to create wrapper script: {e}")
+                        print(f"[SSHPush] Failed to stage systemd unit: {e}")
                 else:
                     err = stderr.read().decode().strip()
                     print(f"[SSHPush] Package installation failed: {err}")
@@ -168,10 +189,9 @@ class SSHPush:
         # Upload to /tmp then move with sudo
         tmp_path = f"/tmp/nebius-config-{inst_cfg.instance_index}.yaml"
         try:
-            sftp = client.open_sftp()
-            with sftp.file(tmp_path, "w") as f:
-                f.write(inst_cfg.config_yaml)
-            sftp.close()
+            with client.open_sftp() as sftp:
+                with sftp.file(tmp_path, "w") as f:
+                    f.write(inst_cfg.config_yaml)
             print(f"[SSHPush] Uploaded temp config to {tmp_path}")
         except Exception as e:
             print(f"[SSHPush] SFTP upload failed: {e}")
@@ -184,9 +204,14 @@ class SSHPush:
             f"sudo mv {tmp_path} /etc/nebius-vpngw/config-resolved.yaml",
             "sudo chown root:root /etc/nebius-vpngw/config-resolved.yaml",
             "sudo chmod 0644 /etc/nebius-vpngw/config-resolved.yaml",
+            # Refresh systemd unit if staged
+            "if [ -f /tmp/nebius-vpngw-agent.service ]; then sudo mv /tmp/nebius-vpngw-agent.service /etc/systemd/system/nebius-vpngw-agent.service; fi",
+            "sudo chmod 0644 /etc/systemd/system/nebius-vpngw-agent.service",
+            "sudo systemctl daemon-reload",
             # Start service if inactive, reload if active
             "sudo systemctl is-active --quiet nebius-vpngw-agent && sudo systemctl reload nebius-vpngw-agent || sudo systemctl start nebius-vpngw-agent",
         ]
+        had_failures = False
         for cmd in cmds:
             try:
                 stdin, stdout, stderr = client.exec_command(cmd, get_pty=True, timeout=20)
@@ -194,10 +219,16 @@ class SSHPush:
                 if rc != 0:
                     err = stderr.read().decode().strip()
                     print(f"[SSHPush] Command failed (rc={rc}): {cmd}\n{err}")
+                    had_failures = True
                 else:
-                    print(f"[SSHPush] OK: {cmd}")
+                    # Suppress noisy per-command logs on success
+                    pass
             except Exception as e:
                 print(f"[SSHPush] Exec failed for: {cmd} -> {e}")
+                had_failures = True
+
+        if not had_failures:
+            print("[SSHPush] Applied config, systemd unit, and restarted agent")
 
         # Verify service is actually running
         try:
@@ -244,6 +275,43 @@ class SSHPush:
                 print("[SSHPush] ✓ frr is running")
             else:
                 print(f"[SSHPush] ✗ frr is NOT running (status: {svc_status})")
+
+            # Quick BGP port probe to detect blocked TCP/179 on peer side
+            try:
+                defaults_mode = (
+                    (local_cfg.get("defaults", {}) or {}).get("routing", {}) or {}
+                ).get("mode", "bgp")
+                tunnels_to_probe = []
+                for conn in (local_cfg.get("connections") or []):
+                    routing_mode = conn.get("routing_mode") or defaults_mode
+                    if routing_mode != "bgp":
+                        continue
+                    for tun in (conn.get("tunnels") or []):
+                        if int(tun.get("gateway_instance_index", 0)) != inst_cfg.instance_index:
+                            continue
+                        if tun.get("ha_role", "active") != "active":
+                            continue
+                        r_ip = tun.get("inner_remote_ip")
+                        l_ip = tun.get("inner_local_ip")
+                        if r_ip:
+                            tunnels_to_probe.append((l_ip, r_ip))
+
+                for l_ip, r_ip in tunnels_to_probe:
+                    cmd = (
+                        f"if command -v nc >/dev/null; then "
+                        f"timeout 3 nc -z -w2 {r_ip} 179; "
+                        f"elif [ -f /bin/bash ]; then "
+                        f"timeout 3 bash -lc 'echo > /dev/tcp/{r_ip}/179'; "
+                        f"else exit 1; fi"
+                    )
+                    stdin, stdout, stderr = client.exec_command(cmd, timeout=6)
+                    rc = stdout.channel.recv_exit_status()
+                    if rc == 0:
+                        print(f"[SSHPush] ✓ BGP port 179 reachable on peer {r_ip}")
+                    else:
+                        print(f"[SSHPush] WARNING: BGP port 179 not reachable on peer {r_ip} (source {l_ip or 'auto'}). Check peer firewall for TCP/179.")
+            except Exception as e:
+                print(f"[SSHPush] WARNING: BGP port probe failed: {e}")
         except Exception as e:
             print(f"[SSHPush] Failed to verify service status: {e}")
 

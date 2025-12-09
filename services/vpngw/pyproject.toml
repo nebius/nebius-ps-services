@@ -47,7 +47,7 @@ pyinstaller = "^6.0.0"
 # Retain tool.poetry table for packaging-specific settings not covered by PEP 621.
 # (Dependencies, groups, packages, include remain here.)
 packages = [{ include = "nebius_vpngw", from = "src" }]
-include = ["src/nebius_vpngw/nebius-vpngw-config-template.yaml"]
+include = ["src/nebius_vpngw/nebius-vpngw-config-template.config.yaml"]
 
 [build-system]
 requires = ["poetry-core>=1.9.0"]

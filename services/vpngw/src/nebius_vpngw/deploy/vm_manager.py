@@ -1390,6 +1390,7 @@ class VMManager:
             subnet_client = SubnetServiceClient(client)  # type: ignore
             # Derive network_id robustly from object (supports metadata.id)
             net_id = getattr(network_obj, "id", None) or getattr(getattr(network_obj, "metadata", None), "id", None)
+            net_name = getattr(getattr(network_obj, "metadata", None), "name", None) or "default-network"
             subnet_obj = None
             try:
                 # First attempt: direct by-name lookup (project-scoped)
@@ -1471,33 +1472,30 @@ class VMManager:
                                     existing = []
                                 # Iterate /27s within pool until first unused
                                 for candidate in pool_net.subnets(new_prefix=27):
-                                    overlap = any(
-                                        (cand.overlaps(ex) or ex.overlaps(cand)) for cand, ex in [(candidate, e) for e in existing]
-                                    )
+                                    overlap = any(candidate.overlaps(e) for e in existing)
                                     if not overlap:
                                         cidr_to_use = str(candidate)
                                         break
                         except Exception:
                             cidr_to_use = None
+                    if not cidr_to_use:
+                        raise RuntimeError(
+                            f"[VMManager] No free /27 available in network '{net_name}' (id={net_id}). "
+                            "Add a new, non-overlapping CIDR to the existing network to expand its IP space "
+                            "(e.g., 10.8.0.0/13, 10.16.0.0/13, or 10.32.0.0/13), ensuring it does not overlap existing subnets/CIDRs."
+                        )
                     # Build SubnetSpec with ipv4_private_pools assigning the /27 slice
                     # Use proper SDK message objects instead of dicts
-                    ipv4_private_pools = None
-                    if cidr_to_use:
-                        # Create message objects matching SDK schema:
-                        # IPv4PrivateSubnetPools with list of SubnetPool containing SubnetCidr
-                        ipv4_private_pools = IPv4PrivateSubnetPools(
-                            pools=[
-                                SubnetPool(
-                                    cidrs=[
-                                        SubnetCidr(cidr=cidr_to_use)
-                                    ]
-                                )
-                            ],
-                            use_network_pools=False,
-                        )
-                    else:
-                        # Inherit network pools if computation failed; user can pre-create subnet
-                        ipv4_private_pools = IPv4PrivateSubnetPools(use_network_pools=True)
+                    ipv4_private_pools = IPv4PrivateSubnetPools(
+                        pools=[
+                            SubnetPool(
+                                cidrs=[
+                                    SubnetCidr(cidr=cidr_to_use)
+                                ]
+                            )
+                        ],
+                        use_network_pools=False,
+                    )
                     req = CreateSubnetRequest(
                         metadata=ResourceMetadata(
                             name="vpngw-subnet",
@@ -1522,7 +1520,7 @@ class VMManager:
                         subnet_obj = None
                 except Exception as e:
                     raise RuntimeError(
-                        f"[VMManager] Failed to create 'vpngw-subnet' in default-network: {e}. "
+                        f"[VMManager] Failed to create 'vpngw-subnet' in {net_name}: {e}. "
                         "Please provide a network_id with sufficient IP space or pre-create the subnet."
                     )
 
@@ -1636,6 +1634,11 @@ class VMManager:
             "            # IP forwarding for VPN gateway\n"
             "            net.ipv4.ip_forward=1\n"
             "            net.ipv6.conf.all.forwarding=1\n"
+            "            # Avoid redirects on a transit gateway\n"
+            "            net.ipv4.conf.all.send_redirects=0\n"
+            "            net.ipv4.conf.all.accept_redirects=0\n"
+            "            net.ipv4.conf.default.send_redirects=0\n"
+            "            net.ipv4.conf.default.accept_redirects=0\n"
             "            # Disable RP filter for asymmetric routing in VPN scenarios\n"
             "            net.ipv4.conf.all.rp_filter=0\n"
             "            net.ipv4.conf.default.rp_filter=0\n"

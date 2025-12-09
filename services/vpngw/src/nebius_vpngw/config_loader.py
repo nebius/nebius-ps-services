@@ -329,6 +329,8 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: t.List[Path]) -> Resolv
             conn_bgp = (conn.get("bgp") or {})
             conn_remote_asn = _to_int(conn_bgp.get("remote_asn"))
             inferred_remote_asn: t.Optional[int] = conn_remote_asn
+            conn_remote_prefixes = conn.get("remote_prefixes") or conn_bgp.get("remote_prefixes") or []
+            routing_mode = conn.get("routing_mode") or (local_cfg.get("defaults", {}).get("routing", {}).get("mode") or "bgp")
 
             merged_tunnels = []
             used_indices: set[int] = set()
@@ -359,6 +361,14 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: t.List[Path]) -> Resolv
                 tun["local_public_ip"] = _merge_fields(
                     _resolved_local_public_ip(local_cfg, tun), peer_tun.get("local_public_ip")
                 )
+                # Propagate connection-level remote_prefixes into static_routes if not set per-tunnel
+                if routing_mode == "static":
+                    sr = tun.get("static_routes") or {}
+                    if not sr.get("remote_prefixes"):
+                        if conn_remote_prefixes:
+                            sr = dict(sr)
+                            sr["remote_prefixes"] = conn_remote_prefixes
+                            tun["static_routes"] = sr
                 # Crypto proposals
                 crypto = tun.get("crypto", {}) or {}
                 pcrypto = peer_tun.get("crypto", {}) or {}
@@ -397,6 +407,8 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: t.List[Path]) -> Resolv
                     if bgp.get("remote_asn") in (None, ""):
                         bgp["remote_asn"] = inferred_remote_asn
                     new_conn["bgp"] = bgp
+                if conn_remote_prefixes:
+                    new_conn["remote_prefixes"] = conn_remote_prefixes
                 new_conn["tunnels"] = inst_tunnels
                 merged_connections.append(new_conn)
 
