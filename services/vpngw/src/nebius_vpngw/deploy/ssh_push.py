@@ -180,7 +180,13 @@ class SSHPush:
                 stdin, stdout, stderr = client.exec_command(install_cmd, get_pty=True, timeout=60)
                 rc = stdout.channel.recv_exit_status()
                 if rc == 0:
-                    print("[SSHPush] Package installed/upgraded successfully")
+                    # Verify package actually installed by checking pip list
+                    stdin_check, stdout_check, stderr_check = client.exec_command("pip3 list | grep nebius-vpngw", timeout=10)
+                    pkg_check = stdout_check.read().decode().strip()
+                    if "nebius-vpngw" in pkg_check:
+                        print(f"[SSHPush] Package installed/upgraded successfully: {pkg_check}")
+                    else:
+                        print("[SSHPush] WARNING: pip install succeeded but package not found in pip list")
                     # Install/refresh systemd unit so ExecStart points to python -m entrypoint
                     service_unit = """[Unit]
 Description=Nebius VPNGW Agent
@@ -203,7 +209,9 @@ WantedBy=multi-user.target
                             print("[SSHPush] Staged systemd unit update")
                             
                             # Deploy route fix script, service, and timer
-                            systemd_dir = Path(__file__).parent.parent / "systemd"
+                            # Use installed package location (works both in dev and deployed)
+                            import nebius_vpngw
+                            systemd_dir = Path(nebius_vpngw.__file__).parent / "systemd"
                             
                             # Deploy ipsec-vti.sh updown script
                             ipsec_vti_script = systemd_dir / "ipsec-vti.sh"
