@@ -63,13 +63,13 @@ Alternatively, use service account authentication with the `--sa` flag (CLI will
 
    ```bash
    nebius-vpngw
-   # Creates ./nebius-vpngw-config.config.yaml from template
+   # Creates ./nebius-vpngw.config.yaml from template
    ```
 
 2. **Edit configuration file:**
 
    ```yaml
-   # nebius-vpngw-config.config.yaml (minimal example)
+   # nebius-vpngw.config.yaml (minimal example)
    gateway_group:
      name: vpngw
      instance_count: 1
@@ -80,14 +80,14 @@ Alternatively, use service account authentication with the `--sa` flag (CLI will
 3. **Preview changes (dry-run):**
 
    ```bash
-   nebius-vpngw --local-config-file ./nebius-vpngw-config.config.yaml --dry-run
+   nebius-vpngw --local-config-file ./nebius-vpngw.config.yaml --dry-run
    ```
 
 4. **Deploy gateway:**
 
    ```bash
    nebius-vpngw \
-     --local-config-file ./nebius-vpngw-config.config.yaml \
+     --local-config-file ./nebius-vpngw.config.yaml \
      --sa nb-vpngw-sa \
      --project-id "$PROJECT_ID" \
      --zone "${REGION_ID}-a"
@@ -96,14 +96,14 @@ Alternatively, use service account authentication with the `--sa` flag (CLI will
 5. **Check tunnel status:**
 
    ```bash
-   nebius-vpngw status --local-config-file ./nebius-vpngw-config.config.yaml
+   nebius-vpngw status --local-config-file ./nebius-vpngw.config.yaml
    ```
 
 ## Configuration
 
 ### Configuration File Structure
 
-The main configuration file (`nebius-vpngw-config.config.yaml`) contains:
+The main configuration file (`nebius-vpngw.config.yaml`) contains:
 
 - **gateway_group**: VM specifications, networking, public IPs
 - **gateway**: Local ASN, prefixes, quotas
@@ -160,7 +160,7 @@ Import tunnel details from cloud provider configurations:
 
 ```bash
 nebius-vpngw apply \
-  --local-config-file ./nebius-vpngw-config.config.yaml \
+  --local-config-file ./nebius-vpngw.config.yaml \
   --peer-config-file ./gcp-ha-vpn-config.txt \
   --peer-config-file ./aws-vpn-config.txt
 ```
@@ -181,31 +181,31 @@ Supported vendors:
 **Deploy or update gateway:**
 
 ```bash
-nebius-vpngw apply --local-config-file ./nebius-vpngw-config.config.yaml
+nebius-vpngw apply --local-config-file ./nebius-vpngw.config.yaml
 ```
 
 **View tunnel status and system health:**
 
 ```bash
-nebius-vpngw status --local-config-file ./nebius-vpngw-config.config.yaml
+nebius-vpngw status --local-config-file ./nebius-vpngw.config.yaml
 ```
 
 **Preview changes (dry-run):**
 
 ```bash
-nebius-vpngw --local-config-file ./nebius-vpngw-config.config.yaml --dry-run
+nebius-vpngw --local-config-file ./nebius-vpngw.config.yaml --dry-run
 ```
 
 **List VPC routes:**
 
 ```bash
-nebius-vpngw list-routes --local-config-file ./nebius-vpngw-config.config.yaml
+nebius-vpngw list-routes --local-config-file ./nebius-vpngw.config.yaml
 ```
 
 **Add static routes to VPC:**
 
 ```bash
-nebius-vpngw add-routes --local-config-file ./nebius-vpngw-config.config.yaml
+nebius-vpngw add-routes --local-config-file ./nebius-vpngw.config.yaml
 ```
 
 ### Authentication Options
@@ -218,7 +218,7 @@ nebius-vpngw add-routes --local-config-file ./nebius-vpngw-config.config.yaml
 Some configuration changes require VM recreation (e.g., changing CPU, memory, boot disk type):
 
 ```bash
-nebius-vpngw apply --recreate-gw --local-config-file ./nebius-vpngw-config.config.yaml
+nebius-vpngw apply --recreate-gw --local-config-file ./nebius-vpngw.config.yaml
 ```
 
 **Warning:** Recreation causes downtime. Public IPs are preserved and reassigned.
@@ -238,7 +238,7 @@ The `apply` command always pushes the resolved YAML config and reloads the agent
 View active tunnels and system health:
 
 ```bash
-nebius-vpngw status --local-config-file ./nebius-vpngw-config.config.yaml
+nebius-vpngw status --local-config-file ./nebius-vpngw.config.yaml
 ```
 
 Example output:
@@ -447,7 +447,7 @@ ssh ubuntu@<gateway-ip> 'sudo journalctl -u nebius-vpngw-agent -n 50'
 ```bash
 # Rebuild wheel before deploying
 poetry build
-nebius-vpngw --local-config-file ./nebius-vpngw-config.config.yaml
+nebius-vpngw --local-config-file ./nebius-vpngw.config.yaml
 ```
 
 ### Debug Logging
@@ -666,7 +666,7 @@ rm -rf dist/*.whl
 poetry build
 
 # Deploy to VMs
-nebius-vpngw --local-config-file ./nebius-vpngw-config.config.yaml
+nebius-vpngw --local-config-file ./nebius-vpngw.config.yaml
 ```
 
 **Note:** The wheel is NOT installed in your local virtualenv—only on remote VMs.
@@ -814,7 +814,7 @@ print("Nebius SDK OK:", sdk)
 ## Project Structure
 
 ```text
-├── nebius-vpngw-config.config.yaml              # Main user configuration
+├── nebius-vpngw.config.yaml              # Main user configuration
 ├── src/nebius_vpngw/
 │   ├── cli.py                            # CLI orchestrator (nebius-vpngw)
 │   ├── config_loader.py                  # YAML parser and peer config merger

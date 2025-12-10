@@ -4,6 +4,7 @@ import typing as t
 from pathlib import Path
 import shutil
 import importlib.resources as resources
+import re
 
 import typer
 from rich import print
@@ -13,7 +14,7 @@ from .deploy.vm_manager import VMManager
 from .deploy.ssh_push import SSHPush
 from .deploy.route_manager import RouteManager
 
-DEFAULT_CONFIG_FILENAME = "nebius-vpngw-config.config.yaml"
+DEFAULT_CONFIG_FILENAME = "nebius-vpngw.config.yaml"
 DEFAULT_TEMPLATE_FILENAME = "nebius-vpngw-config-template.config.yaml"
 
 app = typer.Typer(
@@ -21,10 +22,50 @@ app = typer.Typer(
     help="""
 Nebius VM-based VPN Gateway orchestrator
 
-By default, the CLI looks for 'nebius-vpngw-config.config.yaml' in your current directory.
+By default, the CLI looks for 'nebius-vpngw.config.yaml' in your current directory.
 Use --local-config-file to specify a different config file if needed.
 """
 )
+
+
+def _create_minimal_config(template_path: Path, output_path: Path) -> None:
+    """Create a minimal config file by stripping comments and blank lines from template."""
+    lines = template_path.read_text(encoding="utf-8").splitlines()
+    minimal_lines = []
+    
+    for line in lines:
+        # Skip blank lines
+        if not line.strip():
+            continue
+        
+        # Skip full-line comments
+        if line.strip().startswith("#"):
+            continue
+        
+        # Remove inline comments but keep the content
+        # Handle cases like: key: "value"  # comment
+        if "#" in line:
+            # Find the # that's not inside quotes
+            in_quotes = False
+            quote_char = None
+            for i, char in enumerate(line):
+                if char in ('"', "'") and (i == 0 or line[i-1] != "\\"):
+                    if not in_quotes:
+                        in_quotes = True
+                        quote_char = char
+                    elif char == quote_char:
+                        in_quotes = False
+                elif char == "#" and not in_quotes:
+                    line = line[:i].rstrip()
+                    break
+        
+        # Skip if line becomes empty after removing comment
+        if not line.strip():
+            continue
+            
+        minimal_lines.append(line)
+    
+    output_path.write_text("\n".join(minimal_lines) + "\n", encoding="utf-8")
 
 
 def _resolve_local_config(
@@ -48,8 +89,8 @@ def _resolve_local_config(
 
     try:
         with resources.as_file(resources.files("nebius_vpngw").joinpath(DEFAULT_TEMPLATE_FILENAME)) as tpl_path:
-            shutil.copyfile(tpl_path, default_path)
-        print(f"[green]Created default config at[/green] {default_path}")
+            _create_minimal_config(tpl_path, default_path)
+        print(f"[green]Created minimal config at[/green] {default_path}")
         print("[bold]Please edit the file to fill environment-specific values and secrets, then re-run.[/bold]")
     except Exception as e:
         print(f"[red]Failed to create default config:[/red] {e}")

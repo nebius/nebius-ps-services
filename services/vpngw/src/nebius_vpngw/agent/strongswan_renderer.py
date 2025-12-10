@@ -286,13 +286,22 @@ network:
         )
         if "lookup 220" in result.stdout:
             print("[StrongSwan] FOUND policy rule for table 220 - removing to prevent override of main table")
+            
+            # First, flush all routes in table 220
+            print("[StrongSwan] Flushing all routes in table 220")
+            subprocess.run(["ip", "route", "flush", "table", "220"], check=False)
+            
+            # Then delete the routing rule itself
             subprocess.run(["ip", "rule", "del", "table", "220"], check=False)
+            
             # Verify deletion
             result = subprocess.run(["ip", "rule", "list"], capture_output=True, text=True)
             if "lookup 220" not in result.stdout:
-                print("[StrongSwan] ✓ Successfully removed table 220 routing rule")
+                print("[StrongSwan] ✓ Successfully removed table 220 routing rule and flushed routes")
             else:
                 print("[StrongSwan] ⚠ Table 220 rule still exists - may need manual cleanup")
+                # Try again with priority in case there are multiple rules
+                subprocess.run(["ip", "rule", "del", "pref", "220"], check=False)
         
         # CRITICAL FIX #2: Remove broad 169.254.0.0/16 route via eth0
         # This DHCP-injected route overrides our specific /30 VTI routes

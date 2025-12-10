@@ -202,13 +202,6 @@ WantedBy=multi-user.target
                                 f.write(service_unit)
                             print("[SSHPush] Staged systemd unit update")
                             
-                            # Deploy updown script
-                            updown_script_path = Path(__file__).parent.parent / "scripts" / "vpngw-updown"
-                            if updown_script_path.exists():
-                                with sftp.file("/tmp/vpngw-updown", "w") as f:
-                                    f.write(updown_script_path.read_text())
-                                print("[SSHPush] Staged updown script")
-                            
                             # Deploy route fix script, service, and timer
                             systemd_dir = Path(__file__).parent.parent / "systemd"
                             
@@ -266,9 +259,6 @@ WantedBy=multi-user.target
             f"sudo mv {tmp_path} /etc/nebius-vpngw/config-resolved.yaml",
             "sudo chown root:root /etc/nebius-vpngw/config-resolved.yaml",
             "sudo chmod 0644 /etc/nebius-vpngw/config-resolved.yaml",
-            # Install updown script if staged
-            "if [ -f /tmp/vpngw-updown ]; then sudo mv /tmp/vpngw-updown /usr/local/bin/vpngw-updown; fi",
-            "if [ -f /usr/local/bin/vpngw-updown ]; then sudo chmod 0755 /usr/local/bin/vpngw-updown; fi",
             # Install ipsec-vti.sh updown script if staged
             "sudo mkdir -p /var/lib/strongswan",
             "if [ -f /tmp/ipsec-vti.sh ]; then sudo mv /tmp/ipsec-vti.sh /var/lib/strongswan/ipsec-vti.sh; fi",

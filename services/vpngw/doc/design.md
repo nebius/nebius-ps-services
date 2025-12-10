@@ -62,7 +62,7 @@ Version: v0.2
 
 ## 6. Configuration Model (YAML)
 
-- Single file `nebius-vpngw-config.config.yaml` with sections: `gateway_group`, `defaults`, `gateway`, `connections[*].tunnels[*]` (supports `ha_role`, `routing_mode`, crypto, APIPA inner IPs).
+- Single file `nebius-vpngw.config.yaml` with sections: `gateway_group`, `defaults`, `gateway`, `connections[*].tunnels[*]` (supports `ha_role`, `routing_mode`, crypto, APIPA inner IPs).
 - Key fields: `network_id` (optional), implicit `vpngw-subnet`, `external_ips` as above, `gateway.local_prefixes`.
 - Merge precedence when resolving: tunnel overrides connection overrides peer-config overrides defaults; missing mandatory fields error out.
 - Environment placeholders `${VAR}` expand; all missing vars reported together.

@@ -73,6 +73,7 @@ class FRRRenderer:
         advertised_prefixes: set[str] = set()
 
         # Neighbors per active tunnel
+        tunnel_index = 0  # Track VTI interface index for update-source
         for conn in cfg.get("connections", []):
             routing_mode = conn.get("routing_mode") or cfg.get("defaults", {}).get("routing", {}).get("mode", "bgp")
             if routing_mode != "bgp":
@@ -87,7 +88,7 @@ class FRRRenderer:
                 if tun.get("ha_role", "active") != "active":
                     continue
                 tbgp = tun.get("bgp", {}) or {}
-                _local_ip = tbgp.get("local_ip") or tun.get("inner_local_ip")  # Reserved for future use
+                local_ip = tbgp.get("local_ip") or tun.get("inner_local_ip")
                 remote_ip = tbgp.get("remote_ip") or tun.get("inner_remote_ip")
                 rasn = tbgp.get("remote_asn") or remote_asn
                 if not (remote_ip and rasn):
@@ -96,6 +97,16 @@ class FRRRenderer:
                 lines.append(f" neighbor {remote_ip} remote-as {rasn}")
                 lines.append(f" neighbor {remote_ip} timers {keep} {hold}")
                 lines.append(f" neighbor {remote_ip} maximum-prefix {max_prefixes_default}")
+                
+                # CRITICAL: Configure update-source to use VTI interface IP
+                # This ensures BGP packets use the correct source IP (APIPA inner IP)
+                # instead of the primary interface IP (10.x.x.x)
+                if local_ip:
+                    vti_name = f"vti{tunnel_index}"
+                    lines.append(f" neighbor {remote_ip} update-source {local_ip}")
+                    print(f"[FRR] Configured neighbor {remote_ip} with update-source {local_ip} (via {vti_name})")
+                
+                tunnel_index += 1
                 
                 # Track prefixes to advertise for this connection
                 if advertise:
