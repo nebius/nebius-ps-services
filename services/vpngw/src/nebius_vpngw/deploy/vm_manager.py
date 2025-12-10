@@ -773,8 +773,41 @@ class VMManager:
                                 if hasattr(dsc, "get_by_name"):
                                     disk_obj = dsc.get_by_name(GetByNameRequest(parent_id=self.project_id, name=boot_disk_name)).wait()
                                     boot_disk_id = getattr(disk_obj, "id", None) or getattr(getattr(disk_obj, "metadata", None), "id", None)
+                                    
+                                    # Check if disk is in a usable state
                                     if boot_disk_id:
-                                        print(f"[VMManager] Found existing disk {boot_disk_name} id={boot_disk_id}")
+                                        disk_status = getattr(disk_obj, "status", None)
+                                        disk_state = getattr(disk_status, "status", None) if disk_status else None
+                                        
+                                        # If disk is deleting, wait for it to finish
+                                        if disk_state and "DELET" in str(disk_state).upper():
+                                            print(f"[VMManager] Disk {boot_disk_name} is in state {disk_state}, waiting for deletion to complete...")
+                                            import time
+                                            max_wait = 60
+                                            wait_interval = 5
+                                            for wait_attempt in range(max_wait // wait_interval):
+                                                time.sleep(wait_interval)
+                                                try:
+                                                    disk_obj = dsc.get_by_name(GetByNameRequest(parent_id=self.project_id, name=boot_disk_name)).wait()
+                                                    disk_status = getattr(disk_obj, "status", None)
+                                                    disk_state = getattr(disk_status, "status", None) if disk_status else None
+                                                    if disk_state and "DELET" in str(disk_state).upper():
+                                                        print(f"[VMManager] Still deleting... ({(wait_attempt + 1) * wait_interval}s)")
+                                                        continue
+                                                    else:
+                                                        print(f"[VMManager] Disk state changed to {disk_state}")
+                                                        break
+                                                except Exception:
+                                                    # Disk no longer exists - deletion complete
+                                                    print(f"[VMManager] Disk deletion complete after {(wait_attempt + 1) * wait_interval}s")
+                                                    boot_disk_id = None
+                                                    break
+                                            else:
+                                                # Timeout waiting - disk still deleting
+                                                print(f"[VMManager] Timeout waiting for disk deletion, will retry creation")
+                                                boot_disk_id = None
+                                        else:
+                                            print(f"[VMManager] Found existing disk {boot_disk_name} id={boot_disk_id}")
                             except Exception:
                                 # Disk doesn't exist yet - will create below
                                 boot_disk_id = None
@@ -1141,14 +1174,105 @@ class VMManager:
                                     alloc_id = getattr(getattr(alloc_obj, "metadata", None), "id", None)
                             if alloc_id:
                                 alloc_ids.append(alloc_id)
-                                print(f"[VMManager] Allocation {alloc_name} ready: {alloc_id}")
+                                print(f"[VMManager] Public IP allocation {alloc_name} ready: {alloc_id}")
                                 
                                 # Get the IP address from this allocation for the first NIC (eth0)
                                 if nic_index == 0:
                                     alloc_ip = self.get_allocation_ip(alloc_id)
                                     if alloc_ip:
                                         vm_ips[inst_name] = alloc_ip
-                                        print(f"[VMManager] {inst_name} will use IP: {alloc_ip}")
+                            
+                            # Create static private IP allocation for route next hops
+                            # This allocation will be used as the next hop for VPC routes
+                            private_alloc_obj = None
+                            private_alloc_name = f"{inst_name}-{nic_name}-private-ip"
+                            
+                            # Priority 1: Try by-name to avoid ALREADY_EXISTS
+                            if alloc_client is not None:
+                                try:
+                                    from nebius.api.nebius.vpc.v1 import GetAllocationByNameRequest  # type: ignore
+                                    private_alloc_obj = alloc_client.get_by_name(
+                                        GetAllocationByNameRequest(parent_id=self.project_id or "", name=private_alloc_name)
+                                    ).wait()
+                                    if private_alloc_obj:
+                                        print(f"[VMManager] Found existing private allocation by name: {private_alloc_name}")
+                                except Exception:
+                                    private_alloc_obj = None
+                            
+                            # Priority 2: Create static private allocation
+                            if private_alloc_obj is None:
+                                if not nic.get("subnet_id"):
+                                    raise RuntimeError(
+                                        "[VMManager] Cannot create private IP allocation: subnet_id is not set. "
+                                        "Resolve subnet creation first or provide a valid network_id."
+                                    )
+                                try:
+                                    print(f"[VMManager] Creating static private IP allocation {private_alloc_name} for {nic_name} in vpngw-subnet ...")
+                                    if alloc_client is not None:
+                                        try:
+                                            from nebius.api.nebius.vpc.v1 import CreateAllocationRequest, AllocationSpec, IPv4PrivateAllocationSpec  # type: ignore
+                                            from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
+                                            req = CreateAllocationRequest(
+                                                metadata=ResourceMetadata(
+                                                    name=private_alloc_name,
+                                                    parent_id=self.project_id or "",
+                                                ),
+                                                spec=AllocationSpec(
+                                                    ipv4_private=IPv4PrivateAllocationSpec(
+                                                        subnet_id=nic["subnet_id"],
+                                                    )
+                                                ),
+                                            )
+                                            op = alloc_client.create(req).wait()  # Operation
+                                            try:
+                                                op.sync_wait()
+                                            except Exception:
+                                                pass
+                                            # Try to read allocation id from operation result or refetch by name
+                                            private_alloc_obj = None
+                                            try:
+                                                # Some SDKs expose result.resource.id
+                                                res = getattr(op, "result", None)
+                                                rid = getattr(getattr(res, "resource", None), "id", None)
+                                                if rid:
+                                                    # Construct a minimal object-like dict to carry id
+                                                    private_alloc_obj = type("Alloc", (), {"id": rid})()
+                                            except Exception:
+                                                private_alloc_obj = None
+                                            if private_alloc_obj is None:
+                                                try:
+                                                    from nebius.api.nebius.vpc.v1 import GetAllocationByNameRequest  # type: ignore
+                                                    private_alloc_obj = alloc_client.get_by_name(
+                                                        GetAllocationByNameRequest(parent_id=self.project_id or "", name=private_alloc_name)
+                                                    ).wait()
+                                                except Exception:
+                                                    private_alloc_obj = None
+                                        except Exception as e:
+                                            print(f"[VMManager] private allocation create via client failed: {e}")
+                                            # If it already exists, refetch by name and proceed
+                                            try:
+                                                from nebius.api.nebius.vpc.v1 import GetAllocationByNameRequest  # type: ignore
+                                                private_alloc_obj = alloc_client.get_by_name(
+                                                    GetAllocationByNameRequest(parent_id=self.project_id or "", name=private_alloc_name)
+                                                ).wait()
+                                            except Exception:
+                                                pass
+                                except Exception as e:
+                                    print(f"[VMManager] private allocation create failed: {e}")
+                            
+                            # Extract private allocation id
+                            private_alloc_id = None
+                            if private_alloc_obj is not None:
+                                private_alloc_id = getattr(private_alloc_obj, "id", None)
+                                if not private_alloc_id:
+                                    private_alloc_id = getattr(getattr(private_alloc_obj, "metadata", None), "id", None)
+                            if private_alloc_id:
+                                # Store private allocation ID (we'll need a separate list)
+                                if not hasattr(self, '_private_alloc_ids'):
+                                    self._private_alloc_ids = {}
+                                self._private_alloc_ids[inst_name] = self._private_alloc_ids.get(inst_name, [])
+                                self._private_alloc_ids[inst_name].append(private_alloc_id)
+                                print(f"[VMManager] Private IP allocation {private_alloc_name} ready: {private_alloc_id}")
 
 
                     # Step 3: Create instance with proper metadata/spec per SDK schema
@@ -1180,7 +1304,13 @@ class VMManager:
                             "network_interfaces": [
                                 {
                                     "name": f"eth{nic_idx}",
-                                    "ip_address": {},
+                                    "ip_address": (
+                                        {"allocation_id": self._private_alloc_ids[inst_name][nic_idx]}
+                                        if hasattr(self, '_private_alloc_ids') 
+                                           and inst_name in self._private_alloc_ids 
+                                           and nic_idx < len(self._private_alloc_ids[inst_name])
+                                        else {}
+                                    ),
                                     "public_ip_address": (
                                         {"allocation_id": alloc_ids[nic_idx], "static": True}
                                         if nic_idx < len(alloc_ids)
@@ -1245,24 +1375,40 @@ class VMManager:
                         # NIC CREATION STRATEGY:
                         # - Create num_nics NetworkInterfaceSpecs (eth0, eth1, ..., eth{n-1})
                         # - Map allocations in order: alloc_ids[0] → eth0, alloc_ids[1] → eth1, etc.
-                        # - Each NIC attached to vpngw-subnet with private IP auto-assigned
+                        # - Each NIC gets a static private IP allocation for route next hops
+                        # - Each NIC gets a public IP allocation for external connectivity
                         # CURRENT PLATFORM LIMITATION: num_nics=1 enforced by config validation
                         # FUTURE: When platform supports multi-NIC, NICs will be created per num_nics config
                         ni_msgs = []
                         for nic_idx in range(num_nics):
                             nic_name = f"eth{nic_idx}"
+                            
+                            # Public IP allocation for external connectivity
                             pub = None
                             if nic_idx < len(alloc_ids):
                                 pub = PublicIPAddress(allocation_id=alloc_ids[nic_idx], static=True)
+                            
+                            # Private IP allocation for route next hops (static allocation)
+                            priv = None
+                            priv_alloc_id = None
+                            if hasattr(self, '_private_alloc_ids') and inst_name in self._private_alloc_ids:
+                                if nic_idx < len(self._private_alloc_ids[inst_name]):
+                                    priv_alloc_id = self._private_alloc_ids[inst_name][nic_idx]
+                                    priv = IPAddress(allocation_id=priv_alloc_id)
+                            
+                            # If no private allocation, use auto-assigned (for backward compatibility)
+                            if priv is None:
+                                priv = IPAddress()
+                            
                             ni_msgs.append(
                                 NetworkInterfaceSpec(
                                     name=nic_name,
-                                    ip_address=IPAddress(),
+                                    ip_address=priv,
                                     public_ip_address=pub if pub is not None else PublicIPAddress(),
                                     subnet_id=nic["subnet_id"],
                                 )
                             )
-                            print(f"[VMManager] NIC {nic_name} configured with allocation={alloc_ids[nic_idx] if nic_idx < len(alloc_ids) else 'auto'}")
+                            print(f"[VMManager] NIC {nic_name} configured with public={alloc_ids[nic_idx] if nic_idx < len(alloc_ids) else 'auto'}, private={priv_alloc_id if priv and priv.allocation_id else 'auto'}")
                         
                         # Validation: Ensure we don't exceed platform limits
                         if len(ni_msgs) > 1:
@@ -1291,6 +1437,7 @@ class VMManager:
                             except Exception:
                                 pass
                             created = True
+                            print(f"[VMManager] Instance {inst_name} created successfully via SDK")
                             
                             # Wait for VM to be fully ready with public IP assigned
                             print(f"[VMManager] Waiting for {inst_name} to receive public IP...")
@@ -1310,7 +1457,10 @@ class VMManager:
                                 print(f"[VMManager] Warning: {inst_name} did not receive public IP within {max_ip_wait}s")
                         except Exception as e:
                             print(f"[VMManager] InstanceServiceClient create failed: {e}")
-                    except Exception:
+                            import traceback
+                            traceback.print_exc()
+                    except Exception as e:
+                        print(f"[VMManager] InstanceServiceClient initialization failed: {e}")
                         pass
                     if not created:
                         if instance_api is not None and hasattr(instance_api, "create"):
@@ -1595,8 +1745,6 @@ class VMManager:
             "  - strongswan\n"
             "  - strongswan-pki\n"
             "  - libcharon-extra-plugins\n"
-            "  - frr\n"
-            "  - frr-pythontools\n"
             "  - python3\n"
             "  - python3-pip\n"
             "  - python3-yaml\n"
@@ -1639,12 +1787,22 @@ class VMManager:
             "            net.ipv4.conf.all.accept_redirects=0\n"
             "            net.ipv4.conf.default.send_redirects=0\n"
             "            net.ipv4.conf.default.accept_redirects=0\n"
-            "            # Disable RP filter for asymmetric routing in VPN scenarios\n"
-            "            net.ipv4.conf.all.rp_filter=0\n"
-            "            net.ipv4.conf.default.rp_filter=0\n"
+            "            # Use loose RP filter (mode 2) for asymmetric routing while maintaining security\n"
+            "            # Mode 0 = disabled (no validation)\n"
+            "            # Mode 1 = strict (default, checks exact incoming interface)\n"
+            "            # Mode 2 = loose (allows any interface with valid route back)\n"
+            "            net.ipv4.conf.default.rp_filter=2\n"
+            "            # Keep eth0 in strict mode for internet connectivity reliability\n"
+            "            net.ipv4.conf.eth0.rp_filter=1\n"
             "runcmd:\n"
             "  - [ bash, -lc, \"mkdir -p /etc/nebius-vpngw\" ]\n"
             "  - [ bash, -lc, \"mkdir -p /etc/ipsec.d\" ]\n"
+            "  # Install FRR 10.5.0 from official repository (fixes route installation bug in 8.4.4)\n"
+            "  # Detect Ubuntu version and use appropriate repository\n"
+            "  - [ bash, -c, \"curl -s https://deb.frrouting.org/frr/keys.asc | tee /usr/share/keyrings/frrouting.asc > /dev/null\" ]\n"
+            "  - [ bash, -c, \"UBUNTU_CODENAME=$(lsb_release -cs); echo \\\"deb [signed-by=/usr/share/keyrings/frrouting.asc] https://deb.frrouting.org/frr $UBUNTU_CODENAME frr-stable\\\" > /etc/apt/sources.list.d/frr.list\" ]\n"
+            "  - [ apt-get, update ]\n"
+            "  - [ bash, -c, \"UBUNTU_VERSION=$(lsb_release -rs); if [ \\\"$UBUNTU_VERSION\\\" = \\\"24.04\\\" ]; then apt-get install -y frr=10.5.0-0~ubuntu24.04.1 frr-pythontools; else apt-get install -y frr frr-pythontools; fi\" ]\n"
             "  - [ sysctl, -p, /etc/sysctl.d/99-vpn-gateway.conf ]\n"
             "  - [ systemctl, daemon-reload ]\n"
             "  - [ systemctl, enable, strongswan-starter ]\n"

@@ -1,0 +1,13 @@
+[Unit]
+Description=Fix Nebius VPN Gateway routing issues
+Documentation=https://github.com/nebius/nebius-ps-services
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/nebius-vpngw-fix-routes.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

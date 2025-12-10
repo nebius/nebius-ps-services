@@ -57,8 +57,16 @@ class SSHPush:
 
         # Always attempt to build latest wheel if pyproject is present
         if (project_root / "pyproject.toml").exists():
+            # Clean old wheels to prevent stale dependencies
+            if dist_dir.exists():
+                old_wheels = list(dist_dir.glob("nebius_vpngw-*.whl"))
+                if old_wheels:
+                    print(f"[SSHPush] Removing {len(old_wheels)} old wheel(s) to ensure fresh build...")
+                    for wheel in old_wheels:
+                        wheel.unlink()
+            
             built = False
-            # Prefer poetry build when available
+            # Prefer poetry build when available (faster, uses poetry.lock if present)
             poetry = shutil.which("poetry")
             if poetry:
                 print("[SSHPush] Building wheel via poetry...")
@@ -132,7 +140,24 @@ class SSHPush:
                 timeout=15,
             )
         except Exception as e:
+            error_msg = str(e).lower()
             print(f"[SSHPush] SSH connect failed to {ssh_target}: {e}")
+            
+            # Provide helpful guidance for common network issues
+            if "timed out" in error_msg or "timeout" in error_msg:
+                print("\n" + "="*80)
+                print("⚠️  NETWORK CONNECTIVITY ISSUE DETECTED")
+                print("="*80)
+                print("The VM appears to be unreachable. This can happen if:")
+                print("  1. The VM is still booting (cloud-init may be installing packages)")
+                print("  2. Network configuration issues during VM initialization")
+                print("  3. Firewall or security group blocking SSH access")
+                print("\nRECOMMENDED ACTIONS:")
+                print("  • Wait 2-3 minutes and try running 'apply' again")
+                print("  • Check VM status in Nebius Console (serial logs can show boot issues)")
+                print("  • If the issue persists, restart the VM from the console and retry")
+                print("  • As a last resort, run: nebius-vpngw destroy -y && nebius-vpngw apply")
+                print("="*80 + "\n")
             return
 
         # Always deploy the latest agent package from local build
@@ -146,9 +171,11 @@ class SSHPush:
                     print(f"[SSHPush] Uploaded {wheel_path.name}")
 
                 # Install/upgrade the wheel
+                # Use --break-system-packages on Ubuntu 24.04+ which has PEP 668 restrictions
+                # Use --ignore-installed to avoid conflicts with system packages like typing_extensions
                 install_cmd = (
-                    f"sudo pip3 install --force-reinstall --ignore-installed --break-system-packages {remote_wheel} "
-                    f"|| sudo pip3 install --force-reinstall --ignore-installed {remote_wheel}"
+                    f"sudo pip3 install --upgrade --no-deps --break-system-packages --ignore-installed {remote_wheel} && "
+                    f"sudo pip3 install --break-system-packages --ignore-installed {remote_wheel}"
                 )
                 stdin, stdout, stderr = client.exec_command(install_cmd, get_pty=True, timeout=60)
                 rc = stdout.channel.recv_exit_status()
@@ -174,6 +201,41 @@ WantedBy=multi-user.target
                             with sftp.file("/tmp/nebius-vpngw-agent.service", "w") as f:
                                 f.write(service_unit)
                             print("[SSHPush] Staged systemd unit update")
+                            
+                            # Deploy updown script
+                            updown_script_path = Path(__file__).parent.parent / "scripts" / "vpngw-updown"
+                            if updown_script_path.exists():
+                                with sftp.file("/tmp/vpngw-updown", "w") as f:
+                                    f.write(updown_script_path.read_text())
+                                print("[SSHPush] Staged updown script")
+                            
+                            # Deploy route fix script, service, and timer
+                            systemd_dir = Path(__file__).parent.parent / "systemd"
+                            
+                            # Deploy ipsec-vti.sh updown script
+                            ipsec_vti_script = systemd_dir / "ipsec-vti.sh"
+                            if ipsec_vti_script.exists():
+                                with sftp.file("/tmp/ipsec-vti.sh", "w") as f:
+                                    f.write(ipsec_vti_script.read_text())
+                                print("[SSHPush] Staged ipsec-vti.sh updown script")
+                            fix_routes_script = systemd_dir / "fix-routes.sh"
+                            fix_routes_service = systemd_dir / "nebius-vpngw-fix-routes.service"
+                            fix_routes_timer = systemd_dir / "nebius-vpngw-fix-routes.timer"
+                            
+                            if fix_routes_script.exists():
+                                with sftp.file("/tmp/nebius-vpngw-fix-routes.sh", "w") as f:
+                                    f.write(fix_routes_script.read_text())
+                                print("[SSHPush] Staged route fix script")
+                            
+                            if fix_routes_service.exists():
+                                with sftp.file("/tmp/nebius-vpngw-fix-routes.service", "w") as f:
+                                    f.write(fix_routes_service.read_text())
+                                print("[SSHPush] Staged route fix service")
+                            
+                            if fix_routes_timer.exists():
+                                with sftp.file("/tmp/nebius-vpngw-fix-routes.timer", "w") as f:
+                                    f.write(fix_routes_timer.read_text())
+                                print("[SSHPush] Staged route fix timer")
                     except Exception as e:
                         print(f"[SSHPush] Failed to stage systemd unit: {e}")
                 else:
@@ -204,10 +266,26 @@ WantedBy=multi-user.target
             f"sudo mv {tmp_path} /etc/nebius-vpngw/config-resolved.yaml",
             "sudo chown root:root /etc/nebius-vpngw/config-resolved.yaml",
             "sudo chmod 0644 /etc/nebius-vpngw/config-resolved.yaml",
+            # Install updown script if staged
+            "if [ -f /tmp/vpngw-updown ]; then sudo mv /tmp/vpngw-updown /usr/local/bin/vpngw-updown; fi",
+            "if [ -f /usr/local/bin/vpngw-updown ]; then sudo chmod 0755 /usr/local/bin/vpngw-updown; fi",
+            # Install ipsec-vti.sh updown script if staged
+            "sudo mkdir -p /var/lib/strongswan",
+            "if [ -f /tmp/ipsec-vti.sh ]; then sudo mv /tmp/ipsec-vti.sh /var/lib/strongswan/ipsec-vti.sh; fi",
+            "if [ -f /var/lib/strongswan/ipsec-vti.sh ]; then sudo chmod 0755 /var/lib/strongswan/ipsec-vti.sh; fi",
+            # Install route fix script, service, and timer if staged
+            "if [ -f /tmp/nebius-vpngw-fix-routes.sh ]; then sudo mv /tmp/nebius-vpngw-fix-routes.sh /usr/local/bin/nebius-vpngw-fix-routes.sh; fi",
+            "if [ -f /usr/local/bin/nebius-vpngw-fix-routes.sh ]; then sudo chmod 0755 /usr/local/bin/nebius-vpngw-fix-routes.sh; fi",
+            "if [ -f /tmp/nebius-vpngw-fix-routes.service ]; then sudo mv /tmp/nebius-vpngw-fix-routes.service /etc/systemd/system/nebius-vpngw-fix-routes.service; fi",
+            "if [ -f /tmp/nebius-vpngw-fix-routes.timer ]; then sudo mv /tmp/nebius-vpngw-fix-routes.timer /etc/systemd/system/nebius-vpngw-fix-routes.timer; fi",
+            "sudo chmod 0644 /etc/systemd/system/nebius-vpngw-fix-routes.service",
+            "sudo chmod 0644 /etc/systemd/system/nebius-vpngw-fix-routes.timer",
             # Refresh systemd unit if staged
             "if [ -f /tmp/nebius-vpngw-agent.service ]; then sudo mv /tmp/nebius-vpngw-agent.service /etc/systemd/system/nebius-vpngw-agent.service; fi",
             "sudo chmod 0644 /etc/systemd/system/nebius-vpngw-agent.service",
             "sudo systemctl daemon-reload",
+            # Enable and start route fix timer
+            "sudo systemctl enable --now nebius-vpngw-fix-routes.timer",
             # Start service if inactive, reload if active
             "sudo systemctl is-active --quiet nebius-vpngw-agent && sudo systemctl reload nebius-vpngw-agent || sudo systemctl start nebius-vpngw-agent",
         ]
@@ -267,13 +345,21 @@ WantedBy=multi-user.target
                 joined = ", ".join(strongswan_statuses)
                 print(f"[SSHPush] ✗ strongSwan appears inactive (checked: {joined})")
 
-            # FRR check
-            stdin, stdout, stderr = client.exec_command("sudo systemctl is-active frr", timeout=10)
-            rc = stdout.channel.recv_exit_status()
-            svc_status = stdout.read().decode().strip()
-            if rc == 0 and svc_status == "active":
-                print("[SSHPush] ✓ frr is running")
-            else:
+            # FRR check - wait up to 15 seconds for FRR to start
+            frr_active = False
+            for attempt in range(3):  # 3 attempts, 5 seconds apart
+                stdin, stdout, stderr = client.exec_command("sudo systemctl is-active frr", timeout=10)
+                rc = stdout.channel.recv_exit_status()
+                svc_status = stdout.read().decode().strip()
+                if rc == 0 and svc_status == "active":
+                    print("[SSHPush] ✓ frr is running")
+                    frr_active = True
+                    break
+                elif attempt < 2:  # Don't sleep on last attempt
+                    import time
+                    time.sleep(5)
+            
+            if not frr_active:
                 print(f"[SSHPush] ✗ frr is NOT running (status: {svc_status})")
 
             # Quick BGP port probe to detect blocked TCP/179 on peer side

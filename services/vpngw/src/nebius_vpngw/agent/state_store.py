@@ -7,6 +7,15 @@ import datetime as dt
 import typing as t
 
 
+def _get_package_version() -> str:
+    """Get the installed package version to detect code changes."""
+    try:
+        from importlib.metadata import version
+        return version("nebius-vpngw")
+    except Exception:
+        return "unknown"
+
+
 class StateStore:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -21,7 +30,10 @@ class StateStore:
             return None
 
     def _hash_cfg(self, resolved_config: dict) -> str:
-        s = json.dumps(resolved_config, sort_keys=True).encode()
+        # Include package version in hash so code changes trigger reapply
+        # This ensures that agent code updates force config regeneration
+        pkg_version = _get_package_version()
+        s = json.dumps({"config": resolved_config, "version": pkg_version}, sort_keys=True).encode()
         return hashlib.sha256(s).hexdigest()
 
     def is_changed(self, resolved_config: dict) -> bool:
@@ -32,6 +44,7 @@ class StateStore:
     def save_last_applied(self, resolved_config: dict) -> None:
         payload = {
             "config_hash": self._hash_cfg(resolved_config),
+            "package_version": _get_package_version(),
             "timestamp": dt.datetime.utcnow().isoformat() + "Z",
             "resolved_config": resolved_config,
         }

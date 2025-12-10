@@ -1,6 +1,6 @@
 # Nebius VPN Gateway (VM-based)
 
-A modular Python-based orchestrator and agent to provision Nebius VMs as Site-to-Site IPsec VPN gateways (compatible with GCP HA VPN, AWS Site-to-Site VPN, Azure VPN Gateway, and on-premises routers)
+A modular Python-based orchestrator and agent to provision Nebius VMs as Site-to-Site IPsec VPN gateways (compatible with GCP HA VPN, AWS Site-to-Site VPN, Azure VPN Gateway, and on-premises routers).
 
 ## Features
 
@@ -10,12 +10,22 @@ A modular Python-based orchestrator and agent to provision Nebius VMs as Site-to
 - **Configuration**: YAML-driven with optional peer config import from cloud providers
 - **Automation**: Idempotent agent automatically applies and maintains configurations
 
+## Table of Contents
+
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+- [CLI Usage](#cli-usage)
+- [Monitoring and Troubleshooting](#monitoring-and-troubleshooting)
+- [Development](#development)
+- [Project Structure](#project-structure)
+- [License](#license)
+
 ## Quick Start
 
 ### Prerequisites
 
 - Python 3.10–3.12
-- Nebius account
+- Nebius account with API access
 
 ### Installation
 
@@ -26,40 +36,12 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -U pip wheel
 pip install -e .
-poetry build
-nebius-vpngw --help
 ```
 
-### Configuration
-
-On first run, the CLI automatically creates a template configuration file:
+Verify installation:
 
 ```bash
-nebius-vpngw
-# Creates ./nebius-vpngw-config.config.yaml from template
-```
-
-Edit the configuration file with your environment details:
-
-```yaml
-# nebius-vpngw-config.config.yaml (minimal example)
-gateway_group:
-  name: vpngw
-  vm_spec:
-    count: 1
-    ssh_public_key_path: "~/.ssh/id_ed25519.pub"
-  # Optional: specify VPC network (defaults to your default network)
-  # network_id: ${NETWORK_ID}
-  # Optional: specify public IP allocations (auto-created if omitted)
-  # external_ips: []
-```
-
-**Important**: Do not commit sensitive values. Use environment variables for secrets:
-
-```yaml
-tunnels:
-  - name: gcp-tunnel-1
-    psk: ${GCP_TUNNEL_1_PSK}  # Set via: export GCP_TUNNEL_1_PSK="your-secret"
+nebius-vpngw --help
 ```
 
 ### Authentication
@@ -75,47 +57,106 @@ export NEBIUS_IAM_TOKEN="$(your_token_command)"
 
 Alternatively, use service account authentication with the `--sa` flag (CLI will create/reuse the service account automatically).
 
-### Deploy Your First Gateway
+### First Deployment
 
-Preview changes (dry-run):
+1. **Generate configuration template:**
 
-```bash
-nebius-vpngw --local-config-file ./nebius-vpngw-config.config.yaml --dry-run
+   ```bash
+   nebius-vpngw
+   # Creates ./nebius-vpngw-config.config.yaml from template
+   ```
+
+2. **Edit configuration file:**
+
+   ```yaml
+   # nebius-vpngw-config.config.yaml (minimal example)
+   gateway_group:
+     name: vpngw
+     instance_count: 1
+     vm_spec:
+       ssh_public_key_path: "~/.ssh/id_ed25519.pub"
+   ```
+
+3. **Preview changes (dry-run):**
+
+   ```bash
+   nebius-vpngw --local-config-file ./nebius-vpngw-config.config.yaml --dry-run
+   ```
+
+4. **Deploy gateway:**
+
+   ```bash
+   nebius-vpngw \
+     --local-config-file ./nebius-vpngw-config.config.yaml \
+     --sa nb-vpngw-sa \
+     --project-id "$PROJECT_ID" \
+     --zone "${REGION_ID}-a"
+   ```
+
+5. **Check tunnel status:**
+
+   ```bash
+   nebius-vpngw status --local-config-file ./nebius-vpngw-config.config.yaml
+   ```
+
+## Configuration
+
+### Configuration File Structure
+
+The main configuration file (`nebius-vpngw-config.config.yaml`) contains:
+
+- **gateway_group**: VM specifications, networking, public IPs
+- **gateway**: Local ASN, prefixes, quotas
+- **defaults**: Default IPsec and BGP parameters
+- **connections**: Tunnel definitions with peer details
+
+### Network Configuration
+
+**VPC Network:**
+
+- Specify network via `network_id` in gateway_group (optional - defaults to your default VPC)
+- Gateway VMs are created in `vpngw-subnet` (auto-created /27 CIDR)
+- Platform constraint: 1 NIC per VM with 1 public IP
+
+**Public IP Allocations:**
+
+```yaml
+gateway_group:
+  # Auto-create allocations (if omitted or empty)
+  external_ips: []
+
+  # Use existing allocations
+  external_ips:
+  - 66.201.4.131
 ```
 
-Deploy gateway VMs and configure tunnels:
+Public IPs are preserved during VM recreation.
 
-```bash
-nebius-vpngw \
-  --local-config-file ./nebius-vpngw-config.config.yaml \
-  --sa nb-vpngw-sa \
-  --project-id "$PROJECT_ID" \
-  --zone "${REGION_ID}-a"
+### SSH Configuration
+
+```yaml
+gateway_group:
+  vm_spec:
+    ssh_public_key_path: "~/.ssh/id_ed25519.pub"  # Auto-reads file content
+    ssh_username: ubuntu  # Default: ubuntu
+    ssh_private_key_path: "~/.ssh/id_ed25519"  # Optional, uses SSH agent if omitted
 ```
 
-Check tunnel status:
+### Environment Variables
 
-```bash
-nebius-vpngw status --local-config-file ./nebius-vpngw-config.config.yaml
+Use environment variables for sensitive values:
+
+```yaml
+tunnels:
+  - name: gcp-tunnel-1
+    psk: ${GCP_TUNNEL_1_PSK}  # Set via: export GCP_TUNNEL_1_PSK="your-secret"
 ```
 
-## Usage
+**Important:** Do not commit sensitive values to version control.
 
-### CLI Commands
+### Peer Configuration Import
 
-**View tunnel status and system health:**
-
-```bash
-nebius-vpngw status --local-config-file ./nebius-vpngw-config.config.yaml
-```
-
-**Deploy or update gateway configuration:**
-
-```bash
-nebius-vpngw apply --local-config-file ./nebius-vpngw-config.config.yaml
-```
-
-**Import peer configuration from cloud provider:**
+Import tunnel details from cloud provider configurations:
 
 ```bash
 nebius-vpngw apply \
@@ -126,26 +167,53 @@ nebius-vpngw apply \
 
 Peer config files automatically populate missing tunnel details (PSKs, IPs, crypto proposals) without changing your topology.
 
-**Preview changes without applying:**
+Supported vendors:
+
+- GCP HA VPN
+- AWS Site-to-Site VPN
+- Azure VPN Gateway
+- Cisco IOS
+
+## CLI Usage
+
+### Commands
+
+**Deploy or update gateway:**
+
+```bash
+nebius-vpngw apply --local-config-file ./nebius-vpngw-config.config.yaml
+```
+
+**View tunnel status and system health:**
+
+```bash
+nebius-vpngw status --local-config-file ./nebius-vpngw-config.config.yaml
+```
+
+**Preview changes (dry-run):**
 
 ```bash
 nebius-vpngw --local-config-file ./nebius-vpngw-config.config.yaml --dry-run
 ```
 
-### CLI Options
+**List VPC routes:**
 
-**Authentication:**
+```bash
+nebius-vpngw list-routes --local-config-file ./nebius-vpngw-config.config.yaml
+```
+
+**Add static routes to VPC:**
+
+```bash
+nebius-vpngw add-routes --local-config-file ./nebius-vpngw-config.config.yaml
+```
+
+### Authentication Options
 
 - `--sa <name>`: Create/use service account with Editor permissions
 - Without `--sa`: Uses Nebius CLI default profile credentials
 
-**Networking:**
-
-- Gateway VMs are created with two NICs (eth0, eth1) in `vpngw-subnet` (auto-created, /27 CIDR)
-- Two public IPs are allocated (one per NIC) unless specified via `gateway_group.external_ips`
-- If `network_id` is omitted, the default VPC network is used
-
-**Destructive changes:**
+### VM Recreation
 
 Some configuration changes require VM recreation (e.g., changing CPU, memory, boot disk type):
 
@@ -153,21 +221,15 @@ Some configuration changes require VM recreation (e.g., changing CPU, memory, bo
 nebius-vpngw apply --recreate-gw --local-config-file ./nebius-vpngw-config.config.yaml
 ```
 
-**Warning**: Recreation causes downtime. Public IPs are preserved and reassigned.
+**Warning:** Recreation causes downtime. Public IPs are preserved and reassigned.
 
-### SSH Configuration
+### Configuration Refresh
 
-Configure SSH access in your YAML:
+The `apply` command always pushes the resolved YAML config and reloads the agent, even when no diff is detected:
 
-```yaml
-gateway_group:
-  vm_spec:
-    ssh_public_key_path: "~/.ssh/id_ed25519.pub"  # Auto-reads file content
-    ssh_username: ubuntu  # Default: ubuntu
-    ssh_private_key_path: "~/.ssh/id_ed25519"  # Optional, uses SSH agent if omitted
-```
-
-The CLI automatically reads `ssh_public_key_path` and embeds the public key in the VM configuration.
+- Checks VM diffs first; stops if destructive changes are needed unless `--recreate-gw` is passed
+- Agent won't rewrite configs if desired state matches last applied (idempotent)
+- Safe for refreshing with current config (doubles as restart)
 
 ## Monitoring and Troubleshooting
 
@@ -179,18 +241,7 @@ View active tunnels and system health:
 nebius-vpngw status --local-config-file ./nebius-vpngw-config.config.yaml
 ```
 
-**Output includes:**
-
-- Tunnel status table: name, gateway VM, state (ESTABLISHED/CONNECTING), peer IP, encryption, uptime
-- Service health: `nebius-vpngw-agent`, `strongswan-starter`, `frr` status
-
-### Refreshing the Gateway Config
-
-- `nebius-vpngw apply` always pushes the resolved YAML config and reloads the agent, even when no diff is detected. This doubles as a safe “restart with current config”.
-- Infra safety: it checks VM diffs first; if destructive changes are needed it stops unless you pass `--recreate-gw`. If there’s truly no change, infra is left untouched.
-- Agent idempotency: the agent won’t rewrite strongSwan/FRR files if the desired config matches last applied, so repeated applies are safe for refreshes.
-
-Example:
+Example output:
 
 ```text
                            VPN Gateway Status
@@ -201,12 +252,17 @@ Example:
 └──────────────────────┴─────────────┴──────────────┴─────────────────┴──────────────────────────────┴───────────┘
 ```
 
+Output includes:
+
+- Tunnel status: name, gateway VM, state (ESTABLISHED/CONNECTING), peer IP, encryption, uptime
+- Service health: `nebius-vpngw-agent`, `strongswan-starter`, `frr` status
+
 ### Configuration Files on Gateway VMs
 
 **IPsec (strongSwan):**
 
-- `/etc/ipsec.conf` - Tunnel configuration (auto-generated by agent)
-- `/etc/ipsec.secrets` - Pre-shared keys
+- `/etc/swanctl/conf.d/*.conf` - Tunnel configurations (auto-generated by agent)
+- `/etc/swanctl/swanctl.conf` - Main strongSwan configuration
 - `/etc/strongswan.conf` - Daemon settings
 
 **BGP (FRR):**
@@ -217,6 +273,7 @@ Example:
 **Agent:**
 
 - `/etc/nebius-vpngw-agent.yaml` - Instance-specific config
+- `/etc/nebius-vpngw/last-applied.json` - Last applied state
 - `/var/log/nebius-vpngw-agent.log` - Agent logs
 
 **Services:**
@@ -231,10 +288,18 @@ Example:
 
 **Symptoms:** Status shows `CONNECTING` or no connection
 
-**Check IPsec status:**
+**Diagnosis:**
 
 ```bash
+# Check IPsec status
 ssh ubuntu@<gateway-ip> 'sudo ipsec statusall'
+
+# Verify XFRM policies installed
+ssh ubuntu@<gateway-ip> 'sudo ip xfrm policy'
+# Should show: 10.49.0.0/16 <-> 10.10.0.0/24 (your configured subnets)
+
+# View logs
+ssh ubuntu@<gateway-ip> 'sudo journalctl -u strongswan-starter -n 100'
 ```
 
 **Common errors and fixes:**
@@ -242,25 +307,124 @@ ssh ubuntu@<gateway-ip> 'sudo ipsec statusall'
 | Error | Cause | Solution |
 |-------|-------|----------|
 | `no IKE config found` | Wrong local IP | For responder mode: use `left=%any`. For initiator mode: use `left=<external-ip>` |
-| `INVALID_SYNTAX` | Crypto mismatch | Update `ike_proposal` and `esp_proposal` to match peer. GCP example: `aes256-sha256-modp2048` |
+| `INVALID_SYNTAX` | Crypto mismatch | Update `ike_proposals` and `esp_proposals` to match peer |
 | `AUTHENTICATION_FAILED` | Wrong PSK | Verify PSK is identical (case-sensitive). Check env var: `echo $GCP_TUNNEL_PSK` |
 
-**Verify XFRM policies installed:**
-
-```bash
-ssh ubuntu@<gateway-ip> 'sudo ip xfrm policy'
-# Should show: 10.49.0.0/16 <-> 10.10.0.0/24 (your configured subnets)
-```
-
-**Check firewall rules:**
+**Firewall requirements:**
 
 - Allow UDP 500 (IKE) and 4500 (NAT-T) from peer IP
 - Allow ESP (IP protocol 50) if not using NAT-T
 
-**View logs:**
+#### BGP Session Not Establishing
+
+**Quick check:**
 
 ```bash
-ssh ubuntu@<gateway-ip> 'sudo journalctl -u strongswan-starter -n 100'
+ssh ubuntu@<gateway-ip> 'sudo vtysh -c "show bgp summary"'
+# Look for: State = Established, PfxRcvd > 0
+```
+
+**Step-by-step diagnosis:**
+
+1. **Verify IPsec tunnels are ESTABLISHED:**
+
+   ```bash
+   ssh ubuntu@<gateway-ip> 'sudo ipsec status'
+   # All tunnels must show ESTABLISHED before BGP can work
+   ```
+
+2. **Test BGP peer connectivity:**
+
+   ```bash
+   ssh ubuntu@<gateway-ip> 'ping -c 3 169.254.X.X'  # Use BGP peer IP
+   ```
+
+   **If ping fails:**
+
+   Check interface type (must be XFRM, not VTI):
+
+   ```bash
+   ssh ubuntu@<gateway-ip> 'ip -d link show xfrm0 | head -3'
+   # Should show: "xfrm" type with parent "@eth0"
+   # WRONG: "vti" type (indicates VTI instead of XFRM)
+   ```
+
+   **Root cause:** VTI interfaces with strongSwan `mark=` parameter do not encrypt outbound traffic. Only XFRM interfaces with `if_id=` work correctly.
+
+   **Verification:**
+
+   ```bash
+   # Check strongSwan config uses if_id (correct):
+   ssh ubuntu@<gateway-ip> 'sudo grep -E "if_id_in|if_id_out|mark=" /etc/swanctl/conf.d/*.conf'
+   # Should show: if_id_in=100 and if_id_out=100
+   # WRONG: mark=100 (old VTI configuration)
+
+   # Verify bidirectional ESP traffic:
+   ssh ubuntu@<gateway-ip> 'sudo timeout 5 tcpdump -i eth0 -c 10 esp 2>&1 | grep -E "ESP|packets"'
+   # Should show packets in BOTH directions (not just incoming)
+   ```
+
+3. **Check for BGP OPEN errors (ASN mismatch):**
+
+   ```bash
+   ssh ubuntu@<gateway-ip> 'sudo vtysh -c "show ip bgp neighbor 169.254.X.X"'
+   # Look for: "Last reset" line showing "Bad Peer AS" or "OPEN Message Error"
+   ```
+
+   **Fix:** Update `remote_asn` in YAML config to match peer's actual ASN.
+
+4. **Check for policy blocking (FRR 8.4+):**
+
+   ```bash
+   ssh ubuntu@<gateway-ip> 'sudo vtysh -c "show ip bgp neighbor 169.254.X.X" | grep -i policy'
+   # If you see "(Policy)" or "discarded due to missing policy"
+   ```
+
+   **Fix:** Add `no bgp ebgp-requires-policy` to BGP config (included in frr_renderer.py by default).
+
+5. **Verify routes are being received:**
+
+   ```bash
+   ssh ubuntu@<gateway-ip> 'sudo vtysh -c "show ip bgp"'
+   # Should show routes from peer with path info
+   ```
+
+6. **Check route installation (FRR 8.4.4 bug):**
+
+   ```bash
+   ssh ubuntu@<gateway-ip> 'sudo vtysh -c "show ip route"'
+   # Look for BGP routes marked with "B" and "*" (installed in FIB)
+
+   ssh ubuntu@<gateway-ip> 'ip route get 10.10.0.1'
+   # Should route via BGP next-hop (169.254.X.X)
+   ```
+
+   **Known bug:** FRR 8.4.4 (Ubuntu 24.04 default) may mark routes as "inactive" and not install them to kernel.
+
+   **Solution:** Upgrade to FRR 10.x:
+
+   ```bash
+   curl -s https://deb.frrouting.org/frr/keys.asc | sudo tee /usr/share/keyrings/frrouting.asc
+   echo "deb [signed-by=/usr/share/keyrings/frrouting.asc] https://deb.frrouting.org/frr noble frr-stable" | sudo tee /etc/apt/sources.list.d/frr.list
+   sudo apt update && sudo apt install frr=10.5.0-0~ubuntu24.04.1
+   sudo systemctl restart frr
+   ```
+
+**BGP troubleshooting reference:**
+
+| Symptom | Cause | Solution |
+|---------|-------|----------|
+| `State = Idle`, zero messages | BGP peer unreachable | Verify IPsec ESTABLISHED, test ping to peer IP |
+| `State = Active`, trying to connect | Wrong peer IP or firewall | Check `inner_remote_ip`, verify firewall allows TCP/179 |
+| `OPEN Message Error/Bad Peer AS` | ASN mismatch | Update `remote_asn` to match peer's ASN |
+| `State = Established` but `(Policy)` | FRR policy requirement | Verify `no bgp ebgp-requires-policy` in config |
+| Routes received but PfxRcd = 0 | Route filtering or policy | Check route-maps, run `clear ip bgp * soft in` |
+| BGP routes in RIB but not in kernel | Nexthop unresolved or FRR bug | Check `ip route show table all`, upgrade FRR |
+
+**Force BGP session reset:**
+
+```bash
+ssh ubuntu@<gateway-ip> 'sudo vtysh -c "clear ip bgp *"'
 ```
 
 #### Configuration Not Updating
@@ -286,29 +450,9 @@ poetry build
 nebius-vpngw --local-config-file ./nebius-vpngw-config.config.yaml
 ```
 
-#### BGP Session Not Establishing
-
-**Check BGP status:**
-
-```bash
-ssh ubuntu@<gateway-ip> 'sudo vtysh -c "show bgp summary"'
-```
-
-**Common fixes:**
-
-- Ensure BGP enabled: Check `/etc/frr/daemons` has `bgpd=yes`
-- Configure tunnel IPs: BGP mode requires `inner_cidr`, `inner_local_ip`, `inner_remote_ip` in YAML
-- Verify ASNs: `local_asn` and `remote_asn` must match peer configuration
-
-**View FRR logs:**
-
-```bash
-ssh ubuntu@<gateway-ip> 'sudo journalctl -u frr -n 100'
-```
-
 ### Debug Logging
 
-Enable detailed IPsec logging for troubleshooting:
+Enable detailed IPsec logging:
 
 ```bash
 ssh ubuntu@<gateway-ip>
@@ -345,15 +489,18 @@ sudo journalctl -u strongswan-starter -f
 # IPsec status
 sudo ipsec status                  # Brief
 sudo ipsec statusall              # Detailed
+sudo swanctl --list-sas           # List security associations
 sudo ipsec reload                 # Reload config without restart
 
 # XFRM (Linux kernel IPsec)
 sudo ip xfrm policy               # View policies
 sudo ip xfrm state                # View security associations
+sudo ip link show type xfrm       # Show XFRM interfaces
 
 # BGP (if using BGP mode)
 sudo vtysh -c "show bgp summary"
 sudo vtysh -c "show ip route bgp"
+sudo vtysh -c "show ip bgp neighbor <peer-ip>"
 
 # Services
 sudo systemctl status nebius-vpngw-agent
@@ -367,28 +514,7 @@ sudo journalctl -u frr -n 100
 
 # Connectivity
 ping <peer-subnet-ip>
-```
-
-## Project Structure
-
-```text
-├── nebius-vpngw-config.config.yaml              # Main user configuration
-├── src/nebius_vpngw/
-│   ├── cli.py                            # CLI orchestrator (nebius-vpngw)
-│   ├── config_loader.py                  # YAML parser and peer config merger
-│   ├── agent/
-│   │   ├── main.py                       # On-VM agent
-│   │   ├── frr_renderer.py               # BGP config renderer
-│   │   └── strongswan_renderer.py        # IPsec config renderer
-│   ├── deploy/
-│   │   ├── vm_manager.py                 # VM lifecycle management
-│   │   ├── route_manager.py              # VPC route management
-│   │   └── ssh_push.py                   # Config deployment over SSH
-│   └── peer_parsers/
-│       ├── gcp.py                        # GCP HA VPN parser
-│       ├── aws.py                        # AWS Site-to-Site VPN parser
-│       ├── azure.py                      # Azure VPN Gateway parser
-│       └── cisco.py                      # Cisco IOS parser
+traceroute <peer-subnet-ip>
 ```
 
 ## Development
@@ -527,14 +653,14 @@ The agent runs on gateway VMs and renders IPsec/FRR configurations.
 
 **Agent workflow:**
 
-1. Build wheel: `poetry build` → Creates `dist/nebius_vpngw-0.0.0-py3-none-any.whl`
+1. Build wheel: `poetry build` → Creates `dist/nebius_vpngw-*.whl`
 2. Deploy: CLI uploads wheel to VMs via SSH and installs it
 
 **After modifying agent code:**
 
 ```bash
 # Clean old artifacts
-rm -rf src/dist/ src/build/ src/nebius_vpngw.egg-info/
+rm -rf dist/*.whl
 
 # Rebuild wheel
 poetry build
@@ -545,43 +671,132 @@ nebius-vpngw --local-config-file ./nebius-vpngw-config.config.yaml
 
 **Note:** The wheel is NOT installed in your local virtualenv—only on remote VMs.
 
-**Agent service on gateway VM:**
-
-```bash
-# Install agent binary and systemd unit
-sudo cp /path/to/nebius-vpngw-agent /usr/bin/
-sudo cp /path/to/nebius-vpngw-agent.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now nebius-vpngw-agent
-```
-
-**Example systemd unit:**
-
-```ini
-[Unit]
-Description=Nebius VPNGW Agent
-After=network.target
-
-[Service]
-ExecStart=/usr/bin/nebius-vpngw-agent
-ExecReload=/bin/kill -HUP $MAINPID
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-```
-
 The agent:
 
 - Reads `/etc/nebius-vpngw-agent.yaml` (pushed by orchestrator)
-- Renders `/etc/ipsec.conf`, `/etc/ipsec.secrets`, `/etc/frr/frr.conf`
+- Renders `/etc/swanctl/conf.d/*.conf`, `/etc/frr/frr.conf`
 - Maintains idempotency via `/etc/nebius-vpngw/last-applied.json`
+- Reloads strongSwan and FRR when config changes
+
+### Upgrading Python Dependencies
+
+#### When to Upgrade
+
+- **Security patches**: When CVEs are announced for dependencies
+- **Bug fixes**: When a dependency fixes a critical bug
+- **New features**: When upgrading enables new functionality
+- **Before QA**: Ensure all packages are at stable, tested versions
+- **Regular maintenance**: Quarterly review of dependency versions
+
+#### Upgrade Workflow
+
+**1. Update `pyproject.toml` with new version constraints:**
+
+```toml
+dependencies = [
+    "rich>=14.2.0,<15.0.0",  # Updated from 13.9.2
+    "typer>=0.20.0,<1.0.0",  # Updated from 0.12.5
+]
+```
+
+**Version constraint guidelines:**
+
+- Use `>=X.Y.Z,<next-major` format (e.g., `>=14.2.0,<15.0.0`)
+- Pin major version to prevent breaking changes
+- Allow minor/patch updates for bug fixes
+
+**2. Test locally:**
+
+```bash
+# Update packages in your venv
+poetry update rich typer paramiko
+
+# Smoke test the CLI
+nebius-vpngw --help
+nebius-vpngw status --local-config-file nebius-gcp-ha-vpngw.config.yaml
+```
+
+**3. Rebuild the wheel (CRITICAL):**
+
+```bash
+# Clean old wheels to prevent stale dependencies
+rm -rf dist/*.whl
+
+# Rebuild using poetry (recommended - faster, uses poetry.lock)
+poetry build -f wheel
+```
+
+**Note:** `nebius-vpngw apply` automatically rebuilds the wheel and cleans old ones.
+
+**4. Verify wheel metadata:**
+
+```bash
+# Check that wheel contains updated dependencies
+unzip -p dist/nebius_vpngw-*.whl "*.dist-info/METADATA" | grep Requires-Dist
+```
+
+**5. Deploy to VMs:**
+
+```bash
+nebius-vpngw apply --local-config-file nebius-gcp-ha-vpngw.config.yaml
+```
+
+The deployment process:
+
+1. Builds fresh wheel with updated dependencies
+2. Uploads wheel to VM: `/tmp/nebius_vpngw-*.whl`
+3. Runs: `sudo pip3 install --force-reinstall <wheel>`
+4. Restarts agent with new packages
+
+**6. Verify upgrade on VM:**
+
+```bash
+ssh ubuntu@<gateway-ip> 'sudo -H pip3 list | grep -E "rich|typer|paramiko"'
+```
+
+#### Best Practices
+
+1. **Test major upgrades locally first**: Use `poetry update` in venv before updating `pyproject.toml`
+2. **Review changelogs**: Check for breaking changes in major version bumps
+3. **Clean wheels regularly**: Run `rm -rf dist/*.whl` before building for QA/production
+4. **Lock with Poetry**: Run `poetry lock` after updates to freeze transitive dependencies
+5. **Document why**: Add comment in `pyproject.toml` for non-obvious version pins
+
+#### Troubleshooting Upgrades
+
+**Problem:** Packages not upgrading on VM
+
+```bash
+# Check if wheel has old dependencies
+unzip -p dist/nebius_vpngw-*.whl "*.dist-info/METADATA" | grep Requires-Dist
+
+# Solution: Clean and rebuild
+rm -rf dist/*.whl
+poetry build -f wheel
+```
+
+**Problem:** Dependency conflicts
+
+```bash
+# Check compatibility
+poetry show --tree
+```
+
+**Problem:** Import errors after upgrade
+
+```bash
+# SSH to VM and check agent logs
+ssh ubuntu@<gateway-ip> 'sudo journalctl -u nebius-vpngw-agent -n 50'
+
+# Restart agent
+sudo systemctl restart nebius-vpngw-agent
+```
 
 ### Troubleshooting Development Setup
 
 **`ModuleNotFoundError: No module named 'nebius.pysdk'`**
 
-You're using the old GitHub SDK. This package targets the PyPI SDK:
+You're using the old GitHub SDK. This package uses the PyPI SDK:
 
 ```bash
 source .venv/bin/activate
@@ -596,11 +811,27 @@ import nebius.sdk as sdk
 print("Nebius SDK OK:", sdk)
 ```
 
-## Notes
+## Project Structure
 
-- Vendor peer parsers are extensible; add custom parsers in `peer_parsers/` as needed
-- The architecture emphasizes modularity and idempotency
-- Agent renders configs declaratively and reloads services only when changes are detected
+```text
+├── nebius-vpngw-config.config.yaml              # Main user configuration
+├── src/nebius_vpngw/
+│   ├── cli.py                            # CLI orchestrator (nebius-vpngw)
+│   ├── config_loader.py                  # YAML parser and peer config merger
+│   ├── agent/
+│   │   ├── main.py                       # On-VM agent
+│   │   ├── frr_renderer.py               # BGP config renderer
+│   │   └── strongswan_renderer.py        # IPsec config renderer
+│   ├── deploy/
+│   │   ├── vm_manager.py                 # VM lifecycle management
+│   │   ├── route_manager.py              # VPC route management
+│   │   └── ssh_push.py                   # Config deployment over SSH
+│   └── peer_parsers/
+│       ├── gcp.py                        # GCP HA VPN parser
+│       ├── aws.py                        # AWS Site-to-Site VPN parser
+│       ├── azure.py                      # Azure VPN Gateway parser
+│       └── cisco.py                      # Cisco IOS parser
+```
 
 ## License
 

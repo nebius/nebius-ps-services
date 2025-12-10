@@ -15,9 +15,25 @@ class RouteManager:
         self.endpoint = "vpc.api.nebius.cloud:443"
 
     def _channel(self):
-        import nebius.sdk as sdk  # type: ignore
+        """Create a synchronous gRPC channel for VPC API."""
+        import grpc  # type: ignore
+        import os
 
-        return sdk.SDK(credentials=self.auth_token).create_address_channel(self.endpoint)
+        token = self.auth_token or os.environ.get("NEBIUS_IAM_TOKEN")
+        if not token:
+            raise ValueError("No authentication token available. Set NEBIUS_IAM_TOKEN or pass auth_token.")
+        
+        # Create a metadata callback for authentication
+        def auth_metadata_plugin(context, callback):
+            callback([("authorization", f"Bearer {token}")], None)
+        
+        # Create channel credentials with auth metadata
+        auth_creds = grpc.metadata_call_credentials(auth_metadata_plugin)
+        ssl_creds = grpc.ssl_channel_credentials()
+        composite_creds = grpc.composite_channel_credentials(ssl_creds, auth_creds)
+        
+        # Return channel with composite credentials
+        return grpc.secure_channel(self.endpoint, composite_creds)
 
     def _list_allocations(self, channel):
         """Return list of (network, allocation_id) and a lookup map for pretty-printing."""
@@ -42,29 +58,26 @@ class RouteManager:
 
     def _find_gateway_private_allocation(self, vpc_channel, compute_channel, plan: ResolvedDeploymentPlan) -> Optional[str]:
         from nebius.api.nebius.compute.v1 import instance_service_pb2, instance_service_pb2_grpc
+        import ipaddress
 
         # Collect target instance names from the plan
         target_names = {inst.hostname for inst in plan.iter_instance_configs()}
 
-        # List instances in the project and gather private IPs for target gateways
-        private_ips: List[str] = []
+        # List instances in the project and find the private (static) IP allocation
+        # With the VM manager refactoring, private IPs now use static allocations
         istub = instance_service_pb2_grpc.InstanceServiceStub(compute_channel)
         ilist = istub.List(instance_service_pb2.ListInstancesRequest(parent_id=self.project_id or ""))
         for inst in ilist.items:
             if inst.metadata.name in target_names:
                 for ni in inst.status.network_interfaces:
-                    if ni.ip_address and ipaddress.ip_address(ni.ip_address).is_private:
-                        private_ips.append(ni.ip_address)
+                    # Check if this network interface has a private IP with a static allocation
+                    if ni.ip_address and ni.ip_address.allocation_id:
+                        # Extract the IP address string (without CIDR notation)
+                        ip_str = ni.ip_address.address.split('/')[0]
+                        # Verify it's a private IP
+                        if ipaddress.ip_address(ip_str).is_private:
+                            return ni.ip_address.allocation_id
 
-        if not private_ips:
-            return None
-
-        nets, _ = self._list_allocations(vpc_channel)
-        for ip_str in private_ips:
-            ip_obj = ipaddress.ip_address(ip_str)
-            for net, alloc_id in nets:
-                if ip_obj in net:
-                    return alloc_id
         return None
 
     def list_routes(self, plan: ResolvedDeploymentPlan, local_cfg: dict) -> None:
@@ -119,9 +132,23 @@ class RouteManager:
         except Exception as e:
             print(f"[red]Failed to open VPC SDK channel:[/red] {e}")
             return
+        
+        # Create compute channel using same auth pattern as VPC channel
         try:
-            import nebius.sdk as sdk  # type: ignore
-            compute_channel = sdk.SDK(credentials=self.auth_token).create_address_channel("compute.api.nebius.cloud:443")
+            import grpc  # type: ignore
+            import os
+            
+            token = self.auth_token or os.environ.get("NEBIUS_IAM_TOKEN")
+            if not token:
+                raise ValueError("No authentication token available.")
+            
+            def auth_metadata_plugin(context, callback):
+                callback([("authorization", f"Bearer {token}")], None)
+            
+            auth_creds = grpc.metadata_call_credentials(auth_metadata_plugin)
+            ssl_creds = grpc.ssl_channel_credentials()
+            composite_creds = grpc.composite_channel_credentials(ssl_creds, auth_creds)
+            compute_channel = grpc.secure_channel("compute.api.nebius.cloud:443", composite_creds)
         except Exception:
             compute_channel = None
 
@@ -182,41 +209,80 @@ class RouteManager:
             if not rt_info.default and rt_info.id:
                 print(
                     f"[yellow]Subnet {sn.metadata.name} already uses custom route table {rt_info.id}; "
-                    "please add routes there for remote_prefixes.[/yellow]"
+                    "checking/adding missing routes...[/yellow]"
                 )
-                continue
+                rt_id = rt_info.id
+            else:
+                # Create a custom route table and attach to subnet
+                rt_name = f"{sn.metadata.name}-vpngw-rt"
+                
+                # Check if route table already exists (idempotency)
+                existing_rts = rtstub.List(
+                    route_table_service_pb2.ListRouteTablesRequest(parent_id=self.project_id)
+                ).items
+                existing_rt = next((rt for rt in existing_rts if rt.metadata.name == rt_name), None)
+                
+                if existing_rt:
+                    rt_id = existing_rt.metadata.id
+                    print(f"[green]Using existing route table {rt_id} ({rt_name}) for subnet {sn.metadata.name}[/green]")
+                    # Attach to subnet if not already attached
+                    if rt_info.id != rt_id:
+                        try:
+                            sstub.Update(
+                                subnet_service_pb2.UpdateSubnetRequest(
+                                    metadata=metadata_pb2.ResourceMetadata(id=sn.metadata.id),
+                                    spec=subnet_pb2.SubnetSpec(route_table_id=rt_id),
+                                )
+                            )
+                            print(f"[green]Attached route table {rt_id} to subnet {sn.metadata.name}[/green]")
+                        except Exception as e:
+                            print(f"[yellow]Failed to attach route table to subnet {sn.metadata.name}: {e}[/yellow]")
+                            continue
+                else:
+                    # Create new route table
+                    try:
+                        op = rtstub.Create(
+                            route_table_service_pb2.CreateRouteTableRequest(
+                                metadata=metadata_pb2.ResourceMetadata(
+                                    name=rt_name,
+                                    parent_id=self.project_id,
+                                ),
+                                spec=route_table_pb2.RouteTableSpec(network_id=sn.spec.network_id),
+                            )
+                        )
+                        new_rt_id = op.resource_id or ""
+                        if not new_rt_id:
+                            print(f"[yellow]Route table create returned no resource_id for subnet {sn.metadata.name}; skipping attach.[/yellow]")
+                            continue
+                        # Attach to subnet
+                        sstub.Update(
+                            subnet_service_pb2.UpdateSubnetRequest(
+                                metadata=metadata_pb2.ResourceMetadata(id=sn.metadata.id),
+                                spec=subnet_pb2.SubnetSpec(route_table_id=new_rt_id),
+                            )
+                        )
+                        rt_id = new_rt_id
+                        print(f"[green]Created and attached route table {rt_id} to subnet {sn.metadata.name}[/green]")
+                    except Exception as e:
+                        print(f"[yellow]Failed to create/attach route table for subnet {sn.metadata.name}: {e}[/yellow]")
+                        continue
 
-            # Create a custom route table and attach to subnet
-            rt_name = f"{sn.metadata.name}-vpngw-rt"
+            # Get existing routes to check for duplicates (idempotency)
             try:
-                op = rtstub.Create(
-                    route_table_service_pb2.CreateRouteTableRequest(
-                        metadata=metadata_pb2.ResourceMetadata(
-                            name=rt_name,
-                            parent_id=sn.spec.network_id,
-                        ),
-                        spec=route_table_pb2.RouteTableSpec(network_id=sn.spec.network_id),
-                    )
-                )
-                new_rt_id = op.resource_id or ""
-                if not new_rt_id:
-                    print(f"[yellow]Route table create returned no resource_id for subnet {sn.metadata.name}; skipping attach.[/yellow]")
-                    continue
-                # Attach to subnet
-                sstub.Update(
-                    subnet_service_pb2.UpdateSubnetRequest(
-                        metadata=metadata_pb2.ResourceMetadata(id=sn.metadata.id),
-                        spec=subnet_pb2.SubnetSpec(route_table_id=new_rt_id),
-                    )
-                )
-                rt_id = new_rt_id
-                print(f"[green]Created and attached route table {rt_id} to subnet {sn.metadata.name}[/green]")
+                existing_routes = rstub.List(
+                    route_service_pb2.ListRoutesRequest(parent_id=rt_id)
+                ).items
+                existing_route_cidrs = {r.spec.destination.cidr for r in existing_routes}
             except Exception as e:
-                print(f"[yellow]Failed to create/attach route table for subnet {sn.metadata.name}: {e}[/yellow]")
-                continue
+                print(f"[yellow]Failed to list existing routes on {rt_id}: {e}[/yellow]")
+                existing_route_cidrs = set()
 
-            # Add routes for each remote prefix
+            # Add routes for each remote prefix (skip if already exists)
             for pfx in remote_prefixes:
+                if pfx in existing_route_cidrs:
+                    print(f"[blue]Route {pfx} already exists on {rt_id}; skipping[/blue]")
+                    continue
+                    
                 try:
                     rstub.Create(
                         route_service_pb2.CreateRouteRequest(
@@ -234,7 +300,11 @@ class RouteManager:
                     )
                     print(f"[green]Added route {pfx} -> allocation {alloc_id} on {rt_id}[/green]")
                 except Exception as e:
-                    print(f"[yellow]Failed to add route {pfx} on {rt_id}: {e}[/yellow]")
+                    err_str = str(e).lower()
+                    if "already exists" in err_str or "duplicate" in err_str:
+                        print(f"[blue]Route {pfx} already exists on {rt_id}; skipping[/blue]")
+                    else:
+                        print(f"[yellow]Failed to add route {pfx} on {rt_id}: {e}[/yellow]")
 
     def reconcile(self, plan: ResolvedDeploymentPlan) -> None:
         """Legacy hook; no-op now that routes are driven by --add-route/--list-route."""

@@ -334,6 +334,32 @@ def status(
     
     vm_mgr = VMManager(project_id=proj_id, zone=zone or plan.gateway_group.region, auth_token=auth_token, tenant_id=tenant_id, region_id=region_id)
     
+    # Quick check: verify at least one gateway VM exists before attempting SSH
+    print("[bold]Checking for gateway VMs...[/bold]")
+    from nebius.api.nebius.compute.v1 import InstanceServiceClient, ListInstancesRequest  # type: ignore
+    
+    client = vm_mgr._get_client()
+    if client and proj_id:
+        isc = InstanceServiceClient(client)
+        ilist_op = isc.list(ListInstancesRequest(parent_id=proj_id))
+        ilist = ilist_op.wait() if hasattr(ilist_op, 'wait') else ilist_op
+        
+        items = []
+        if hasattr(ilist, 'items'):
+            items = ilist.items
+        elif hasattr(ilist, '__iter__'):
+            items = list(ilist)
+        
+        existing_vms = [
+            inst for inst in items
+            if getattr(getattr(inst, "metadata", None), "name", "").startswith(f"{plan.gateway_group.name}-")
+        ]
+        
+        if not existing_vms:
+            console.print(f"[yellow]No gateway VMs found matching pattern '{plan.gateway_group.name}-*'[/yellow]")
+            console.print(f"[yellow]Run 'nebius-vpngw apply' to create gateway VMs first.[/yellow]")
+            raise typer.Exit(0)
+    
     print("[bold]Collecting gateway VM status...[/bold]")
     vm_ips = {}
     for inst_cfg in plan.iter_instance_configs():
@@ -384,6 +410,7 @@ def status(
         bgp_states: dict[str, str] = {}
         if tunnel_bgp_map.get(inst_cfg.hostname):
             try:
+                # Try JSON output first
                 bgp_out = subprocess.run(
                     ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10", f"ubuntu@{target}",
                      "sudo vtysh -c 'show bgp ipv4 unicast summary json'"],
@@ -392,12 +419,50 @@ def status(
                     timeout=10,
                 )
                 if bgp_out.returncode == 0 and bgp_out.stdout:
-                    data = json.loads(bgp_out.stdout)
-                    peers = (data.get("ipv4Unicast") or {}).get("peers") or {}
-                    for ip, info in peers.items():
-                        state = info.get("state") or info.get("state_name") or info.get("stateName")
-                        if state:
-                            bgp_states[ip] = state
+                    try:
+                        data = json.loads(bgp_out.stdout)
+                        # Try multiple possible JSON structures from different FRR versions
+                        peers = (data.get("ipv4Unicast") or {}).get("peers") or {}
+                        if not peers:
+                            # Try alternative structure
+                            peers = data.get("peers") or {}
+                        for ip, info in peers.items():
+                            # Try different possible field names for state
+                            state = (info.get("state") or 
+                                   info.get("state_name") or 
+                                   info.get("stateName") or 
+                                   info.get("peerState") or
+                                   info.get("bgpState"))
+                            if state:
+                                bgp_states[ip] = state
+                    except json.JSONDecodeError:
+                        pass
+                
+                # If JSON parsing didn't work, fall back to text parsing
+                if not bgp_states:
+                    bgp_out = subprocess.run(
+                        ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10", f"ubuntu@{target}",
+                         "sudo vtysh -c 'show bgp summary'"],
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+                    if bgp_out.returncode == 0 and bgp_out.stdout:
+                        # Parse text output: look for neighbor lines
+                        # Example: "169.254.5.153    4 65014      123      456       0    0 01:23:45 Established"
+                        for line in bgp_out.stdout.splitlines():
+                            parts = line.split()
+                            # Look for lines starting with an IP address
+                            if len(parts) >= 2 and parts[0] and '.' in parts[0]:
+                                try:
+                                    # Validate it's an IP
+                                    octets = parts[0].split('.')
+                                    if len(octets) == 4 and all(o.isdigit() and 0 <= int(o) <= 255 for o in octets):
+                                        # Last column is typically the state
+                                        state = parts[-1]
+                                        bgp_states[parts[0]] = state
+                                except (ValueError, IndexError):
+                                    continue
             except Exception:
                 pass
         
@@ -471,23 +536,43 @@ def status(
                 peer_cfg_ip = tunnel_bgp_map.get(inst_cfg.hostname, {}).get(tname)
                 if peer_cfg_ip and peer_cfg_ip in bgp_states:
                     tinfo['bgp'] = bgp_states[peer_cfg_ip]
+                elif bgp_states:
+                    # Fallback: if we have BGP states but no exact match, try to match any peer
+                    # This handles cases where tunnel name mapping might be off
+                    for bgp_ip, bgp_state in bgp_states.items():
+                        # Simple heuristic: assign if we don't have a BGP status yet
+                        if tinfo.get('bgp') == '-':
+                            tinfo['bgp'] = bgp_state
+                            break
             
             # Add rows to table
             if tunnels:
                 for tunnel_name, info in tunnels.items():
                     status_text = info['status']
                     if status_text == "ESTABLISHED":
-                        status_display = "[green]ESTABLISHED[/green]"
+                        status_display = "[green]Established[/green]"
                     elif status_text == "CONNECTING":
-                        status_display = "[yellow]CONNECTING[/yellow]"
+                        status_display = "[yellow]Connecting[/yellow]"
                     else:
-                        status_display = f"[red]{status_text}[/red]"
+                        status_display = f"[red]{status_text.capitalize()}[/red]"
+                    
+                    # Format BGP status with colors
+                    bgp_status = info.get('bgp', '-')
+                    if bgp_status and bgp_status != '-':
+                        if bgp_status.lower() == 'established':
+                            bgp_display = "[green]Established[/green]"
+                        elif bgp_status.lower() in ('idle', 'connect', 'active'):
+                            bgp_display = f"[yellow]{bgp_status.capitalize()}[/yellow]"
+                        else:
+                            bgp_display = f"[red]{bgp_status}[/red]"
+                    else:
+                        bgp_display = '-'
                     
                     table.add_row(
                         tunnel_name,
                         inst_cfg.hostname,
                         status_display,
-                        info.get('bgp', '-'),
+                        bgp_display,
                         info['peer_ip'],
                         info['encryption'],
                         info['uptime']
@@ -617,6 +702,436 @@ def status(
         )
     
     console.print(service_table)
+
+
+@app.command()
+def list_routes(
+    local_config_file: t.Optional[Path] = typer.Option(None, exists=True, readable=True, help=f"Path to {DEFAULT_CONFIG_FILENAME}"),
+    project_id: t.Optional[str] = typer.Option(None, help="Nebius project/folder identifier"),
+):
+    """List VPC routes for subnets matching gateway.local_prefixes."""
+    local_config_file = _resolve_local_config(
+        local_config_file,
+        create_if_missing=False,
+        exit_after_create=False,
+    )
+    
+    print("[bold]Loading local YAML config...[/bold]")
+    local_cfg = load_local_config(local_config_file)
+    
+    print("[bold]Parsing deployment plan...[/bold]")
+    plan: ResolvedDeploymentPlan = merge_with_peer_configs(local_cfg, [])
+    
+    # Resolve project_id
+    proj_id = project_id or (local_cfg.get("project_id") or "").strip() or None
+    
+    # Get token for API access
+    auth_token = None
+    if not os.environ.get("NEBIUS_IAM_TOKEN"):
+        try:
+            from .vpngw_sa import ensure_cli_access_token
+            tok = ensure_cli_access_token()
+            if tok:
+                os.environ["NEBIUS_IAM_TOKEN"] = tok
+                auth_token = tok
+        except Exception:
+            pass
+    
+    routes = RouteManager(project_id=proj_id, auth_token=auth_token)
+    
+    print("[bold]Listing VPC routes for local_prefixes...[/bold]")
+    routes.list_routes(plan, local_cfg)
+
+
+@app.command()
+def add_routes(
+    local_config_file: t.Optional[Path] = typer.Option(None, exists=True, readable=True, help=f"Path to {DEFAULT_CONFIG_FILENAME}"),
+    project_id: t.Optional[str] = typer.Option(None, help="Nebius project/folder identifier"),
+):
+    """Ensure VPC routes to VPN gateway for remote_prefixes."""
+    local_config_file = _resolve_local_config(
+        local_config_file,
+        create_if_missing=False,
+        exit_after_create=False,
+    )
+    
+    print("[bold]Loading local YAML config...[/bold]")
+    local_cfg = load_local_config(local_config_file)
+    
+    print("[bold]Parsing deployment plan...[/bold]")
+    plan: ResolvedDeploymentPlan = merge_with_peer_configs(local_cfg, [])
+    
+    # Resolve project_id
+    proj_id = project_id or (local_cfg.get("project_id") or "").strip() or None
+    
+    # Get token for API access
+    auth_token = None
+    if not os.environ.get("NEBIUS_IAM_TOKEN"):
+        try:
+            from .vpngw_sa import ensure_cli_access_token
+            tok = ensure_cli_access_token()
+            if tok:
+                os.environ["NEBIUS_IAM_TOKEN"] = tok
+                auth_token = tok
+        except Exception:
+            pass
+    
+    routes = RouteManager(project_id=proj_id, auth_token=auth_token)
+    
+    print("[bold]Ensuring VPC routes to VPN gateway for remote_prefixes...[/bold]")
+    routes.add_routes(plan, local_cfg)
+    
+    print("[green]Route management completed.[/green]")
+
+
+@app.command()
+def destroy(
+    local_config_file: t.Optional[Path] = typer.Option(None, exists=True, readable=True, help=f"Path to {DEFAULT_CONFIG_FILENAME}"),
+    project_id: t.Optional[str] = typer.Option(None, help="Nebius project/folder identifier"),
+    zone: t.Optional[str] = typer.Option(None, help="Nebius zone for gateway VMs"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+):
+    """Delete gateway VMs, boot disks, private IP allocations, and routes (preserves public IPs)."""
+    local_config_file = _resolve_local_config(
+        local_config_file,
+        create_if_missing=False,
+        exit_after_create=False,
+    )
+    
+    print("[bold]Loading local YAML config...[/bold]")
+    local_cfg = load_local_config(local_config_file)
+    
+    print("[bold]Parsing deployment plan...[/bold]")
+    plan: ResolvedDeploymentPlan = merge_with_peer_configs(local_cfg, [])
+    
+    # Resolve context from CLI args or config
+    tenant_id = (local_cfg.get("tenant_id") or "").strip() or None
+    proj_id = project_id or (local_cfg.get("project_id") or "").strip() or None
+    region_id = (local_cfg.get("region_id") or "").strip() or None
+    
+    # Get token for API access
+    auth_token = None
+    if not os.environ.get("NEBIUS_IAM_TOKEN"):
+        try:
+            from .vpngw_sa import ensure_cli_access_token
+            tok = ensure_cli_access_token()
+            if tok:
+                os.environ["NEBIUS_IAM_TOKEN"] = tok
+                auth_token = tok
+        except Exception:
+            pass
+    
+    vm_mgr = VMManager(
+        project_id=proj_id, 
+        zone=zone or plan.gateway_group.region, 
+        auth_token=auth_token, 
+        tenant_id=tenant_id, 
+        region_id=region_id
+    )
+    
+    # Confirmation prompt
+    if not yes:
+        print("\n[yellow]⚠️  WARNING: This will:[/yellow]")
+        print(f"[yellow]  • Delete all gateway VMs ({plan.gateway_group.name}-*)[/yellow]")
+        print("[yellow]  • Delete all boot disks[/yellow]")
+        print("[yellow]  • Delete static private IP allocations[/yellow]")
+        print("[yellow]  • Delete VPC routes pointing to gateway[/yellow]")
+        print("[yellow]  • Terminate all VPN tunnels[/yellow]")
+        print("")
+        print("[green]  ✓ Preserve network resources (VPC, subnets)[/green]")
+        print("[green]  ✓ Preserve public IP allocations (reusable)[/green]")
+        print("")
+        import sys
+        sys.stdout.write("\033[1mProceed with destruction? [y/N]:\033[0m ")
+        sys.stdout.flush()
+        response = input().strip().lower()
+        if response not in ("y", "yes"):
+            print("[green]Aborted. No changes made.[/green]")
+            raise typer.Exit(code=0)
+    
+    print("[bold]Destroying gateway infrastructure...[/bold]")
+    
+    try:
+        # Import the client
+        Client = None
+        try:
+            from nebius.sdk import SDK as _C
+            Client = _C
+        except Exception:
+            try:
+                from nebius.sdk import Client as _C
+                Client = _C
+            except Exception:
+                try:
+                    from nebius.client import Client as _C
+                    Client = _C
+                except Exception:
+                    print("[red]Error: Nebius SDK not available. Install with 'pip install nebius'.[/red]")
+                    raise typer.Exit(code=1)
+        
+        if vm_mgr.tenant_id and vm_mgr.project_id and (vm_mgr.region_id or plan.gateway_group.region):
+            try:
+                client = Client(
+                    tenant_id=vm_mgr.tenant_id,
+                    project_id=vm_mgr.project_id,
+                    region_id=vm_mgr.region_id or plan.gateway_group.region,
+                )
+            except TypeError:
+                client = Client()
+        else:
+            client = Client()
+        
+        # Get service clients
+        from nebius.api.nebius.compute.v1 import InstanceServiceClient, DiskServiceClient, ListInstancesRequest
+        from nebius.api.nebius.vpc.v1 import AllocationServiceClient
+        isc = InstanceServiceClient(client)
+        dsc = DiskServiceClient(client)
+        asc = AllocationServiceClient(client)
+        
+        # List existing VMs matching the gateway group name
+        print(f"[bold]Step 1/4: Listing VMs matching pattern '{plan.gateway_group.name}-*'...[/bold]")
+        ilist_op = isc.list(ListInstancesRequest(parent_id=proj_id or ""))
+        ilist = ilist_op.wait() if hasattr(ilist_op, 'wait') else ilist_op
+        
+        # Extract items from the response
+        items = []
+        if hasattr(ilist, 'items'):
+            items = ilist.items
+        elif hasattr(ilist, '__iter__'):
+            items = list(ilist)
+        
+        existing = [
+            inst for inst in items
+            if getattr(getattr(inst, "metadata", None), "name", "").startswith(f"{plan.gateway_group.name}-")
+        ]
+        
+        if not existing:
+            print(f"[yellow]No VMs found matching '{plan.gateway_group.name}-*'.[/yellow]")
+        else:
+            print(f"[yellow]Found {len(existing)} VM(s) to delete[/yellow]")
+        
+        # Collect private IP allocations to delete
+        # Method 1: From existing VMs (if any)
+        private_alloc_ids = []
+        for inst in existing:
+            inst_name = getattr(getattr(inst, "metadata", None), "name", None) or "unknown"
+            # Get network interfaces from VM status
+            if hasattr(inst, "status") and hasattr(inst.status, "network_interfaces"):
+                for ni in inst.status.network_interfaces:
+                    # Private IP allocation (we want to delete these)
+                    if hasattr(ni, "ip_address") and hasattr(ni.ip_address, "allocation_id"):
+                        if ni.ip_address.allocation_id:
+                            private_alloc_ids.append((inst_name, ni.ip_address.allocation_id))
+                            print(f"[dim]Found private allocation from VM {inst_name}: {ni.ip_address.allocation_id}[/dim]")
+        
+        # Method 2: Search by name pattern (catches allocations from already-deleted VMs)
+        try:
+            from nebius.api.nebius.vpc.v1 import ListAllocationsRequest
+            alloc_list_op = asc.list(ListAllocationsRequest(parent_id=proj_id or ""))
+            alloc_list = alloc_list_op.wait() if hasattr(alloc_list_op, 'wait') else alloc_list_op
+            
+            alloc_items = []
+            if hasattr(alloc_list, 'items'):
+                alloc_items = alloc_list.items
+            elif hasattr(alloc_list, '__iter__'):
+                alloc_items = list(alloc_list)
+            
+            # Look for private IP allocations matching our naming pattern
+            for alloc in alloc_items:
+                alloc_name = getattr(getattr(alloc, "metadata", None), "name", None)
+                alloc_id = getattr(alloc, "id", None) or getattr(getattr(alloc, "metadata", None), "id", None)
+                
+                # Check if this is a private allocation for our gateway
+                # Pattern: {gateway-name}-{index}-eth{nic}-private-ip
+                if alloc_name and alloc_id:
+                    for i in range(plan.gateway_group.instance_count):
+                        expected_name = f"{plan.gateway_group.name}-{i}-eth0-private-ip"
+                        if alloc_name == expected_name:
+                            # Check if we already have this from VM inspection
+                            if not any(aid == alloc_id for _, aid in private_alloc_ids):
+                                inst_name = f"{plan.gateway_group.name}-{i}"
+                                private_alloc_ids.append((inst_name, alloc_id))
+                                print(f"[dim]Found private allocation by name pattern {alloc_name}: {alloc_id}[/dim]")
+                            break
+        except Exception as e:
+            print(f"[dim]Could not search for allocations by name: {e}[/dim]")
+        
+        # Step 2: Delete VMs
+        print(f"[bold]Step 2/5: Deleting VMs...[/bold]")
+        for inst in existing:
+            inst_id = getattr(inst, "id", None) or getattr(getattr(inst, "metadata", None), "id", None)
+            inst_name = getattr(getattr(inst, "metadata", None), "name", None) or "unknown"
+            
+            if inst_id:
+                try:
+                    print(f"[VMManager] Deleting VM {inst_name} (id={inst_id})...")
+                    from nebius.api.nebius.compute.v1 import DeleteInstanceRequest
+                    delete_req = DeleteInstanceRequest(id=inst_id)
+                    op = isc.delete(delete_req)
+                    if hasattr(op, "wait"):
+                        op.wait()
+                        print(f"[green]✓ VM {inst_name} deleted[/green]")
+                except Exception as e:
+                    print(f"[red]Failed to delete VM {inst_name}: {e}[/red]")
+        
+        # Wait for VM deletions to complete
+        if existing:
+            import time
+            print("[VMManager] Waiting for VM deletions to complete...")
+            time.sleep(15)
+        
+        # Step 3: Delete boot disks
+        print(f"[bold]Step 3/5: Deleting boot disks...[/bold]")
+        from nebius.api.nebius.common.v1 import GetByNameRequest
+        import time
+        
+        for i in range(plan.gateway_group.instance_count):
+            inst_name = f"{plan.gateway_group.name}-{i}"
+            boot_disk_name = f"{inst_name}-boot"
+            
+            try:
+                disk_obj = dsc.get_by_name(GetByNameRequest(parent_id=proj_id, name=boot_disk_name)).wait()
+                disk_id = getattr(disk_obj, "id", None) or getattr(getattr(disk_obj, "metadata", None), "id", None)
+                
+                if disk_id:
+                    # Retry disk deletion up to 3 times
+                    max_retries = 3
+                    for attempt in range(max_retries):
+                        try:
+                            print(f"[VMManager] Deleting boot disk {boot_disk_name} (id={disk_id})...")
+                            from nebius.api.nebius.compute.v1 import DeleteDiskRequest
+                            delete_disk_req = DeleteDiskRequest(id=disk_id)
+                            disk_op = dsc.delete(delete_disk_req)
+                            if hasattr(disk_op, "wait"):
+                                disk_op.wait()
+                                print(f"[green]✓ Boot disk {boot_disk_name} deleted[/green]")
+                            break
+                        except Exception as disk_err:
+                            if "FAILED_PRECONDITION" in str(disk_err) and "read-write attachments" in str(disk_err):
+                                if attempt < max_retries - 1:
+                                    wait_time = 10 * (attempt + 1)
+                                    print(f"[yellow]Disk still attached, waiting {wait_time}s before retry {attempt + 2}/{max_retries}...[/yellow]")
+                                    time.sleep(wait_time)
+                                else:
+                                    print(f"[red]Could not delete boot disk {boot_disk_name} after {max_retries} attempts: {disk_err}[/red]")
+                            else:
+                                print(f"[red]Could not delete boot disk {boot_disk_name}: {disk_err}[/red]")
+                                break
+            except Exception as e:
+                # Non-fatal: disk might not exist
+                print(f"[dim]Boot disk {boot_disk_name} not found (may have been already deleted)[/dim]")
+        
+        # Step 4: Delete VPC routes (MUST happen before deleting private IP allocations)
+        print(f"[bold]Step 4/5: Deleting VPC routes pointing to gateway allocations...[/bold]")
+        deleted_routes = []
+        try:
+            from nebius.api.nebius.vpc.v1 import RouteTableServiceClient, RouteServiceClient, ListRouteTablesRequest, ListRoutesRequest
+            rtc = RouteTableServiceClient(client)
+            rsc = RouteServiceClient(client)
+            
+            # List all route tables in the project
+            rt_list_op = rtc.list(ListRouteTablesRequest(parent_id=proj_id or ""))
+            rt_list = rt_list_op.wait() if hasattr(rt_list_op, 'wait') else rt_list_op
+            
+            rt_items = []
+            if hasattr(rt_list, 'items'):
+                rt_items = rt_list.items
+            elif hasattr(rt_list, '__iter__'):
+                rt_items = list(rt_list)
+            
+            # For each route table, list its routes
+            for rt in rt_items:
+                rt_id = getattr(rt, "id", None) or getattr(getattr(rt, "metadata", None), "id", None)
+                rt_name = getattr(getattr(rt, "metadata", None), "name", None) or "unknown"
+                
+                if not rt_id:
+                    continue
+                
+                # List routes in this table using ListRoutesRequest
+                try:
+                    routes_list_op = rsc.list(ListRoutesRequest(parent_id=rt_id))
+                    routes_list = routes_list_op.wait() if hasattr(routes_list_op, 'wait') else routes_list_op
+                    
+                    route_items = []
+                    if hasattr(routes_list, 'items'):
+                        route_items = routes_list.items
+                    elif hasattr(routes_list, '__iter__'):
+                        route_items = list(routes_list)
+                    
+                    for route in route_items:
+                        route_id = getattr(route, "id", None) or getattr(getattr(route, "metadata", None), "id", None)
+                        route_name = getattr(getattr(route, "metadata", None), "name", None) or "unknown"
+                        spec = getattr(route, "spec", None)
+                        next_hop = getattr(spec, "next_hop", None) if spec else None
+                        
+                        # Check if this route uses one of our private allocations
+                        # NextHop has an 'allocation' field with an 'id' sub-field
+                        if next_hop and hasattr(next_hop, "allocation"):
+                            allocation = next_hop.allocation
+                            if hasattr(allocation, "id") and allocation.id:
+                                nh_alloc_id = allocation.id
+                                for inst_name, alloc_id in private_alloc_ids:
+                                    if nh_alloc_id == alloc_id:
+                                        # Delete this route
+                                        try:
+                                            print(f"Deleting route {route_name} → {alloc_id}")
+                                            from nebius.api.nebius.vpc.v1 import DeleteRouteRequest
+                                            delete_route_req = DeleteRouteRequest(id=route_id)
+                                            route_op = rsc.delete(delete_route_req)
+                                            if hasattr(route_op, "wait"):
+                                                route_op.wait()
+                                                deleted_routes.append(route_id)
+                                        except Exception as e:
+                                            print(f"[yellow]Could not delete route: {e}[/yellow]")
+                                        break
+                except Exception as e:
+                    print(f"[yellow]Could not list routes for table {rt_name}: {e}[/yellow]")
+            
+            if deleted_routes:
+                print(f"[green]Deleted {len(deleted_routes)} route(s)[/green]")
+            else:
+                print("[dim]No routes found using gateway allocations[/dim]")
+        except Exception as e:
+            print(f"[yellow]Could not clean up routes: {e}[/yellow]")
+            print("[yellow]You may need to manually delete routes before private IP allocations can be removed[/yellow]")
+        
+        # Step 5: Delete static private IP allocations (after routes are deleted)
+        print(f"[bold]Step 5/5: Deleting static private IP allocations...[/bold]")
+        if private_alloc_ids:
+            from nebius.api.nebius.vpc.v1 import DeleteAllocationRequest
+            for inst_name, alloc_id in private_alloc_ids:
+                try:
+                    print(f"[VMManager] Deleting private IP allocation for {inst_name} (id={alloc_id})...")
+                    delete_alloc_req = DeleteAllocationRequest(id=alloc_id)
+                    alloc_op = asc.delete(delete_alloc_req)
+                    if hasattr(alloc_op, "wait"):
+                        alloc_op.wait()
+                        print(f"[green]✓ Private IP allocation deleted[/green]")
+                except Exception as e:
+                    # Check if it's already deleted (lifecycle managed by network interface)
+                    if "NOT_FOUND" in str(e):
+                        print(f"[dim]Private IP allocation already deleted (auto-managed by network interface)[/dim]")
+                    elif "FAILED_PRECONDITION" in str(e) and "used as next hop for routes" in str(e):
+                        print(f"[yellow]Could not delete private IP allocation (still used by routes): {e}[/yellow]")
+                        print(f"[yellow]This may require manual cleanup via console or CLI[/yellow]")
+                    else:
+                        print(f"[yellow]Could not delete private IP allocation: {e}[/yellow]")
+        else:
+            print("[dim]No private IP allocations found to delete[/dim]")
+        
+        print()
+        print("[green]✓ Destroy completed successfully.[/green]")
+        print("[dim]Preserved resources:[/dim]")
+        print("[dim]  • Network resources (VPC, subnets)[/dim]")
+        print("[dim]  • Public IP allocations (reusable via external_ips in config)[/dim]")
+        print("")
+        print("[yellow]⚠️  IMPORTANT: After recreating VMs, you must run:[/yellow]")
+        print("[bold]  nebius-vpngw add-routes --local-config-file <your-config.yaml>[/bold]")
+        print("[dim]This will create new routes with the new static private IP allocations.[/dim]")
+        
+    except Exception as e:
+        print(f"[red]Error during destroy: {e}[/red]")
+        raise typer.Exit(code=1)
 
 
 # init_config command removed; auto-creation occurs on first run without --local-config-file

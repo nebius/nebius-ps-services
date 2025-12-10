@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import os
 import re
 import typing as t
@@ -187,6 +188,61 @@ def _detect_vendor(text: str) -> str:
     return "generic"
 
 
+def _validate_tunnel_inner_ips(tunnel: dict, tunnel_name: str) -> None:
+    """Validate that inner_local_ip and inner_remote_ip fall within inner_cidr.
+    
+    Raises ValueError if validation fails.
+    """
+    inner_cidr = tunnel.get("inner_cidr")
+    inner_local_ip = tunnel.get("inner_local_ip")
+    inner_remote_ip = tunnel.get("inner_remote_ip")
+    
+    # Skip validation if any required field is missing
+    if not inner_cidr or not inner_local_ip or not inner_remote_ip:
+        return
+    
+    try:
+        # Parse the CIDR network
+        network = ipaddress.ip_network(inner_cidr, strict=False)
+        local_ip = ipaddress.ip_address(inner_local_ip)
+        remote_ip = ipaddress.ip_address(inner_remote_ip)
+        
+        # Check if IPs are within the network
+        if local_ip not in network:
+            raise ValueError(
+                f"Tunnel '{tunnel_name}': inner_local_ip {inner_local_ip} is NOT within inner_cidr {inner_cidr}. "
+                f"Network range: {network.network_address} - {network.broadcast_address}"
+            )
+        
+        if remote_ip not in network:
+            raise ValueError(
+                f"Tunnel '{tunnel_name}': inner_remote_ip {inner_remote_ip} is NOT within inner_cidr {inner_cidr}. "
+                f"Network range: {network.network_address} - {network.broadcast_address}"
+            )
+        
+        # Additional check: warn if using network or broadcast address
+        if local_ip == network.network_address or local_ip == network.broadcast_address:
+            raise ValueError(
+                f"Tunnel '{tunnel_name}': inner_local_ip {inner_local_ip} is the network or broadcast address. "
+                f"Use a host address within {inner_cidr}"
+            )
+        
+        if remote_ip == network.network_address or remote_ip == network.broadcast_address:
+            raise ValueError(
+                f"Tunnel '{tunnel_name}': inner_remote_ip {inner_remote_ip} is the network or broadcast address. "
+                f"Use a host address within {inner_cidr}"
+            )
+            
+    except ValueError:
+        raise  # Re-raise validation errors
+    except Exception as e:
+        # Invalid CIDR format or IP format
+        raise ValueError(
+            f"Tunnel '{tunnel_name}': Invalid IP/CIDR format - inner_cidr={inner_cidr}, "
+            f"inner_local_ip={inner_local_ip}, inner_remote_ip={inner_remote_ip}. Error: {e}"
+        )
+
+
 def _parse_peer_file(path: Path) -> dict:
     from .peer_parsers import gcp as gcp_parser
     from .peer_parsers import aws as aws_parser
@@ -357,6 +413,10 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: t.List[Path]) -> Resolv
                 tun["inner_local_ip"] = _merge_fields(tun.get("inner_local_ip"), peer_tun.get("inner_local_ip"))
                 tun["inner_remote_ip"] = _merge_fields(tun.get("inner_remote_ip"), peer_tun.get("inner_remote_ip"))
                 tun["remote_public_ip"] = _merge_fields(tun.get("remote_public_ip"), peer_tun.get("remote_public_ip"))
+                
+                # VALIDATION: Ensure inner IPs fall within inner_cidr
+                tunnel_name = tun.get("name", f"tunnel-{i}")
+                _validate_tunnel_inner_ips(tun, tunnel_name)
                 # local_public_ip is derived from YAML indices; preserve if present in peer
                 tun["local_public_ip"] = _merge_fields(
                     _resolved_local_public_ip(local_cfg, tun), peer_tun.get("local_public_ip")

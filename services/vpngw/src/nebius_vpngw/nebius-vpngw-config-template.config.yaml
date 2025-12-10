@@ -83,14 +83,14 @@ defaults:
 
   crypto:
     ike_proposals:
-    - "aes256-sha256-modp2048"          # GCP HA VPN supported
-    - "aes256gcm16-prfsha256-modp2048"  # GCP HA VPN supported
-    - "aes256-sha1-modp1024"            # Compatibility fallback
+    - "aes256-sha256-modp2048" # GCP HA VPN supported
+    - "aes256gcm16-prfsha256-modp2048" # GCP HA VPN supported
+    - "aes256-sha1-modp1024" # Compatibility fallback
     ike_lifetime_seconds: 28800
     esp_proposals:
-    - "aes256-sha256-modp2048"          # GCP HA VPN supported
-    - "aes256gcm16-modp2048"            # GCP HA VPN supported
-    - "aes256-sha1-modp1024"            # Compatibility fallback
+    - "aes256-sha256-modp2048" # GCP HA VPN supported
+    - "aes256gcm16-modp2048" # GCP HA VPN supported
+    - "aes256-sha1-modp1024" # Compatibility fallback
     esp_lifetime_seconds: 3600
     dh_groups:
     - 14
@@ -104,9 +104,9 @@ defaults:
   routing:
     mode: bgp # Default routing mode: bgp | static
     bgp:
-      router_id: null      # Optional: set a stable, unique router-id (e.g., 169.254.50.1 or Nebius internal IP range); leave null to let FRR pick one
-      hold_time_seconds: 60   # Match peer timers (e.g., GCP default hold 60s, keepalive 20s)
-      keepalive_seconds: 20   # Best practice: align with peer gateway values
+      router_id: null # Optional: set a stable, unique router-id (e.g., 169.254.50.1 or Nebius internal IP range); leave null to let FRR pick one
+      hold_time_seconds: 60 # Match peer timers (e.g., GCP default hold 60s, keepalive 20s)
+      keepalive_seconds: 20 # Best practice: align with peer gateway values
       graceful_restart: true
       max_prefixes: 1000
 
@@ -133,24 +133,31 @@ connections:
   - name: "gcp-ha-tunnel-1"
     gateway_instance_index: 0
     local_public_ip_index: 0
-    ha_role: "active"   # Set to "passive" to keep this tunnel down (useful for troubleshooting)
+    ha_role: "active" # Set to "passive" to keep this tunnel down (useful for troubleshooting)
     ike_version: null
     remote_public_ip: "35.242.0.10"
     psk: ${GCP_TUNNEL_1_PSK}
+    # Inner tunnel IPs (link-local /30 for BGP peering):
+    # - inner_cidr: The full /30 subnet (4 IPs: network, 2 usable hosts, broadcast)
+    # - inner_local_ip: This Nebius VPN gateway's inner IP (assigned to VTI interface)
+    # - inner_remote_ip: The remote peer's inner IP (GCP Cloud Router BGP peer address)
+    # IMPORTANT: Both inner_local_ip and inner_remote_ip MUST be usable hosts within inner_cidr
+    # Example: For 169.254.10.0/30 → usable IPs are .1 and .2 (.0=network, .3=broadcast)
     inner_cidr: "169.254.10.0/30"
-    inner_local_ip: "169.254.10.1"
-    inner_remote_ip: "169.254.10.2"
+    inner_local_ip: "169.254.10.1" # Nebius side
+    inner_remote_ip: "169.254.10.2" # GCP Cloud Router side
 
   - name: "gcp-ha-tunnel-2"
     gateway_instance_index: 0
     local_public_ip_index: 0
-    ha_role: "active"   # Set to "passive" to keep this tunnel down
+    ha_role: "active" # Set to "passive" to keep this tunnel down
     ike_version: null
     remote_public_ip: "35.220.0.10"
     psk: ${GCP_TUNNEL_2_PSK}
+    # Inner tunnel IPs - see tunnel 1 comments for detailed explanation
     inner_cidr: "169.254.11.0/30"
-    inner_local_ip: "169.254.11.1"
-    inner_remote_ip: "169.254.11.2"
+    inner_local_ip: "169.254.11.1" # Nebius side
+    inner_remote_ip: "169.254.11.2" # GCP Cloud Router side
 - name: "gcp-classic-vpn"
   description: "GCP Classic VPN with static routing"
   vendor: "gcp"
