@@ -924,21 +924,37 @@ print("Nebius SDK OK:", sdk)
 ```text
 ├── nebius-vpngw.config.yaml              # Main user configuration
 ├── src/nebius_vpngw/
-│   ├── cli.py                            # CLI orchestrator (nebius-vpngw)
+│   ├── __main__.py                       # Python module entry point
+│   ├── cli.py                            # CLI orchestrator (nebius-vpngw command)
 │   ├── config_loader.py                  # YAML parser and peer config merger
+│   ├── build.py                          # Binary build utilities
+│   ├── vpngw_sa.py                       # Service account management
 │   ├── agent/
-│   │   ├── main.py                       # On-VM agent
-│   │   ├── frr_renderer.py               # BGP config renderer
-│   │   └── strongswan_renderer.py        # IPsec config renderer
+│   │   ├── main.py                       # On-VM agent daemon
+│   │   ├── frr_renderer.py               # FRR/BGP config renderer
+│   │   ├── strongswan_renderer.py        # strongSwan/IPsec config renderer
+│   │   ├── routing_guard.py              # Declarative route management & cleanup
+│   │   ├── firewall_manager.py           # UFW firewall rule synchronization
+│   │   ├── tunnel_iterator.py            # Centralized tunnel enumeration
+│   │   ├── state_store.py                # Agent state persistence
+│   │   ├── status_check.py               # Tunnel/BGP/service health checks
+│   │   └── sanity_check.py               # Routing invariant validation tool
 │   ├── deploy/
-│   │   ├── vm_manager.py                 # VM lifecycle management
-│   │   ├── route_manager.py              # VPC route management
-│   │   └── ssh_push.py                   # Config deployment over SSH
-│   └── peer_parsers/
-│       ├── gcp.py                        # GCP HA VPN parser
-│       ├── aws.py                        # AWS Site-to-Site VPN parser
-│       ├── azure.py                      # Azure VPN Gateway parser
-│       └── cisco.py                      # Cisco IOS parser
+│   │   ├── vm_manager.py                 # VM lifecycle management (create/delete/recreate)
+│   │   ├── vm_diff.py                    # VM configuration change detection
+│   │   ├── route_manager.py              # VPC route management (static mode)
+│   │   └── ssh_push.py                   # Package/config deployment over SSH
+│   ├── peer_parsers/
+│   │   ├── gcp.py                        # GCP HA VPN config parser
+│   │   ├── aws.py                        # AWS Site-to-Site VPN config parser
+│   │   ├── azure.py                      # Azure VPN Gateway config parser
+│   │   └── cisco.py                      # Cisco IOS config parser
+│   └── systemd/
+│       ├── nebius-vpngw-agent.service    # Agent systemd unit
+│       ├── ipsec-vti.sh                  # VTI interface creation script (strongSwan updown)
+│       ├── fix-routes.sh                 # Route cleanup utility script
+│       ├── nebius-vpngw-fix-routes.service  # Route fix systemd service
+│       └── nebius-vpngw-fix-routes.timer    # Route fix systemd timer
 ```
 
 ## License

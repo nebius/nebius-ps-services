@@ -586,6 +586,7 @@ The routing guard implements **declarative APIPA route management** to ensure th
 **Why Orphaned Routes Are Dangerous:**
 
 If left untouched, orphaned routes can:
+
 - Misroute BGP replies (causing session failures)
 - Override intended routing paths
 - Create hairpin loops inside the VM
@@ -600,18 +601,21 @@ If left untouched, orphaned routes can:
 The routing guard (`routing_guard.py`) implements explicit ownership boundaries for APIPA routes:
 
 **We Own (Tunnel APIPA):**
+
 - Tunnel CIDR routes: `169.254.x.x/30` connected routes from VTI IP assignments (`inner_cidr` in YAML)
 - Tunnel peer routes: `169.254.x.x/32` BGP peer routes (`inner_remote_ip` in YAML)
 - Tracked in `expected_tunnel_cidrs` and `expected_tunnel_peers` dictionaries
 - Only routes matching YAML + correct VTI interface are preserved
 
 **Cloud Owns (Metadata APIPA):**
+
 - Metadata routes: `169.254.169.0/24` for cloud platform APIs
 - Examples: `169.254.169.1` (DHCP gateway), `169.254.169.254` (metadata service)
 - Explicitly whitelisted via `CLOUD_METADATA_PREFIX = "169.254.169."`
 - NEVER touched by routing guard
 
 **Everything Else Gets Deleted:**
+
 - Any APIPA route in `169.254.0.0/16` that doesn't match the above categories
 - Wrong VTI interface (route exists but uses wrong device)
 - APIPA prefixes not defined in YAML
@@ -647,6 +651,7 @@ for each unexpected route:
 ```
 
 **Key Features:**
+
 - **Idempotent:** Safe to run multiple times (uses `ip route replace` for additions)
 - **Deterministic:** Same YAML always produces same routing table
 - **Self-healing:** Automatically corrects drift on every agent startup/reload
@@ -666,24 +671,28 @@ The routing guard enforces invariants automatically:
 #### Examples of Routes That Get Deleted
 
 **1. Wrong VTI interface:**
+
 ```bash
 # Route exists but uses wrong device per YAML
 169.254.18.225 dev vti1  # Should be vti0 per YAML → DELETED
 ```
 
 **2. Leftover from deleted tunnel:**
+
 ```bash
 # Tunnel removed from YAML but route remains
 169.254.5.152/30 dev vti2  # Tunnel no longer in YAML → DELETED
 ```
 
 **3. Routes on eth0 instead of VTI:**
+
 ```bash
 # APIPA route on management interface (not metadata)
 169.254.18.224/30 dev eth0  # Should be dev vti0 → DELETED
 ```
 
 **4. APIPA prefixes not in config:**
+
 ```bash
 # Arbitrary APIPA route not defined in YAML
 169.254.99.0/24 dev vti0  # Not in YAML → DELETED
@@ -692,6 +701,7 @@ The routing guard enforces invariants automatically:
 #### Examples of Routes That Are Preserved
 
 **1. Metadata routes (cloud-owned):**
+
 ```bash
 169.254.169.1 dev eth0                      # DHCP gateway → PRESERVED
 169.254.169.254 via 169.254.169.1 dev eth0  # Metadata API → PRESERVED
@@ -699,12 +709,14 @@ default via 169.254.169.1 dev eth0          # DHCP default → PRESERVED
 ```
 
 **2. Tunnel CIDR routes (YAML-defined):**
+
 ```bash
 # YAML: inner_cidr: "169.254.18.224/30"
 169.254.18.224/30 dev vti0 proto kernel  # Connected route → PRESERVED
 ```
 
 **3. Tunnel peer routes (YAML-defined):**
+
 ```bash
 # YAML: inner_remote_ip: "169.254.18.225/30"
 169.254.18.225/32 dev vti0  # BGP peer route → PRESERVED
@@ -714,18 +726,20 @@ default via 169.254.169.1 dev eth0          # DHCP default → PRESERVED
 
 After each enforcement cycle, the routing guard logs comprehensive metrics:
 
-```
+```text
 [RoutingGuard] Summary: table_220_removed=False broad_apipa_removed=False 
   orphaned_apipa_removed=0 bgp_peer_routes_ensured=2
 ```
 
 **Metrics Tracked:**
+
 - `table_220_removed` (bool): Policy routing rule cleaned up
 - `broad_apipa_removed` (bool): Misconfigured broad routes removed
 - `orphaned_apipa_removed` (int): Count of stale tunnel routes deleted
 - `bgp_peer_routes_ensured` (int): BGP peer /32 routes verified/added
 
 **Benefits:**
+
 - Enables monitoring and alerting (track orphan rate over time)
 - Facilitates debugging without verbose per-route logging
 - Provides actionable metrics for SRE teams
@@ -735,7 +749,7 @@ After each enforcement cycle, the routing guard logs comprehensive metrics:
 
 The `nebius-vpngw status` command displays routing health alongside tunnel/BGP status:
 
-```
+```text
 Routing Table Health:
 ┏━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━┓
 ┃ Gateway VM      ┃ Table 220 ┃ Broad APIPA ┃ Tunnel Routes   ┃ Overall ┃
@@ -745,12 +759,14 @@ Routing Table Health:
 ```
 
 **Health Indicators:**
+
 - **Table 220:** Should show `OK` (green); `EXISTS` (red) indicates policy routing issue
 - **Broad APIPA:** Should show `OK` (green); `EXISTS` (red) indicates 169.254.0.0/16 misconfiguration
 - **Tunnel Routes:** Count of APIPA routes (informational, not pass/fail)
 - **Overall:** Aggregated health (`Healthy`, `Warning`, or `Issues Found`)
 
 The "Tunnel Routes" count includes:
+
 - Tunnel subnet routes (2× `/30` connected routes for 2 tunnels)
 - BGP peer routes (2× `/32` routes for 2 peers)
 - DHCP default route (1× `default via 169.254.169.1`)
@@ -781,6 +797,7 @@ python3 -m nebius_vpngw.agent.sanity_check
 ```
 
 **Use Cases:**
+
 - Pre-deployment validation
 - Manual troubleshooting
 - CI/CD integration for config validation
@@ -800,7 +817,89 @@ This declarative route management provides:
 
 **Summary:** The routing guard makes your VPN gateway infrastructure-as-code compliant, ensuring the actual routing state always reflects the declared configuration.
 
-## 18. References
+## 18. Project Structure
+
+The codebase is organized into distinct modules with clear separation of concerns:
+
+```text
+├── nebius-vpngw.config.yaml              # Main user configuration
+├── src/nebius_vpngw/
+│   ├── __main__.py                       # Python module entry point
+│   ├── cli.py                            # CLI orchestrator (nebius-vpngw command)
+│   ├── config_loader.py                  # YAML parser and peer config merger
+│   ├── build.py                          # Binary build utilities
+│   ├── vpngw_sa.py                       # Service account management
+│   ├── agent/
+│   │   ├── main.py                       # On-VM agent daemon
+│   │   ├── frr_renderer.py               # FRR/BGP config renderer
+│   │   ├── strongswan_renderer.py        # strongSwan/IPsec config renderer
+│   │   ├── routing_guard.py              # Declarative route management & cleanup
+│   │   ├── firewall_manager.py           # UFW firewall rule synchronization
+│   │   ├── tunnel_iterator.py            # Centralized tunnel enumeration
+│   │   ├── state_store.py                # Agent state persistence
+│   │   ├── status_check.py               # Tunnel/BGP/service health checks
+│   │   └── sanity_check.py               # Routing invariant validation tool
+│   ├── deploy/
+│   │   ├── vm_manager.py                 # VM lifecycle management (create/delete/recreate)
+│   │   ├── vm_diff.py                    # VM configuration change detection
+│   │   ├── route_manager.py              # VPC route management (static mode)
+│   │   └── ssh_push.py                   # Package/config deployment over SSH
+│   ├── peer_parsers/
+│   │   ├── gcp.py                        # GCP HA VPN config parser
+│   │   ├── aws.py                        # AWS Site-to-Site VPN config parser
+│   │   ├── azure.py                      # Azure VPN Gateway config parser
+│   │   └── cisco.py                      # Cisco IOS config parser
+│   └── systemd/
+│       ├── nebius-vpngw-agent.service    # Agent systemd unit
+│       ├── ipsec-vti.sh                  # VTI interface creation script (strongSwan updown)
+│       ├── fix-routes.sh                 # Route cleanup utility script
+│       ├── nebius-vpngw-fix-routes.service  # Route fix systemd service
+│       └── nebius-vpngw-fix-routes.timer    # Route fix systemd timer
+```
+
+### Module Descriptions
+
+**Orchestrator (runs on operator machine):**
+
+- `cli.py`: Main entry point for the `nebius-vpngw` command. Orchestrates VM provisioning, config deployment, and status checks.
+- `config_loader.py`: Parses YAML configuration, merges peer configs, expands environment variables, validates schema.
+- `vpngw_sa.py`: Manages Nebius service account lifecycle for API authentication.
+- `build.py`: Utilities for building standalone binaries (PyInstaller).
+
+**Agent (runs on gateway VM):**
+
+- `main.py`: Agent daemon that renders and applies strongSwan/FRR configurations, handles SIGHUP reload signals.
+- `frr_renderer.py`: Generates FRR BGP configuration (`bgpd.conf`) from YAML tunnel definitions.
+- `strongswan_renderer.py`: Generates strongSwan IPsec configuration (`ipsec.conf`, `ipsec.secrets`) and manages VTI interfaces.
+- `routing_guard.py`: Enforces routing table invariants (removes table 220, cleans orphaned routes, ensures BGP peer /32 routes).
+- `firewall_manager.py`: Synchronizes UFW firewall rules with active tunnel peer IPs.
+- `tunnel_iterator.py`: Centralized iterator for active tunnels ensuring consistent VTI index mapping across all modules.
+- `state_store.py`: Persists last-applied configuration to `/etc/nebius-vpngw/last-applied.json` for idempotency.
+- `status_check.py`: Collects tunnel/BGP/service health metrics for status command.
+- `sanity_check.py`: Standalone validation tool for verifying routing invariants (table 220, BGP routes, orphaned routes).
+
+**Deployment:**
+
+- `vm_manager.py`: Manages VM lifecycle using Nebius SDK (create, delete, recreate with IP preservation).
+- `vm_diff.py`: Detects VM configuration changes requiring recreation vs reload.
+- `route_manager.py`: Manages VPC static routes (used in static routing mode, not needed for BGP).
+- `ssh_push.py`: Deploys agent package and configuration to VMs via SSH/SFTP, triggers agent reload.
+
+**Peer Config Parsers:**
+
+- `gcp.py`: Parses GCP HA VPN configuration exports (peer IPs, ASNs, shared secrets).
+- `aws.py`: Parses AWS Site-to-Site VPN configuration downloads.
+- `azure.py`: Parses Azure VPN Gateway configuration exports.
+- `cisco.py`: Parses Cisco IOS configuration snippets.
+
+**Systemd Resources:**
+
+- `nebius-vpngw-agent.service`: Systemd unit for agent daemon (runs on VM boot and handles SIGHUP reload).
+- `ipsec-vti.sh`: strongSwan updown script that creates VTI interfaces using kernel's native support (workaround for missing VTI plugin in Ubuntu).
+- `fix-routes.sh`: Utility script for manual route cleanup (usually not needed as routing_guard handles this automatically).
+- `nebius-vpngw-fix-routes.{service,timer}`: Optional systemd timer for periodic route enforcement (future enhancement).
+
+## 19. References
 
 - Diagrams: `image/vpngw-architecture.dot`, `image/vpngw-conn-diagram.dot` (render with Graphviz).
 - README: quick start, packaging, build instructions (root `README.md`).
