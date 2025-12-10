@@ -9,10 +9,13 @@ A modular Python-based orchestrator and agent to provision Nebius VMs as Site-to
 - **High availability**: Single-VM or multi-VM gateway groups
 - **Configuration**: YAML-driven with optional peer config import from cloud providers
 - **Automation**: Idempotent agent automatically applies and maintains configurations
+- **Security hardening**: SSH hardening, fail2ban, UFW firewall, auditd, automated security updates
+- **Production monitoring**: Routing health checks, structured logging with metrics, service status
 
 ## Table of Contents
 
 - [Quick Start](#quick-start)
+- [Security](#security)
 - [Configuration](#configuration)
 - [CLI Usage](#cli-usage)
 - [Monitoring and Troubleshooting](#monitoring-and-troubleshooting)
@@ -98,6 +101,95 @@ Alternatively, use service account authentication with the `--sa` flag (CLI will
    ```bash
    nebius-vpngw status --local-config-file ./nebius-vpngw.config.yaml
    ```
+
+## Security
+
+Gateway VMs include comprehensive security hardening applied automatically during VM creation:
+
+### Security Features
+
+- **SSH Hardening:**
+  - Key-only authentication (passwords disabled)
+  - Root login disabled
+  - Maximum 3 authentication attempts
+  - Verbose logging for security audits
+
+- **Intrusion Prevention:**
+  - Fail2ban monitoring SSH authentication
+  - 3 failed attempts trigger 1-hour IP ban
+  - Automatic blocking/unblocking
+
+- **UFW Firewall (VPN-Safe):**
+  - Default deny incoming on management interface (eth0)
+  - Explicit allow for IPsec: UDP 500, 4500, ESP protocol
+  - SSH restricted to management CIDRs (optional)
+  - **VTI/XFRM interfaces NOT filtered** - BGP flows freely
+  - Dynamic firewall updates synchronized with config changes
+
+- **Audit Logging (auditd):**
+  - All command executions logged
+  - Configuration file monitoring (`/etc/nebius-vpngw/`, `/etc/swanctl/`, `/etc/frr/`)
+  - Tamper detection and forensics capability
+
+- **System Hardening:**
+  - IP forwarding enabled for VPN
+  - ICMP redirects disabled (routing attack prevention)
+  - Martian packet logging (spoofing detection)
+  - SYN cookies enabled (SYN flood protection)
+
+- **Automated Security Updates:**
+  - Unattended security patches
+  - Minimized reboot frequency
+  - Restart monitoring alerts
+
+### Routing Health Monitoring
+
+The agent includes production-grade routing guard with:
+
+- **Explicit APIPA scoping:** Distinguishes tunnel routes from cloud metadata routes
+- **Policy routing protection:** Removes table 220 rules that cause asymmetric routing
+- **Structured logging:** Metrics for table_220_removed, orphaned_routes, bgp_peer_routes
+- **Health checks:** Integrated into status command (no additional flags required)
+
+### Security Best Practices
+
+**Management Access:**
+
+```yaml
+gateway_group:
+  management_cidrs:
+    - 10.0.0.0/8  # Your corporate network
+    - 203.0.113.0/24  # Your VPN range
+```
+
+This restricts SSH access to specified CIDRs. Omit `management_cidrs` to allow SSH from anywhere (not recommended for production).
+
+**Secret Management:**
+
+Never commit secrets to version control. Use environment variables:
+
+```bash
+export GCP_TUNNEL_1_PSK="your-secure-psk"
+export GCP_TUNNEL_2_PSK="your-secure-psk"
+```
+
+Reference in config:
+
+```yaml
+tunnels:
+  - name: gcp-tunnel-1
+    psk: ${GCP_TUNNEL_1_PSK}
+```
+
+**VM Recreation for Full Hardening:**
+
+Security hardening is applied via cloud-init at VM creation. To apply hardening to existing VMs:
+
+```bash
+nebius-vpngw apply --recreate-gw --local-config-file ./nebius-vpngw.config.yaml
+```
+
+**Note:** Public IPs are preserved during recreation, but tunnels will experience downtime.
 
 ## Configuration
 
@@ -244,18 +336,34 @@ nebius-vpngw status --local-config-file ./nebius-vpngw.config.yaml
 Example output:
 
 ```text
-                           VPN Gateway Status
-┏━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━┓
-┃ Tunnel               ┃ Gateway VM  ┃ Status       ┃ Peer IP         ┃ Encryption                   ┃ Uptime    ┃
-┡━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━┩
-│ gcp-classic-tunnel-0 │ vpngw-vm-0  │ ESTABLISHED  │ 34.155.169.244  │ AES_GCM_16_128/...           │ 5 minutes │
-└──────────────────────┴─────────────┴──────────────┴─────────────────┴──────────────────────────────┴───────────┘
+                                  VPN Gateway Status                                   
+┏━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━┓
+┃ Tunnel     ┃ Gateway VM ┃ Status     ┃ BGP    ┃ Peer IP    ┃ Encrypti… ┃ Uptime     ┃
+┡━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━━┩
+│ gcp-ha-tu… │ nebius-vp… │ Establish… │ Active │ 34.157.14… │ AES_GCM_… │ 30 minutes │
+│ gcp-ha-tu… │ nebius-vp… │ Establish… │ Active │ 34.157.15… │ AES_GCM_… │ 36 minutes │
+└────────────┴────────────┴────────────┴────────┴────────────┴───────────┴────────────┘
+
+Checking system services...
+┏━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━┓
+┃ Gateway VM      ┃ Agent  ┃ StrongSwan ┃ FRR    ┃
+┡━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━┩
+│ nebius-vpn-gw-0 │ active │ active     │ active │
+└─────────────────┴────────┴────────────┴────────┘
+
+Routing Table Health:
+┏━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━┓
+┃ Gateway VM      ┃ Table 220 ┃ Broad APIPA ┃ Orphaned Routes ┃ Overall ┃
+┡━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━┩
+│ nebius-vpn-gw-0 │ OK        │ OK          │ 5 routes        │ Healthy │
+└─────────────────┴───────────┴─────────────┴─────────────────┴─────────┘
 ```
 
 Output includes:
 
-- Tunnel status: name, gateway VM, state (ESTABLISHED/CONNECTING), peer IP, encryption, uptime
-- Service health: `nebius-vpngw-agent`, `strongswan-starter`, `frr` status
+- **Tunnel status:** name, gateway VM, state (ESTABLISHED/CONNECTING), BGP state, peer IP, encryption, uptime
+- **Service health:** `nebius-vpngw-agent`, `strongswan`, `frr` status
+- **Routing health:** Table 220 check, broad APIPA detection, orphaned routes count, overall status
 
 ### Configuration Files on Gateway VMs
 

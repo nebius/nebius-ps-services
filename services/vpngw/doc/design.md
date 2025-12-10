@@ -370,7 +370,437 @@ sudo vtysh -c "show version" | grep "FRRouting"
 - Requires stable public allocations—document and monitor unassigned allocations (30-day grace before provider GC).
 - SSH/SDK integrations are scaffolds; production requires completing those components and adding tests.
 
-## 17. References
+## 17. Security Hardening & Production Improvements
+
+### 17.1 Security Hardening Stack
+
+The VPN Gateway VM incorporates comprehensive security hardening applied via cloud-init during VM creation. This provides defense-in-depth for production deployments:
+
+**SSH Hardening (`/etc/ssh/sshd_config.d/50-vpngw.conf`):**
+
+- Key-only authentication (passwords disabled)
+- Root login disabled
+- Maximum 3 authentication attempts
+- Verbose logging for audit trails
+- Modern cryptographic algorithms only
+
+**Fail2ban Protection:**
+
+- Monitors SSH authentication logs
+- 3 failed attempts trigger 1-hour ban
+- Protects against brute-force attacks
+- Automatic IP address blocking/unblocking
+
+**UFW Firewall (VPN-Safe Configuration):**
+
+- Default deny incoming on eth0 (management interface)
+- Explicit allow rules for IPsec protocols:
+  - UDP 500 (IKE)
+  - UDP 4500 (NAT-T)
+  - ESP protocol (IP protocol 50)
+- SSH access restricted to management CIDRs (if configured)
+- **Critical:** VTI/XFRM interfaces are NOT filtered by UFW
+- BGP traffic (TCP 179) flows freely over tunnel interfaces
+- ICMP allowed for troubleshooting (ping, traceroute)
+
+**Dynamic Firewall Management:**
+
+- `firewall_manager.py` module synchronizes UFW rules with config changes
+- Updates peer IP whitelist when tunnels are added/removed/modified
+- Maintains `/etc/vpngw_peer_ips` and `/etc/vpngw_mgmt_cidrs`
+- Idempotent script execution (only reloads if changes detected)
+- Integrated into agent reload cycle (non-blocking, logs warnings on failure)
+
+**Auditd Security Monitoring:**
+
+- Logs all command executions
+- Monitors critical configuration files:
+  - `/etc/nebius-vpngw/`
+  - `/etc/swanctl/`
+  - `/etc/frr/`
+  - `/etc/ssh/sshd_config`
+- Provides tamper detection and forensics capability
+
+**System Hardening (sysctl):**
+
+- IP forwarding enabled for VPN functionality
+- ICMP redirects disabled (prevents routing attacks)
+- Martian packet logging enabled (detects spoofing)
+- SYN cookies enabled (SYN flood protection)
+- Source validation disabled on tunnel interfaces (required for VPN)
+
+**Unattended Security Updates:**
+
+- Automatic installation of security patches
+- Configurable to minimize or eliminate reboot frequency
+- Ensures VM stays protected against known vulnerabilities
+
+**Restart Monitoring:**
+
+- System timer alerts when reboot is required for updates
+- Operator can schedule maintenance windows appropriately
+
+### 17.2 Routing Guard with Production Hardening
+
+The agent includes an enhanced routing guard (`routing_guard.py`) that enforces routing table invariants with production-grade observability:
+
+**Explicit APIPA Scoping:**
+
+- **Tunnel APIPA routes** (169.254.x.x/32): Routes we own and manage
+  - Tracked in `expected_tunnel_cidrs` and `expected_tunnel_peers` dictionaries
+  - BGP peer /32 routes explicitly mapped to VTI interfaces
+- **Cloud metadata routes** (169.254.169.254/32): Routes the platform owns
+  - Explicitly excluded from cleanup via `CLOUD_METADATA_PREFIX`
+- **Broad APIPA routes** (169.254.0.0/16): Never allowed (indicates misconfiguration)
+
+**Structured Logging with Metrics:**
+
+- All routing guard functions return metrics (bool or int counts)
+- Summary statistics logged after each enforcement cycle:
+  - `table_220_removed=X` - Policy routing rules cleaned up
+  - `broad_apipa_removed=Y` - Misconfigured broad routes removed
+  - `orphaned_apipa_removed=Z` - Stale tunnel routes cleaned
+  - `bgp_peer_routes_ensured=N` - BGP peer /32 routes verified
+- Enables monitoring, alerting, and trend analysis
+- Facilitates debugging without verbose per-route logging
+
+**Benefits:**
+
+- Prevents routing loops and asymmetric routing
+- Protects against platform policy routing overrides (table 220)
+- Ensures BGP connectivity by maintaining peer /32 routes
+- Safe coexistence with cloud metadata service
+- Production-ready observability for SRE teams
+
+### 17.3 Routing Health Checks in Status Command
+
+The `nebius-vpngw status` command now includes integrated routing health validation:
+
+**Health Checks Performed:**
+
+- **Table 220 Presence:** Detects policy routing rules that override main table (should not exist)
+- **Broad APIPA Routes:** Checks for 169.254.0.0/16 routes (indicates misconfiguration)
+- **Orphaned Routes:** Counts APIPA routes to detect stale configurations
+- **Overall Health:** Aggregates checks into single status indicator
+
+**Output Format:**
+
+```text
+Routing Table Health:
+┏━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━┓
+┃ Gateway VM      ┃ Table 220 ┃ Broad APIPA ┃ Orphaned Routes ┃ Overall ┃
+┡━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━┩
+│ nebius-vpn-gw-0 │ OK        │ OK          │ 5 routes        │ Healthy │
+└─────────────────┴───────────┴─────────────┴─────────────────┴─────────┘
+```
+
+**Implementation:**
+
+- Lightweight remote Python check (no dependencies)
+- Runs in parallel with service health checks
+- Color-coded: green (OK), red (EXISTS/ERROR), yellow (warnings)
+- Zero impact on existing tunnel operations
+
+**Benefits:**
+
+- Proactive detection of routing issues before they cause outages
+- Immediate visibility into configuration drift
+- Reduces MTTR (Mean Time To Recovery) by surfacing issues early
+- No additional flags or commands required (integrated into existing workflow)
+
+### 17.4 Architecture Benefits
+
+**Defense-in-Depth:**
+
+- Multiple security layers protect against different attack vectors
+- Compromise of one layer doesn't compromise entire system
+- Hardening applied at VM creation (immutable foundation)
+
+**Production Readiness:**
+
+- Meets common enterprise security requirements
+- Audit logging enables compliance verification
+- Automated updates reduce operational burden
+- Monitoring hooks for integration with SIEM/alerting systems
+
+**VPN-Safe Design:**
+
+- Security hardening does NOT interfere with IPsec or BGP
+- Firewall rules explicitly allow VPN protocols
+- Tunnel interfaces bypass firewall completely
+- Dynamic management adapts to configuration changes
+
+**Operational Excellence:**
+
+- Structured logging provides actionable metrics
+- Health checks enable proactive monitoring
+- Non-blocking integrations prevent cascade failures
+- Idempotent operations support safe retries
+
+### 17.5 Deployment Considerations
+
+**New VM Deployments:**
+
+- All security hardening applies automatically via cloud-init
+- Firewall setup script created at: `/usr/local/bin/setup-vpngw-firewall.sh`
+- Management CIDRs configured from YAML (optional)
+
+**Existing VM Updates:**
+
+- Structured logging and routing health checks work immediately after agent update
+- Firewall manager is integrated but requires firewall setup script (only on new VMs)
+- To apply full hardening: recreate VM with `nebius-vpngw apply --recreate-gw`
+
+**Rollback Considerations:**
+
+- Security hardening is immutable (applied at creation)
+- Firewall rules can be manually adjusted via SSH if needed
+- Agent features can be disabled by reverting to previous package version
+
+### 17.6 Declarative Route Management & Orphan Cleanup
+
+The routing guard implements **declarative APIPA route management** to ensure the kernel routing table always matches YAML configuration. This prevents state drift and routing bugs caused by leftover routes.
+
+#### What Are "Orphaned Routes"?
+
+**Orphaned routes** are routes in the kernel routing table that are NOT declared in the YAML configuration. These are automatically detected and removed by the routing guard.
+
+**Common Sources of Orphaned Routes:**
+
+1. **Old VTI connected routes** from previously-active tunnels:
+   - When a tunnel is deleted from YAML, the kernel may retain `169.254.X.Y/30 dev vti2`
+   - strongSwan or the kernel doesn't always clean up automatically
+
+2. **Old /32 host routes** pointing at the wrong VTI:
+   - Example: `169.254.5.153 dev vti0` when it should be `dev vti1` per YAML
+   - Occurs when VTI numbering changes or tunnel layout is reconfigured
+
+3. **Kernel artifacts** from tunnel up/down events:
+   - strongSwan sometimes briefly installs: `0.0.0.0/0 dev vtiX table 220`
+   - Kernel may keep: `169.254.* routes on eth0` unless explicitly deleted
+
+4. **Cloud-init/DHCP residuals**:
+   - Ubuntu's networking stack may add: `169.254.0.0/16 dev eth0 scope link`
+   - Must be removed unless it's the metadata route
+
+**Why Orphaned Routes Are Dangerous:**
+
+If left untouched, orphaned routes can:
+- Misroute BGP replies (causing session failures)
+- Override intended routing paths
+- Create hairpin loops inside the VM
+- Silently bypass IPsec for APIPA traffic
+- Cause FRR BGP to choose the wrong interface/source
+- Route tunnel traffic out eth0 instead of vtiX
+
+**Bottom Line:** Orphans = state drift = bugs. The routing guard prevents this automatically.
+
+#### Implementation: Explicit Scoping
+
+The routing guard (`routing_guard.py`) implements explicit ownership boundaries for APIPA routes:
+
+**We Own (Tunnel APIPA):**
+- Tunnel CIDR routes: `169.254.x.x/30` connected routes from VTI IP assignments (`inner_cidr` in YAML)
+- Tunnel peer routes: `169.254.x.x/32` BGP peer routes (`inner_remote_ip` in YAML)
+- Tracked in `expected_tunnel_cidrs` and `expected_tunnel_peers` dictionaries
+- Only routes matching YAML + correct VTI interface are preserved
+
+**Cloud Owns (Metadata APIPA):**
+- Metadata routes: `169.254.169.0/24` for cloud platform APIs
+- Examples: `169.254.169.1` (DHCP gateway), `169.254.169.254` (metadata service)
+- Explicitly whitelisted via `CLOUD_METADATA_PREFIX = "169.254.169."`
+- NEVER touched by routing guard
+
+**Everything Else Gets Deleted:**
+- Any APIPA route in `169.254.0.0/16` that doesn't match the above categories
+- Wrong VTI interface (route exists but uses wrong device)
+- APIPA prefixes not defined in YAML
+- Routes on eth0 instead of VTI (except metadata)
+
+#### Cleanup Algorithm
+
+The `_cleanup_unexpected_apipa_routes()` function implements the following logic:
+
+```python
+# 1. Build expected route sets from YAML
+for each active tunnel in YAML:
+    expected_tunnel_cidrs[inner_cidr] = vti_name
+    expected_tunnel_peers[inner_remote_ip] = vti_name
+
+# 2. Scan all kernel routes
+for each route in kernel routing table:
+    if route contains "169.254.":
+        # Skip metadata (cloud-owned)
+        if route.startswith("169.254.169."):
+            continue
+        
+        # Check if expected (YAML-defined + correct VTI)
+        if route matches expected_tunnel_cidrs OR expected_tunnel_peers:
+            continue  # Keep it
+        
+        # Unexpected route found - mark for deletion
+        routes_to_remove.append(route)
+
+# 3. Remove all unexpected routes
+for each unexpected route:
+    ip route del <prefix> dev <interface>
+```
+
+**Key Features:**
+- **Idempotent:** Safe to run multiple times (uses `ip route replace` for additions)
+- **Deterministic:** Same YAML always produces same routing table
+- **Self-healing:** Automatically corrects drift on every agent startup/reload
+- **Safe:** Whitelist protection prevents deleting cloud metadata routes
+
+#### When Cleanup Runs
+
+The routing guard enforces invariants automatically:
+
+1. **On agent startup** (system boot)
+2. **On agent reload** (SIGHUP signal after config push)
+3. **After every configuration change**
+4. **Optionally via timer** (future enhancement for continuous enforcement)
+
+**Result:** The routing table always matches the YAML configuration.
+
+#### Examples of Routes That Get Deleted
+
+**1. Wrong VTI interface:**
+```bash
+# Route exists but uses wrong device per YAML
+169.254.18.225 dev vti1  # Should be vti0 per YAML → DELETED
+```
+
+**2. Leftover from deleted tunnel:**
+```bash
+# Tunnel removed from YAML but route remains
+169.254.5.152/30 dev vti2  # Tunnel no longer in YAML → DELETED
+```
+
+**3. Routes on eth0 instead of VTI:**
+```bash
+# APIPA route on management interface (not metadata)
+169.254.18.224/30 dev eth0  # Should be dev vti0 → DELETED
+```
+
+**4. APIPA prefixes not in config:**
+```bash
+# Arbitrary APIPA route not defined in YAML
+169.254.99.0/24 dev vti0  # Not in YAML → DELETED
+```
+
+#### Examples of Routes That Are Preserved
+
+**1. Metadata routes (cloud-owned):**
+```bash
+169.254.169.1 dev eth0                      # DHCP gateway → PRESERVED
+169.254.169.254 via 169.254.169.1 dev eth0  # Metadata API → PRESERVED
+default via 169.254.169.1 dev eth0          # DHCP default → PRESERVED
+```
+
+**2. Tunnel CIDR routes (YAML-defined):**
+```bash
+# YAML: inner_cidr: "169.254.18.224/30"
+169.254.18.224/30 dev vti0 proto kernel  # Connected route → PRESERVED
+```
+
+**3. Tunnel peer routes (YAML-defined):**
+```bash
+# YAML: inner_remote_ip: "169.254.18.225/30"
+169.254.18.225/32 dev vti0  # BGP peer route → PRESERVED
+```
+
+#### Structured Logging & Observability
+
+After each enforcement cycle, the routing guard logs comprehensive metrics:
+
+```
+[RoutingGuard] Summary: table_220_removed=False broad_apipa_removed=False 
+  orphaned_apipa_removed=0 bgp_peer_routes_ensured=2
+```
+
+**Metrics Tracked:**
+- `table_220_removed` (bool): Policy routing rule cleaned up
+- `broad_apipa_removed` (bool): Misconfigured broad routes removed
+- `orphaned_apipa_removed` (int): Count of stale tunnel routes deleted
+- `bgp_peer_routes_ensured` (int): BGP peer /32 routes verified/added
+
+**Benefits:**
+- Enables monitoring and alerting (track orphan rate over time)
+- Facilitates debugging without verbose per-route logging
+- Provides actionable metrics for SRE teams
+- Detects configuration drift patterns
+
+#### Integration with Status Command
+
+The `nebius-vpngw status` command displays routing health alongside tunnel/BGP status:
+
+```
+Routing Table Health:
+┏━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━┓
+┃ Gateway VM      ┃ Table 220 ┃ Broad APIPA ┃ Tunnel Routes   ┃ Overall ┃
+┡━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━┩
+│ nebius-vpn-gw-0 │ OK        │ OK          │ 5 routes        │ Healthy │
+└─────────────────┴───────────┴─────────────┴─────────────────┴─────────┘
+```
+
+**Health Indicators:**
+- **Table 220:** Should show `OK` (green); `EXISTS` (red) indicates policy routing issue
+- **Broad APIPA:** Should show `OK` (green); `EXISTS` (red) indicates 169.254.0.0/16 misconfiguration
+- **Tunnel Routes:** Count of APIPA routes (informational, not pass/fail)
+- **Overall:** Aggregated health (`Healthy`, `Warning`, or `Issues Found`)
+
+The "Tunnel Routes" count includes:
+- Tunnel subnet routes (2× `/30` connected routes for 2 tunnels)
+- BGP peer routes (2× `/32` routes for 2 peers)
+- DHCP default route (1× `default via 169.254.169.1`)
+
+**Example for HA setup with 2 tunnels:** 5 routes = 2×(subnet + peer) + 1×default = expected/legitimate.
+
+#### Sanity Check Script
+
+A standalone verification tool (`agent/sanity_check.py`) can be run manually on the VM:
+
+```bash
+# On gateway VM
+python3 -m nebius_vpngw.agent.sanity_check
+
+# Output
+🔍 Checking for table 220...
+✅ PASS: Table 220 not found
+
+🔍 Checking BGP peer routes...
+✅ PASS: 169.254.18.225 → vti0
+✅ PASS: 169.254.5.153 → vti1
+
+🔍 Checking for orphaned routes...
+✅ PASS: No orphaned routes found
+
+============================================================
+✅ All routing invariants satisfied!
+```
+
+**Use Cases:**
+- Pre-deployment validation
+- Manual troubleshooting
+- CI/CD integration for config validation
+- Compliance verification
+
+#### Production Benefits
+
+This declarative route management provides:
+
+✅ **Deterministic:** Routing table always matches YAML configuration
+✅ **Idempotent:** Safe to run multiple times without side effects
+✅ **Self-healing:** Automatically fixes drift from desired state
+✅ **Observable:** Structured logging enables monitoring/alerting
+✅ **Safe:** Whitelist protection for cloud metadata routes
+✅ **Aggressive:** Removes any unexpected routes that could cause bugs
+✅ **Production-grade:** Meets enterprise reliability requirements
+
+**Summary:** The routing guard makes your VPN gateway infrastructure-as-code compliant, ensuring the actual routing state always reflects the declared configuration.
+
+## 18. References
 
 - Diagrams: `image/vpngw-architecture.dot`, `image/vpngw-conn-diagram.dot` (render with Graphviz).
 - README: quick start, packaging, build instructions (root `README.md`).

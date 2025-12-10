@@ -4,10 +4,13 @@ After=network.target
 
 [Service]
 Type=simple
+Environment="PYTHONUNBUFFERED=1"
 ExecStart=/usr/bin/python3 -m nebius_vpngw.agent.main
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=3
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target

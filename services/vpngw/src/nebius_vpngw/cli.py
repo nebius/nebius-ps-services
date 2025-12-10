@@ -603,7 +603,8 @@ def status(
                         if bgp_status.lower() == 'established':
                             bgp_display = "[green]Established[/green]"
                         elif bgp_status.lower() in ('idle', 'connect', 'active'):
-                            bgp_display = f"[yellow]{bgp_status.capitalize()}[/yellow]"
+                            # These are failure states when persistent - show as Down in red
+                            bgp_display = f"[red]Down ({bgp_status.capitalize()})[/red]"
                         else:
                             bgp_display = f"[red]{bgp_status}[/red]"
                     else:
@@ -668,7 +669,7 @@ def status(
     console.print(table)
     
     # Show service health
-    print("\n[bold]Checking system services...[/bold]")
+    console.print("\n[bold]Checking system services...[/bold]")
     service_table = Table(show_header=True, header_style="bold cyan")
     service_table.add_column("Gateway VM", style="white")
     service_table.add_column("Agent", style="white")
@@ -743,6 +744,139 @@ def status(
         )
     
     console.print(service_table)
+    
+    # Show routing health (checks for routing table invariants)
+    console.print("\n[bold]Routing Table Health:[/bold]")
+    routing_table = Table(show_header=True, header_style="bold cyan")
+    routing_table.add_column("Gateway VM", style="white")
+    routing_table.add_column("Table 220", style="white")
+    routing_table.add_column("Broad APIPA", style="white")
+    routing_table.add_column("Tunnel Routes", style="white")
+    routing_table.add_column("Overall", style="white")
+    
+    for inst_cfg in plan.iter_instance_configs():
+        target = vm_ips.get(inst_cfg.hostname)
+        if not target:
+            continue
+        
+        try:
+            # Check routing health by running Python status check remotely
+            check_cmd = """python3 -c "
+import subprocess
+import json
+
+health = {
+    'table_220': False,
+    'broad_apipa': False,
+    'orphaned_count': 0,
+    'status': 'healthy'
+}
+
+# Check table 220
+r = subprocess.run(['ip', 'rule', 'show'], capture_output=True, text=True)
+if '220' in r.stdout:
+    health['table_220'] = True
+    health['status'] = 'error'
+
+# Check broad APIPA
+r = subprocess.run(['ip', 'route', 'show', '169.254.0.0/16'], capture_output=True, text=True)
+if r.stdout.strip():
+    health['broad_apipa'] = True
+    health['status'] = 'error'
+
+# Count APIPA tunnel routes (VTI subnets + BGP peer /32s)
+# This is for informational purposes - these are expected/legitimate routes
+r = subprocess.run(['ip', 'route', 'show'], capture_output=True, text=True)
+apipa_count = 0
+for line in r.stdout.split('\\n'):
+    if '169.254.' in line and not line.startswith('169.254.169.'):
+        apipa_count += 1
+
+health['orphaned_count'] = apipa_count  # Note: 'orphaned' name kept for compatibility
+
+print(json.dumps(health))
+" """
+            
+            result = subprocess.run(
+                ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10", 
+                 f"ubuntu@{target}", check_cmd],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                shell=False
+            )
+            
+            if result.returncode == 0 and result.stdout.strip():
+                try:
+                    health = json.loads(result.stdout.strip())
+                    
+                    # Format table 220 status
+                    if health.get('table_220'):
+                        table_220_display = "[red]EXISTS[/red]"
+                    else:
+                        table_220_display = "[green]OK[/green]"
+                    
+                    # Format broad APIPA status
+                    if health.get('broad_apipa'):
+                        broad_apipa_display = "[red]EXISTS[/red]"
+                    else:
+                        broad_apipa_display = "[green]OK[/green]"
+                    
+                    # Format tunnel routes count (APIPA routes for VTI interfaces)
+                    tunnel_routes_count = health.get('orphaned_count', 0)
+                    tunnel_routes_display = f"{tunnel_routes_count} routes"
+                    
+                    # Overall status
+                    status = health.get('status', 'unknown')
+                    if status == 'healthy':
+                        overall_display = "[green]Healthy[/green]"
+                    elif status == 'warning':
+                        overall_display = "[yellow]Warning[/yellow]"
+                    else:
+                        overall_display = "[red]Issues Found[/red]"
+                    
+                    routing_table.add_row(
+                        inst_cfg.hostname,
+                        table_220_display,
+                        broad_apipa_display,
+                        tunnel_routes_display,
+                        overall_display
+                    )
+                except json.JSONDecodeError:
+                    routing_table.add_row(
+                        inst_cfg.hostname,
+                        "[red]ERROR[/red]",
+                        "[red]ERROR[/red]",
+                        "-",
+                        "[red]Parse Error[/red]"
+                    )
+            else:
+                routing_table.add_row(
+                    inst_cfg.hostname,
+                    "[red]ERROR[/red]",
+                    "[red]ERROR[/red]",
+                    "-",
+                    "[red]Check Failed[/red]"
+                )
+        
+        except subprocess.TimeoutExpired:
+            routing_table.add_row(
+                inst_cfg.hostname,
+                "[red]TIMEOUT[/red]",
+                "[red]TIMEOUT[/red]",
+                "-",
+                "[red]Timeout[/red]"
+            )
+        except Exception as e:
+            routing_table.add_row(
+                inst_cfg.hostname,
+                "[red]ERROR[/red]",
+                "[red]ERROR[/red]",
+                "-",
+                f"[red]{str(e)[:20]}[/red]"
+            )
+    
+    console.print(routing_table)
 
 
 @app.command()

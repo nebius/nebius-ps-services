@@ -170,15 +170,14 @@ class SSHPush:
                     sftp.put(str(wheel_path), remote_wheel)
                     print(f"[SSHPush] Uploaded {wheel_path.name}")
 
-                # Install/upgrade the wheel
+                # Install/upgrade the wheel with dependencies
                 # Use --break-system-packages on Ubuntu 24.04+ which has PEP 668 restrictions
-                # Use --ignore-installed to avoid conflicts with system packages like typing_extensions
-                install_cmd = (
-                    f"sudo pip3 install --upgrade --no-deps --break-system-packages --ignore-installed {remote_wheel} && "
-                    f"sudo pip3 install --break-system-packages --ignore-installed {remote_wheel}"
-                )
-                stdin, stdout, stderr = client.exec_command(install_cmd, get_pty=True, timeout=60)
+                # Use --ignore-installed to avoid conflicts with system-managed packages like typing_extensions
+                install_cmd = f"sudo pip3 install --upgrade --ignore-installed --break-system-packages {remote_wheel}"
+                stdin, stdout, stderr = client.exec_command(install_cmd, get_pty=True, timeout=120)
                 rc = stdout.channel.recv_exit_status()
+                out = stdout.read().decode().strip()
+                err = stderr.read().decode().strip()
                 if rc == 0:
                     # Verify package actually installed by checking pip list
                     stdin_check, stdout_check, stderr_check = client.exec_command("pip3 list | grep nebius-vpngw", timeout=10)
@@ -240,8 +239,11 @@ WantedBy=multi-user.target
                     except Exception as e:
                         print(f"[SSHPush] Failed to stage systemd unit: {e}")
                 else:
-                    err = stderr.read().decode().strip()
-                    print(f"[SSHPush] Package installation failed: {err}")
+                    print(f"[SSHPush] Package installation failed (rc={rc})")
+                    if out:
+                        print(f"[SSHPush] stdout: {out[-500:]}" if len(out) > 500 else f"[SSHPush] stdout: {out}")
+                    if err:
+                        print(f"[SSHPush] stderr: {err[-500:]}" if len(err) > 500 else f"[SSHPush] stderr: {err}")
                     print("[SSHPush] WARNING: Continuing with config push, but agent may not work")
             except Exception as e:
                 print(f"[SSHPush] Failed to deploy package: {e}")
@@ -276,14 +278,14 @@ WantedBy=multi-user.target
             "if [ -f /usr/local/bin/nebius-vpngw-fix-routes.sh ]; then sudo chmod 0755 /usr/local/bin/nebius-vpngw-fix-routes.sh; fi",
             "if [ -f /tmp/nebius-vpngw-fix-routes.service ]; then sudo mv /tmp/nebius-vpngw-fix-routes.service /etc/systemd/system/nebius-vpngw-fix-routes.service; fi",
             "if [ -f /tmp/nebius-vpngw-fix-routes.timer ]; then sudo mv /tmp/nebius-vpngw-fix-routes.timer /etc/systemd/system/nebius-vpngw-fix-routes.timer; fi",
-            "sudo chmod 0644 /etc/systemd/system/nebius-vpngw-fix-routes.service",
-            "sudo chmod 0644 /etc/systemd/system/nebius-vpngw-fix-routes.timer",
+            "if [ -f /etc/systemd/system/nebius-vpngw-fix-routes.service ]; then sudo chmod 0644 /etc/systemd/system/nebius-vpngw-fix-routes.service; fi",
+            "if [ -f /etc/systemd/system/nebius-vpngw-fix-routes.timer ]; then sudo chmod 0644 /etc/systemd/system/nebius-vpngw-fix-routes.timer; fi",
             # Refresh systemd unit if staged
             "if [ -f /tmp/nebius-vpngw-agent.service ]; then sudo mv /tmp/nebius-vpngw-agent.service /etc/systemd/system/nebius-vpngw-agent.service; fi",
             "sudo chmod 0644 /etc/systemd/system/nebius-vpngw-agent.service",
             "sudo systemctl daemon-reload",
-            # Enable and start route fix timer
-            "sudo systemctl enable --now nebius-vpngw-fix-routes.timer",
+            # Enable and start route fix timer (only if service file exists)
+            "if [ -f /etc/systemd/system/nebius-vpngw-fix-routes.timer ]; then sudo systemctl enable --now nebius-vpngw-fix-routes.timer; fi",
             # Start service if inactive, reload if active
             "sudo systemctl is-active --quiet nebius-vpngw-agent && sudo systemctl reload nebius-vpngw-agent || sudo systemctl start nebius-vpngw-agent",
         ]
