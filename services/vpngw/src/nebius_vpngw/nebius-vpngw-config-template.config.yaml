@@ -199,9 +199,6 @@ connections:
     ike_version: 1
     remote_public_ip: "203.0.113.5"
     psk: ${ONPREM_TUNNEL_1_PSK}
-    inner_cidr: "169.254.20.0/30"
-    inner_local_ip: "169.254.20.1"
-    inner_remote_ip: "169.254.20.2"
     crypto:
       ike_proposals:
       - "aes256-sha256-modp2048"

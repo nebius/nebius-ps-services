@@ -129,10 +129,10 @@ def apply(
     local_config_file: t.Optional[Path] = typer.Option(None, exists=True, readable=True, help=f"Path to {DEFAULT_CONFIG_FILENAME}"),
     peer_config_file: t.List[Path] = typer.Option([], exists=True, readable=True, help="Vendor peer config file(s)"),
     recreate_gw: bool = typer.Option(False, help="Delete and recreate gateway VMs before applying"),
-    sa: t.Optional[str] = typer.Option(None, help="If provided, ensure a Service Account with this name and use it for auth"),
+    sa: t.Optional[str] = typer.Option(None, hidden=True, help="If provided, ensure a Service Account with this name and use it for auth"),
     project_id: t.Optional[str] = typer.Option(None, help="Nebius project/folder identifier"),
     zone: t.Optional[str] = typer.Option(None, help="Nebius zone for gateway VMs"),
-    dry_run: bool = typer.Option(False, help="Render actions without applying"),
+    dry_run: bool = typer.Option(False, hidden=True, help="Render actions without applying"),
     add_route: bool = typer.Option(False, help="(Experimental) Ensure VPC routes to VPN gateway for remote_prefixes"),
     list_route: bool = typer.Option(False, help="List VPC routes for subnets matching gateway.local_prefixes"),
 ):
@@ -329,6 +329,85 @@ def apply(
         routes.reconcile(plan)
 
     print("[green]Apply completed successfully.[/green]")
+
+
+@app.command()
+def validate_config(
+    config_file: Path = typer.Argument(
+        ...,
+        exists=True,
+        readable=True,
+        help="Path to configuration file to validate"
+    ),
+):
+    """Validate configuration file against schema without deploying.
+    
+    This command performs comprehensive validation including:
+    - Schema compliance (correct structure, no unknown fields)
+    - Type checking (strings, numbers, booleans, lists)
+    - Field constraints (IP addresses, CIDRs, ASN ranges)
+    - Logical consistency (BGP mode requires remote_asn, etc.)
+    - Resource quotas (connections, tunnels within limits)
+    
+    Examples:
+        nebius-vpngw validate-config my-config.yaml
+        nebius-vpngw validate-config nebius-gcp-ha-vpngw.config.yaml
+    """
+    from rich.console import Console
+    from rich.panel import Panel
+    from pydantic import ValidationError
+    from . import schema
+    from .config_loader import load_local_config
+    
+    console = Console()
+    
+    try:
+        console.print(f"[bold]Validating configuration: {config_file}[/bold]")
+        
+        # Load and validate (this will trigger schema validation)
+        local_cfg = load_local_config(config_file)
+        
+        # Extract key metrics for summary
+        connections_count = len(local_cfg.get("connections", []))
+        tunnels_count = sum(len(c.get("tunnels", [])) for c in local_cfg.get("connections", []))
+        instance_count = local_cfg.get("gateway_group", {}).get("instance_count", 1)
+        
+        # Success message with summary
+        console.print()
+        console.print(Panel.fit(
+            f"[bold green]✓ Configuration is valid![/bold green]\n\n"
+            f"[dim]Summary:[/dim]\n"
+            f"  • Gateway instances: {instance_count}\n"
+            f"  • Connections: {connections_count}\n"
+            f"  • Tunnels: {tunnels_count}\n"
+            f"  • Schema version: v{local_cfg.get('version', 1)}",
+            title="[green]Validation Passed[/green]",
+            border_style="green"
+        ))
+        console.print()
+        console.print("[dim]You can now run 'nebius-vpngw apply' to deploy this configuration.[/dim]")
+        
+    except ValueError as e:
+        # Schema validation errors or missing env vars
+        console.print()
+        console.print(Panel.fit(
+            f"[bold red]✗ Configuration validation failed[/bold red]\n\n"
+            f"{str(e)}",
+            title="[red]Validation Error[/red]",
+            border_style="red"
+        ))
+        raise typer.Exit(code=1)
+    
+    except Exception as e:
+        # Unexpected errors
+        console.print()
+        console.print(Panel.fit(
+            f"[bold red]✗ Unexpected error during validation[/bold red]\n\n"
+            f"{str(e)}",
+            title="[red]Error[/red]",
+            border_style="red"
+        ))
+        raise typer.Exit(code=1)
 
 
 @app.command()

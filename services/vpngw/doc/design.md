@@ -68,12 +68,102 @@ Version: v0.2
 - Environment placeholders `${VAR}` expand; all missing vars reported together.
 - First run convenience: if no local config is provided/found, CLI copies a template to CWD then exits.
 
+### 6.1. Schema Validation
+
+**Strict, versioned schema validation** (Pydantic-based) protects against configuration errors:
+
+**Purpose:**
+
+- Catches typos before deployment (e.g., `inner_ciddr` → caught as unknown field)
+- Enforces type safety (numbers, IPs, CIDRs validated)
+- Validates constraints (ASN ranges, /30 subnets, APIPA ranges)
+- Checks logical consistency (BGP requires `remote_asn`, static forbids it)
+- Verifies resource quotas (connections/tunnels within limits)
+
+**API Versioning:**
+
+- `version: 1` field required in config
+- Future schema changes → new version number
+- Backwards compatibility maintained through version detection
+
+**Validation Features:**
+
+- `extra="forbid"` on all models → rejects unknown fields
+- Field validators: IP addresses, CIDR ranges, ASN ranges (64512-65534)
+- Cross-field validators: inner IPs must be within inner_cidr, not network/broadcast
+- Quota validators: total connections/tunnels within max limits
+- Routing mode consistency: BGP mode requires BGP config, static forbids it
+
+**CLI Integration:**
+
+```bash
+# Validate configuration without deployment (recommended first step)
+nebius-vpngw validate-config nebius-vpngw.config.yaml
+
+# Validation runs automatically during apply
+nebius-vpngw apply --local-config-file nebius-vpngw.config.yaml
+```
+
+**Important:** The `validate-config` command takes the config file as a **positional argument**, not as `--local-config-file`. This is different from other commands like `apply` which use the flag syntax.
+
+**Example Validation Errors:**
+
+```text
+Configuration validation failed:
+  • connections -> 0 -> tunnels -> 0 -> inner_cidr: inner_cidr '192.168.1.0/30' must be in APIPA range 169.254.0.0/16
+  • connections -> 1 -> bgp -> remote_asn: remote_asn is required when BGP is enabled
+  • gateway -> local_asn: ASN 65535 is invalid. Use private ASN (64512-65534)
+  • connections -> 0 -> tunnels -> 1 -> inner_ciddr: Extra inputs are not permitted
+```
+
+**Security Benefits:**
+
+- No blind concatenation of arbitrary fields into shell commands
+- Only validated, typed values used in templates (strongSwan, FRR)
+- Prevents injection-like problems via malformed YAML
+- Clear error messages guide users to fix issues
+
+**Implementation:**
+
+- `src/nebius_vpngw/schema.py`: Pydantic models for entire config structure
+- `src/nebius_vpngw/config_loader.py`: Validates after env expansion, before processing
+- `src/nebius_vpngw/cli.py`: `validate-config` command for standalone validation
+
 ## 7. Workflows & CLI
 
-- Command: `nebius-vpngw` (or `python -m nebius_vpngw`).
-- Typical apply: parse args → load YAML and peer configs → merge and validate → ensure network/subnet → ensure VMs + allocations → push per-VM config over SSH → `systemctl reload nebius-vpngw-agent` → reconcile static routes (if static mode).
-- Flags: `--local-config-file`, repeatable `--peer-config-file`, `--recreate-gw`, `--project-id`, `--zone`, `--dry-run`.
+### 7.1. Commands
+
+**Configuration Validation:**
+
+- `nebius-vpngw validate-config <config-file>`: Validates configuration against schema without deployment
+  - Takes config file as positional argument (not `--local-config-file`)
+  - Performs full schema validation (types, constraints, logical consistency)
+  - Returns exit code 0 (valid) or 1 (invalid)
+  - Displays rich formatted output with summary or detailed errors
+  - Use before deployment to catch errors early
+
+**Deployment:**
+
+- `nebius-vpngw apply --local-config-file <file>`: Deploy or update gateway
+  - Runs schema validation automatically before deployment
+  - Flags: `--local-config-file`, `--peer-config-file` (repeatable), `--recreate-gw`, `--project-id`, `--zone`
+  - Typical flow: parse args → load YAML → validate schema → merge peer configs → ensure network/subnet → ensure VMs + allocations → push per-VM config over SSH → `systemctl reload nebius-vpngw-agent` → reconcile static routes (if static mode)
+
+**Status & Monitoring:**
+
+- `nebius-vpngw status --local-config-file <file>`: Show tunnel status and gateway health
+- `nebius-vpngw list-routes --local-config-file <file>`: List VPC routes
+- `nebius-vpngw add-routes --local-config-file <file>`: Add static routes to VPC
+
+**Default Behavior:**
+
+- Running `nebius-vpngw` alone (with config present): shows status
+- Running `nebius-vpngw` alone (no config): creates template from embedded template
+
+### 7.2. Peer Import & Merging
+
 - Peer import: vendor parsers (GCP/AWS/Azure/Cisco) normalize templates; merger fills only missing fields—YAML topology is never overridden.
+- Merge precedence: tunnel overrides connection overrides peer-config overrides defaults
 
 ## 8. Routing Modes & Local Prefixes
 
@@ -827,6 +917,7 @@ The codebase is organized into distinct modules with clear separation of concern
 │   ├── __main__.py                       # Python module entry point
 │   ├── cli.py                            # CLI orchestrator (nebius-vpngw command)
 │   ├── config_loader.py                  # YAML parser and peer config merger
+│   ├── schema.py                         # Pydantic schema for YAML config validation
 │   ├── build.py                          # Binary build utilities
 │   ├── vpngw_sa.py                       # Service account management
 │   ├── agent/
@@ -863,6 +954,7 @@ The codebase is organized into distinct modules with clear separation of concern
 
 - `cli.py`: Main entry point for the `nebius-vpngw` command. Orchestrates VM provisioning, config deployment, and status checks.
 - `config_loader.py`: Parses YAML configuration, merges peer configs, expands environment variables, validates schema.
+- `schema.py`: Pydantic models for strict YAML config validation with type checking, field constraints, and logical consistency verification.
 - `vpngw_sa.py`: Manages Nebius service account lifecycle for API authentication.
 - `build.py`: Utilities for building standalone binaries (PyInstaller).
 

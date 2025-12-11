@@ -17,8 +17,11 @@ A modular Python-based orchestrator and agent to provision Nebius VMs as Site-to
 - [Quick Start](#quick-start)
 - [Security](#security)
 - [Configuration](#configuration)
+  - [Schema Validation](#schema-validation)
+  - [Configuration File Structure](#configuration-file-structure)
 - [CLI Usage](#cli-usage)
 - [Monitoring and Troubleshooting](#monitoring-and-troubleshooting)
+- [Advanced Options](#advanced-options)
 - [Development](#development)
 - [Project Structure](#project-structure)
 - [License](#license)
@@ -32,33 +35,42 @@ A modular Python-based orchestrator and agent to provision Nebius VMs as Site-to
 
 ### Installation
 
-Install using pip (recommended):
+1. **Clone the repository:**
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -U pip wheel
-pip install -e .
-```
+   ```bash
+   git clone https://github.com/nebius/nebius-ps-services.git
+   cd nebius-ps-services/services/vpngw
+   ```
 
-Verify installation:
+2. **Install using pip (recommended):**
 
-```bash
-nebius-vpngw --help
-```
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
+   pip install -U pip wheel
+   pip install -e .
+   ```
+
+3. **Verify installation:**
+
+   ```bash
+   nebius-vpngw --help
+   ```
 
 ### Authentication
 
-Set up Nebius API credentials:
+Ensure you're authenticated with Nebius CLI:
 
 ```bash
-export TENANT_ID="your-tenant-id"
+# If not already logged in
+nebius login
+
+# Set environment variables
 export PROJECT_ID="your-project-id"
 export REGION_ID="eu-north1"
-export NEBIUS_IAM_TOKEN="$(your_token_command)"
 ```
 
-Alternatively, use service account authentication with the `--sa` flag (CLI will create/reuse the service account automatically).
+The CLI automatically uses your Nebius CLI authentication token.
 
 ### First Deployment
 
@@ -80,26 +92,26 @@ Alternatively, use service account authentication with the `--sa` flag (CLI will
        ssh_public_key_path: "~/.ssh/id_ed25519.pub"
    ```
 
-3. **Preview changes (dry-run):**
+3. **Deploy gateway:**
 
    ```bash
-   nebius-vpngw --local-config-file ./nebius-vpngw.config.yaml --dry-run
-   ```
-
-4. **Deploy gateway:**
-
-   ```bash
-   nebius-vpngw \
+   nebius-vpngw apply \
      --local-config-file ./nebius-vpngw.config.yaml \
-     --sa nb-vpngw-sa \
      --project-id "$PROJECT_ID" \
      --zone "${REGION_ID}-a"
    ```
 
-5. **Check tunnel status:**
+4. **Check tunnel status:**
 
    ```bash
    nebius-vpngw status --local-config-file ./nebius-vpngw.config.yaml
+   ```
+
+   Or simply (if config exists in current directory):
+
+   ```bash
+   nebius-vpngw status
+   # Or just: nebius-vpngw (status is the default action)
    ```
 
 ## Security
@@ -193,6 +205,47 @@ nebius-vpngw apply --recreate-gw --local-config-file ./nebius-vpngw.config.yaml
 
 ## Configuration
 
+### Schema Validation
+
+The configuration file is validated against a strict, versioned schema that:
+
+- **Rejects unknown fields** - Catches typos like `inner_ciddr` instead of `inner_cidr`
+- **Enforces types** - Ensures numbers are numbers, IPs are valid, CIDRs are correct
+- **Validates constraints** - ASN ranges (64512-65534), /30 subnets, APIPA ranges
+- **Checks consistency** - BGP mode requires `remote_asn`, static mode forbids it
+- **Verifies quotas** - Total connections and tunnels within limits
+
+**Validate before deploying:**
+
+```bash
+nebius-vpngw validate-config nebius-vpngw.config.yaml
+```
+
+**Note:** The config file is passed as a positional argument, not using `--local-config-file`.
+
+**Example validation output:**
+
+```text
+✓ Configuration is valid!
+
+Summary:
+  • Gateway instances: 1
+  • Connections: 2
+  • Tunnels: 3
+  • Schema version: v1
+```
+
+**Common validation errors:**
+
+```text
+Configuration validation failed:
+  • connections -> 0 -> tunnels -> 0 -> inner_cidr: inner_cidr '192.168.1.0/30' must be in APIPA range 169.254.0.0/16
+  • connections -> 1 -> bgp -> remote_asn: remote_asn is required when BGP is enabled
+  • gateway -> local_asn: ASN 65535 is invalid. Use private ASN (64512-65534) or public ASN (1-64511)
+```
+
+The schema validation runs automatically during `nebius-vpngw apply`, but using `validate-config` first helps catch errors early without deployment overhead.
+
 ### Configuration File Structure
 
 The main configuration file (`nebius-vpngw.config.yaml`) contains:
@@ -219,7 +272,7 @@ gateway_group:
 
   # Use existing allocations
   external_ips:
-  - 66.201.4.131
+  - 203.0.113.10  # Replace with your actual public IP
 ```
 
 Public IPs are preserved during VM recreation.
@@ -270,22 +323,33 @@ Supported vendors:
 
 ### Commands
 
+**Validate configuration file (recommended before deployment):**
+
+```bash
+nebius-vpngw validate-config nebius-vpngw.config.yaml
+```
+
+This validates your configuration against the schema without deploying. Use this to catch errors early:
+
+- Typos in field names
+- Invalid IP addresses or CIDRs
+- Incorrect ASN ranges
+- Missing required fields for BGP/static modes
+- Quota violations
+
 **Deploy or update gateway:**
 
 ```bash
 nebius-vpngw apply --local-config-file ./nebius-vpngw.config.yaml
 ```
 
-**View tunnel status and system health:**
+Note: Validation runs automatically during `apply`, but running `validate-config` first helps catch errors without deployment overhead.
+
+**View tunnel status and system health (default action):**
 
 ```bash
 nebius-vpngw status --local-config-file ./nebius-vpngw.config.yaml
-```
-
-**Preview changes (dry-run):**
-
-```bash
-nebius-vpngw --local-config-file ./nebius-vpngw.config.yaml --dry-run
+# Or simply: nebius-vpngw (status is the default if config exists)
 ```
 
 **List VPC routes:**
@@ -300,10 +364,7 @@ nebius-vpngw list-routes --local-config-file ./nebius-vpngw.config.yaml
 nebius-vpngw add-routes --local-config-file ./nebius-vpngw.config.yaml
 ```
 
-### Authentication Options
-
-- `--sa <name>`: Create/use service account with Editor permissions
-- Without `--sa`: Uses Nebius CLI default profile credentials
+**Note:** The CLI automatically uses your Nebius CLI authentication (via `nebius login`). Token is fetched automatically from Nebius CLI configuration.
 
 ### VM Recreation
 
@@ -625,6 +686,99 @@ ping <peer-subnet-ip>
 traceroute <peer-subnet-ip>
 ```
 
+## Advanced Options
+
+This section covers advanced CLI flags and features for specific use cases.
+
+### Dry-run Mode
+
+Preview what changes would be applied without actually making them:
+
+```bash
+nebius-vpngw apply --local-config-file ./nebius-vpngw.config.yaml --dry-run
+```
+
+**Use cases:**
+
+- Validating configuration changes before deployment
+- CI/CD pipeline testing
+- Understanding what resources will be created/modified
+
+**What it does:**
+
+- Parses and validates YAML configuration
+- Merges peer configs and resolves environment variables
+- Shows a summary of planned actions
+- Exits without creating VMs or pushing configs
+
+**Example output:**
+
+```text
+Dry-run: showing summary of actions
+
+Gateway Group: vpngw
+  Instances: 1
+  VM Spec: 8 cores, 16GB RAM, 50GB boot disk
+  Network: default-vpc / vpngw-subnet
+  Connections: 2 (gcp-ha-tunnel-1, gcp-ha-tunnel-2)
+  Tunnels: 2 active BGP tunnels
+```
+
+### Service Account Authentication
+
+Create and use a Nebius service account for authentication (useful for CI/CD or automation):
+
+```bash
+nebius-vpngw apply \
+  --local-config-file ./nebius-vpngw.config.yaml \
+  --sa nb-vpngw-sa \
+  --project-id "$PROJECT_ID" \
+  --zone "${REGION_ID}-a"
+```
+
+**What it does:**
+
+1. Creates a service account named `nb-vpngw-sa` if it doesn't exist
+2. Assigns Editor permissions to the service account
+3. Generates and uses a temporary access token for this deployment
+4. Token is automatically injected into `NEBIUS_IAM_TOKEN` environment variable
+
+**Use cases:**
+
+- **CI/CD pipelines:** Automate deployments without interactive login
+- **Automation scripts:** Run deployments from cron jobs or orchestration tools
+- **Multi-account management:** Different service accounts for different environments
+
+**When NOT to use:**
+
+- Regular developer workflows (use `nebius login` instead)
+- Local testing and debugging
+- Interactive deployments
+
+**Security considerations:**
+
+- Service account has Editor permissions on the project
+- Access tokens are temporary and expire after the session
+- Consider using more restrictive roles for production (custom role with minimal permissions)
+- Store service account credentials securely (use secrets managers in CI/CD)
+
+**Example CI/CD usage (GitHub Actions):**
+
+```yaml
+- name: Deploy VPN Gateway
+  env:
+    PROJECT_ID: ${{ secrets.NEBIUS_PROJECT_ID }}
+    REGION_ID: eu-north1
+  run: |
+    nebius-vpngw apply \
+      --local-config-file ./nebius-vpngw.config.yaml \
+      --sa github-actions-vpngw \
+      --project-id "$PROJECT_ID" \
+      --zone "${REGION_ID}-a"
+```
+
+**Note:** Both `--sa` and `--dry-run` flags are hidden from `--help` output to keep the standard usage simple. They remain fully functional for advanced use cases.
+
 ## Development
 
 This section is for contributors and maintainers.
@@ -927,6 +1081,7 @@ print("Nebius SDK OK:", sdk)
 │   ├── __main__.py                       # Python module entry point
 │   ├── cli.py                            # CLI orchestrator (nebius-vpngw command)
 │   ├── config_loader.py                  # YAML parser and peer config merger
+│   ├── schema.py                         # Pydantic schema for YAML config validation
 │   ├── build.py                          # Binary build utilities
 │   ├── vpngw_sa.py                       # Service account management
 │   ├── agent/

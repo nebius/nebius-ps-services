@@ -9,6 +9,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+from pydantic import ValidationError
+
+from . import schema
 
 
 @dataclass
@@ -151,7 +154,9 @@ def load_local_config(path: Path) -> dict:
             "Missing environment variables for placeholders: "
             + ", ".join(sorted(missing))
         )
+    
     # Optional convenience: read SSH public key from a path if provided
+    # DO THIS BEFORE SCHEMA VALIDATION so schema sees the inline key
     try:
         gg = expanded.get("gateway_group", {}) or {}
         vm_spec = gg.get("vm_spec", {}) or {}
@@ -162,15 +167,36 @@ def load_local_config(path: Path) -> dict:
             if not p.exists():
                 raise ValueError(f"SSH public key file not found: {p}")
             key_text = p.read_text(encoding="utf-8").strip()
-            # Insert content into ssh_public_key and drop the *_path field
+            # Insert content into ssh_public_key (keep the path for reference)
             vm_spec["ssh_public_key"] = key_text
-            if "ssh_public_key_path" in vm_spec:
-                del vm_spec["ssh_public_key_path"]
             gg["vm_spec"] = vm_spec
             expanded["gateway_group"] = gg
     except Exception as e:
         # Re-raise as ValueError to provide a clear message to CLI
         raise ValueError(str(e))
+    
+    # ============================================================================
+    # SCHEMA VALIDATION: Validate against strict Pydantic schema
+    # This catches typos, unknown fields, type errors, and constraint violations
+    # ============================================================================
+    try:
+        validated_config = schema.validate_config(expanded)
+        # Convert back to dict for downstream processing
+        # (preserves existing code paths while ensuring schema compliance)
+        expanded = validated_config.model_dump(mode="python", exclude_none=False)
+    except ValidationError as e:
+        # Format Pydantic errors into user-friendly messages
+        errors = []
+        for err in e.errors():
+            loc = " -> ".join(str(x) for x in err["loc"])
+            msg = err["msg"]
+            errors.append(f"  • {loc}: {msg}")
+        
+        raise ValueError(
+            "Configuration validation failed:\n" + "\n".join(errors) +
+            "\n\nPlease fix these errors and try again. "
+            "Run 'nebius-vpngw validate-config <file>' to validate without deploying."
+        )
 
     return expanded
 
