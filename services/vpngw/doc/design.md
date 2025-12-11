@@ -578,8 +578,3 @@ nebius-vpngw apply --local-config-file test.config.yaml
 **Peer Config Parsers:**
 
 - `gcp.py`, `aws.py`, `azure.py`, `cisco.py`: Parse vendor-specific configs
-
-## References
-
-- Architecture Diagram: ![GCP to Nebius Site to Site VPN](image/ha-vpn-gcp-to-on-prem.svg "GCP to Nebius Site to Site VPN")
-- Google Cloud VPN topologies: [Documentation](https://cloud.google.com/network-connectivity/docs/vpn/concepts/topologies)
