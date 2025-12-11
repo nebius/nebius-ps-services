@@ -1,4 +1,19 @@
 # nebius-vpngw-config-template.config.yaml
+#
+# ⚠️  REFERENCE ONLY - NOT USED BY CODE ⚠️
+#
+# This file is kept in the repository for reference and documentation purposes.
+# The actual template used by the CLI is embedded in config_template.py
+# to ensure it always stays in sync with the Pydantic schema.
+#
+# When users run 'nebius-vpngw' without a config file, the embedded template
+# from config_template.py is written to their directory, not this file.
+#
+# If you need to update the template, edit src/nebius_vpngw/config_template.py
+# and keep this file in sync for documentation purposes only.
+#
+###############################################################################
+
 # Template config for Nebius VM-based VPN Gateway.
 # Sections: gateway_group (infra), gateway (routing identity/prefixes), defaults (behavior), connections (peers+tunnels).
 # Override order: tunnel > connection > defaults; gateway.local_prefixes is the single source of truth for Nebius prefixes.
@@ -26,8 +41,8 @@ gateway_group:
   # Single NIC + two HA tunnels: leave empty to auto-allocate one public IP and set local_public_ip_index: 0 on each tunnel.
   # Example:
   # external_ips:
-  #   - ["1.2.3.4"]  # instance 0, eth0
-  #   - ["5.6.7.8"]  # instance 1, eth0
+  #   - ["203.0.113.10"]  # instance 0, eth0
+  #   - ["203.0.113.20"]  # instance 1, eth0
 
   # VM specification.
   vm_spec:
@@ -135,7 +150,7 @@ connections:
     local_public_ip_index: 0
     ha_role: "active" # Set to "passive" to keep this tunnel down (useful for troubleshooting)
     ike_version: null
-    remote_public_ip: "35.242.0.10"
+    remote_public_ip: "203.0.113.1"
     psk: ${GCP_TUNNEL_1_PSK}
     # Inner tunnel IPs (link-local /30 for BGP peering):
     # - inner_cidr: The full /30 subnet (4 IPs: network, 2 usable hosts, broadcast)
@@ -152,7 +167,7 @@ connections:
     local_public_ip_index: 0
     ha_role: "active" # Set to "passive" to keep this tunnel down
     ike_version: null
-    remote_public_ip: "35.220.0.10"
+    remote_public_ip: "203.0.113.2"
     psk: ${GCP_TUNNEL_2_PSK}
     # Inner tunnel IPs - see tunnel 1 comments for detailed explanation
     inner_cidr: "169.254.11.0/30"
@@ -173,7 +188,7 @@ connections:
   - name: "gcp-classic-tunnel-1"
     gateway_instance_index: 0
     ike_version: 2
-    remote_public_ip: "34.155.169.244"
+    remote_public_ip: "203.0.113.3"
     psk: ${GCP_CLASSIC_PSK}
     crypto:
       ike_proposals:

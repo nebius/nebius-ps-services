@@ -64,7 +64,6 @@ pyinstaller = ">=6.17.0,<7.0.0"
 # (Dependencies, groups, packages, include remain here.)
 packages = [{ include = "nebius_vpngw", from = "src" }]
 include = [
-    "src/nebius_vpngw/nebius-vpngw-config-template.config.yaml",
     "src/nebius_vpngw/systemd/*"
 ]
 

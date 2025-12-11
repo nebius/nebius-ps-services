@@ -3,7 +3,6 @@ import os
 import typing as t
 from pathlib import Path
 import shutil
-import importlib.resources as resources
 import re
 
 import typer
@@ -13,9 +12,9 @@ from .config_loader import load_local_config, merge_with_peer_configs, ResolvedD
 from .deploy.vm_manager import VMManager
 from .deploy.ssh_push import SSHPush
 from .deploy.route_manager import RouteManager
+from .config_template import DEFAULT_CONFIG_TEMPLATE
 
 DEFAULT_CONFIG_FILENAME = "nebius-vpngw.config.yaml"
-DEFAULT_TEMPLATE_FILENAME = "nebius-vpngw-config-template.config.yaml"
 
 app = typer.Typer(
     add_completion=False,
@@ -28,44 +27,13 @@ Use --local-config-file to specify a different config file if needed.
 )
 
 
-def _create_minimal_config(template_path: Path, output_path: Path) -> None:
-    """Create a minimal config file by stripping comments and blank lines from template."""
-    lines = template_path.read_text(encoding="utf-8").splitlines()
-    minimal_lines = []
-    
-    for line in lines:
-        # Skip blank lines
-        if not line.strip():
-            continue
-        
-        # Skip full-line comments
-        if line.strip().startswith("#"):
-            continue
-        
-        # Remove inline comments but keep the content
-        # Handle cases like: key: "value"  # comment
-        if "#" in line:
-            # Find the # that's not inside quotes
-            in_quotes = False
-            quote_char = None
-            for i, char in enumerate(line):
-                if char in ('"', "'") and (i == 0 or line[i-1] != "\\"):
-                    if not in_quotes:
-                        in_quotes = True
-                        quote_char = char
-                    elif char == quote_char:
-                        in_quotes = False
-                elif char == "#" and not in_quotes:
-                    line = line[:i].rstrip()
-                    break
-        
-        # Skip if line becomes empty after removing comment
-        if not line.strip():
-            continue
-            
-        minimal_lines.append(line)
-    
-    output_path.write_text("\n".join(minimal_lines) + "\n", encoding="utf-8")
+def _create_config_from_template(output_path: Path) -> None:
+    """Write the embedded config template to user's directory."""
+    try:
+        output_path.write_text(DEFAULT_CONFIG_TEMPLATE, encoding="utf-8")
+    except Exception as e:
+        print(f"[red]Failed to write config template:[/red] {e}")
+        raise typer.Exit(code=1)
 
 
 def _resolve_local_config(
@@ -74,7 +42,7 @@ def _resolve_local_config(
     create_if_missing: bool,
     exit_after_create: bool,
 ) -> Path:
-    """Resolve config path, optionally creating a template and exiting."""
+    """Resolve config path, optionally creating from embedded template and exiting."""
     if local_config_file is not None:
         return local_config_file
 
@@ -87,14 +55,17 @@ def _resolve_local_config(
         print("[yellow]Run 'nebius-vpngw' first to create a template config.[/yellow]")
         raise typer.Exit(code=1)
 
-    try:
-        with resources.as_file(resources.files("nebius_vpngw").joinpath(DEFAULT_TEMPLATE_FILENAME)) as tpl_path:
-            _create_minimal_config(tpl_path, default_path)
-        print(f"[green]Created minimal config at[/green] {default_path}")
-        print("[bold]Please edit the file to fill environment-specific values and secrets, then re-run.[/bold]")
-    except Exception as e:
-        print(f"[red]Failed to create default config:[/red] {e}")
-        raise typer.Exit(code=1)
+    _create_config_from_template(default_path)
+    print(f"[green]✓ Created config template at[/green] {default_path}")
+    print()
+    print("[bold]Next steps:[/bold]")
+    print("  1. Edit the file to set your project context (tenant_id, project_id, region_id)")
+    print("  2. Configure gateway VMs (instance_count, vm_spec, external_ips)")
+    print("  3. Define connections and tunnels with peer details")
+    print("  4. Set secrets via environment variables (e.g., export GCP_TUNNEL_1_PSK=...)")
+    print("  5. Validate: [cyan]nebius-vpngw validate-config nebius-vpngw.config.yaml[/cyan]")
+    print("  6. Deploy: [cyan]nebius-vpngw apply[/cyan]")
+    print()
 
     if exit_after_create:
         raise typer.Exit(code=0)
@@ -331,7 +302,7 @@ def apply(
     print("[green]Apply completed successfully.[/green]")
 
 
-@app.command()
+@app.command(options_metavar="")
 def validate_config(
     config_file: Path = typer.Argument(
         ...,
@@ -403,6 +374,108 @@ def validate_config(
         console.print()
         console.print(Panel.fit(
             f"[bold red]✗ Unexpected error during validation[/bold red]\n\n"
+            f"{str(e)}",
+            title="[red]Error[/red]",
+            border_style="red"
+        ))
+        raise typer.Exit(code=1)
+
+
+@app.command(options_metavar="")
+def create_config(
+    config_file: Path = typer.Argument(
+        ...,
+        help="Path for new configuration file (recommended: *.config.yaml)"
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Overwrite existing file if it exists"
+    ),
+):
+    """Create a new configuration file from template.
+    
+    Generates a new YAML configuration file with comprehensive comments and examples.
+    The template includes all available options for gateway setup, crypto settings,
+    BGP/static routing, and tunnel configuration.
+    
+    Security best practice: Use *.config.yaml extension - these files are git-ignored
+    automatically to prevent committing sensitive information (IPs, ASNs, secrets).
+    
+    Examples:
+        nebius-vpngw create-config gcp-ha-vpn.config.yaml
+        nebius-vpngw create-config aws-vpn.config.yaml
+        nebius-vpngw create-config test.yaml  # Warning: not git-ignored
+    """
+    from rich.console import Console
+    from rich.panel import Panel
+    
+    console = Console()
+    
+    # Check if file exists
+    if config_file.exists() and not force:
+        console.print()
+        console.print(Panel.fit(
+            f"[bold red]✗ File already exists[/bold red]\n\n"
+            f"Path: {config_file}\n\n"
+            f"Use --force to overwrite, or choose a different filename.",
+            title="[red]Error[/red]",
+            border_style="red"
+        ))
+        raise typer.Exit(code=1)
+    
+    # Warn if not using .config.yaml extension
+    if not str(config_file).endswith(".config.yaml"):
+        console.print()
+        console.print(Panel.fit(
+            f"[bold yellow]⚠️  Security Warning[/bold yellow]\n\n"
+            f"File: [cyan]{config_file}[/cyan]\n\n"
+            f"The filename does not end with [bold].config.yaml[/bold]\n\n"
+            f"Files matching [bold]*.config.yaml[/bold] are automatically git-ignored to prevent\n"
+            f"committing sensitive information (public IPs, ASNs, PSKs).\n\n"
+            f"[bold red]This file may be tracked by git and could expose secrets![/bold red]\n\n"
+            f"[dim]Recommended: Use a .config.yaml extension (e.g., {config_file.stem}.config.yaml)[/dim]",
+            title="[yellow]⚠️  Not Git-Ignored[/yellow]",
+            border_style="yellow"
+        ))
+        
+        # Ask for confirmation
+        console.print()
+        proceed = typer.confirm("Do you want to proceed anyway?", default=False)
+        if not proceed:
+            console.print("[yellow]Cancelled.[/yellow]")
+            raise typer.Exit(code=0)
+        console.print()
+    
+    # Create the config file
+    try:
+        _create_config_from_template(config_file)
+        
+        console.print()
+        console.print(Panel.fit(
+            f"[bold green]✓ Configuration template created[/bold green]\n\n"
+            f"File: [cyan]{config_file}[/cyan]\n\n"
+            f"[dim]Next steps:[/dim]\n"
+            f"  1. Edit file to set project context (tenant_id, project_id, region_id)\n"
+            f"  2. Configure gateway VMs and networking\n"
+            f"  3. Define connections and tunnels with peer details\n"
+            f"  4. Set secrets via environment variables\n"
+            f"  5. Validate: [cyan]nebius-vpngw validate-config {config_file}[/cyan]\n"
+            f"  6. Deploy: [cyan]nebius-vpngw apply --local-config-file {config_file}[/cyan]",
+            title="[green]Success[/green]",
+            border_style="green"
+        ))
+        
+        # Additional warning for non-.config.yaml files
+        if not str(config_file).endswith(".config.yaml"):
+            console.print()
+            console.print("[bold red]Remember: This file is NOT git-ignored. Do not commit secrets![/bold red]")
+        
+    except Exception as e:
+        console.print()
+        console.print(Panel.fit(
+            f"[bold red]✗ Failed to create configuration file[/bold red]\n\n"
             f"{str(e)}",
             title="[red]Error[/red]",
             border_style="red"
