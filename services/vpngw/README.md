@@ -424,7 +424,7 @@ nebius-vpngw status --local-config-file <file>
 
 **Common issues:**
 
-- **No OPEN messages:** IPsec tunnel not established or XFRM interface down
+- **No OPEN messages:** IPsec tunnel not established or VTI interface down
 - **OPEN errors:** ASN mismatch between peers
 - **Routes not installed:** FRR version issue (use 10.x, not 8.4.4)
 - **Policy errors:** Add `no bgp ebgp-requires-policy` (automatically configured)
@@ -638,7 +638,7 @@ Agent synchronizes UFW rules with active tunnels:
 
 - Adds peer IPs when tunnels configured
 - Removes stale peer IPs when tunnels deleted
-- XFRM interfaces not filtered (internal routing)
+- VTI interfaces not filtered (internal encrypted traffic)
 
 ### Secrets Management
 

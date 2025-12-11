@@ -241,24 +241,34 @@ Global default under `defaults.routing.mode`; override per connection/tunnel.
 
 ### strongSwan
 
-- Policy-based or route-based (XFRM interfaces, not VTI)
+- Policy-based or route-based (VTI interfaces)
 - IKEv2 default, IKEv1 fallback configurable
 - PSK authentication
 - DPD (Dead Peer Detection) for tunnel liveness
 
-### XFRM Interfaces
+### VTI Interfaces
 
-Uses Linux kernel's XFRM with `if_id` parameter for proper route-based VPN:
+Uses Linux kernel's VTI (Virtual Tunnel Interface) with strongSwan marks for proper route-based VPN:
 
-- Creates `xfrm0`, `xfrm1`, etc. interfaces
-- Each tunnel gets unique `if_id` (100, 101, ...)
-- BGP sessions run over XFRM interfaces using APIPA inner IPs
+- Creates `vti0`, `vti1`, etc. interfaces
+- Each tunnel gets unique mark via `mark=%unique` in strongSwan config
+- BGP sessions run over VTI interfaces using APIPA inner IPs
+- Marks passed to custom updown script via `PLUTO_MARK_OUT` and `PLUTO_MARK_IN`
 
-**Why XFRM, not VTI:**
+**VTI Setup:**
 
-- strongSwan `mark=` parameter (VTI) doesn't encrypt outbound traffic correctly
-- `if_id=` parameter (XFRM) works bidirectionally
-- Verified via `tcpdump -i eth0 esp` (shows ESP packets in both directions)
+- strongSwan assigns unique marks automatically with `mark=%unique`
+- Custom updown script (`ipsec-vti.sh`) creates VTI interfaces on tunnel establishment
+- VTI interface created with: `ip link add vti{N} type vti okey <mark_out> ikey <mark_in>`
+- Inner APIPA addresses assigned to VTI interfaces for BGP peering
+- MTU set to 1387 (GCP MTU 1460 - IPsec overhead 73 bytes)
+
+**Why VTI:**
+
+- Route-based VPN allows BGP traffic over encrypted tunnels
+- Works with `0.0.0.0/0` traffic selectors (required by GCP HA VPN)
+- Supports asymmetric routing with proper sysctls (`rp_filter=2`)
+- VTI interfaces can be referenced in FRR BGP neighbor configuration
 
 ### Crypto Proposals
 
@@ -279,7 +289,7 @@ Uses Linux kernel's XFRM with `if_id` parameter for proper route-based VPN:
 ### FRR Setup
 
 - `bgpd` daemon for BGP routing
-- Runs over XFRM interfaces using APIPA inner IPs
+- Runs over VTI interfaces using APIPA inner IPs
 - Configurable timers: hold time (60s), keepalive (20s)
 - Graceful restart enabled by default
 
@@ -293,14 +303,14 @@ Uses Linux kernel's XFRM with `if_id` parameter for proper route-based VPN:
 ### BGP Session Requirements
 
 1. IPsec tunnels must be ESTABLISHED first
-2. XFRM interfaces must be up with assigned inner IPs
+2. VTI interfaces must be up with assigned inner IPs
 3. BGP peer must be reachable via inner_remote_ip
 4. ASN configuration must match on both sides
 5. FRR 10.x recommended (8.4.4 has route installation bugs)
 
 ### Common BGP Issues
 
-- **No OPEN messages:** IPsec tunnel not established or XFRM interface down
+- **No OPEN messages:** IPsec tunnel not established or VTI interface down
 - **OPEN errors:** ASN mismatch between peers
 - **Routes not installed:** FRR 8.4.4 bug, upgrade to 10.x
 - **Policy errors:** Add `no bgp ebgp-requires-policy` to config
@@ -346,7 +356,7 @@ Agent synchronizes UFW rules with active tunnels:
 
 - Adds peer IPs dynamically
 - Removes stale peer IPs
-- VTI/XFRM interfaces are NOT filtered
+- VTI interfaces are NOT filtered (internal encrypted traffic)
 
 ### Routing Guard
 
