@@ -52,6 +52,9 @@ Icon?
 image/*.svg
 image/*.png
 
+# Exception: Keep the Google Cloud HA VPN diagram
+!image/ha-vpn-gcp-to-on-prem.svg
+
 # Security / secrets / credentials patterns
 *.psk
 *.secret
