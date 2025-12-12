@@ -6,6 +6,7 @@ import os
 import re
 import typing as t
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 
 import yaml
@@ -108,6 +109,20 @@ def _to_int(val: t.Any) -> t.Optional[int]:
         except Exception:
             return None
     return None
+
+
+def _enum_to_value(obj: t.Any) -> t.Any:
+    """Recursively convert Enum objects to their values for YAML serialization.
+    
+    This is needed because yaml.safe_dump() cannot serialize Enum objects directly.
+    """
+    if isinstance(obj, Enum):
+        return obj.value
+    if isinstance(obj, dict):
+        return {k: _enum_to_value(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_enum_to_value(v) for v in obj]
+    return obj
 
 
 def load_local_config(path: Path) -> dict:
@@ -504,7 +519,9 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: t.List[Path]) -> Resolv
             "defaults": local_cfg.get("defaults", {}),
             "connections": merged_connections,
         }
-        serialized = yaml.safe_dump(per_vm_cfg, sort_keys=False)
+        # Convert Enum objects to their values before YAML serialization
+        per_vm_cfg_serializable = _enum_to_value(per_vm_cfg)
+        serialized = yaml.safe_dump(per_vm_cfg_serializable, sort_keys=False)
         per_instance.append(
             InstanceResolvedConfig(
                 instance_index=idx, hostname=hostname, external_ip=ip, config_yaml=serialized

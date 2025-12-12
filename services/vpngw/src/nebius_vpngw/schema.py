@@ -381,17 +381,32 @@ class GatewayConfig(BaseModel):
 
 
 class StaticRoutes(BaseModel):
-    """Static routing configuration for a tunnel."""
+    """Static routing configuration for a tunnel.
+    
+    In static routing mode, remote_prefixes define the actual networks to route.
+    These are propagated from connection.remote_prefixes if not set per-tunnel.
+    """
     model_config = ConfigDict(extra="forbid")
     
     local_prefixes: t.Optional[t.List[str]] = Field(
         default=None,
         description="Override local prefixes for this tunnel (CIDR notation)"
     )
+    remote_prefixes: t.Optional[t.List[str]] = Field(
+        default=None,
+        description="Remote networks to route through this tunnel in static mode (CIDR notation)"
+    )
     
     @field_validator("local_prefixes")
     @classmethod
     def validate_local_prefixes(cls, v: t.Optional[t.List[str]]) -> t.Optional[t.List[str]]:
+        if v is None:
+            return v
+        return [validate_cidr(cidr) for cidr in v]
+    
+    @field_validator("remote_prefixes")
+    @classmethod
+    def validate_remote_prefixes(cls, v: t.Optional[t.List[str]]) -> t.Optional[t.List[str]]:
         if v is None:
             return v
         return [validate_cidr(cidr) for cidr in v]
@@ -567,7 +582,7 @@ class BGPConfig(BaseModel):
     )
     remote_prefixes: t.Optional[t.List[str]] = Field(
         default=None,
-        description="Expected remote prefixes (for validation/documentation)"
+        description="Optional: Remote prefixes for filtering/validation. In BGP mode, routes are learned dynamically; this field can optionally whitelist allowed prefixes. Not used for manual route installation in BGP mode."
     )
     
     @field_validator("remote_asn")
@@ -619,7 +634,7 @@ class ConnectionConfig(BaseModel):
     )
     remote_prefixes: t.Optional[t.List[str]] = Field(
         default=None,
-        description="Remote prefixes (CIDR notation)"
+        description="Remote prefixes (CIDR notation). In 'static' routing_mode: used for installing static routes. In 'bgp' routing_mode: optional, used for filtering/validating received BGP routes (routes are learned dynamically)."
     )
     bgp: BGPConfig = Field(
         ...,
@@ -647,6 +662,21 @@ class ConnectionConfig(BaseModel):
     @model_validator(mode="after")
     def validate_routing_mode_consistency(self) -> "ConnectionConfig":
         """Validate BGP config matches routing mode."""
+        # In static mode, warn if remote_prefixes is not specified
+        if self.routing_mode == RoutingMode.STATIC:
+            if not self.remote_prefixes:
+                # Check if any tunnel has static_routes.remote_prefixes
+                has_tunnel_remote_prefixes = any(
+                    t.static_routes and t.static_routes.get("remote_prefixes")
+                    for t in self.tunnels
+                )
+                if not has_tunnel_remote_prefixes:
+                    import warnings
+                    warnings.warn(
+                        f"Connection '{self.name}' uses static routing but has no remote_prefixes defined. "
+                        "Static routes to remote networks will not be installed."
+                    )
+        
         if self.routing_mode == RoutingMode.BGP:
             if not self.bgp.enabled:
                 raise ValueError(

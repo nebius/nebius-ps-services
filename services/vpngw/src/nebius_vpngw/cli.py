@@ -21,8 +21,8 @@ app = typer.Typer(
     help="""
 Nebius VM-based VPN Gateway orchestrator
 
-By default, the CLI looks for 'nebius-vpngw.config.yaml' in your current directory.
-Use --local-config-file to specify a different config file if needed.
+By default, commands look for 'nebius-vpngw.config.yaml' in your current directory.
+Use --local-config-file with any command to specify a different config file.
 """
 )
 
@@ -74,24 +74,14 @@ def _resolve_local_config(
 
 
 @app.callback(invoke_without_command=True)
-def _default(
-    ctx: typer.Context,
-    local_config_file: t.Optional[Path] = typer.Option(None, exists=True, readable=True, help=f"Path to {DEFAULT_CONFIG_FILENAME}"),
-    project_id: t.Optional[str] = typer.Option(None, help="Nebius project/folder identifier"),
-    zone: t.Optional[str] = typer.Option(None, help="Nebius zone for gateway VMs"),
-):
-    """Default action: shows status if config exists, creates template if not."""
+def _default(ctx: typer.Context):
+    """Default action: creates config template if it doesn't exist."""
     if ctx.invoked_subcommand is None:
+        # No command given - create config template if missing
         local_config_file = _resolve_local_config(
-            local_config_file,
+            None,
             create_if_missing=True,
             exit_after_create=True,
-        )
-        # Config exists - show status by default
-        return status(
-            local_config_file=local_config_file,
-            project_id=project_id,
-            zone=zone,
         )
 
 
@@ -104,8 +94,6 @@ def apply(
     project_id: t.Optional[str] = typer.Option(None, help="Nebius project/folder identifier"),
     zone: t.Optional[str] = typer.Option(None, help="Nebius zone for gateway VMs"),
     dry_run: bool = typer.Option(False, hidden=True, help="Render actions without applying"),
-    add_route: bool = typer.Option(False, help="(Experimental) Ensure VPC routes to VPN gateway for remote_prefixes"),
-    list_route: bool = typer.Option(False, help="List VPC routes for subnets matching gateway.local_prefixes"),
 ):
     """Apply desired state to Nebius: create/update gateway VMs and push config."""
     local_config_file = _resolve_local_config(
@@ -288,16 +276,6 @@ def apply(
                 print(f"[dim]Skipping config push for {inst_cfg.hostname}: No IP address available[/dim]")
                 continue
         ssh.push_config_and_reload(target, inst_cfg, local_cfg)
-
-    if list_route:
-        print("[bold]Listing VPC routes for local_prefixes...[/bold]")
-        routes.list_routes(plan, local_cfg)
-    if add_route:
-        print("[bold]Ensuring VPC routes to VPN gateway for remote_prefixes...[/bold]")
-        routes.add_routes(plan, local_cfg)
-    elif plan.should_manage_routes:
-        print("[bold]Reconciling VPC routes...[/bold]")
-        routes.reconcile(plan)
 
     print("[green]Apply completed successfully.[/green]")
 
@@ -682,6 +660,30 @@ def status(
             
             output = result.stdout
             
+            def parse_strongswan_uptime(uptime_str: str) -> str:
+                """Parse strongSwan uptime format (e.g., '5 hours ago', '32 minutes ago') and keep it in readable format."""
+                import re
+                # Parse the uptime string
+                match = re.match(r'(\d+)\s+(second|minute|hour|day)s?\s+ago', uptime_str)
+                if not match:
+                    # If we can't parse it, return as-is
+                    return uptime_str
+                
+                value = int(match.group(1))
+                unit = match.group(2)
+                
+                # Format based on the unit
+                if unit == 'second':
+                    return f"{value}s ago"
+                elif unit == 'minute':
+                    return f"{value}m ago"
+                elif unit == 'hour':
+                    return f"{value}h ago"
+                elif unit == 'day':
+                    return f"{value}d ago"
+                else:
+                    return uptime_str
+            
             # Parse IPsec status output
             # Look for patterns like: "gcp-classic-tunnel-0[202]: ESTABLISHED 8 minutes ago, 10.48.0.13[10.48.0.13]...34.155.169.244[34.155.169.244]"
             tunnel_pattern = re.compile(r'(\S+)\[\d+\]:\s+(\w+)\s+(.+?),\s+[\d.]+\[[\d.]+\]\.\.\.(\d+\.\d+\.\d+\.\d+)\[')
@@ -692,11 +694,12 @@ def status(
             for match in tunnel_pattern.finditer(output):
                 tunnel_name = match.group(1)
                 status = match.group(2)
-                uptime = match.group(3)
+                raw_uptime = match.group(3)
+                formatted_uptime = parse_strongswan_uptime(raw_uptime)
                 peer_ip = match.group(4)
                 tunnels[tunnel_name] = {
                     'status': status,
-                    'uptime': uptime,
+                    'uptime': formatted_uptime,
                     'peer_ip': peer_ip,
                     'encryption': 'Unknown',
                     'bgp': '-',
@@ -1031,12 +1034,16 @@ print(json.dumps(health))
     console.print(routing_table)
 
 
-@app.command()
-def list_routes(
+@app.command(name="add-routes-local")
+def add_routes_local(
     local_config_file: t.Optional[Path] = typer.Option(None, exists=True, readable=True, help=f"Path to {DEFAULT_CONFIG_FILENAME}"),
     project_id: t.Optional[str] = typer.Option(None, help="Nebius project/folder identifier"),
 ):
-    """List VPC routes for subnets matching gateway.local_prefixes."""
+    """Add VPC routes for gateway.local_prefixes pointing to VPN gateway (Nebius → Remote).
+    
+    These routes direct traffic from Nebius VPC subnets to remote sites via the VPN gateway.
+    Next-hop is the VPN gateway's private IP.
+    """
     local_config_file = _resolve_local_config(
         local_config_file,
         create_if_missing=False,
@@ -1066,16 +1073,63 @@ def list_routes(
     
     routes = RouteManager(project_id=proj_id, auth_token=auth_token)
     
-    print("[bold]Listing VPC routes for local_prefixes...[/bold]")
+    print("[bold]Ensuring VPC routes for local prefixes (Nebius → Remote)...[/bold]")
+    routes.add_routes(plan, local_cfg)
+    
+    print("[green]Local route management completed.[/green]")
+
+
+@app.command(name="list-routes-local")
+def list_routes_local(
+    local_config_file: t.Optional[Path] = typer.Option(None, exists=True, readable=True, help=f"Path to {DEFAULT_CONFIG_FILENAME}"),
+    project_id: t.Optional[str] = typer.Option(None, help="Nebius project/folder identifier"),
+):
+    """List VPC routes for gateway.local_prefixes (Nebius → Remote).
+    
+    Shows route table entries in Nebius VPC subnets that match local_prefixes.
+    """
+    local_config_file = _resolve_local_config(
+        local_config_file,
+        create_if_missing=False,
+        exit_after_create=False,
+    )
+    
+    print("[bold]Loading local YAML config...[/bold]")
+    local_cfg = load_local_config(local_config_file)
+    
+    print("[bold]Parsing deployment plan...[/bold]")
+    plan: ResolvedDeploymentPlan = merge_with_peer_configs(local_cfg, [])
+    
+    proj_id = project_id or (local_cfg.get("project_id") or "").strip() or None
+    
+    # Get token for API access
+    auth_token = None
+    if not os.environ.get("NEBIUS_IAM_TOKEN"):
+        try:
+            from .vpngw_sa import ensure_cli_access_token
+            tok = ensure_cli_access_token()
+            if tok:
+                os.environ["NEBIUS_IAM_TOKEN"] = tok
+                auth_token = tok
+        except Exception:
+            pass
+    
+    routes = RouteManager(project_id=proj_id, auth_token=auth_token)
+    
+    print("[bold]Listing VPC routes for local prefixes...[/bold]")
     routes.list_routes(plan, local_cfg)
 
 
-@app.command()
-def add_routes(
+@app.command(name="list-routes-remote")
+def list_routes_remote(
     local_config_file: t.Optional[Path] = typer.Option(None, exists=True, readable=True, help=f"Path to {DEFAULT_CONFIG_FILENAME}"),
-    project_id: t.Optional[str] = typer.Option(None, help="Nebius project/folder identifier"),
+    connection: t.Optional[str] = typer.Option(None, help="Connection name to show routes for (default: all)"),
 ):
-    """Ensure VPC routes to VPN gateway for remote_prefixes."""
+    """List remote routes learned/configured via VPN (Remote → Nebius).
+    
+    - BGP mode: Shows BGP-learned routes from peers with whitelist status
+    - Static mode: Shows static routes configured on gateway VMs
+    """
     local_config_file = _resolve_local_config(
         local_config_file,
         create_if_missing=False,
@@ -1088,27 +1142,13 @@ def add_routes(
     print("[bold]Parsing deployment plan...[/bold]")
     plan: ResolvedDeploymentPlan = merge_with_peer_configs(local_cfg, [])
     
-    # Resolve project_id
-    proj_id = project_id or (local_cfg.get("project_id") or "").strip() or None
+    # Get project_id for RouteManager (not really needed for this command but kept for consistency)
+    proj_id = local_cfg.get("project_id") or ""
     
-    # Get token for API access
-    auth_token = None
-    if not os.environ.get("NEBIUS_IAM_TOKEN"):
-        try:
-            from .vpngw_sa import ensure_cli_access_token
-            tok = ensure_cli_access_token()
-            if tok:
-                os.environ["NEBIUS_IAM_TOKEN"] = tok
-                auth_token = tok
-        except Exception:
-            pass
+    routes = RouteManager(project_id=proj_id, auth_token=None)
     
-    routes = RouteManager(project_id=proj_id, auth_token=auth_token)
-    
-    print("[bold]Ensuring VPC routes to VPN gateway for remote_prefixes...[/bold]")
-    routes.add_routes(plan, local_cfg)
-    
-    print("[green]Route management completed.[/green]")
+    print("[bold]Querying remote routes from gateway VMs...[/bold]")
+    routes.list_remote_routes(plan, local_cfg, connection_filter=connection)
 
 
 @app.command()

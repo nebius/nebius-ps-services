@@ -136,8 +136,14 @@ connections:
   vendor: "gcp"
   routing_mode: bgp
 
-  # Remote prefixes: place here once per connection (applies to all tunnels)
-  remote_prefixes: []
+  # Remote prefixes (OPTIONAL in BGP mode):
+  # - If omitted: BGP accepts ALL routes advertised by peer (recommended for most cases)
+  # - If specified: Acts as inbound whitelist filter - only these prefixes accepted from BGP
+  # - NOT used for manual route installation - BGP learns and installs routes dynamically
+  # Example use case: Limit routes to specific ranges for security/policy reasons
+  # remote_prefixes:
+  #   - "10.0.0.0/8"    # Only accept 10.x networks from peer
+  #   - "172.16.0.0/12" # Only accept 172.16-31.x networks
 
   bgp:
     enabled: true
@@ -178,8 +184,14 @@ connections:
   vendor: "gcp"
   routing_mode: static
 
-  # Remote prefixes: place here once per connection (applies to all tunnels)
-  remote_prefixes: []
+  # Remote prefixes (REQUIRED in static mode):
+  # - List ALL remote networks that should be routed through this VPN
+  # - Used for actual IPsec route installation (rightsubnet)
+  # - Each network must be explicitly enumerated (no dynamic learning)
+  remote_prefixes:
+  - "10.10.0.0/24" # Example GCP VPC subnet 1
+  - "10.20.0.0/24" # Example GCP VPC subnet 2
+  # Add all GCP subnets you need to reach
 
   bgp:
     enabled: false

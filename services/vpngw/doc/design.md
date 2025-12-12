@@ -207,8 +207,9 @@ Flags: `--peer-config-file` (repeatable), `--recreate-gw`, `--project-id`, `--zo
 
 ```bash
 nebius-vpngw status --local-config-file <file>
-nebius-vpngw list-routes --local-config-file <file>
-nebius-vpngw add-routes --local-config-file <file>
+nebius-vpngw list-routes-local --local-config-file <file>
+nebius-vpngw list-routes-remote --local-config-file <file>
+nebius-vpngw add-routes-local --local-config-file <file>
 ```
 
 **Default Behavior:**
@@ -236,6 +237,30 @@ Global default under `defaults.routing.mode`; override per connection/tunnel.
 **BGP mode:** Advertised to peers when `advertise_local_prefixes: true`
 
 **Static mode:** Used as `leftsubnet` in IPsec unless `tunnel.static_routes.local_prefixes` overrides
+
+### Remote Prefixes
+
+`connection.remote_prefixes` has different semantics depending on routing mode:
+
+| Routing Mode | remote_prefixes Usage |
+|--------------|----------------------|
+| **BGP** | Optional - acts as inbound filter/whitelist. If omitted, accepts all BGP routes. |
+| **Static** | Required - used for actual route installation (rightsubnet in IPsec). |
+
+**BGP mode:**
+
+- **Optional** - BGP learns routes dynamically from peer
+- If specified: Acts as **inbound filter** (prefix-list) - only listed prefixes accepted
+- If omitted: All routes advertised by peer are accepted
+- Routes installed automatically by FRR BGP daemon
+- No manual enumeration needed for 100+ remote networks
+
+**Static mode:**
+
+- **Required** (or in `tunnel.static_routes.remote_prefixes`)
+- Used for actual IPsec route installation (`rightsubnet`)
+- Each remote network must be explicitly listed
+- No dynamic learning
 
 ## IPsec Configuration
 
@@ -319,13 +344,66 @@ Uses Linux kernel's VTI (Virtual Tunnel Interface) with strongSwan marks for pro
 
 ### VPC Route Management
 
-For static routing mode, CLI can manage VPC routes:
+Three route management commands with distinct purposes:
+
+**1. Add local routes (Nebius VPC → Remote):**
 
 ```bash
-nebius-vpngw add-routes --local-config-file <file>
+nebius-vpngw add-routes-local --local-config-file <file>
 ```
 
-Creates static routes pointing to gateway VMs for `connection.remote_prefixes`.
+Creates VPC route table entries for remote networks pointing to gateway VMs.
+
+**Implementation Details:**
+
+- **BGP mode**: Queries BGP-learned routes from gateway VMs via SSH (`vtysh -c 'show bgp ipv4 unicast json'`)
+  - Filters by `remote_prefixes` whitelist if configured
+  - Filters out locally originated routes (next-hop 0.0.0.0)
+  - Filters out overlapping local networks (from `gateway.local_prefixes`)
+- **Static mode**: Uses `remote_prefixes` from YAML configuration
+- Finds subnets matching `gateway.local_prefixes`
+- Resolves gateway VM private IP allocation via Compute API
+- Creates/reuses custom route tables for matching subnets
+  - If subnet uses default route table: Creates custom RT and copies existing routes
+  - Warns user about route table separation
+- Creates route entries: destination = remote prefix, next-hop = gateway private IP
+- Implements idempotency (skips existing routes)
+
+**2. List local routes (Nebius VPC → Remote):**
+
+```bash
+nebius-vpngw list-routes-local --local-config-file <file>
+```
+
+Lists VPC route table entries for subnets matching `gateway.local_prefixes`.
+
+**Implementation Details:**
+
+- Queries VPC API for subnets matching `gateway.local_prefixes`
+- Displays route table ID and routes for each subnet
+- Shows destination CIDR and next-hop (resolves allocation IDs to IP addresses)
+- Uses Rich tables for formatted output
+
+**3. List remote routes (Remote → Nebius):**
+
+```bash
+nebius-vpngw list-routes-remote --local-config-file <file>
+```
+
+Lists routes on gateway VMs that direct traffic from remote sites to Nebius networks.
+
+**Implementation Details:**
+
+- **BGP mode**:
+  - SSHs to gateway VMs and queries FRR: `vtysh -c 'show bgp ipv4 unicast json'`
+  - Extracts routes with next-hop IPs, AS paths, and status
+  - Queries `ip route get <next-hop>` to determine outgoing VTI interface
+  - Filters out locally originated routes (next-hop 0.0.0.0)
+  - Checks against `remote_prefixes` whitelist (shows allowed/not-allowed status)
+  - Displays: Prefix, Next-Hop, Via (VTI interface), AS Path, Status
+- **Static mode**:
+  - Compares YAML `remote_prefixes` with kernel routing table via `ip route show`
+  - Shows installation status (installed/missing)
 
 ### Per-Tunnel Static Routes
 
@@ -356,7 +434,7 @@ Agent synchronizes UFW rules with active tunnels:
 
 - Adds peer IPs dynamically
 - Removes stale peer IPs
-- VTI interfaces are NOT filtered (internal encrypted traffic)
+- VTI interfaces are not filtered by UFW (allows BGP traffic to flow freely)
 
 ### Routing Guard
 
@@ -398,7 +476,7 @@ nebius-vpngw status --local-config-file <file>
 - Tunnel status (ESTABLISHED, CONNECTING, etc.)
 - BGP session state and prefix counts
 - Service health (agent, strongSwan, FRR)
-- Routing table health (table 220, APIPA routes, orphaned routes)
+- Routing table health (table 220, APIPA routes over VTI interfaces, orphaned routes)
 
 ### Tunnel Status
 
@@ -422,8 +500,9 @@ Service status for each gateway VM:
 
 Per-VM routing validation:
 
-- Table 220 check: OK/WARNING
-- Broad APIPA detection: OK/WARNING
+- Table 220 check: OK/WARNING (policy routes cause asymmetric routing)
+- Broad APIPA detection: OK/WARNING (should be /30 subnets only)
+- BGP peer routes: Shows APIPA routes over VTI interfaces
 - Orphaned routes count
 - Overall health: Healthy/Degraded
 

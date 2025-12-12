@@ -108,14 +108,48 @@ def check_strongswan_tunnels() -> Dict[str, Any]:
         }
     
     import re
+    
+    def parse_strongswan_uptime(uptime_str: str) -> str:
+        """Parse strongSwan uptime format (e.g., '5 hours ago', '32 minutes ago') and convert to 'Xh Ym Zs' format."""
+        # Parse the uptime string
+        match = re.match(r'(\d+)\s+(second|minute|hour|day)s?\s+ago', uptime_str)
+        if not match:
+            # If we can't parse it, return as-is
+            return uptime_str
+        
+        value = int(match.group(1))
+        unit = match.group(2)
+        
+        # Convert to seconds
+        if unit == 'second':
+            total_seconds = value
+        elif unit == 'minute':
+            total_seconds = value * 60
+        elif unit == 'hour':
+            total_seconds = value * 3600
+        elif unit == 'day':
+            total_seconds = value * 86400
+        else:
+            return uptime_str
+        
+        # Format as "Xh Ym Zs"
+        hours = total_seconds // 3600
+        minutes = (total_seconds % 3600) // 60
+        seconds = total_seconds % 60
+        
+        return f"{hours}h {minutes}m {seconds}s"
+    
     tunnels = []
     tunnel_pattern = re.compile(r'(\S+)\[\d+\]:\s+(\w+)\s+(.+?),\s+[\d.]+\[[\d.]+\]\.\.\.(\d+\.\d+\.\d+\.\d+)\[')
     
     for match in tunnel_pattern.finditer(result.stdout):
+        raw_uptime = match.group(3)
+        formatted_uptime = parse_strongswan_uptime(raw_uptime)
+        
         tunnels.append({
             "name": match.group(1),
             "status": match.group(2),
-            "uptime": match.group(3),
+            "uptime": formatted_uptime,
             "peer_ip": match.group(4)
         })
     

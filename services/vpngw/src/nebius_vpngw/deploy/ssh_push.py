@@ -362,12 +362,15 @@ WantedBy=multi-user.target
             if not frr_active:
                 print(f"[SSHPush] ✗ frr is NOT running (status: {svc_status})")
 
-            # Quick BGP port probe to detect blocked TCP/179 on peer side
+            # Check BGP session status via FRR instead of TCP port probing
+            # (TCP probes fail when BGP sessions are already established)
             try:
                 defaults_mode = (
                     (local_cfg.get("defaults", {}) or {}).get("routing", {}) or {}
                 ).get("mode", "bgp")
-                tunnels_to_probe = []
+                
+                # Collect BGP peers for this instance
+                bgp_peers = []
                 for conn in (local_cfg.get("connections") or []):
                     routing_mode = conn.get("routing_mode") or defaults_mode
                     if routing_mode != "bgp":
@@ -378,26 +381,43 @@ WantedBy=multi-user.target
                         if tun.get("ha_role", "active") != "active":
                             continue
                         r_ip = tun.get("inner_remote_ip")
-                        l_ip = tun.get("inner_local_ip")
                         if r_ip:
-                            tunnels_to_probe.append((l_ip, r_ip))
+                            bgp_peers.append(r_ip)
 
-                for l_ip, r_ip in tunnels_to_probe:
-                    cmd = (
-                        f"if command -v nc >/dev/null; then "
-                        f"timeout 3 nc -z -w2 {r_ip} 179; "
-                        f"elif [ -f /bin/bash ]; then "
-                        f"timeout 3 bash -lc 'echo > /dev/tcp/{r_ip}/179'; "
-                        f"else exit 1; fi"
-                    )
-                    stdin, stdout, stderr = client.exec_command(cmd, timeout=6)
+                if bgp_peers:
+                    # Check BGP session status via vtysh
+                    cmd = "sudo vtysh -c 'show bgp summary json' 2>/dev/null || echo '{}'"
+                    stdin, stdout, stderr = client.exec_command(cmd, timeout=10)
                     rc = stdout.channel.recv_exit_status()
-                    if rc == 0:
-                        print(f"[SSHPush] ✓ BGP port 179 reachable on peer {r_ip}")
-                    else:
-                        print(f"[SSHPush] WARNING: BGP port 179 not reachable on peer {r_ip} (source {l_ip or 'auto'}). Check peer firewall for TCP/179.")
+                    output = stdout.read().decode().strip()
+                    
+                    try:
+                        import json
+                        bgp_summary = json.loads(output) if output != '{}' else {}
+                        
+                        # Check for IPv4 unicast peers
+                        ipv4_peers = bgp_summary.get("ipv4Unicast", {}).get("peers", {})
+                        
+                        for peer_ip in bgp_peers:
+                            peer_info = ipv4_peers.get(peer_ip, {})
+                            state = peer_info.get("state", "Unknown")
+                            
+                            if state == "Established":
+                                uptime_sec = peer_info.get("peerUptimeMsec", 0) // 1000  # Convert to seconds
+                                hours = uptime_sec // 3600
+                                minutes = (uptime_sec % 3600) // 60
+                                seconds = uptime_sec % 60
+                                uptime_str = f"{hours}h {minutes}m {seconds}s"
+                                print(f"[SSHPush] ✓ BGP session with {peer_ip} is Established (uptime: {uptime_str})")
+                            elif state != "Unknown":
+                                print(f"[SSHPush] WARNING: BGP session with {peer_ip} is {state}")
+                            # If Unknown, FRR might still be starting, don't warn
+                    except (json.JSONDecodeError, Exception) as e:
+                        # FRR might not be fully started yet, don't warn
+                        pass
             except Exception as e:
-                print(f"[SSHPush] WARNING: BGP port probe failed: {e}")
+                # BGP check is informational only, don't fail deployment
+                pass
         except Exception as e:
             print(f"[SSHPush] Failed to verify service status: {e}")
 

@@ -175,11 +175,13 @@ connections:
     vendor: "gcp"
     routing_mode: "bgp"
 
-    # Remote prefixes: Networks on the peer side (GCP VPC subnets)
-    # For BGP: These are learned dynamically, but list here for reference
-    # For static: These become rightsubnet in IPsec
-    remote_prefixes:
-      - "10.10.0.0/24"  # Example: GCP VPC subnet
+    # Remote prefixes (OPTIONAL in BGP mode):
+    # - If omitted: BGP accepts ALL routes advertised by GCP Cloud Router (RECOMMENDED)
+    # - If specified: Acts as inbound whitelist filter - only these prefixes accepted
+    # - NOT used for manual route installation - BGP learns routes dynamically
+    # Use case: Restrict routes to specific ranges for security/policy
+    # remote_prefixes:
+    #   - "10.0.0.0/8"  # Only accept 10.x networks from GCP
 
     bgp:
       enabled: true
@@ -223,8 +225,13 @@ connections:
   #   vendor: "gcp"
   #   routing_mode: "static"
   #
+  #   # Remote prefixes (REQUIRED in static mode):
+  #   # - List ALL remote networks to route through this VPN
+  #   # - Used for actual IPsec route installation (rightsubnet)
+  #   # - Each network must be explicitly enumerated
   #   remote_prefixes:
-  #     - "10.20.0.0/24"
+  #     - "10.20.0.0/24"  # GCP VPC subnet 1
+  #     - "10.21.0.0/24"  # GCP VPC subnet 2
   #
   #   bgp:
   #     enabled: false
@@ -244,6 +251,8 @@ connections:
   #   vendor: "cisco"
   #   routing_mode: "static"
   #
+  #   # Remote prefixes (REQUIRED in static mode):
+  #   # - Must enumerate all on-premises networks
   #   remote_prefixes:
   #     - "192.168.0.0/16"  # On-prem network
   #

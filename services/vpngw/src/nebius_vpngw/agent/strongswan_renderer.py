@@ -249,7 +249,8 @@ network:
             print(f"[StrongSwan] WARNING: failed to restart strongswan-starter: {e}")
 
         # VTI interfaces are created by ipsec-vti.sh updown script when tunnels establish
-        # Agent only needs to ensure routes for BGP peers and remote prefixes
+        # For BGP mode: Only add host route to BGP peer - BGP will learn and install remote prefixes dynamically
+        # For static mode: remote_prefixes would be in rightsubnet, not here
         import time
         time.sleep(2)  # Brief wait for tunnels to establish and updown script to run
         
@@ -257,12 +258,10 @@ network:
             name = vti["name"]
             remote_inner = vti["remote_inner_ip"]
             
-            # Ensure a host route to the BGP peer IP exists
+            # Ensure a host route to the BGP peer IP exists (required for BGP session)
             subprocess.run(["ip", "route", "replace", f"{remote_inner}/32", "dev", name], check=False)
             print(f"[StrongSwan] Added route to BGP peer {remote_inner} via {name}")
             
-            # Add routes for remote prefixes if specified
-            remote_prefixes = vti.get("remote_prefixes", []) or []
-            for prefix in remote_prefixes:
-                subprocess.run(["ip", "route", "replace", prefix, "dev", name], check=False)
-                print(f"[StrongSwan] Added route {prefix} via {name}")
+            # NOTE: In BGP mode, remote_prefixes are NOT installed as static routes here.
+            # BGP will learn and install these routes dynamically from the peer.
+            # If remote_prefixes is specified, it's used as a filter in FRR bgpd.conf.
