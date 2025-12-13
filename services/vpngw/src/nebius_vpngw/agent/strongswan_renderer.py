@@ -92,33 +92,21 @@ class StrongSwanRenderer:
                 conn_lines.append("    type=tunnel")
                 mark_val = None
                 
-                # For BGP mode: use VTI with mark for route-based VPN
-                # For static mode: use policy-based with explicit subnets
-                if tun_mode == "bgp":
-                    # GCP HA VPN requires 0.0.0.0/0 selectors
-                    conn_lines.append("    leftsubnet=0.0.0.0/0")
-                    conn_lines.append("    rightsubnet=0.0.0.0/0")
-                    # Use mark=%unique to let strongSwan assign unique marks automatically
-                    # This sets PLUTO_MARK_OUT and PLUTO_MARK_IN env vars for updown script
-                    conn_lines.append("    mark=%unique")
-                else:
-                    # Static routing: use actual network prefixes
-                    static_routes = tun.get("static_routes", {}) or {}
-                    remote_prefixes = static_routes.get("remote_prefixes", [])
-                    
-                    # Local prefixes: use tunnel-specific override if provided, else gateway defaults
-                    tunnel_local_prefixes = static_routes.get("local_prefixes", [])
-                    if tunnel_local_prefixes:
-                        # Tunnel-specific override (for split traffic scenarios)
-                        local_prefixes = tunnel_local_prefixes
-                    else:
-                        # Default: use gateway-level local_prefixes
-                        local_prefixes = gateway_local_prefixes
-                    
-                    if local_prefixes:
-                        conn_lines.append(f"    leftsubnet={','.join(local_prefixes)}")
-                    if remote_prefixes:
-                        conn_lines.append(f"    rightsubnet={','.join(remote_prefixes)}")
+                # ALWAYS use route-based VPN with 0.0.0.0/0 selectors (both BGP and static modes)
+                # Traffic Selectors do NOT control routing - they only define what CAN be encapsulated
+                # Actual routing is controlled by Linux kernel routes (ip route add <prefix> dev vtiX)
+                conn_lines.append("    leftsubnet=0.0.0.0/0")
+                conn_lines.append("    rightsubnet=0.0.0.0/0")
+                # Use mark=%unique to let strongSwan assign unique marks automatically
+                # This sets PLUTO_MARK_OUT and PLUTO_MARK_IN env vars for updown script
+                conn_lines.append("    mark=%unique")
+                
+                # Collect remote_prefixes for static mode (used later for kernel route installation)
+                static_routes = tun.get("static_routes", {}) or {}
+                tunnel_remote_prefixes = static_routes.get("remote_prefixes", [])
+                if not tunnel_remote_prefixes:
+                    # Fall back to connection-level remote_prefixes
+                    tunnel_remote_prefixes = conn.get("remote_prefixes", []) or []
 
                 # Crypto proposals
                 if ike_props:
@@ -138,7 +126,9 @@ class StrongSwanRenderer:
 
                 # Custom VTI updown script (no plugin required)
                 # Script creates VTI interfaces using marks from strongSwan PLUTO variables
-                if tun_mode == "bgp" and inner_local_ip and inner_remote_ip and inner_cidr:
+                # BGP mode: requires inner IPs for BGP peering
+                # Static mode: can work without inner IPs (VTI created without IP assignment)
+                if inner_local_ip and inner_remote_ip and inner_cidr:
                     # Extract prefix length from CIDR
                     try:
                         import ipaddress
@@ -149,25 +139,29 @@ class StrongSwanRenderer:
                     # Pass: tunnel_id, remote_ip/prefix, local_ip/prefix
                     vti_id = idx  # Use index as VTI ID
                     conn_lines.append(f'    leftupdown="/var/lib/strongswan/ipsec-vti.sh {vti_id} {inner_remote_ip}/{prefix} {inner_local_ip}/{prefix}"')
+                elif tun_mode == "static":
+                    # Static mode without inner IPs: create VTI without IP assignment
+                    vti_id = idx
+                    conn_lines.append(f'    leftupdown="/var/lib/strongswan/ipsec-vti.sh {vti_id} 0.0.0.0/0 0.0.0.0/0"')
 
                 # Auto-start
                 conn_lines.append("    auto=start")
                 
                 connections.append("\n".join(conn_lines))
-                # Track VTI interface setup for BGP inner IPs
-                if tun_mode == "bgp" and inner_local_ip and inner_remote_ip and inner_cidr:
-                    vti_name = f"vti{idx}"  # Match updown script naming: vti0, vti1, etc.
-                    vti_endpoints.append(
-                        {
-                            "name": vti_name,
-                            "local_inner_ip": inner_local_ip,
-                            "remote_inner_ip": inner_remote_ip,
-                            "cidr": inner_cidr,
-                            "local_public_ip": local_public_ip,
-                            "remote_public_ip": remote_public_ip,
-                            "remote_prefixes": conn.get("remote_prefixes", []) or [],
-                        }
-                    )
+                # Track VTI interface setup for route installation
+                vti_name = f"vti{idx}"  # Match updown script naming: vti0, vti1, etc.
+                vti_endpoints.append(
+                    {
+                        "name": vti_name,
+                        "mode": tun_mode,
+                        "local_inner_ip": inner_local_ip,
+                        "remote_inner_ip": inner_remote_ip,
+                        "cidr": inner_cidr,
+                        "local_public_ip": local_public_ip,
+                        "remote_public_ip": remote_public_ip,
+                        "remote_prefixes": tunnel_remote_prefixes,
+                    }
+                )
 
                 # PSK secret
                 if psk:
@@ -249,19 +243,28 @@ network:
             print(f"[StrongSwan] WARNING: failed to restart strongswan-starter: {e}")
 
         # VTI interfaces are created by ipsec-vti.sh updown script when tunnels establish
-        # For BGP mode: Only add host route to BGP peer - BGP will learn and install remote prefixes dynamically
-        # For static mode: remote_prefixes would be in rightsubnet, not here
+        # Wait for tunnels to establish and VTI interfaces to be created
         import time
         time.sleep(2)  # Brief wait for tunnels to establish and updown script to run
         
         for vti in vti_endpoints:
             name = vti["name"]
-            remote_inner = vti["remote_inner_ip"]
+            mode = vti["mode"]
+            remote_inner = vti.get("remote_inner_ip")
+            remote_prefixes = vti.get("remote_prefixes", [])
             
-            # Ensure a host route to the BGP peer IP exists (required for BGP session)
-            subprocess.run(["ip", "route", "replace", f"{remote_inner}/32", "dev", name], check=False)
-            print(f"[StrongSwan] Added route to BGP peer {remote_inner} via {name}")
-            
-            # NOTE: In BGP mode, remote_prefixes are NOT installed as static routes here.
-            # BGP will learn and install these routes dynamically from the peer.
-            # If remote_prefixes is specified, it's used as a filter in FRR bgpd.conf.
+            if mode == "bgp":
+                # BGP mode: Only add host route to BGP peer - BGP will learn and install remote prefixes dynamically
+                if remote_inner:
+                    subprocess.run(["ip", "route", "replace", f"{remote_inner}/32", "dev", name], check=False)
+                    print(f"[StrongSwan] Added route to BGP peer {remote_inner} via {name}")
+                # NOTE: remote_prefixes in BGP mode are used as filters in FRR, not installed as kernel routes
+            else:
+                # Static mode: Install kernel routes for all remote_prefixes
+                if remote_prefixes:
+                    for prefix in remote_prefixes:
+                        subprocess.run(["ip", "route", "replace", prefix, "dev", name], check=False)
+                        print(f"[StrongSwan] Added static route {prefix} via {name}")
+                    print(f"[StrongSwan] Installed {len(remote_prefixes)} static route(s) for {name}")
+                else:
+                    print(f"[yellow][StrongSwan] WARNING: Static mode tunnel {name} has no remote_prefixes configured[/yellow]")

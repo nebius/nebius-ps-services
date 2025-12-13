@@ -385,24 +385,16 @@ class StaticRoutes(BaseModel):
     
     In static routing mode, remote_prefixes define the actual networks to route.
     These are propagated from connection.remote_prefixes if not set per-tunnel.
+    
+    Note: gateway.local_prefixes is the single source of truth for local networks.
+    Per-tunnel overrides are not supported in route-based VPN architecture.
     """
     model_config = ConfigDict(extra="forbid")
     
-    local_prefixes: t.Optional[t.List[str]] = Field(
-        default=None,
-        description="Override local prefixes for this tunnel (CIDR notation)"
-    )
     remote_prefixes: t.Optional[t.List[str]] = Field(
         default=None,
         description="Remote networks to route through this tunnel in static mode (CIDR notation)"
     )
-    
-    @field_validator("local_prefixes")
-    @classmethod
-    def validate_local_prefixes(cls, v: t.Optional[t.List[str]]) -> t.Optional[t.List[str]]:
-        if v is None:
-            return v
-        return [validate_cidr(cidr) for cidr in v]
     
     @field_validator("remote_prefixes")
     @classmethod

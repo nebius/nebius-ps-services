@@ -236,14 +236,14 @@ Global default under `defaults.routing.mode`; override per connection/tunnel.
 
 **BGP mode:** Advertised to peers when `advertise_local_prefixes: true`
 
-**Static mode:** Used as `leftsubnet` in IPsec unless `tunnel.static_routes.local_prefixes` overrides
+**Static mode:** Used for VPC route management (not for IPsec traffic selectors)
 
 ### Remote Prefixes
 
 `connection.remote_prefixes` has different semantics depending on routing mode:
 
 | Routing Mode | remote_prefixes Usage |
-|--------------|----------------------|
+| ------------ | --------------------- |
 | **BGP** | Optional - acts as inbound filter/whitelist. If omitted, accepts all BGP routes. |
 | **Static** | Required - used for actual route installation (rightsubnet in IPsec). |
 
@@ -294,6 +294,85 @@ Uses Linux kernel's VTI (Virtual Tunnel Interface) with strongSwan marks for pro
 - Works with `0.0.0.0/0` traffic selectors (required by GCP HA VPN)
 - Supports asymmetric routing with proper sysctls (`rp_filter=2`)
 - VTI interfaces can be referenced in FRR BGP neighbor configuration
+
+### Route-Based VPN Architecture
+
+#### IPsec Traffic Selectors vs Routing
+
+`leftsubnet` and `rightsubnet` in strongSwan define **only the IPsec Traffic Selectors (TS)** exchanged during IKE negotiation. They do **NOT install routes** and do **NOT control which networks are routed through the tunnel**.
+
+**For route-based VPN (VTI), always use:**
+
+```text
+leftsubnet=0.0.0.0/0
+rightsubnet=0.0.0.0/0
+```
+
+This configuration:
+
+- Tells strongSwan: "Allow ANY inner packet to be encapsulated"
+- Permits the tunnel to carry:
+  - BGP APIPA traffic (169.254.x.x)
+  - All dynamically learned remote prefixes
+  - All local prefixes advertised through BGP
+  - Any number of enterprise networks (scalable)
+- Does NOT create policy-based routing restrictions
+- Eliminates the need for hundreds of traffic selectors
+
+**Routing is controlled exclusively by:**
+
+1. **Linux routing table:** `ip route add <prefix> dev vti0`
+2. **BGP daemon (FRR):** Learned routes installed dynamically
+3. **Static routes:** Manual kernel routes (in static mode)
+4. **VTI interfaces:** Bound via marks from strongSwan
+
+**What determines which traffic enters the tunnel:**
+
+- **The routing table** → what prefixes point to the VTI interface
+- **BGP daemon** → which routes FRR installs dynamically
+- **NOT** leftsubnet/rightsubnet → these are "wide open" allow-lists
+
+**Why this matters:**
+
+- **BGP scalability:** No need to reconfigure IPsec when remote networks change
+- **Dynamic routing:** BGP can learn/install 100+ prefixes without IPsec restarts
+- **APIPA support:** BGP peering IPs (169.254.x.x) work seamlessly
+- **Simplified config:** No tunnel-level prefix enumeration required
+- **Peer compatibility:** GCP HA VPN and AWS VPN require 0.0.0.0/0 selectors
+
+**Encryption decision:**
+
+- strongSwan uses VTI interface binding via marks
+- `ip link add vti0 type vti okey=<mark> ikey=<mark> ...`
+- Any packet routed through vtiX gets encrypted by strongSwan
+- No policy database (SPD) restrictions on prefixes
+
+### local_prefixes vs remote_prefixes
+
+The configuration fields `local_prefixes` and `remote_prefixes` have different meanings depending on the VPN mode:
+
+| Mode   | local_prefixes → Remote Peer                         | remote_prefixes → Nebius VM                                  |
+|--------|------------------------------------------------------|--------------------------------------------------------------|
+| BGP    | Advertised by FRR to peer via `network` statements   | Learned dynamically from peer BGP; no YAML required          |
+| Static | Installed as static routes to VTIs + VPC routes      | Installed as static kernel routes to VTIs                    |
+
+**BGP Mode:**
+
+- `local_prefixes`: Networks advertised to the remote peer via BGP `network` statements in FRR
+- `remote_prefixes`: Optional filter list; actual routes learned dynamically from BGP peer
+- FRR installs all learned routes automatically
+
+**Static Mode:**
+
+- `local_prefixes`: Networks reachable via Nebius VPC; installed as kernel routes and VPC routes
+- `remote_prefixes`: Networks behind the remote peer; installed as kernel routes to VTI interfaces
+- Agent installs routes explicitly: `ip route replace <prefix> dev vti0`
+
+**Key Differences:**
+
+- BGP: Remote prefixes are **dynamic** (no YAML config needed)
+- Static: Remote prefixes must be **explicitly configured** in YAML
+- Both modes: Use route-based VPN with `0.0.0.0/0` traffic selectors
 
 ### Crypto Proposals
 
@@ -402,20 +481,32 @@ Lists routes on gateway VMs that direct traffic from remote sites to Nebius netw
   - Checks against `remote_prefixes` whitelist (shows allowed/not-allowed status)
   - Displays: Prefix, Next-Hop, Via (VTI interface), AS Path, Status
 - **Static mode**:
+  - Agent installs kernel routes: `ip route replace <prefix> dev vtiX` for each `remote_prefixes`
   - Compares YAML `remote_prefixes` with kernel routing table via `ip route show`
   - Shows installation status (installed/missing)
+  - Routes installed automatically by strongSwan renderer after tunnel establishment
 
-### Per-Tunnel Static Routes
+**Static Mode Route Installation:**
 
-Override global `gateway.local_prefixes` per tunnel:
+In static mode, the agent automatically installs kernel routes for all `remote_prefixes`:
 
-```yaml
-tunnels:
-  - name: tunnel-1
-    static_routes:
-      local_prefixes:
-        - "10.0.0.0/16"  # Override for this tunnel only
+```bash
+# Example: For remote_prefixes: ["10.10.0.0/24", "10.11.0.0/16"]
+ip route replace 10.10.0.0/24 dev vti0
+ip route replace 10.11.0.0/16 dev vti0
 ```
+
+This happens in `strongswan_renderer.py` after tunnel establishment (2s wait for VTI creation).
+
+**BGP vs Static Routing:**
+
+| Aspect | BGP Mode | Static Mode |
+| ------ | -------- | ----------- |
+| **Traffic Selectors** | `0.0.0.0/0` (both sides) | `0.0.0.0/0` (both sides) |
+| **Kernel Routes** | Installed by FRR BGP | Installed by agent from YAML |
+| **remote_prefixes** | Optional filter/whitelist | Required, installed as routes |
+| **Dynamic Learning** | Yes (via BGP) | No (manual YAML updates) |
+| **Scalability** | 100+ networks, no config changes | Must enumerate each network |
 
 ## Security Hardening
 

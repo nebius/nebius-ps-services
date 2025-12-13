@@ -74,7 +74,7 @@ gateway:
   # Local prefixes (Nebius-side subnets) - SINGLE SOURCE OF TRUTH
   # These are the networks on the Nebius side that should be advertised to peers.
   # For BGP: These prefixes are advertised via BGP to all connections where advertise_local_prefixes=true
-  # For Static: These are used as leftsubnet in IPsec unless overridden per-tunnel
+  # For Static: These prefixes are advertised via VPC routes (not IPsec traffic selectors)
   # Examples: VPC subnet CIDRs, workload subnets, etc.
   local_prefixes:
   - 10.0.0.0/16 # Example: Main VPC CIDR; should contain your Nebius-side subnets
@@ -127,7 +127,7 @@ defaults:
 
 # Connections: one per peer. Override order: tunnel > connection > defaults.
 # BGP advertises gateway.local_prefixes when advertise_local_prefixes=true.
-# Static mode uses gateway.local_prefixes unless tunnel.static_routes.local_prefixes overrides.
+# Static mode uses gateway.local_prefixes as the single source of truth.
 # Single-NIC/Same-IP: set local_public_ip_index: 0 on each tunnel to reuse the VM's first public IP.
 ###############################################################################
 connections:
@@ -209,9 +209,6 @@ connections:
       - "aes256-sha256"
       ike_lifetime_seconds: 28800
       esp_lifetime_seconds: 3600
-    static_routes:
-      # local_prefixes:  # Static-only override; otherwise gateway.local_prefixes is used
-      # - "10.0.0.0/16"
 - name: "onprem-static"
   description: "On-prem DC using static routing"
   vendor: "cisco"
@@ -233,6 +230,3 @@ connections:
       - "aes256-sha256"
       ike_lifetime_seconds: 28800
       esp_lifetime_seconds: 3600
-    static_routes:
-      # local_prefixes:  # Static-only override; otherwise gateway.local_prefixes is used
-      # - "10.0.0.0/16"

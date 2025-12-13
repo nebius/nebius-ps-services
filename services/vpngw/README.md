@@ -48,6 +48,38 @@ VM-based site-to-site IPsec/BGP VPN gateway for Nebius AI Cloud. Supports GCP HA
 - Python 3.11+ with Poetry
 - Service account with Compute permissions
 
+### Required Information from Peer Gateway
+
+Before configuring your VPN gateway, collect the following information from your peer gateway (e.g., GCP Cloud Router, AWS VPN, Azure VPN Gateway):
+
+**Routing mode:** `bgp` or `static`
+
+**For BGP mode:**
+
+- Remote ASN number (e.g., `65014`)
+- BGP timers (optional, defaults shown):
+  - `hold_time_seconds: 60`
+  - `keepalive_seconds: 20`
+- Number of tunnels (e.g., `2` for HA VPN)
+
+**For static mode:**
+
+- Remote prefixes/subnets (e.g., `10.10.0.0/16`, `10.20.0.0/16`)
+- Number of tunnels (e.g., `2` for HA VPN)
+
+**For each tunnel (both modes):**
+
+- Remote public IP address
+- Pre-shared key (PSK)
+
+**For each tunnel (BGP mode only):**
+
+- Inner tunnel CIDR (e.g., `169.254.5.152/30`)
+- Inner local IP (e.g., `169.254.5.154`)
+- Inner remote IP (e.g., `169.254.5.153`)
+
+> **Note:** GCP Cloud Router and AWS VPN provide all this information in their console/CLI output after creating the VPN gateway and tunnels.
+
 ### Installation
 
 ```bash
@@ -515,25 +547,6 @@ sudo vtysh -c "show ip route"
 ```
 
 ## Static Routing Configuration
-
-### Per-Tunnel Overrides
-
-Override global `local_prefixes` for specific tunnels:
-
-```yaml
-gateway:
-  local_prefixes:
-    - "10.0.0.0/16"
-    - "10.1.0.0/16"
-    
-connections:
-  - name: peer
-    tunnels:
-      - name: tunnel-1
-        static_routes:
-          local_prefixes:
-            - "10.0.0.0/16"  # Only advertise this subnet
-```
 
 ### VPC Route Management
 
