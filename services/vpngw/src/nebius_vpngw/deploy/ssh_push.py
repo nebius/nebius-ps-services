@@ -173,34 +173,48 @@ class SSHPush:
                 # Install/upgrade the wheel with dependencies
                 # Use --break-system-packages on Ubuntu 24.04+ which has PEP 668 restrictions
                 # Use --ignore-installed to avoid conflicts with system-managed packages like typing_extensions
-                install_cmd = f"sudo pip3 install --upgrade --ignore-installed --break-system-packages {remote_wheel}"
+                # Use 'python3 -m pip' instead of 'pip3' for Ubuntu 24.04 compatibility
+                install_cmd = f"sudo python3 -m pip install --upgrade --ignore-installed --break-system-packages {remote_wheel}"
                 stdin, stdout, stderr = client.exec_command(install_cmd, get_pty=True, timeout=120)
                 rc = stdout.channel.recv_exit_status()
                 out = stdout.read().decode().strip()
                 err = stderr.read().decode().strip()
                 if rc == 0:
                     # Verify package actually installed by checking pip list
-                    stdin_check, stdout_check, stderr_check = client.exec_command("pip3 list | grep nebius-vpngw", timeout=10)
+                    stdin_check, stdout_check, stderr_check = client.exec_command("python3 -m pip list | grep nebius-vpngw", timeout=10)
                     pkg_check = stdout_check.read().decode().strip()
                     if "nebius-vpngw" in pkg_check:
                         print(f"[SSHPush] Package installed/upgraded successfully: {pkg_check}")
                     else:
                         print("[SSHPush] WARNING: pip install succeeded but package not found in pip list")
-                    # Install/refresh systemd unit so ExecStart points to python -m entrypoint
-                    service_unit = """[Unit]
+                    # Install/refresh systemd unit - read from package systemd/ directory
+                    import nebius_vpngw
+                    systemd_dir = Path(nebius_vpngw.__file__).parent / "systemd"
+                    service_unit_file = systemd_dir / "nebius-vpngw-agent.service"
+                    
+                    if service_unit_file.exists():
+                        service_unit = service_unit_file.read_text()
+                    else:
+                        # Fallback to embedded content if file not found
+                        service_unit = """[Unit]
 Description=Nebius VPNGW Agent
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
+Environment="PYTHONUNBUFFERED=1"
 ExecStart=/usr/bin/python3 -m nebius_vpngw.agent.main
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=3
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
 """
+                    
                     try:
                         with client.open_sftp() as sftp:
                             with sftp.file("/tmp/nebius-vpngw-agent.service", "w") as f:
@@ -271,8 +285,7 @@ WantedBy=multi-user.target
             "sudo chmod 0644 /etc/nebius-vpngw/config-resolved.yaml",
             # Install ipsec-vti.sh updown script if staged
             "sudo mkdir -p /var/lib/strongswan",
-            "if [ -f /tmp/ipsec-vti.sh ]; then sudo mv /tmp/ipsec-vti.sh /var/lib/strongswan/ipsec-vti.sh; fi",
-            "if [ -f /var/lib/strongswan/ipsec-vti.sh ]; then sudo chmod 0755 /var/lib/strongswan/ipsec-vti.sh; fi",
+            "if [ -f /tmp/ipsec-vti.sh ]; then sudo install -m 0755 -o root -g root /tmp/ipsec-vti.sh /var/lib/strongswan/ipsec-vti.sh && rm -f /tmp/ipsec-vti.sh; fi",
             # Install route fix script, service, and timer if staged
             "if [ -f /tmp/nebius-vpngw-fix-routes.sh ]; then sudo mv /tmp/nebius-vpngw-fix-routes.sh /usr/local/bin/nebius-vpngw-fix-routes.sh; fi",
             "if [ -f /usr/local/bin/nebius-vpngw-fix-routes.sh ]; then sudo chmod 0755 /usr/local/bin/nebius-vpngw-fix-routes.sh; fi",
@@ -286,6 +299,8 @@ WantedBy=multi-user.target
             "sudo systemctl daemon-reload",
             # Enable and start route fix timer (only if service file exists)
             "if [ -f /etc/systemd/system/nebius-vpngw-fix-routes.timer ]; then sudo systemctl enable --now nebius-vpngw-fix-routes.timer; fi",
+            # Run route fix script immediately to remove Table 220 and broad APIPA routes before starting agent
+            "if [ -f /usr/local/bin/nebius-vpngw-fix-routes.sh ]; then sudo /usr/local/bin/nebius-vpngw-fix-routes.sh; fi",
             # Start service if inactive, reload if active
             "sudo systemctl is-active --quiet nebius-vpngw-agent && sudo systemctl reload nebius-vpngw-agent || sudo systemctl start nebius-vpngw-agent",
         ]
@@ -307,6 +322,27 @@ WantedBy=multi-user.target
 
         if not had_failures:
             print("[SSHPush] Applied config, systemd unit, and restarted agent")
+        
+        # Verify routing table health after route fix script ran
+        try:
+            # Check if Table 220 exists (should be removed)
+            stdin, stdout, stderr = client.exec_command("ip rule list | grep -q 'lookup 220' && echo 'EXISTS' || echo 'OK'", timeout=10)
+            table220_status = stdout.read().decode().strip()
+            
+            # Check if broad APIPA route exists (should be removed)
+            stdin, stdout, stderr = client.exec_command("ip route show 169.254.0.0/16 2>/dev/null | grep -q eth0 && echo 'EXISTS' || echo 'OK'", timeout=10)
+            apipa_status = stdout.read().decode().strip()
+            
+            if table220_status == "OK" and apipa_status == "OK":
+                print("[SSHPush] ✓ Routing table clean (Table 220 and broad APIPA removed)")
+            else:
+                if table220_status == "EXISTS":
+                    print("[SSHPush] ⚠ Table 220 policy route still exists (may impact VPN routing)")
+                if apipa_status == "EXISTS":
+                    print("[SSHPush] ⚠ Broad APIPA route (169.254.0.0/16) still exists (may block VTI tunnels)")
+        except Exception as e:
+            # Non-critical check, don't fail deployment
+            pass
 
         # Verify service is actually running
         try:
@@ -385,36 +421,88 @@ WantedBy=multi-user.target
                             bgp_peers.append(r_ip)
 
                 if bgp_peers:
-                    # Check BGP session status via vtysh
-                    cmd = "sudo vtysh -c 'show bgp summary json' 2>/dev/null || echo '{}'"
-                    stdin, stdout, stderr = client.exec_command(cmd, timeout=10)
-                    rc = stdout.channel.recv_exit_status()
-                    output = stdout.read().decode().strip()
+                    # Wait for IPsec tunnels to establish before testing connectivity
+                    import time
+                    import json
+                    print(f"[SSHPush] Waiting for IPsec tunnels to establish...")
+                    time.sleep(10)
                     
-                    try:
-                        import json
-                        bgp_summary = json.loads(output) if output != '{}' else {}
+                    print(f"[SSHPush] Verifying tunnel connectivity to {len(bgp_peers)} peer(s)...")
+                    
+                    # Step 1: Test ping connectivity to BGP peers
+                    all_peers_reachable = True
+                    for peer_ip in bgp_peers:
+                        cmd = f"ping -c 2 -W 2 {peer_ip} >/dev/null 2>&1 && echo OK || echo FAIL"
+                        stdin, stdout, stderr = client.exec_command(cmd, timeout=10)
+                        result = stdout.read().decode().strip()
+                        if result == "OK":
+                            print(f"[SSHPush] ✓ Tunnel connectivity OK: {peer_ip} is reachable")
+                        else:
+                            print(f"[SSHPush] ✗ Tunnel connectivity FAILED: {peer_ip} is NOT reachable")
+                            all_peers_reachable = False
+                    
+                    if not all_peers_reachable:
+                        print("[SSHPush] WARNING: Some peers are not reachable. BGP may not establish.")
+                    
+                    # Step 2: Wait for BGP sessions to establish (up to 60 seconds)
+                    print("[SSHPush] Waiting for BGP sessions to establish...")
+                    max_wait_time = 60
+                    start_time = time.time()
+                    all_established = False
+                    last_states = {}
+                    
+                    while (time.time() - start_time) < max_wait_time:
+                        cmd = "sudo vtysh -c 'show bgp summary json' 2>/dev/null || echo '{}'"
+                        stdin, stdout, stderr = client.exec_command(cmd, timeout=10)
+                        output = stdout.read().decode().strip()
                         
-                        # Check for IPv4 unicast peers
-                        ipv4_peers = bgp_summary.get("ipv4Unicast", {}).get("peers", {})
-                        
-                        for peer_ip in bgp_peers:
-                            peer_info = ipv4_peers.get(peer_ip, {})
-                            state = peer_info.get("state", "Unknown")
+                        try:
+                            bgp_summary = json.loads(output) if output != '{}' else {}
+                            ipv4_peers = bgp_summary.get("ipv4Unicast", {}).get("peers", {})
                             
-                            if state == "Established":
-                                uptime_sec = peer_info.get("peerUptimeMsec", 0) // 1000  # Convert to seconds
-                                hours = uptime_sec // 3600
-                                minutes = (uptime_sec % 3600) // 60
-                                seconds = uptime_sec % 60
-                                uptime_str = f"{hours}h {minutes}m {seconds}s"
-                                print(f"[SSHPush] ✓ BGP session with {peer_ip} is Established (uptime: {uptime_str})")
-                            elif state != "Unknown":
-                                print(f"[SSHPush] WARNING: BGP session with {peer_ip} is {state}")
-                            # If Unknown, FRR might still be starting, don't warn
-                    except (json.JSONDecodeError, Exception) as e:
-                        # FRR might not be fully started yet, don't warn
-                        pass
+                            established_count = 0
+                            current_states = {}
+                            
+                            for peer_ip in bgp_peers:
+                                peer_info = ipv4_peers.get(peer_ip, {})
+                                state = peer_info.get("state", "Unknown")
+                                current_states[peer_ip] = state
+                                
+                                if state == "Established":
+                                    established_count += 1
+                            
+                            # Print state changes
+                            for peer_ip, state in current_states.items():
+                                if peer_ip not in last_states or last_states[peer_ip] != state:
+                                    elapsed = int(time.time() - start_time)
+                                    if state == "Established":
+                                        print(f"[SSHPush] ✓ BGP session with {peer_ip} is Established (after {elapsed}s)")
+                                    elif state != "Unknown":
+                                        print(f"[SSHPush]   BGP session with {peer_ip}: {state} (waiting...)")
+                            
+                            last_states = current_states
+                            
+                            if established_count == len(bgp_peers):
+                                all_established = True
+                                break
+                            
+                            # Wait 3 seconds before checking again
+                            time.sleep(3)
+                            
+                        except (json.JSONDecodeError, Exception) as e:
+                            # FRR might not be fully started yet
+                            time.sleep(3)
+                            continue
+                    
+                    # Final status report
+                    if all_established:
+                        elapsed = int(time.time() - start_time)
+                        print(f"[SSHPush] ✓ All BGP sessions established successfully (took {elapsed}s)")
+                    else:
+                        elapsed = int(time.time() - start_time)
+                        print(f"[SSHPush] ⚠ BGP sessions not yet established after {elapsed}s")
+                        print(f"[SSHPush]   Current states: {', '.join([f'{ip}={state}' for ip, state in last_states.items()])}")
+                        print(f"[SSHPush]   BGP sessions may take additional time to establish. Check with: nebius-vpngw status")
             except Exception as e:
                 # BGP check is informational only, don't fail deployment
                 pass

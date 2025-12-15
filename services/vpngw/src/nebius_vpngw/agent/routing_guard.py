@@ -1,27 +1,75 @@
 """Routing Guard: Enforce routing table invariants for VPN gateway.
 
 This module ensures critical routing rules are always correct, independent of
-configuration changes. It runs on every agent startup and reload to prevent
-policy routing from breaking VPN connectivity.
+configuration changes. It runs AFTER all config rendering (strongSwan/FRR/netplan)
+completes to prevent routing issues from breaking VPN connectivity.
+
+Defense-in-Depth Strategy:
+This module is part of a multi-layer defense against problematic APIPA routing:
+
+Layer 1 (Hardening - sysctl): Kernel settings reduce attack surface
+  - net.ipv4.conf.all.route_localnet=0 (disable link-local routing)
+  - net.ipv4.conf.all.accept_local=0 (prevent local address acceptance)
+  - net.ipv4.conf.all.arp_announce=2 (strict ARP source address)
+  - net.ipv4.conf.all.arp_ignore=1 (strict ARP target matching)
+  Note: These prevent kernel auto-generation but NOT DHCP client route additions
+  
+Layer 2 (Primary Defense - this module): Remove DHCP-added routes reactively
+  - Runs AFTER strongSwan/FRR/netplan rendering completes
+  - Removes table 220 policy routes
+  - Removes broad APIPA routes (169.254.0.0/16) added by DHCP
+  - Runs on every agent start/reload
+  - This is the PRIMARY defense against DHCP-added broad APIPA routes
+  
+Layer 3 (Backup - timer): Periodic enforcement every 5 minutes
+  - nebius-vpngw-fix-routes.timer runs fix-routes.sh
+  - Catches routes added by periodic DHCP renewals
+  - Independent of agent lifecycle
 
 Design Philosophy:
 - Routing invariants are GLOBAL, not tied to any specific config renderer
 - Must be idempotent (safe to run multiple times)
-- Must run on EVERY agent startup/reload, not just config changes
-- Prevents table 220 and other routing issues that break BGP/IPsec
+- Must run AFTER config rendering to clean up DHCP-added routes
+- Defense-in-depth: Combine prevention (sysctl) with cleanup (this module + timer)
+
+Timing is Critical:
+The module MUST run AFTER strongSwan/FRR rendering because:
+1. strongSwan renderer writes netplan config and runs "netplan apply"
+2. netplan apply triggers systemd-networkd reload
+3. systemd-networkd loses DHCP lease and re-acquires it
+4. DHCP renewal may add back 169.254.0.0/16 route (Nebius metadata service)
+5. This broad APIPA route captures VTI tunnel traffic and breaks BGP
+
+By running AFTER all rendering, we ensure routes are cleaned up even if
+DHCP renewal occurs during agent startup/reload.
 
 Common Issues Prevented:
 1. Table 220 policy routing (overrides main table, breaks VTI routing)
 2. Broad APIPA routes (169.254.0.0/16) that capture VTI traffic
 3. Missing /32 routes for BGP peers (causes source IP issues)
+
+Note: This follows the same pattern as AWS/Azure/Juniper/Cisco routers when
+building strongSwan customer gateways in cloud environments.
 """
 
 from __future__ import annotations
 
 import subprocess
 from typing import Dict, Any, List
+import ipaddress
 
 from .tunnel_iterator import iter_active_tunnels
+
+
+# Cloud metadata service APIPA whitelist
+# These routes are OWNED by the cloud platform and must NEVER be removed
+# GCP/AWS/Azure: Instance metadata service at 169.254.169.254
+# Nebius: Gateway at 169.254.169.1 for metadata and DHCP
+METADATA_APIPA_WHITELIST = [
+    "169.254.169.0/24",   # Full metadata service range
+    "169.254.169.1/32",   # Specific gateway (Nebius)
+    "169.254.169.254/32", # Specific metadata endpoint (AWS/GCP/Azure)
+]
 
 
 def enforce_routing_invariants(cfg: Dict[str, Any]) -> None:
@@ -74,11 +122,18 @@ def enforce_routing_invariants(cfg: Dict[str, Any]) -> None:
     stats["bgp_peer_routes_ensured"] = _ensure_bgp_peer_routes(cfg)
     
     # Structured logging summary
-    print(f"[RoutingGuard] Summary: table_220_removed={stats['table_220_removed']} "
-          f"broad_apipa_removed={stats['broad_apipa_removed']} "
-          f"orphaned_apipa_removed={stats['orphaned_apipa_removed']} "
-          f"bgp_peer_routes_ensured={stats['bgp_peer_routes_ensured']}")
-    print("[RoutingGuard] Routing invariants enforced")
+    if stats["table_220_removed"] or stats["broad_apipa_removed"] or stats["orphaned_apipa_removed"] > 0:
+        # Something was fixed
+        print(f"[RoutingGuard] Summary: table_220_removed={stats['table_220_removed']} "
+              f"broad_apipa_removed={stats['broad_apipa_removed']} "
+              f"orphaned_apipa_removed={stats['orphaned_apipa_removed']} "
+              f"bgp_peer_routes_ensured={stats['bgp_peer_routes_ensured']}")
+        print("[RoutingGuard] ✓ Routing invariants enforced")
+    else:
+        # Clean state - nothing needed fixing
+        print(f"[RoutingGuard] ✓ No orphan routes found. Table 220 & APIPA OK. "
+              f"BGP peer routes: {stats['bgp_peer_routes_ensured']}")
+
 
 
 def _remove_table_220() -> bool:
@@ -99,6 +154,16 @@ def _remove_table_220() -> bool:
     """
     removed = False
     
+    # Check if table 220 rule exists before attempting removal
+    result = subprocess.run(
+        ["ip", "rule", "show"],
+        capture_output=True,
+        text=True
+    )
+    if "220" not in result.stdout:
+        # Clean state - nothing to do
+        return False
+    
     # Flush all routes in table 220 first (important for clean removal)
     result = subprocess.run(
         ["ip", "route", "flush", "table", "220"],
@@ -116,7 +181,7 @@ def _remove_table_220() -> bool:
         text=True
     )
     if result.returncode == 0:
-        print("[RoutingGuard] Removed table 220 routing rule (lookup)")
+        print("[RoutingGuard] Removed policy rule: pref 220 from all lookup 220")
         removed = True
     
     # Fallback: Remove by preference number (some systems use pref instead of lookup)
@@ -126,7 +191,7 @@ def _remove_table_220() -> bool:
         text=True
     )
     if result.returncode == 0:
-        print("[RoutingGuard] Removed table 220 routing rule (pref)")
+        print("[RoutingGuard] Removed policy rule: pref 220 (fallback method)")
         removed = True
     
     # Verify removal
@@ -136,8 +201,10 @@ def _remove_table_220() -> bool:
         text=True
     )
     if "220" in result.stdout:
-        print(f"[RoutingGuard] WARNING: Table 220 rule still present after removal attempt")
-        print(f"[RoutingGuard] Current rules: {result.stdout}")
+        print(f"[RoutingGuard] ⚠ WARNING: Table 220 rule still present after removal attempt")
+        print(f"[RoutingGuard] Current rules:\n{result.stdout}")
+    elif removed:
+        print("[RoutingGuard] ✓ Table 220 completely removed")
     
     return removed
 
@@ -146,12 +213,13 @@ def _remove_broad_apipa_route() -> bool:
     """Remove broad 169.254.0.0/16 APIPA route if present.
     
     Problem:
-    - Some systems create 169.254.0.0/16 route on eth0
-    - VTI interfaces use 169.254.x.x addresses
-    - Broad route captures VTI traffic, routing it to eth0 instead
+    - DHCP client creates 169.254.0.0/16 route on eth0 for metadata gateway
+    - VTI interfaces use 169.254.x.x addresses for BGP peering
+    - Broad route captures VTI traffic, routing it to eth0 instead of VTI
     
     Solution:
-    - Remove the broad /16 route
+    - Remove the broad /16 route (this function)
+    - Preserve specific metadata routes in METADATA_APIPA_WHITELIST
     - Use specific /32 routes for each BGP peer (handled separately)
     - VTI interfaces get their own /30 routes automatically
     
@@ -166,6 +234,7 @@ def _remove_broad_apipa_route() -> bool:
     )
     
     if result.stdout.strip():
+        route_info = result.stdout.strip()
         # Route exists, remove it
         result = subprocess.run(
             ["ip", "route", "del", "169.254.0.0/16"],
@@ -173,10 +242,10 @@ def _remove_broad_apipa_route() -> bool:
             text=True
         )
         if result.returncode == 0:
-            print("[RoutingGuard] Removed broad APIPA route 169.254.0.0/16")
+            print(f"[RoutingGuard] Removed orphan APIPA route: 169.254.0.0/16 (was: {route_info})")
             return True
         else:
-            print(f"[RoutingGuard] Failed to remove 169.254.0.0/16: {result.stderr}")
+            print(f"[RoutingGuard] ⚠ Failed to remove 169.254.0.0/16: {result.stderr}")
     
     return False
 
@@ -210,10 +279,6 @@ def _cleanup_unexpected_apipa_routes(cfg: Dict[str, Any]) -> int:
     expected_tunnel_cidrs = {}  # {cidr: vti_name}
     expected_tunnel_peers = {}  # {peer_ip: vti_name}
     
-    # Cloud metadata APIPA - NEVER touch these
-    # GCP/AWS/Azure: 169.254.169.254 and related routes in 169.254.169.0/24
-    CLOUD_METADATA_PREFIX = "169.254.169."
-    
     for idx, vti_name, conn, tun in iter_active_tunnels(cfg):
         # Tunnel CIDR: Connected route from VTI IP assignment (kernel-added)
         inner_cidr = tun.get("inner_cidr")
@@ -236,7 +301,7 @@ def _cleanup_unexpected_apipa_routes(cfg: Dict[str, Any]) -> int:
     )
     
     if result.returncode != 0:
-        print(f"[RoutingGuard] Failed to get routes: {result.stderr}")
+        print(f"[RoutingGuard] ⚠ Failed to get routes: {result.stderr}")
         return 0
     
     routes_to_remove = []
@@ -256,8 +321,23 @@ def _cleanup_unexpected_apipa_routes(cfg: Dict[str, Any]) -> int:
         
         prefix = parts[0]
         
-        # EXPLICIT SCOPING: Cloud metadata APIPA - NEVER touch
-        if prefix.startswith(CLOUD_METADATA_PREFIX):
+        # EXPLICIT SCOPING: Cloud metadata APIPA whitelist - NEVER touch
+        # Check if route destination overlaps with metadata whitelist
+        is_metadata = False
+        try:
+            route_net = ipaddress.ip_network(prefix, strict=False)
+            for metadata_prefix in METADATA_APIPA_WHITELIST:
+                metadata_net = ipaddress.ip_network(metadata_prefix)
+                # Check if route is within metadata range or exactly matches
+                if route_net.overlaps(metadata_net) or route_net == metadata_net:
+                    is_metadata = True
+                    break
+        except ValueError:
+            # Invalid IP format - skip
+            continue
+        
+        if is_metadata:
+            # Protected metadata route - skip
             continue
         
         # Find device
@@ -285,10 +365,8 @@ def _cleanup_unexpected_apipa_routes(cfg: Dict[str, Any]) -> int:
     # Remove unexpected routes
     removed_count = 0
     if routes_to_remove:
-        print(f"[RoutingGuard] Found {len(routes_to_remove)} unexpected APIPA route(s)")
+        print(f"[RoutingGuard] Found {len(routes_to_remove)} unexpected APIPA route(s) to remove")
         for prefix, dev, full_route in routes_to_remove:
-            print(f"[RoutingGuard] Removing unexpected: {prefix} dev {dev}")
-            
             result = subprocess.run(
                 ["ip", "route", "del", prefix, "dev", dev],
                 capture_output=True,
@@ -296,14 +374,12 @@ def _cleanup_unexpected_apipa_routes(cfg: Dict[str, Any]) -> int:
             )
             
             if result.returncode == 0:
-                print(f"[RoutingGuard] ✓ Removed: {prefix} dev {dev}")
+                print(f"[RoutingGuard] Removed orphan APIPA route: {prefix} dev {dev}")
                 removed_count += 1
             else:
                 # Log but don't fail - route might have been removed already
-                if "No such process" not in result.stderr:
-                    print(f"[RoutingGuard] Could not remove {prefix} dev {dev}: {result.stderr.strip()}")
-    else:
-        print("[RoutingGuard] All APIPA routes are expected (declarative check passed)")
+                if "No such process" not in result.stderr and "not found" not in result.stderr.lower():
+                    print(f"[RoutingGuard] ⚠ Could not remove {prefix} dev {dev}: {result.stderr.strip()}")
     
     return removed_count
 

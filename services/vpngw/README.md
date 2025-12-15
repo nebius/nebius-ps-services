@@ -835,13 +835,79 @@ sudo ip route show table 220  # Should be empty
 sudo ip route | grep 169.254  # Should show /30 routes only
 ```
 
-**Routing guard:**
+**Defense-in-Depth Routing Protection:**
 
-Agent automatically:
+The gateway uses a three-layer defense against problematic APIPA routing:
+
+#### Layer 1: Kernel Configuration (Hardening)
+
+Sysctl settings harden the kernel's network behavior for VPN environments:
+
+```bash
+# /etc/sysctl.d/99-vpn-gateway.conf (APIPA section)
+net.ipv4.conf.all.route_localnet=0      # Disable IPv4 link-local routing
+net.ipv4.conf.all.accept_local=0        # Prevent local address acceptance
+net.ipv4.conf.all.arp_announce=2        # Strict ARP source selection
+net.ipv4.conf.all.arp_ignore=1          # Strict ARP target matching
+```
+
+These settings:
+
+- Prevent kernel from auto-generating link-local routes on interface events
+- Improve ARP security for VPN tunnel operations
+- Provide baseline hardening following VPN appliance best practices
+
+**Note:** These settings do NOT prevent DHCP from adding routes (DHCP client explicitly adds them), but they reduce the attack surface and prevent other link-local route issues.
+
+#### Layer 2: Routing Guard (Reactive - Primary Defense)
+
+Agent's `routing_guard.py` runs AFTER all config changes:
 
 - Removes table 220 policy routes
-- Warns about broad APIPA routes
-- Reports orphaned routes
+- Removes broad APIPA routes (169.254.0.0/16) added by DHCP
+- Runs on every agent start/reload
+- Ensures clean state after netplan/systemd-networkd operations
+
+This is the **primary defense** against DHCP-added broad APIPA routes.
+
+#### Layer 3: Timer Service (Backup)
+
+`nebius-vpngw-fix-routes.timer` runs every 5 minutes:
+
+- Catches routes added by periodic DHCP renewals
+- Independent of agent lifecycle
+- Provides continuous enforcement between agent operations
+
+**Why This Three-Layer Approach?**
+
+Nebius cloud DHCP server provides gateway `169.254.169.1`, which causes systemd-networkd to add a `169.254.0.0/16` route. This broad route conflicts with VPN tunnel inner IPs (also in 169.254.0.0/16 APIPA range).
+
+We cannot:
+
+- Disable DHCP routes entirely (breaks default gateway and DNS)
+- Prevent DHCP client from adding routes (systemd-networkd behavior)
+
+We can:
+
+1. Harden kernel with sysctl (reduce attack surface)
+2. Reactively remove bad routes after DHCP adds them (routing_guard)
+3. Periodically enforce cleanup (timer)
+
+This follows the same pattern as AWS/Azure/Juniper/Cisco routers when building strongSwan customer gateways in cloud environments.
+
+**If routes persist:**
+
+```bash
+# Manual cleanup
+ssh ubuntu@<gateway-ip>
+sudo /usr/local/bin/nebius-vpngw-fix-routes.sh
+
+# Or trigger agent reload
+sudo systemctl reload nebius-vpngw-agent
+
+# Check sysctl settings
+sudo sysctl -a | grep -E "route_localnet|accept_local|arp_announce|arp_ignore"
+```
 
 ### Agent Issues
 
@@ -863,6 +929,172 @@ sudo journalctl -u nebius-vpngw-agent --since "10 minutes ago"
 
 ```bash
 nebius-vpngw apply --local-config-file <file>
+```
+
+### Viewing Logs
+
+**Agent Logs (routing guard, config changes, service health):**
+
+```bash
+ssh ubuntu@<gateway-ip>
+
+# Real-time agent logs (routing guard, BGP peer routes, config rendering)
+sudo journalctl -u nebius-vpngw-agent -f
+
+# Recent agent logs (last 50 lines)
+sudo journalctl -u nebius-vpngw-agent -n 50 --no-pager
+
+# Agent logs since specific time
+sudo journalctl -u nebius-vpngw-agent --since "10 minutes ago"
+
+# Search for routing guard operations
+sudo journalctl -u nebius-vpngw-agent | grep RoutingGuard
+
+# View clean state confirmations
+sudo journalctl -u nebius-vpngw-agent | grep "No orphan routes"
+
+# View route cleanup operations
+sudo journalctl -u nebius-vpngw-agent | grep -E "(Removed|orphan|Table 220)"
+```
+
+**Route Fix Timer Logs (periodic cleanup every 5 minutes):**
+
+```bash
+# Timer service logs
+sudo journalctl -u nebius-vpngw-fix-routes.timer -n 20
+
+# Route fix script execution logs
+sudo journalctl -u nebius-vpngw-fix-routes.service -n 20
+
+# Check systemd timer status
+sudo systemctl status nebius-vpngw-fix-routes.timer
+```
+
+**strongSwan IPsec Logs (tunnel establishment, encryption):**
+
+```bash
+# Real-time strongSwan logs
+sudo journalctl -u strongswan-starter -f
+
+# Recent strongSwan logs
+sudo journalctl -u strongswan-starter -n 50
+
+# IKE negotiation logs
+sudo journalctl -u strongswan-starter | grep -E "(IKE_SA|CHILD_SA|established)"
+
+# Tunnel errors
+sudo journalctl -u strongswan-starter | grep -i error
+
+# VTI interface operations (from ipsec-vti.sh updown script)
+sudo journalctl | grep "ipsec-vti" -A 2 -B 2
+```
+
+**FRR BGP Logs (routing protocol):**
+
+```bash
+# FRR service logs
+sudo journalctl -u frr -n 50
+
+# BGP-specific logs (if available)
+sudo journalctl | grep bgpd
+
+# Check BGP daemon directly
+sudo vtysh -c "show logging" | tail -20
+```
+
+**Linux Networking Logs (netplan, systemd-networkd, DHCP):**
+
+```bash
+# systemd-networkd logs (DHCP, interface configuration)
+sudo journalctl -u systemd-networkd -n 50
+
+# Search for DHCP lease renewals
+sudo journalctl -u systemd-networkd | grep -i dhcp
+
+# Search for route additions by DHCP
+sudo journalctl -u systemd-networkd | grep -E "(route|169.254)"
+
+# netplan operations
+sudo journalctl | grep netplan
+
+# Kernel network messages
+sudo dmesg | grep -E "(eth0|vti|route)" | tail -20
+```
+
+**Firewall Logs (UFW rule changes):**
+
+```bash
+# UFW operations from agent
+sudo journalctl -u nebius-vpngw-agent | grep -i firewall
+
+# System firewall logs
+sudo journalctl | grep ufw | tail -20
+
+# Check current UFW rules
+sudo ufw status verbose
+```
+
+**Combined View (all critical services):**
+
+```bash
+# Follow all VPN-related logs in real-time
+sudo journalctl -f -u nebius-vpngw-agent \
+                    -u strongswan-starter \
+                    -u frr \
+                    -u systemd-networkd \
+                    -u nebius-vpngw-fix-routes.service
+
+# Recent activity across all services
+sudo journalctl --since "5 minutes ago" \
+                -u nebius-vpngw-agent \
+                -u strongswan-starter \
+                -u frr \
+                -u systemd-networkd \
+                --no-pager
+```
+
+**Log Patterns to Watch:**
+
+```bash
+# Successful routing guard execution (clean state)
+[RoutingGuard] ✓ No orphan routes found. Table 220 & APIPA OK. BGP peer routes: 2
+
+# Routing issues detected and fixed
+[RoutingGuard] Found 1 unexpected APIPA route(s) to remove
+[RoutingGuard] Removed orphan APIPA route: 169.254.99.0/24 dev eth0
+[RoutingGuard] Removed policy rule: pref 220 from all lookup 220
+[RoutingGuard] ✓ Table 220 completely removed
+[RoutingGuard] Summary: table_220_removed=True orphaned_apipa_removed=1
+
+# BGP sessions established
+[RoutingGuard] Ensured route 169.254.18.225/32 via vti0
+[RoutingGuard] Ensured route 169.254.5.153/32 via vti1
+
+# Config changes applied
+[Agent] Received signal 1; reloading
+[Agent] No changes detected; skipping config render
+```
+
+**Troubleshooting Specific Issues:**
+
+```bash
+# Issue: BGP not establishing
+sudo journalctl -u nebius-vpngw-agent | grep RoutingGuard  # Check routing
+sudo journalctl -u strongswan-starter | grep ESTABLISHED   # Check IPsec
+sudo vtysh -c "show bgp summary"                           # Check BGP state
+
+# Issue: Routes keep getting added back
+sudo journalctl -u systemd-networkd --since "1 hour ago" | grep 169.254
+sudo journalctl -u nebius-vpngw-fix-routes.service -n 20
+
+# Issue: Tunnel won't establish
+sudo journalctl -u strongswan-starter -n 100 | grep -E "(error|fail|timeout)"
+sudo ipsec statusall
+
+# Issue: Agent not responding
+sudo systemctl status nebius-vpngw-agent
+sudo journalctl -u nebius-vpngw-agent --since "1 hour ago" | tail -50
+ps aux | grep "python3 -m nebius_vpngw.agent.main"
 ```
 
 ## Development

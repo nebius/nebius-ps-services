@@ -257,6 +257,7 @@ class VMManager:
         print(f"[VMManager] Waiting for {vm_name} ({ip_address}) to be reachable...")
         start_time = time.time()
         attempt = 0
+        printed_progress = False
         
         while time.time() - start_time < timeout:
             attempt += 1
@@ -269,18 +270,21 @@ class VMManager:
                 )
                 if result.returncode == 0:
                     elapsed = int(time.time() - start_time)
-                    print(f"[green]✓ {vm_name} is reachable (took {elapsed}s)[/green]")
+                    if printed_progress:
+                        print()  # finish the progress line
+                    print(f"[VMManager] ✓ {vm_name} is reachable (took {elapsed}s)")
                     return True
                 else:
                     # Show progress
                     if attempt % 3 == 0:  # Every 3 attempts
                         print(".", end="", flush=True)
+                        printed_progress = True
             except Exception:
                 pass
             
             time.sleep(1)
         
-        print(f"\n[red]✗ Timeout waiting for {vm_name} to become reachable[/red]")
+        print(f"\n✗ Timeout waiting for {vm_name} to become reachable")
         return False
     
     def get_vm_allocations(self, vm_name: str) -> t.List[t.Tuple[int, str]]:
@@ -379,6 +383,18 @@ class VMManager:
             )
             if 'done' in cloud_init_check.stdout.lower() or 'status: done' in cloud_init_check.stdout.lower():
                 result['cloud_init_complete'] = True
+                # Also verify pip module is available (critical for package installation)
+                pip_check = subprocess.run(
+                    ['ssh', '-o', 'ConnectTimeout=5', '-o', 'StrictHostKeyChecking=no',
+                     '-o', 'UserKnownHostsFile=/dev/null', '-o', 'LogLevel=ERROR',
+                     f'ubuntu@{public_ip}', 'python3 -m pip --version 2>/dev/null'],
+                    capture_output=True,
+                    timeout=10,
+                    text=True
+                )
+                if pip_check.returncode != 0:
+                    # pip module not available yet, cloud-init might not be fully done
+                    result['cloud_init_complete'] = False
         except Exception:
             pass
         
@@ -726,6 +742,10 @@ class VMManager:
                     # Note: _ensure_vpngw_subnet only creates if missing, never deletes
                     # This preserves the subnet and any unassigned allocations during --recreate-gw
                     subnet_id = self._ensure_vpngw_subnet(client, spec)
+                    
+                    # Ensure route table exists and is attached to vpngw-subnet
+                    self._ensure_vpngw_route_table(client, subnet_id)
+                    
                     nic = {"subnet_id": subnet_id}
                     # Preset-based CPU/mem; fall back to cores/memory_gb if preset missing
                     platform = spec.vm_spec.get("platform") or "cpu-d3"
@@ -1059,7 +1079,11 @@ class VMManager:
                                     if get_by_addr:
                                         alloc_obj = get_by_addr(address=desired_ip, project_id=self.project_id)
                                         if alloc_obj:
-                                            print(f"[VMManager] Using allocation from YAML external_ips: {desired_ip}")
+                                            print(f"[VMManager] Found existing allocation with IP {desired_ip}")
+                                            # Check if allocation is in a different subnet - if so, migrate it
+                                            alloc_obj = self._migrate_allocation_to_vpngw_subnet(
+                                                alloc_client, alloc_obj, nic.get("subnet_id"), desired_ip
+                                            )
                                 except Exception:
                                     alloc_obj = None
                             
@@ -1074,6 +1098,10 @@ class VMManager:
                                             # Get IP for display
                                             preserved_ip = self.get_allocation_ip(preserved_alloc_id)
                                             print(f"[VMManager] Reusing preserved allocation {preserved_alloc_id} ({preserved_ip}) for {inst_name} {nic_name}")
+                                            # Check if allocation is in wrong subnet - migrate if needed
+                                            alloc_obj = self._migrate_allocation_to_vpngw_subnet(
+                                                alloc_client, alloc_obj, nic.get("subnet_id"), preserved_ip
+                                            )
                                 except Exception as e:
                                     print(f"[VMManager] Could not retrieve preserved allocation {preserved_alloc_id}: {e}")
                                     alloc_obj = None
@@ -1088,6 +1116,11 @@ class VMManager:
                                     ).wait()
                                     if alloc_obj:
                                         print(f"[VMManager] Found existing allocation by name: {alloc_name}")
+                                        # Check if allocation is in wrong subnet - migrate if needed
+                                        byname_ip = self.get_allocation_ip(getattr(getattr(alloc_obj, "metadata", None), "id", None) or getattr(alloc_obj, "id", None))
+                                        alloc_obj = self._migrate_allocation_to_vpngw_subnet(
+                                            alloc_client, alloc_obj, nic.get("subnet_id"), byname_ip
+                                        )
                                 except Exception:
                                     alloc_obj = None
                             
@@ -1101,7 +1134,10 @@ class VMManager:
                                     )
                                 try:
                                     alloc_name = f"{inst_name}-{nic_name}-ip"
-                                    print(f"[VMManager] Creating public IP allocation {alloc_name} for {nic_name} in vpngw-subnet ...")
+                                    if desired_ip:
+                                        print(f"[VMManager] Creating public IP allocation {alloc_name} for {nic_name} in vpngw-subnet requesting IP {desired_ip} ...")
+                                    else:
+                                        print(f"[VMManager] Creating public IP allocation {alloc_name} for {nic_name} in vpngw-subnet ...")
                                     if alloc_client is not None:
                                         try:
                                             from nebius.api.nebius.vpc.v1 import CreateAllocationRequest, AllocationSpec, IPv4PublicAllocationSpec  # type: ignore
@@ -1332,9 +1368,44 @@ class VMManager:
                             dsc2 = DiskServiceClient(client)  # type: ignore
                             if hasattr(dsc2, "get_by_name"):
                                 disk_obj = dsc2.get_by_name(GetByNameRequest(parent_id=self.project_id, name=boot_disk_name)).wait()
-                                boot_disk_id = getattr(disk_obj, "id", None) or getattr(getattr(disk_obj, "metadata", None), "id", None)
-                                if boot_disk_id:
-                                    print(f"[VMManager] Final fallback: resolved disk id={boot_disk_id}")
+                                candidate_disk_id = getattr(disk_obj, "id", None) or getattr(getattr(disk_obj, "metadata", None), "id", None)
+                                
+                                # Check if disk is deleting - if so, wait for it
+                                if candidate_disk_id:
+                                    disk_status = getattr(disk_obj, "status", None)
+                                    disk_state = getattr(disk_status, "status", None) if disk_status else None
+                                    
+                                    if disk_state and "DELET" in str(disk_state).upper():
+                                        print(f"[VMManager] Final fallback: disk {boot_disk_name} is deleting (state={disk_state}), waiting up to 120s...")
+                                        import time
+                                        max_wait = 120  # Wait longer in fallback since we're about to create VM
+                                        wait_interval = 5
+                                        for wait_attempt in range(max_wait // wait_interval):
+                                            time.sleep(wait_interval)
+                                            try:
+                                                disk_obj = dsc2.get_by_name(GetByNameRequest(parent_id=self.project_id, name=boot_disk_name)).wait()
+                                                disk_status = getattr(disk_obj, "status", None)
+                                                disk_state = getattr(disk_status, "status", None) if disk_status else None
+                                                if disk_state and "DELET" in str(disk_state).upper():
+                                                    print(f"[VMManager] Still deleting... ({(wait_attempt + 1) * wait_interval}s / {max_wait}s)")
+                                                    continue
+                                                else:
+                                                    print(f"[VMManager] Disk state changed to {disk_state}, can now use disk")
+                                                    boot_disk_id = candidate_disk_id
+                                                    break
+                                            except Exception:
+                                                # Disk no longer exists - deletion complete, don't use this ID
+                                                print(f"[VMManager] Disk deletion complete after {(wait_attempt + 1) * wait_interval}s")
+                                                boot_disk_id = None
+                                                break
+                                        else:
+                                            # Timeout - disk still deleting, don't use it
+                                            print(f"[VMManager] Timeout waiting {max_wait}s for disk deletion. Will proceed without boot disk (may create new disk).")
+                                            boot_disk_id = None
+                                    else:
+                                        # Disk exists and not deleting - safe to use
+                                        boot_disk_id = candidate_disk_id
+                                        print(f"[VMManager] Final fallback: resolved disk id={boot_disk_id}")
                         except Exception as e:
                             print(f"[VMManager] Final fallback disk lookup failed: {e}")
 
@@ -1487,12 +1558,12 @@ class VMManager:
         return vm_ips
 
     def _ensure_vpngw_subnet(self, client: t.Any, spec: GatewayGroupSpec) -> t.Optional[str]:
-        """Ensure a single gateway subnet named 'vpngw-subnet' (/27) exists in the chosen network.
+        """Ensure a single gateway subnet named 'vpngw-subnet' (/24) exists in the chosen network.
 
         Resolution:
         - If vm_spec.network_id is provided, use that VPC network.
         - Else, find network by name 'default-network'.
-        - Find subnet by name 'vpngw-subnet' in that network; create if missing with CIDR /27.
+        - Find subnet by name 'vpngw-subnet' in that network; create if missing with CIDR /24.
         Returns the subnet_id or None if not available.
         """
         if client is None:
@@ -1515,26 +1586,68 @@ class VMManager:
             )  # type: ignore
 
             net_client = NetworkServiceClient(client)  # type: ignore
-            # Resolve network by id or by name 'default-network'
+            # Network resolution priority:
+            # 1. Use network_id from YAML if provided
+            # 2. Check for default-network in project
+            # 3. If only ONE custom network exists, use it
+            # 4. Error if multiple custom networks exist (ambiguous)
             network_id = spec.vm_spec.get("network_id")
             network_obj = None
+            
             if network_id:
+                # User explicitly specified network_id
                 try:
                     network_obj = net_client.get(GetNetworkRequest(id=network_id)).wait()
-                except Exception:
-                    network_obj = None
-            if network_obj is None:
+                    print(f"[VMManager] Using network from YAML: {network_id}")
+                except Exception as e:
+                    raise RuntimeError(f"[VMManager] Specified network_id '{network_id}' not found: {e}")
+            else:
+                # Auto-discover network
+                print("[VMManager] No network_id in YAML, auto-discovering network...")
+                
+                # Try default-network first
                 try:
-                    # SDK expects parent_id for get-by-name (project scope)
                     network_obj = net_client.get_by_name(
                         GetNetworkByNameRequest(parent_id=self.project_id or "", name="default-network")
                     ).wait()
+                    print("[VMManager] Found default-network, using it")
                 except Exception:
                     network_obj = None
+                
+                # If no default, list all networks and use single custom network
+                if network_obj is None:
+                    try:
+                        from nebius.api.nebius.vpc.v1 import ListNetworksRequest
+                        networks_list = net_client.list(
+                            ListNetworksRequest(parent_id=self.project_id or "")
+                        ).wait()
+                        networks = getattr(networks_list, "items", []) or []
+                        
+                        if len(networks) == 0:
+                            raise RuntimeError(
+                                "[VMManager] No networks found in project. "
+                                "Please create a network or specify network_id in YAML."
+                            )
+                        elif len(networks) == 1:
+                            network_obj = networks[0]
+                            net_name = getattr(getattr(network_obj, "metadata", None), "name", "unknown")
+                            print(f"[VMManager] Found single custom network: {net_name}, using it")
+                        else:
+                            # Multiple networks - ambiguous
+                            net_names = [getattr(getattr(n, "metadata", None), "name", "unknown") for n in networks]
+                            raise RuntimeError(
+                                f"[VMManager] Multiple networks found in project: {', '.join(net_names)}. "
+                                "Please specify which network to use by setting network_id in your YAML config."
+                            )
+                    except RuntimeError:
+                        raise
+                    except Exception as e:
+                        raise RuntimeError(f"[VMManager] Failed to list networks: {e}")
+            
             if network_obj is None:
                 raise RuntimeError(
-                    "[VMManager] No network_id provided and default-network not found. "
-                    "Please set an existing network_id in your YAML."
+                    "[VMManager] Could not resolve network. "
+                    "Please specify network_id in your YAML config."
                 )
 
             subnet_client = SubnetServiceClient(client)  # type: ignore
@@ -1542,6 +1655,7 @@ class VMManager:
             net_id = getattr(network_obj, "id", None) or getattr(getattr(network_obj, "metadata", None), "id", None)
             net_name = getattr(getattr(network_obj, "metadata", None), "name", None) or "default-network"
             subnet_obj = None
+            subnet_needs_recreation = False
             try:
                 # First attempt: direct by-name lookup (project-scoped)
                 candidate = subnet_client.get_by_name(
@@ -1552,7 +1666,26 @@ class VMManager:
                     c_spec = getattr(candidate, "spec", None)
                     c_net_id = getattr(c_spec, "network_id", None)
                     if c_net_id == net_id:
+                        # Check if subnet has correct settings (use_network_pools should be False)
+                        sp = getattr(c_spec, "ipv4_private_pools", None)
+                        use_network_pools = getattr(sp, "use_network_pools", True)
+                        
+                        if use_network_pools:
+                            print(f"[VMManager] WARNING: Found existing vpngw-subnet with use_network_pools=true")
+                            print(f"[VMManager] This subnet will inherit the network's /13 pool instead of using a dedicated /24")
+                            print(f"[VMManager] Subnet needs to be deleted and recreated to fix this")
+                            subnet_needs_recreation = True
+                        
                         subnet_obj = candidate
+                        # Log existing subnet CIDR for debugging
+                        if c_spec and sp:
+                            sp_pools = getattr(sp, "pools", []) or []
+                            for sp_pool in sp_pools:
+                                sp_cidrs = getattr(sp_pool, "cidrs", []) or []
+                                for c in sp_cidrs:
+                                    existing_cidr = getattr(c, "cidr", None)
+                                    existing_max_mask = getattr(c, "max_mask_length", None)
+                                    print(f"[VMManager] Found existing vpngw-subnet with CIDR: {existing_cidr} (max_mask_length: {existing_max_mask}, use_network_pools: {use_network_pools})")
                 # If by-name found but network mismatch, search within the target network
                 if subnet_obj is None:
                     lst = subnet_client.list_by_network(
@@ -1562,9 +1695,25 @@ class VMManager:
                     for s in items:
                         if getattr(getattr(s, "metadata", None), "name", None) == "vpngw-subnet":
                             subnet_obj = s
+                            # Check use_network_pools setting
+                            s_spec = getattr(s, "spec", None)
+                            sp = getattr(s_spec, "ipv4_private_pools", None)
+                            use_network_pools = getattr(sp, "use_network_pools", True)
+                            if use_network_pools:
+                                subnet_needs_recreation = True
                             break
             except Exception:
                 subnet_obj = None
+            
+            # If subnet exists but has wrong settings, warn the user
+            if subnet_obj is not None and subnet_needs_recreation:
+                raise ValueError(
+                    "vpngw-subnet exists but has use_network_pools=true (wrong setting). "
+                    "This causes the subnet to inherit the network's /13 CIDR instead of using a dedicated /24. "
+                    "Please delete the vpngw-subnet manually and run this command again to recreate it correctly. "
+                    "Note: You must first delete any VMs attached to this subnet."
+                )
+            
             if subnet_obj is None:
                 # Attempt to create the subnet in default-network.
                 # If the project has no IP space, the create call will fail and we
@@ -1573,7 +1722,7 @@ class VMManager:
                     print("[VMManager] Creating gateway subnet 'vpngw-subnet' ...")
                     from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
                     from nebius.api.nebius.vpc.v1 import SubnetSpec  # type: ignore
-                    # Derive first-free /27 from the network's private pool CIDR(s)
+                    # Derive first-free /24 from the network's private pool CIDR(s)
                     # 1) Read network's private pool id
                     try:
                         # network_obj.spec.ipv4_private_pools.pools[0].id
@@ -1598,6 +1747,7 @@ class VMManager:
                             import ipaddress as _ip
                             if pool_cidr_str:
                                 pool_net = _ip.ip_network(pool_cidr_str)
+                                print(f"[VMManager] Network pool CIDR: {pool_cidr_str}")
                                 # Collect existing subnets in this network
                                 try:
                                     existing = []
@@ -1605,6 +1755,7 @@ class VMManager:
                                         ListSubnetsByNetworkRequest(network_id=net_id)
                                     ).wait()
                                     items = getattr(lst, "items", []) or []
+                                    print(f"[VMManager] Found {len(items)} existing subnet(s) in network")
                                     for s in items:
                                         s_spec = getattr(s, "spec", None)
                                         sp = getattr(s_spec, "ipv4_private_pools", None)
@@ -1616,36 +1767,54 @@ class VMManager:
                                                 if cstr:
                                                     try:
                                                         existing.append(_ip.ip_network(cstr))
+                                                        print(f"[VMManager]   - Existing subnet: {cstr}")
                                                     except Exception:
                                                         pass
-                                except Exception:
+                                except Exception as list_err:
+                                    print(f"[VMManager] Warning: Could not list existing subnets: {list_err}")
                                     existing = []
-                                # Iterate /27s within pool until first unused
-                                for candidate in pool_net.subnets(new_prefix=27):
+                                # Iterate /24s within pool until first unused
+                                print(f"[VMManager] Calculating first free /24 from {pool_cidr_str}...")
+                                found_count = 0
+                                for candidate in pool_net.subnets(new_prefix=24):
                                     overlap = any(candidate.overlaps(e) for e in existing)
                                     if not overlap:
                                         cidr_to_use = str(candidate)
+                                        print(f"[VMManager] Selected free /24: {cidr_to_use}")
                                         break
-                        except Exception:
+                                    found_count += 1
+                                    if found_count <= 3:
+                                        print(f"[VMManager]   - Skipping {candidate} (overlaps with existing)")
+                        except Exception as calc_err:
+                            print(f"[VMManager] Warning: Failed to calculate free /24: {calc_err}")
                             cidr_to_use = None
-                    if not cidr_to_use:
+                    
+                    # Validate we have a proper CIDR
+                    if not cidr_to_use or cidr_to_use == "/24":
                         raise RuntimeError(
-                            f"[VMManager] No free /27 available in network '{net_name}' (id={net_id}). "
-                            "Add a new, non-overlapping CIDR to the existing network to expand its IP space "
-                            "(e.g., 10.8.0.0/13, 10.16.0.0/13, or 10.32.0.0/13), ensuring it does not overlap existing subnets/CIDRs."
+                            f"[VMManager] Failed to calculate a free /24 CIDR in network '{net_name}'. "
+                            "The network pool may be exhausted or misconfigured. "
+                            "Please manually create 'vpngw-subnet' with a /24 CIDR or add more IP space to the network."
                         )
-                    # Build SubnetSpec with ipv4_private_pools assigning the /27 slice
-                    # Use proper SDK message objects instead of dicts
-                    ipv4_private_pools = IPv4PrivateSubnetPools(
-                        pools=[
-                            SubnetPool(
-                                cidrs=[
-                                    SubnetCidr(cidr=cidr_to_use)
-                                ]
-                            )
-                        ],
-                        use_network_pools=False,
-                    )
+                    
+                    print(f"[VMManager] Creating vpngw-subnet with CIDR {cidr_to_use}")
+                    
+                    # Build SubnetSpec with ipv4_private_pools assigning the calculated /24
+                    # CRITICAL: Per API docs, use_network_pools defaults to TRUE
+                    # We MUST explicitly set it to False when providing explicit pools
+                    # Otherwise subnet inherits network's /13 pool instead of our /24
+                    from nebius.api.nebius.vpc.v1 import IPv4PublicSubnetPools  # type: ignore
+                    
+                    ipv4_private_pools = IPv4PrivateSubnetPools()
+                    ipv4_private_pools.pools.extend([
+                        SubnetPool(
+                            cidrs=[
+                                SubnetCidr(cidr=cidr_to_use)
+                            ]
+                        )
+                    ])
+                    ipv4_private_pools.use_network_pools = False
+                    
                     req = CreateSubnetRequest(
                         metadata=ResourceMetadata(
                             name="vpngw-subnet",
@@ -1656,18 +1825,45 @@ class VMManager:
                             ipv4_private_pools=ipv4_private_pools,
                         ),
                     )
-                    op = subnet_client.create(req).wait()  # Operation
+                    
+                    op = subnet_client.create(req)
+                    
+                    # Wait for operation to complete
                     try:
                         op.sync_wait()
-                    except Exception:
-                        pass
-                    # After creation, refetch by name to obtain the id
-                    try:
-                        subnet_obj = subnet_client.get_by_name(
-                            GetSubnetByNameRequest(parent_id=self.project_id or "", name="vpngw-subnet")
-                        ).wait()
-                    except Exception:
-                        subnet_obj = None
+                    except AttributeError:
+                        # Older SDK version might not have sync_wait
+                        op.wait()
+                    
+                    # Add delay to allow backend to fully commit the changes
+                    import time
+                    time.sleep(5)
+                    
+                    # Fetch the subnet to verify
+                    subnet_obj = subnet_client.get_by_name(
+                        GetSubnetByNameRequest(parent_id=self.project_id or "", name="vpngw-subnet")
+                    ).wait()
+                    
+                    if subnet_obj:
+                        print(f"[VMManager] ✓ Subnet 'vpngw-subnet' created successfully")
+                        
+                        # Verify use_network_pools is False to prevent /13 inheritance
+                        s_spec = getattr(subnet_obj, "spec", None)
+                        if s_spec:
+                            sp = getattr(s_spec, "ipv4_private_pools", None)
+                            if sp:
+                                use_net_pools_actual = getattr(sp, 'use_network_pools', True)
+                                if use_net_pools_actual:
+                                    raise RuntimeError(
+                                        f"[VMManager] CRITICAL: Subnet was created but use_network_pools=true! "
+                                        f"This means the subnet will inherit the network's /13 pool instead of using the specified /24. "
+                                        f"This is a bug in the Nebius API - it ignored our explicit use_network_pools=False setting. "
+                                        f"The subnet has been created incorrectly and must be deleted manually."
+                                    )
+                    
+                    # Create dedicated route table for vpngw-subnet
+                    if subnet_obj is not None:
+                        self._create_vpngw_route_table(client, subnet_obj, net_id)
                 except Exception as e:
                     raise RuntimeError(
                         f"[VMManager] Failed to create 'vpngw-subnet' in {net_name}: {e}. "
@@ -1681,6 +1877,343 @@ class VMManager:
                     sid = getattr(getattr(subnet_obj, "metadata", None), "id", None)
                 return sid
             return None
+        except Exception as e:
+            print(f"[VMManager] Error in _ensure_vpngw_subnet: {e}")
+            return None
+    
+    def _ensure_vpngw_route_table(self, client: t.Any, subnet_id: t.Optional[str]) -> None:
+        """Ensure route table exists for vpngw-subnet and is properly configured.
+        
+        This method is idempotent - it checks if RT exists, creates if missing.
+        Called both during subnet creation and when updating existing VMs.
+        
+        Args:
+            client: Nebius SDK client
+            subnet_id: Subnet ID for vpngw-subnet
+        """
+        if not client or not subnet_id:
+            return
+        
+        try:
+            from nebius.api.nebius.vpc.v1 import (
+                SubnetServiceClient,
+                GetSubnetRequest,
+                RouteTableServiceClient,
+                GetRouteTableRequest,
+            )  # type: ignore
+            
+            subnet_client = SubnetServiceClient(client)  # type: ignore
+            
+            # Get subnet to check if it has a route table
+            try:
+                subnet_obj = subnet_client.get(GetSubnetRequest(id=subnet_id)).wait()
+            except Exception as e:
+                print(f"[VMManager] Could not get subnet {subnet_id}: {e}")
+                return
+            
+            # Check if subnet has route table attached
+            subnet_spec = getattr(subnet_obj, "spec", None)
+            rt_id = getattr(subnet_spec, "route_table_id", None) if subnet_spec else None
+            
+            if rt_id:
+                # Route table exists, verify it's valid
+                try:
+                    rt_client = RouteTableServiceClient(client)  # type: ignore
+                    rt_obj = rt_client.get(GetRouteTableRequest(id=rt_id)).wait()
+                    rt_name = getattr(getattr(rt_obj, "metadata", None), "name", None) or "unknown"
+                    print(f"[VMManager] Route table '{rt_name}' already attached to vpngw-subnet")
+                    return
+                except Exception:
+                    # RT ID exists but not found - will recreate
+                    print("[VMManager] Route table ID found but not accessible, creating new one...")
+            
+            # No route table or invalid RT - create one
+            network_id = subnet_spec.network_id if subnet_spec else None
+            if not network_id:
+                print("[VMManager] Cannot create route table: network_id not found")
+                return
+            
+            self._create_vpngw_route_table(client, subnet_obj, network_id)
+            
+        except Exception as e:
+            print(f"[VMManager] Error ensuring route table for vpngw-subnet: {e}")
+    
+    def _migrate_allocation_to_vpngw_subnet(
+        self, 
+        alloc_client: t.Any, 
+        alloc_obj: t.Any, 
+        target_subnet_id: t.Optional[str],
+        desired_ip: str
+    ) -> t.Any:
+        """Migrate public IP allocation to vpngw-subnet if it's in a different subnet.
+        
+        This enables users to:
+        1. Rename old vpngw-subnet (e.g., to vpngw-subnet-old)
+        2. Run 'apply' to create fresh vpngw-subnet
+        3. Automatically move public IP allocations to new subnet
+        
+        Args:
+            alloc_client: AllocationServiceClient
+            alloc_obj: Existing allocation object
+            target_subnet_id: Target vpngw-subnet ID
+            desired_ip: IP address for logging
+            
+        Returns:
+            Updated allocation object (or original if no migration needed)
+        """
+        if not alloc_client or not alloc_obj or not target_subnet_id:
+            return alloc_obj
+        
+        try:
+            # Get allocation's current subnet
+            alloc_spec = getattr(alloc_obj, "spec", None)
+            if not alloc_spec:
+                return alloc_obj
+            
+            # Check if it's a public allocation
+            ipv4_public = getattr(alloc_spec, "ipv4_public", None)
+            if not ipv4_public:
+                return alloc_obj
+            
+            current_subnet_id = getattr(ipv4_public, "subnet_id", None)
+            
+            # If already in target subnet, no migration needed
+            if current_subnet_id == target_subnet_id:
+                print(f"[VMManager] Allocation {desired_ip} already in vpngw-subnet")
+                return alloc_obj
+            
+            from nebius.api.nebius.vpc.v1 import (
+                UpdateAllocationRequest,
+                AllocationSpec,
+                IPv4PublicAllocationSpec,
+            )  # type: ignore
+            from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
+            
+            # Resolve the IP/CIDR we should preserve during migration
+            alloc_id = getattr(alloc_obj, "id", None) or getattr(getattr(alloc_obj, "metadata", None), "id", None)
+            ip_cidr = desired_ip
+            if not ip_cidr and ipv4_public:
+                ip_cidr = getattr(ipv4_public, "cidr", None) or getattr(ipv4_public, "address", None)
+            if not ip_cidr and alloc_id:
+                # Try to fetch via helper to avoid relying on object shape
+                ip_cidr = self.get_allocation_ip(str(alloc_id))
+            if ip_cidr:
+                ip_cidr = str(ip_cidr)
+            else:
+                # Fallback: let API keep the same IP by using /32 request semantics
+                ip_cidr = "/32"
+
+            print(f"[VMManager] Attempting to migrate allocation {ip_cidr} to vpngw-subnet...")
+            
+            # Get allocation ID and metadata
+            if not alloc_id:
+                alloc_id = getattr(getattr(alloc_obj, "metadata", None), "id", None)
+            
+            alloc_meta = getattr(alloc_obj, "metadata", None)
+            alloc_name = getattr(alloc_meta, "name", None) if alloc_meta else None
+            parent_id = self.project_id or getattr(alloc_meta, "parent_id", None)
+            if not parent_id:
+                # Some SDKs expose project_id on metadata instead of parent_id
+                parent_id = getattr(alloc_meta, "project_id", None)
+            
+            if not alloc_id:
+                print(f"[VMManager] Cannot migrate allocation: ID not found")
+                return alloc_obj
+            if not parent_id:
+                print(f"[VMManager] Cannot migrate allocation {alloc_name or alloc_id}: parent_id is missing")
+                return alloc_obj
+            if not alloc_name:
+                # Some APIs require name on update; fall back to id as name if missing
+                alloc_name = str(alloc_id)
+            
+            # Update allocation to new subnet
+            update_req = UpdateAllocationRequest(
+                metadata=ResourceMetadata(id=alloc_id, parent_id=parent_id, name=alloc_name),
+                spec=AllocationSpec(
+                    ipv4_public=IPv4PublicAllocationSpec(
+                        subnet_id=target_subnet_id,
+                        cidr=ip_cidr,  # Preserve the IP address
+                    )
+                ),
+            )
+            
+            try:
+                update_op = alloc_client.update(update_req).wait()
+                try:
+                    update_op.sync_wait()
+                except Exception:
+                    pass
+                
+                # Refetch the updated allocation
+                try:
+                    from nebius.api.nebius.vpc.v1 import GetAllocationRequest  # type: ignore
+                    updated_alloc = alloc_client.get(GetAllocationRequest(id=alloc_id)).wait()
+                    print(f"[VMManager] ✓ Migrated allocation {ip_cidr} to vpngw-subnet")
+                    return updated_alloc
+                except Exception as e:
+                    print(f"[VMManager] Migration completed but could not refetch: {e}")
+                    return alloc_obj
+            except Exception as e:
+                err_text = str(e)
+                if "Immutable field: subnetId" in err_text or "subnetId must not be changed" in err_text:
+                    # Nebius API forbids changing allocation.subnet_id; fail fast with guidance.
+                    raise RuntimeError(
+                        f"Public IP allocation {alloc_name or alloc_id} is bound to subnet {current_subnet_id} "
+                        f"and cannot be migrated to vpngw-subnet {target_subnet_id}. "
+                        "Options: (1) deploy the gateway in the original subnet/network so the IP matches, "
+                        "or (2) remove the IP from external_ips to allow a new allocation, "
+                        "or (3) release the old allocation and re-request the same IP in vpngw-subnet "
+                        "(best effort only)."
+                    )
+                print(f"[VMManager] Could not migrate allocation {ip_cidr}: {e}")
+                print(f"[VMManager] Continuing with existing allocation in current subnet")
+                return alloc_obj
+                
+        except Exception as e:
+            print(f"[VMManager] Could not migrate allocation {desired_ip}: {e}")
+            print(f"[VMManager] Continuing with existing allocation in current subnet")
+            return alloc_obj
+    
+    def _create_vpngw_route_table(self, client: t.Any, subnet_obj: t.Any, network_id: str) -> None:
+        """Create a dedicated route table for vpngw-subnet with default egress route.
+        
+        Args:
+            client: Nebius SDK client
+            subnet_obj: Subnet object for vpngw-subnet
+            network_id: Network ID containing the subnet
+        """
+        try:
+            from nebius.api.nebius.vpc.v1 import (
+                RouteTableServiceClient,
+                CreateRouteTableRequest,
+                RouteServiceClient,
+                CreateRouteRequest,
+                SubnetServiceClient,
+                UpdateSubnetRequest,
+            )  # type: ignore
+            from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
+            from nebius.api.nebius.vpc.v1 import RouteTableSpec, SubnetSpec  # type: ignore
+            from nebius.api.nebius.vpc.v1 import route_pb2  # type: ignore
+            
+            rt_name = "vpngw-subnet-routing-table"
+            rt_client = RouteTableServiceClient(client)  # type: ignore
+            route_client = RouteServiceClient(client)  # type: ignore
+            subnet_client = SubnetServiceClient(client)  # type: ignore
+            
+            # Get subnet ID
+            subnet_id = getattr(subnet_obj, "id", None)
+            if not subnet_id:
+                subnet_id = getattr(getattr(subnet_obj, "metadata", None), "id", None)
+            
+            if not subnet_id:
+                print("[VMManager] Cannot create route table: subnet_id not found")
+                return
+            
+            print(f"[VMManager] Creating dedicated route table '{rt_name}' for vpngw-subnet...")
+            
+            # Create route table (handle ALREADY_EXISTS)
+            rt_id = None
+            try:
+                rt_req = CreateRouteTableRequest(
+                    metadata=ResourceMetadata(
+                        name=rt_name,
+                        parent_id=self.project_id or "",
+                    ),
+                    spec=RouteTableSpec(network_id=network_id),
+                )
+                rt_op = rt_client.create(rt_req).wait()
+                try:
+                    rt_op.sync_wait()
+                except Exception:
+                    pass
+                
+                rt_id = rt_op.resource_id or ""
+            except Exception as e:
+                if "ALREADY_EXISTS" in str(e) or "already exists" in str(e):
+                    print(f"[VMManager] Route table '{rt_name}' already exists, reusing...")
+                    # Get existing route table by name
+                    try:
+                        from nebius.api.nebius.vpc.v1 import GetRouteTableByNameRequest
+                        rt_obj = rt_client.get_by_name(
+                            GetRouteTableByNameRequest(parent_id=self.project_id or "", name=rt_name)
+                        ).wait()
+                        rt_id = getattr(rt_obj, "id", None) or getattr(getattr(rt_obj, "metadata", None), "id", None)
+                    except Exception as get_err:
+                        print(f"[VMManager] Could not retrieve existing route table: {get_err}")
+                        return
+                else:
+                    print(f"[VMManager] Error creating route table: {e}")
+                    return
+            
+            if not rt_id:
+                print("[VMManager] Route table creation returned no resource_id")
+                return
+            
+            print(f"[VMManager] Created route table: {rt_name} (ID: {rt_id})")
+            
+            # Add default egress route (0.0.0.0/0 -> default-egress)
+            try:
+                route_req = CreateRouteRequest(
+                    metadata=ResourceMetadata(
+                        name="default-egress",
+                        parent_id=rt_id,
+                    ),
+                    spec=route_pb2.RouteSpec(
+                        destination=route_pb2.DestinationMatch(cidr="0.0.0.0/0"),
+                        next_hop=route_pb2.NextHop(
+                            default_egress_gateway=True
+                        ),
+                    ),
+                )
+                route_client.create(route_req).wait()
+                print(f"[VMManager] Added route: 0.0.0.0/0 -> default-egress")
+            except Exception as e:
+                err_str = str(e)
+                if "ALREADY_EXISTS" in err_str or "already exists" in err_str:
+                    print(f"[VMManager] Default egress route already exists, skipping")
+                else:
+                    print(f"[VMManager] Warning: Could not create default egress route: {e}")
+            
+            # Attach route table to subnet
+            try:
+                subnet_meta = getattr(subnet_obj, "metadata", None)
+                subnet_spec = getattr(subnet_obj, "spec", None)
+                if subnet_meta and subnet_spec:
+                    # Get subnet's network_id - required by API
+                    subnet_network_id = getattr(subnet_spec, "network_id", None)
+                    if not subnet_network_id:
+                        print(f"[VMManager] Warning: Subnet has no network_id, cannot attach route table")
+                        return
+                    
+                    # CRITICAL: Preserve existing ipv4_private_pools when updating
+                    # If we don't include it, the API resets use_network_pools=true!
+                    existing_ipv4_private_pools = getattr(subnet_spec, "ipv4_private_pools", None)
+                    existing_ipv4_public_pools = getattr(subnet_spec, "ipv4_public_pools", None)
+                    
+                    # ResourceMetadata requires: id, parent_id (required), and name (validated)
+                    # SubnetSpec requires: network_id (required) and route_table_id (what we're updating)
+                    update_req = UpdateSubnetRequest(
+                        metadata=ResourceMetadata(
+                            id=getattr(subnet_meta, "id", subnet_id),
+                            parent_id=getattr(subnet_meta, "parent_id", ""),
+                            name=getattr(subnet_meta, "name", ""),
+                        ),
+                        spec=SubnetSpec(
+                            network_id=subnet_network_id,
+                            route_table_id=rt_id,
+                            ipv4_private_pools=existing_ipv4_private_pools,
+                            ipv4_public_pools=existing_ipv4_public_pools,
+                        ),
+                    )
+                    subnet_client.update(update_req).wait()
+                    print(f"[VMManager] ✓ Attached route table '{rt_name}' to vpngw-subnet")
+                else:
+                    print(f"[VMManager] Warning: Could not get subnet metadata/spec for update")
+            except Exception as e:
+                print(f"[VMManager] Warning: Could not attach route table to subnet: {e}")
+                
+        except Exception as e:
+            print(f"[VMManager] Error creating route table for vpngw-subnet: {e}")
         except Exception as e:
             print(f"[VMManager] ensure_vpngw_subnet failed: {e}")
             return None
@@ -1717,10 +2250,13 @@ class VMManager:
 
                 [Service]
                 Type=simple
-                ExecStart=/usr/bin/nebius-vpngw-agent
+                Environment="PYTHONUNBUFFERED=1"
+                ExecStart=/usr/bin/python3 -m nebius_vpngw.agent.main
                 ExecReload=/bin/kill -HUP $MAINPID
                 Restart=always
                 RestartSec=3
+                StandardOutput=journal
+                StandardError=journal
 
                 [Install]
                 WantedBy=multi-user.target
@@ -1927,6 +2463,14 @@ class VMManager:
             "            # We allow all traffic on vti* interfaces (tunnel inner traffic)\n"
             "            logger -t vpngw-firewall \"VTI interfaces (vti*) are not filtered - BGP traffic allowed\"\n"
             "            \n"
+            "            # Explicitly allow all traffic on VTI interfaces\n"
+            "            for vti in vti0 vti1 vti2 vti3 vti4 vti5 vti6 vti7; do\n"
+            "              if ip link show \"$vti\" &>/dev/null; then\n"
+            "                ufw allow in on \"$vti\"\n"
+            "                ufw allow out on \"$vti\"\n"
+            "              fi\n"
+            "            done\n"
+            "            \n"
             "            # Allow ICMP for troubleshooting\n"
             "            ufw allow in on \"$PUBLIC_IF\" proto icmp comment \"ICMP for troubleshooting\"\n"
             "            \n"
@@ -1941,6 +2485,7 @@ class VMManager:
             "    content: |\n"
             "            # FRR daemons configuration - enable bgpd\n"
             "            bgpd=yes\n"
+            "            bgpd_options=\"   -A 0.0.0.0\"\n"
             "            ospfd=no\n"
             "            ospf6d=no\n"
             "            ripd=no\n"
@@ -1998,6 +2543,30 @@ class VMManager:
             "            \n"
             "            # TCP hardening: ignore ICMP echo requests (optional - may break troubleshooting)\n"
             "            # net.ipv4.icmp_echo_ignore_all=1\n"
+            "            \n"
+            "            # VPN-specific: Prevent broad APIPA (169.254.0.0/16) link-local routing\n"
+            "            # This is critical for VPN gateways that use APIPA addresses for tunnel inner IPs\n"
+            "            # Background: Nebius DHCP adds 169.254.0.0/16 route for metadata service (169.254.169.x)\n"
+            "            # but this broad route captures VTI tunnel traffic (also in 169.254.0.0/16 range)\n"
+            "            # Solution: Suppress kernel's APIPA link-local behavior while allowing metadata routes\n"
+            "            \n"
+            "            # Disable IPv4 link-local (APIPA) auto-routing behavior\n"
+            "            net.ipv4.conf.all.route_localnet=0\n"
+            "            net.ipv4.conf.default.route_localnet=0\n"
+            "            \n"
+            "            # Prevent acceptance of local addresses from other interfaces\n"
+            "            net.ipv4.conf.all.accept_local=0\n"
+            "            net.ipv4.conf.default.accept_local=0\n"
+            "            \n"
+            "            # ARP announce mode: Use best local address for ARP requests\n"
+            "            # Mode 2 = Use only target's address from outgoing interface\n"
+            "            net.ipv4.conf.all.arp_announce=2\n"
+            "            net.ipv4.conf.default.arp_announce=2\n"
+            "            \n"
+            "            # ARP ignore mode: Reply only if target IP is local address on incoming interface\n"
+            "            # Mode 1 = Reply only if target IP matches incoming interface\n"
+            "            net.ipv4.conf.all.arp_ignore=1\n"
+            "            net.ipv4.conf.default.arp_ignore=1\n"
             "runcmd:\n"
             "  - [ bash, -lc, \"mkdir -p /etc/nebius-vpngw\" ]\n"
             "  - [ bash, -lc, \"mkdir -p /etc/ipsec.d\" ]\n"

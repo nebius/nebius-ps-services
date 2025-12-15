@@ -60,7 +60,13 @@ gateway_group:
     # SSH access. If ssh_public_key_path is set and ssh_public_key is empty, the key is inlined automatically.
     ssh_public_key_path: "~/.ssh/id_ed25519.pub"
     ssh_private_key_path: "~/.ssh/id_ed25519"
-    # network_id: "my-vpc-network-id"  # optional; omit to use default network
+    # network_id (optional): Specify which VPC network to use for the VPN gateway.
+    # Auto-discovery logic if omitted:
+    #   1. Uses 'default-network' if it exists
+    #   2. Uses the only custom network if exactly one exists
+    #   3. Errors if multiple custom networks exist (must specify network_id)
+    # Example:
+    # network_id: "vpcnetwork-abc123def456"
 
     ###############################################################################
     # Gateway-wide parameters (BGP ASN, local prefixes, quotas)

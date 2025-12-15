@@ -11,29 +11,83 @@ DAEMONS_FILE = Path("/etc/frr/daemons")
 
 class FRRRenderer:
     def _ensure_bgpd_enabled(self) -> bool:
-        """Ensure bgpd daemon is enabled; minimal edit of /etc/frr/daemons."""
+        """Ensure bgpd daemon is enabled and listening on all interfaces."""
         if not DAEMONS_FILE.exists():
             print("[FRR] WARNING: /etc/frr/daemons not found; creating with bgpd=yes")
             DAEMONS_FILE.parent.mkdir(parents=True, exist_ok=True)
-            DAEMONS_FILE.write_text("bgpd=yes\n", encoding="utf-8")
+            DAEMONS_FILE.write_text("bgpd=yes\nbgpd_options=\"   -A 0.0.0.0\"\n", encoding="utf-8")
             return True
 
         text = DAEMONS_FILE.read_text(encoding="utf-8").splitlines()
-        seen = False
+        bgpd_seen = False
+        bgpd_options_seen = False
+        changed = False
         new_lines: List[str] = []
         for line in text:
-            if line.strip().startswith("bgpd="):
+            stripped = line.strip()
+            if stripped.startswith("bgpd="):
                 new_lines.append("bgpd=yes")
-                seen = True
+                bgpd_seen = True
+                if line != "bgpd=yes":
+                    changed = True
+            elif stripped.startswith("bgpd_options="):
+                # Change -A 127.0.0.1 to -A 0.0.0.0 to listen on all interfaces
+                new_line = 'bgpd_options="   -A 0.0.0.0"'
+                new_lines.append(new_line)
+                bgpd_options_seen = True
+                if line != new_line:
+                    changed = True
             else:
                 new_lines.append(line)
-        if not seen:
+        
+        if not bgpd_seen:
             new_lines.append("bgpd=yes")
-        if new_lines != text:
+            changed = True
+        if not bgpd_options_seen:
+            new_lines.append('bgpd_options="   -A 0.0.0.0"')
+            changed = True
+        
+        if changed:
             DAEMONS_FILE.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
-            print("[FRR] Enabled bgpd in /etc/frr/daemons")
+            print("[FRR] Configured bgpd to listen on all interfaces in /etc/frr/daemons")
             return True
         return False
+
+    def _ensure_local_prefix_routes(self, local_prefixes: List[str], interface: str = "eth0") -> None:
+        """Ensure static routes exist for local_prefixes so BGP can advertise them.
+        
+        BGP requires routes to exist in the kernel routing table before advertising them.
+        This is controlled by FRR's 'import-check' feature (enabled by default).
+        Without a kernel route, BGP will mark the prefix as 'inaccessible' and not advertise it.
+        
+        Args:
+            local_prefixes: List of CIDR prefixes to add routes for
+            interface: Interface to use for the static route (default: eth0)
+        """
+        for prefix in local_prefixes:
+            # Check if route already exists
+            result = subprocess.run(
+                ["ip", "route", "show", prefix],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                print(f"[FRR] Route for {prefix} already exists: {result.stdout.strip()}")
+                continue
+            
+            # Add static route (scope link = reachable via this interface)
+            try:
+                subprocess.run(
+                    ["ip", "route", "add", prefix, "dev", interface, "scope", "link"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                print(f"[FRR] Added static route: {prefix} dev {interface} scope link")
+            except subprocess.CalledProcessError as e:
+                print(f"[FRR] WARNING: Failed to add route for {prefix}: {e.stderr}")
 
     def render_and_apply(self, cfg: Dict[str, Any]) -> None:
         """Render FRR bgpd.conf for BGP tunnels and prefix advertisement.
@@ -49,6 +103,10 @@ class FRRRenderer:
         local_asn = gateway.get("local_asn", 65010)
         # Gateway-level local_prefixes: single source of truth for Nebius-side subnets
         gateway_local_prefixes: List[str] = gateway.get("local_prefixes", [])
+        
+        # Ensure kernel routes exist for local_prefixes so BGP can advertise them
+        if gateway_local_prefixes:
+            self._ensure_local_prefix_routes(gateway_local_prefixes)
         
         d_bgp = cfg.get("defaults", {}).get("routing", {}).get("bgp", {})
         hold = d_bgp.get("hold_time_seconds", 60)
@@ -91,8 +149,7 @@ class FRRRenderer:
         
         # Start router bgp configuration
         lines.append(f"router bgp {local_asn}")
-            f" timers bgp {keep} {hold}",
-        ]
+        lines.append(f" timers bgp {keep} {hold}")
         if router_id:
             lines.append(f" bgp router-id {router_id}")
         if graceful:

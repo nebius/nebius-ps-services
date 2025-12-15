@@ -240,26 +240,31 @@ def apply(
                     print(f"[red]{vm_name} ({vm_ip}): {health['message']}[/red]")
                     all_healthy = False
             
-            # If VMs are not fully healthy (e.g., SSH not ready), wait additional time
+            # If VMs are not fully healthy (cloud-init not complete or packages not installed), wait additional time
             if not all_healthy:
                 import time
-                print("[yellow]Waiting for SSH to become available...[/yellow]")
-                max_ssh_wait = 120  # Wait up to 2 minutes for SSH
-                ssh_wait_interval = 10
-                for attempt in range(max_ssh_wait // ssh_wait_interval):
-                    time.sleep(ssh_wait_interval)
-                    all_ssh_ready = True
+                print("[yellow]Waiting for cloud-init to complete and packages to be installed...[/yellow]")
+                max_wait = 300  # Wait up to 5 minutes for cloud-init
+                wait_interval = 10
+                for attempt in range(max_wait // wait_interval):
+                    time.sleep(wait_interval)
+                    all_ready = True
                     for vm_name, vm_ip in vm_ips.items():
                         health = vm_mgr.check_vm_health(vm_name, vm_ip)
-                        if not health['reachable']:
-                            all_ssh_ready = False
+                        # Check if VM is reachable AND cloud-init is complete
+                        if not health['reachable'] or not health['cloud_init_complete']:
+                            all_ready = False
+                            if not health['reachable']:
+                                print(f"[dim]{vm_name}: SSH not ready yet[/dim]")
+                            elif not health['cloud_init_complete']:
+                                print(f"[dim]{vm_name}: Cloud-init still running (packages being installed)[/dim]")
                             break
-                    if all_ssh_ready:
-                        print(f"[green]✓ All VMs SSH ready (waited {(attempt + 1) * ssh_wait_interval}s)[/green]")
+                    if all_ready:
+                        print(f"[green]✓ All VMs ready: SSH accessible and cloud-init complete (waited {(attempt + 1) * wait_interval}s)[/green]")
                         break
-                    print(f"[dim]SSH not ready, waiting... ({(attempt + 1) * ssh_wait_interval}s elapsed)[/dim]")
+                    print(f"[dim]Waiting for bootstrap to complete... ({(attempt + 1) * wait_interval}s elapsed)[/dim]")
                 else:
-                    print("[yellow]Warning: SSH did not become ready within timeout, attempting config push anyway...[/yellow]")
+                    print("[yellow]Warning: Cloud-init did not complete within timeout, attempting config push anyway...[/yellow]")
         else:
             print("[yellow]Some VMs did not become reachable within timeout[/yellow]")
 
@@ -1032,6 +1037,125 @@ print(json.dumps(health))
             )
     
     console.print(routing_table)
+    
+    # Show vpngw-subnet route table
+    console.print("\n[bold]VPN Gateway Subnet Route Table:[/bold]")
+    try:
+        from nebius.api.nebius.vpc.v1 import (
+            SubnetServiceClient,
+            GetSubnetByNameRequest,
+            RouteTableServiceClient,
+            GetRouteTableRequest,
+            RouteServiceClient,
+            ListRoutesRequest,
+        )
+        from rich.table import Table
+        
+        client = vm_mgr._get_client()
+        if client and proj_id:
+            subnet_client = SubnetServiceClient(client)
+            
+            try:
+                # Get vpngw-subnet
+                subnet_obj = subnet_client.get_by_name(
+                    GetSubnetByNameRequest(parent_id=proj_id, name="vpngw-subnet")
+                ).wait()
+                
+                # Get subnet CIDR
+                subnet_spec = getattr(subnet_obj, "spec", None)
+                subnet_cidrs = []
+                if subnet_spec:
+                    ipv4_pools = getattr(subnet_spec, "ipv4_private_pools", None)
+                    if ipv4_pools:
+                        pools = getattr(ipv4_pools, "pools", []) or []
+                        for pool in pools:
+                            cidrs = getattr(pool, "cidrs", []) or []
+                            for cidr_obj in cidrs:
+                                cidr_str = getattr(cidr_obj, "cidr", None)
+                                if cidr_str:
+                                    subnet_cidrs.append(cidr_str)
+                
+                subnet_cidr = subnet_cidrs[0] if subnet_cidrs else "unknown"
+                
+                # Get route table ID
+                rt_id = getattr(subnet_spec, "route_table_id", None) if subnet_spec else None
+                
+                if not rt_id:
+                    console.print(f"[yellow]Subnet: vpngw-subnet ({subnet_cidr})[/yellow]")
+                    console.print("[yellow]  No route table attached[/yellow]")
+                else:
+                    # Get route table details
+                    rt_client = RouteTableServiceClient(client)
+                    route_client = RouteServiceClient(client)
+                    
+                    rt_obj = rt_client.get(GetRouteTableRequest(id=rt_id)).wait()
+                    rt_meta = getattr(rt_obj, "metadata", None)
+                    rt_name = getattr(rt_meta, "name", None) or "unknown"
+                    
+                    # Check if it's default route table
+                    is_default = False
+                    try:
+                        subnet_status = getattr(subnet_obj, "status", None)
+                        if subnet_status:
+                            rt_info = getattr(subnet_status, "route_table", None)
+                            if rt_info:
+                                is_default = getattr(rt_info, "default", False)
+                    except Exception:
+                        pass
+                    
+                    console.print(f"Subnet: vpngw-subnet ({subnet_cidr})")
+                    console.print(f"  Route Table: {rt_name} (ID: {rt_id}, default={is_default})")
+                    
+                    # Get routes in the table
+                    routes_list_op = route_client.list(ListRoutesRequest(parent_id=rt_id))
+                    routes_list = routes_list_op.wait() if hasattr(routes_list_op, 'wait') else routes_list_op
+                    
+                    route_items = []
+                    if hasattr(routes_list, 'items'):
+                        route_items = routes_list.items
+                    elif hasattr(routes_list, '__iter__'):
+                        route_items = list(routes_list)
+                    
+                    if route_items:
+                        # Create routes table
+                        routes_table = Table(show_header=True, header_style="bold cyan", box=None)
+                        routes_table.add_column("Destination", style="white")
+                        routes_table.add_column("Next Hop", style="white")
+                        
+                        for route in route_items:
+                            route_spec = getattr(route, "spec", None)
+                            if not route_spec:
+                                continue
+                            
+                            # Get destination
+                            dest = getattr(route_spec, "destination", None)
+                            dest_cidr = getattr(dest, "cidr", None) if dest else "unknown"
+                            
+                            # Get next hop
+                            next_hop_text = "unknown"
+                            next_hop = getattr(route_spec, "next_hop", None)
+                            if next_hop:
+                                # Check for default_egress_gateway field
+                                if hasattr(next_hop, "default_egress_gateway") and getattr(next_hop, "default_egress_gateway", False):
+                                    next_hop_text = "default-egress"
+                                elif hasattr(next_hop, "default_internet_gateway") and getattr(next_hop, "default_internet_gateway", False):
+                                    next_hop_text = "default-gateway"
+                                elif hasattr(next_hop, "allocation"):
+                                    alloc = next_hop.allocation
+                                    alloc_id = getattr(alloc, "id", None)
+                                    if alloc_id:
+                                        next_hop_text = f"allocation:{alloc_id[:16]}..."
+                            
+                            routes_table.add_row(dest_cidr, next_hop_text)
+                        
+                        console.print(routes_table)
+                    else:
+                        console.print("  [dim]No routes in table[/dim]")
+            
+            except Exception as e:
+                console.print(f"[yellow]Could not fetch vpngw-subnet route table: {e}[/yellow]")
+    except Exception as e:
+        console.print(f"[yellow]Error displaying route table: {e}[/yellow]")
 
 
 @app.command(name="add-routes-local")
@@ -1256,7 +1380,7 @@ def destroy(
         asc = AllocationServiceClient(client)
         
         # List existing VMs matching the gateway group name
-        print(f"[bold]Step 1/4: Listing VMs matching pattern '{plan.gateway_group.name}-*'...[/bold]")
+        print(f"[bold]Step 1/5: Listing VMs matching pattern '{plan.gateway_group.name}-*'...[/bold]")
         ilist_op = isc.list(ListInstancesRequest(parent_id=proj_id or ""))
         ilist = ilist_op.wait() if hasattr(ilist_op, 'wait') else ilist_op
         
@@ -1493,7 +1617,7 @@ def destroy(
         print("[dim]  • Public IP allocations (reusable via external_ips in config)[/dim]")
         print("")
         print("[yellow]⚠️  IMPORTANT: After recreating VMs, you must run:[/yellow]")
-        print("[bold]  nebius-vpngw add-routes --local-config-file <your-config.yaml>[/bold]")
+        print("[bold]  nebius-vpngw add-routes-local --local-config-file <your-config.yaml>[/bold]")
         print("[dim]This will create new routes with the new static private IP allocations.[/dim]")
         
     except Exception as e:

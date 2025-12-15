@@ -85,8 +85,10 @@ gateway_group:
     ssh_public_key_path: "~/.ssh/id_ed25519.pub"  # File is auto-read and inlined
     ssh_private_key_path: "~/.ssh/id_ed25519"     # Optional, uses SSH agent if omitted
 
-    # VPC Network (optional): Defaults to your project's default VPC
-    # network_id: "my-vpc-network-id"
+    # VPC Network (optional): Auto-discovers if omitted
+    # Resolution order: 1) default-network, 2) single custom network, 3) error if multiple
+    # Specify network_id to override auto-discovery or when multiple networks exist
+    # network_id: "vpcnetwork-abc123def456"
 
 ###############################################################################
 # Gateway: Routing Identity and Prefixes

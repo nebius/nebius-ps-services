@@ -27,11 +27,6 @@ class Agent:
             return
         cfg = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
         
-        # CRITICAL: Enforce routing invariants on EVERY reload
-        # This must run regardless of config changes to prevent routing issues
-        # (e.g., table 220 breaking BGP after agent restart)
-        enforce_routing_invariants(cfg)
-        
         # Update firewall rules based on config (peer IPs, management CIDRs)
         # This keeps UFW synchronized with VPN peer connections
         # Safe to call on every reload - only updates if peer IPs changed
@@ -44,6 +39,10 @@ class Agent:
         
         if not self.state.is_changed(cfg):
             print("[Agent] No changes detected; skipping config render")
+            # CRITICAL: Enforce routing invariants even when config unchanged
+            # This prevents routing issues (table 220, broad APIPA) from persisting
+            # across agent restarts when config hasn't changed
+            enforce_routing_invariants(cfg)
             return
         # Render configs
         self.ss.render_and_apply(cfg)
@@ -51,6 +50,12 @@ class Agent:
         # Persist state
         self.state.save_last_applied(cfg)
         print("[Agent] Applied and persisted new configuration")
+        
+        # CRITICAL: Enforce routing invariants AFTER config rendering completes
+        # Must run after strongSwan/FRR rendering because those operations can
+        # trigger systemd-networkd reload, which causes DHCP renewal that adds
+        # back the problematic routes (table 220, broad APIPA 169.254.0.0/16)
+        enforce_routing_invariants(cfg)
 
 
 def main() -> None:

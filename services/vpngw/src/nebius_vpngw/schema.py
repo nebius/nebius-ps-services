@@ -747,7 +747,12 @@ class VMSpec(BaseModel):
     )
     network_id: t.Optional[str] = Field(
         default=None,
-        description="Network ID (optional, defaults to default network)"
+        description=(
+            "Network ID (VPC network) to use for VPN gateway. Optional. "
+            "If not specified, auto-discovers in this order: "
+            "1) default-network, 2) single custom network if only one exists, "
+            "3) errors if multiple custom networks found (specify network_id to resolve)"
+        )
     )
     
     @field_validator("num_nics")

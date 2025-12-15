@@ -65,9 +65,20 @@ Deliver a VM-based site-to-site VPN gateway for Nebius AI Cloud using IPsec (str
 
 ### VPC and Subnets
 
-- One VPC network selected via `network_id` (optional; defaults to project's default VPC)
+- One VPC network selected via `network_id` (optional; see resolution logic below)
 - Dedicated `vpngw-subnet` (/27 CIDR) created automatically if missing
+- Dedicated route table (`vpngw-subnet-routing-table`) with default egress route
 - Workload subnets remain separate for security isolation
+
+**Network Resolution Logic:**
+
+When `network_id` is not specified in the YAML config, the system auto-discovers the network using this priority order:
+
+1. **Default network:** Looks for a network named `default-network` in the project
+2. **Single custom network:** If no default network exists and exactly ONE custom network is found, uses that network
+3. **Multiple networks:** If multiple custom networks exist (rare scenario), the deployment **fails** with an error asking the user to explicitly specify `network_id` in the YAML
+
+This intelligent resolution handles the common case (default network or single VPC) while preventing ambiguity when multiple networks exist.
 
 **Platform Constraint:** Currently 1 NIC per VM with 1 public IP. All tunnels share the same IP, differentiated by IKE/IPsec identifiers.
 
@@ -80,6 +91,7 @@ Deliver a VM-based site-to-site VPN gateway for Nebius AI Cloud using IPsec (str
 - **IP hygiene:** Controlled CIDR for gateway infrastructure, separate from workloads
 - **Policy separation:** Distinct egress controls without affecting application subnets
 - **Operational safety:** Safer VM recreations with reduced ARP/ND noise
+- **Capacity:** Orchestrator auto-creates `vpngw-subnet` as the first free /24 carved from the target VPC’s private pool. If no /24 is available, deployment fails with guidance to add more IP space. This supports multi-VM gateway groups.
 
 ### Public IP Allocations
 
@@ -93,6 +105,12 @@ Configuration shape: `external_ips[instance_index][nic_index]` → IP string
 - Auto naming: `{instance}-eth{N}-ip`
 
 **Preservation:** Allocations are kept and reattached during VM recreation. No downtime for IP addresses, only for tunnel establishment.
+
+**Subnet constraint:** Nebius does not allow changing `subnet_id` on an existing public allocation. If you supply `external_ips` and the found allocation belongs to a different subnet than the target gateway subnet, we fail fast with guidance:
+
+- Deploy in the original subnet/network so the allocation matches, **or**
+- Remove the IP from `external_ips` to get a new allocation in the gateway subnet, **or**
+- (Best effort) Manually release the old allocation and let the deployer request the same IP in the new subnet. If the pool allows it and the address is still free, it is reclaimed; otherwise the request fails or yields a different IP.
 
 **Examples:**
 
@@ -758,3 +776,39 @@ nebius-vpngw apply --local-config-file test.config.yaml
 **Peer Config Parsers:**
 
 - `gcp.py`, `aws.py`, `azure.py`, `cisco.py`: Parse vendor-specific configs
+
+## Tips & Troubleshooting
+
+### Subnet CIDR Issues
+
+**Problem:** When creating the `vpngw-subnet`, it may show the network's parent CIDR (e.g., `/13`) instead of the intended `/24` in the console, even though the code calculates and requests the correct CIDR.
+
+**Root Cause:** The Nebius VPC API field `use_network_pools` defaults to `true`. When `true`, the subnet inherits the network's address pool instead of using the explicitly specified CIDR. The issue was caused by a subtle bug in subnet creation:
+
+1. **Initial Creation:** Subnet is created correctly with `IPv4PrivateSubnetPools` containing the pools array and `use_network_pools=False`
+2. **Route Table Attachment:** When attaching a route table via `UpdateSubnetRequest`, the code was creating a new `SubnetSpec` with only `network_id` and `route_table_id`
+3. **Field Reset:** The missing `ipv4_private_pools` field in the update request caused the API to reset the subnet to default settings (`use_network_pools=true`)
+
+**Solution:** When updating a subnet (e.g., to attach a route table), always preserve the existing `ipv4_private_pools` and `ipv4_public_pools` fields from the original subnet spec:
+
+```python
+# Get existing pool configuration
+existing_ipv4_private_pools = getattr(subnet_spec, "ipv4_private_pools", None)
+existing_ipv4_public_pools = getattr(subnet_spec, "ipv4_public_pools", None)
+
+# Include in update request
+update_req = UpdateSubnetRequest(
+    metadata=ResourceMetadata(...),
+    spec=SubnetSpec(
+        network_id=subnet_network_id,
+        route_table_id=rt_id,
+        ipv4_private_pools=existing_ipv4_private_pools,  # Preserve!
+        ipv4_public_pools=existing_ipv4_public_pools,    # Preserve!
+    ),
+)
+```
+
+**Verification:** After subnet creation, check that:
+- `spec.ipv4_private_pools.use_network_pools` is `false` (or field is absent)
+- `spec.ipv4_private_pools.pools[0].cidrs[0].cidr` shows the expected `/24` CIDR
+- `status.ipv4_private_cidrs` contains the expected `/24` CIDR (what the console displays)
