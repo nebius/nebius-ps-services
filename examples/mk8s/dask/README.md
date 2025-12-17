@@ -2,20 +2,6 @@
 
 This repository automates deployment to Nebius using Terraform, Docker, Kubernetes, CSI volumes, and Dask.
 
-## Folder Structure
-
-```
-.
-├─ environment.sh
-├─ terraform/
-├─ scripts/
-│  ├─ 0-bootstrap.sh
-│  ├─ 1-build-and-push.sh
-│  ├─ 2-install-csi.sh
-│  └─ 3-deploy-dask.sh
-└─ yamls/
-```
-
 ## 1. Environment Variables
 
 Create a file named `environment.sh` in the project root:
@@ -81,23 +67,58 @@ Result: a Pod with a mounted filesystem containing your project.
 ## 5. Deploy Dask Operator and Notebook
 
 ```
-scripts/3-deploy-dask.sh
+scripts/3-deploy-dask-notebook.sh
 ```
 
 This script:
 
 - Installs Dask Kubernetes Operator via Helm
 - Applies notebook RBAC rules
+- Reads registry information from Terraform outputs
 - Renders `pod.yaml.tpl` via `envsubst` and deploys it
 - Waits for the notebook Pod to become ready
-- Prints port-forwarding commands
+- Prints Jupyter port-forward instructions
 
-Access:
+Access JupyterLab:
 
-- JupyterLab → http://localhost:8889/lab/
-- Dask Dashboard → http://localhost:8787
+- Port-forward:
+  ```
+  kubectl port-forward pod/mda-notebook 8889:8889 -n default
+  ```
+- Open:
+  - http://localhost:8889/lab/
 
-## 6. Helpful Commands
+From the notebook UI, you can start the Dask cluster.
+
+## 6. Check Dask Cluster Status & Dashboard
+
+```
+scripts/4-dask-status.sh
+```
+
+This script:
+
+- Shows current pods in the `default` namespace
+- Waits for the Dask scheduler pod to appear
+- Prints the Dask dashboard port-forward command when the scheduler is detected
+
+Typical usage after starting the cluster from the notebook:
+
+```
+scripts/4-dask-status.sh
+```
+
+The script will produce a command like:
+
+```
+kubectl port-forward -n default pod/mk8s-dask-cluster-scheduler-... 8787:8787
+```
+
+Dask Dashboard:
+
+- http://localhost:8787
+
+## 7. Helpful Commands
 
 List pods:
 
@@ -108,23 +129,39 @@ kubectl get pods
 Port-forward to Jupyter:
 
 ```
-kubectl port-forward pod/mda-notebook 8889:8889
+kubectl port-forward pod/mda-notebook 8889:8889 -n default
 ```
 
-Port-forward Dask dashboard:
+Port-forward Dask dashboard (manual variant):
 
 ```
 POD=$(kubectl get pod -n default -o name | grep mk8s-dask-cluster-scheduler)
 kubectl port-forward -n default $POD 8787:8787
 ```
 
-## 7. Full Automation Pipeline
+## 8. Full Automation Pipeline
+
+Run the scripts in order:
 
 ```
 scripts/0-bootstrap.sh
 scripts/1-build-and-push.sh
 scripts/2-install-csi.sh
-scripts/3-deploy-dask.sh
+scripts/3-deploy-dask-notebook.sh
+scripts/4-dask-status.sh
 ```
 
-After all steps, the Nebius infrastructure is provisioned, Docker images are built and deployed, CSI storage is attached, and Dask Notebook + cluster are running.
+After these steps, the Nebius infrastructure is provisioned, Docker images are built and deployed, CSI storage is attached, and the Dask Notebook + cluster are running.
+
+### 9. Delete (optional)
+
+Example cleanup commands:
+
+```
+kubectl delete daskcluster mk8s-dask-cluster
+kubectl delete deployment dask-operator-dask-kubernetes-operator
+kubectl delete pod mda-notebook
+helm uninstall dask-operator
+```
+
+Use these as needed to tear down the Dask cluster, operator, and notebook resources.
