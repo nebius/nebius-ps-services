@@ -1,15 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Always work from repo root
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
-
 echo "===> Loading environment from ./environment.sh"
 if [[ ! -f ./environment.sh ]]; then
   echo "environment.sh not found in project root. Please create it first."
   exit 1
 fi
-# shellcheck disable=SC1091
+
 source ./environment.sh
 
 echo "Exported variables:"
