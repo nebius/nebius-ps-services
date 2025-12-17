@@ -8,6 +8,7 @@ echo "===> Login into Nebius registry..."
 nebius registry configure-helper
 
 export REGISTRY_PATH=$(echo $REGISTRY_ID | cut -d- -f2)
+source ./environment.sh
 IMAGE="cr.$NEBIUS_REGION.nebius.cloud/$REGISTRY_PATH/mda-dask:latest"
 
 echo "===> Building Docker image..."
