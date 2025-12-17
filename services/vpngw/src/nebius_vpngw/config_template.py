@@ -106,6 +106,10 @@ gateway:
     - "10.0.0.0/16"  # Example: Main VPC CIDR
     # - "10.1.0.0/16"  # Example: Additional subnet
 
+  # IPsec interface mode (optional, defaults to xfrm-interface)
+  # - xfrm-interface: Modern XFRM netdevs (recommended, eliminates packet duplication)
+  # ipsec_mode: "xfrm-interface"
+
   # Resource quotas (optional)
   quotas:
     max_connections: 16

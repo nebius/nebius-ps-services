@@ -35,6 +35,7 @@ class InstanceResolvedConfig:
 @dataclass
 class ResolvedDeploymentPlan:
     gateway_group: GatewayGroupSpec
+    gateway: dict = field(default_factory=dict)
     per_instance: t.List[InstanceResolvedConfig] = field(default_factory=list)
     manage_routes: bool = False
 
@@ -58,7 +59,9 @@ class ResolvedDeploymentPlan:
         ]
         for inst in self.per_instance:
             h = hashlib.sha256(inst.config_yaml.encode()).hexdigest()[:12]
-            lines.append(f"  - idx={inst.instance_index} host={inst.hostname} ip={inst.external_ip} cfg={h}")
+            lines.append(
+                f"  - idx={inst.instance_index} host={inst.hostname} ip={inst.external_ip} cfg={h}"
+            )
         return "\n".join(lines)
 
 
@@ -74,6 +77,7 @@ def _expand_env_value(val: str, missing: set[str]) -> str:
     unchanged. Returning the original string when no placeholders are found is
     intentional to avoid touching unrelated values.
     """
+
     def repl(match: re.Match[str]) -> str:
         name = match.group(1)
         env_val = os.environ.get(name)
@@ -113,7 +117,7 @@ def _to_int(val: t.Any) -> t.Optional[int]:
 
 def _enum_to_value(obj: t.Any) -> t.Any:
     """Recursively convert Enum objects to their values for YAML serialization.
-    
+
     This is needed because yaml.safe_dump() cannot serialize Enum objects directly.
     """
     if isinstance(obj, Enum):
@@ -134,8 +138,8 @@ def load_local_config(path: Path) -> dict:
     # is an unresolved placeholder, drop the field to fall back to default network.
     try:
         if "NETWORK_ID" in missing:
-            gg0 = (expanded.get("gateway_group") or {})
-            vm0 = (gg0.get("vm_spec") or {})
+            gg0 = expanded.get("gateway_group") or {}
+            vm0 = gg0.get("vm_spec") or {}
             nid = vm0.get("network_id")
             if isinstance(nid, str) and nid.strip() == "${NETWORK_ID}":
                 vm0.pop("network_id", None)
@@ -144,7 +148,7 @@ def load_local_config(path: Path) -> dict:
                 missing.discard("NETWORK_ID")
         # Treat unresolved placeholders in external_ips as "not provided":
         # drop any entries that remain as ${VAR} and clear those vars from missing.
-        gg1 = (expanded.get("gateway_group") or {})
+        gg1 = expanded.get("gateway_group") or {}
         ext1 = list((gg1.get("external_ips") or []))
         new_ext: list[str] = []
         for ip in ext1:
@@ -169,7 +173,7 @@ def load_local_config(path: Path) -> dict:
             "Missing environment variables for placeholders: "
             + ", ".join(sorted(missing))
         )
-    
+
     # Optional convenience: read SSH public key from a path if provided
     # DO THIS BEFORE SCHEMA VALIDATION so schema sees the inline key
     try:
@@ -189,7 +193,7 @@ def load_local_config(path: Path) -> dict:
     except Exception as e:
         # Re-raise as ValueError to provide a clear message to CLI
         raise ValueError(str(e))
-    
+
     # ============================================================================
     # SCHEMA VALIDATION: Validate against strict Pydantic schema
     # This catches typos, unknown fields, type errors, and constraint violations
@@ -206,10 +210,11 @@ def load_local_config(path: Path) -> dict:
             loc = " -> ".join(str(x) for x in err["loc"])
             msg = err["msg"]
             errors.append(f"  • {loc}: {msg}")
-        
+
         raise ValueError(
-            "Configuration validation failed:\n" + "\n".join(errors) +
-            "\n\nPlease fix these errors and try again. "
+            "Configuration validation failed:\n"
+            + "\n".join(errors)
+            + "\n\nPlease fix these errors and try again. "
             "Run 'nebius-vpngw validate-config <file>' to validate without deploying."
         )
 
@@ -231,49 +236,52 @@ def _detect_vendor(text: str) -> str:
 
 def _validate_tunnel_inner_ips(tunnel: dict, tunnel_name: str) -> None:
     """Validate that inner_local_ip and inner_remote_ip fall within inner_cidr.
-    
+
     Raises ValueError if validation fails.
     """
     inner_cidr = tunnel.get("inner_cidr")
     inner_local_ip = tunnel.get("inner_local_ip")
     inner_remote_ip = tunnel.get("inner_remote_ip")
-    
+
     # Skip validation if any required field is missing
     if not inner_cidr or not inner_local_ip or not inner_remote_ip:
         return
-    
+
     try:
         # Parse the CIDR network
         network = ipaddress.ip_network(inner_cidr, strict=False)
         local_ip = ipaddress.ip_address(inner_local_ip)
         remote_ip = ipaddress.ip_address(inner_remote_ip)
-        
+
         # Check if IPs are within the network
         if local_ip not in network:
             raise ValueError(
                 f"Tunnel '{tunnel_name}': inner_local_ip {inner_local_ip} is NOT within inner_cidr {inner_cidr}. "
                 f"Network range: {network.network_address} - {network.broadcast_address}"
             )
-        
+
         if remote_ip not in network:
             raise ValueError(
                 f"Tunnel '{tunnel_name}': inner_remote_ip {inner_remote_ip} is NOT within inner_cidr {inner_cidr}. "
                 f"Network range: {network.network_address} - {network.broadcast_address}"
             )
-        
+
         # Additional check: warn if using network or broadcast address
         if local_ip == network.network_address or local_ip == network.broadcast_address:
             raise ValueError(
                 f"Tunnel '{tunnel_name}': inner_local_ip {inner_local_ip} is the network or broadcast address. "
                 f"Use a host address within {inner_cidr}"
             )
-        
-        if remote_ip == network.network_address or remote_ip == network.broadcast_address:
+
+        if (
+            remote_ip == network.network_address
+            or remote_ip == network.broadcast_address
+        ):
             raise ValueError(
                 f"Tunnel '{tunnel_name}': inner_remote_ip {inner_remote_ip} is the network or broadcast address. "
                 f"Use a host address within {inner_cidr}"
             )
-            
+
     except ValueError:
         raise  # Re-raise validation errors
     except Exception as e:
@@ -346,7 +354,10 @@ def _score_peer_tunnel(
     y_local_pub = _resolved_local_public_ip(local_cfg, yaml_tun)
     if y_local_pub and peer_tun.get("local_public_ip") == y_local_pub:
         score += 4
-    if peer_tun.get("remote_public_ip") and peer_tun.get("remote_public_ip") != y_local_pub:
+    if (
+        peer_tun.get("remote_public_ip")
+        and peer_tun.get("remote_public_ip") != y_local_pub
+    ):
         score += 2
     # Inner IP/cidr hints
     hints = 0
@@ -374,7 +385,9 @@ def _normalize_peer_specs(peer_specs: list[dict]) -> list[dict]:
     return flat
 
 
-def merge_with_peer_configs(local_cfg: dict, peer_files: t.List[Path]) -> ResolvedDeploymentPlan:
+def merge_with_peer_configs(
+    local_cfg: dict, peer_files: t.List[Path]
+) -> ResolvedDeploymentPlan:
     # Build normalized peer specs
     peer_specs = [_parse_peer_file(p) for p in peer_files]
     gg = local_cfg.get("gateway_group", {})
@@ -384,7 +397,7 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: t.List[Path]) -> Resolv
     region = gg.get("region") or (local_cfg.get("region_id") or "eu-north1-a")
     external_ips = gg.get("external_ips", [])
     vm_spec = gg.get("vm_spec", {})
-    
+
     # Validate and normalize num_nics configuration
     # CURRENT PLATFORM LIMITATION: Only 1 NIC per instance is supported
     # Future: When platform supports multi-NIC, this validation can be relaxed
@@ -423,11 +436,15 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: t.List[Path]) -> Resolv
             conn_vendor = (conn.get("vendor") or "").lower()
             conn_tunnels = conn.get("tunnels", [])
             # Connection-level hints
-            conn_bgp = (conn.get("bgp") or {})
+            conn_bgp = conn.get("bgp") or {}
             conn_remote_asn = _to_int(conn_bgp.get("remote_asn"))
             inferred_remote_asn: t.Optional[int] = conn_remote_asn
-            conn_remote_prefixes = conn.get("remote_prefixes") or conn_bgp.get("remote_prefixes") or []
-            routing_mode = conn.get("routing_mode") or (local_cfg.get("defaults", {}).get("routing", {}).get("mode") or "bgp")
+            conn_remote_prefixes = (
+                conn.get("remote_prefixes") or conn_bgp.get("remote_prefixes") or []
+            )
+            routing_mode = conn.get("routing_mode") or (
+                local_cfg.get("defaults", {}).get("routing", {}).get("mode") or "bgp"
+            )
 
             merged_tunnels = []
             used_indices: set[int] = set()
@@ -438,7 +455,9 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: t.List[Path]) -> Resolv
                 for j, pt in enumerate(flat_peer_tunnels):
                     if j in used_indices:
                         continue
-                    score = _score_peer_tunnel(conn_vendor, conn_remote_asn, tun, pt, local_cfg)
+                    score = _score_peer_tunnel(
+                        conn_vendor, conn_remote_asn, tun, pt, local_cfg
+                    )
                     if score > best_score:
                         best_score = score
                         best_idx = j
@@ -450,17 +469,26 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: t.List[Path]) -> Resolv
                 tun = dict(tun)  # copy
                 # Merge essential fields
                 tun["psk"] = _merge_fields(tun.get("psk"), peer_tun.get("psk"))
-                tun["inner_cidr"] = _merge_fields(tun.get("inner_cidr"), peer_tun.get("inner_cidr"))
-                tun["inner_local_ip"] = _merge_fields(tun.get("inner_local_ip"), peer_tun.get("inner_local_ip"))
-                tun["inner_remote_ip"] = _merge_fields(tun.get("inner_remote_ip"), peer_tun.get("inner_remote_ip"))
-                tun["remote_public_ip"] = _merge_fields(tun.get("remote_public_ip"), peer_tun.get("remote_public_ip"))
-                
+                tun["inner_cidr"] = _merge_fields(
+                    tun.get("inner_cidr"), peer_tun.get("inner_cidr")
+                )
+                tun["inner_local_ip"] = _merge_fields(
+                    tun.get("inner_local_ip"), peer_tun.get("inner_local_ip")
+                )
+                tun["inner_remote_ip"] = _merge_fields(
+                    tun.get("inner_remote_ip"), peer_tun.get("inner_remote_ip")
+                )
+                tun["remote_public_ip"] = _merge_fields(
+                    tun.get("remote_public_ip"), peer_tun.get("remote_public_ip")
+                )
+
                 # VALIDATION: Ensure inner IPs fall within inner_cidr
                 tunnel_name = tun.get("name", f"tunnel-{i}")
                 _validate_tunnel_inner_ips(tun, tunnel_name)
                 # local_public_ip is derived from YAML indices; preserve if present in peer
                 tun["local_public_ip"] = _merge_fields(
-                    _resolved_local_public_ip(local_cfg, tun), peer_tun.get("local_public_ip")
+                    _resolved_local_public_ip(local_cfg, tun),
+                    peer_tun.get("local_public_ip"),
                 )
                 # Propagate connection-level remote_prefixes into static_routes if not set per-tunnel
                 if routing_mode == "static":
@@ -474,33 +502,45 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: t.List[Path]) -> Resolv
                 crypto = tun.get("crypto", {}) or {}
                 pcrypto = peer_tun.get("crypto", {}) or {}
                 crypto["ike_proposals"] = _merge_fields(
-                    crypto.get("ike_proposals"), pcrypto.get("ike_proposals"), default_val=[]
+                    crypto.get("ike_proposals"),
+                    pcrypto.get("ike_proposals"),
+                    default_val=[],
                 )
                 crypto["esp_proposals"] = _merge_fields(
-                    crypto.get("esp_proposals"), pcrypto.get("esp_proposals"), default_val=[]
+                    crypto.get("esp_proposals"),
+                    pcrypto.get("esp_proposals"),
+                    default_val=[],
                 )
                 crypto["ike_lifetime_seconds"] = _merge_fields(
-                    crypto.get("ike_lifetime_seconds"), pcrypto.get("ike_lifetime_seconds")
+                    crypto.get("ike_lifetime_seconds"),
+                    pcrypto.get("ike_lifetime_seconds"),
                 )
                 crypto["esp_lifetime_seconds"] = _merge_fields(
-                    crypto.get("esp_lifetime_seconds"), pcrypto.get("esp_lifetime_seconds")
+                    crypto.get("esp_lifetime_seconds"),
+                    pcrypto.get("esp_lifetime_seconds"),
                 )
                 tun["crypto"] = crypto
 
                 merged_tunnels.append(tun)
 
             # Filter tunnels assigned to this instance
-            inst_tunnels_raw = [t for t in merged_tunnels if int(t.get("gateway_instance_index", 0)) == idx]
+            inst_tunnels_raw = [
+                t
+                for t in merged_tunnels
+                if int(t.get("gateway_instance_index", 0)) == idx
+            ]
             if inst_tunnels_raw:
                 # Inject the actual external IP into each tunnel's local_public_ip if not already set
                 inst_tunnels = []
                 for t in inst_tunnels_raw:
-                    t_copy = dict(t)  # Make a copy to avoid modifying shared tunnel dict
+                    t_copy = dict(
+                        t
+                    )  # Make a copy to avoid modifying shared tunnel dict
                     lip = t_copy.get("local_public_ip")
                     if lip in (None, ""):
                         t_copy["local_public_ip"] = ip
                     inst_tunnels.append(t_copy)
-                
+
                 new_conn = dict(conn)
                 # Fill connection-level BGP remote_asn if missing
                 if inferred_remote_asn is not None:
@@ -524,20 +564,25 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: t.List[Path]) -> Resolv
         serialized = yaml.safe_dump(per_vm_cfg_serializable, sort_keys=False)
         per_instance.append(
             InstanceResolvedConfig(
-                instance_index=idx, hostname=hostname, external_ip=ip, config_yaml=serialized
+                instance_index=idx,
+                hostname=hostname,
+                external_ip=ip,
+                config_yaml=serialized,
             )
         )
 
     # Determine if we should manage routes: enable if any connection/tunnel uses static routing
     manage_routes = False
     try:
-        defaults_mode = (local_cfg.get("defaults", {}).get("routing", {}) or {}).get("mode") or "bgp"
-        for conn in (local_cfg.get("connections") or []):
+        defaults_mode = (local_cfg.get("defaults", {}).get("routing", {}) or {}).get(
+            "mode"
+        ) or "bgp"
+        for conn in local_cfg.get("connections") or []:
             conn_mode = (conn.get("routing_mode") or defaults_mode) or "bgp"
             if conn_mode == "static":
                 manage_routes = True
                 break
-            for tun in (conn.get("tunnels") or []):
+            for tun in conn.get("tunnels") or []:
                 tun_mode = (tun.get("routing_mode") or conn_mode) or defaults_mode
                 if tun_mode == "static":
                     manage_routes = True
@@ -548,5 +593,8 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: t.List[Path]) -> Resolv
         manage_routes = False
 
     return ResolvedDeploymentPlan(
-        gateway_group=gateway_group, per_instance=per_instance, manage_routes=manage_routes
+        gateway_group=gateway_group,
+        gateway=local_cfg.get("gateway", {}),
+        per_instance=per_instance,
+        manage_routes=manage_routes,
     )

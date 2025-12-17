@@ -2,6 +2,8 @@
 
 **Version:** v0.3
 
+> Note: Legacy VTI support has been removed. XFRM interfaces are the only supported mode going forward.
+
 VM-based site-to-site IPsec/BGP VPN gateway for Nebius AI Cloud. Supports GCP HA VPN, AWS Site-to-Site VPN, Azure VPN Gateway, Cisco IOS, and custom peers.
 
 ## Table of Contents
@@ -47,6 +49,35 @@ VM-based site-to-site IPsec/BGP VPN gateway for Nebius AI Cloud. Supports GCP HA
 - Nebius AI Cloud project with VPC network
 - Python 3.11+ with Poetry
 - Service account with Compute permissions
+
+### Firewall Requirements
+
+The VPN gateway automatically configures UFW (Uncomplicated Firewall) with the following rules:
+
+**Required Ports (automatically configured):**
+
+- **UDP 500** - IKE (Internet Key Exchange) for IPsec tunnel establishment
+- **UDP 4500** - IPsec NAT-T (NAT Traversal) for ESP over UDP
+- **ESP (IP Protocol 50)** - Encapsulating Security Payload for encrypted data
+- **TCP 179** - BGP for dynamic routing (when using BGP mode)
+- **TCP 22** - SSH for management access
+- **ICMP** - For troubleshooting and diagnostics
+
+**Traffic Flow:**
+
+- **Inbound:** Restricted to peer VPN gateway IPs (for IPsec) and management CIDRs (for SSH)
+- **Outbound:** Unrestricted (default allow)
+- **Local VPC subnets:** Allowed to forward traffic through the gateway
+- **Tunnel interfaces (xfrm*):** Unrestricted (required for BGP and encrypted traffic)
+
+**Peer Gateway Requirements:**
+
+- **GCP Cloud VPN:** No additional firewall configuration needed (handled automatically by GCP)
+- **AWS VPN Gateway:** No additional firewall configuration needed (handled automatically by AWS)
+- **Azure VPN Gateway:** No additional firewall configuration needed (handled automatically by Azure)
+- **On-premises/Cisco:** Ensure firewall allows UDP 500, UDP 4500, and ESP (protocol 50) from/to Nebius gateway public IP
+
+**Note:** UFW is the default and recommended firewall. The system automatically enables and configures it during VM deployment.
 
 ### Required Information from Peer Gateway
 
@@ -110,6 +141,7 @@ gateway:
   local_asn: 64512
   local_prefixes:
     - "10.0.0.0/16"
+  # ipsec_mode: xfrm-interface  # Default: modern XFRM (recommended)
     
 connections:
   - name: gcp-ha-vpn
@@ -385,7 +417,7 @@ nebius-vpngw list-routes-local --local-config-file <file>
 nebius-vpngw add-routes-local --local-config-file <file>
 
 # List remote routes (Remote → Nebius)
-# - BGP mode: Shows BGP-learned routes with whitelist status and VTI interfaces
+# - BGP mode: Shows BGP-learned routes with whitelist status and XFRM interfaces
 # - Static mode: Shows static routes and kernel installation status
 # - Filters out locally originated routes (next-hop 0.0.0.0)
 nebius-vpngw list-routes-remote --local-config-file <file>
@@ -533,7 +565,7 @@ nebius-vpngw status --local-config-file <file>
 
 **Common issues:**
 
-- **No OPEN messages:** IPsec tunnel not established or VTI interface down
+- **No OPEN messages:** IPsec tunnel not established or XFRM interface down
 - **OPEN errors:** ASN mismatch between peers
 - **Routes not installed:** FRR version issue (use 10.x, not 8.4.4)
 - **Policy errors:** Add `no bgp ebgp-requires-policy` (automatically configured)
@@ -721,7 +753,7 @@ Per-VM checks:
 
 - **Table 220:** Detects policy routes (causes asymmetric routing)
 - **Broad APIPA:** Detects 169.254.0.0/16 routes (should be /30 only)
-- **BGP peer routes:** Shows APIPA routes over VTI interfaces
+- **BGP peer routes:** Shows APIPA routes over XFRM interfaces
 - **Orphaned routes:** Routes without corresponding tunnels
 
 ## Security
@@ -743,7 +775,7 @@ Agent synchronizes UFW rules with active tunnels:
 
 - Adds peer IPs when tunnels configured
 - Removes stale peer IPs when tunnels deleted
-- VTI interfaces not filtered by UFW (allows BGP/encrypted traffic to flow)
+- XFRM interfaces not filtered by UFW (allows BGP/encrypted traffic to flow)
 
 ### Secrets Management
 
@@ -819,7 +851,7 @@ sudo vtysh -c "show ip route bgp"
 3. **IPsec down:** Fix tunnel before debugging BGP
 4. **FRR version:** Upgrade to 10.x if routes not installing
 
-### Routing Issues
+### Routing / XFRM Issues
 
 **Check routing health:**
 
@@ -832,10 +864,13 @@ nebius-vpngw status --local-config-file <file>
 ```bash
 ssh ubuntu@<gateway-ip>
 sudo ip route show table 220  # Should be empty
-sudo ip route | grep 169.254  # Should show /30 routes only
+sudo ip route | grep 169.254  # Should show /30 routes only (tunnels) + metadata (169.254.169.x)
+sudo ip link show type xfrm   # xfrm0/xfrm1 should exist and be UP
+sudo ip addr show xfrm0       # Should have inner_local_ip/30
+sudo ip xfrm policy           # Local selector = inner /30 + gateway.local_prefixes; remote = 0.0.0.0/0
 ```
 
-**Defense-in-Depth Routing Protection:**
+**Defense-in-Depth Routing Protection (XFRM):**
 
 The gateway uses a three-layer defense against problematic APIPA routing:
 
@@ -863,8 +898,8 @@ These settings:
 
 Agent's `routing_guard.py` runs AFTER all config changes:
 
-- Removes table 220 policy routes
-- Removes broad APIPA routes (169.254.0.0/16) added by DHCP
+- Removes table 220 policy routes (policy routing not used with XFRM)
+- Removes broad APIPA routes (169.254.0.0/16) added by DHCP, preserving metadata routes (169.254.169.x)
 - Runs on every agent start/reload
 - Ensures clean state after netplan/systemd-networkd operations
 
@@ -984,9 +1019,6 @@ sudo journalctl -u strongswan-starter | grep -E "(IKE_SA|CHILD_SA|established)"
 
 # Tunnel errors
 sudo journalctl -u strongswan-starter | grep -i error
-
-# VTI interface operations (from ipsec-vti.sh updown script)
-sudo journalctl | grep "ipsec-vti" -A 2 -B 2
 ```
 
 **FRR BGP Logs (routing protocol):**
@@ -1032,6 +1064,12 @@ sudo journalctl | grep ufw | tail -20
 
 # Check current UFW rules
 sudo ufw status verbose
+# Expected posture (no management CIDRs):
+# - SSH allowed from anywhere
+# - ICMP allowed from anywhere
+# - IPsec (UDP 500/4500, ESP) allowed from peers (or anywhere until peers known)
+# - All traffic allowed on xfrm* tunnel interfaces
+# - Default deny inbound on eth0 for other ports
 ```
 
 **Combined View (all critical services):**
@@ -1187,6 +1225,7 @@ nebius-vpngw apply --local-config-file <file>
 │   │   ├── main.py                       # Agent daemon
 │   │   ├── frr_renderer.py               # BGP config renderer
 │   │   ├── strongswan_renderer.py        # IPsec config renderer
+│   │   ├── xfrm_manager.py               # XFRM interface lifecycle (create, address, route)
 │   │   ├── routing_guard.py              # Route validation
 │   │   ├── firewall_manager.py           # UFW rule sync
 │   │   ├── tunnel_iterator.py            # Tunnel enumeration
@@ -1204,8 +1243,11 @@ nebius-vpngw apply --local-config-file <file>
 │   │   ├── aws.py
 │   │   ├── azure.py
 │   │   └── cisco.py
-│   └── systemd/                          # Systemd units
-│       └── nebius-vpngw-agent.service
+│   └── systemd/                          # Systemd units/scripts
+│       ├── nebius-vpngw-agent.service    # Agent service unit
+│       ├── fix-routes.sh                 # Route cleanup helper (table 220/APIPA)
+│       ├── nebius-vpngw-fix-routes.service  # Service wrapper for route cleanup
+│       └── nebius-vpngw-fix-routes.timer    # Timer to enforce route cleanup periodically
 ```
 
 ### Key Modules

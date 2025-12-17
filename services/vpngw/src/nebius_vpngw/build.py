@@ -12,7 +12,9 @@ def build_binary() -> None:
       - __main__.py present to serve as entry point
     """
     if shutil.which("pyinstaller") is None:
-        print("[build-binary] PyInstaller not found. Install with: poetry add pyinstaller --group dev")
+        print(
+            "[build-binary] PyInstaller not found. Install with: poetry add pyinstaller --group dev"
+        )
         sys.exit(1)
 
     entry = Path(__file__).parent / "__main__.py"
@@ -38,6 +40,7 @@ def build_binary() -> None:
         print(f"[build-binary] Success. Binary at: {dist_path}")
     else:
         print("[build-binary] Build finished but binary not found in dist/")
+
 
 if __name__ == "__main__":  # Allow direct invocation if desired
     build_binary()

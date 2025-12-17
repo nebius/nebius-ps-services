@@ -2,6 +2,17 @@
 
 Version: v0.3
 
+> Note: Legacy VTI support has been removed. XFRM interfaces are the only supported mode going forward (migration guide retired; this doc is the source of truth).
+
+## XFRM Mode Summary (current, required)
+
+- XFRM netdevices (`xfrm0`, `xfrm1`, …) bound via `if_id` in strongSwan; no marks or updown scripts.
+- Traffic selectors: local side is scoped to the tunnel’s inner /30 plus `gateway.local_prefixes`; remote stays `0.0.0.0/0`. This keeps SSH/ping to the public IP off the tunnel while allowing any remote prefixes to traverse.
+- Routing hygiene: table 220 is removed; the broad `169.254.0.0/16` DHCP route is removed while preserving metadata routes (`169.254.169.x`). Prevents policy routing and APIPA from stealing tunnel/management traffic.
+- Sysctl: `rp_filter=0` on all/default/eth0 (required for XFRM), IP forwarding enabled, redirects off, ARP hardened.
+- Firewall: UFW allows SSH from management CIDRs (or anywhere if not configured), IPsec (UDP 500/4500, ESP) from peer IPs, BGP (TCP 179) for dynamic routing, traffic from local VPC subnets for forwarding, ICMP for troubleshooting, and permits all traffic on tunnel interfaces (xfrm*). Everything else inbound on eth0 is denied.
+- Interfaces must exist before IPsec brings up CHILD_SAs; agent creates XFRM devices and assigns inner IPs/routes before FRR reload.
+
 ## Purpose & Scope
 
 Deliver a VM-based site-to-site VPN gateway for Nebius AI Cloud using IPsec (strongSwan) and routing (FRR for BGP, static as fallback). Provide a CLI orchestrator plus per-VM agent with idempotent configuration from a single YAML file, optionally merged with vendor peer configs. Support common cloud and on-premises peers (GCP HA VPN, AWS Site-to-Site VPN, Azure VPN Gateway, Cisco IOS).
@@ -284,34 +295,53 @@ Global default under `defaults.routing.mode`; override per connection/tunnel.
 
 ### strongSwan
 
-- Policy-based or route-based (VTI interfaces)
+- Route-based VPN using XFRM interfaces (default) or VTI (legacy)
 - IKEv2 default, IKEv1 fallback configurable
 - PSK authentication
 - DPD (Dead Peer Detection) for tunnel liveness
 
-### VTI Interfaces
+### IPsec Interface Modes
 
-Uses Linux kernel's VTI (Virtual Tunnel Interface) with strongSwan marks for proper route-based VPN:
+The gateway supports two interface modes for IPsec tunnels:
 
-- Creates `vti0`, `vti1`, etc. interfaces
-- Each tunnel gets unique mark via `mark=%unique` in strongSwan config
-- BGP sessions run over VTI interfaces using APIPA inner IPs
-- Marks passed to custom updown script via `PLUTO_MARK_OUT` and `PLUTO_MARK_IN`
+#### XFRM Interface Mode (Default, Recommended)
 
-**VTI Setup:**
+Modern kernel XFRM netdevs bound to strongSwan CHILD_SAs via `if_id`:
 
-- strongSwan assigns unique marks automatically with `mark=%unique`
-- Custom updown script (`ipsec-vti.sh`) creates VTI interfaces on tunnel establishment
-- VTI interface created with: `ip link add vti{N} type vti okey <mark_out> ikey <mark_in>`
-- Inner APIPA addresses assigned to VTI interfaces for BGP peering
+- Creates `xfrm-gcp-ha-1`, `xfrm-gcp-ha-2`, etc. interfaces
+- Each tunnel bound via `if_id_in/if_id_out` parameters (e.g., 100, 101)
+- No marks or updown scripts required
+- **Eliminates packet duplication** issue with 0.0.0.0/0 traffic selectors
+- BGP sessions run over XFRM interfaces using APIPA inner IPs
+- Cleaner architecture, better performance
+
+**Configuration:**
+
+```yaml
+gateway:
+  local_asn: 65010
+  local_prefixes:
+    - "10.0.0.0/16"
+  ipsec_mode: xfrm-interface  # Default (can omit)
+```
+
+**XFRM Setup:**
+
+- strongSwan config uses `if_id_in=100, if_id_out=100` (no marks)
+- Agent creates XFRM devices: `ip link add xfrm-gcp-ha-1 type xfrm dev eth0 if_id 100`
+- Inner APIPA addresses assigned to XFRM interfaces for BGP peering
 - MTU set to 1387 (GCP MTU 1460 - IPsec overhead 73 bytes)
 
-**Why VTI:**
+**Why XFRM:**
 
-- Route-based VPN allows BGP traffic over encrypted tunnels
-- Works with `0.0.0.0/0` traffic selectors (required by GCP HA VPN)
-- Supports asymmetric routing with proper sysctls (`rp_filter=2`)
-- VTI interfaces can be referenced in FRR BGP neighbor configuration
+- Modern Linux kernel interface (5.4+)
+- No packet duplication with 0.0.0.0/0 traffic selectors
+- Cleaner separation: if_id binding vs mark-based routing
+- Better performance and maintainability
+
+#### VTI Mode (Removed)
+
+Legacy Virtual Tunnel Interface support has been removed due to packet duplication issues and operational complexity. All deployments must use XFRM interfaces.
 
 ### Route-Based VPN Architecture
 
@@ -319,7 +349,7 @@ Uses Linux kernel's VTI (Virtual Tunnel Interface) with strongSwan marks for pro
 
 `leftsubnet` and `rightsubnet` in strongSwan define **only the IPsec Traffic Selectors (TS)** exchanged during IKE negotiation. They do **NOT install routes** and do **NOT control which networks are routed through the tunnel**.
 
-**For route-based VPN (VTI), always use:**
+**For route-based VPN (XFRM), always use:**
 
 ```text
 leftsubnet=0.0.0.0/0
@@ -339,14 +369,14 @@ This configuration:
 
 **Routing is controlled exclusively by:**
 
-1. **Linux routing table:** `ip route add <prefix> dev vti0`
+1. **Linux routing table:** `ip route add <prefix> dev xfrm0`
 2. **BGP daemon (FRR):** Learned routes installed dynamically
 3. **Static routes:** Manual kernel routes (in static mode)
-4. **VTI interfaces:** Bound via marks from strongSwan
+4. **XFRM interfaces:** Bound via `if_id` from strongSwan
 
 **What determines which traffic enters the tunnel:**
 
-- **The routing table** → what prefixes point to the VTI interface
+- **The routing table** → what prefixes point to the XFRM interface
 - **BGP daemon** → which routes FRR installs dynamically
 - **NOT** leftsubnet/rightsubnet → these are "wide open" allow-lists
 
@@ -360,19 +390,19 @@ This configuration:
 
 **Encryption decision:**
 
-- strongSwan uses VTI interface binding via marks
-- `ip link add vti0 type vti okey=<mark> ikey=<mark> ...`
-- Any packet routed through vtiX gets encrypted by strongSwan
+- strongSwan binds CHILD_SAs to XFRM interfaces via `if_id`
+- `ip link add xfrm0 type xfrm dev eth0 if_id <id>`
+- Any packet routed through xfrmX gets encrypted by strongSwan
 - No policy database (SPD) restrictions on prefixes
 
 ### local_prefixes vs remote_prefixes
 
 The configuration fields `local_prefixes` and `remote_prefixes` have different meanings depending on the VPN mode:
 
-| Mode   | local_prefixes → Remote Peer                         | remote_prefixes → Nebius VM                                  |
-|--------|------------------------------------------------------|--------------------------------------------------------------|
-| BGP    | Advertised by FRR to peer via `network` statements   | Learned dynamically from peer BGP; no YAML required          |
-| Static | Installed as static routes to VTIs + VPC routes      | Installed as static kernel routes to VTIs                    |
+| Mode   | local_prefixes → Remote Peer                               | remote_prefixes → Nebius VM                             |
+|--------|------------------------------------------------------------|---------------------------------------------------------|
+| BGP    | Advertised by FRR to peer via `network` statements         | Learned dynamically from peer BGP; no YAML required     |
+| Static | Installed as static routes to XFRM interfaces + VPC routes | Installed as static kernel routes to XFRM interfaces    |
 
 **BGP Mode:**
 
@@ -383,8 +413,8 @@ The configuration fields `local_prefixes` and `remote_prefixes` have different m
 **Static Mode:**
 
 - `local_prefixes`: Networks reachable via Nebius VPC; installed as kernel routes and VPC routes
-- `remote_prefixes`: Networks behind the remote peer; installed as kernel routes to VTI interfaces
-- Agent installs routes explicitly: `ip route replace <prefix> dev vti0`
+- `remote_prefixes`: Networks behind the remote peer; installed as kernel routes to XFRM interfaces
+- Agent installs routes explicitly: `ip route replace <prefix> dev xfrm0`
 
 **Key Differences:**
 
@@ -494,12 +524,12 @@ Lists routes on gateway VMs that direct traffic from remote sites to Nebius netw
 - **BGP mode**:
   - SSHs to gateway VMs and queries FRR: `vtysh -c 'show bgp ipv4 unicast json'`
   - Extracts routes with next-hop IPs, AS paths, and status
-  - Queries `ip route get <next-hop>` to determine outgoing VTI interface
+  - Queries `ip route get <next-hop>` to determine outgoing XFRM interface
   - Filters out locally originated routes (next-hop 0.0.0.0)
   - Checks against `remote_prefixes` whitelist (shows allowed/not-allowed status)
-  - Displays: Prefix, Next-Hop, Via (VTI interface), AS Path, Status
+  - Displays: Prefix, Next-Hop, Via (XFRM interface), AS Path, Status
 - **Static mode**:
-  - Agent installs kernel routes: `ip route replace <prefix> dev vtiX` for each `remote_prefixes`
+  - Agent installs kernel routes: `ip route replace <prefix> dev xfrmX` for each `remote_prefixes`
   - Compares YAML `remote_prefixes` with kernel routing table via `ip route show`
   - Shows installation status (installed/missing)
   - Routes installed automatically by strongSwan renderer after tunnel establishment
@@ -510,11 +540,11 @@ In static mode, the agent automatically installs kernel routes for all `remote_p
 
 ```bash
 # Example: For remote_prefixes: ["10.10.0.0/24", "10.11.0.0/16"]
-ip route replace 10.10.0.0/24 dev vti0
-ip route replace 10.11.0.0/16 dev vti0
+ip route replace 10.10.0.0/24 dev xfrm0
+ip route replace 10.11.0.0/16 dev xfrm0
 ```
 
-This happens in `strongswan_renderer.py` after tunnel establishment (2s wait for VTI creation).
+This happens in `strongswan_renderer.py` after tunnel establishment.
 
 **BGP vs Static Routing:**
 
@@ -525,6 +555,243 @@ This happens in `strongswan_renderer.py` after tunnel establishment (2s wait for
 | **remote_prefixes** | Optional filter/whitelist | Required, installed as routes |
 | **Dynamic Learning** | Yes (via BGP) | No (manual YAML updates) |
 | **Scalability** | 100+ networks, no config changes | Must enumerate each network |
+
+## XFRM Routing Stack
+
+### Architecture Overview
+
+The VPN gateway uses a **multi-layer defense** strategy to ensure routing stability for XFRM (IPsec) tunnels:
+
+1. **Dedicated Sysctl Configuration** (`/etc/sysctl.d/99-zzz-vpngw.conf`)
+2. **Systemd Service Ordering** (UFW → strongSwan → FRR → agent)
+3. **Self-Healing Routing Guard** (automatic sysctl enforcement)
+
+This design **decouples routing correctness from UFW status**, making the gateway resilient to service failures and configuration changes.
+
+### Critical Sysctl Settings
+
+File: `/etc/sysctl.d/99-zzz-vpngw.conf`
+
+```bash
+# 1. IP Forwarding - Gateway must route packets
+net.ipv4.ip_forward = 1
+
+# 2. Reverse Path Filtering - MUST BE DISABLED
+# XFRM tunnels create asymmetric routing that strict rp_filter blocks
+net.ipv4.conf.all.rp_filter = 0
+net.ipv4.conf.default.rp_filter = 0
+net.ipv4.conf.eth0.rp_filter = 0
+net.ipv4.conf.lo.rp_filter = 0
+
+# 3. ICMP Redirects - Disabled (cloud fabric shouldn't redirect)
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.default.send_redirects = 0
+
+# 4. Source Routing - Disabled for security
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv4.conf.default.accept_source_route = 0
+
+# 5. Martian Logging - Enabled for debugging
+net.ipv4.conf.all.log_martians = 1
+net.ipv4.conf.default.log_martians = 1
+
+# 6. IPv6 Hygiene
+net.ipv6.conf.all.accept_redirects = 0
+net.ipv6.conf.default.accept_redirects = 0
+net.ipv6.conf.all.accept_ra = 0
+net.ipv6.conf.default.accept_ra = 0
+```
+
+**Why `99-zzz-vpngw.conf`?**
+
+- The `zzz` prefix ensures it loads **after** `/etc/sysctl.conf` (via `99-sysctl.conf` symlink)
+- This prevents the default Ubuntu sysctl settings from overriding our XFRM-specific values
+- Cloud-init also comments out conflicting lines in `/etc/sysctl.conf`
+
+### Systemd Service Ordering
+
+**Boot Sequence:**
+
+```text
+network-online.target
+    ↓
+cloud-init.service
+    ↓
+sysctl --system (loads 99-zzz-vpngw.conf)
+    ↓
+ufw.service (firewall)
+    ↓
+strongswan.service (IPsec)
+    ↓
+frr.service (BGP)
+    ↓
+nebius-vpngw-agent.service (routing guard + agent)
+```
+
+**Configuration Files:**
+
+Each service has a systemd override in `/etc/systemd/system/<service>.d/override.conf`:
+
+```ini
+# /etc/systemd/system/ufw.service.d/override.conf
+[Unit]
+After=network-online.target cloud-init.service
+Wants=network-online.target
+
+# /etc/systemd/system/strongswan.service.d/override.conf
+[Unit]
+After=ufw.service network-online.target
+Wants=ufw.service
+
+# /etc/systemd/system/frr.service.d/override.conf
+[Unit]
+After=strongswan.service
+Wants=strongswan.service
+
+# /etc/systemd/system/nebius-vpngw-agent.service.d/override.conf
+[Unit]
+After=strongswan.service frr.service
+Wants=strongswan.service frr.service
+```
+
+**Why This Ordering Matters:**
+
+- **UFW after cloud-init**: Prevents cloud-init network changes from racing with UFW
+- **strongSwan after UFW**: Ensures netfilter framework is initialized before IPsec tunnels
+- **FRR after strongSwan**: BGP needs XFRM interfaces created by strongSwan
+- **Agent after FRR**: Routing guard validates routes installed by FRR
+
+### Self-Healing Routing Guard
+
+The `routing_guard.py` module enforces routing invariants on **every agent startup/reload**:
+
+#### INVARIANT 0: Sysctl Enforcement
+
+```python
+# Automatically fixes sysctls if they get reset
+net.ipv4.ip_forward = 1 (if currently 0)
+net.ipv4.conf.all.rp_filter = 0 (if currently 1 or 2)
+net.ipv4.conf.xfrm*.rp_filter = 0 (all XFRM interfaces)
+```
+
+#### INVARIANT 1: No Policy Routing
+
+- Removes table 220 rules (cloud platforms sometimes add these)
+- Flushes table 220 routes
+
+#### INVARIANT 2: No Broad APIPA Routes
+
+- Removes `169.254.0.0/16` route if present
+- Keeps metadata-specific routes (`169.254.169.0/24`)
+
+#### INVARIANT 3: No Scope Link Routes
+
+- Removes `scope link` routes for local prefixes
+- These mark prefixes as "directly connected" which breaks forwarding
+
+#### INVARIANT 4: Clean Orphaned Routes
+
+- Removes APIPA routes not defined in config
+- Prevents leftover routes from old tunnels
+
+#### INVARIANT 5: BGP Peer Routes
+
+- Ensures `/32` routes for BGP peers via XFRM interfaces
+- Required for correct source IP selection
+
+**Logs Example:**
+
+```text
+[RoutingGuard] ✓ All invariants OK. BGP peer routes: 2
+[RoutingGuard] Fixed 2 sysctls: net.ipv4.ip_forward, net.ipv4.conf.all.rp_filter
+```
+
+### Verification Commands
+
+**Check Sysctl Settings:**
+
+```bash
+sysctl net.ipv4.ip_forward  # Must be 1
+sysctl net.ipv4.conf.all.rp_filter  # Must be 0
+sysctl net.ipv4.conf.eth0.rp_filter  # Must be 0
+```
+
+**Check Service Order:**
+
+```bash
+systemctl list-dependencies nebius-vpngw-agent.service | grep -E "ufw|strongswan|frr"
+```
+
+**Check Routing Guard Logs:**
+
+```bash
+sudo journalctl -u nebius-vpngw-agent -n 50 | grep RoutingGuard
+```
+
+**Check for Problematic Routes:**
+
+```bash
+# Should NOT exist:
+ip route show table 220  # Empty
+ip route show 169.254.0.0/16  # Empty or metadata-specific
+ip rule show | grep 220  # Empty
+
+# Should exist:
+ip route show 169.254.169.0/24  # Metadata service OK
+```
+
+### Troubleshooting
+
+#### Symptom: VMs can't reach remote networks
+
+1. Check sysctl settings:
+
+   ```bash
+   sysctl net.ipv4.ip_forward net.ipv4.conf.all.rp_filter
+   ```
+
+   - If `ip_forward=0` or `rp_filter≠0`, routing won't work
+
+2. Check UFW status:
+
+   ```bash
+   sudo ufw status
+   ```
+
+   - Must show `Status: active`
+
+3. Check service ordering:
+
+   ```bash
+   systemctl status ufw strongswan frr nebius-vpngw-agent
+   ```
+
+   - All should be `active (running)` or `active (exited)` for UFW
+
+4. Restart agent to enforce invariants:
+
+   ```bash
+   sudo systemctl restart nebius-vpngw-agent
+   sudo journalctl -u nebius-vpngw-agent -n 30 | grep -E "RoutingGuard|sysctl"
+   ```
+
+#### Symptom: Sysctls reset after reboot
+
+- Check `/etc/sysctl.d/99-zzz-vpngw.conf` exists and has correct settings
+- Check `/etc/sysctl.conf` doesn't have conflicting `ip_forward` or `rp_filter` (should be commented)
+- Run `sudo sysctl --system` to reload all sysctl files
+
+#### Symptom: Services start in wrong order
+
+- Check systemd overrides exist:
+
+  ```bash
+  ls -la /etc/systemd/system/{ufw,strongswan,frr,nebius-vpngw-agent}.service.d/
+  ```
+
+- Run `sudo systemctl daemon-reload` after creating overrides
 
 ## Security Hardening
 
@@ -537,13 +804,84 @@ This happens in `strongswan_renderer.py` after tunnel establishment (2s wait for
 - Automated security updates (unattended-upgrades)
 - IP forwarding enabled, ICMP redirects disabled
 
+### CRITICAL: UFW Must Be Active
+
+**UFW (Uncomplicated Firewall) MUST be active and enabled for the VPN gateway to function correctly.**
+
+**Why UFW is Required:**
+
+1. **Netfilter Framework Initialization**: UFW activates the Linux netfilter framework, which is essential for proper packet forwarding through XFRM (IPsec) tunnels.
+
+2. **VPC Fabric Integration**: Without UFW active, packets from the Nebius VPC fabric may not be correctly routed through the VPN gateway to remote networks, even with `net.ipv4.ip_forward=1` enabled.
+
+3. **XFRM Tunnel Forwarding**: UFW's FORWARD chain rules are necessary for the kernel to properly handle packets destined for XFRM interfaces (xfrm0, xfrm1, etc.).
+
+**Verification After Deployment:**
+
+```bash
+# Check UFW is active (REQUIRED)
+sudo ufw status verbose
+
+# Should show: Status: active
+# If inactive, the VPN gateway will NOT forward traffic correctly
+```
+
+**Symptoms of Inactive UFW:**
+
+- VMs in local subnets cannot reach remote networks via VPN
+- Packets never reach the gateway VM (zero iptables counters)
+- XFRM encryption counters don't increment
+- BGP and IPsec tunnels work, but data plane fails
+
+**Recovery if UFW is Inactive:**
+
+```bash
+# Enable UFW (will activate netfilter)
+sudo /usr/local/bin/setup-vpngw-firewall.sh
+
+# Or manually:
+sudo ufw enable
+```
+
 ### Firewall Management
 
-Agent synchronizes UFW rules with active tunnels:
+**Default Firewall:** UFW (Uncomplicated Firewall) is the default and required firewall solution.
 
-- Adds peer IPs dynamically
-- Removes stale peer IPs
-- VTI interfaces are not filtered by UFW (allows BGP traffic to flow freely)
+**Automatic Configuration:** The gateway VM automatically configures and enables UFW during deployment via cloud-init with the following rules:
+
+**Required Ports:**
+
+- **UDP 500** - IKE (Internet Key Exchange) for IPsec tunnel establishment
+- **UDP 4500** - IPsec NAT-T (NAT Traversal) for ESP over UDP when behind NAT
+- **ESP (IP Protocol 50)** - Encapsulating Security Payload for encrypted VPN data
+- **TCP 179** - BGP for dynamic routing (critical for route exchange)
+- **TCP 22** - SSH for management access (can be restricted to management CIDRs)
+- **ICMP** - For path MTU discovery and troubleshooting
+
+**Traffic Rules:**
+
+- **Default policy:** Deny incoming, allow outgoing
+- **Loopback:** Unrestricted (localhost communication)
+- **SSH access:** Restricted to management CIDRs when configured, otherwise from anywhere (protected by fail2ban)
+- **IPsec protocols:** Allowed from peer gateway public IPs (UDP 500, 4500, ESP)
+- **BGP:** Allowed on all interfaces (TCP 179) for dynamic routing
+- **Local VPC subnets:** Traffic from `gateway.local_prefixes` allowed for forwarding through the gateway
+- **Tunnel interfaces (xfrm*):** Unrestricted traffic allowed (BGP runs over these encrypted channels)
+- **ICMP:** Allowed on public interface for troubleshooting
+
+**Dynamic Updates:** The agent (`firewall_manager.py`) synchronizes UFW rules with active tunnels:
+
+- Adds peer IPs dynamically as tunnels are configured
+- Removes stale peer IPs when tunnels are removed
+- Updates local prefix rules when configuration changes
+- Maintains firewall state in `/etc/vpngw_peer_ips` and `/etc/vpngw_local_prefixes`
+
+**Security Benefits:**
+
+- Limits attack surface by denying all non-essential inbound traffic
+- Protects against unauthorized access while allowing legitimate VPN traffic
+- Prevents accidental exposure of management interfaces
+- Enables traffic forwarding for VPC workloads without compromising security
 
 ### Routing Guard
 
@@ -611,7 +949,7 @@ Per-VM routing validation:
 
 - Table 220 check: OK/WARNING (policy routes cause asymmetric routing)
 - Broad APIPA detection: OK/WARNING (should be /30 subnets only)
-- BGP peer routes: Shows APIPA routes over VTI interfaces
+- BGP peer routes: Shows APIPA routes over XFRM interfaces
 - Orphaned routes count
 - Overall health: Healthy/Degraded
 
@@ -722,6 +1060,7 @@ nebius-vpngw apply --local-config-file test.config.yaml
 │   │   ├── main.py                       # On-VM agent daemon
 │   │   ├── frr_renderer.py               # FRR/BGP config renderer
 │   │   ├── strongswan_renderer.py        # strongSwan/IPsec config renderer
+│   │   ├── xfrm_manager.py               # XFRM interface lifecycle (create, address, route)
 │   │   ├── routing_guard.py              # Declarative route management & cleanup
 │   │   ├── firewall_manager.py           # UFW firewall rule synchronization
 │   │   ├── tunnel_iterator.py            # Centralized tunnel enumeration
@@ -740,7 +1079,9 @@ nebius-vpngw apply --local-config-file test.config.yaml
 │   │   └── cisco.py                      # Cisco IOS config parser
 │   └── systemd/
 │       ├── nebius-vpngw-agent.service    # Agent systemd unit
-│       └── ipsec-vti.sh                  # VTI interface creation script
+│       ├── fix-routes.sh                 # Route cleanup helper (table 220/APIPA)
+│       ├── nebius-vpngw-fix-routes.service  # Service wrapper for route cleanup
+│       └── nebius-vpngw-fix-routes.timer    # Timer to enforce route cleanup periodically
 ```
 
 ### Module Descriptions
@@ -779,6 +1120,62 @@ nebius-vpngw apply --local-config-file test.config.yaml
 
 ## Tips & Troubleshooting
 
+### UFW Must Be Active for VPN to Work
+
+**Problem:** VMs in local subnets cannot reach remote networks via VPN, even though IPsec tunnels are ESTABLISHED and BGP sessions are UP.
+
+**Symptoms:**
+
+- Tunnels show ESTABLISHED status
+- BGP peers are connected and exchanging routes
+- Routes appear in routing tables
+- But: VMs cannot ping or connect to remote networks
+- tcpdump on gateway shows zero packets from local VMs
+- XFRM encryption counters don't increment for data traffic
+
+**Root Cause:** UFW (firewall) is inactive. **UFW MUST be active for the VPN gateway to forward traffic correctly.**
+
+**Why This Happens:**
+
+- UFW activates the Linux netfilter framework
+- Without netfilter active, the kernel doesn't properly integrate with XFRM (IPsec) tunnels for packet forwarding
+- Even with `net.ipv4.ip_forward=1` set, packets from the VPC fabric won't be forwarded through XFRM without netfilter
+- This is not about blocking traffic - it's about netfilter initialization being required for XFRM forwarding
+
+**Diagnosis:**
+
+```bash
+# Check UFW status
+sudo ufw status
+
+# If it shows "Status: inactive", that's the problem!
+```
+
+**Solution:**
+
+```bash
+# Enable UFW firewall
+sudo /usr/local/bin/setup-vpngw-firewall.sh
+
+# Or manually enable:
+sudo ufw enable
+
+# Verify it's active
+sudo ufw status verbose
+# Should show: Status: active
+```
+
+**After Fix:**
+
+- Test connectivity from VMs immediately - it should work instantly
+- UFW is now enabled on boot, so this won't happen again after reboots
+
+**Prevention:**
+
+- The firewall setup script should run automatically during VM creation (cloud-init)
+- Always verify UFW is active after deploying a new gateway
+- Include UFW check in monitoring/health checks
+
 ### Subnet CIDR Issues
 
 **Problem:** When creating the `vpngw-subnet`, it may show the network's parent CIDR (e.g., `/13`) instead of the intended `/24` in the console, even though the code calculates and requests the correct CIDR.
@@ -809,6 +1206,27 @@ update_req = UpdateSubnetRequest(
 ```
 
 **Verification:** After subnet creation, check that:
+
 - `spec.ipv4_private_pools.use_network_pools` is `false` (or field is absent)
 - `spec.ipv4_private_pools.pools[0].cidrs[0].cidr` shows the expected `/24` CIDR
 - `status.ipv4_private_cidrs` contains the expected `/24` CIDR (what the console displays)
+
+### Packet Duplication / Broadcast Loop Issue
+
+**Problem:** When pinging the VPN gateway from VMs in other subnets, you may see 60+ duplicate ICMP packets (marked as `DUP!` in ping output).
+
+**Root Cause:** **strongSwan/IPsec service** is causing packet duplication when inspecting traffic destined for the gateway's primary IP address.
+
+**Evidence from service isolation tests:**
+
+- Services stopped (IPsec OFF, FRR OFF, IP forward OFF): ✅ No duplicates
+- IP forwarding enabled only: ✅ No duplicates  
+- FRR running + IP forwarding: ✅ No duplicates
+- **IPsec running + FRR + IP forwarding: ❌ 60+ duplicates**
+- IPsec stopped, FRR still running: ✅ No duplicates
+
+**Why IPsec causes duplication:**
+strongSwan with VTI (Virtual Tunnel Interface) mode intercepts all packets for IPsec policy evaluation. When packets are destined for the gateway's own IP (not through the tunnels), the XFRM (Transform) framework or VTI processing may duplicate packets during policy lookups or tunnel path evaluation. With 2 active tunnels to GCP, each packet may be evaluated against multiple tunnel policies, creating duplicates.
+
+**Fix**
+Switch to IPSEC with XFRM interfaces which is implemented now.

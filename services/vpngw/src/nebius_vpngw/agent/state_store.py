@@ -11,6 +11,7 @@ def _get_package_version() -> str:
     """Get the installed package version to detect code changes."""
     try:
         from importlib.metadata import version
+
         return version("nebius-vpngw")
     except Exception:
         return "unknown"
@@ -33,7 +34,9 @@ class StateStore:
         # Include package version in hash so code changes trigger reapply
         # This ensures that agent code updates force config regeneration
         pkg_version = _get_package_version()
-        s = json.dumps({"config": resolved_config, "version": pkg_version}, sort_keys=True).encode()
+        s = json.dumps(
+            {"config": resolved_config, "version": pkg_version}, sort_keys=True
+        ).encode()
         return hashlib.sha256(s).hexdigest()
 
     def is_changed(self, resolved_config: dict) -> bool:

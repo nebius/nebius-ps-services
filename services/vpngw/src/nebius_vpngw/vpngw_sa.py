@@ -3,6 +3,7 @@ import typing as t
 import subprocess
 import json
 import shlex
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 
 """
 Service Account management for Nebius VPNGW.
@@ -29,10 +30,12 @@ def _init_client(tenant_id: str | None, project_id: str | None, region_id: str |
     pysdk = None
     try:
         import nebius.sdk as _sdk  # type: ignore
+
         sdk = _sdk
     except Exception:
         try:
             from nebius import pysdk as _pysdk  # type: ignore
+
             pysdk = _pysdk
         except Exception as e:  # pragma: no cover - runtime import guard
             raise RuntimeError(
@@ -44,11 +47,15 @@ def _init_client(tenant_id: str | None, project_id: str | None, region_id: str |
         try:
             if sdk is not None:
                 try:
-                    client = sdk.SDK(tenant_id=tenant_id, project_id=project_id, region_id=region_id)
+                    client = sdk.SDK(
+                        tenant_id=tenant_id, project_id=project_id, region_id=region_id
+                    )
                 except TypeError:
                     client = sdk.SDK()
             else:
-                client = pysdk.Client(tenant_id=tenant_id, project_id=project_id, region_id=region_id)  # type: ignore
+                client = pysdk.Client(
+                    tenant_id=tenant_id, project_id=project_id, region_id=region_id
+                )  # type: ignore
             return client, False
         except Exception:
             # fall back to CLI/default config
@@ -102,8 +109,14 @@ def ensure_service_account_and_token(
             except Exception:
                 sa = None
         if sa is None and hasattr(sa_ops, "create"):
-            print(f"[SA] Creating Service Account '{sa_name}' in project {project_id}...")
-            sa = sa_ops.create(name=sa_name, project_id=project_id, description="Nebius VPNGW orchestrator")
+            print(
+                f"[SA] Creating Service Account '{sa_name}' in project {project_id}..."
+            )
+            sa = sa_ops.create(
+                name=sa_name,
+                project_id=project_id,
+                description="Nebius VPNGW orchestrator",
+            )
     except Exception as e:
         print(f"[SA] Failed to ensure Service Account: {e}")
         sa = None
@@ -111,11 +124,15 @@ def ensure_service_account_and_token(
     # Grant Editor role if possible
     try:
         if sa is not None:
-            bindings = getattr(iam, "bindings", None) or getattr(iam, "role_binding", None)
+            bindings = getattr(iam, "bindings", None) or getattr(
+                iam, "role_binding", None
+            )
             editor_role_id = "roles/editor"
             if bindings and hasattr(bindings, "grant"):
                 print(f"[SA] Granting role {editor_role_id} to {sa_name}...")
-                bindings.grant(principal=sa, role_id=editor_role_id, project_id=project_id)
+                bindings.grant(
+                    principal=sa, role_id=editor_role_id, project_id=project_id
+                )
     except Exception as e:
         print(f"[SA] Failed to grant Editor role: {e}")
 
@@ -125,8 +142,12 @@ def ensure_service_account_and_token(
         if sa is not None:
             tokens = getattr(iam, "tokens", None) or getattr(iam, "access_token", None)
             if tokens and hasattr(tokens, "create_for_service_account"):
-                token_obj = tokens.create_for_service_account(service_account_id=getattr(sa, "id", None))
-                token = getattr(token_obj, "access_token", None) or getattr(token_obj, "token", None)
+                token_obj = tokens.create_for_service_account(
+                    service_account_id=getattr(sa, "id", None)
+                )
+                token = getattr(token_obj, "access_token", None) or getattr(
+                    token_obj, "token", None
+                )
     except Exception as e:
         print(f"[SA] Failed to create token for SA: {e}")
 
@@ -183,13 +204,19 @@ def get_cli_token() -> t.Optional[str]:
     return None
 
 
-def ensure_cli_access_token() -> t.Optional[str]:
+def ensure_cli_access_token(timeout_seconds: int = 60) -> t.Optional[str]:
     """Obtain an IAM access token using Nebius CLI config.
 
     Order:
     1) Try SDK Config reader (fast path)
     2) Try SDK IAM API via client initialized with Config
     3) Fallback to invoking Nebius CLI: `nebius iam get-access-token`
+
+    Args:
+        timeout_seconds: Maximum time to wait for authentication (default: 60s)
+
+    Returns:
+        Token string if successful, None if auth fails or times out
     """
     # 1) Config reader fast path
     tok = get_cli_token()
@@ -197,28 +224,52 @@ def ensure_cli_access_token() -> t.Optional[str]:
         return tok
 
     # 2) SDK IAM API via CLI Config reader (disable parent-id)
+    def _try_sdk_auth():
+        try:
+            import nebius.sdk as sdk  # type: ignore
+            from nebius.aio.cli_config import Config  # type: ignore
+
+            client = sdk.SDK(config_reader=Config(no_parent_id=True))
+            iam = getattr(client, "iam")()
+            tokens = getattr(iam, "access_token", None) or getattr(iam, "tokens", None)
+            if tokens is not None:
+                # Try common creation/get patterns
+                if hasattr(tokens, "create_for_user"):
+                    obj = tokens.create_for_user()
+                elif hasattr(tokens, "create"):
+                    # Some SDKs expose generic create for current principal
+                    try:
+                        obj = tokens.create()
+                    except TypeError:
+                        obj = tokens.create({})
+                elif hasattr(tokens, "get"):
+                    obj = tokens.get()
+                else:
+                    obj = None
+                if obj is not None:
+                    return getattr(obj, "access_token", None) or getattr(
+                        obj, "token", None
+                    )
+        except Exception:
+            pass
+        return None
+
     try:
-        import nebius.sdk as sdk  # type: ignore
-        from nebius.aio.cli_config import Config  # type: ignore
-        client = sdk.SDK(config_reader=Config(no_parent_id=True))
-        iam = getattr(client, "iam")()
-        tokens = getattr(iam, "access_token", None) or getattr(iam, "tokens", None)
-        if tokens is not None:
-            # Try common creation/get patterns
-            if hasattr(tokens, "create_for_user"):
-                obj = tokens.create_for_user()
-            elif hasattr(tokens, "create"):
-                # Some SDKs expose generic create for current principal
-                try:
-                    obj = tokens.create()
-                except TypeError:
-                    obj = tokens.create({})
-            elif hasattr(tokens, "get"):
-                obj = tokens.get()
-            else:
-                obj = None
-            if obj is not None:
-                return getattr(obj, "access_token", None) or getattr(obj, "token", None)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_try_sdk_auth)
+            result = future.result(timeout=timeout_seconds)
+            if result:
+                return result
+    except FutureTimeoutError:
+        print(
+            f"[yellow]⚠️  SDK authentication timed out after {timeout_seconds}s.[/yellow]"
+        )
+        print(
+            "[yellow]   This usually means browser authentication is pending.[/yellow]"
+        )
+        print(
+            "[yellow]   Please complete authentication or run: nebius auth login[/yellow]"
+        )
     except Exception:
         pass
 
@@ -226,7 +277,9 @@ def ensure_cli_access_token() -> t.Optional[str]:
     try:
         # Prefer JSON for robust parsing
         cmd = "nebius iam get-access-token --format json"
-        res = subprocess.run(shlex.split(cmd), capture_output=True, text=True)
+        res = subprocess.run(
+            shlex.split(cmd), capture_output=True, text=True, timeout=timeout_seconds
+        )
         if res.returncode == 0:
             try:
                 data = json.loads(res.stdout)
@@ -240,11 +293,22 @@ def ensure_cli_access_token() -> t.Optional[str]:
         else:
             # Retry without JSON
             cmd2 = "nebius iam get-access-token"
-            res2 = subprocess.run(shlex.split(cmd2), capture_output=True, text=True)
+            res2 = subprocess.run(
+                shlex.split(cmd2),
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+            )
             if res2.returncode == 0:
                 out2 = res2.stdout.strip()
                 if out2:
                     return out2
+    except subprocess.TimeoutExpired:
+        print(
+            f"[yellow]⚠️  Authentication timed out after {timeout_seconds}s. Please ensure you're logged in:[/yellow]"
+        )
+        print("[yellow]   Run: nebius auth login[/yellow]")
+        return None
     except Exception:
         pass
     return None

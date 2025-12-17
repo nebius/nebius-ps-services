@@ -8,6 +8,7 @@ import yaml
 from .state_store import StateStore
 from .strongswan_renderer import StrongSwanRenderer
 from .frr_renderer import FRRRenderer
+from .xfrm_manager import XFRMManager
 from .routing_guard import enforce_routing_invariants
 from .firewall_manager import update_firewall_from_config
 
@@ -20,23 +21,23 @@ class Agent:
         self.state = StateStore(STATE_PATH)
         self.ss = StrongSwanRenderer()
         self.frr = FRRRenderer()
+        self.xfrm = XFRMManager()
 
     def reload(self) -> None:
         if not CONFIG_PATH.exists():
             print(f"[Agent] Config not found: {CONFIG_PATH}")
             return
         cfg = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
-        
+
         # Update firewall rules based on config (peer IPs, management CIDRs)
-        # This keeps UFW synchronized with VPN peer connections
+        # With no management CIDRs provided, SSH remains open from anywhere.
         # Safe to call on every reload - only updates if peer IPs changed
         try:
             update_firewall_from_config(cfg)
         except Exception as e:
             # Log but don't fail - firewall updates are not critical for VPN functionality
-            # (Initial cloud-init already configured basic firewall rules)
             print(f"[Agent] WARNING: Firewall update failed: {e}")
-        
+
         if not self.state.is_changed(cfg):
             print("[Agent] No changes detected; skipping config render")
             # CRITICAL: Enforce routing invariants even when config unchanged
@@ -44,13 +45,23 @@ class Agent:
             # across agent restarts when config hasn't changed
             enforce_routing_invariants(cfg)
             return
-        # Render configs
-        self.ss.render_and_apply(cfg)
+
+        # Render strongSwan config (returns interface endpoints for XFRM/VTI management)
+        interface_endpoints = self.ss.render_and_apply(cfg)
+
+        # Setup XFRM interfaces. Must happen AFTER strongSwan config is written
+        # but BEFORE tunnels come up so CHILD_SAs can bind to the devices.
+        if interface_endpoints:
+            print("[Agent] Setting up XFRM interfaces...")
+            self.xfrm.setup_interfaces(interface_endpoints)
+
+        # Render FRR BGP config
         self.frr.render_and_apply(cfg)
+
         # Persist state
         self.state.save_last_applied(cfg)
         print("[Agent] Applied and persisted new configuration")
-        
+
         # CRITICAL: Enforce routing invariants AFTER config rendering completes
         # Must run after strongSwan/FRR rendering because those operations can
         # trigger systemd-networkd reload, which causes DHCP renewal that adds
@@ -71,7 +82,7 @@ def main() -> None:
     # Daemon: wait for reloads
     signal.signal(signal.SIGHUP, handle_reload)
     print("[Agent] Running; await SIGHUP for reload")
-    
+
     # Loop signal.pause() to handle the case where it returns after signal handling
     while True:
         try:
