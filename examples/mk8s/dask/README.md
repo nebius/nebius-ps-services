@@ -154,7 +154,3 @@ scripts/4-dask-status.sh
 ```
 
 Open Jupyter, start the Dask cluster from the notebook, then forward the dashboard.
-
----
-
-# Enjoy scalable MD analysis with Dask on Nebius!
