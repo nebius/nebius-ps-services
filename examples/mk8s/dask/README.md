@@ -1,167 +1,160 @@
-# Project Setup & Automation Guide
+# Dask on Nebius — Project README
 
-This repository automates deployment to Nebius using Terraform, Docker, Kubernetes, CSI volumes, and Dask.
+This repository contains scripts, Terraform configuration, and Kubernetes manifests
+to deploy a Molecular Dynamics + Dask workflow on **Nebius MK8s** using a custom Jupyter
+notebook image and a persistent CSI-mounted project directory.
 
-## 1. Environment Variables
+---
 
-Create a file named `environment.sh` in the project root:
-
-```
-export NEBIUS_TENANT_ID="YOUR_TENANT"
-export NEBIUS_PROJECT_ID="YOUR_PROJECT"
-export NEBIUS_REGION="eu-north1"
-```
-
-Do not commit this file.
-
-The bootstrap script automatically sources it.
-
-## 2. Bootstrap Nebius + Terraform
-
-Run:
+## Repository Structure
 
 ```
+.
+├── docker/                     # Docker image for the notebook + MD analysis
+├── project/                    # Input trajectory + example notebook
+├── scripts/                    # Deployment automation
+├── terraform/                  # Nebius infrastructure
+└── yamls/                      # Kubernetes manifests (CSI, RBAC, pod template)
+```
+
+---
+
+# Deployment Workflow
+
+Below is an overview of each script in the `scripts/` directory and what it does.
+
+---
+
+## 1. `scripts/0-bootstrap.sh`
+Initializes Nebius environment variables, fetches an IAM token, discovers VPC subnet,
+and exports Terraform variables.
+
+```bash
 scripts/0-bootstrap.sh
 ```
 
-This script:
+This script sets:
 
-- Sources `environment.sh`
-- Sets Nebius profile parent-id
-- Creates Terraform service account
-- Generates IAM auth keys
-- Assigns admin permissions to the service account
-- Runs `terraform init/validate/apply` inside `terraform/`
+- `NEBIUS_TENANT_ID`
+- `NEBIUS_PROJECT_ID`
+- `NEBIUS_REGION`
+- IAM token
+- VPC subnet (`NEBIUS_VPC_SUBNET_ID`)
+- Terraform variables (`TF_VAR_*`)
 
-After completion, all Terraform resources are deployed.
+After running it, Terraform and the subsequent scripts will have all required context.
 
-## 3. Build and Push Docker Image
+---
 
-```
+## 2. `scripts/1-build-and-push.sh`
+Builds the custom Docker image and pushes it to Nebius Container Registry defined by Terraform outputs.
+
+```bash
 scripts/1-build-and-push.sh
 ```
 
-This script:
+Actions:
 
-- Reads Terraform outputs (`registry_id`, `nebius_region`)
-- Builds Docker image using Buildx
-- Tags it for Nebius Container Registry
-- Pushes it to the registry path derived from Terraform
+- Reads `registry_id` from Terraform
+- Logs into Nebius registry
+- Builds `mda-dask` Docker image
+- Tags & pushes the image to `cr.<region>.nebius.cloud/.../mda-dask:latest`
 
-## 4. Install CSI and Upload Project Code
+---
 
-```
+## 3. `scripts/2-install-csi.sh`
+Installs the CSI driver, creates a persistent volume, and copies the project directory into the pod.
+
+```bash
 scripts/2-install-csi.sh
 ```
 
-This script:
+Actions:
 
-- Loads Kubernetes credentials for the Nebius MK8s cluster
-- Downloads and installs the CSI mounted filesystem Helm chart
-- Applies PVC and example Pod manifests
-- Waits for the Pod to become ready
-- Copies local `project/` contents into the running Pod
+- Reads Terraform outputs (`mount_tag`, `nb_cluster_id`)
+- Fetches kubeconfig for the MK8s cluster
+- Installs Nebius CSI Helm chart
+- Applies `yamls/csi-pvc-and-pod.yaml`
+- Waits for pod `my-csi-app` to become ready
+- Copies the local `project/` directory into the persistent volume
 
-Result: a Pod with a mounted filesystem containing your project.
+---
 
-## 5. Deploy Dask Operator and Notebook
+## 4. `scripts/3-deploy-dask-notebook.sh`
+Deploys the Dask Operator and launches the notebook pod.
 
-```
+```bash
 scripts/3-deploy-dask-notebook.sh
 ```
 
-This script:
+Actions:
 
-- Installs Dask Kubernetes Operator via Helm
-- Applies notebook RBAC rules
-- Reads registry information from Terraform outputs
-- Renders `pod.yaml.tpl` via `envsubst` and deploys it
-- Waits for the notebook Pod to become ready
-- Prints Jupyter port-forward instructions
-
-Access JupyterLab:
-
-- Port-forward:
+- Installs `dask-kubernetes-operator` Helm chart
+- Applies notebook RBAC
+- Renders `yamls/pod.yaml.tpl` using `envsubst`
+- Deploys notebook pod `mda-notebook`
+- Provides instructions for port-forwarding:
   ```
-  kubectl port-forward pod/mda-notebook 8889:8889 -n default
+  kubectl port-forward pod/mda-notebook 8889:8889
   ```
-- Open:
-  - http://localhost:8889/lab/
+- Jupyter Lab becomes available at:  
+  **http://localhost:8889/lab/tree/project/run_from_pod.ipynb**
 
-From the notebook UI, you can start the Dask cluster.
+Inside Jupyter, start the Dask cluster from the notebook.
 
-## 6. Check Dask Cluster Status & Dashboard
+---
 
-```
+## 5. `scripts/4-dask-status.sh`
+Waits for the Dask scheduler pod to appear and prints port-forward instructions.
+
+```bash
 scripts/4-dask-status.sh
 ```
 
-This script:
+Actions:
 
-- Shows current pods in the `default` namespace
-- Waits for the Dask scheduler pod to appear
-- Prints the Dask dashboard port-forward command when the scheduler is detected
+- Lists running pods
+- Waits for the scheduler pod (`mk8s-dask-cluster-scheduler*`)
+- When detected, prints:
+  ```
+  kubectl port-forward <scheduler-pod> 8787:8787
+  ```
+- Dask dashboard becomes available at:  
+  **http://localhost:8787**
 
-Typical usage after starting the cluster from the notebook:
+---
 
-```
-scripts/4-dask-status.sh
-```
+# Optional Cleanup / Deletion
 
-The script will produce a command like:
+To remove deployed resources:
 
-```
-kubectl port-forward -n default pod/mk8s-dask-cluster-scheduler-... 8787:8787
-```
-
-Dask Dashboard:
-
-- http://localhost:8787
-
-## 7. Helpful Commands
-
-List pods:
-
-```
-kubectl get pods
-```
-
-Port-forward to Jupyter:
-
-```
-kubectl port-forward pod/mda-notebook 8889:8889 -n default
-```
-
-Port-forward Dask dashboard (manual variant):
-
-```
-POD=$(kubectl get pod -n default -o name | grep mk8s-dask-cluster-scheduler)
-kubectl port-forward -n default $POD 8787:8787
-```
-
-## 8. Full Automation Pipeline
-
-Run the scripts in order:
-
-```
-scripts/0-bootstrap.sh
-scripts/1-build-and-push.sh
-scripts/2-install-csi.sh
-scripts/3-deploy-dask-notebook.sh
-scripts/4-dask-status.sh
-```
-
-After these steps, the Nebius infrastructure is provisioned, Docker images are built and deployed, CSI storage is attached, and the Dask Notebook + cluster are running.
-
-### 9. Delete (optional)
-
-Example cleanup commands:
-
-```
+```bash
 kubectl delete daskcluster mk8s-dask-cluster
 kubectl delete deployment dask-operator-dask-kubernetes-operator
 kubectl delete pod mda-notebook
 helm uninstall dask-operator
 ```
 
-Use these as needed to tear down the Dask cluster, operator, and notebook resources.
+(Optional) Remove CSI pod + PVC:
+
+```bash
+kubectl delete -f yamls/csi-pvc-and-pod.yaml
+```
+
+---
+
+# Typical End-to-End Usage
+
+```bash
+scripts/0-bootstrap.sh
+scripts/1-build-and-push.sh
+scripts/2-install-csi.sh
+scripts/3-deploy-dask-notebook.sh
+scripts/4-dask-status.sh
+```
+
+Open Jupyter, start the Dask cluster from the notebook, then forward the dashboard.
+
+---
+
+# Enjoy scalable MD analysis with Dask on Nebius!
