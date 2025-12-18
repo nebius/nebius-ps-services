@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source ./environment.sh
+
 echo "===> Reading terraform outputs..."
 export REGISTRY_ID=$(terraform -chdir=terraform output -raw registry_id)
 
@@ -8,7 +10,6 @@ echo "===> Login into Nebius registry..."
 nebius registry configure-helper
 
 export REGISTRY_PATH=$(echo $REGISTRY_ID | cut -d- -f2)
-source ./environment.sh
 IMAGE="cr.$NEBIUS_REGION.nebius.cloud/$REGISTRY_PATH/mda-dask:latest"
 
 echo "===> Building Docker image..."

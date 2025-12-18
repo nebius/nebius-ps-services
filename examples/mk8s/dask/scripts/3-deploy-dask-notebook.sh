@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source ./environment.sh
+
 echo "===> Installing Dask operator..."
 helm repo add dask https://helm.dask.org
 helm repo update

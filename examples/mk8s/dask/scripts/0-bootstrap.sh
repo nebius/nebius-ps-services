@@ -2,11 +2,6 @@
 set -euo pipefail
 
 echo "===> Loading environment from ./environment.sh"
-if [[ ! -f ./environment.sh ]]; then
-  echo "environment.sh not found in project root. Please create it first."
-  exit 1
-fi
-
 source ./environment.sh
 
 echo "Exported variables:"
