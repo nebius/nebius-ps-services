@@ -1,9 +1,10 @@
 #!/bin/bash
 
 # Set the following environment variables:
-export NEBIUS_TENANT_ID='tenant-e00h6h46ywdm9fnqaf'
-export NEBIUS_PROJECT_ID='project-e00kmt05pr00d4dnxgz81d'
-export NEBIUS_REGION='eu-north1'
+# export NEBIUS_TENANT_ID='<tenant-...>'
+# export NEBIUS_PROJECT_ID='<project-...>'
+# export NEBIUS_REGION='<region>'
+
 
 # IAM token
 unset NEBIUS_IAM_TOKEN
