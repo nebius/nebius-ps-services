@@ -124,25 +124,6 @@ Actions:
 
 ---
 
-# Optional Cleanup / Deletion
-
-To remove deployed resources:
-
-```bash
-kubectl delete daskcluster mk8s-dask-cluster
-kubectl delete deployment dask-operator-dask-kubernetes-operator
-kubectl delete pod mda-notebook
-helm uninstall dask-operator
-```
-
-(Optional) Remove CSI pod + PVC:
-
-```bash
-kubectl delete -f yamls/csi-pvc-and-pod.yaml
-```
-
----
-
 # Typical End-to-End Usage
 
 ```bash
@@ -154,3 +135,17 @@ scripts/4-dask-status.sh
 ```
 
 Open Jupyter, start the Dask cluster from the notebook, then forward the dashboard.
+
+---
+
+# Optional Cleanup / Deletion
+
+To remove deployed resources:
+
+```bash
+kubectl delete daskcluster mk8s-dask-cluster
+kubectl delete pod mda-notebook
+helm uninstall dask-operator
+kubectl delete -f yamls/csi-pvc-and-pod.yaml
+kubectl delete daemonset csi-mounted-fs-path-plugin
+```
