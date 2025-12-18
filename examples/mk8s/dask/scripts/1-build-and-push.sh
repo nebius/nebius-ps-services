@@ -17,6 +17,8 @@ docker buildx build \
   --platform=linux/amd64 \
   -f docker/Dockerfile \
   -t mda-dask \
+  --provenance=false \
+  --sbom=false \
   .
 
 echo "===> Tagging image as $IMAGE"

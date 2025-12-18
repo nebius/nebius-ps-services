@@ -149,3 +149,9 @@ helm uninstall dask-operator
 kubectl delete -f yamls/csi-pvc-and-pod.yaml
 kubectl delete daemonset csi-mounted-fs-path-plugin
 ```
+
+Full teardown:
+
+```bash
+scripts/5-destroy.sh
+```
