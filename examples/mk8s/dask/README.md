@@ -21,11 +21,12 @@ notebook image and a persistent CSI-mounted project directory.
 
 # Deployment Workflow
 
-Below is an overview of each script in the `scripts/` directory and what it does.
+Below is an overview of each script in the `scripts/` directory and what it does. efore running any scripts, make sure to define all required Nebius environment variables in `environment.sh` and `terraform/terraform.tfvars`.
 
 ---
 
 ## 1. `scripts/0-bootstrap.sh`
+
 Initializes Nebius environment variables, fetches an IAM token, discovers VPC subnet,
 and exports Terraform variables.
 
