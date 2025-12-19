@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -67,47 +66,27 @@ class SSHPush:
                     for wheel in old_wheels:
                         wheel.unlink()
 
-            built = False
-            # Prefer poetry build when available (faster, uses poetry.lock if present)
-            poetry = shutil.which("poetry")
-            if poetry:
-                print("[SSHPush] Building wheel via poetry...")
-                try:
-                    result = subprocess.run(
-                        [poetry, "build", "-f", "wheel"],
-                        cwd=project_root,
-                        capture_output=True,
-                        text=True,
-                        timeout=90,
-                    )
-                    if result.returncode == 0:
-                        built = True
-                    else:
-                        print(f"[SSHPush] poetry build failed: {result.stderr}")
-                except Exception as e:
-                    print(f"[SSHPush] poetry build error: {e}")
-            if not built:
-                print(
-                    "[SSHPush] Building nebius-vpngw wheel package with python -m build..."
+            print(
+                "[SSHPush] Building nebius-vpngw wheel package with python -m build..."
+            )
+            try:
+                result = subprocess.run(
+                    [sys.executable, "-m", "build", "--wheel"],
+                    cwd=project_root,
+                    capture_output=True,
+                    text=True,
+                    timeout=90,
                 )
-                try:
-                    result = subprocess.run(
-                        [sys.executable, "-m", "build", "--wheel"],
-                        cwd=project_root,
-                        capture_output=True,
-                        text=True,
-                        timeout=90,
-                    )
-                    if result.returncode != 0:
-                        print(f"[SSHPush] Wheel build failed: {result.stderr}")
-                except FileNotFoundError:
-                    print(
-                        "[SSHPush] WARNING: 'build' module not found. Install with: pip install build"
-                    )
-                except Exception as e:
-                    print(f"[SSHPush] Wheel build error: {e}")
+                if result.returncode != 0:
+                    print(f"[SSHPush] Wheel build failed: {result.stderr}")
+            except FileNotFoundError:
+                print(
+                    "[SSHPush] WARNING: 'build' module not found. Install with: pip install build"
+                )
+            except Exception as e:
+                print(f"[SSHPush] Wheel build error: {e}")
 
-        # Reuse newest existing wheel (works with poetry build or python -m build)
+        # Reuse newest existing wheel (works with python -m build)
         if dist_dir.exists():
             wheels = sorted(
                 dist_dir.glob("nebius_vpngw-*.whl"),

@@ -1057,7 +1057,7 @@ During recreation:
 ### Agent Development
 
 1. Modify agent code in `src/nebius_vpngw/agent/`
-2. Rebuild wheel: `poetry build`
+2. Rebuild wheel: `python -m build --wheel`
 3. Deploy: `nebius-vpngw apply` (uploads new wheel automatically)
 
 Agent is installed on remote VMs, not in local virtualenv.
@@ -1080,7 +1080,7 @@ nebius-vpngw apply --local-config-file test.config.yaml
 ```bash
 # Update pyproject.toml version constraints
 # Rebuild wheel (cleans old ones automatically)
-poetry build -f wheel
+python -m build --wheel
 
 # Deploy with new dependencies
 nebius-vpngw apply --local-config-file test.config.yaml

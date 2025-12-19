@@ -14,6 +14,11 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [v0.3.0] - 2025-12-19
+- Added new flags to the release.sh script (get --help please)
+- Reformated README.md and doc/design.doc
+- Removed the Poetry build path so nebius-vpngw apply always builds with python -m build --wheel. This avoids the likely Poetry failure with the current pyproject.toml.
+
 ## [v0.2.0] - 2025-12-18
 
 ### Added
