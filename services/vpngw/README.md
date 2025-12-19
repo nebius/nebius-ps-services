@@ -46,7 +46,8 @@ VM-based site-to-site IPsec/BGP VPN gateway for Nebius AI Cloud. Supports GCP HA
 
 ### End users (pipx + GitHub release wheel)
 
-- Requirements: Python 3.10–3.12 with [pipx](https://pipx.pypa.io/) available (`python3 -m pip install --user pipx && python3 -m pipx ensurepath`).
+- Requirements: Python 3.10–3.12 (e.g., `brew install python@3.12` on macOS, `sudo apt-get install python3.12 python3.12-venv` on Ubuntu).
+- Install pipx: `python3 -m pip install --user pipx && python3 -m pipx ensurepath`
 - Download the latest `nebius_vpngw-<version>-py3-none-any.whl` from this repository’s GitHub Release assets (version comes from the Git tag).
 - Install with pipx:
 
@@ -1263,7 +1264,7 @@ The script will:
 
 - Commit staged changes (if any) with `Release vX.Y.Z commit`, push the branch, create/push tag `vX.Y.Z`.
 - Build the wheel (`python -m build --wheel`) and upload it to a GitHub Release `vX.Y.Z`.
-- Require `gh` to be installed and authenticated (`gh auth login`).
+- Auto-install `gh` (brew/apt) if missing and handle auth via `GH_TOKEN`/`GITHUB_TOKEN`, or fall back to `gh auth login` if needed.
 
 ### Optional: build a single-file binary (PyInstaller)
 
@@ -1279,6 +1280,7 @@ The script will:
 ├── README.md
 ├── pyproject.toml
 ├── *.config.yaml                         # User configs (git-ignored)
+├── release.sh                            # One-shot release helper (commit/tag/build/publish with gh)
 ├── doc/
 │   └── design.md                         # Detailed design document
 ├── image/
@@ -1309,6 +1311,7 @@ The script will:
 │   │   ├── vm_diff.py                    # VM change detection
 │   │   ├── route_manager.py              # VPC route management
 │   │   └── ssh_push.py                   # SSH deployment
+│   └── release.sh                        # One-shot release helper (commit/tag/build/publish GitHub release)
 │   ├── peer_parsers/                     # Vendor config parsers
 │   │   ├── __init__.py
 │   │   ├── gcp.py

@@ -169,6 +169,11 @@ def _default(
 ):
     """Default action: creates config template if it doesn't exist."""
     if ctx.invoked_subcommand is None:
+        default_path = Path.cwd() / DEFAULT_CONFIG_FILENAME
+        if default_path.exists():
+            # If default config already exists, show help for convenience.
+            typer.echo(ctx.get_help())
+            raise typer.Exit()
         # No command given - create config template if missing
         _resolve_local_config(
             None,

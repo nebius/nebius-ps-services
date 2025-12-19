@@ -1064,6 +1064,7 @@ nebius-vpngw apply --local-config-file test.config.yaml
 
 ```text
 ├── nebius-vpngw.config.yaml              # User configuration (git-ignored)
+├── release.sh                            # One-shot release helper (commit/tag/build/publish with gh)
 ├── src/nebius_vpngw/
 │   ├── __main__.py                       # Python module entry point
 │   ├── cli.py                            # CLI orchestrator (nebius-vpngw command)
