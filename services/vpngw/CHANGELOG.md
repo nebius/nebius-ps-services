@@ -16,6 +16,8 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [v0.4.0] - 2025-12-19
 
+- fix changelog update issue in the release.sh script
+
 ## [v0.3.0] - 2025-12-19
 
 - Added new flags to the release.sh script (get --help please)
