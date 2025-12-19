@@ -180,16 +180,15 @@ if not match:
     print("Unable to locate Unreleased heading", file=sys.stderr)
     sys.exit(1)
 
-# Ensure we keep the content that followed Unreleased
+# Ensure we keep the content that followed Unreleased, normalized to a single blank line
 post = text[match.end():]
-if post.startswith("\n"):
-    post = post[1:]
+post = post.lstrip("\n")
 
 new_text = (
     text[: match.start()]
     + "## [Unreleased]\n\n"
     + release_header
-    + "\n"
+    + "\n\n"
     + post
 )
 
