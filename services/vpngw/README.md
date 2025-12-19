@@ -47,7 +47,10 @@ VM-based site-to-site IPsec/BGP VPN gateway for Nebius AI Cloud. Supports GCP HA
 ### End users (pipx + GitHub release wheel)
 
 - Requirements: Python 3.10–3.12 (e.g., `brew install python@3.12` on macOS, `sudo apt-get install python3.12 python3.12-venv` on Ubuntu).
-- Install pipx: `python3 -m pip install --user pipx && python3 -m pipx ensurepath`
+- Install pipx (preferred via package manager to avoid PEP 668 errors):
+  - macOS (Homebrew): `brew install pipx && pipx ensurepath`
+  - Ubuntu/Debian: `sudo apt-get install pipx && pipx ensurepath`
+  - If you must use pip: `python3 -m pip install --user pipx --break-system-packages && python3 -m pipx ensurepath`
 - Download the latest `nebius_vpngw-<version>-py3-none-any.whl` from this repository’s GitHub Release assets (version comes from the Git tag).
 - Install with pipx:
 

@@ -1,24 +1,17 @@
 #!/usr/bin/env bash
-
-# Usage: ./release.sh vX.Y.Z
-# Tags the current HEAD, builds the wheel, and creates a GitHub release with the wheel asset.
-# Requires: git, python, gh, build deps (setuptools, setuptools-scm, build).
-
 set -euo pipefail
 
-# Tag can come from env (TAG) or positional arg
-TAG="${TAG:-${1-}}"
-ALLOW_RETAG="${ALLOW_RETAG:-1}"
-
-if [[ -z "${TAG}" ]]; then
-  echo "Usage: TAG=vX.Y.Z $0 [vX.Y.Z]"
-  exit 1
-fi
-
-if [[ ! "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "Tag must be in form vMAJOR.MINOR.PATCH (e.g., v0.4.0)"
-  exit 1
-fi
+usage() {
+  local b=$'\033[1m'
+  local g=$'\033[32m'
+  local c=$'\033[36m'
+  local r=$'\033[0m'
+  cat <<EOF
+${b}Usage:${r}
+  ${g}./release.sh${r} ${c}vX.Y.Z${r}            # full flow: commit/tag/build/release
+  ${g}./release.sh${r} ${c}--verify vX.Y.Z${r}   # verify an existing release asset only
+EOF
+}
 
 ensure_gh() {
   if command -v gh >/dev/null 2>&1; then
@@ -35,6 +28,66 @@ ensure_gh() {
     exit 1
   fi
 }
+
+verify_release_asset() {
+  local tag="$1"
+  ensure_gh
+  echo "==> Downloading wheel from GitHub release ${tag} to verify integrity..."
+  local tmp_dir
+  tmp_dir="$(mktemp -d)"
+  gh release download "${tag}" \
+    --pattern 'nebius_vpngw-*.whl' \
+    --dir "${tmp_dir}" \
+    --clobber >/dev/null
+
+  local downloaded
+  downloaded="$(find "${tmp_dir}" -maxdepth 1 -type f -name 'nebius_vpngw-*.whl' -print -quit)"
+  if [[ -z "${downloaded}" ]]; then
+    echo "ERROR: Could not find downloaded wheel in ${tmp_dir}; aborting integrity check." >&2
+    rm -rf "${tmp_dir}"
+    exit 1
+  fi
+
+  echo "==> Verifying downloaded wheel zip structure..."
+  if ! python -m zipfile -t "${downloaded}" >/dev/null 2>&1; then
+    echo "ERROR: Downloaded wheel ${downloaded} appears to be corrupt." >&2
+    rm -rf "${tmp_dir}"
+    exit 1
+  fi
+
+  rm -rf "${tmp_dir}"
+  echo "==> Downloaded wheel integrity check passed."
+}
+
+VERIFY_ONLY=0
+if [[ "${1-}" == "--verify" ]]; then
+  VERIFY_ONLY=1
+  shift
+fi
+if [[ "${1-}" == "--help" || "${1-}" == "-h" ]]; then
+  usage
+  exit 0
+fi
+
+# Tag can come from env (TAG) or positional arg
+TAG="${TAG:-${1-}}"
+ALLOW_RETAG="${ALLOW_RETAG:-1}"
+RETAGGED=0
+
+if [[ -z "${TAG}" ]]; then
+  usage
+  exit 1
+fi
+
+if [[ ! "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "Tag must be in form vMAJOR.MINOR.PATCH (e.g., v0.4.0)"
+  exit 1
+fi
+
+if [[ "${VERIFY_ONLY}" -eq 1 ]]; then
+  verify_release_asset "${TAG}"
+  exit 0
+fi
 
 TOKEN=""
 
@@ -82,13 +135,18 @@ if git rev-parse --verify --quiet "${TAG}" >/dev/null 2>&1; then
       git tag -d "${TAG}" >/dev/null 2>&1 || true
       git push origin :refs/tags/"${TAG}" >/dev/null 2>&1 || true
       TAG_EXISTS=0
+      RETAGGED=1
     else
       echo "Head commit (${HEAD_COMMIT}) does not match existing tag ${TAG} (${TAG_COMMIT})."
       echo "Set ALLOW_RETAG=1 to retag the current HEAD, or checkout the tagged commit."
       exit 1
     fi
   fi
-  echo "Tag ${TAG} already exists on current HEAD."
+  if [[ "${TAG_EXISTS}" -eq 1 ]]; then
+    echo "Tag ${TAG} already exists on current HEAD."
+  elif [[ "${RETAGGED}" -eq 1 ]]; then
+    echo "Tag ${TAG} was retagged to current HEAD."
+  fi
 fi
 
 echo "==> Committing any staged changes (if any)..."
@@ -207,6 +265,8 @@ PY
 
   echo "==> Creating GitHub release ${TAG} with asset ${WHEEL_PATH}..."
   gh release create "${TAG}" "${WHEEL_PATH}" --title "${TAG}" --notes "Release ${TAG}"
+
+  verify_release_asset "${TAG}"
 else
   echo "==> Skipping GitHub release creation; already exists."
 fi
