@@ -58,6 +58,14 @@ VM-based site-to-site IPsec/BGP VPN gateway for Nebius AI Cloud. Supports GCP HA
 pipx install /path/to/nebius_vpngw-<version>-py3-none-any.whl
 ```
 
+If pipx reports that its bin dir is not on PATH (e.g., `~/.local/bin`), run:
+
+```bash
+pipx ensurepath
+# then restart your shell, or:
+exec $SHELL
+```
+
 - Upgrade when a new tag is released: `pipx upgrade nebius-vpngw`.
 - Verify: `nebius-vpngw --version`.
 

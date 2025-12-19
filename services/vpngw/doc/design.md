@@ -1,6 +1,32 @@
 # Nebius VPN Gateway (VM-Based) — Design Document
 
 Version: v0.4
+Designed by: Reza B.
+Copyright 2025 Nebius B.V.
+Licensed under the Apache License, Version 2.0
+
+## Table of Contents
+
+- [XFRM Mode Summary (current, required)](#xfrm-mode-summary-current-required)
+- [Purpose & Scope](#purpose--scope)
+- [Goals & Non-Goals](#goals--non-goals)
+- [Architecture Overview](#architecture-overview)
+- [Nebius Networking Model](#nebius-networking-model)
+- [Configuration Model](#configuration-model)
+- [Workflows & CLI](#workflows--cli)
+- [Routing Modes & Local Prefixes](#routing-modes--local-prefixes)
+- [IPsec Configuration](#ipsec-configuration)
+- [BGP Configuration](#bgp-configuration)
+- [Static Routes Configuration](#static-routes-configuration)
+- [XFRM Routing Stack](#xfrm-routing-stack)
+- [Security Hardening](#security-hardening)
+- [Agent State Management](#agent-state-management)
+- [Monitoring & Status](#monitoring--status)
+- [Peer Config Import](#peer-config-import)
+- [VM Management](#vm-management)
+- [Development Workflow](#development-workflow)
+- [Project Structure](#project-structure)
+- [Tips & Troubleshooting](#tips--troubleshooting)
 
 > Note: Legacy VTI support has been removed. XFRM interfaces are the only supported mode going forward.
 
