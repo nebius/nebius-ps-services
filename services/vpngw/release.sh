@@ -145,6 +145,33 @@ if [[ "${RELEASE_EXISTS}" -eq 0 ]]; then
     exit 1
   fi
 
+  EXPECTED_VERSION="${TAG#v}"
+  WHEEL_VERSION="$(python - "$WHEEL_PATH" <<'PY'
+import sys
+import zipfile
+from email import message_from_bytes
+
+w = sys.argv[1]
+with zipfile.ZipFile(w) as zf:
+    meta_names = [n for n in zf.namelist() if n.endswith("METADATA")]
+    if not meta_names:
+        print("")
+        sys.exit(0)
+    meta = message_from_bytes(zf.read(meta_names[0]))
+    print(meta.get("Version", ""))
+PY
+)"
+
+  if [[ -z "${WHEEL_VERSION}" ]]; then
+    echo "Could not read wheel version from ${WHEEL_PATH}; aborting."
+    exit 1
+  fi
+
+  if [[ "${WHEEL_VERSION}" != "${EXPECTED_VERSION}" ]]; then
+    echo "Wheel version (${WHEEL_VERSION}) does not match tag (${EXPECTED_VERSION}). Aborting to avoid publishing a mismatched artifact."
+    exit 1
+  fi
+
   echo "==> Creating GitHub release ${TAG} with asset ${WHEEL_PATH}..."
   gh release create "${TAG}" "${WHEEL_PATH}" --title "${TAG}" --notes "Release ${TAG}"
 else
