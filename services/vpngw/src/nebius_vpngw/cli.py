@@ -7,6 +7,7 @@ import re
 import typer
 from rich import print
 
+from . import __version__
 from .config_loader import (
     load_local_config,
     merge_with_peer_configs,
@@ -28,6 +29,13 @@ By default, commands look for 'nebius-vpngw.config.yaml' in your current directo
 Use --local-config-file with any command to specify a different config file.
 """,
 )
+
+
+def _version_callback(value: bool) -> bool:
+    if value:
+        print(f"nebius-vpngw {__version__}")
+        raise typer.Exit()
+    return value
 
 
 def _create_config_from_template(output_path: Path) -> None:
@@ -148,7 +156,17 @@ def _resolve_local_config(
 
 
 @app.callback(invoke_without_command=True)
-def _default(ctx: typer.Context):
+def _default(
+    ctx: typer.Context,
+    version: bool = typer.Option(
+        False,
+        "--version",
+        "-v",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show version and exit",
+    ),
+):
     """Default action: creates config template if it doesn't exist."""
     if ctx.invoked_subcommand is None:
         # No command given - create config template if missing

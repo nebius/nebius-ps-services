@@ -11,6 +11,7 @@ dist/
 *.egg-info/
 *.egg
 wheels/
+src/nebius_vpngw/_version.py
 
 # Virtual environments
 .env/
@@ -47,10 +48,6 @@ Icon?
 .Spotlight-V100
 .Trashes
 .fseventsd
-
-# Graphviz rendered outputs (keep source .dot files)
-image/*.svg
-image/*.png
 
 # Exception: Keep the Google Cloud HA VPN diagram
 !image/ha-vpn-gcp-to-on-prem.svg
@@ -96,4 +93,3 @@ bgpd.conf
 # Misc
 .poetry/
 .python-version
-DUP-PACKET-ROOT-CAUSE.md

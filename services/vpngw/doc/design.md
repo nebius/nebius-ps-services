@@ -1,8 +1,8 @@
 # Nebius VPN Gateway (VM-Based) — Design Document
 
-Version: v0.3
+Version: v0.4
 
-> Note: Legacy VTI support has been removed. XFRM interfaces are the only supported mode going forward (migration guide retired; this doc is the source of truth).
+> Note: Legacy VTI support has been removed. XFRM interfaces are the only supported mode going forward.
 
 ## XFRM Mode Summary (current, required)
 
@@ -27,11 +27,27 @@ Deliver a VM-based site-to-site VPN gateway for Nebius AI Cloud using IPsec (str
 - Repeatable, idempotent deployments with minimal operator state
 - Stable public IP preservation across VM recreation
 
-**Non-goals (current scope):**
+**Non-goals:**
 
-- ECMP in VPC route tables
-- External NAT/Load balancing
-- Multi-NIC support (platform limitation, code is future-ready)
+These features are not currently implemented but may be considered for future enhancements:
+
+- **ECMP (Equal-Cost Multi-Path) in VPC route tables:**
+  - *What it does:* Allows load balancing traffic across multiple gateway VMs for the same destination prefix
+  - *Current limitation:* VPC routes point to a single next-hop (one gateway VM per route)
+  - *Benefit:* Would enable automatic traffic distribution and higher aggregate throughput for high-bandwidth workloads
+  - *Status:* Nebius VPC platform does not currently support ECMP routing
+
+- **External NAT/Load balancing:**
+  - *What it does:* Single public IP distributed across multiple gateway VMs for incoming VPN connections
+  - *Current limitation:* Each gateway has its own public IP; peers must configure multiple tunnels
+  - *Benefit:* Would simplify peer configuration and enable transparent gateway VM scaling
+  - *Status:* Requires platform-level load balancer integration for IPsec traffic
+
+- **Multi-NIC support:**
+  - *What it does:* Multiple network interfaces per gateway VM for traffic separation (management, tunnel, internal)
+  - *Current limitation:* Nebius platform currently limits VMs to 1 NIC with 1 public IP
+  - *Benefit:* Would improve security isolation and enable dedicated high-throughput tunnel interfaces
+  - *Status:* Configuration is future-ready (accepts `num_nics > 1`), awaiting platform support
 
 ## Architecture Overview
 
@@ -295,7 +311,7 @@ Global default under `defaults.routing.mode`; override per connection/tunnel.
 
 ### strongSwan
 
-- Route-based VPN using XFRM interfaces (default) or VTI (legacy)
+- Route-based VPN using XFRM interfaces (default)
 - IKEv2 default, IKEv1 fallback configurable
 - PSK authentication
 - DPD (Dead Peer Detection) for tunnel liveness
@@ -441,7 +457,7 @@ The configuration fields `local_prefixes` and `remote_prefixes` have different m
 ### FRR Setup
 
 - `bgpd` daemon for BGP routing
-- Runs over VTI interfaces using APIPA inner IPs
+- Runs over XFRM interfaces using APIPA inner IPs
 - Configurable timers: hold time (60s), keepalive (20s)
 - Graceful restart enabled by default
 
@@ -455,14 +471,14 @@ The configuration fields `local_prefixes` and `remote_prefixes` have different m
 ### BGP Session Requirements
 
 1. IPsec tunnels must be ESTABLISHED first
-2. VTI interfaces must be up with assigned inner IPs
+2. XFRM interfaces must be up with assigned inner IPs
 3. BGP peer must be reachable via inner_remote_ip
 4. ASN configuration must match on both sides
 5. FRR 10.x recommended (8.4.4 has route installation bugs)
 
 ### Common BGP Issues
 
-- **No OPEN messages:** IPsec tunnel not established or VTI interface down
+- **No OPEN messages:** IPsec tunnel not established or XFRM interface down
 - **OPEN errors:** ASN mismatch between peers
 - **Routes not installed:** FRR 8.4.4 bug, upgrade to 10.x
 - **Policy errors:** Add `no bgp ebgp-requires-policy` to config
@@ -923,7 +939,7 @@ nebius-vpngw status --local-config-file <file>
 - Tunnel status (ESTABLISHED, CONNECTING, etc.)
 - BGP session state and prefix counts
 - Service health (agent, strongSwan, FRR)
-- Routing table health (table 220, APIPA routes over VTI interfaces, orphaned routes)
+- Routing table health (table 220, APIPA routes over XFRM interfaces, orphaned routes)
 
 ### Tunnel Status
 
@@ -1211,22 +1227,11 @@ update_req = UpdateSubnetRequest(
 - `spec.ipv4_private_pools.pools[0].cidrs[0].cidr` shows the expected `/24` CIDR
 - `status.ipv4_private_cidrs` contains the expected `/24` CIDR (what the console displays)
 
-### Packet Duplication / Broadcast Loop Issue
+### Packet Duplication Issue (Historical - Resolved)
 
-**Problem:** When pinging the VPN gateway from VMs in other subnets, you may see 60+ duplicate ICMP packets (marked as `DUP!` in ping output).
+**Problem (VTI mode only - now removed):** When using legacy VTI (Virtual Tunnel Interface) mode, pinging the VPN gateway from VMs in other subnets would show 60+ duplicate ICMP packets (marked as `DUP!` in ping output).
 
-**Root Cause:** **strongSwan/IPsec service** is causing packet duplication when inspecting traffic destined for the gateway's primary IP address.
+**Root Cause:** strongSwan with VTI mode intercepted all packets for IPsec policy evaluation. When packets were destined for the gateway's own IP (not through the tunnels), VTI processing would duplicate packets during policy lookups or tunnel path evaluation. With 2 active tunnels to GCP, each packet was evaluated against multiple tunnel policies, creating duplicates.
 
-**Evidence from service isolation tests:**
-
-- Services stopped (IPsec OFF, FRR OFF, IP forward OFF): ✅ No duplicates
-- IP forwarding enabled only: ✅ No duplicates  
-- FRR running + IP forwarding: ✅ No duplicates
-- **IPsec running + FRR + IP forwarding: ❌ 60+ duplicates**
-- IPsec stopped, FRR still running: ✅ No duplicates
-
-**Why IPsec causes duplication:**
-strongSwan with VTI (Virtual Tunnel Interface) mode intercepts all packets for IPsec policy evaluation. When packets are destined for the gateway's own IP (not through the tunnels), the XFRM (Transform) framework or VTI processing may duplicate packets during policy lookups or tunnel path evaluation. With 2 active tunnels to GCP, each packet may be evaluated against multiple tunnel policies, creating duplicates.
-
-**Fix**
-Switch to IPSEC with XFRM interfaces which is implemented now.
+**Resolution:**
+**Switching to XFRM interfaces completely eliminated this issue.** XFRM's `if_id` binding mechanism provides clean separation between tunnel interfaces and avoids the packet duplication problem that occurred with VTI mode. The current implementation uses XFRM interfaces exclusively and does not experience packet duplication.

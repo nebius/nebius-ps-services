@@ -1,3 +1,4 @@
+import os
 import shutil
 import subprocess
 import sys
@@ -8,12 +9,12 @@ def build_binary() -> None:
     """Build a single-file PyInstaller binary named 'nebius-vpngw'.
 
     Requirements:
-      - PyInstaller installed in the current Poetry environment (dev dependency)
+      - PyInstaller installed in the current environment (dev dependency)
       - __main__.py present to serve as entry point
     """
     if shutil.which("pyinstaller") is None:
         print(
-            "[build-binary] PyInstaller not found. Install with: poetry add pyinstaller --group dev"
+            "[build-binary] PyInstaller not found. Install with: pip install pyinstaller"
         )
         sys.exit(1)
 
@@ -22,11 +23,22 @@ def build_binary() -> None:
         print(f"[build-binary] Entry point not found: {entry}")
         sys.exit(1)
 
+    systemd_dir = Path(__file__).parent / "systemd"
+    add_data_args = []
+    if systemd_dir.exists():
+        add_data_args = [
+            "--add-data",
+            f"{systemd_dir}{os.pathsep}nebius_vpngw/systemd",
+        ]
+    else:
+        print("[build-binary] WARNING: systemd assets not found; binary may miss agent units")
+
     cmd = [
         "pyinstaller",
         "--onefile",
         "--name",
         "nebius-vpngw",
+        *add_data_args,
         str(entry),
     ]
     print("[build-binary] Running:", " ".join(cmd))

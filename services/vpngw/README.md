@@ -1,7 +1,5 @@
 # Nebius VPN Gateway (VM-Based)
 
-**Version:** v0.3
-
 > Note: Legacy VTI support has been removed. XFRM interfaces are the only supported mode going forward.
 
 VM-based site-to-site IPsec/BGP VPN gateway for Nebius AI Cloud. Supports GCP HA VPN, AWS Site-to-Site VPN, Azure VPN Gateway, Cisco IOS, and custom peers.
@@ -10,6 +8,7 @@ VM-based site-to-site IPsec/BGP VPN gateway for Nebius AI Cloud. Supports GCP HA
 
 - [Security Notice](#security-notice)
 - [Features](#features)
+- [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Architecture](#architecture)
 - [Configuration](#configuration)
@@ -23,6 +22,7 @@ VM-based site-to-site IPsec/BGP VPN gateway for Nebius AI Cloud. Supports GCP HA
 - [Security](#security)
 - [Troubleshooting](#troubleshooting)
 - [Development](#development)
+- [Release & Versioning](#release--versioning)
 - [Project Structure](#project-structure)
 
 ## Security Notice
@@ -42,17 +42,52 @@ VM-based site-to-site IPsec/BGP VPN gateway for Nebius AI Cloud. Supports GCP HA
 - **Validation:** Strict Pydantic schema catches typos and invalid values
 - **HA options:** Single VM (multi-tunnel) or gateway group (VM-level HA, not supported on the current Nebius VM)
 
+## Installation
+
+### End users (pipx + GitHub release wheel)
+
+- Requirements: Python 3.10–3.12 with [pipx](https://pipx.pypa.io/) available (`python3 -m pip install --user pipx && python3 -m pipx ensurepath`).
+- Download the latest `nebius_vpngw-<version>-py3-none-any.whl` from this repository’s GitHub Release assets (version comes from the Git tag).
+- Install with pipx:
+
+```bash
+pipx install /path/to/nebius_vpngw-<version>-py3-none-any.whl
+```
+
+- Upgrade when a new tag is released: `pipx upgrade nebius-vpngw`.
+- Verify: `nebius-vpngw --version`.
+
+**Version:** Sourced from Git tags (SemVer). Run `nebius-vpngw --version` after install.
+
+### Developers (editable install)
+
+- Create a virtual environment (Python 3.10–3.12) and activate it:
+
+```bash
+python3 -m venv ~/venvs/nebius-vpngw
+source ~/venvs/nebius-vpngw/bin/activate
+```
+
+- Install in editable mode with developer tools:
+
+```bash
+python -m pip install --upgrade pip
+pip install -e ".[dev]"
+```
+
+- Confirm the CLI is reachable: `nebius-vpngw --help`. Developer extras include linting, tests, PyInstaller, and build tooling.
+
 ## Quick Start
 
 ### Prerequisites
 
+- Nebius AI Cloud account
 - Nebius AI Cloud project with VPC network
-- Python 3.11+ with Poetry
-- Service account with Compute permissions
+- Python 3.10–3.12 runtime (install the CLI with pipx or via editable install as above)
 
 ### Firewall Requirements
 
-The VPN gateway automatically configures UFW (Uncomplicated Firewall) with the following rules:
+The VPN gateway automatically configures UFW on the VPN gateway with the following rules:
 
 **Required Ports (automatically configured):**
 
@@ -110,13 +145,6 @@ Before configuring your VPN gateway, collect the following information from your
 - Inner remote IP (e.g., `169.254.5.153`)
 
 > **Note:** GCP Cloud Router and AWS VPN provide all this information in their console/CLI output after creating the VPN gateway and tunnels.
-
-### Installation
-
-```bash
-cd /path/to/nebius-ps-services/services/vpngw
-poetry install
-```
 
 ### First Deployment
 
@@ -1149,7 +1177,7 @@ vim src/nebius_vpngw/agent/main.py
 **Rebuild and deploy:**
 
 ```bash
-poetry build
+python -m build --wheel
 nebius-vpngw apply --local-config-file <file>
 ```
 
@@ -1183,22 +1211,66 @@ nebius-vpngw status --local-config-file test.config.yaml
 **Update pyproject.toml:**
 
 ```toml
-[tool.poetry.dependencies]
-pydantic = "^2.10.0"
+[project]
+dependencies = [
+  "pydantic>=2.12.0,<3.0.0",
+  # ...
+]
 ```
 
-**Rebuild:**
+**Refresh your editable install and rebuild when needed:**
 
 ```bash
-poetry lock
-poetry build -f wheel
+pip install -e ".[dev]"
+python -m build --wheel
 ```
 
-**Deploy:**
+## Release & Versioning
+
+- Versions are derived from annotated Git tags (`vMAJOR.MINOR.PATCH`) via `setuptools-scm`; no manual edits to `pyproject.toml` are needed. The generated version is written to `src/nebius_vpngw/_version.py` during build and surfaced via `nebius-vpngw --version`.
+- Semantic Versioning policy:
+  - **MAJOR:** breaking changes (CLI flags removed/changed, behavior changes that could break scripts).
+  - **MINOR:** backward-compatible features (new options, new Nebius resources supported).
+  - **PATCH:** bug fixes only (no breaking behavior, no new major capability).
+- Keep `CHANGELOG.md` updated before tagging; the changelog is the human-friendly record of what changed.
+- If you build without a tag, `setuptools-scm` will fall back to `0.0.0`; create a proper `vX.Y.Z` tag before shipping artifacts.
+
+### Choosing the next SemVer
+
+Bump **MAJOR** if there’s a breaking change (CLI flags or behavior changes that can break scripts).
+Bump **MINOR** for backward-compatible features.
+Bump **PATCH** for fixes only.
+**Current working version (including dev distance):** `python -m setuptools_scm`
+
+### Release workflow (example)
+
+1. Ensure tooling: `python -m pip install --upgrade setuptools setuptools-scm build` and install GitHub CLI (`command -v gh || brew install gh` / `sudo apt-get install gh`), then `gh auth login`.
+2. Tag the release with SemVer: `git tag -a vX.Y.Z -m "Release vX.Y.Z" && git push origin vX.Y.Z`.
+3. Build from a clean tree so the wheel matches the tag: `rm -rf dist && python -m build --wheel` (the wheel filename should be `nebius_vpngw-X.Y.Z-py3-none-any.whl`; do not rename it by hand).
+4. Publish the wheel to GitHub Releases: `gh release create vX.Y.Z ./dist/nebius_vpngw-X.Y.Z-py3-none-any.whl --title "vX.Y.Z" --notes "Release notes..."`.
+5. End users install or upgrade via pipx using the published wheel (see Installation). Verify with `nebius-vpngw --version` and ensure it matches the tag.
+
+### One-shot release script (Mac/Linux)
+
+Use `release.sh` to commit, tag, build, and publish in one go:
 
 ```bash
-nebius-vpngw apply --local-config-file <file>
+chmod +x release.sh
+./release.sh vX.Y.Z
 ```
+
+The script will:
+
+- Commit staged changes (if any) with `Release vX.Y.Z commit`, push the branch, create/push tag `vX.Y.Z`.
+- Build the wheel (`python -m build --wheel`) and upload it to a GitHub Release `vX.Y.Z`.
+- Require `gh` to be installed and authenticated (`gh auth login`).
+
+### Optional: build a single-file binary (PyInstaller)
+
+- Use when you need a standalone executable instead of a wheel/pipx install.
+- Install the tool once in your environment: `pip install pyinstaller`.
+- Build the binary: `python -m nebius_vpngw.build` (or run the `build-binary` console script).
+- Output lands at `dist/nebius-vpngw`; ship or copy that file directly.
 
 ## Project Structure
 
