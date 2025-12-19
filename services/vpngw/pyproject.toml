@@ -44,11 +44,12 @@ include = ["nebius_vpngw*"]
 nebius_vpngw = ["systemd/*"]
 
 [tool.setuptools_scm]
-version_scheme = "semver"
+version_scheme = "python-simplified-semver"
 local_scheme = "no-local-version"
 write_to = "src/nebius_vpngw/_version.py"
 tag_regex = "^v?(?P<version>\\d+\\.\\d+\\.\\d+)$"
 fallback_version = "0.0.0"
+search_parent_directories = true
 
 # System dependencies (installed via apt on Ubuntu 24.04):
 # - strongswan >= 5.9.x (for XFRM interface support with if_id parameter)

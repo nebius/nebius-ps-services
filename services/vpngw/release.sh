@@ -6,10 +6,12 @@
 
 set -euo pipefail
 
-TAG="${1-}"
+# Tag can come from env (TAG) or positional arg
+TAG="${TAG:-${1-}}"
+ALLOW_RETAG="${ALLOW_RETAG:-1}"
 
 if [[ -z "${TAG}" ]]; then
-  echo "Usage: $0 vX.Y.Z"
+  echo "Usage: TAG=vX.Y.Z $0 [vX.Y.Z]"
   exit 1
 fi
 
@@ -62,6 +64,32 @@ get_token() {
 
 get_token
 export GH_TOKEN="${TOKEN}"
+
+TAG_EXISTS=0
+if git rev-parse --verify --quiet "${TAG}" >/dev/null 2>&1; then
+  TAG_EXISTS=1
+  TAG_COMMIT="$(git rev-parse "${TAG}")"
+  HEAD_COMMIT="$(git rev-parse HEAD)"
+  if [[ "${TAG_COMMIT}" != "${HEAD_COMMIT}" ]]; then
+    if [[ "${ALLOW_RETAG}" == "1" ]]; then
+      echo "Head commit (${HEAD_COMMIT}) differs from tag ${TAG} (${TAG_COMMIT}); retagging because ALLOW_RETAG=1."
+      # Try to delete existing GitHub release for this tag (ignore errors if it does not exist)
+      if gh release view "${TAG}" >/dev/null 2>&1; then
+        echo "Deleting existing GitHub release ${TAG} (ALLOW_RETAG=1)..."
+        gh release delete "${TAG}" -y || true
+      fi
+      echo "Deleting existing tag ${TAG} locally and remotely..."
+      git tag -d "${TAG}" >/dev/null 2>&1 || true
+      git push origin :refs/tags/"${TAG}" >/dev/null 2>&1 || true
+      TAG_EXISTS=0
+    else
+      echo "Head commit (${HEAD_COMMIT}) does not match existing tag ${TAG} (${TAG_COMMIT})."
+      echo "Set ALLOW_RETAG=1 to retag the current HEAD, or checkout the tagged commit."
+      exit 1
+    fi
+  fi
+  echo "Tag ${TAG} already exists on current HEAD."
+fi
 
 echo "==> Committing any staged changes (if any)..."
 echo "==> Updating CHANGELOG.md..."
@@ -121,7 +149,7 @@ echo "==> Pushing current branch..."
 git push
 
 echo "==> Creating tag ${TAG} and pushing..."
-if git rev-parse "${TAG}" >/dev/null 2>&1; then
+if [[ "${TAG_EXISTS}" -eq 1 ]]; then
   echo "Tag ${TAG} already exists; skipping tag creation."
 else
   git tag -a "${TAG}" -m "Release ${TAG}"
@@ -139,11 +167,16 @@ if [[ "${RELEASE_EXISTS}" -eq 0 ]]; then
   rm -rf dist
   python -m build --wheel
 
-  WHEEL_PATH="$(ls dist/nebius_vpngw-*.whl | head -n 1 || true)"
-  if [[ -z "${WHEEL_PATH}" ]]; then
+  mapfile -t wheels < <(find dist -maxdepth 1 -type f -name "nebius_vpngw-*.whl" | sort)
+  if [[ "${#wheels[@]}" -eq 0 ]]; then
     echo "Wheel not found in dist/. Aborting."
     exit 1
   fi
+  if [[ "${#wheels[@]}" -gt 1 ]]; then
+    echo "Multiple wheels found, using the first one:"
+    printf '  %s\n' "${wheels[@]}"
+  fi
+  WHEEL_PATH="${wheels[0]}"
 
   EXPECTED_VERSION="${TAG#v}"
   WHEEL_VERSION="$(python - "$WHEEL_PATH" <<'PY'

@@ -15,6 +15,7 @@ All notable changes to this project are tracked here. This changelog follows
 ## [Unreleased]
 
 ## [v0.2.0] - 2025-12-18
+
 ### Added
 
 - Git tag–driven versioning via `setuptools-scm` with a `--version` CLI flag that surfaces the tagged release.
