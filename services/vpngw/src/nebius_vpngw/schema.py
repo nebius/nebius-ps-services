@@ -19,8 +19,7 @@ import ipaddress
 import typing as t
 from enum import Enum
 
-from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
-
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # ============================================================================
 # Enums for controlled vocabularies
@@ -97,7 +96,7 @@ def validate_cidr(v: str) -> str:
         ipaddress.ip_network(v, strict=False)
         return v
     except ValueError as e:
-        raise ValueError(f"Invalid CIDR '{v}': {e}")
+        raise ValueError(f"Invalid CIDR '{v}': {e}") from e
 
 
 def validate_ip_address(v: str) -> str:
@@ -106,7 +105,7 @@ def validate_ip_address(v: str) -> str:
         ipaddress.ip_address(v)
         return v
     except ValueError as e:
-        raise ValueError(f"Invalid IP address '{v}': {e}")
+        raise ValueError(f"Invalid IP address '{v}': {e}") from e
 
 
 def validate_asn(v: int) -> int:
@@ -143,7 +142,7 @@ def validate_apipa_cidr(v: str) -> str:
 
         return v
     except ipaddress.AddressValueError as e:
-        raise ValueError(f"Invalid CIDR '{v}': {e}")
+        raise ValueError(f"Invalid CIDR '{v}': {e}") from e
 
 
 def validate_apipa_ip(v: str, field_name: str) -> str:
@@ -159,7 +158,7 @@ def validate_apipa_ip(v: str, field_name: str) -> str:
 
         return v
     except ipaddress.AddressValueError as e:
-        raise ValueError(f"Invalid IP address '{v}': {e}")
+        raise ValueError(f"Invalid IP address '{v}': {e}") from e
 
 
 # ============================================================================
@@ -172,7 +171,7 @@ class CryptoProposals(BaseModel):
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    ike_proposals: t.List[str] = Field(
+    ike_proposals: list[str] = Field(
         ...,
         min_length=1,
         description="IKE proposal strings (e.g., 'aes256-sha256-modp2048')",
@@ -181,7 +180,7 @@ class CryptoProposals(BaseModel):
     ike_lifetime_seconds: int = Field(
         ..., ge=3600, le=86400, description="IKE SA lifetime in seconds (3600-86400)"
     )
-    esp_proposals: t.List[str] = Field(
+    esp_proposals: list[str] = Field(
         ...,
         min_length=1,
         description="ESP proposal strings (e.g., 'aes256-sha256')",
@@ -190,7 +189,7 @@ class CryptoProposals(BaseModel):
     esp_lifetime_seconds: int = Field(
         ..., ge=1800, le=14400, description="ESP SA lifetime in seconds (1800-14400)"
     )
-    dh_groups: t.Optional[t.List[int]] = Field(
+    dh_groups: list[int] | None = Field(
         default=None, description="Diffie-Hellman group numbers (e.g., 14, 19, 20)"
     )
 
@@ -208,7 +207,7 @@ class DPDConfig(BaseModel):
     )
 
     @model_validator(mode="after")
-    def validate_timeout_greater_than_interval(self) -> "DPDConfig":
+    def validate_timeout_greater_than_interval(self) -> DPDConfig:
         if self.timeout_seconds <= self.interval_seconds:
             raise ValueError(
                 f"timeout_seconds ({self.timeout_seconds}) must be greater than "
@@ -222,7 +221,7 @@ class BGPDefaults(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    router_id: t.Optional[str] = Field(
+    router_id: str | None = Field(
         default=None, description="BGP router ID (IPv4 format, e.g., '169.254.50.1')"
     )
     hold_time_seconds: int = Field(
@@ -246,17 +245,17 @@ class BGPDefaults(BaseModel):
 
     @field_validator("router_id")
     @classmethod
-    def validate_router_id(cls, v: t.Optional[str]) -> t.Optional[str]:
+    def validate_router_id(cls, v: str | None) -> str | None:
         if v is None:
             return v
         try:
             ipaddress.IPv4Address(v)
             return v
         except ValueError as e:
-            raise ValueError(f"router_id must be a valid IPv4 address: {e}")
+            raise ValueError(f"router_id must be a valid IPv4 address: {e}") from e
 
     @model_validator(mode="after")
-    def validate_keepalive_hold_ratio(self) -> "BGPDefaults":
+    def validate_keepalive_hold_ratio(self) -> BGPDefaults:
         # Best practice: keepalive should be ~1/3 of hold time
         if self.keepalive_seconds > self.hold_time_seconds / 2:
             raise ValueError(
@@ -321,7 +320,7 @@ class GatewayQuotas(BaseModel):
     max_tunnels: int = Field(
         default=32, ge=1, le=200, description="Maximum number of tunnels (1-200)"
     )
-    max_total_bandwidth_mbps: t.Optional[int] = Field(
+    max_total_bandwidth_mbps: int | None = Field(
         default=None, ge=1, description="Maximum total bandwidth in Mbps"
     )
 
@@ -334,7 +333,7 @@ class GatewayConfig(BaseModel):
     local_asn: int = Field(
         ..., description="Local BGP ASN (private: 64512-65534, public: 1-64511)"
     )
-    local_prefixes: t.List[str] = Field(
+    local_prefixes: list[str] = Field(
         ...,
         min_length=1,
         description="Local prefixes to advertise (CIDR notation)",
@@ -355,7 +354,7 @@ class GatewayConfig(BaseModel):
 
     @field_validator("local_prefixes")
     @classmethod
-    def validate_local_prefixes(cls, v: t.List[str]) -> t.List[str]:
+    def validate_local_prefixes(cls, v: list[str]) -> list[str]:
         return [validate_cidr(cidr) for cidr in v]
 
 
@@ -371,7 +370,7 @@ class StaticRoutes(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    remote_prefixes: t.Optional[t.List[str]] = Field(
+    remote_prefixes: list[str] | None = Field(
         default=None,
         description="Remote networks to route through this tunnel in static mode (CIDR notation)",
     )
@@ -379,8 +378,8 @@ class StaticRoutes(BaseModel):
     @field_validator("remote_prefixes")
     @classmethod
     def validate_remote_prefixes(
-        cls, v: t.Optional[t.List[str]]
-    ) -> t.Optional[t.List[str]]:
+        cls, v: list[str] | None
+    ) -> list[str] | None:
         if v is None:
             return v
         return [validate_cidr(cidr) for cidr in v]
@@ -401,7 +400,7 @@ class TunnelConfig(BaseModel):
     gateway_instance_index: int = Field(
         ..., ge=0, description="Gateway VM instance index (0-based)"
     )
-    local_public_ip_index: t.Optional[int] = Field(
+    local_public_ip_index: int | None = Field(
         default=None,
         ge=0,
         description="Index of local public IP to use (for multi-NIC)",
@@ -409,7 +408,7 @@ class TunnelConfig(BaseModel):
     ha_role: HARole = Field(
         default=HARole.ACTIVE, description="HA role for this tunnel"
     )
-    ike_version: t.Optional[int] = Field(
+    ike_version: int | None = Field(
         default=None, ge=1, le=2, description="IKE version override (1 or 2)"
     )
     remote_public_ip: str = Field(..., description="Remote peer public IP address")
@@ -425,15 +424,15 @@ class TunnelConfig(BaseModel):
     inner_remote_ip: str = Field(
         ..., description="Inner remote IP (must be within inner_cidr)"
     )
-    crypto: t.Optional[CryptoProposals] = Field(
+    crypto: CryptoProposals | None = Field(
         default=None, description="Crypto proposals override"
     )
-    static_routes: t.Optional[StaticRoutes] = Field(
+    static_routes: StaticRoutes | None = Field(
         default=None, description="Static routing configuration (for static mode only)"
     )
 
     # Optional escape hatch for custom metadata
-    extensions: t.Dict[str, t.Any] = Field(
+    extensions: dict[str, t.Any] = Field(
         default_factory=dict, description="Custom extensions (opaque metadata)"
     )
 
@@ -458,7 +457,7 @@ class TunnelConfig(BaseModel):
         return validate_apipa_ip(v, "inner_remote_ip")
 
     @model_validator(mode="after")
-    def validate_inner_ips_in_cidr(self) -> "TunnelConfig":
+    def validate_inner_ips_in_cidr(self) -> TunnelConfig:
         """Validate that inner IPs are within inner_cidr and not network/broadcast."""
         try:
             network = ipaddress.ip_network(self.inner_cidr, strict=False)
@@ -515,7 +514,7 @@ class TunnelConfig(BaseModel):
         except (ipaddress.AddressValueError, ValueError) as e:
             if isinstance(e, ValueError) and "Tunnel" in str(e):
                 raise  # Re-raise our validation errors
-            raise ValueError(f"Tunnel '{self.name}': Invalid IP/CIDR format - {e}")
+            raise ValueError(f"Tunnel '{self.name}': Invalid IP/CIDR format - {e}") from e
 
         return self
 
@@ -526,18 +525,18 @@ class BGPConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = Field(..., description="Enable BGP for this connection")
-    remote_asn: t.Optional[int] = Field(default=None, description="Remote peer BGP ASN")
+    remote_asn: int | None = Field(default=None, description="Remote peer BGP ASN")
     advertise_local_prefixes: bool = Field(
         default=True, description="Advertise gateway.local_prefixes to this peer"
     )
-    remote_prefixes: t.Optional[t.List[str]] = Field(
+    remote_prefixes: list[str] | None = Field(
         default=None,
         description="Optional: Remote prefixes for filtering/validation. In BGP mode, routes are learned dynamically; this field can optionally whitelist allowed prefixes. Not used for manual route installation in BGP mode.",
     )
 
     @field_validator("remote_asn")
     @classmethod
-    def validate_remote_asn(cls, v: t.Optional[int]) -> t.Optional[int]:
+    def validate_remote_asn(cls, v: int | None) -> int | None:
         if v is None:
             return v
         return validate_asn(v)
@@ -545,14 +544,14 @@ class BGPConfig(BaseModel):
     @field_validator("remote_prefixes")
     @classmethod
     def validate_remote_prefixes(
-        cls, v: t.Optional[t.List[str]]
-    ) -> t.Optional[t.List[str]]:
+        cls, v: list[str] | None
+    ) -> list[str] | None:
         if v is None:
             return v
         return [validate_cidr(cidr) for cidr in v]
 
     @model_validator(mode="after")
-    def validate_bgp_requires_remote_asn(self) -> "BGPConfig":
+    def validate_bgp_requires_remote_asn(self) -> BGPConfig:
         if self.enabled and self.remote_asn is None:
             raise ValueError("remote_asn is required when BGP is enabled")
         return self
@@ -570,38 +569,38 @@ class ConnectionConfig(BaseModel):
         pattern=r"^[a-z0-9]([a-z0-9\-]*[a-z0-9])?$",
         description="Connection name (lowercase, alphanumeric, hyphens)",
     )
-    description: t.Optional[str] = Field(
+    description: str | None = Field(
         default=None, max_length=256, description="Human-readable description"
     )
     vendor: VendorType = Field(..., description="Peer vendor type")
     routing_mode: RoutingMode = Field(
         ..., description="Routing mode for this connection"
     )
-    remote_prefixes: t.Optional[t.List[str]] = Field(
+    remote_prefixes: list[str] | None = Field(
         default=None,
         description="Remote prefixes (CIDR notation). In 'static' routing_mode: used for installing static routes. In 'bgp' routing_mode: optional, used for filtering/validating received BGP routes (routes are learned dynamically).",
     )
     bgp: BGPConfig = Field(..., description="BGP configuration")
-    tunnels: t.List[TunnelConfig] = Field(
+    tunnels: list[TunnelConfig] = Field(
         ..., min_length=1, description="Tunnel configurations"
     )
 
     # Optional escape hatch for custom metadata
-    extensions: t.Dict[str, t.Any] = Field(
+    extensions: dict[str, t.Any] = Field(
         default_factory=dict, description="Custom extensions (opaque metadata)"
     )
 
     @field_validator("remote_prefixes")
     @classmethod
     def validate_remote_prefixes(
-        cls, v: t.Optional[t.List[str]]
-    ) -> t.Optional[t.List[str]]:
+        cls, v: list[str] | None
+    ) -> list[str] | None:
         if v is None:
             return v
         return [validate_cidr(cidr) for cidr in v]
 
     @model_validator(mode="after")
-    def validate_routing_mode_consistency(self) -> "ConnectionConfig":
+    def validate_routing_mode_consistency(self) -> ConnectionConfig:
         """Validate BGP config matches routing mode."""
         # In static mode, warn if remote_prefixes is not specified
         if self.routing_mode == RoutingMode.STATIC:
@@ -616,7 +615,8 @@ class ConnectionConfig(BaseModel):
 
                     warnings.warn(
                         f"Connection '{self.name}' uses static routing but has no remote_prefixes defined. "
-                        "Static routes to remote networks will not be installed."
+                        "Static routes to remote networks will not be installed.",
+                        stacklevel=2,
                     )
 
         if self.routing_mode == RoutingMode.BGP:
@@ -634,7 +634,7 @@ class ConnectionConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def validate_tunnel_names_unique(self) -> "ConnectionConfig":
+    def validate_tunnel_names_unique(self) -> ConnectionConfig:
         """Ensure tunnel names are unique within connection."""
         names = [t.name for t in self.tunnels]
         duplicates = [n for n in names if names.count(n) > 1]
@@ -670,16 +670,16 @@ class VMSpec(BaseModel):
         le=1,  # Platform limitation
         description="Number of NICs (currently limited to 1)",
     )
-    ssh_public_key: t.Optional[str] = Field(
+    ssh_public_key: str | None = Field(
         default=None, description="SSH public key content (inline)"
     )
-    ssh_public_key_path: t.Optional[str] = Field(
+    ssh_public_key_path: str | None = Field(
         default=None, description="Path to SSH public key file"
     )
-    ssh_private_key_path: t.Optional[str] = Field(
+    ssh_private_key_path: str | None = Field(
         default=None, description="Path to SSH private key file"
     )
-    network_id: t.Optional[str] = Field(
+    network_id: str | None = Field(
         default=None,
         description=(
             "Network ID (VPC network) to use for VPN gateway. Optional. "
@@ -700,7 +700,7 @@ class VMSpec(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def validate_ssh_key_config(self) -> "VMSpec":
+    def validate_ssh_key_config(self) -> VMSpec:
         """Ensure either ssh_public_key or ssh_public_key_path is provided."""
         if not self.ssh_public_key and not self.ssh_public_key_path:
             raise ValueError(
@@ -724,19 +724,19 @@ class GatewayGroup(BaseModel):
     instance_count: int = Field(
         ..., ge=1, le=10, description="Number of gateway VMs (1-10)"
     )
-    external_ips: t.Optional[t.List[str]] = Field(
+    external_ips: list[str] | None = Field(
         default=None, description="Pre-allocated external IPs per instance (flat list)"
     )
     vm_spec: VMSpec = Field(..., description="VM specification")
-    region: t.Optional[str] = Field(
+    region: str | None = Field(
         default=None, description="Region ID (can be set at top level or here)"
     )
 
     @field_validator("external_ips")
     @classmethod
     def validate_external_ips(
-        cls, v: t.Optional[t.List[str]]
-    ) -> t.Optional[t.List[str]]:
+        cls, v: list[str] | None
+    ) -> list[str] | None:
         if v is None:
             return v
 
@@ -747,7 +747,7 @@ class GatewayGroup(BaseModel):
             try:
                 validate_ip_address(ip)
             except ValueError as e:
-                raise ValueError(f"external_ips[{i}]: {e}")
+                raise ValueError(f"external_ips[{i}]: {e}") from e
 
         return v
 
@@ -773,12 +773,12 @@ class VPNGatewayConfig(BaseModel):
     defaults: DefaultsConfig = Field(
         ..., description="Global defaults for VPN behavior"
     )
-    connections: t.List[ConnectionConfig] = Field(
+    connections: list[ConnectionConfig] = Field(
         ..., min_length=1, description="VPN connections to peers"
     )
 
     @model_validator(mode="after")
-    def validate_connection_names_unique(self) -> "VPNGatewayConfig":
+    def validate_connection_names_unique(self) -> VPNGatewayConfig:
         """Ensure connection names are unique."""
         names = [c.name for c in self.connections]
         duplicates = [n for n in names if names.count(n) > 1]
@@ -787,7 +787,7 @@ class VPNGatewayConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def validate_quotas(self) -> "VPNGatewayConfig":
+    def validate_quotas(self) -> VPNGatewayConfig:
         """Validate resource usage against quotas."""
         total_connections = len(self.connections)
         total_tunnels = sum(len(c.tunnels) for c in self.connections)
@@ -807,7 +807,7 @@ class VPNGatewayConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def validate_tunnel_instance_indices(self) -> "VPNGatewayConfig":
+    def validate_tunnel_instance_indices(self) -> VPNGatewayConfig:
         """Validate tunnel instance indices are within instance_count."""
         instance_count = self.gateway_group.instance_count
 
@@ -823,7 +823,7 @@ class VPNGatewayConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def validate_external_ips_match_instance_count(self) -> "VPNGatewayConfig":
+    def validate_external_ips_match_instance_count(self) -> VPNGatewayConfig:
         """Validate external_ips list matches instance_count if provided."""
         external_ips = self.gateway_group.external_ips
         if external_ips is not None and external_ips:

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import typing as t
-import textwrap
 import importlib.resources as resources
+import textwrap
+import typing as t
 
 from ..config_loader import GatewayGroupSpec
 from .vm_diff import VMDiffAnalyzer, VMSpec
@@ -16,11 +16,11 @@ class VMManager:
 
     def __init__(
         self,
-        project_id: t.Optional[str],
-        zone: t.Optional[str],
-        auth_token: t.Optional[str] = None,
-        tenant_id: t.Optional[str] = None,
-        region_id: t.Optional[str] = None,
+        project_id: str | None,
+        zone: str | None,
+        auth_token: str | None = None,
+        tenant_id: str | None = None,
+        region_id: str | None = None,
     ) -> None:
         self.project_id = project_id
         self.zone = zone
@@ -29,7 +29,7 @@ class VMManager:
         self.region_id = region_id
         self.diff_analyzer = VMDiffAnalyzer()
 
-    def check_changes(self, spec: GatewayGroupSpec) -> t.List[t.Tuple[str, t.Any]]:
+    def check_changes(self, spec: GatewayGroupSpec) -> list[tuple[str, t.Any]]:
         """Check what changes would be applied without making them.
 
         Returns:
@@ -43,7 +43,7 @@ class VMManager:
             print("[VMManager] Cannot check changes: SDK not available")
             return []
 
-        results: t.List[t.Tuple[str, t.Any]] = []
+        results: list[tuple[str, t.Any]] = []
         desired_spec = VMSpec.from_config(spec.vm_spec)
 
         for i in range(spec.instance_count):
@@ -79,7 +79,7 @@ class VMManager:
 
         return results
 
-    def _get_client(self) -> t.Optional[t.Any]:
+    def _get_client(self) -> t.Any | None:
         """Get Nebius SDK client (extracted from ensure_group for reuse)."""
         import os
 
@@ -133,11 +133,11 @@ class VMManager:
         except Exception:
             return None
 
-    def _get_vm_by_name(self, client: t.Any, name: str) -> t.Optional[t.Any]:
+    def _get_vm_by_name(self, client: t.Any, name: str) -> t.Any | None:
         """Get VM by name, returns None if not found."""
         try:
-            from nebius.api.nebius.compute.v1 import InstanceServiceClient  # type: ignore
             from nebius.api.nebius.common.v1 import GetByNameRequest  # type: ignore
+            from nebius.api.nebius.compute.v1 import InstanceServiceClient  # type: ignore
 
             isc = InstanceServiceClient(client)
             if hasattr(isc, "get_by_name") and self.project_id:
@@ -152,11 +152,11 @@ class VMManager:
             pass
         return None
 
-    def _get_disk_by_name(self, client: t.Any, name: str) -> t.Optional[t.Any]:
+    def _get_disk_by_name(self, client: t.Any, name: str) -> t.Any | None:
         """Get disk by name, returns None if not found."""
         try:
-            from nebius.api.nebius.compute.v1 import DiskServiceClient  # type: ignore
             from nebius.api.nebius.common.v1 import GetByNameRequest  # type: ignore
+            from nebius.api.nebius.compute.v1 import DiskServiceClient  # type: ignore
 
             dsc = DiskServiceClient(client)
             if hasattr(dsc, "get_by_name") and self.project_id:
@@ -171,7 +171,7 @@ class VMManager:
             pass
         return None
 
-    def get_vm_public_ip(self, vm_name: str) -> t.Optional[str]:
+    def get_vm_public_ip(self, vm_name: str) -> str | None:
         """Get the public IP address of a VM by querying its network interfaces.
 
         Args:
@@ -220,7 +220,7 @@ class VMManager:
             pass
         return None
 
-    def get_allocation_ip(self, allocation_id: str) -> t.Optional[str]:
+    def get_allocation_ip(self, allocation_id: str) -> str | None:
         """Get the IP address from an allocation.
 
         Args:
@@ -234,8 +234,10 @@ class VMManager:
             if client is None:
                 return None
 
-            from nebius.api.nebius.vpc.v1 import AllocationServiceClient  # type: ignore
-            from nebius.api.nebius.vpc.v1 import GetAllocationRequest  # type: ignore
+            from nebius.api.nebius.vpc.v1 import (
+                AllocationServiceClient,  # type: ignore
+                GetAllocationRequest,  # type: ignore
+            )
 
             asc = AllocationServiceClient(client)
             alloc = asc.get(GetAllocationRequest(id=allocation_id)).wait()
@@ -301,7 +303,7 @@ class VMManager:
         print(f"\n✗ Timeout waiting for {vm_name} to become reachable")
         return False
 
-    def get_vm_allocations(self, vm_name: str) -> t.List[t.Tuple[int, str]]:
+    def get_vm_allocations(self, vm_name: str) -> list[tuple[int, str]]:
         """Get allocation IDs attached to a VM's network interfaces.
 
         Args:
@@ -310,7 +312,7 @@ class VMManager:
         Returns:
             List of (nic_index, allocation_id) tuples
         """
-        allocations: t.List[t.Tuple[int, str]] = []
+        allocations: list[tuple[int, str]] = []
         try:
             client = self._get_client()
             if client is None:
@@ -496,8 +498,8 @@ class VMManager:
         self,
         spec: GatewayGroupSpec,
         recreate: bool = False,
-        local_prefixes: t.Optional[t.List[str]] = None,
-    ) -> t.Dict[str, str]:
+        local_prefixes: list[str] | None = None,
+    ) -> dict[str, str]:
         """Ensure gateway VMs exist per spec.
 
         Pseudocode for Nebius SDK integration:
@@ -521,7 +523,7 @@ class VMManager:
         )
 
         # Track created/existing VMs and their IPs
-        vm_ips: t.Dict[str, str] = {}
+        vm_ips: dict[str, str] = {}
 
         try:
             print(
@@ -689,8 +691,8 @@ class VMManager:
                 # ALLOCATION PRESERVATION STRATEGY (Section 16):
                 # Before deleting VMs, query and save their allocation IDs
                 # After recreation, reuse the same allocations (unless external_ips explicitly provided in YAML)
-                preserved_allocations: t.Dict[
-                    str, t.List[str]
+                preserved_allocations: dict[
+                    str, list[str]
                 ] = {}  # vm_name -> [allocation_id_eth0, ...]
 
                 if recreate and existing:
@@ -725,8 +727,8 @@ class VMManager:
                     dsc = None
                     try:
                         from nebius.api.nebius.compute.v1 import (
-                            InstanceServiceClient,
                             DiskServiceClient,
+                            InstanceServiceClient,
                         )  # type: ignore
 
                         isc = InstanceServiceClient(client)
@@ -793,8 +795,9 @@ class VMManager:
 
                     # Step 2: Delete boot disks (with retry since disk detachment can take time)
                     if dsc:
-                        from nebius.api.nebius.common.v1 import GetByNameRequest  # type: ignore
                         import time
+
+                        from nebius.api.nebius.common.v1 import GetByNameRequest  # type: ignore
 
                         for i in range(spec.instance_count):
                             inst_name = f"{spec.name}-{i}"
@@ -962,16 +965,16 @@ class VMManager:
                     boot_disk_id = None
                     # Prefer explicit DiskServiceClient with CreateDiskRequest per schema
                     try:
-                        from nebius.api.nebius.compute.v1 import (
-                            DiskServiceClient,
-                            CreateDiskRequest,
-                            DiskSpec,
-                            ImageServiceClient,
-                            GetImageLatestByFamilyRequest,
-                        )  # type: ignore
                         from nebius.api.nebius.common.v1 import (
-                            ResourceMetadata,
                             GetByNameRequest,
+                            ResourceMetadata,
+                        )  # type: ignore
+                        from nebius.api.nebius.compute.v1 import (
+                            CreateDiskRequest,
+                            DiskServiceClient,
+                            DiskSpec,
+                            GetImageLatestByFamilyRequest,
+                            ImageServiceClient,
                         )  # type: ignore
 
                         dsc = DiskServiceClient(client)  # type: ignore
@@ -1635,13 +1638,13 @@ class VMManager:
                                         )
                                     if alloc_client is not None:
                                         try:
-                                            from nebius.api.nebius.vpc.v1 import (
-                                                CreateAllocationRequest,
-                                                AllocationSpec,
-                                                IPv4PublicAllocationSpec,
-                                            )  # type: ignore
                                             from nebius.api.nebius.common.v1 import (
                                                 ResourceMetadata,
+                                            )  # type: ignore
+                                            from nebius.api.nebius.vpc.v1 import (
+                                                AllocationSpec,
+                                                CreateAllocationRequest,
+                                                IPv4PublicAllocationSpec,
                                             )  # type: ignore
 
                                             req = CreateAllocationRequest(
@@ -1791,13 +1794,13 @@ class VMManager:
                                     )
                                     if alloc_client is not None:
                                         try:
-                                            from nebius.api.nebius.vpc.v1 import (
-                                                CreateAllocationRequest,
-                                                AllocationSpec,
-                                                IPv4PrivateAllocationSpec,
-                                            )  # type: ignore
                                             from nebius.api.nebius.common.v1 import (
                                                 ResourceMetadata,
+                                            )  # type: ignore
+                                            from nebius.api.nebius.vpc.v1 import (
+                                                AllocationSpec,
+                                                CreateAllocationRequest,
+                                                IPv4PrivateAllocationSpec,
                                             )  # type: ignore
 
                                             req = CreateAllocationRequest(
@@ -1968,8 +1971,10 @@ class VMManager:
                     # If boot_disk_id is still missing, try to resolve by name before creating instance
                     if not boot_disk_id and self.project_id:
                         try:
-                            from nebius.api.nebius.compute.v1 import DiskServiceClient  # type: ignore
                             from nebius.api.nebius.common.v1 import GetByNameRequest  # type: ignore
+                            from nebius.api.nebius.compute.v1 import (
+                                DiskServiceClient,  # type: ignore
+                            )
 
                             dsc2 = DiskServiceClient(client)  # type: ignore
                             if hasattr(dsc2, "get_by_name"):
@@ -2063,18 +2068,18 @@ class VMManager:
                         # Prefer explicit InstanceServiceClient if available
                     created = False
                     try:
-                        from nebius.api.nebius.compute.v1 import (
-                            InstanceServiceClient,
-                            CreateInstanceRequest,
-                            InstanceSpec,
-                            ResourcesSpec,
-                            NetworkInterfaceSpec,
-                            IPAddress,
-                            PublicIPAddress,
-                            AttachedDiskSpec,
-                            ExistingDisk,
-                        )  # type: ignore
                         from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
+                        from nebius.api.nebius.compute.v1 import (
+                            AttachedDiskSpec,
+                            CreateInstanceRequest,
+                            ExistingDisk,
+                            InstanceServiceClient,
+                            InstanceSpec,
+                            IPAddress,
+                            NetworkInterfaceSpec,
+                            PublicIPAddress,
+                            ResourcesSpec,
+                        )  # type: ignore
 
                         isc = InstanceServiceClient(client)  # type: ignore
                         print(
@@ -2252,7 +2257,7 @@ class VMManager:
 
     def _ensure_vpngw_subnet(
         self, client: t.Any, spec: GatewayGroupSpec
-    ) -> t.Optional[str]:
+    ) -> str | None:
         """Ensure a single gateway subnet named 'vpngw-subnet' (/24) exists in the chosen network.
 
         Resolution:
@@ -2266,18 +2271,18 @@ class VMManager:
         try:
             # Use explicit service clients from the Nebius SDK
             from nebius.api.nebius.vpc.v1 import (
-                NetworkServiceClient,
-                SubnetServiceClient,
-                GetNetworkRequest,
-                GetNetworkByNameRequest,
-                GetSubnetByNameRequest,
-                ListSubnetsByNetworkRequest,
                 CreateSubnetRequest,
-                PoolServiceClient,
+                GetNetworkByNameRequest,
+                GetNetworkRequest,
                 GetPoolRequest,
+                GetSubnetByNameRequest,
                 IPv4PrivateSubnetPools,
-                SubnetPool,
+                ListSubnetsByNetworkRequest,
+                NetworkServiceClient,
+                PoolServiceClient,
                 SubnetCidr,
+                SubnetPool,
+                SubnetServiceClient,
             )  # type: ignore
 
             net_client = NetworkServiceClient(client)  # type: ignore
@@ -2299,7 +2304,7 @@ class VMManager:
                 except Exception as e:
                     raise RuntimeError(
                         f"[VMManager] Specified network_id '{network_id}' not found: {e}"
-                    )
+                    ) from e
             else:
                 # Auto-discover network
                 print("[VMManager] No network_id in YAML, auto-discovering network...")
@@ -2353,7 +2358,7 @@ class VMManager:
                     except RuntimeError:
                         raise
                     except Exception as e:
-                        raise RuntimeError(f"[VMManager] Failed to list networks: {e}")
+                        raise RuntimeError(f"[VMManager] Failed to list networks: {e}") from e
 
             if network_obj is None:
                 raise RuntimeError(
@@ -2632,7 +2637,7 @@ class VMManager:
                     raise RuntimeError(
                         f"[VMManager] Failed to create 'vpngw-subnet' in {net_name}: {e}. "
                         "Please provide a network_id with sufficient IP space or pre-create the subnet."
-                    )
+                    ) from e
 
             # Extract subnet id robustly: some SDKs expose id under metadata.id
             if subnet_obj is not None:
@@ -2646,7 +2651,7 @@ class VMManager:
             return None
 
     def _ensure_vpngw_route_table(
-        self, client: t.Any, subnet_id: t.Optional[str]
+        self, client: t.Any, subnet_id: str | None
     ) -> None:
         """Ensure route table exists for vpngw-subnet and is properly configured.
 
@@ -2662,10 +2667,10 @@ class VMManager:
 
         try:
             from nebius.api.nebius.vpc.v1 import (
-                SubnetServiceClient,
+                GetRouteTableRequest,
                 GetSubnetRequest,
                 RouteTableServiceClient,
-                GetRouteTableRequest,
+                SubnetServiceClient,
             )  # type: ignore
 
             subnet_client = SubnetServiceClient(client)  # type: ignore
@@ -2717,7 +2722,7 @@ class VMManager:
         self,
         alloc_client: t.Any,
         alloc_obj: t.Any,
-        target_subnet_id: t.Optional[str],
+        target_subnet_id: str | None,
         desired_ip: str,
     ) -> t.Any:
         """Migrate public IP allocation to vpngw-subnet if it's in a different subnet.
@@ -2757,12 +2762,12 @@ class VMManager:
                 print(f"[VMManager] Allocation {desired_ip} already in vpngw-subnet")
                 return alloc_obj
 
+            from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
             from nebius.api.nebius.vpc.v1 import (
-                UpdateAllocationRequest,
                 AllocationSpec,
                 IPv4PublicAllocationSpec,
+                UpdateAllocationRequest,
             )  # type: ignore
-            from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
 
             # Resolve the IP/CIDR we should preserve during migration
             alloc_id = getattr(alloc_obj, "id", None) or getattr(
@@ -2857,7 +2862,7 @@ class VMManager:
                         "or (2) remove the IP from external_ips to allow a new allocation, "
                         "or (3) release the old allocation and re-request the same IP in vpngw-subnet "
                         "(best effort only)."
-                    )
+                    ) from e
                 print(f"[VMManager] Could not migrate allocation {ip_cidr}: {e}")
                 print(
                     "[VMManager] Continuing with existing allocation in current subnet"
@@ -2880,17 +2885,18 @@ class VMManager:
             network_id: Network ID containing the subnet
         """
         try:
-            from nebius.api.nebius.vpc.v1 import (
-                RouteTableServiceClient,
+            from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
+            from nebius.api.nebius.vpc.v1 import (  # type: ignore
+                CreateRouteRequest,
                 CreateRouteTableRequest,
                 RouteServiceClient,
-                CreateRouteRequest,
+                RouteTableServiceClient,
+                RouteTableSpec,
                 SubnetServiceClient,
+                SubnetSpec,
                 UpdateSubnetRequest,
+                route_pb2,  # type: ignore
             )  # type: ignore
-            from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
-            from nebius.api.nebius.vpc.v1 import RouteTableSpec, SubnetSpec  # type: ignore
-            from nebius.api.nebius.vpc.v1 import route_pb2  # type: ignore
 
             rt_name = "vpngw-subnet-routing-table"
             rt_client = RouteTableServiceClient(client)  # type: ignore
@@ -3034,11 +3040,6 @@ class VMManager:
 
         except Exception as e:
             print(f"[VMManager] Error creating route table for vpngw-subnet: {e}")
-        except Exception as e:
-            print(f"[VMManager] ensure_vpngw_subnet failed: {e}")
-            return None
-        except Exception as e:
-            print(f"[VMManager] ensure_group encountered an error: {e}")
 
     def get_instance_ssh_target(self, instance_index: int) -> str:
         # Placeholder fallback if external IP wasn't available in plan
@@ -3046,8 +3047,8 @@ class VMManager:
 
     def _build_cloud_init(
         self,
-        ssh_key: t.Optional[str] = None,
-        local_prefixes: t.Optional[t.List[str]] = None,
+        ssh_key: str | None = None,
+        local_prefixes: list[str] | None = None,
     ) -> str:
         """Return a hardened cloud-init to install deps, configure security, and setup the gateway.
 

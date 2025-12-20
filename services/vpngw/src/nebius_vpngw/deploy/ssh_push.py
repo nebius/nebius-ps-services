@@ -4,7 +4,6 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
 
 from ..config_loader import InstanceResolvedConfig
 
@@ -30,7 +29,7 @@ class SSHPush:
             self._paramiko = paramiko
         return self._paramiko
 
-    def _build_wheel(self) -> Optional[Path]:
+    def _build_wheel(self) -> Path | None:
         """Build the nebius-vpngw wheel package if not already built."""
         if self._wheel_path and self._wheel_path.exists():
             return self._wheel_path
@@ -119,13 +118,14 @@ class SSHPush:
         username: str = vm_spec.get("ssh_username") or os.environ.get(
             "VPNGW_SSH_USER", "ubuntu"
         )
-        key_path: Optional[str] = vm_spec.get("ssh_private_key_path") or os.environ.get(
+        key_path: str | None = vm_spec.get("ssh_private_key_path") or os.environ.get(
             "VPNGW_SSH_KEY"
         )
         key_file = Path(key_path).expanduser() if key_path else None
 
         print(f"[SSHPush] Connecting to {ssh_target} as {username} ...")
         client = paramiko.SSHClient()
+        # codeql[py/unsafe-ssh-host-key-policy] - VMs are created on demand; auto-add avoids breaking apply while still using SSH key auth.
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         try:
             client.connect(
@@ -169,6 +169,10 @@ class SSHPush:
         print("[SSHPush] Deploying latest nebius-vpngw package...")
         wheel_path = self._build_wheel()
         if wheel_path and wheel_path.exists():
+            wheel_version = None
+            wheel_parts = wheel_path.name.split("-")
+            if len(wheel_parts) >= 2:
+                wheel_version = wheel_parts[1]
             try:
                 with client.open_sftp() as sftp:
                     remote_wheel = f"/tmp/{wheel_path.name}"
@@ -187,19 +191,91 @@ class SSHPush:
                 out = stdout.read().decode().strip()
                 err = stderr.read().decode().strip()
                 if rc == 0:
-                    # Verify package actually installed by checking pip list
-                    stdin_check, stdout_check, stderr_check = client.exec_command(
-                        "python3 -m pip list | grep nebius-vpngw", timeout=10
+                    # Reinstall just our package to avoid stale version metadata, without touching deps
+                    reinstall_cmd = (
+                        f"sudo python3 -m pip install --upgrade --force-reinstall "
+                        f"--no-deps --break-system-packages {remote_wheel}"
                     )
-                    pkg_check = stdout_check.read().decode().strip()
-                    if "nebius-vpngw" in pkg_check:
+                    stdin_re, stdout_re, stderr_re = client.exec_command(
+                        reinstall_cmd, get_pty=True, timeout=120
+                    )
+                    rc_re = stdout_re.channel.recv_exit_status()
+                    re_out = stdout_re.read().decode().strip()
+                    re_err = stderr_re.read().decode().strip()
+                    if rc_re != 0:
                         print(
-                            f"[SSHPush] Package installed/upgraded successfully: {pkg_check}"
+                            "[SSHPush] WARNING: Forced reinstall failed; continuing anyway"
                         )
+                        if re_out:
+                            print(
+                                f"[SSHPush] stdout: {re_out[-500:]}"
+                                if len(re_out) > 500
+                                else f"[SSHPush] stdout: {re_out}"
+                            )
+                        if re_err:
+                            print(
+                                f"[SSHPush] stderr: {re_err[-500:]}"
+                                if len(re_err) > 500
+                                else f"[SSHPush] stderr: {re_err}"
+                            )
+
+                    # Verify package actually installed by importing it
+                    verify_cmd = (
+                        "python3 -c \"import importlib.metadata as m, nebius_vpngw; "
+                        "print('version=' + m.version('nebius-vpngw')); "
+                        "print('path=' + nebius_vpngw.__file__)\""
+                    )
+                    stdin_check, stdout_check, stderr_check = client.exec_command(
+                        verify_cmd, timeout=10
+                    )
+                    rc_check = stdout_check.channel.recv_exit_status()
+                    verify_out = stdout_check.read().decode().strip()
+                    verify_err = stderr_check.read().decode().strip()
+                    if rc_check == 0 and verify_out:
+                        lines = [
+                            line.strip()
+                            for line in verify_out.splitlines()
+                            if line.strip()
+                        ]
+                        version_line = next(
+                            (line for line in lines if line.startswith("version=")), ""
+                        )
+                        path_line = next(
+                            (line for line in lines if line.startswith("path=")), ""
+                        )
+                        if version_line:
+                            installed_version = version_line.split("=", 1)[1]
+                            installed_path = (
+                                path_line.split("=", 1)[1] if path_line else None
+                            )
+                            print(
+                                "[SSHPush] Package installed/upgraded successfully: "
+                                f"nebius-vpngw {installed_version}"
+                            )
+                            if wheel_version and installed_version != wheel_version:
+                                print(
+                                    "[SSHPush] WARNING: Installed version does not match "
+                                    f"wheel ({installed_version} != {wheel_version}). "
+                                    "A system package may be shadowing the installed wheel."
+                                )
+                                if installed_path:
+                                    print(
+                                        f"[SSHPush] Installed package path: {installed_path}"
+                                    )
+                        else:
+                            print(
+                                "[SSHPush] WARNING: Could not read installed package version"
+                            )
                     else:
                         print(
-                            "[SSHPush] WARNING: pip install succeeded but package not found in pip list"
+                            "[SSHPush] WARNING: pip install succeeded but package import check failed"
                         )
+                        if verify_err:
+                            print(
+                                f"[SSHPush] stderr: {verify_err[-500:]}"
+                                if len(verify_err) > 500
+                                else f"[SSHPush] stderr: {verify_err}"
+                            )
                     # Install/refresh systemd unit - read from package systemd/ directory
                     import nebius_vpngw
 
@@ -301,9 +377,8 @@ WantedBy=multi-user.target
         # Upload to /tmp then move with sudo
         tmp_path = f"/tmp/nebius-config-{inst_cfg.instance_index}.yaml"
         try:
-            with client.open_sftp() as sftp:
-                with sftp.file(tmp_path, "w") as f:
-                    f.write(inst_cfg.config_yaml)
+            with client.open_sftp() as sftp, sftp.file(tmp_path, "w") as f:
+                f.write(inst_cfg.config_yaml)
             print(f"[SSHPush] Uploaded temp config to {tmp_path}")
         except Exception as e:
             print(f"[SSHPush] SFTP upload failed: {e}")
@@ -485,8 +560,8 @@ WantedBy=multi-user.target
 
                 if bgp_peers:
                     # Wait for IPsec tunnels to establish before testing connectivity
-                    import time
                     import json
+                    import time
 
                     print("[SSHPush] Waiting for IPsec tunnels to establish...")
                     time.sleep(10)

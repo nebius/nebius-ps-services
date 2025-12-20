@@ -14,9 +14,9 @@ their VPN gateway. All fields align with the Pydantic schema defined in schema.p
 SCHEMA_VERSION = 1
 
 # Default template written to user's directory on first run
-DEFAULT_CONFIG_TEMPLATE = """\
+DEFAULT_CONFIG_TEMPLATE = f"""\
 # Nebius VPN Gateway Configuration
-# Generated from embedded template (schema version {version})
+# Generated from embedded template (schema version {SCHEMA_VERSION})
 # 
 # YAML structure:
 #   - gateway_group: VM infrastructure (instances, IPs, VM specs)
@@ -29,7 +29,7 @@ DEFAULT_CONFIG_TEMPLATE = """\
 # Environment variables: Use ${{VAR}} syntax (e.g., ${{GCP_PSK}})
 # Security: Keep secrets out of git-tracked files
 
-version: {version}
+version: {SCHEMA_VERSION}
 
 ###############################################################################
 # Nebius Project Context
@@ -290,4 +290,4 @@ connections:
 # 4. Deploy gateway:
 #      nebius-vpngw apply --local-config-file nebius-vpngw.config.yaml
 ###############################################################################
-""".format(version=SCHEMA_VERSION)
+"""

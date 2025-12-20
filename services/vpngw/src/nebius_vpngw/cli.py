@@ -1,22 +1,21 @@
-import sys
 import os
-import typing as t
-from pathlib import Path
 import re
+import sys
+from pathlib import Path
 
 import typer
 from rich import print
 
 from . import __version__
 from .config_loader import (
+    ResolvedDeploymentPlan,
     load_local_config,
     merge_with_peer_configs,
-    ResolvedDeploymentPlan,
 )
-from .deploy.vm_manager import VMManager
-from .deploy.ssh_push import SSHPush
-from .deploy.route_manager import RouteManager
 from .config_template import DEFAULT_CONFIG_TEMPLATE
+from .deploy.route_manager import RouteManager
+from .deploy.ssh_push import SSHPush
+from .deploy.vm_manager import VMManager
 
 DEFAULT_CONFIG_FILENAME = "nebius-vpngw.config.yaml"
 
@@ -44,7 +43,7 @@ def _create_config_from_template(output_path: Path) -> None:
         output_path.write_text(DEFAULT_CONFIG_TEMPLATE, encoding="utf-8")
     except Exception as e:
         print(f"[red]Failed to write config template:[/red] {e}")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from e
 
 
 def _ensure_authentication(
@@ -52,7 +51,7 @@ def _ensure_authentication(
     required: bool = True,
     timeout_seconds: int = 60,
     show_progress: bool = True,
-) -> t.Optional[str]:
+) -> str | None:
     """Centralized authentication helper for all commands.
 
     Args:
@@ -105,7 +104,7 @@ def _ensure_authentication(
         if required:
             print(f"[red]✗ Authentication error: {e}[/red]")
             print("[yellow]Please ensure you're logged in: nebius auth login[/yellow]")
-            raise typer.Exit(code=1)
+            raise typer.Exit(code=1) from e
         else:
             if show_progress:
                 print(f"[yellow]⚠️  Authentication error: {e}[/yellow]")
@@ -113,7 +112,7 @@ def _ensure_authentication(
 
 
 def _resolve_local_config(
-    local_config_file: t.Optional[Path],
+    local_config_file: Path | None,
     *,
     create_if_missing: bool,
     exit_after_create: bool,
@@ -184,24 +183,24 @@ def _default(
 
 @app.command()
 def apply(
-    local_config_file: t.Optional[Path] = typer.Option(
+    local_config_file: Path | None = typer.Option(
         None, exists=True, readable=True, help=f"Path to {DEFAULT_CONFIG_FILENAME}"
     ),
-    peer_config_file: t.List[Path] = typer.Option(
+    peer_config_file: list[Path] = typer.Option(
         [], exists=True, readable=True, help="Vendor peer config file(s)"
     ),
     recreate_gw: bool = typer.Option(
         False, help="Delete and recreate gateway VMs before applying"
     ),
-    sa: t.Optional[str] = typer.Option(
+    sa: str | None = typer.Option(
         None,
         hidden=True,
         help="If provided, ensure a Service Account with this name and use it for auth",
     ),
-    project_id: t.Optional[str] = typer.Option(
+    project_id: str | None = typer.Option(
         None, help="Nebius project/folder identifier"
     ),
-    zone: t.Optional[str] = typer.Option(None, help="Nebius zone for gateway VMs"),
+    zone: str | None = typer.Option(None, help="Nebius zone for gateway VMs"),
     dry_run: bool = typer.Option(
         False, hidden=True, help="Render actions without applying"
     ),
@@ -457,6 +456,7 @@ def validate_config(
     """
     from rich.console import Console
     from rich.panel import Panel
+
     from .config_loader import load_local_config
 
     console = Console()
@@ -503,7 +503,7 @@ def validate_config(
                 border_style="red",
             )
         )
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from e
 
     except Exception as e:
         # Unexpected errors
@@ -516,7 +516,7 @@ def validate_config(
                 border_style="red",
             )
         )
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from e
 
 
 @app.command(options_metavar="")
@@ -624,24 +624,25 @@ def create_config(
                 border_style="red",
             )
         )
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from e
 
 
 @app.command()
 def status(
-    local_config_file: t.Optional[Path] = typer.Option(
+    local_config_file: Path | None = typer.Option(
         None, exists=True, readable=True, help=f"Path to {DEFAULT_CONFIG_FILENAME}"
     ),
-    project_id: t.Optional[str] = typer.Option(
+    project_id: str | None = typer.Option(
         None, help="Nebius project/folder identifier"
     ),
-    zone: t.Optional[str] = typer.Option(None, help="Nebius zone for gateway VMs"),
+    zone: str | None = typer.Option(None, help="Nebius zone for gateway VMs"),
 ):
     """Show status of VPN tunnels and gateway health."""
+    import json
+    import subprocess
+
     from rich.console import Console
     from rich.table import Table
-    import subprocess
-    import json
 
     console = Console()
 
@@ -674,7 +675,10 @@ def status(
 
     # Quick check: verify at least one gateway VM exists before attempting SSH
     print("[bold]Checking for gateway VMs...[/bold]")
-    from nebius.api.nebius.compute.v1 import InstanceServiceClient, ListInstancesRequest  # type: ignore
+    from nebius.api.nebius.compute.v1 import (  # type: ignore
+        InstanceServiceClient,
+        ListInstancesRequest,
+    )
 
     client = vm_mgr._get_client()
     if client and proj_id:
@@ -950,7 +954,7 @@ def status(
                 elif bgp_states:
                     # Fallback: if we have BGP states but no exact match, try to match any peer
                     # This handles cases where tunnel name mapping might be off
-                    for bgp_ip, bgp_state in bgp_states.items():
+                    for _bgp_ip, bgp_state in bgp_states.items():
                         # Simple heuristic: assign if we don't have a BGP status yet
                         if tinfo.get("bgp") == "-":
                             tinfo["bgp"] = bgp_state
@@ -1059,7 +1063,7 @@ def status(
             "frr": "Unknown",
         }
 
-        for service_name in services.keys():
+        for service_name in services:
             try:
                 # Special handling for strongSwan - check if charon daemon is running
                 if service_name == "strongswan":
@@ -1285,12 +1289,12 @@ print(json.dumps(health))
     console.print("\n[bold]VPN Gateway Subnet Route Table:[/bold]")
     try:
         from nebius.api.nebius.vpc.v1 import (
-            SubnetServiceClient,
-            GetSubnetByNameRequest,
-            RouteTableServiceClient,
             GetRouteTableRequest,
-            RouteServiceClient,
+            GetSubnetByNameRequest,
             ListRoutesRequest,
+            RouteServiceClient,
+            RouteTableServiceClient,
+            SubnetServiceClient,
         )
         from rich.table import Table
 
@@ -1431,10 +1435,10 @@ print(json.dumps(health))
 
 @app.command(name="add-routes-local")
 def add_routes_local(
-    local_config_file: t.Optional[Path] = typer.Option(
+    local_config_file: Path | None = typer.Option(
         None, exists=True, readable=True, help=f"Path to {DEFAULT_CONFIG_FILENAME}"
     ),
-    project_id: t.Optional[str] = typer.Option(
+    project_id: str | None = typer.Option(
         None, help="Nebius project/folder identifier"
     ),
 ):
@@ -1471,10 +1475,10 @@ def add_routes_local(
 
 @app.command(name="list-routes-local")
 def list_routes_local(
-    local_config_file: t.Optional[Path] = typer.Option(
+    local_config_file: Path | None = typer.Option(
         None, exists=True, readable=True, help=f"Path to {DEFAULT_CONFIG_FILENAME}"
     ),
-    project_id: t.Optional[str] = typer.Option(
+    project_id: str | None = typer.Option(
         None, help="Nebius project/folder identifier"
     ),
 ):
@@ -1509,10 +1513,10 @@ def list_routes_local(
 
 @app.command(name="list-routes-remote")
 def list_routes_remote(
-    local_config_file: t.Optional[Path] = typer.Option(
+    local_config_file: Path | None = typer.Option(
         None, exists=True, readable=True, help=f"Path to {DEFAULT_CONFIG_FILENAME}"
     ),
-    connection: t.Optional[str] = typer.Option(
+    connection: str | None = typer.Option(
         None, help="Connection name to show routes for (default: all)"
     ),
 ):
@@ -1544,13 +1548,13 @@ def list_routes_remote(
 
 @app.command()
 def destroy(
-    local_config_file: t.Optional[Path] = typer.Option(
+    local_config_file: Path | None = typer.Option(
         None, exists=True, readable=True, help=f"Path to {DEFAULT_CONFIG_FILENAME}"
     ),
-    project_id: t.Optional[str] = typer.Option(
+    project_id: str | None = typer.Option(
         None, help="Nebius project/folder identifier"
     ),
-    zone: t.Optional[str] = typer.Option(None, help="Nebius zone for gateway VMs"),
+    zone: str | None = typer.Option(None, help="Nebius zone for gateway VMs"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ):
     """Delete gateway VMs, boot disks, private IP allocations, and routes (preserves public IPs)."""
@@ -1624,11 +1628,11 @@ def destroy(
                     from nebius.client import Client as _C
 
                     Client = _C
-                except Exception:
+                except Exception as e:
                     print(
                         "[red]Error: Nebius SDK not available. Install with 'pip install nebius'.[/red]"
                     )
-                    raise typer.Exit(code=1)
+                    raise typer.Exit(code=1) from e
 
         if (
             vm_mgr.tenant_id
@@ -1648,8 +1652,8 @@ def destroy(
 
         # Get service clients
         from nebius.api.nebius.compute.v1 import (
-            InstanceServiceClient,
             DiskServiceClient,
+            InstanceServiceClient,
             ListInstancesRequest,
         )
         from nebius.api.nebius.vpc.v1 import AllocationServiceClient
@@ -1782,8 +1786,9 @@ def destroy(
 
         # Step 3: Delete boot disks
         print("[bold]Step 3/5: Deleting boot disks...[/bold]")
-        from nebius.api.nebius.common.v1 import GetByNameRequest
         import time
+
+        from nebius.api.nebius.common.v1 import GetByNameRequest
 
         for i in range(plan.gateway_group.instance_count):
             inst_name = f"{plan.gateway_group.name}-{i}"
@@ -1847,10 +1852,10 @@ def destroy(
         deleted_routes = []
         try:
             from nebius.api.nebius.vpc.v1 import (
-                RouteTableServiceClient,
-                RouteServiceClient,
-                ListRouteTablesRequest,
                 ListRoutesRequest,
+                ListRouteTablesRequest,
+                RouteServiceClient,
+                RouteTableServiceClient,
             )
 
             rtc = RouteTableServiceClient(client)
@@ -1910,7 +1915,7 @@ def destroy(
                             allocation = next_hop.allocation
                             if hasattr(allocation, "id") and allocation.id:
                                 nh_alloc_id = allocation.id
-                                for inst_name, alloc_id in private_alloc_ids:
+                                for _inst_name, alloc_id in private_alloc_ids:
                                     if nh_alloc_id == alloc_id:
                                         # Delete this route
                                         try:
@@ -2003,7 +2008,7 @@ def destroy(
 
     except Exception as e:
         print(f"[red]Error during destroy: {e}[/red]")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from e
 
 
 # init_config command removed; auto-creation occurs on first run without --local-config-file

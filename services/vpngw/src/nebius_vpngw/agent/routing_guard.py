@@ -54,10 +54,10 @@ building strongSwan customer gateways in cloud environments.
 
 from __future__ import annotations
 
-import subprocess
-from typing import Dict, Any, List, Tuple
 import ipaddress
 import logging
+import subprocess
+from typing import Any
 
 from .tunnel_iterator import iter_active_tunnels
 
@@ -87,7 +87,7 @@ METADATA_APIPA_WHITELIST = [
 ]
 
 
-def _enforce_routing_sysctls() -> Tuple[int, List[str]]:
+def _enforce_routing_sysctls() -> tuple[int, list[str]]:
     """Enforce critical sysctl settings for XFRM routing.
 
     This provides self-healing capability if sysctls get reset by:
@@ -157,7 +157,7 @@ def _enforce_routing_sysctls() -> Tuple[int, List[str]]:
     return fixed_count, fixed_sysctls
 
 
-def enforce_routing_invariants(cfg: Dict[str, Any]) -> None:
+def enforce_routing_invariants(cfg: dict[str, Any]) -> None:
     """Enforce routing table invariants for VPN gateway.
 
     This function MUST be called on every agent startup/reload, regardless of
@@ -343,7 +343,7 @@ def _remove_broad_apipa_route() -> bool:
     return False
 
 
-def _remove_scope_link_local_prefixes(cfg: Dict[str, Any]) -> int:
+def _remove_scope_link_local_prefixes(cfg: dict[str, Any]) -> int:
     """Remove scope link routes for local prefixes that break packet forwarding.
 
     Problem:
@@ -409,7 +409,7 @@ def _remove_scope_link_local_prefixes(cfg: Dict[str, Any]) -> int:
     return removed_count
 
 
-def _cleanup_unexpected_apipa_routes(cfg: Dict[str, Any]) -> int:
+def _cleanup_unexpected_apipa_routes(cfg: dict[str, Any]) -> int:
     """Remove APIPA routes that are not explicitly defined in config.
 
     This implements declarative APIPA route management with explicit scoping:
@@ -438,7 +438,7 @@ def _cleanup_unexpected_apipa_routes(cfg: Dict[str, Any]) -> int:
     expected_tunnel_cidrs = {}  # {cidr: iface_name}
     expected_tunnel_peers = {}  # {peer_ip: iface_name}
 
-    for idx, iface_name, conn, tun in iter_active_tunnels(cfg):
+    for _idx, iface_name, _conn, tun in iter_active_tunnels(cfg):
         # Tunnel CIDR: Connected route from VTI IP assignment (kernel-added)
         inner_cidr = tun.get("inner_cidr")
         if inner_cidr:
@@ -539,7 +539,7 @@ def _cleanup_unexpected_apipa_routes(cfg: Dict[str, Any]) -> int:
         print(
             f"[RoutingGuard] Found {len(routes_to_remove)} unexpected APIPA route(s) to remove"
         )
-        for prefix, dev, full_route in routes_to_remove:
+        for prefix, dev, _full_route in routes_to_remove:
             result = subprocess.run(
                 ["ip", "route", "del", prefix, "dev", dev],
                 capture_output=True,
@@ -562,7 +562,7 @@ def _cleanup_unexpected_apipa_routes(cfg: Dict[str, Any]) -> int:
     return removed_count
 
 
-def _ensure_bgp_peer_routes(cfg: Dict[str, Any]) -> int:
+def _ensure_bgp_peer_routes(cfg: dict[str, Any]) -> int:
     """Ensure /32 routes exist for BGP peers through XFRM interfaces.
 
     Problem:
@@ -638,7 +638,7 @@ def _ensure_bgp_peer_routes(cfg: Dict[str, Any]) -> int:
     return routes_ensured
 
 
-def get_routing_diagnostics() -> Dict[str, Any]:
+def get_routing_diagnostics() -> dict[str, Any]:
     """Get current routing state for diagnostics.
 
     Returns:

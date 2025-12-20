@@ -1,9 +1,10 @@
 from __future__ import annotations
-import typing as t
-import subprocess
+
 import json
 import shlex
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+import subprocess
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 
 """
 Service Account management for Nebius VPNGW.
@@ -82,7 +83,7 @@ def ensure_service_account_and_token(
     tenant_id: str | None,
     project_id: str | None,
     region_id: str | None,
-) -> t.Optional[str]:
+) -> str | None:
     """Ensure a Service Account exists with Editor permissions and return a token.
 
     If initialization via explicit context fails, falls back to Nebius CLI config.
@@ -93,7 +94,7 @@ def ensure_service_account_and_token(
 
     # The exact IAM APIs depend on pysdk; scaffold with defensive guards.
     try:
-        iam = getattr(client, "iam")()
+        iam = client.iam()
     except Exception as e:
         # IAM not available in this SDK instance; operate without SA provisioning.
         print(f"[SA] IAM client not available: {e}")
@@ -101,7 +102,7 @@ def ensure_service_account_and_token(
 
     sa = None
     try:
-        sa_ops = getattr(iam, "service_account")
+        sa_ops = iam.service_account
         # Try to find by name; fall back to create
         if hasattr(sa_ops, "get_by_name"):
             try:
@@ -137,7 +138,7 @@ def ensure_service_account_and_token(
         print(f"[SA] Failed to grant Editor role: {e}")
 
     # Issue an access token
-    token: t.Optional[str] = None
+    token: str | None = None
     try:
         if sa is not None:
             tokens = getattr(iam, "tokens", None) or getattr(iam, "access_token", None)
@@ -160,7 +161,7 @@ def ensure_service_account_and_token(
     return None
 
 
-def get_cli_token() -> t.Optional[str]:
+def get_cli_token() -> str | None:
     """Attempt to read an IAM token from Nebius CLI config via SDK's Config reader.
 
     Returns a token string if discoverable, else None.
@@ -204,7 +205,7 @@ def get_cli_token() -> t.Optional[str]:
     return None
 
 
-def ensure_cli_access_token(timeout_seconds: int = 60) -> t.Optional[str]:
+def ensure_cli_access_token(timeout_seconds: int = 60) -> str | None:
     """Obtain an IAM access token using Nebius CLI config.
 
     Order:
@@ -230,7 +231,7 @@ def ensure_cli_access_token(timeout_seconds: int = 60) -> t.Optional[str]:
             from nebius.aio.cli_config import Config  # type: ignore
 
             client = sdk.SDK(config_reader=Config(no_parent_id=True))
-            iam = getattr(client, "iam")()
+            iam = client.iam()
             tokens = getattr(iam, "access_token", None) or getattr(iam, "tokens", None)
             if tokens is not None:
                 # Try common creation/get patterns

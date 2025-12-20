@@ -20,7 +20,7 @@ class GatewayGroupSpec:
     name: str
     instance_count: int
     region: str
-    external_ips: t.List[str]
+    external_ips: list[str]
     vm_spec: dict
 
 
@@ -36,7 +36,7 @@ class InstanceResolvedConfig:
 class ResolvedDeploymentPlan:
     gateway_group: GatewayGroupSpec
     gateway: dict = field(default_factory=dict)
-    per_instance: t.List[InstanceResolvedConfig] = field(default_factory=list)
+    per_instance: list[InstanceResolvedConfig] = field(default_factory=list)
     manage_routes: bool = False
 
     def validate(self) -> None:
@@ -100,7 +100,7 @@ def _expand_env(obj: t.Any, missing: set[str]) -> t.Any:
     return obj
 
 
-def _to_int(val: t.Any) -> t.Optional[int]:
+def _to_int(val: t.Any) -> int | None:
     """Return integer if val represents an int, else None.
 
     Accept ints directly or strings of digits (with optional leading -).
@@ -149,7 +149,7 @@ def load_local_config(path: Path) -> dict:
         # Treat unresolved placeholders in external_ips as "not provided":
         # drop any entries that remain as ${VAR} and clear those vars from missing.
         gg1 = expanded.get("gateway_group") or {}
-        ext1 = list((gg1.get("external_ips") or []))
+        ext1 = list(gg1.get("external_ips") or [])
         new_ext: list[str] = []
         for ip in ext1:
             if isinstance(ip, str) and _ENV_PATTERN.fullmatch(ip or ""):
@@ -192,7 +192,7 @@ def load_local_config(path: Path) -> dict:
             expanded["gateway_group"] = gg
     except Exception as e:
         # Re-raise as ValueError to provide a clear message to CLI
-        raise ValueError(str(e))
+        raise ValueError(str(e)) from e
 
     # ============================================================================
     # SCHEMA VALIDATION: Validate against strict Pydantic schema
@@ -216,7 +216,7 @@ def load_local_config(path: Path) -> dict:
             + "\n".join(errors)
             + "\n\nPlease fix these errors and try again. "
             "Run 'nebius-vpngw validate-config <file>' to validate without deploying."
-        )
+        ) from e
 
     return expanded
 
@@ -289,14 +289,14 @@ def _validate_tunnel_inner_ips(tunnel: dict, tunnel_name: str) -> None:
         raise ValueError(
             f"Tunnel '{tunnel_name}': Invalid IP/CIDR format - inner_cidr={inner_cidr}, "
             f"inner_local_ip={inner_local_ip}, inner_remote_ip={inner_remote_ip}. Error: {e}"
-        )
+        ) from e
 
 
 def _parse_peer_file(path: Path) -> dict:
-    from .peer_parsers import gcp as gcp_parser
     from .peer_parsers import aws as aws_parser
     from .peer_parsers import azure as azure_parser
     from .peer_parsers import cisco as cisco_parser
+    from .peer_parsers import gcp as gcp_parser
 
     text = path.read_text(encoding="utf-8", errors="ignore")
     vendor = _detect_vendor(text)
@@ -323,7 +323,7 @@ def _merge_fields(yaml_val, peer_val, default_val=None):
     return default_val
 
 
-def _resolved_local_public_ip(local_cfg: dict, tunnel: dict) -> t.Optional[str]:
+def _resolved_local_public_ip(local_cfg: dict, tunnel: dict) -> str | None:
     gg = local_cfg.get("gateway_group", {})
     ips = gg.get("external_ips", [])
     idx = tunnel.get("local_public_ip_index")
@@ -337,7 +337,7 @@ def _resolved_local_public_ip(local_cfg: dict, tunnel: dict) -> t.Optional[str]:
 
 def _score_peer_tunnel(
     conn_vendor: str,
-    conn_remote_asn: t.Optional[int],
+    conn_remote_asn: int | None,
     yaml_tun: dict,
     peer_tun: dict,
     local_cfg: dict,
@@ -386,7 +386,7 @@ def _normalize_peer_specs(peer_specs: list[dict]) -> list[dict]:
 
 
 def merge_with_peer_configs(
-    local_cfg: dict, peer_files: t.List[Path]
+    local_cfg: dict, peer_files: list[Path]
 ) -> ResolvedDeploymentPlan:
     # Build normalized peer specs
     peer_specs = [_parse_peer_file(p) for p in peer_files]
@@ -421,7 +421,7 @@ def merge_with_peer_configs(
     )
 
     # Build per-instance configs by filtering tunnels for each instance
-    per_instance: t.List[InstanceResolvedConfig] = []
+    per_instance: list[InstanceResolvedConfig] = []
     flat_peer_tunnels = _normalize_peer_specs(peer_specs)
     # Ensure external_ips is a list to avoid NoneType errors when computing length
     ext_ips = external_ips or []
@@ -438,7 +438,7 @@ def merge_with_peer_configs(
             # Connection-level hints
             conn_bgp = conn.get("bgp") or {}
             conn_remote_asn = _to_int(conn_bgp.get("remote_asn"))
-            inferred_remote_asn: t.Optional[int] = conn_remote_asn
+            inferred_remote_asn: int | None = conn_remote_asn
             conn_remote_prefixes = (
                 conn.get("remote_prefixes") or conn_bgp.get("remote_prefixes") or []
             )

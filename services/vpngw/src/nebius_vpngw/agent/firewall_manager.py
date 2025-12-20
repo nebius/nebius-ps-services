@@ -8,14 +8,14 @@ This module manages UFW firewall rules to ensure:
 
 import subprocess
 from pathlib import Path
-from typing import Dict, Any, List, Set
+from typing import Any
 
 PEER_IPS_FILE = Path("/etc/vpngw_peer_ips")
 MGMT_CIDRS_FILE = Path("/etc/vpngw_mgmt_cidrs")
 FIREWALL_SETUP_SCRIPT = Path("/usr/local/bin/setup-vpngw-firewall.sh")
 
 
-def update_peer_ips(cfg: Dict[str, Any]) -> bool:
+def update_peer_ips(cfg: dict[str, Any]) -> bool:
     """Extract peer public IPs from config and update /etc/vpngw_peer_ips.
 
     Args:
@@ -24,7 +24,7 @@ def update_peer_ips(cfg: Dict[str, Any]) -> bool:
     Returns:
         True if file was updated, False if unchanged
     """
-    peer_ips: Set[str] = set()
+    peer_ips: set[str] = set()
 
     # Extract peer IPs from connections
     for conn in cfg.get("connections", []):
@@ -56,7 +56,7 @@ def update_peer_ips(cfg: Dict[str, Any]) -> bool:
     return False
 
 
-def update_management_cidrs(cidrs: List[str]) -> bool:
+def update_management_cidrs(cidrs: list[str]) -> bool:
     """Update /etc/vpngw_mgmt_cidrs with allowed SSH source CIDRs.
 
     Args:
@@ -124,7 +124,7 @@ def reload_firewall() -> bool:
 
 
 def update_firewall_from_config(
-    cfg: Dict[str, Any], mgmt_cidrs: List[str] = None
+    cfg: dict[str, Any], mgmt_cidrs: list[str] = None
 ) -> None:
     """Update firewall configuration from gateway config.
 

@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import json
-import hashlib
-from pathlib import Path
 import datetime as dt
-import typing as t
+import hashlib
+import json
+from pathlib import Path
 
 
 def _get_package_version() -> str:
@@ -22,7 +21,7 @@ class StateStore:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
-    def load_last_applied(self) -> t.Optional[dict]:
+    def load_last_applied(self) -> dict | None:
         if not self.path.exists():
             return None
         try:

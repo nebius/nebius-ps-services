@@ -18,9 +18,9 @@ class VMSpec:
     """Normalized VM specification for comparison."""
 
     platform: str
-    preset: t.Optional[str]
-    cores: t.Optional[int]
-    memory_gb: t.Optional[int]
+    preset: str | None
+    cores: int | None
+    memory_gb: int | None
     disk_boot_image: str
     disk_type: str
     disk_gb: int
@@ -97,8 +97,8 @@ class VMDiff:
     """Comparison result between desired and actual VM state."""
 
     change_type: ChangeType
-    differences: t.List[str]  # Human-readable list of changes
-    destructive_fields: t.List[str]  # Fields requiring recreation
+    differences: list[str]  # Human-readable list of changes
+    destructive_fields: list[str]  # Fields requiring recreation
 
     def has_changes(self) -> bool:
         """Returns True if any changes detected."""
@@ -148,7 +148,7 @@ class VMDiffAnalyzer:
         "disk_block_bytes",
     }
 
-    def compare(self, desired: VMSpec, actual: t.Optional[VMSpec]) -> VMDiff:
+    def compare(self, desired: VMSpec, actual: VMSpec | None) -> VMDiff:
         """Compare desired vs actual VM specifications.
 
         Args:
@@ -167,8 +167,8 @@ class VMDiffAnalyzer:
                 destructive_fields=[],
             )
 
-        differences: t.List[str] = []
-        destructive_fields: t.List[str] = []
+        differences: list[str] = []
+        destructive_fields: list[str] = []
 
         # Check platform
         if desired.platform != actual.platform:
@@ -274,7 +274,7 @@ class VMDiffAnalyzer:
         )
 
     @staticmethod
-    def _normalize_disk_type(disk_type: t.Union[str, int]) -> str:
+    def _normalize_disk_type(disk_type: str | int) -> str:
         """Normalize disk type for comparison.
 
         Handles both string names and numeric enum values from Nebius API.

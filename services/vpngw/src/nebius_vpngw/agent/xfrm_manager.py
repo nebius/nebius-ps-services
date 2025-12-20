@@ -13,17 +13,17 @@ Key advantages over VTI:
 
 from __future__ import annotations
 
-import subprocess
 import ipaddress
-from typing import Dict, Any, List
+import subprocess
 from pathlib import Path
+from typing import Any
 
 
 class XFRMManager:
     """Manages XFRM network devices for IPsec tunnels."""
 
     def setup_interfaces(
-        self, interface_endpoints: List[Dict[str, Any]], parent_dev: str = "eth0"
+        self, interface_endpoints: list[dict[str, Any]], parent_dev: str = "eth0"
     ) -> None:
         """Create XFRM interfaces and configure them with IPs and routes.
 
@@ -70,7 +70,7 @@ class XFRMManager:
                         f"[XFRM] WARNING: Static mode interface {name} has no remote_prefixes"
                     )
 
-    def cleanup_interfaces(self, interface_names: List[str]) -> None:
+    def cleanup_interfaces(self, interface_names: list[str]) -> None:
         """Remove XFRM interfaces.
 
         Args:
@@ -155,7 +155,7 @@ class XFRMManager:
         else:
             print(f"[XFRM] WARNING: Failed to add peer route: {result.stderr}")
 
-    def _add_static_routes(self, name: str, remote_prefixes: List[str]) -> None:
+    def _add_static_routes(self, name: str, remote_prefixes: list[str]) -> None:
         """Add static routes for remote prefixes via XFRM interface."""
         for prefix in remote_prefixes:
             result = subprocess.run(

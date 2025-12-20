@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ipaddress
-from typing import Dict, List, Tuple, Optional
 
 from rich import print
 
@@ -16,8 +15,9 @@ class RouteManager:
 
     def _channel(self):
         """Create a synchronous gRPC channel for VPC API."""
-        import grpc  # type: ignore
         import os
+
+        import grpc  # type: ignore
 
         token = self.auth_token or os.environ.get("NEBIUS_IAM_TOKEN")
         if not token:
@@ -44,8 +44,8 @@ class RouteManager:
             allocation_service_pb2_grpc,
         )
 
-        nets: List[Tuple[ipaddress._BaseNetwork, str]] = []
-        alloc_to_ip: Dict[str, str] = {}
+        nets: list[tuple[ipaddress._BaseNetwork, str]] = []
+        alloc_to_ip: dict[str, str] = {}
         stub = allocation_service_pb2_grpc.AllocationServiceStub(channel)
         req = allocation_service_pb2.ListAllocationsRequest(
             parent_id=self.project_id or ""
@@ -69,12 +69,13 @@ class RouteManager:
 
     def _find_gateway_private_allocation(
         self, vpc_channel, compute_channel, plan: ResolvedDeploymentPlan
-    ) -> Optional[str]:
+    ) -> str | None:
+        import ipaddress
+
         from nebius.api.nebius.compute.v1 import (
             instance_service_pb2,
             instance_service_pb2_grpc,
         )
-        import ipaddress
 
         # Collect target instance names from the plan
         target_names = {inst.hostname for inst in plan.iter_instance_configs()}
@@ -106,13 +107,13 @@ class RouteManager:
             print(f"[red]Failed to open VPC SDK channel:[/red] {e}")
             return
         from nebius.api.nebius.vpc.v1 import (
-            subnet_service_pb2,
-            subnet_service_pb2_grpc,
             route_service_pb2,
             route_service_pb2_grpc,
+            subnet_service_pb2,
+            subnet_service_pb2_grpc,
         )
-        from rich.table import Table
         from rich.console import Console
+        from rich.table import Table
 
         gateway_prefixes = [
             ipaddress.ip_network(p)
@@ -190,8 +191,9 @@ class RouteManager:
 
         Shows what routes are announced to remote sites, organized by connection and tunnel.
         """
-        import subprocess
         import json
+        import subprocess
+
         from rich.table import Table
 
         print(
@@ -368,7 +370,7 @@ class RouteManager:
                 print(f"[yellow]Error querying BGP data: {e}[/yellow]")
 
     def _find_connection_for_peer(
-        self, peer_ip: str, connections: List[dict], inst_cfg
+        self, peer_ip: str, connections: list[dict], inst_cfg
     ) -> tuple:
         """Find connection and tunnel name for a BGP peer IP.
 
@@ -405,8 +407,9 @@ class RouteManager:
 
         # Create compute channel using same auth pattern as VPC channel
         try:
-            import grpc  # type: ignore
             import os
+
+            import grpc  # type: ignore
 
             token = self.auth_token or os.environ.get("NEBIUS_IAM_TOKEN")
             if not token:
@@ -424,18 +427,18 @@ class RouteManager:
         except Exception:
             compute_channel = None
 
+        from nebius.api.nebius.common.v1 import metadata_pb2
         from nebius.api.nebius.vpc.v1 import (
-            subnet_service_pb2,
-            subnet_service_pb2_grpc,
-            route_table_service_pb2,
-            route_table_service_pb2_grpc,
-            route_table_pb2,
+            route_pb2,
             route_service_pb2,
             route_service_pb2_grpc,
-            route_pb2,
+            route_table_pb2,
+            route_table_service_pb2,
+            route_table_service_pb2_grpc,
             subnet_pb2,
+            subnet_service_pb2,
+            subnet_service_pb2_grpc,
         )
-        from nebius.api.nebius.common.v1 import metadata_pb2
 
         gateway_prefixes = [
             ipaddress.ip_network(p)
@@ -453,7 +456,7 @@ class RouteManager:
         ) or "bgp"
 
         # Collect remote prefixes based on routing mode
-        remote_prefixes: List[str] = []
+        remote_prefixes: list[str] = []
 
         for conn in local_cfg.get("connections") or []:
             mode = conn.get("routing_mode") or defaults_mode
@@ -755,11 +758,11 @@ class RouteManager:
 
     def _get_bgp_learned_routes(
         self, plan: ResolvedDeploymentPlan, conn: dict, local_cfg: dict
-    ) -> List[str]:
+    ) -> list[str]:
         """Query FRR on gateway VMs to get BGP-learned routes (filtered by whitelist if configured)."""
-        import subprocess
-        import json
         import ipaddress
+        import json
+        import subprocess
 
         conn_name = conn.get("name", "unnamed")
         whitelist = (
@@ -871,7 +874,7 @@ class RouteManager:
         self,
         plan: ResolvedDeploymentPlan,
         local_cfg: dict,
-        connection_filter: Optional[str] = None,
+        connection_filter: str | None = None,
     ) -> None:
         """List remote routes learned via BGP or configured as static routes.
 
@@ -933,15 +936,16 @@ class RouteManager:
         hostname: str,
         external_ip: str,
         conn_name: str,
-        whitelist: List[str],
+        whitelist: list[str],
         console,
     ) -> None:
         """Query FRR BGP routes and check against whitelist."""
-        import subprocess
+        import ipaddress
         import json
         import re
+        import subprocess
+
         from rich.table import Table
-        import ipaddress
 
         # Query BGP routes via SSH
         try:
@@ -1092,11 +1096,12 @@ class RouteManager:
         hostname: str,
         external_ip: str,
         conn_name: str,
-        remote_prefixes: List[str],
+        remote_prefixes: list[str],
         console,
     ) -> None:
         """List static routes configured on gateway VM."""
         import subprocess
+
         from rich.table import Table
 
         if not remote_prefixes:

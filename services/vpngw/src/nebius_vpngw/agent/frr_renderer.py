@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Any
 
 BGPD_CONF = Path("/etc/frr/bgpd.conf")
 FRR_CONF = Path("/etc/frr/frr.conf")
@@ -24,7 +24,7 @@ class FRRRenderer:
         bgpd_seen = False
         bgpd_options_seen = False
         changed = False
-        new_lines: List[str] = []
+        new_lines: list[str] = []
         for line in text:
             stripped = line.strip()
             if stripped.startswith("bgpd="):
@@ -58,7 +58,7 @@ class FRRRenderer:
         return False
 
     def _ensure_local_prefix_routes(
-        self, local_prefixes: List[str], interface: str = "eth0"
+        self, local_prefixes: list[str], interface: str = "eth0"
     ) -> None:
         """Ensure static routes exist for local_prefixes so BGP can advertise them.
 
@@ -123,7 +123,7 @@ class FRRRenderer:
             except subprocess.CalledProcessError as e:
                 print(f"[FRR] WARNING: Failed to add route for {prefix}: {e.stderr}")
 
-    def render_and_apply(self, cfg: Dict[str, Any]) -> None:
+    def render_and_apply(self, cfg: dict[str, Any]) -> None:
         """Render FRR bgpd.conf for BGP tunnels and prefix advertisement.
 
         When routing_mode is bgp, configures neighbors for each active tunnel with APIPA link IPs.
@@ -136,7 +136,7 @@ class FRRRenderer:
         gateway = cfg.get("gateway", {})
         local_asn = gateway.get("local_asn", 65010)
         # Gateway-level local_prefixes: single source of truth for Nebius-side subnets
-        gateway_local_prefixes: List[str] = gateway.get("local_prefixes", [])
+        gateway_local_prefixes: list[str] = gateway.get("local_prefixes", [])
 
         # Ensure kernel routes exist for local_prefixes so BGP can advertise them
         if gateway_local_prefixes:
@@ -154,8 +154,8 @@ class FRRRenderer:
         ]
 
         # Track prefix-list filters for inbound BGP routes (optional whitelist)
-        prefix_list_filters: Dict[
-            str, List[str]
+        prefix_list_filters: dict[
+            str, list[str]
         ] = {}  # neighbor_ip -> list of allowed prefixes
 
         # Track which local prefixes should be advertised outbound
@@ -275,7 +275,7 @@ class FRRRenderer:
             lines.append(f"  network {pfx}")
 
         # Apply inbound prefix-list filters to neighbors (if configured)
-        for neighbor_ip in prefix_list_filters.keys():
+        for neighbor_ip in prefix_list_filters:
             list_name = f"ALLOW-FROM-{neighbor_ip.replace('.', '-')}"
             lines.append(f"  neighbor {neighbor_ip} prefix-list {list_name} in")
 

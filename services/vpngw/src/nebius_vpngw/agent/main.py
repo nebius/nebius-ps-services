@@ -5,12 +5,12 @@ from pathlib import Path
 
 import yaml
 
+from .firewall_manager import update_firewall_from_config
+from .frr_renderer import FRRRenderer
+from .routing_guard import enforce_routing_invariants
 from .state_store import StateStore
 from .strongswan_renderer import StrongSwanRenderer
-from .frr_renderer import FRRRenderer
 from .xfrm_manager import XFRMManager
-from .routing_guard import enforce_routing_invariants
-from .firewall_manager import update_firewall_from_config
 
 CONFIG_PATH = Path("/etc/nebius-vpngw/config-resolved.yaml")
 STATE_PATH = Path("/etc/nebius-vpngw/last-applied.json")

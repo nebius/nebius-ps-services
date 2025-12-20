@@ -69,6 +69,30 @@ nebius-vpngw = "nebius_vpngw.__main__:main"
 nebius-vpngw-agent = "nebius_vpngw.agent.main:main"
 build-binary = "nebius_vpngw.build:build_binary"
 
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src"]
+extend-exclude = ["dist", "build", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+ignore = [
+	"B008",
+	"B025",
+	"B028",
+	"B904",
+	"E501",
+	"E741",
+	"SIM102",
+	"SIM105",
+	"SIM108",
+	"SIM113",
+	"SIM116",
+	"SIM212",
+	"UP022",
+]
+
 [build-system]
 requires = ["setuptools>=64", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"

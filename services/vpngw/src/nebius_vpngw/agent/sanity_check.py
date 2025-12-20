@@ -11,9 +11,10 @@ Usage:
     python3 -m nebius_vpngw.agent.sanity_check
 """
 
-import sys
 import subprocess
+import sys
 from pathlib import Path
+
 import yaml
 
 from .tunnel_iterator import iter_active_tunnels
@@ -58,7 +59,7 @@ def check_routing_invariants():
     print("\n🔍 Checking BGP peer routes...")
     expected_routes = {}
 
-    for idx, iface_name, conn, tun in iter_active_tunnels(cfg):
+    for _idx, iface_name, conn, tun in iter_active_tunnels(cfg):
         # Check if this is a BGP tunnel
         routing_mode = conn.get("routing_mode") or cfg.get("defaults", {}).get(
             "routing", {}
@@ -103,7 +104,7 @@ def check_routing_invariants():
 
     # Also track expected CIDRs (connected routes from VTI IP assignments)
     expected_cidrs = set()
-    for idx, iface_name, conn, tun in iter_active_tunnels(cfg):
+    for _idx, _iface_name, _conn, tun in iter_active_tunnels(cfg):
         inner_cidr = tun.get("inner_cidr")
         if inner_cidr:
             expected_cidrs.add(inner_cidr)

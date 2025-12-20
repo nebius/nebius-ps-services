@@ -10,12 +10,13 @@ The mapping logic is:
 - Each active tunnel gets xfrm{idx} where idx increments globally across all connections
 """
 
-from typing import Iterator, Tuple, Dict, Any
+from collections.abc import Iterator
+from typing import Any
 
 
 def iter_active_tunnels(
-    cfg: Dict[str, Any],
-) -> Iterator[Tuple[int, str, Dict[str, Any], Dict[str, Any]]]:
+    cfg: dict[str, Any],
+) -> Iterator[tuple[int, str, dict[str, Any], dict[str, Any]]]:
     """Iterate over all active tunnels with their XFRM interface indices.
 
     This is the canonical source of truth for tunnel-to-interface mapping.
@@ -54,7 +55,7 @@ def iter_active_tunnels(
             idx += 1
 
 
-def get_tunnel_interface_mapping(cfg: Dict[str, Any]) -> Dict[str, Tuple[int, str]]:
+def get_tunnel_interface_mapping(cfg: dict[str, Any]) -> dict[str, tuple[int, str]]:
     """Get a mapping of tunnel names to their interface indices and names.
 
     Useful for lookups when you have a tunnel name and need its interface.
@@ -72,7 +73,7 @@ def get_tunnel_interface_mapping(cfg: Dict[str, Any]) -> Dict[str, Tuple[int, st
         Tunnel uses xfrm0 (index 0)
     """
     mapping = {}
-    for idx, iface_name, conn, tun in iter_active_tunnels(cfg):
+    for idx, iface_name, _conn, tun in iter_active_tunnels(cfg):
         tunnel_name = tun.get("name", f"tunnel{idx}")
         mapping[tunnel_name] = (idx, iface_name)
     return mapping

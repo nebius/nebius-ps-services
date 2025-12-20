@@ -4,12 +4,12 @@ This module provides functions to check the health of the VPN gateway,
 including tunnel status, BGP sessions, and routing table invariants.
 """
 
-import subprocess
-from typing import Dict, Any
 import json
+import subprocess
+from typing import Any
 
 
-def check_routing_health() -> Dict[str, Any]:
+def check_routing_health() -> dict[str, Any]:
     """Check routing table health and invariants.
 
     Returns:
@@ -76,7 +76,7 @@ def check_routing_health() -> Dict[str, Any]:
     return health
 
 
-def check_strongswan_tunnels() -> Dict[str, Any]:
+def check_strongswan_tunnels() -> dict[str, Any]:
     """Check strongSwan tunnel status.
 
     Returns:
@@ -154,7 +154,7 @@ def check_strongswan_tunnels() -> Dict[str, Any]:
     return {"tunnels": tunnels, "overall_status": overall}
 
 
-def check_bgp_sessions() -> Dict[str, Any]:
+def check_bgp_sessions() -> dict[str, Any]:
     """Check FRR BGP session status.
 
     Returns:
@@ -232,7 +232,7 @@ def check_bgp_sessions() -> Dict[str, Any]:
         return {"peers": {}, "overall_status": "error", "error": str(e)}
 
 
-def get_full_status() -> Dict[str, Any]:
+def get_full_status() -> dict[str, Any]:
     """Get comprehensive gateway status.
 
     Returns:
