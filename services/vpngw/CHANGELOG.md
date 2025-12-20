@@ -14,6 +14,10 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [v0.4.2] - 2025-12-19
+
+- Secrets file logging no longer prints the file path (CodeQL clear-text logging).
+
 ## [v0.4.1] - 2025-12-19
 
 - Deployment no longer attempts Poetry builds; wheel build uses `python -m build --wheel` only.
