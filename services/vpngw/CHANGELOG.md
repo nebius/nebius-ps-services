@@ -14,6 +14,14 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [v0.4.1] - 2025-12-19
+
+- Deployment no longer attempts Poetry builds; wheel build uses `python -m build --wheel` only.
+- Hardened strongSwan secrets write: atomic file update, 0600 perms, CodeQL justification.
+- SSH push install now verifies installed version via import metadata and uses a concise success log.
+- Ruff lint configuration added with project-specific ignores/exclusions (including generated `_version.py`).
+- Release script changelog update keeps a blank line between release headers and content.
+
 ## [v0.4.0] - 2025-12-19
 
 - fix changelog update issue in the release.sh script
