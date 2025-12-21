@@ -20,7 +20,7 @@ class GatewayGroupSpec:
     name: str
     instance_count: int
     region: str
-    external_ips: list[str]
+    external_ips: list[list[str]]
     vm_spec: dict
 
 
@@ -149,20 +149,25 @@ def load_local_config(path: Path) -> dict:
         # Treat unresolved placeholders in external_ips as "not provided":
         # drop any entries that remain as ${VAR} and clear those vars from missing.
         gg1 = expanded.get("gateway_group") or {}
-        ext1 = list(gg1.get("external_ips") or [])
-        new_ext: list[str] = []
-        for ip in ext1:
-            if isinstance(ip, str) and _ENV_PATTERN.fullmatch(ip or ""):
-                # Placeholder remained; mark its name as non-mandatory
-                m = _ENV_PATTERN.match(ip)
-                if m:
-                    missing.discard(m.group(1))
-                # Skip adding to the list
-                continue
-            if ip:
-                new_ext.append(ip)
-        if new_ext != ext1:
-            gg1["external_ips"] = new_ext
+        ext1 = gg1.get("external_ips")
+        if isinstance(ext1, list):
+            new_ext: list[t.Any] = []
+            for entry in ext1:
+                if isinstance(entry, list):
+                    cleaned: list[str] = []
+                    for ip in entry:
+                        if isinstance(ip, str) and _ENV_PATTERN.fullmatch(ip or ""):
+                            m = _ENV_PATTERN.match(ip)
+                            if m:
+                                missing.discard(m.group(1))
+                            continue
+                        if ip:
+                            cleaned.append(ip)
+                    new_ext.append(cleaned)
+                    continue
+                new_ext.append(entry)
+            if new_ext != ext1:
+                gg1["external_ips"] = new_ext
             expanded["gateway_group"] = gg1
     except Exception:
         # Ignore and let normal missing handling report variables
@@ -324,12 +329,19 @@ def _merge_fields(yaml_val, peer_val, default_val=None):
 
 
 def _resolved_local_public_ip(local_cfg: dict, tunnel: dict) -> str | None:
-    gg = local_cfg.get("gateway_group", {})
-    ips = gg.get("external_ips", [])
-    idx = tunnel.get("local_public_ip_index")
+    gg = local_cfg.get("gateway_group", {}) or {}
+    ips = gg.get("external_ips") or []
+    inst_idx = tunnel.get("gateway_instance_index", 0)
+    nic_idx = tunnel.get("local_public_ip_index")
+    if nic_idx is None:
+        nic_idx = 0
     try:
-        if isinstance(idx, int) and 0 <= idx < len(ips):
-            return ips[idx]
+        if isinstance(inst_idx, int) and 0 <= inst_idx < len(ips):
+            inst_ips = ips[inst_idx]
+            if isinstance(inst_ips, list) and isinstance(nic_idx, int):
+                if 0 <= nic_idx < len(inst_ips):
+                    val = inst_ips[nic_idx]
+                    return val or None
     except Exception:
         return None
     return None
@@ -395,7 +407,7 @@ def merge_with_peer_configs(
     name = gg.get("name", "nebius-vpn-gw")
     # Prefer gateway_group.region, else top-level region_id, else a sane default
     region = gg.get("region") or (local_cfg.get("region_id") or "eu-north1-a")
-    external_ips = gg.get("external_ips", [])
+    external_ips = gg.get("external_ips", []) or []
     vm_spec = gg.get("vm_spec", {})
 
     # Validate and normalize num_nics configuration
@@ -424,10 +436,11 @@ def merge_with_peer_configs(
     per_instance: list[InstanceResolvedConfig] = []
     flat_peer_tunnels = _normalize_peer_specs(peer_specs)
     # Ensure external_ips is a list to avoid NoneType errors when computing length
-    ext_ips = external_ips or []
+    ext_ips = external_ips
     for idx in range(instance_count):
         hostname = f"{name}-{idx}"
-        ip = ext_ips[idx] if idx < len(ext_ips) else ""
+        inst_ips = ext_ips[idx] if idx < len(ext_ips) else []
+        ip = inst_ips[0] if inst_ips else ""
         connections = local_cfg.get("connections", [])
 
         # Merge peer-derived values into tunnels that have null/empty fields
@@ -538,7 +551,16 @@ def merge_with_peer_configs(
                     )  # Make a copy to avoid modifying shared tunnel dict
                     lip = t_copy.get("local_public_ip")
                     if lip in (None, ""):
-                        t_copy["local_public_ip"] = ip
+                        local_idx = t_copy.get("local_public_ip_index")
+                        if local_idx is None:
+                            local_idx = 0
+                        if isinstance(local_idx, int) and inst_ips:
+                            if 0 <= local_idx < len(inst_ips):
+                                t_copy["local_public_ip"] = inst_ips[local_idx]
+                            elif ip:
+                                t_copy["local_public_ip"] = ip
+                        elif ip:
+                            t_copy["local_public_ip"] = ip
                     inst_tunnels.append(t_copy)
 
                 new_conn = dict(conn)

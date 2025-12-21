@@ -26,7 +26,7 @@ DEFAULT_CONFIG_TEMPLATE = f"""\
 #
 # Override hierarchy: tunnel > connection > defaults
 # Local prefixes: gateway.local_prefixes is the single source of truth
-# Environment variables: Use ${{VAR}} syntax (e.g., ${{GCP_PSK}})
+# Environment variables (optional): Use ${{VAR}} syntax (e.g., ${{GCP_PSK}})
 # Security: Keep secrets out of git-tracked files
 
 version: {SCHEMA_VERSION}
@@ -34,7 +34,7 @@ version: {SCHEMA_VERSION}
 ###############################################################################
 # Nebius Project Context
 ###############################################################################
-# REQUIRED: Set these via environment variables or replace with literal values
+# REQUIRED: Set these via environment variables or replace with literal values here:
 tenant_id: "${{TENANT_ID}}"
 project_id: "${{PROJECT_ID}}"
 region_id: "${{REGION_ID}}"  # Examples: eu-north1, eu-west1, us-central1
@@ -50,6 +50,7 @@ gateway_group:
   # - Omit or leave empty: Auto-allocate public IPs for all NICs
   # - Provide IPs: Use existing IP allocations (create missing ones)
   # - Platform constraint: Currently 1 NIC per VM
+  # - Flat lists (e.g., external_ips: ["203.0.113.10"]) are not supported
   #
   # Examples:
   #   Single VM, auto-allocate:
@@ -64,12 +65,6 @@ gateway_group:
   #       - ["203.0.113.10"]  # VM 0
   #       - ["203.0.113.20"]  # VM 1
   external_ips: []
-
-  # Management access (optional): Restrict SSH to specific CIDRs
-  # Omit to allow SSH from anywhere (not recommended for production)
-  # management_cidrs:
-  #   - "10.0.0.0/8"        # Corporate network
-  #   - "203.0.113.0/24"    # VPN range
 
   # VM Specification
   vm_spec:
@@ -106,8 +101,7 @@ gateway:
     - "10.0.0.0/16"  # Example: Main VPC CIDR
     # - "10.1.0.0/16"  # Example: Additional subnet
 
-  # IPsec interface mode (optional, defaults to xfrm-interface)
-  # - xfrm-interface: Modern XFRM netdevs (recommended, eliminates packet duplication)
+  #Default ipsec mode is xfrm-interface, VTI mode is not supported.
   # ipsec_mode: "xfrm-interface"
 
   # Resource quotas (optional)
@@ -181,7 +175,7 @@ connections:
     vendor: "gcp"
     routing_mode: "bgp"
 
-    # Remote prefixes (OPTIONAL in BGP mode):
+    # Remote prefixes (OPTIONAL in BGP mode, REQUIRED in static mode):
     # - If omitted: BGP accepts ALL routes advertised by GCP Cloud Router (RECOMMENDED)
     # - If specified: Acts as inbound whitelist filter - only these prefixes accepted
     # - NOT used for manual route installation - BGP learns routes dynamically
@@ -233,7 +227,8 @@ connections:
   #
   #   # Remote prefixes (REQUIRED in static mode):
   #   # - List ALL remote networks to route through this VPN
-  #   # - Used for actual IPsec route installation (rightsubnet)
+  #   # - Used for kernel route installation via XFRM interfaces
+  #   # - Traffic selectors remain broad (rightsubnet=0.0.0.0/0)
   #   # - Each network must be explicitly enumerated
   #   remote_prefixes:
   #     - "10.20.0.0/24"  # GCP VPC subnet 1
@@ -247,9 +242,11 @@ connections:
   #       gateway_instance_index: 0
   #       remote_public_ip: "203.0.113.3"  # REPLACE
   #       psk: "${{GCP_CLASSIC_PSK}}"
+  #       inner_cidr: "169.254.20.0/30"
+  #       inner_local_ip: "169.254.20.1"
+  #       inner_remote_ip: "169.254.20.2"
   #
-  #       # Static mode: no inner IPs needed
-  #       # Uses gateway.local_prefixes and connection.remote_prefixes
+  #       # Static mode still uses inner /30s for XFRM interfaces
 
   # Example 3: On-premises router with static routing
   # - name: "onprem-router"
@@ -271,6 +268,9 @@ connections:
   #       ike_version: 1  # Override if peer requires IKEv1
   #       remote_public_ip: "203.0.113.5"  # REPLACE
   #       psk: "${{ONPREM_PSK}}"
+  #       inner_cidr: "169.254.30.0/30"
+  #       inner_local_ip: "169.254.30.1"
+  #       inner_remote_ip: "169.254.30.2"
   #
   #       # Custom crypto (override defaults)
   #       crypto:

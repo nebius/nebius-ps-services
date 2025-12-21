@@ -103,12 +103,35 @@ The VPN gateway automatically configures UFW on the VPN gateway with the followi
 
 **Required Ports (automatically configured):**
 
+> Public (eth0):  IKE / ESP only, SSH, ICMP
+> Tunnel (xfrm*): BGP (tcp/179), ICMP, routed traffic
+
 - **UDP 500** - IKE (Internet Key Exchange) for IPsec tunnel establishment
 - **UDP 4500** - IPsec NAT-T (NAT Traversal) for ESP over UDP
 - **ESP (IP Protocol 50)** - Encapsulating Security Payload for encrypted data
-- **TCP 179** - BGP for dynamic routing (when using BGP mode)
 - **TCP 22** - SSH for management access
 - **ICMP** - For troubleshooting and diagnostics
+- **TCP 179** - BGP for dynamic routing (over xfrm* only; not exposed on public interface)
+
+**BGP (TCP/179) scope:**
+
+- Allowed only on xfrm interfaces, between APIPA peers (inner_local_ip ↔ inner_remote_ip)
+- APIPA inner IPs are assigned to xfrm interfaces and only exist after IPsec decryption
+- TCP/179 is NOT opened on the public interface (eth0)
+
+**Interface-specific rules (conceptual):**
+
+```text
+eth0 (public):
+  allow udp/500 from <peer_public_ips>
+  allow udp/4500 from <peer_public_ips>
+  allow esp from <peer_public_ips>
+  allow tcp/22 from <management_cidrs> (or anywhere if unset)
+  allow icmp
+
+xfrm*:
+  allow all (includes tcp/179 between APIPA peers)
+```
 
 **Traffic Flow:**
 
@@ -116,6 +139,7 @@ The VPN gateway automatically configures UFW on the VPN gateway with the followi
 - **Outbound:** Unrestricted (default allow)
 - **Local VPC subnets:** Allowed to forward traffic through the gateway
 - **Tunnel interfaces (xfrm*):** Unrestricted (required for BGP and encrypted traffic)
+- **BGP:** Runs only over xfrm* using APIPA inner IPs (no TCP/179 on eth0)
 
 **Peer Gateway Requirements:**
 
@@ -145,18 +169,15 @@ Before configuring your VPN gateway, collect the following information from your
 - Remote prefixes/subnets (e.g., `10.10.0.0/16`, `10.20.0.0/16`)
 - Number of tunnels (e.g., `2` for HA VPN)
 
-**For each tunnel (both modes):**
+**For each tunnel (all modes):**
 
 - Remote public IP address
 - Pre-shared key (PSK)
-
-**For each tunnel (BGP mode only):**
-
 - Inner tunnel CIDR (e.g., `169.254.5.152/30`)
 - Inner local IP (e.g., `169.254.5.154`)
 - Inner remote IP (e.g., `169.254.5.153`)
 
-> **Note:** GCP Cloud Router and AWS VPN provide all this information in their console/CLI output after creating the VPN gateway and tunnels.
+> **Note:** Inner /30s are required for XFRM interface addressing even in static mode; GCP Cloud Router and AWS VPN provide all this information in their console/CLI output after creating the VPN gateway and tunnels.
 
 ### First Deployment
 
@@ -171,31 +192,80 @@ nebius-vpngw create-config my-vpn.config.yaml
 ```yaml
 version: 1
 
+tenant_id: ${TENANT_ID}
+project_id: ${PROJECT_ID}
+region_id: ${REGION_ID}
+
 gateway_group:
-  project_id: ${NEBIUS_PROJECT_ID}
-  zone: eu-north1-c
+  name: "nebius-vpn-gw"
   instance_count: 1
-  platform_id: standard-v3
+  external_ips: []
+  vm_spec:
+    platform: "cpu-d3"
+    preset: "4vcpu-16gb"
+    disk_boot_image: "ubuntu24.04-driverless"
+    disk_gb: 50
+    disk_type: "network_ssd"
+    disk_block_bytes: 4096
+    num_nics: 1
+    ssh_public_key_path: "~/.ssh/id_ed25519.pub"
   
 gateway:
   local_asn: 64512
   local_prefixes:
     - "10.0.0.0/16"
   # ipsec_mode: xfrm-interface  # Default: modern XFRM (recommended)
+
+defaults:
+  vpn_type: ipsec
+  ike_version: 2
+  allow_ikev1: true
+  auth:
+    method: psk
+  crypto:
+    ike_proposals:
+      - "aes256gcm16-prfsha256-modp2048"
+    ike_lifetime_seconds: 28800
+    esp_proposals:
+      - "aes256gcm16-modp2048"
+    esp_lifetime_seconds: 3600
+    dh_groups:
+      - 14
+  dpd:
+    interval_seconds: 30
+    timeout_seconds: 120
+  routing:
+    mode: bgp
+    bgp:
+      hold_time_seconds: 60
+      keepalive_seconds: 20
+      graceful_restart: true
+      max_prefixes: 1000
     
 connections:
   - name: gcp-ha-vpn
-    remote_public_ips:
-      - "203.0.113.1"
+    vendor: gcp
+    routing_mode: bgp
+    bgp:
+      enabled: true
+      remote_asn: 65001
+      advertise_local_prefixes: true
     tunnels:
       - name: tunnel-1
+        gateway_instance_index: 0
         psk: ${GCP_TUNNEL_1_PSK}
+        remote_public_ip: "203.0.113.1"
+        inner_cidr: "169.254.10.0/30"
+        inner_local_ip: "169.254.10.1"
+        inner_remote_ip: "169.254.10.2"
 ```
 
 **3. Set environment variables:**
 
 ```bash
-export NEBIUS_PROJECT_ID="my-project-id"
+export TENANT_ID="my-tenant-id"
+export PROJECT_ID="my-project-id"
+export REGION_ID="eu-north1"
 export GCP_TUNNEL_1_PSK="your-pre-shared-key"
 ```
 
@@ -232,7 +302,7 @@ nebius-vpngw status --local-config-file my-vpn.config.yaml
 
 **Networking:**
 
-- Dedicated `vpngw-subnet` (/27 CIDR) for gateway isolation
+- Dedicated `vpngw-subnet` (/24 CIDR) for gateway isolation
 - One NIC per VM (platform constraint), future-ready for multi-NIC
 - Public IP allocations preserved across VM recreation
 
@@ -245,15 +315,23 @@ For detailed architecture, see [design document](doc/design.md).
 ```yaml
 version: 1
 
+tenant_id: ${TENANT_ID}
+project_id: ${PROJECT_ID}
+region_id: ${REGION_ID}
+
 gateway_group:
-  project_id: ${PROJECT_ID}
-  zone: eu-north1-c
+  name: "nebius-vpn-gw"
   instance_count: 2
-  platform_id: standard-v3
-  cores: 4
-  memory: 8
-  disk_size: 30
   external_ips: []  # Auto-allocate
+  vm_spec:
+    platform: "cpu-d3"
+    preset: "4vcpu-16gb"
+    disk_boot_image: "ubuntu24.04-driverless"
+    disk_gb: 50
+    disk_type: "network_ssd"
+    disk_block_bytes: 4096
+    num_nics: 1
+    ssh_public_key_path: "~/.ssh/id_ed25519.pub"
 
 gateway:
   local_asn: 64512
@@ -262,35 +340,58 @@ gateway:
     - "10.1.0.0/16"
 
 defaults:
+  vpn_type: ipsec
+  ike_version: 2
+  allow_ikev1: true
+  auth:
+    method: psk
   crypto:
-    ike_version: 2
     ike_proposals:
       - "aes256gcm16-prfsha256-modp2048"
+    ike_lifetime_seconds: 28800
     esp_proposals:
       - "aes256gcm16-modp2048"
+    esp_lifetime_seconds: 3600
+    dh_groups:
+      - 14
+  dpd:
+    interval_seconds: 30
+    timeout_seconds: 120
   routing:
     mode: bgp
-    advertise_local_prefixes: true
-  dpd:
-    delay: 30
-    timeout: 120
+    bgp:
+      hold_time_seconds: 60
+      keepalive_seconds: 20
+      graceful_restart: true
+      max_prefixes: 1000
 
 connections:
   - name: peer-vpn
-    remote_public_ips:
-      - "203.0.113.1"
-    remote_asn: 65001
+    vendor: generic
+    routing_mode: bgp
     # Optional in BGP mode: used for filtering received BGP routes
     # remote_prefixes:
     #   - "192.168.0.0/16"
+    bgp:
+      enabled: true
+      remote_asn: 65001
+      advertise_local_prefixes: true
     tunnels:
       - name: tunnel-1
+        gateway_instance_index: 0
+        local_public_ip_index: 0
         psk: ${TUNNEL_1_PSK}
-        inner_local_ip: "169.254.10.1/30"
+        remote_public_ip: "203.0.113.1"
+        inner_cidr: "169.254.10.0/30"
+        inner_local_ip: "169.254.10.1"
         inner_remote_ip: "169.254.10.2"
       - name: tunnel-2
+        gateway_instance_index: 1
+        local_public_ip_index: 0
         psk: ${TUNNEL_2_PSK}
-        inner_local_ip: "169.254.10.5/30"
+        remote_public_ip: "203.0.113.2"
+        inner_cidr: "169.254.10.4/30"
+        inner_local_ip: "169.254.10.5"
         inner_remote_ip: "169.254.10.6"
 ```
 
@@ -309,28 +410,49 @@ connections:
 ```yaml
 connections:
   - name: gcp-vpn
+    vendor: gcp
     routing_mode: bgp
     # Optional: Whitelist specific prefixes (filter)
     remote_prefixes:
       - "10.0.0.0/8"   # Only accept 10.0.0.0/8 from peer
     bgp:
+      enabled: true
       remote_asn: 65001
+    tunnels:
+      - name: tunnel-1
+        gateway_instance_index: 0
+        remote_public_ip: "203.0.113.1"
+        psk: ${TUNNEL_1_PSK}
+        inner_cidr: "169.254.10.0/30"
+        inner_local_ip: "169.254.10.1"
+        inner_remote_ip: "169.254.10.2"
 ```
 
 **Static Mode:**
 
 - `remote_prefixes` is **required** (or specified per-tunnel in `static_routes`)
-- Used to install actual static routes via IPsec rightsubnet
+- Used to install kernel routes via XFRM interfaces (rightsubnet stays 0.0.0.0/0)
 - You must enumerate each remote network manually
 - No dynamic route learning
 
 ```yaml
 connections:
   - name: peer-vpn
+    vendor: generic
     routing_mode: static
     remote_prefixes:      # Required: actual routes to install
       - "192.168.1.0/24"
       - "192.168.2.0/24"
+    bgp:
+      enabled: false
+    tunnels:
+      - name: tunnel-1
+        gateway_instance_index: 0
+        remote_public_ip: "203.0.113.1"
+        psk: ${TUNNEL_1_PSK}
+        inner_cidr: "169.254.20.0/30"
+        inner_local_ip: "169.254.20.1"
+        inner_remote_ip: "169.254.20.2"
 ```
 
 ### Schema Validation
@@ -338,8 +460,8 @@ connections:
 **Strict validation** enforces correctness before deployment:
 
 - **Type safety:** IPs, CIDRs, ASNs, booleans validated
-- **Constraints:** ASN 64512-65534, /30 subnets, APIPA 169.254.0.0/16
-- **Consistency:** BGP mode requires `remote_asn`, tunnel IPs must be unique
+- **Constraints:** ASN validated (private 64512-65534 recommended; public/extended allowed), /30 subnets, APIPA 169.254.0.0/16
+- **Consistency:** BGP mode requires `bgp.enabled: true` and `bgp.remote_asn`; inner IPs must be host addresses within inner_cidr
 - **Unknown fields:** Rejects typos like `inner_ciddr` or `remote_ips`
 
 **API versioning:**
@@ -363,11 +485,11 @@ nebius-vpngw apply --local-config-file my-vpn.config.yaml
 Use `${VAR}` for secrets and environment-specific values:
 
 ```yaml
-project_id: ${NEBIUS_PROJECT_ID}
+tenant_id: ${TENANT_ID}
+project_id: ${PROJECT_ID}
+region_id: ${REGION_ID}
 psk: ${TUNNEL_1_PSK}
-remote_public_ips:
-  - ${PEER_IP_1}
-  - ${PEER_IP_2}
+remote_public_ip: ${PEER_IP_1}
 ```
 
 Missing variables are reported before deployment.
@@ -488,7 +610,8 @@ nebius-vpngw list-routes-remote --local-config-file <file>
 
 **Requirements:**
 
-- `remote_asn` must be configured
+- `bgp.remote_asn` must be configured
+- `bgp.enabled` must be true when `routing_mode: bgp`
 - Inner IPs must be /30 APIPA (169.254.0.0/16)
 - Peer must support BGP
 
@@ -498,7 +621,6 @@ nebius-vpngw list-routes-remote --local-config-file <file>
 defaults:
   routing:
     mode: bgp
-    advertise_local_prefixes: true
     
 gateway:
   local_asn: 64512
@@ -507,10 +629,19 @@ gateway:
     
 connections:
   - name: peer
-    remote_asn: 65001
+    vendor: generic
+    routing_mode: bgp
+    bgp:
+      enabled: true
+      remote_asn: 65001
+      advertise_local_prefixes: true
     tunnels:
       - name: tunnel-1
-        inner_local_ip: "169.254.10.1/30"
+        gateway_instance_index: 0
+        remote_public_ip: "203.0.113.1"
+        psk: ${TUNNEL_1_PSK}
+        inner_cidr: "169.254.10.0/30"
+        inner_local_ip: "169.254.10.1"
         inner_remote_ip: "169.254.10.2"
 ```
 
@@ -538,12 +669,23 @@ defaults:
     
 connections:
   - name: peer
+    vendor: generic
     routing_mode: static
     # Required: List all remote networks to route
     remote_prefixes:
       - "192.168.1.0/24"
       - "192.168.2.0/24"
       - "192.168.3.0/24"
+    bgp:
+      enabled: false
+    tunnels:
+      - name: tunnel-1
+        gateway_instance_index: 0
+        remote_public_ip: "203.0.113.1"
+        psk: ${TUNNEL_1_PSK}
+        inner_cidr: "169.254.20.0/30"
+        inner_local_ip: "169.254.20.1"
+        inner_remote_ip: "169.254.20.2"
 ```
 
 **Route management:**
@@ -576,23 +718,26 @@ nebius-vpngw list-routes-remote --local-config-file <file>
 ```yaml
 tunnels:
   - name: tunnel-1
-    inner_local_ip: "169.254.10.1/30"
+    inner_cidr: "169.254.10.0/30"
+    inner_local_ip: "169.254.10.1"
     inner_remote_ip: "169.254.10.2"
   - name: tunnel-2
-    inner_local_ip: "169.254.10.5/30"
+    inner_cidr: "169.254.10.4/30"
+    inner_local_ip: "169.254.10.5"
     inner_remote_ip: "169.254.10.6"
 ```
 
 ### BGP Timers
 
-Customize per connection or tunnel:
+Customize defaults:
 
 ```yaml
 defaults:
-  bgp:
-    hold_time: 60
-    keepalive_interval: 20
-    graceful_restart: true
+  routing:
+    bgp:
+      hold_time_seconds: 60
+      keepalive_seconds: 20
+      graceful_restart: true
 ```
 
 ### BGP Troubleshooting
@@ -664,8 +809,8 @@ nebius-vpngw apply \
 
 **Merge behavior:**
 
-- Fills only **missing** fields (PSKs, remote IPs, ASNs, inner IPs)
-- Never overrides explicit YAML values
+- Fills only empty YAML fields; explicit YAML values always win
+- Local config must pass schema validation; required fields cannot be omitted
 - Your topology is the source of truth
 
 ### Example: GCP HA VPN
@@ -678,26 +823,32 @@ gcloud compute routers describe my-router \
   --format yaml > gcp-peer.txt
 ```
 
-**2. Create minimal Nebius config:**
+**2. Create Nebius config from the template and edit the `connections` section:**
 
 ```yaml
-version: 1
-
-gateway_group:
-  project_id: ${NEBIUS_PROJECT_ID}
-  zone: eu-north1-c
-  instance_count: 1
-
-gateway:
-  local_asn: 64512
-  local_prefixes:
-    - "10.0.0.0/16"
-
 connections:
   - name: gcp-ha-vpn
+    vendor: gcp
+    routing_mode: bgp
+    bgp:
+      enabled: true
+      remote_asn: 65014
+      advertise_local_prefixes: true
     tunnels:
       - name: tunnel-1
+        gateway_instance_index: 0
+        remote_public_ip: "203.0.113.1"
+        psk: ${GCP_TUNNEL_1_PSK}
+        inner_cidr: "169.254.10.0/30"
+        inner_local_ip: "169.254.10.1"
+        inner_remote_ip: "169.254.10.2"
       - name: tunnel-2
+        gateway_instance_index: 0
+        remote_public_ip: "203.0.113.2"
+        psk: ${GCP_TUNNEL_2_PSK}
+        inner_cidr: "169.254.11.0/30"
+        inner_local_ip: "169.254.11.1"
+        inner_remote_ip: "169.254.11.2"
 ```
 
 **3. Deploy with peer config:**
@@ -708,7 +859,7 @@ nebius-vpngw apply \
   --peer-config-file gcp-peer.txt
 ```
 
-Merger fills PSKs, remote IPs, remote ASN, and inner IPs from GCP config.
+Merger fills only empty YAML fields from the GCP config; explicit YAML values always win.
 
 ## VM Management
 
@@ -736,6 +887,8 @@ nebius-vpngw apply --local-config-file <file> --recreate-gw
 **Downtime:** Tunnel re-establishment time only (IPs never change)
 
 ### Public IP Preservation
+
+`external_ips` is a list per instance; each inner list maps to NICs on that VM. Legacy flat lists are not supported.
 
 **Configuration:**
 
@@ -815,6 +968,7 @@ Agent synchronizes UFW rules with active tunnels:
 
 - Adds peer IPs when tunnels configured
 - Removes stale peer IPs when tunnels deleted
+- Keeps local prefix rules in sync with `gateway.local_prefixes`
 - XFRM interfaces not filtered by UFW (allows BGP/encrypted traffic to flow)
 
 ### Secrets Management
@@ -886,7 +1040,7 @@ sudo vtysh -c "show ip route bgp"
 
 **Common fixes:**
 
-1. **ASN mismatch:** Verify `local_asn` and `remote_asn` match peer
+1. **ASN mismatch:** Verify `local_asn` and `bgp.remote_asn` match peer
 2. **Inner IPs:** Ensure /30 APIPA subnets unique per tunnel
 3. **IPsec down:** Fix tunnel before debugging BGP
 4. **FRR version:** Upgrade to 10.x if routes not installing
@@ -904,7 +1058,7 @@ nebius-vpngw status --local-config-file <file>
 ```bash
 ssh ubuntu@<gateway-ip>
 sudo ip route show table 220  # Should be empty
-sudo ip route | grep 169.254  # Should show /30 routes only (tunnels) + metadata (169.254.169.x)
+sudo ip route | grep 169.254  # Should show /30 tunnel routes, /32 peer routes, + metadata (169.254.169.x)
 sudo ip link show type xfrm   # xfrm0/xfrm1 should exist and be UP
 sudo ip addr show xfrm0       # Should have inner_local_ip/30
 sudo ip xfrm policy           # Local selector = inner /30 + gateway.local_prefixes; remote = 0.0.0.0/0
@@ -1090,7 +1244,7 @@ sudo journalctl -u systemd-networkd | grep -E "(route|169.254)"
 sudo journalctl | grep netplan
 
 # Kernel network messages
-sudo dmesg | grep -E "(eth0|vti|route)" | tail -20
+sudo dmesg | grep -E "(eth0|xfrm|route)" | tail -20
 ```
 
 **Firewall Logs (UFW rule changes):**
@@ -1105,9 +1259,10 @@ sudo journalctl | grep ufw | tail -20
 # Check current UFW rules
 sudo ufw status verbose
 # Expected posture (no management CIDRs):
-# - SSH allowed from anywhere
-# - ICMP allowed from anywhere
+# - SSH allowed from anywhere (or from management CIDRs if configured)
+# - ICMP allowed from anywhere on eth0
 # - IPsec (UDP 500/4500, ESP) allowed from peers (or anywhere until peers known)
+# - TCP 179 not exposed on eth0 (BGP runs over xfrm*)
 # - All traffic allowed on xfrm* tunnel interfaces
 # - Default deny inbound on eth0 for other ports
 ```
@@ -1135,18 +1290,19 @@ sudo journalctl --since "5 minutes ago" \
 
 ```bash
 # Successful routing guard execution (clean state)
-[RoutingGuard] ✓ No orphan routes found. Table 220 & APIPA OK. BGP peer routes: 2
+[RoutingGuard] ✓ All invariants OK. BGP peer routes: 2
 
 # Routing issues detected and fixed
 [RoutingGuard] Found 1 unexpected APIPA route(s) to remove
 [RoutingGuard] Removed orphan APIPA route: 169.254.99.0/24 dev eth0
 [RoutingGuard] Removed policy rule: pref 220 from all lookup 220
 [RoutingGuard] ✓ Table 220 completely removed
-[RoutingGuard] Summary: table_220_removed=True orphaned_apipa_removed=1
+[RoutingGuard] Summary: sysctls_fixed=0 table_220_removed=True broad_apipa_removed=True scope_link_routes_removed=0 orphaned_apipa_removed=1 bgp_peer_routes_ensured=2
+[RoutingGuard] ✓ Routing invariants enforced
 
 # BGP sessions established
-[RoutingGuard] Ensured route 169.254.18.225/32 via vti0
-[RoutingGuard] Ensured route 169.254.5.153/32 via vti1
+[RoutingGuard] Ensured route 169.254.18.225/32 via xfrm0
+[RoutingGuard] Ensured route 169.254.5.153/32 via xfrm1
 
 # Config changes applied
 [Agent] Received signal 1; reloading

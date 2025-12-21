@@ -1,9 +1,9 @@
 # Nebius VPN Gateway (VM-Based) — Design Document
 
-Version: v0.4
-Designed by: Reza B.
-Copyright 2025 Nebius B.V.
-Licensed under the Apache License, Version 2.0
+> Version: v0.4
+> Designed by: Reza Bahmanzadeh, Nebius Professional Services, CX Org.
+> Copyright 2025 Nebius B.V.
+> Licensed under the Apache License, Version 2.0
 
 ## Table of Contents
 
@@ -28,7 +28,7 @@ Licensed under the Apache License, Version 2.0
 - [Project Structure](#project-structure)
 - [Tips & Troubleshooting](#tips--troubleshooting)
 
-> Note: Legacy VTI support has been removed. XFRM interfaces are the only supported mode going forward.
+> Note: Legacy VTI support has been removed. XFRM interfaces are the only > supported mode going forward.
 
 ## XFRM Mode Summary (current, required)
 
@@ -36,7 +36,11 @@ Licensed under the Apache License, Version 2.0
 - Traffic selectors: local side is scoped to the tunnel’s inner /30 plus `gateway.local_prefixes`; remote stays `0.0.0.0/0`. This keeps SSH/ping to the public IP off the tunnel while allowing any remote prefixes to traverse.
 - Routing hygiene: table 220 is removed; the broad `169.254.0.0/16` DHCP route is removed while preserving metadata routes (`169.254.169.x`). Prevents policy routing and APIPA from stealing tunnel/management traffic.
 - Sysctl: `rp_filter=0` on all/default/eth0 (required for XFRM), IP forwarding enabled, redirects off, ARP hardened.
-- Firewall: UFW allows SSH from management CIDRs (or anywhere if not configured), IPsec (UDP 500/4500, ESP) from peer IPs, BGP (TCP 179) for dynamic routing, traffic from local VPC subnets for forwarding, ICMP for troubleshooting, and permits all traffic on tunnel interfaces (xfrm*). Everything else inbound on eth0 is denied.
+- Firewall: UFW allows SSH from management CIDRs (or anywhere if not configured), IPsec (UDP 500/4500, ESP) from peer IPs, traffic from local VPC subnets for forwarding, ICMP for troubleshooting, and permits all traffic on tunnel interfaces (xfrm*). BGP (TCP 179) is reachable only over xfrm* between APIPA peers (169.254.x.x), which only exist after IPsec decryption; no TCP/179 on eth0. Everything else inbound on eth0 is denied.
+
+> Public (eth0):   IKE / ESP only, SSH, ICMP
+> Tunnel (xfrm*):  BGP (tcp/179), ICMP, routed traffic
+
 - Interfaces must exist before IPsec brings up CHILD_SAs; agent creates XFRM devices and assigns inner IPs/routes before FRR reload.
 
 ## Purpose & Scope
@@ -119,7 +123,7 @@ These features are not currently implemented but may be considered for future en
 ### VPC and Subnets
 
 - One VPC network selected via `network_id` (optional; see resolution logic below)
-- Dedicated `vpngw-subnet` (/27 CIDR) created automatically if missing
+- Dedicated `vpngw-subnet` (/24 CIDR) created automatically if missing
 - Dedicated route table (`vpngw-subnet-routing-table`) with default egress route
 - Workload subnets remain separate for security isolation
 
@@ -148,7 +152,7 @@ This intelligent resolution handles the common case (default network or single V
 
 ### Public IP Allocations
 
-Configuration shape: `external_ips[instance_index][nic_index]` → IP string
+Configuration shape: `external_ips[instance_index][nic_index]` → IP string (flat lists are not supported)
 
 **Behavior:**
 
@@ -217,7 +221,7 @@ Template includes comprehensive comments and examples. Files with `.config.yaml`
 - Rejects unknown fields (catches typos like `inner_ciddr`)
 - Validates types (IPs, CIDRs, numbers, booleans)
 - Enforces constraints (ASN ranges 64512-65534, /30 subnets, APIPA ranges)
-- Checks logical consistency (BGP mode requires `remote_asn`)
+- Checks logical consistency (BGP mode requires `bgp.remote_asn`)
 - Verifies resource quotas
 
 **API Versioning:**
@@ -307,7 +311,7 @@ Global default under `defaults.routing.mode`; override per connection/tunnel.
 
 **BGP mode:** Advertised to peers when `advertise_local_prefixes: true`
 
-**Static mode:** Used for VPC route management (not for IPsec traffic selectors)
+**Static mode:** Used for VPC route management and included in leftsubnet selectors
 
 ### Remote Prefixes
 
@@ -316,7 +320,7 @@ Global default under `defaults.routing.mode`; override per connection/tunnel.
 | Routing Mode | remote_prefixes Usage |
 | ------------ | --------------------- |
 | **BGP** | Optional - acts as inbound filter/whitelist. If omitted, accepts all BGP routes. |
-| **Static** | Required - used for actual route installation (rightsubnet in IPsec). |
+| **Static** | Required - used for kernel route installation via XFRM interfaces. |
 
 **BGP mode:**
 
@@ -329,7 +333,7 @@ Global default under `defaults.routing.mode`; override per connection/tunnel.
 **Static mode:**
 
 - **Required** (or in `tunnel.static_routes.remote_prefixes`)
-- Used for actual IPsec route installation (`rightsubnet`)
+- Used for kernel route installation via XFRM interfaces (rightsubnet stays 0.0.0.0/0)
 - Each remote network must be explicitly listed
 - No dynamic learning
 
@@ -350,7 +354,7 @@ The gateway supports two interface modes for IPsec tunnels:
 
 Modern kernel XFRM netdevs bound to strongSwan CHILD_SAs via `if_id`:
 
-- Creates `xfrm-gcp-ha-1`, `xfrm-gcp-ha-2`, etc. interfaces
+- Creates `xfrm0`, `xfrm1`, etc. interfaces
 - Each tunnel bound via `if_id_in/if_id_out` parameters (e.g., 100, 101)
 - No marks or updown scripts required
 - **Eliminates packet duplication** issue with 0.0.0.0/0 traffic selectors
@@ -370,7 +374,7 @@ gateway:
 **XFRM Setup:**
 
 - strongSwan config uses `if_id_in=100, if_id_out=100` (no marks)
-- Agent creates XFRM devices: `ip link add xfrm-gcp-ha-1 type xfrm dev eth0 if_id 100`
+- Agent creates XFRM devices: `ip link add xfrm0 type xfrm dev eth0 if_id 100`
 - Inner APIPA addresses assigned to XFRM interfaces for BGP peering
 - MTU set to 1387 (GCP MTU 1460 - IPsec overhead 73 bytes)
 
@@ -391,16 +395,18 @@ Legacy Virtual Tunnel Interface support has been removed due to packet duplicati
 
 `leftsubnet` and `rightsubnet` in strongSwan define **only the IPsec Traffic Selectors (TS)** exchanged during IKE negotiation. They do **NOT install routes** and do **NOT control which networks are routed through the tunnel**.
 
-**For route-based VPN (XFRM), always use:**
+**For route-based VPN (XFRM), use:**
 
 ```text
-leftsubnet=0.0.0.0/0
+leftsubnet=<inner /30 + gateway.local_prefixes>
 rightsubnet=0.0.0.0/0
 ```
 
+leftsubnet is a comma-separated list of the tunnel inner /30 plus `gateway.local_prefixes`.
+
 This configuration:
 
-- Tells strongSwan: "Allow ANY inner packet to be encapsulated"
+- Allows any remote prefix for the configured local selectors (inner /30 + `gateway.local_prefixes`)
 - Permits the tunnel to carry:
   - BGP APIPA traffic (169.254.x.x)
   - All dynamically learned remote prefixes
@@ -420,7 +426,7 @@ This configuration:
 
 - **The routing table** → what prefixes point to the XFRM interface
 - **BGP daemon** → which routes FRR installs dynamically
-- **NOT** leftsubnet/rightsubnet → these are "wide open" allow-lists
+- **NOT** leftsubnet/rightsubnet → these are IPsec selector allow-lists, not route selection
 
 **Why this matters:**
 
@@ -462,7 +468,7 @@ The configuration fields `local_prefixes` and `remote_prefixes` have different m
 
 - BGP: Remote prefixes are **dynamic** (no YAML config needed)
 - Static: Remote prefixes must be **explicitly configured** in YAML
-- Both modes: Use route-based VPN with `0.0.0.0/0` traffic selectors
+- Both modes: rightsubnet is 0.0.0.0/0; leftsubnet includes the inner /30 plus `gateway.local_prefixes`
 
 ### Crypto Proposals
 
@@ -878,10 +884,10 @@ sudo ufw status verbose
 **Recovery if UFW is Inactive:**
 
 ```bash
-# Enable UFW (will activate netfilter)
-sudo /usr/local/bin/setup-vpngw-firewall.sh
+# Re-apply firewall config via agent (preferred)
+sudo systemctl restart nebius-vpngw-agent
 
-# Or manually:
+# If UFW was disabled manually:
 sudo ufw enable
 ```
 
@@ -896,7 +902,7 @@ sudo ufw enable
 - **UDP 500** - IKE (Internet Key Exchange) for IPsec tunnel establishment
 - **UDP 4500** - IPsec NAT-T (NAT Traversal) for ESP over UDP when behind NAT
 - **ESP (IP Protocol 50)** - Encapsulating Security Payload for encrypted VPN data
-- **TCP 179** - BGP for dynamic routing (critical for route exchange)
+- **TCP 179** - BGP for dynamic routing (over xfrm* only; not exposed on public interface)
 - **TCP 22** - SSH for management access (can be restricted to management CIDRs)
 - **ICMP** - For path MTU discovery and troubleshooting
 
@@ -906,17 +912,37 @@ sudo ufw enable
 - **Loopback:** Unrestricted (localhost communication)
 - **SSH access:** Restricted to management CIDRs when configured, otherwise from anywhere (protected by fail2ban)
 - **IPsec protocols:** Allowed from peer gateway public IPs (UDP 500, 4500, ESP)
-- **BGP:** Allowed on all interfaces (TCP 179) for dynamic routing
+- **BGP:** Allowed only on tunnel interfaces (xfrm*); no TCP/179 on public interface
 - **Local VPC subnets:** Traffic from `gateway.local_prefixes` allowed for forwarding through the gateway
 - **Tunnel interfaces (xfrm*):** Unrestricted traffic allowed (BGP runs over these encrypted channels)
 - **ICMP:** Allowed on public interface for troubleshooting
+
+**BGP (TCP/179) scope:**
+
+- BGP peers use APIPA inner IPs (e.g., `169.254.18.226 ↔ 169.254.18.225`)
+- These APIPA addresses are assigned to xfrm interfaces (xfrm0, xfrm1, ...)
+- They are reachable only after IPsec decryption; TCP/179 is never opened on eth0
+
+**Interface-specific rules (conceptual):**
+
+```text
+eth0 (public):
+  allow udp/500 from <peer_public_ips>
+  allow udp/4500 from <peer_public_ips>
+  allow esp from <peer_public_ips>
+  allow tcp/22 from <management_cidrs> (or anywhere if unset)
+  allow icmp
+
+xfrm*:
+  allow all (includes tcp/179 between APIPA peers)
+```
 
 **Dynamic Updates:** The agent (`firewall_manager.py`) synchronizes UFW rules with active tunnels:
 
 - Adds peer IPs dynamically as tunnels are configured
 - Removes stale peer IPs when tunnels are removed
 - Updates local prefix rules when configuration changes
-- Maintains firewall state in `/etc/vpngw_peer_ips` and `/etc/vpngw_local_prefixes`
+- Maintains firewall state in `/etc/vpngw_peer_ips`, `/etc/vpngw_mgmt_cidrs`, and `/etc/vpngw_local_prefixes`
 
 **Security Benefits:**
 
@@ -1197,10 +1223,10 @@ sudo ufw status
 **Solution:**
 
 ```bash
-# Enable UFW firewall
-sudo /usr/local/bin/setup-vpngw-firewall.sh
+# Re-apply firewall config via agent (preferred)
+sudo systemctl restart nebius-vpngw-agent
 
-# Or manually enable:
+# If UFW was disabled manually:
 sudo ufw enable
 
 # Verify it's active
@@ -1215,7 +1241,7 @@ sudo ufw status verbose
 
 **Prevention:**
 
-- The firewall setup script should run automatically during VM creation (cloud-init)
+- Firewall setup runs automatically during VM creation (cloud-init) and is re-applied by the agent
 - Always verify UFW is active after deploying a new gateway
 - Include UFW check in monitoring/health checks
 
