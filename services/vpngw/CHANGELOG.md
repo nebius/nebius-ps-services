@@ -14,6 +14,13 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [v0.4.3] - 2025-12-20
+
+- Enforced nested `gateway_group.external_ips` (list of lists) in schema and removed legacy flat-list handling.
+- Static routing now requires `remote_prefixes` (connection-level or per-tunnel); example configs updated accordingly.
+- Firewall setup aligned with XFRM BGP: TCP/179 not exposed on eth0, with tunnel-interface allowances and ICMP handling clarified.
+- Embedded config template/docs refreshed; redundant template file removed and `*.config.yaml` ignored.
+
 ## [v0.4.2] - 2025-12-19
 
 - Secrets file logging no longer prints the file path (CodeQL clear-text logging).
