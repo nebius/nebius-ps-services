@@ -1475,7 +1475,7 @@ class VMManager:
                     # ALLOCATION STRATEGY:
                     # - Create num_nics allocations (one per network interface)
                     # - Allocations are named: {instance}-eth0-ip, {instance}-eth1-ip, etc.
-                    # - Map external_ips array in order: external_ips[0] → eth0, external_ips[1] → eth1
+                    # - Map external_ips per instance: external_ips[instance_index][nic_index]
                     # - If external_ips not provided or insufficient, auto-create allocations
                     # - PRESERVATION: When recreating VMs, reuse preserved allocations (same IPs)
                     # CURRENT PLATFORM LIMITATION: num_nics=1 (enforced by config_loader)
@@ -1492,9 +1492,16 @@ class VMManager:
                         num_nics = 1
 
                     desired_ips = []
-                    if spec.external_ips:
-                        # Take first num_nics IPs from external_ips array
-                        desired_ips = [ip for ip in spec.external_ips[:num_nics] if ip]
+                    instance_external_ips: list[str] = []
+                    if spec.external_ips and i < len(spec.external_ips):
+                        inst_ips = spec.external_ips[i] or []
+                        if isinstance(inst_ips, list):
+                            instance_external_ips = inst_ips
+                    if instance_external_ips:
+                        # Take first num_nics IPs for this instance
+                        desired_ips = [
+                            ip for ip in instance_external_ips[:num_nics] if ip
+                        ]
 
                     # Check if we have preserved allocations from VM recreation (Section 16)
                     preserved_alloc_ids = preserved_allocations.get(inst_name, [])
@@ -2244,9 +2251,10 @@ class VMManager:
                 # Fallback logging only
                 for i in range(spec.instance_count):
                     inst_name = f"{spec.name}-{i}"
-                    pub_ip = (
-                        spec.external_ips[i] if i < len(spec.external_ips) else None
+                    inst_ips = (
+                        spec.external_ips[i] if i < len(spec.external_ips) else []
                     )
+                    pub_ip = inst_ips[0] if inst_ips else None
                     print(
                         f"[VMManager] ensure instance {inst_name} pub_ip={pub_ip} platform={spec.vm_spec.get('platform')} subnet=vpngw-subnet"
                     )
@@ -3303,10 +3311,13 @@ class VMManager:
             '              ufw allow in on "$PUBLIC_IF" proto esp comment "ESP (unrestricted)"\n'
             "            fi\n"
             "            \n"
-            "            # Allow BGP from tunnel peer IPs (BGP runs over XFRM interfaces)\n"
-            "            # BGP uses TCP 179 and is critical for dynamic routing\n"
-            '            ufw allow in proto tcp to any port 179 comment "BGP for dynamic routing"\n'
-            '            logger -t vpngw-firewall "Allowed BGP (TCP 179) for dynamic routing"\n'
+            "            # BGP runs only over XFRM interfaces; do not expose TCP 179 on public interface\n"
+            "            # Remove any existing TCP/179 allow rule (if present)\n"
+            "            if ufw --force delete allow 179/tcp >/dev/null 2>&1; then\n"
+            '              logger -t vpngw-firewall "Removed TCP/179 allow rule"\n'
+            "            else\n"
+            '              logger -t vpngw-firewall "No TCP/179 allow rule to remove"\n'
+            "            fi\n"
             "            \n"
             "            # Allow traffic from local VPC subnets (forwarding through gateway)\n"
             "            # This enables VMs in the VPC to reach remote networks via VPN\n"
@@ -3331,8 +3342,40 @@ class VMManager:
             '              logger -t vpngw-firewall "Allowed traffic on XFRM interface: $xfrm_if"\n'
             "            done\n"
             "            \n"
-            "            # Allow ICMP for troubleshooting\n"
-            '            ufw allow in on "$PUBLIC_IF" proto icmp comment "ICMP for troubleshooting"\n'
+            "            # Ensure ICMP is allowed on eth0 via /etc/ufw/before.rules\n"
+            '            BEFORE_RULES="/etc/ufw/before.rules"\n'
+            '            if [ -f "$BEFORE_RULES" ] && ! grep -q "vpngw-icmp-allow" "$BEFORE_RULES"; then\n'
+            "            python3 - <<'PY'\n"
+            "            from pathlib import Path\n"
+            "            path = Path(\"/etc/ufw/before.rules\")\n"
+            "            marker = \"# vpngw-icmp-allow\"\n"
+            "            try:\n"
+            "                text = path.read_text()\n"
+            "                if marker not in text:\n"
+            "                    insert = \"\\n\".join([\n"
+            "                        marker,\n"
+            "                        \"-A ufw-before-input -i eth0 -p icmp --icmp-type destination-unreachable -j ACCEPT\",\n"
+            "                        \"-A ufw-before-input -i eth0 -p icmp --icmp-type time-exceeded -j ACCEPT\",\n"
+            "                        \"-A ufw-before-input -i eth0 -p icmp --icmp-type parameter-problem -j ACCEPT\",\n"
+            "                        \"-A ufw-before-input -i eth0 -p icmp --icmp-type echo-request -j ACCEPT\",\n"
+            "                        \"# vpngw-icmp-allow-end\",\n"
+            "                    ]) + \"\\n\"\n"
+            "                    if \"COMMIT\\n\" in text:\n"
+            "                        text = text.replace(\"COMMIT\\n\", insert + \"COMMIT\\n\", 1)\n"
+            "                    else:\n"
+            "                        text = text + \"\\n\" + insert\n"
+            "                    path.write_text(text)\n"
+            "            except Exception as exc:\n"
+            "                print(f\"[vpngw-firewall] Failed to update before.rules: {exc}\")\n"
+            "            PY\n"
+            "            fi\n"
+            "            \n"
+            "            # Allow ICMP for troubleshooting (ufw may not support proto icmp directly)\n"
+            '            if ufw allow in on "$PUBLIC_IF" proto icmp comment "ICMP for troubleshooting" >/dev/null 2>&1; then\n'
+            '              logger -t vpngw-firewall "Allowed ICMP on $PUBLIC_IF via UFW rule"\n'
+            "            else\n"
+            '              logger -t vpngw-firewall "UFW does not support proto icmp; relying on /etc/ufw/before.rules"\n'
+            "            fi\n"
             "            \n"
             "            # CRITICAL: Set forward policy to ACCEPT for VPN routing\n"
             "            # Default is DROP which blocks all forwarded packets\n"

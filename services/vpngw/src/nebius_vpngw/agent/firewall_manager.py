@@ -3,6 +3,7 @@
 This module manages UFW firewall rules to ensure:
 - IPsec protocols (IKE, NAT-T, ESP) are allowed from VPN peers
 - SSH is restricted to management CIDRs
+- Local VPC prefixes are allowed for forwarding
 - XFRM interfaces are not filtered (BGP traffic flows freely)
 """
 
@@ -12,6 +13,7 @@ from typing import Any
 
 PEER_IPS_FILE = Path("/etc/vpngw_peer_ips")
 MGMT_CIDRS_FILE = Path("/etc/vpngw_mgmt_cidrs")
+LOCAL_PREFIXES_FILE = Path("/etc/vpngw_local_prefixes")
 FIREWALL_SETUP_SCRIPT = Path("/usr/local/bin/setup-vpngw-firewall.sh")
 
 
@@ -90,6 +92,37 @@ def update_management_cidrs(cidrs: list[str]) -> bool:
     return False
 
 
+def update_local_prefixes(prefixes: list[str]) -> bool:
+    """Update /etc/vpngw_local_prefixes with allowed local VPC prefixes.
+
+    Args:
+        prefixes: List of CIDR strings (e.g., ["10.0.0.0/16", "10.1.0.0/16"])
+
+    Returns:
+        True if file was updated, False if unchanged
+    """
+    current_content = ""
+    if LOCAL_PREFIXES_FILE.exists():
+        current_content = LOCAL_PREFIXES_FILE.read_text()
+
+    lines = [
+        "# Local VPC prefixes allowed through firewall (auto-generated)",
+        "# One CIDR per line",
+        "",
+    ]
+    lines.extend(sorted(set(prefixes)))
+    new_content = "\n".join(lines) + "\n"
+
+    if new_content != current_content:
+        LOCAL_PREFIXES_FILE.write_text(new_content)
+        print(
+            f"[FirewallMgr] Updated {LOCAL_PREFIXES_FILE} with {len(prefixes)} prefix(es)"
+        )
+        return True
+
+    return False
+
+
 def reload_firewall() -> bool:
     """Reload UFW firewall rules by running the setup script.
 
@@ -132,20 +165,23 @@ def update_firewall_from_config(
     1. Extracts peer IPs from config
     2. Updates peer IPs file
     3. Updates management CIDRs file (if provided)
-    4. Reloads firewall rules if anything changed
+    4. Updates local prefix rules
+    5. Reloads firewall rules if anything changed
 
     Args:
         cfg: Gateway configuration
         mgmt_cidrs: Optional list of management CIDRs for SSH access
     """
     peer_ips_changed = update_peer_ips(cfg)
+    local_prefixes = (cfg.get("gateway", {}) or {}).get("local_prefixes", []) or []
+    local_prefixes_changed = update_local_prefixes(local_prefixes)
 
     mgmt_cidrs_changed = False
     if mgmt_cidrs is not None:
         mgmt_cidrs_changed = update_management_cidrs(mgmt_cidrs)
 
     # Reload firewall if anything changed
-    if peer_ips_changed or mgmt_cidrs_changed:
+    if peer_ips_changed or mgmt_cidrs_changed or local_prefixes_changed:
         reload_firewall()
     else:
         print("[FirewallMgr] No firewall changes needed")

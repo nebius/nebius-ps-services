@@ -578,7 +578,12 @@ class ConnectionConfig(BaseModel):
     )
     remote_prefixes: list[str] | None = Field(
         default=None,
-        description="Remote prefixes (CIDR notation). In 'static' routing_mode: used for installing static routes. In 'bgp' routing_mode: optional, used for filtering/validating received BGP routes (routes are learned dynamically).",
+        description=(
+            "Remote prefixes (CIDR notation). In 'static' routing_mode: required "
+            "(unless specified per-tunnel in static_routes) and used for installing "
+            "static routes. In 'bgp' routing_mode: optional, used for filtering/"
+            "validating received BGP routes (routes are learned dynamically)."
+        ),
     )
     bgp: BGPConfig = Field(..., description="BGP configuration")
     tunnels: list[TunnelConfig] = Field(
@@ -602,21 +607,18 @@ class ConnectionConfig(BaseModel):
     @model_validator(mode="after")
     def validate_routing_mode_consistency(self) -> ConnectionConfig:
         """Validate BGP config matches routing mode."""
-        # In static mode, warn if remote_prefixes is not specified
+        # In static mode, require remote_prefixes (connection-level or per-tunnel)
         if self.routing_mode == RoutingMode.STATIC:
             if not self.remote_prefixes:
                 # Check if any tunnel has static_routes.remote_prefixes
                 has_tunnel_remote_prefixes = any(
-                    t.static_routes and t.static_routes.get("remote_prefixes")
+                    t.static_routes and t.static_routes.remote_prefixes
                     for t in self.tunnels
                 )
                 if not has_tunnel_remote_prefixes:
-                    import warnings
-
-                    warnings.warn(
+                    raise ValueError(
                         f"Connection '{self.name}' uses static routing but has no remote_prefixes defined. "
-                        "Static routes to remote networks will not be installed.",
-                        stacklevel=2,
+                        "Set connection.remote_prefixes or tunnel.static_routes.remote_prefixes."
                     )
 
         if self.routing_mode == RoutingMode.BGP:
@@ -724,30 +726,60 @@ class GatewayGroup(BaseModel):
     instance_count: int = Field(
         ..., ge=1, le=10, description="Number of gateway VMs (1-10)"
     )
-    external_ips: list[str] | None = Field(
-        default=None, description="Pre-allocated external IPs per instance (flat list)"
+    external_ips: list[list[str]] | None = Field(
+        default=None,
+        description=(
+            "Pre-allocated external IPs per instance (list per instance; each inner "
+            "list maps to NICs)"
+        ),
     )
     vm_spec: VMSpec = Field(..., description="VM specification")
     region: str | None = Field(
         default=None, description="Region ID (can be set at top level or here)"
     )
 
+    @field_validator("external_ips", mode="before")
+    @classmethod
+    def reject_flat_external_ips(cls, v: t.Any) -> t.Any:
+        if v is None:
+            return v
+        if not isinstance(v, list):
+            return v
+        if not v:
+            return v
+        if all(isinstance(item, (str, type(None))) for item in v):
+            raise ValueError(
+                "external_ips must be a list of lists (one list per instance), "
+                'for example: [["203.0.113.10"], ["203.0.113.20"]]'
+            )
+        for item in v:
+            if isinstance(item, (str, type(None))):
+                raise ValueError(
+                    "external_ips must be a list of lists (one list per instance)"
+                )
+        return v
+
     @field_validator("external_ips")
     @classmethod
     def validate_external_ips(
-        cls, v: list[str] | None
-    ) -> list[str] | None:
+        cls, v: list[list[str]] | None
+    ) -> list[list[str]] | None:
         if v is None:
             return v
 
         # Validate each IP address
-        for i, ip in enumerate(v):
-            if not ip:  # Skip empty strings (placeholders)
+        for i, ips in enumerate(v):
+            if not ips:
                 continue
-            try:
-                validate_ip_address(ip)
-            except ValueError as e:
-                raise ValueError(f"external_ips[{i}]: {e}") from e
+            if not isinstance(ips, list):
+                raise ValueError(f"external_ips[{i}] must be a list of IPs")
+            for j, ip in enumerate(ips):
+                if not ip:  # Skip empty strings (placeholders)
+                    continue
+                try:
+                    validate_ip_address(ip)
+                except ValueError as e:
+                    raise ValueError(f"external_ips[{i}][{j}]: {e}") from e
 
         return v
 
@@ -824,17 +856,17 @@ class VPNGatewayConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_external_ips_match_instance_count(self) -> VPNGatewayConfig:
-        """Validate external_ips list matches instance_count if provided."""
+        """Validate external_ips list does not exceed instance_count if provided."""
         external_ips = self.gateway_group.external_ips
         if external_ips is not None and external_ips:
             # Filter out empty strings (unresolved placeholders)
-            non_empty_ips = [ip for ip in external_ips if ip]
+            non_empty_ips = [ip for inst in external_ips for ip in inst if ip]
             instance_count = self.gateway_group.instance_count
             # Only validate if we have non-empty IPs
-            if non_empty_ips and len(external_ips) != instance_count:
+            if non_empty_ips and len(external_ips) > instance_count:
                 raise ValueError(
                     f"external_ips has {len(external_ips)} entries but "
-                    f"instance_count is {instance_count}. They must match."
+                    f"instance_count is {instance_count}. It cannot exceed instance_count."
                 )
 
         return self
