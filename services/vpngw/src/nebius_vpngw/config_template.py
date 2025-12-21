@@ -71,7 +71,7 @@ gateway_group:
     platform: "cpu-d3"              # Options: cpu-e2, cpu-d3
     preset: "4vcpu-16gb"            # See Nebius docs for available presets
     disk_boot_image: "ubuntu24.04-driverless"
-    disk_gb: 50
+    disk_gb: 100
     disk_type: "network_ssd"        # Options: network_ssd, network_ssd_nonreplicated
     disk_block_bytes: 4096
     num_nics: 1                     # Platform currently supports 1 NIC

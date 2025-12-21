@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import ipaddress
 import os
@@ -328,6 +329,66 @@ def _merge_fields(yaml_val, peer_val, default_val=None):
     return default_val
 
 
+def _merge_fields_peer_first(peer_val, yaml_val, default_val=None):
+    # Priority: peer config -> YAML explicit -> default
+    if peer_val not in (None, [], ""):
+        return peer_val
+    if yaml_val not in (None, [], ""):
+        return yaml_val
+    return default_val
+
+
+def _merge_with_preference(yaml_val, peer_val, prefer_peer: bool, default_val=None):
+    if prefer_peer:
+        return _merge_fields_peer_first(peer_val, yaml_val, default_val=default_val)
+    return _merge_fields(yaml_val, peer_val, default_val=default_val)
+
+
+def _crypto_is_complete(crypto: dict) -> bool:
+    required = (
+        "ike_proposals",
+        "ike_lifetime_seconds",
+        "esp_proposals",
+        "esp_lifetime_seconds",
+    )
+    return all(crypto.get(key) not in (None, [], "") for key in required)
+
+
+def _merge_crypto_overrides(
+    yaml_crypto: dict | None, peer_crypto: dict | None, prefer_peer: bool
+) -> dict | None:
+    yc = yaml_crypto or {}
+    pc = peer_crypto or {}
+    if not yc and not pc:
+        return None
+    merged = {
+        "ike_proposals": _merge_with_preference(
+            yc.get("ike_proposals"), pc.get("ike_proposals"), prefer_peer
+        ),
+        "ike_lifetime_seconds": _merge_with_preference(
+            yc.get("ike_lifetime_seconds"),
+            pc.get("ike_lifetime_seconds"),
+            prefer_peer,
+        ),
+        "esp_proposals": _merge_with_preference(
+            yc.get("esp_proposals"), pc.get("esp_proposals"), prefer_peer
+        ),
+        "esp_lifetime_seconds": _merge_with_preference(
+            yc.get("esp_lifetime_seconds"),
+            pc.get("esp_lifetime_seconds"),
+            prefer_peer,
+        ),
+        "dh_groups": _merge_with_preference(
+            yc.get("dh_groups"), pc.get("dh_groups"), prefer_peer
+        ),
+    }
+    if not _crypto_is_complete(merged):
+        return None
+    if merged.get("dh_groups") in (None, [], ""):
+        merged.pop("dh_groups", None)
+    return merged
+
+
 def _resolved_local_public_ip(local_cfg: dict, tunnel: dict) -> str | None:
     gg = local_cfg.get("gateway_group", {}) or {}
     ips = gg.get("external_ips") or []
@@ -395,6 +456,115 @@ def _normalize_peer_specs(peer_specs: list[dict]) -> list[dict]:
                 item["remote_asn"] = remote_asn
             flat.append(item)
     return flat
+
+
+def merge_peer_configs_into_local_config(
+    local_cfg: dict, peer_files: list[Path], *, prefer_peer: bool = False
+) -> dict:
+    """Merge vendor peer configs into a local config dict.
+
+    prefer_peer=True will overwrite existing values with peer values when present.
+    prefer_peer=False only fills missing fields (local config wins).
+    """
+    cfg = copy.deepcopy(local_cfg)
+    peer_specs = [_parse_peer_file(p) for p in peer_files]
+    if not peer_specs:
+        return cfg
+    flat_peer_tunnels = _normalize_peer_specs(peer_specs)
+    if not flat_peer_tunnels:
+        return cfg
+
+    peer_vendor = next(
+        (spec.get("vendor") for spec in peer_specs if spec.get("vendor")), None
+    )
+    peer_remote_asn: int | None = None
+    for spec in peer_specs:
+        if spec.get("remote_asn") is not None:
+            peer_remote_asn = _to_int(spec.get("remote_asn"))
+            if peer_remote_asn is not None:
+                break
+
+    def merge_value(yaml_val, peer_val, default_val=None):
+        return _merge_with_preference(yaml_val, peer_val, prefer_peer, default_val)
+    connections = cfg.get("connections") or []
+    for conn in connections:
+        conn_vendor = (conn.get("vendor") or "").lower()
+        if prefer_peer and peer_vendor:
+            conn["vendor"] = peer_vendor
+            conn_vendor = peer_vendor
+
+        conn_bgp = conn.get("bgp") or {}
+        conn_remote_asn = _to_int(conn_bgp.get("remote_asn"))
+        if peer_remote_asn is not None and (prefer_peer or conn_remote_asn is None):
+            conn_bgp["remote_asn"] = peer_remote_asn
+            conn_remote_asn = peer_remote_asn
+        conn["bgp"] = conn_bgp
+
+        conn_tunnels = conn.get("tunnels") or []
+        used_indices: set[int] = set()
+        merged_tunnels = []
+        for i, tun in enumerate(conn_tunnels):
+            best_idx = None
+            best_score = 0
+            for j, pt in enumerate(flat_peer_tunnels):
+                if j in used_indices:
+                    continue
+                score = _score_peer_tunnel(
+                    conn_vendor, conn_remote_asn, tun, pt, cfg
+                )
+                if score > best_score:
+                    best_score = score
+                    best_idx = j
+            if best_idx is None and flat_peer_tunnels:
+                if i < len(flat_peer_tunnels) and i not in used_indices:
+                    best_idx = i
+                else:
+                    for j in range(len(flat_peer_tunnels)):
+                        if j not in used_indices:
+                            best_idx = j
+                            break
+            peer_tun = flat_peer_tunnels[best_idx] if best_idx is not None else {}
+            if best_idx is not None:
+                used_indices.add(best_idx)
+                if conn_remote_asn is None:
+                    inferred_asn = _to_int(peer_tun.get("remote_asn"))
+                    if inferred_asn is not None:
+                        conn_remote_asn = inferred_asn
+                        conn_bgp["remote_asn"] = inferred_asn
+                        conn["bgp"] = conn_bgp
+
+            tun = dict(tun)
+            tun["psk"] = merge_value(tun.get("psk"), peer_tun.get("psk"))
+            tun["inner_cidr"] = merge_value(
+                tun.get("inner_cidr"), peer_tun.get("inner_cidr")
+            )
+            tun["inner_local_ip"] = merge_value(
+                tun.get("inner_local_ip"), peer_tun.get("inner_local_ip")
+            )
+            tun["inner_remote_ip"] = merge_value(
+                tun.get("inner_remote_ip"), peer_tun.get("inner_remote_ip")
+            )
+            tun["remote_public_ip"] = merge_value(
+                tun.get("remote_public_ip"), peer_tun.get("remote_public_ip")
+            )
+
+            merged_crypto = _merge_crypto_overrides(
+                tun.get("crypto"), peer_tun.get("crypto"), prefer_peer
+            )
+            if merged_crypto is not None:
+                tun["crypto"] = merged_crypto
+            else:
+                tun.pop("crypto", None)
+
+            tunnel_name = tun.get("name", f"tunnel-{i}")
+            _validate_tunnel_inner_ips(tun, tunnel_name)
+
+            merged_tunnels.append(tun)
+
+        conn["tunnels"] = merged_tunnels
+
+    cfg["connections"] = connections
+    return cfg
 
 
 def merge_with_peer_configs(
