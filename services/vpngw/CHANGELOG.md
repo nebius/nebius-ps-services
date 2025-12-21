@@ -14,6 +14,10 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [v0.4.4] - 2025-12-21
+
+- Added `create-from-peer-config` command to generate YAML from vendor peer files; removed `--peer-config-file` from `apply`.
+
 ## [v0.4.3] - 2025-12-20
 
 - Enforced nested `gateway_group.external_ips` (list of lists) in schema and removed legacy flat-list handling.

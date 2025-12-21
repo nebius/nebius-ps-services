@@ -533,18 +533,20 @@ nebius-vpngw validate-config <file>
 
 **Note:** `validate-config` takes the config file as a positional argument, not as `--local-config-file`. This is different from other commands which use the flag syntax.
 
+**Generate from peer config (no deployment):**
+
+```bash
+nebius-vpngw create-from-peer-config my-vpn.config.yaml \
+  --peer-config-file gcp-peer.txt \
+  --peer-config-file aws-peer.xml
+```
+
 ### Deployment
 
 **Deploy or update:**
 
 ```bash
 nebius-vpngw apply --local-config-file <file>
-
-# With peer configs
-nebius-vpngw apply \
-  --local-config-file my-vpn.config.yaml \
-  --peer-config-file gcp-peer.txt \
-  --peer-config-file aws-peer.xml
 
 # Force VM recreation
 nebius-vpngw apply --local-config-file <file> --recreate-gw
@@ -801,17 +803,16 @@ nebius-vpngw list-routes-remote --local-config-file <file>
 ### Import Workflow
 
 ```bash
-nebius-vpngw apply \
-  --local-config-file nebius-vpn.config.yaml \
+nebius-vpngw create-from-peer-config nebius-vpn.config.yaml \
   --peer-config-file gcp-peer.txt \
   --peer-config-file aws-peer.xml
 ```
 
 **Merge behavior:**
 
-- Fills only empty YAML fields; explicit YAML values always win
-- Local config must pass schema validation; required fields cannot be omitted
-- Your topology is the source of truth
+- Peer values overwrite template defaults when present
+- Topology is taken from the generated config and should be reviewed
+- Validate before deployment
 
 ### Example: GCP HA VPN
 
@@ -823,7 +824,14 @@ gcloud compute routers describe my-router \
   --format yaml > gcp-peer.txt
 ```
 
-**2. Create Nebius config from the template and edit the `connections` section:**
+**2. Generate a Nebius config from the peer file:**
+
+```bash
+nebius-vpngw create-from-peer-config gcp-ha-vpn.config.yaml \
+  --peer-config-file gcp-peer.txt
+```
+
+**3. Review and fill in required values (tenant/project/region/PSKs/local prefixes):**
 
 ```yaml
 connections:
@@ -851,15 +859,14 @@ connections:
         inner_remote_ip: "169.254.11.2"
 ```
 
-**3. Deploy with peer config:**
+**4. Validate and deploy:**
 
 ```bash
-nebius-vpngw apply \
-  --local-config-file nebius-vpn.config.yaml \
-  --peer-config-file gcp-peer.txt
+nebius-vpngw validate-config gcp-ha-vpn.config.yaml
+nebius-vpngw apply --local-config-file gcp-ha-vpn.config.yaml
 ```
 
-Merger fills only empty YAML fields from the GCP config; explicit YAML values always win.
+Peer import only fills what it can from the vendor file; PSKs and public IPs may still need to be set manually.
 
 ## VM Management
 
@@ -1497,7 +1504,7 @@ The script will:
 **Orchestrator (local):**
 
 - `cli.py`: Command-line interface and workflow orchestration
-- `config_loader.py`: YAML parsing, peer config merging, env var expansion, schema validation
+- `config_loader.py`: YAML parsing, peer-config import/merging, env var expansion, schema validation
 - `schema.py`: Pydantic models for strict validation with types and constraints
 - `config_template.py`: Embedded YAML template, source of truth, always aligned with schema
 - `build.py`: PyInstaller utilities for standalone binary builds

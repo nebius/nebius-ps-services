@@ -1,4 +1,17 @@
+import ipaddress
 import re
+
+
+def _infer_inner_cidr(local_ip: str | None, remote_ip: str | None) -> str | None:
+    if not local_ip or not remote_ip:
+        return None
+    try:
+        net = ipaddress.ip_network(f"{local_ip}/30", strict=False)
+        if ipaddress.ip_address(remote_ip) in net:
+            return str(net)
+    except ValueError:
+        return None
+    return None
 
 
 def parse(text: str) -> dict:
@@ -21,12 +34,29 @@ def parse(text: str) -> dict:
 
     # Extract inner /30 pairs (169.254.x.x/30 or local/remote IP)
     cidrs = re.findall(r"(169\.254\.\d+\.\d+/30)", text)
+    if cidrs:
+        normalized: list[str] = []
+        for c in cidrs:
+            try:
+                normalized.append(str(ipaddress.ip_network(c, strict=False)))
+            except ValueError:
+                normalized.append(c)
+        cidrs = normalized
     local_ips = re.findall(
         r"(?i)(?:local|customer)\s*ip\s*[:=]\s*(169\.254\.\d+\.\d+)", text
     )
     remote_ips = re.findall(
         r"(?i)(?:remote|cloud)\s*ip\s*[:=]\s*(169\.254\.\d+\.\d+)", text
     )
+    # GCP Cloud Router YAML: peerIpAddress = customer side, ipAddress = GCP side
+    gcp_peer_ips = re.findall(
+        r"(?mi)^\s*peerIpAddress:\s*(169\.254\.\d+\.\d+)", text
+    )
+    gcp_router_ips = re.findall(
+        r"(?mi)^\s*ipAddress:\s*(169\.254\.\d+\.\d+)", text
+    )
+    local_ips.extend(gcp_peer_ips)
+    remote_ips.extend(gcp_router_ips)
 
     # Public endpoints (heuristic)
     local_pub = re.findall(
@@ -45,6 +75,13 @@ def parse(text: str) -> dict:
             remote_asn = int(m_asn.group(2))
         except Exception:
             remote_asn = None
+    if remote_asn is None:
+        m_asn = re.search(r"(?s)bgp:\s*.*?\basn:\s*(\d+)", text)
+        if m_asn:
+            try:
+                remote_asn = int(m_asn.group(1))
+            except Exception:
+                remote_asn = None
 
     # Build up to two tunnels if we have pairs
     for i in range(max(len(psks), len(local_ips), len(remote_ips), len(cidrs), 2)):
@@ -52,6 +89,8 @@ def parse(text: str) -> dict:
         inner_cidr = cidrs[i] if i < len(cidrs) else None
         il = local_ips[i] if i < len(local_ips) else None
         ir = remote_ips[i] if i < len(remote_ips) else None
+        if inner_cidr is None:
+            inner_cidr = _infer_inner_cidr(il, ir)
         tunnels.append(
             {
                 "psk": psk,

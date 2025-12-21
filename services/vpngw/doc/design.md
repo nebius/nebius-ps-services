@@ -45,7 +45,7 @@
 
 ## Purpose & Scope
 
-Deliver a VM-based site-to-site VPN gateway for Nebius AI Cloud using IPsec (strongSwan) and routing (FRR for BGP, static as fallback). Provide a CLI orchestrator plus per-VM agent with idempotent configuration from a single YAML file, optionally merged with vendor peer configs. Support common cloud and on-premises peers (GCP HA VPN, AWS Site-to-Site VPN, Azure VPN Gateway, Cisco IOS).
+Deliver a VM-based site-to-site VPN gateway for Nebius AI Cloud using IPsec (strongSwan) and routing (FRR for BGP, static as fallback). Provide a CLI orchestrator plus per-VM agent with idempotent configuration from a single YAML file, with optional peer-config import to generate that YAML. Support common cloud and on-premises peers (GCP HA VPN, AWS Site-to-Site VPN, Azure VPN Gateway, Cisco IOS).
 
 ## Goals & Non-Goals
 
@@ -86,7 +86,7 @@ These features are not currently implemented but may be considered for future en
 **Orchestrator CLI (`nebius-vpngw`):**
 
 - Runs on operator laptop or CI/CD pipeline
-- Reads YAML configuration and optional peer configs
+- Reads YAML configuration; peer configs can be imported to generate YAML
 - Manages VM lifecycle and IP allocations via Nebius SDK
 - Pushes configuration to VMs over SSH
 - Triggers agent reloads
@@ -274,9 +274,20 @@ Validates configuration against schema without deployment. Performs full validat
 nebius-vpngw apply --local-config-file <file>
 ```
 
-Deploy or update gateway. Automatically validates schema before deployment. Typical flow: parse args → load YAML → validate schema → merge peer configs → ensure network/subnet → ensure VMs + allocations → push config via SSH → reload agent → reconcile routes (static mode).
+Deploy or update gateway. Automatically validates schema before deployment. Typical flow: parse args → load YAML → validate schema → ensure network/subnet → ensure VMs + allocations → push config via SSH → reload agent → reconcile routes (static mode).
 
-Flags: `--peer-config-file` (repeatable), `--recreate-gw`, `--project-id`, `--zone`
+Flags: `--recreate-gw`, `--project-id`, `--zone`
+
+**Peer Config Import (generate YAML only):**
+
+```bash
+nebius-vpngw create-from-peer-config <output-config-file> \
+  --peer-config-file ./gcp-ha-vpn.txt \
+  --peer-config-file ./aws-vpn.xml
+```
+
+Creates a new YAML config by merging vendor peer configs into the embedded template.
+No deployment is performed; review and validate before running `apply`.
 
 **Status & Monitoring:**
 
@@ -294,7 +305,7 @@ nebius-vpngw add-routes-local --local-config-file <file>
 
 ### Peer Import & Merging
 
-Vendor parsers (GCP/AWS/Azure/Cisco) normalize peer templates. Merger fills only missing fields—YAML topology is never overridden. Merge precedence: tunnel > connection > peer-config > defaults.
+Vendor parsers (GCP/AWS/Azure/Cisco) normalize peer templates. Peer import overlays parsed values onto the template while keeping topology intact. Peer values replace template defaults when present; missing fields remain for manual review.
 
 ## Routing Modes & Local Prefixes
 
@@ -1033,15 +1044,14 @@ Per-VM routing validation:
 ### Usage
 
 ```bash
-nebius-vpngw apply \
-  --local-config-file ./nebius-vpngw.config.yaml \
+nebius-vpngw create-from-peer-config ./nebius-vpngw.config.yaml \
   --peer-config-file ./gcp-ha-vpn.txt \
   --peer-config-file ./aws-vpn.xml
 ```
 
 ### Merge Behavior
 
-Peer configs fill only **missing** fields:
+Peer configs populate the template where values are available:
 
 - PSKs (pre-shared keys)
 - Remote public IPs
@@ -1049,7 +1059,8 @@ Peer configs fill only **missing** fields:
 - ASNs
 - Inner IPs (for BGP)
 
-Your YAML topology and explicit values are never overridden.
+Any fields not present in the peer export remain for manual review and editing.
+Note: Cloud Router exports do not include PSKs or public IPs; those must be set manually.
 
 ## VM Management
 
@@ -1158,7 +1169,7 @@ nebius-vpngw apply --local-config-file test.config.yaml
 **Orchestrator (runs on operator machine):**
 
 - `cli.py`: Main CLI entry point, orchestrates VM provisioning and config deployment
-- `config_loader.py`: Parses YAML, merges peer configs, expands env vars, validates schema
+- `config_loader.py`: Parses YAML, merges peer configs for generated configs, expands env vars, validates schema
 - `schema.py`: Pydantic models for strict validation with type checking and constraints
 - `config_template.py`: Embedded YAML template, source of truth, always aligned with schema
 - `vpngw_sa.py`: Service account lifecycle for API authentication

@@ -10,6 +10,7 @@ from . import __version__
 from .config_loader import (
     ResolvedDeploymentPlan,
     load_local_config,
+    merge_peer_configs_into_local_config,
     merge_with_peer_configs,
 )
 from .config_template import DEFAULT_CONFIG_TEMPLATE
@@ -186,9 +187,6 @@ def apply(
     local_config_file: Path | None = typer.Option(
         None, exists=True, readable=True, help=f"Path to {DEFAULT_CONFIG_FILENAME}"
     ),
-    peer_config_file: list[Path] = typer.Option(
-        [], exists=True, readable=True, help="Vendor peer config file(s)"
-    ),
     recreate_gw: bool = typer.Option(
         False, help="Delete and recreate gateway VMs before applying"
     ),
@@ -215,8 +213,8 @@ def apply(
     print("[bold]Loading local YAML config...[/bold]")
     local_cfg = load_local_config(local_config_file)
 
-    print("[bold]Parsing peer configs...[/bold]")
-    plan: ResolvedDeploymentPlan = merge_with_peer_configs(local_cfg, peer_config_file)
+    print("[bold]Building deployment plan...[/bold]")
+    plan: ResolvedDeploymentPlan = merge_with_peer_configs(local_cfg, [])
 
     print("[bold]Validating quotas and constraints...[/bold]")
     plan.validate()
@@ -608,6 +606,125 @@ def create_config(
         )
 
         # Additional warning for non-.config.yaml files
+        if not str(config_file).endswith(".config.yaml"):
+            console.print()
+            console.print(
+                "[bold red]Remember: This file is NOT git-ignored. Do not commit secrets![/bold red]"
+            )
+
+    except Exception as e:
+        console.print()
+        console.print(
+            Panel.fit(
+                f"[bold red]✗ Failed to create configuration file[/bold red]\n\n"
+                f"{str(e)}",
+                title="[red]Error[/red]",
+                border_style="red",
+            )
+        )
+        raise typer.Exit(code=1) from e
+
+
+@app.command(options_metavar="")
+def create_from_peer_config(
+    config_file: Path = typer.Argument(
+        ..., help="Path for new configuration file (recommended: *.config.yaml)"
+    ),
+    peer_config_file: list[Path] = typer.Option(
+        ..., exists=True, readable=True, help="Vendor peer config file(s)"
+    ),
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Overwrite existing file if it exists"
+    ),
+):
+    """Create a new configuration file by merging peer configs into the template.
+
+    This generates a standalone YAML config file aligned with the schema for
+    review and validation before deployment.
+    """
+    from rich.console import Console
+    from rich.panel import Panel
+
+    import yaml
+
+    console = Console()
+
+    if not peer_config_file:
+        console.print(
+            Panel.fit(
+                "[bold red]✗ No peer config file provided[/bold red]\n\n"
+                "Use --peer-config-file to specify at least one vendor config.",
+                title="[red]Error[/red]",
+                border_style="red",
+            )
+        )
+        raise typer.Exit(code=1)
+
+    if config_file.exists() and not force:
+        console.print()
+        console.print(
+            Panel.fit(
+                f"[bold red]✗ File already exists[/bold red]\n\n"
+                f"Path: {config_file}\n\n"
+                f"Use --force to overwrite, or choose a different filename.",
+                title="[red]Error[/red]",
+                border_style="red",
+            )
+        )
+        raise typer.Exit(code=1)
+
+    if not str(config_file).endswith(".config.yaml"):
+        console.print()
+        console.print(
+            Panel.fit(
+                f"[bold yellow]⚠️  Security Warning[/bold yellow]\n\n"
+                f"File: [cyan]{config_file}[/cyan]\n\n"
+                f"The filename does not end with [bold].config.yaml[/bold]\n\n"
+                f"Files matching [bold]*.config.yaml[/bold] are automatically git-ignored to prevent\n"
+                f"committing sensitive information (public IPs, ASNs, PSKs).\n\n"
+                f"[bold red]This file may be tracked by git and could expose secrets![/bold red]\n\n"
+                f"[dim]Recommended: Use a .config.yaml extension (e.g., {config_file.stem}.config.yaml)[/dim]",
+                title="[yellow]⚠️  Not Git-Ignored[/yellow]",
+                border_style="yellow",
+            )
+        )
+        console.print()
+        proceed = typer.confirm("Do you want to proceed anyway?", default=False)
+        if not proceed:
+            console.print("[yellow]Cancelled.[/yellow]")
+            raise typer.Exit(code=0)
+        console.print()
+
+    try:
+        base_cfg = yaml.safe_load(DEFAULT_CONFIG_TEMPLATE) or {}
+        merged_cfg = merge_peer_configs_into_local_config(
+            base_cfg, peer_config_file, prefer_peer=True
+        )
+
+        if merged_cfg == base_cfg:
+            console.print(
+                "[yellow]⚠️  Peer config did not change the template. "
+                "Review the file and fill in any missing fields manually.[/yellow]"
+            )
+
+        config_file.write_text(
+            yaml.safe_dump(merged_cfg, sort_keys=False), encoding="utf-8"
+        )
+
+        console.print()
+        console.print(
+            Panel.fit(
+                f"[bold green]✓ Configuration created from peer config[/bold green]\n\n"
+                f"File: [cyan]{config_file}[/cyan]\n\n"
+                f"[dim]Next steps:[/dim]\n"
+                f"  1. Review and replace any placeholders (tenant/project/region/PSKs)\n"
+                f"  2. Validate: [cyan]nebius-vpngw validate-config {config_file}[/cyan]\n"
+                f"  3. Deploy: [cyan]nebius-vpngw apply --local-config-file {config_file}[/cyan]",
+                title="[green]Success[/green]",
+                border_style="green",
+            )
+        )
+
         if not str(config_file).endswith(".config.yaml"):
             console.print()
             console.print(
