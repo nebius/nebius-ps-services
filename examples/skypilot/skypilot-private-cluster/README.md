@@ -1,4 +1,5 @@
 # Examples of SkyPilot Private Clusters via Jump Host
+
 ---
 
 ## TL;DR
@@ -14,13 +15,13 @@ source ~/venvs/skypilot-env/bin/activate
 # If prompted, edit ./.env with real TENANT_ID/PROJECT_ID/REGION_ID/JUMP_HOST_IP and re-run
 ```
 
-2) Verify
+1) Verify
 
 ```sh
 sky check nebius
 ```
 
-3) Launch and connect
+1) Launch and connect
 
 ```sh
 sky launch -c mycluster vmtask.yaml
@@ -28,8 +29,8 @@ ssh mycluster
 ```
 
 Optional (only if your VM workload needs AWS CLI against Nebius S3):
-You run bootstrap task against the existing cluster. It will bootstrap the VMs 
-  with your global aws config. 
+You run bootstrap task against the existing cluster. It will bootstrap the VMs
+  with your global aws config.
 
 ```sh
 sky launch -c mycluster bootstrap-awscli-only.sky.yaml
@@ -56,7 +57,7 @@ This example demonstrates how to use a project-scoped SkyPilot configuration (`.
 
 ### Storage guidance
 
-- Use `nebius://` storage paths in your Sky YAML for connectiong to the Nebius cloud object storage to avoid requiring AWS provider checks.
+- Use `nebius://` storage paths in your Sky YAML for connecting to the Nebius cloud object storage to avoid requiring AWS provider checks.
 - For Nebius compute itself, SkyPilot uses `~/.nebius/credentials.json`.
 - If you run the AWS CLI locally against Nebius S3, pass an explicit profile (for example: `--profile nebius-us-central1`).
 - Optional bootstrap: `bootstrap-awscli-only.sky.yaml` mounts your global `~/.aws` and installs `awscli` on the VM. Use it only if your workloads execute the AWS CLI inside the VM. It does not export any env vars; use explicit `--profile` in your commands on the VM.
@@ -66,14 +67,17 @@ This example demonstrates how to use a project-scoped SkyPilot configuration (`.
 ## Environment Variables
 
 - Run the Nebius setup, first run it generates a `.env` file from `.env.placeholder`, and then you are able to enter the values in `.env` :
+
   ```sh
   ./nebiaus-sa-setup.sh
   ```
+
 - So if `.env` has placeholder values (e.g., `tenant-EXAMPLE_ID`, `project-EXAMPLE_ID`), the script exits with an error. Open `./.env`, set real values for `TENANT_ID`, `PROJECT_ID`, `REGION_ID`, and `JUMP_HOST_IP`, then rerun `./nebiaus-sa-setup.sh`.
 
 - Auto-load the `.envrc` when you cd to the folder. The setup script configures direnv and runs `direnv allow` so `.env` loads automatically. If direnv isn't available, you can enable it later; otherwise use the manual fallback below.
 
   - Manual fallback (no direnv):
+
      ```sh
      source .env
      ```
@@ -90,15 +94,15 @@ This example demonstrates how to use a project-scoped SkyPilot configuration (`.
   - Place your key at `~/.ssh/id_ed25519` (or set the path you use in `.sky.yaml`).
   - Add the jump host to `~/.ssh/known_hosts` (required because StrictHostKeyChecking=yes). If you have logged in one time to the jumphost from your laptop directly it's added already.
 
-2) Make sure you have set your environment variables properly in .env file for the Region/Project and jump host IP address.
+1) Make sure you have set your environment variables properly in .env file for the Region/Project and jump host IP address.
 
-3) Launch a cluster
+2) Launch a cluster
 
 - From this project directory, run your normal SkyPilot workflows (examples):
   - `sky launch -c cluster7 mytask.yaml`
   - Reuse clusters with `-c <name>`
 
-4) Connect via SSH
+1) Connect via SSH
 
   `ssh <cluster-name>`
 
@@ -130,4 +134,3 @@ SkyPilot automatically reads `.sky.yaml` when you run `sky` commands inside this
 - Switching regions: set `REGION_ID` in `.env`, rerun `./nebiaus-sa-setup.sh` to refresh profiles; for VM-side AWS CLI, always pass `--profile`.
 - In this setup SkyPilot provisions Nebius instances with internal/private IPs.
 - You connect to them via a proxy (jump host) using `ssh_proxy_command`.
-
