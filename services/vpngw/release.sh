@@ -8,9 +8,25 @@ usage() {
   local r=$'\033[0m'
   cat <<EOF
 ${b}Usage:${r}
-  ${g}./release.sh${r} ${c}vX.Y.Z${r}            # full flow: commit/tag/build/release
+  ${g}./release.sh${r} ${c}--prep vX.Y.Z${r}     # prepare changelog commit and push branch
+  ${g}./release.sh${r} ${c}--publish vX.Y.Z${r}  # main only, clean, up-to-date; tag/build/release
   ${g}./release.sh${r} ${c}--verify vX.Y.Z${r}   # verify an existing release asset only
+
+${b}Options:${r}
+  ${c}--force-retag${r}                          # allow deleting/recreating existing tag (publish only)
 EOF
+}
+
+die() {
+  echo "ERROR: $*" >&2
+  exit 1
+}
+
+confirm() {
+  local prompt="$1"
+  local ans
+  read -r -p "${prompt} [y/N] " ans
+  [[ "${ans}" == "y" || "${ans}" == "Y" ]]
 }
 
 ensure_gh() {
@@ -59,101 +75,36 @@ verify_release_asset() {
   echo "==> Downloaded wheel integrity check passed."
 }
 
-VERIFY_ONLY=0
-if [[ "${1-}" == "--verify" ]]; then
-  VERIFY_ONLY=1
-  shift
-fi
-if [[ "${1-}" == "--help" || "${1-}" == "-h" ]]; then
-  usage
-  exit 0
-fi
-
-# Tag can come from env (TAG) or positional arg
-TAG="${TAG:-${1-}}"
-ALLOW_RETAG="${ALLOW_RETAG:-1}"
-RETAGGED=0
-
-if [[ -z "${TAG}" ]]; then
-  usage
-  exit 1
-fi
-
-if [[ ! "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "Tag must be in form vMAJOR.MINOR.PATCH (e.g., v0.4.0)"
-  exit 1
-fi
-
-if [[ "${VERIFY_ONLY}" -eq 1 ]]; then
-  verify_release_asset "${TAG}"
-  exit 0
-fi
-
 TOKEN=""
 
 get_token() {
   if [[ -n "${GH_TOKEN:-}" ]]; then
     TOKEN="${GH_TOKEN}"
-    return
-  fi
-  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+  elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
     TOKEN="${GITHUB_TOKEN}"
-    return
+  else
+    ensure_gh
+
+    if ! gh auth status -h github.com >/dev/null 2>&1; then
+      echo "Logging into GitHub via browser..."
+      gh auth login \
+        --web \
+        --hostname github.com \
+        --git-protocol https \
+        --skip-ssh-key
+    fi
+
+    TOKEN="$(gh auth token 2>/dev/null)"
   fi
-
-  ensure_gh
-
-  if ! gh auth status -h github.com >/dev/null 2>&1; then
-    echo "Logging into GitHub via browser..."
-    gh auth login \
-      --web \
-      --hostname github.com \
-      --git-protocol https \
-      --skip-ssh-key
-  fi
-
-  TOKEN="$(gh auth token 2>/dev/null)"
+  export GH_TOKEN="${TOKEN}"
 }
 
-get_token
-export GH_TOKEN="${TOKEN}"
-
-TAG_EXISTS=0
-if git rev-parse --verify --quiet "${TAG}" >/dev/null 2>&1; then
-  TAG_EXISTS=1
-  TAG_COMMIT="$(git rev-parse "${TAG}")"
-  HEAD_COMMIT="$(git rev-parse HEAD)"
-  if [[ "${TAG_COMMIT}" != "${HEAD_COMMIT}" ]]; then
-    if [[ "${ALLOW_RETAG}" == "1" ]]; then
-      echo "Head commit (${HEAD_COMMIT}) differs from tag ${TAG} (${TAG_COMMIT}); retagging because ALLOW_RETAG=1."
-      # Try to delete existing GitHub release for this tag (ignore errors if it does not exist)
-      if gh release view "${TAG}" >/dev/null 2>&1; then
-        echo "Deleting existing GitHub release ${TAG} (ALLOW_RETAG=1)..."
-        gh release delete "${TAG}" -y || true
-      fi
-      echo "Deleting existing tag ${TAG} locally and remotely..."
-      git tag -d "${TAG}" >/dev/null 2>&1 || true
-      git push origin :refs/tags/"${TAG}" >/dev/null 2>&1 || true
-      TAG_EXISTS=0
-      RETAGGED=1
-    else
-      echo "Head commit (${HEAD_COMMIT}) does not match existing tag ${TAG} (${TAG_COMMIT})."
-      echo "Set ALLOW_RETAG=1 to retag the current HEAD, or checkout the tagged commit."
-      exit 1
-    fi
-  fi
-  if [[ "${TAG_EXISTS}" -eq 1 ]]; then
-    echo "Tag ${TAG} already exists on current HEAD."
-  elif [[ "${RETAGGED}" -eq 1 ]]; then
-    echo "Tag ${TAG} was retagged to current HEAD."
-  fi
-fi
-
-echo "==> Committing any staged changes (if any)..."
-echo "==> Updating CHANGELOG.md..."
-CHANGELOG="CHANGELOG.md"
-RELEASE_DATE="$(date +%Y-%m-%d)"
-python - "$TAG" "$RELEASE_DATE" "$CHANGELOG" <<'PY'
+update_changelog() {
+  local tag="$1"
+  local changelog="CHANGELOG.md"
+  local release_date
+  release_date="$(date +%Y-%m-%d)"
+  python - "$tag" "$release_date" "$changelog" <<'PY'
 import sys
 import pathlib
 import re
@@ -194,49 +145,144 @@ new_text = (
 
 path.write_text(new_text)
 PY
+}
 
-git add -A
-if git diff --cached --quiet; then
-  echo "No staged changes. Skipping commit."
-else
-  git commit -m "Release ${TAG} commit"
-fi
+prep_release() {
+  local tag="$1"
+  echo "==> Updating CHANGELOG.md..."
+  update_changelog "${tag}"
 
-echo "==> Pushing current branch..."
-git push
+  git add -A
+  if git diff --cached --quiet; then
+    echo "No staged changes. Skipping commit."
+  else
+    git commit -m "Prepare release ${tag}"
+  fi
 
-echo "==> Creating tag ${TAG} and pushing..."
-if [[ "${TAG_EXISTS}" -eq 1 ]]; then
-  echo "Tag ${TAG} already exists; skipping tag creation."
-else
-  git tag -a "${TAG}" -m "Release ${TAG}"
-  git push origin "${TAG}"
-fi
+  echo "==> Pushing current branch..."
+  git push
 
-echo "==> Building wheel from tagged state..."
-RELEASE_EXISTS=0
-if gh release view "${TAG}" >/dev/null 2>&1; then
-  RELEASE_EXISTS=1
-  echo "Release ${TAG} already exists; skipping build and release creation."
-fi
+  echo "==> Done. Open a PR when ready (e.g., gh pr create)."
+}
 
-if [[ "${RELEASE_EXISTS}" -eq 0 ]]; then
-  rm -rf dist
-  python -m build --wheel
-
-  mapfile -t wheels < <(find dist -maxdepth 1 -type f -name "nebius_vpngw-*.whl" | sort)
-  if [[ "${#wheels[@]}" -eq 0 ]]; then
-    echo "Wheel not found in dist/. Aborting."
+require_main_clean() {
+  local branch
+  branch="$(git rev-parse --abbrev-ref HEAD)"
+  if [[ "${branch}" != "main" ]]; then
+    echo "ERROR: must be on main (currently: ${branch})"
+    echo "Stash or commit changes, then run:"
+    echo "  git stash -a"
+    echo "  git switch main"
     exit 1
   fi
-  if [[ "${#wheels[@]}" -gt 1 ]]; then
-    echo "Multiple wheels found, using the first one:"
-    printf '  %s\n' "${wheels[@]}"
-  fi
-  WHEEL_PATH="${wheels[0]}"
 
-  EXPECTED_VERSION="${TAG#v}"
-  WHEEL_VERSION="$(python - "$WHEEL_PATH" <<'PY'
+  if ! git diff --quiet || ! git diff --cached --quiet; then
+    echo "ERROR: working tree is not clean."
+    git status --porcelain
+    echo "Stash or commit changes, then retry:"
+    echo "  git stash -a"
+    exit 1
+  fi
+
+  git fetch origin
+  local local_commit remote_commit
+  local_commit="$(git rev-parse HEAD)"
+  remote_commit="$(git rev-parse origin/main)"
+  if [[ "${local_commit}" != "${remote_commit}" ]]; then
+    echo "ERROR: local main is not at origin/main"
+    echo "local : ${local_commit}"
+    echo "origin: ${remote_commit}"
+    exit 1
+  fi
+}
+
+retag_cleanup() {
+  local tag="$1"
+  if gh release view "${tag}" >/dev/null 2>&1; then
+    echo "Deleting existing GitHub release ${tag}..."
+    gh release delete "${tag}" -y || true
+  fi
+  echo "Deleting existing tag ${tag} locally and remotely..."
+  git tag -d "${tag}" >/dev/null 2>&1 || true
+  git push origin :refs/tags/"${tag}" >/dev/null 2>&1 || true
+}
+
+ensure_tag_available() {
+  local tag="$1"
+  if git rev-parse --verify --quiet "${tag}" >/dev/null 2>&1; then
+    local tag_commit head_commit
+    tag_commit="$(git rev-parse "${tag}")"
+    head_commit="$(git rev-parse HEAD)"
+
+    if [[ "${ALLOW_RETAG}" != "1" ]]; then
+      if [[ "${tag_commit}" == "${head_commit}" ]]; then
+        echo "ERROR: tag ${tag} already exists on current HEAD."
+        echo "This may be a mistake. Use --force-retag to recreate it, or use --verify to check the release asset."
+      else
+        echo "ERROR: tag ${tag} exists at ${tag_commit} (current HEAD is ${head_commit})."
+        echo "Refusing to retag by default. Use --force-retag to overwrite."
+      fi
+      exit 1
+    fi
+
+    echo "WARNING: tag ${tag} already exists."
+    echo "Tag commit : ${tag_commit}"
+    echo "HEAD commit: ${head_commit}"
+    echo "This will delete the existing tag and any GitHub release named ${tag}."
+    if ! confirm "Proceed with retagging ${tag}?"; then
+      exit 1
+    fi
+
+    get_token
+    retag_cleanup "${tag}"
+  fi
+}
+
+publish_release() {
+  local tag="$1"
+  require_main_clean
+  ensure_tag_available "${tag}"
+
+  echo "About to release from:"
+  git --no-pager log -1 --decorate --oneline
+  echo
+  git --no-pager show -s --format="Commit: %H%nAuthor: %an%nDate:   %ad%n%n%s" HEAD
+  echo
+
+  if ! confirm "Proceed to create tag/release?"; then
+    exit 1
+  fi
+
+  echo "==> Creating tag ${tag} and pushing..."
+  git tag -a "${tag}" -m "Release ${tag}"
+  git push origin "${tag}"
+
+  get_token
+
+  echo "==> Building wheel from tagged state..."
+  RELEASE_EXISTS=0
+  if gh release view "${tag}" >/dev/null 2>&1; then
+    RELEASE_EXISTS=1
+    echo "Release ${tag} already exists; skipping build and release creation."
+  fi
+
+  if [[ "${RELEASE_EXISTS}" -eq 0 ]]; then
+    rm -rf dist
+    python -m build --wheel
+
+    mapfile -t wheels < <(find dist -maxdepth 1 -type f -name "nebius_vpngw-*.whl" | sort)
+    if [[ "${#wheels[@]}" -eq 0 ]]; then
+      echo "Wheel not found in dist/. Aborting."
+      exit 1
+    fi
+    if [[ "${#wheels[@]}" -gt 1 ]]; then
+      echo "Multiple wheels found, using the first one:"
+      printf '  %s\n' "${wheels[@]}"
+    fi
+    WHEEL_PATH="${wheels[0]}"
+
+    EXPECTED_VERSION="${tag#v}"
+    WHEEL_VERSION="$(python - "$WHEEL_PATH" <<'PY'
 import sys
 import zipfile
 from email import message_from_bytes
@@ -252,26 +298,110 @@ with zipfile.ZipFile(w) as zf:
 PY
 )"
 
-  if [[ -z "${WHEEL_VERSION}" ]]; then
-    echo "Could not read wheel version from ${WHEEL_PATH}; aborting."
-    exit 1
+    if [[ -z "${WHEEL_VERSION}" ]]; then
+      echo "Could not read wheel version from ${WHEEL_PATH}; aborting."
+      exit 1
+    fi
+
+    if [[ "${WHEEL_VERSION}" != "${EXPECTED_VERSION}" ]]; then
+      echo "Wheel version (${WHEEL_VERSION}) does not match tag (${EXPECTED_VERSION}). Aborting to avoid publishing a mismatched artifact."
+      exit 1
+    fi
+
+    echo "==> Creating GitHub release ${tag} with asset ${WHEEL_PATH}..."
+    gh release create "${tag}" "${WHEEL_PATH}" --title "${tag}" --notes "Release ${tag}"
+
+    verify_release_asset "${tag}"
+  else
+    echo "==> Skipping GitHub release creation; already exists."
   fi
 
-  if [[ "${WHEEL_VERSION}" != "${EXPECTED_VERSION}" ]]; then
-    echo "Wheel version (${WHEEL_VERSION}) does not match tag (${EXPECTED_VERSION}). Aborting to avoid publishing a mismatched artifact."
-    exit 1
+  if [[ "${RELEASE_EXISTS}" -eq 0 ]]; then
+    echo "==> Done. Published ${tag} with asset: ${WHEEL_PATH}"
+  else
+    echo "==> Done. Release ${tag} already existed; no new asset published."
   fi
+}
 
-  echo "==> Creating GitHub release ${TAG} with asset ${WHEEL_PATH}..."
-  gh release create "${TAG}" "${WHEEL_PATH}" --title "${TAG}" --notes "Release ${TAG}"
+MODE=""
+FORCE_RETAG=0
 
-  verify_release_asset "${TAG}"
-else
-  echo "==> Skipping GitHub release creation; already exists."
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --prep)
+      MODE="prep"
+      shift
+      ;;
+    --publish)
+      MODE="publish"
+      shift
+      ;;
+    --verify)
+      MODE="verify"
+      shift
+      ;;
+    --force-retag)
+      FORCE_RETAG=1
+      shift
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      echo "Unknown flag: $1"
+      usage
+      exit 1
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+if [[ -z "${MODE}" ]]; then
+  usage
+  exit 1
 fi
 
-if [[ "${RELEASE_EXISTS}" -eq 0 ]]; then
-  echo "==> Done. Published ${TAG} with asset: ${WHEEL_PATH}"
-else
-  echo "==> Done. Release ${TAG} already existed; no new asset published."
+if [[ "${FORCE_RETAG}" -eq 1 && "${MODE}" != "publish" ]]; then
+  die "--force-retag is only valid with --publish"
 fi
+
+TAG="${TAG:-${1-}}"
+if [[ -z "${TAG}" ]]; then
+  usage
+  exit 1
+fi
+if [[ -n "${2-}" ]]; then
+  die "Unexpected extra arguments: ${*:2}"
+fi
+
+if [[ ! "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  die "Tag must be in form vMAJOR.MINOR.PATCH (e.g., v0.4.0)"
+fi
+
+ALLOW_RETAG="${ALLOW_RETAG:-0}"
+if [[ "${FORCE_RETAG}" -eq 1 ]]; then
+  ALLOW_RETAG=1
+fi
+
+case "${MODE}" in
+  prep)
+    prep_release "${TAG}"
+    ;;
+  publish)
+    publish_release "${TAG}"
+    ;;
+  verify)
+    verify_release_asset "${TAG}"
+    ;;
+  *)
+    usage
+    exit 1
+    ;;
+esac
