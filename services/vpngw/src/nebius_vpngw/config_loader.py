@@ -176,8 +176,7 @@ def load_local_config(path: Path) -> dict:
     if missing:
         # Surface all missing vars at once to help the user export them.
         raise ValueError(
-            "Missing environment variables for placeholders: "
-            + ", ".join(sorted(missing))
+            "Missing environment variables for placeholders: " + ", ".join(sorted(missing))
         )
 
     # Optional convenience: read SSH public key from a path if provided
@@ -279,10 +278,7 @@ def _validate_tunnel_inner_ips(tunnel: dict, tunnel_name: str) -> None:
                 f"Use a host address within {inner_cidr}"
             )
 
-        if (
-            remote_ip == network.network_address
-            or remote_ip == network.broadcast_address
-        ):
+        if remote_ip == network.network_address or remote_ip == network.broadcast_address:
             raise ValueError(
                 f"Tunnel '{tunnel_name}': inner_remote_ip {inner_remote_ip} is the network or broadcast address. "
                 f"Use a host address within {inner_cidr}"
@@ -378,9 +374,7 @@ def _merge_crypto_overrides(
             pc.get("esp_lifetime_seconds"),
             prefer_peer,
         ),
-        "dh_groups": _merge_with_preference(
-            yc.get("dh_groups"), pc.get("dh_groups"), prefer_peer
-        ),
+        "dh_groups": _merge_with_preference(yc.get("dh_groups"), pc.get("dh_groups"), prefer_peer),
     }
     if not _crypto_is_complete(merged):
         return None
@@ -427,10 +421,7 @@ def _score_peer_tunnel(
     y_local_pub = _resolved_local_public_ip(local_cfg, yaml_tun)
     if y_local_pub and peer_tun.get("local_public_ip") == y_local_pub:
         score += 4
-    if (
-        peer_tun.get("remote_public_ip")
-        and peer_tun.get("remote_public_ip") != y_local_pub
-    ):
+    if peer_tun.get("remote_public_ip") and peer_tun.get("remote_public_ip") != y_local_pub:
         score += 2
     # Inner IP/cidr hints
     hints = 0
@@ -474,9 +465,7 @@ def merge_peer_configs_into_local_config(
     if not flat_peer_tunnels:
         return cfg
 
-    peer_vendor = next(
-        (spec.get("vendor") for spec in peer_specs if spec.get("vendor")), None
-    )
+    peer_vendor = next((spec.get("vendor") for spec in peer_specs if spec.get("vendor")), None)
     peer_remote_asn: int | None = None
     for spec in peer_specs:
         if spec.get("remote_asn") is not None:
@@ -486,6 +475,7 @@ def merge_peer_configs_into_local_config(
 
     def merge_value(yaml_val, peer_val, default_val=None):
         return _merge_with_preference(yaml_val, peer_val, prefer_peer, default_val)
+
     connections = cfg.get("connections") or []
     for conn in connections:
         conn_vendor = (conn.get("vendor") or "").lower()
@@ -509,9 +499,7 @@ def merge_peer_configs_into_local_config(
             for j, pt in enumerate(flat_peer_tunnels):
                 if j in used_indices:
                     continue
-                score = _score_peer_tunnel(
-                    conn_vendor, conn_remote_asn, tun, pt, cfg
-                )
+                score = _score_peer_tunnel(conn_vendor, conn_remote_asn, tun, pt, cfg)
                 if score > best_score:
                     best_score = score
                     best_idx = j
@@ -535,9 +523,7 @@ def merge_peer_configs_into_local_config(
 
             tun = dict(tun)
             tun["psk"] = merge_value(tun.get("psk"), peer_tun.get("psk"))
-            tun["inner_cidr"] = merge_value(
-                tun.get("inner_cidr"), peer_tun.get("inner_cidr")
-            )
+            tun["inner_cidr"] = merge_value(tun.get("inner_cidr"), peer_tun.get("inner_cidr"))
             tun["inner_local_ip"] = merge_value(
                 tun.get("inner_local_ip"), peer_tun.get("inner_local_ip")
             )
@@ -567,9 +553,7 @@ def merge_peer_configs_into_local_config(
     return cfg
 
 
-def merge_with_peer_configs(
-    local_cfg: dict, peer_files: list[Path]
-) -> ResolvedDeploymentPlan:
+def merge_with_peer_configs(local_cfg: dict, peer_files: list[Path]) -> ResolvedDeploymentPlan:
     # Build normalized peer specs
     peer_specs = [_parse_peer_file(p) for p in peer_files]
     gg = local_cfg.get("gateway_group", {})
@@ -638,9 +622,7 @@ def merge_with_peer_configs(
                 for j, pt in enumerate(flat_peer_tunnels):
                     if j in used_indices:
                         continue
-                    score = _score_peer_tunnel(
-                        conn_vendor, conn_remote_asn, tun, pt, local_cfg
-                    )
+                    score = _score_peer_tunnel(conn_vendor, conn_remote_asn, tun, pt, local_cfg)
                     if score > best_score:
                         best_score = score
                         best_idx = j
@@ -652,9 +634,7 @@ def merge_with_peer_configs(
                 tun = dict(tun)  # copy
                 # Merge essential fields
                 tun["psk"] = _merge_fields(tun.get("psk"), peer_tun.get("psk"))
-                tun["inner_cidr"] = _merge_fields(
-                    tun.get("inner_cidr"), peer_tun.get("inner_cidr")
-                )
+                tun["inner_cidr"] = _merge_fields(tun.get("inner_cidr"), peer_tun.get("inner_cidr"))
                 tun["inner_local_ip"] = _merge_fields(
                     tun.get("inner_local_ip"), peer_tun.get("inner_local_ip")
                 )
@@ -708,17 +688,13 @@ def merge_with_peer_configs(
 
             # Filter tunnels assigned to this instance
             inst_tunnels_raw = [
-                t
-                for t in merged_tunnels
-                if int(t.get("gateway_instance_index", 0)) == idx
+                t for t in merged_tunnels if int(t.get("gateway_instance_index", 0)) == idx
             ]
             if inst_tunnels_raw:
                 # Inject the actual external IP into each tunnel's local_public_ip if not already set
                 inst_tunnels = []
                 for t in inst_tunnels_raw:
-                    t_copy = dict(
-                        t
-                    )  # Make a copy to avoid modifying shared tunnel dict
+                    t_copy = dict(t)  # Make a copy to avoid modifying shared tunnel dict
                     lip = t_copy.get("local_public_ip")
                     if lip in (None, ""):
                         local_idx = t_copy.get("local_public_ip_index")

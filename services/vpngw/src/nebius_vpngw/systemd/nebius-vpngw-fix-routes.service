@@ -1,12 +1,14 @@
 [Unit]
 Description=Fix Nebius VPN Gateway routing issues
 Documentation=https://github.com/nebius/nebius-ps-services
-After=network-online.target
-Wants=network-online.target
+After=network-online.target strongswan-starter.service frr.service
+Wants=network-online.target strongswan-starter.service frr.service
+ConditionPathExists=/etc/nebius-vpngw/config-resolved.yaml
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/nebius-vpngw-fix-routes.sh
+Environment="PYTHONUNBUFFERED=1"
+ExecStart=/usr/bin/python3 -m nebius_vpngw.agent.fix_routes --config /etc/nebius-vpngw/config-resolved.yaml
 StandardOutput=journal
 StandardError=journal
 

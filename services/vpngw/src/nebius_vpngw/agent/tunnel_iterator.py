@@ -1,13 +1,15 @@
 """Centralized tunnel iteration logic.
 
-This module provides a single source of truth for iterating over active tunnels
+This module provides a single source of truth for iterating over enabled tunnels
 and their corresponding XFRM interface indices. This ensures that strongswan_renderer,
 routing_guard, and FRR all use identical tunnel-to-interface mappings.
 
-The mapping logic is:
-- Only active tunnels (ha_role != "standby") are processed
+The mapping logic:
+- Both "active" and "passive" tunnels are processed (for Active/Passive HA)
+- Only tunnels with ha_role="disable" are skipped
 - Interface indices are assigned sequentially starting from 0
-- Each active tunnel gets xfrm{idx} where idx increments globally across all connections
+- Each enabled tunnel gets xfrm{idx} where idx increments globally across all connections
+- FRR applies local-preference to differentiate active (pref=200) vs passive (pref=100)
 """
 
 from collections.abc import Iterator
@@ -17,26 +19,32 @@ from typing import Any
 def iter_active_tunnels(
     cfg: dict[str, Any],
 ) -> Iterator[tuple[int, str, dict[str, Any], dict[str, Any]]]:
-    """Iterate over all active tunnels with their XFRM interface indices.
+    """Iterate over all enabled tunnels with their XFRM interface indices.
 
     This is the canonical source of truth for tunnel-to-interface mapping.
     All components (strongswan_renderer, routing_guard, frr_renderer) MUST use
     this iterator to ensure consistent interface index assignment.
 
+    For Active/Passive HA:
+    - Both "active" and "passive" tunnels are included (IPsec + BGP established)
+    - Only tunnels with ha_role="disable" are excluded
+    - FRR applies different local-preference: active=200, passive=100
+    - This prevents ECMP while maintaining hot standby
+
     The interface index is scoped per-VM (per rendered config), not globally across
-    a gateway group. Each VM starts from xfrm0 for its first active tunnel.
+    a gateway group. Each VM starts from xfrm0 for its first enabled tunnel.
 
     Args:
         cfg: Gateway configuration dictionary
 
     Yields:
-        Tuple of (iface_index, iface_name, connection, tunnel) for each active tunnel
+        Tuple of (iface_index, iface_name, connection, tunnel) for each enabled tunnel
 
     Example:
         >>> for idx, iface_name, conn, tun in iter_active_tunnels(cfg):
-        ...     print(f"Tunnel {tun['name']} uses {iface_name}")
-        Tunnel gcp-ha-tunnel-1 uses xfrm0
-        Tunnel gcp-ha-tunnel-2 uses xfrm1
+        ...     print(f"Tunnel {tun['name']} ({tun['ha_role']}) uses {iface_name}")
+        Tunnel gcp-ha-tunnel-1 (active) uses xfrm0
+        Tunnel gcp-ha-tunnel-2 (passive) uses xfrm1
     """
     idx = 0
     connections = cfg.get("connections", [])
@@ -45,9 +53,10 @@ def iter_active_tunnels(
         tunnels = conn.get("tunnels", [])
 
         for tun in tunnels:
-            # Skip standby/disabled tunnels (only process active)
-            # This must match the logic in strongswan_renderer to keep indices aligned
-            if tun.get("ha_role", "active") != "active":
+            # Skip only explicitly disabled tunnels
+            # Both "active" and "passive" tunnels are processed for Active/Passive HA
+            ha_role = tun.get("ha_role", "active")
+            if ha_role == "disable":
                 continue
 
             iface_name = f"xfrm{idx}"

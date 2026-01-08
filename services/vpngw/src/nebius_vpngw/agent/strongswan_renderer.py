@@ -34,13 +34,7 @@ def _write_secret_file(path: Path, content: str) -> None:
 
 
 class StrongSwanRenderer:
-    def render_and_apply(self, cfg: dict[str, Any]) -> None:
-        """Render strongSwan config based on resolved per-VM YAML.
-
-        Generates ipsec.conf with one connection per active tunnel and ipsec.secrets for PSKs.
-        Supports IKEv1/IKEv2, configurable crypto proposals, DPD, and both BGP and static routing
-        using XFRM interfaces.
-        """
+    def _collect_tunnel_state(self, cfg: dict[str, Any]) -> tuple[list[str], list[str], list[dict]]:
         connections: list[str] = []
         secrets_lines: list[str] = []
 
@@ -63,8 +57,9 @@ class StrongSwanRenderer:
                 "routing", {}
             ).get("mode", "bgp")
             for tun in conn.get("tunnels", []):
-                if tun.get("ha_role", "active") != "active":
-                    continue
+                ha_role = tun.get("ha_role", "active")
+                if ha_role == "disable":
+                    continue  # Skip only explicitly disabled tunnels
                 tun_mode = tun.get("routing_mode") or routing_mode
 
                 name = tun.get("name") or f"tunnel{idx}"
@@ -73,9 +68,7 @@ class StrongSwanRenderer:
                     ike_version = global_ike_version
 
                 # Tunnel IPs and endpoints
-                local_public_ip = tun.get(
-                    "local_public_ip"
-                )  # Optional; auto-detected if omitted
+                local_public_ip = tun.get("local_public_ip")  # Optional; auto-detected if omitted
                 remote_public_ip = tun.get("remote_public_ip")  # Required for right=
                 inner_local_ip = tun.get("inner_local_ip")
                 inner_remote_ip = tun.get("inner_remote_ip")
@@ -83,19 +76,13 @@ class StrongSwanRenderer:
                 psk = tun.get("psk")
 
                 if not remote_public_ip:
-                    print(
-                        f"[StrongSwan] WARNING: Tunnel {name} missing remote_public_ip; skipping"
-                    )
+                    print(f"[StrongSwan] WARNING: Tunnel {name} missing remote_public_ip; skipping")
                     continue
 
                 # Crypto proposals
                 ccrypto = tun.get("crypto", {}) or {}
-                ike_props = ccrypto.get("ike_proposals") or crypto_defaults.get(
-                    "ike_proposals", []
-                )
-                esp_props = ccrypto.get("esp_proposals") or crypto_defaults.get(
-                    "esp_proposals", []
-                )
+                ike_props = ccrypto.get("ike_proposals") or crypto_defaults.get("ike_proposals", [])
+                esp_props = ccrypto.get("esp_proposals") or crypto_defaults.get("esp_proposals", [])
                 ike_life = ccrypto.get("ike_lifetime_seconds") or crypto_defaults.get(
                     "ike_lifetime_seconds", 28800
                 )
@@ -169,12 +156,8 @@ class StrongSwanRenderer:
 
                 # DPD (Dead Peer Detection)
                 if dpd:
-                    conn_lines.append(
-                        f"    dpddelay={int(dpd.get('interval_seconds', 30))}s"
-                    )
-                    conn_lines.append(
-                        f"    dpdtimeout={int(dpd.get('timeout_seconds', 120))}s"
-                    )
+                    conn_lines.append(f"    dpddelay={int(dpd.get('interval_seconds', 30))}s")
+                    conn_lines.append(f"    dpdtimeout={int(dpd.get('timeout_seconds', 120))}s")
                     conn_lines.append("    dpdaction=restart")
 
                 # Auto-start
@@ -204,6 +187,21 @@ class StrongSwanRenderer:
                     secrets_lines.append(f'%any {remote_public_ip} : PSK "{psk}"')
 
                 idx += 1
+
+        return connections, secrets_lines, interface_endpoints
+
+    def build_interface_endpoints(self, cfg: dict[str, Any]) -> list[dict]:
+        _, _, interface_endpoints = self._collect_tunnel_state(cfg)
+        return interface_endpoints
+
+    def render_and_apply(self, cfg: dict[str, Any]) -> None:
+        """Render strongSwan config based on resolved per-VM YAML.
+
+        Generates ipsec.conf with one connection per active tunnel and ipsec.secrets for PSKs.
+        Supports IKEv1/IKEv2, configurable crypto proposals, DPD, and both BGP and static routing
+        using XFRM interfaces.
+        """
+        connections, secrets_lines, interface_endpoints = self._collect_tunnel_state(cfg)
 
         # Write strongSwan plugin configuration based on mode
         STRONGSWAN_CONF_DIR.mkdir(parents=True, exist_ok=True)

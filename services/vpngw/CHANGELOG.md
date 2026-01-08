@@ -14,6 +14,19 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Added Active/Passive HA support with BGP MED (Multi-Exit Discriminator) and local-preference for bidirectional path control.
+- Active tunnels use MED=0 and local-pref=200; passive tunnels use MED=100 and local-pref=100 for deterministic routing.
+- Disabled `ensure_local_prefix_routes()` in frr_renderer.py and routing_guard.py to prevent routes that break packet forwarding.
+- Added `no bgp network import-check` to BGP configuration to allow prefix advertisement without kernel routes.
+- Comprehensive MED documentation added to design.md with verification commands for both Nebius and peer sides.
+- Enhanced Project Structure documentation in design.md and README.md with all agent modules and systemd components.
+- Added MTU/MSS hardening for XFRM gateways: TCP MSS clamp, TCP MTU probing, ICMP frag-needed allowances, and explicit XFRM MTU calculation.
+- Ensured XFRM interfaces and local prefix routes are enforced even when config is unchanged; state tracking now uses render version.
+- Routing guard now canonicalizes internal CIDR routes (dedup + onlink metric), flushes route cache after fixes, and uses a shared lock to prevent concurrent enforcement.
+- Fix-routes timer now runs the Python entrypoint with systemd ordering/conditions and config path; legacy fix-routes shell script removed.
+- Deployment updates: firewall setup script externalized, systemd assets staged via SSH push, and agent restart/reload logic refined.
+- XFRM IP assignment made idempotent via `ip addr replace`.
+
 ## [v0.4.4] - 2025-12-21
 
 - Added `create-from-peer-config` command to generate YAML from vendor peer files; removed `--peer-config-file` from `apply`.

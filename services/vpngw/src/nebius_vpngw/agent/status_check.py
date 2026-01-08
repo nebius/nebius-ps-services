@@ -175,11 +175,7 @@ def check_bgp_sessions() -> dict[str, Any]:
         if result.returncode == 0 and result.stdout:
             try:
                 data = json.loads(result.stdout)
-                peers_data = (
-                    (data.get("ipv4Unicast") or {}).get("peers")
-                    or data.get("peers")
-                    or {}
-                )
+                peers_data = (data.get("ipv4Unicast") or {}).get("peers") or data.get("peers") or {}
 
                 for ip, info in peers_data.items():
                     state = (

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import signal
 from pathlib import Path
 
@@ -7,7 +8,11 @@ import yaml
 
 from .firewall_manager import update_firewall_from_config
 from .frr_renderer import FRRRenderer
-from .routing_guard import enforce_routing_invariants
+from .routing_guard import (
+    acquire_routing_lock,
+    enforce_routing_invariants,
+    enforce_routing_invariants_locked,
+)
 from .state_store import StateStore
 from .strongswan_renderer import StrongSwanRenderer
 from .xfrm_manager import XFRMManager
@@ -24,49 +29,74 @@ class Agent:
         self.xfrm = XFRMManager()
 
     def reload(self) -> None:
-        if not CONFIG_PATH.exists():
-            print(f"[Agent] Config not found: {CONFIG_PATH}")
-            return
-        cfg = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
-
-        # Update firewall rules based on config (peer IPs, management CIDRs)
-        # With no management CIDRs provided, SSH remains open from anywhere.
-        # Safe to call on every reload - only updates if peer IPs changed
+        lock_fd = None
         try:
-            update_firewall_from_config(cfg)
+            lock_fd = acquire_routing_lock(blocking=True)
         except Exception as e:
-            # Log but don't fail - firewall updates are not critical for VPN functionality
-            print(f"[Agent] WARNING: Firewall update failed: {e}")
+            print(f"[Agent] WARNING: Failed to acquire routing lock: {e}")
 
-        if not self.state.is_changed(cfg):
-            print("[Agent] No changes detected; skipping config render")
-            # CRITICAL: Enforce routing invariants even when config unchanged
-            # This prevents routing issues (table 220, broad APIPA) from persisting
-            # across agent restarts when config hasn't changed
-            enforce_routing_invariants(cfg)
-            return
+        try:
+            if not CONFIG_PATH.exists():
+                print(f"[Agent] Config not found: {CONFIG_PATH}")
+                return
+            cfg = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
 
-        # Render strongSwan config (returns interface endpoints for XFRM/VTI management)
-        interface_endpoints = self.ss.render_and_apply(cfg)
+            # Update firewall rules based on config (peer IPs, management CIDRs)
+            # With no management CIDRs provided, SSH remains open from anywhere.
+            # Safe to call on every reload - only updates if peer IPs changed
+            try:
+                update_firewall_from_config(cfg)
+            except Exception as e:
+                # Log but don't fail - firewall updates are not critical for VPN functionality
+                print(f"[Agent] WARNING: Firewall update failed: {e}")
 
-        # Setup XFRM interfaces. Must happen AFTER strongSwan config is written
-        # but BEFORE tunnels come up so CHILD_SAs can bind to the devices.
-        if interface_endpoints:
-            print("[Agent] Setting up XFRM interfaces...")
-            self.xfrm.setup_interfaces(interface_endpoints)
+            interface_endpoints = self.ss.build_interface_endpoints(cfg)
+            self.frr.ensure_local_prefix_routes(cfg)
 
-        # Render FRR BGP config
-        self.frr.render_and_apply(cfg)
+            if not self.state.is_changed(cfg):
+                print("[Agent] No changes detected; skipping config render")
+                if interface_endpoints:
+                    print("[Agent] Ensuring XFRM interfaces are present...")
+                    self.xfrm.setup_interfaces(interface_endpoints)
+                # CRITICAL: Enforce routing invariants even when config unchanged
+                # This prevents routing issues (table 220, broad APIPA) from persisting
+                # across agent restarts when config hasn't changed
+                if lock_fd is not None:
+                    enforce_routing_invariants_locked(cfg)
+                else:
+                    enforce_routing_invariants(cfg)
+                return
 
-        # Persist state
-        self.state.save_last_applied(cfg)
-        print("[Agent] Applied and persisted new configuration")
+            # Render strongSwan config (returns interface endpoints for XFRM/VTI management)
+            interface_endpoints = self.ss.render_and_apply(cfg)
 
-        # CRITICAL: Enforce routing invariants AFTER config rendering completes
-        # Must run after strongSwan/FRR rendering because those operations can
-        # trigger systemd-networkd reload, which causes DHCP renewal that adds
-        # back the problematic routes (table 220, broad APIPA 169.254.0.0/16)
-        enforce_routing_invariants(cfg)
+            # Setup XFRM interfaces. Must happen AFTER strongSwan config is written
+            # but BEFORE tunnels come up so CHILD_SAs can bind to the devices.
+            if interface_endpoints:
+                print("[Agent] Setting up XFRM interfaces...")
+                self.xfrm.setup_interfaces(interface_endpoints)
+
+            # Render FRR BGP config
+            self.frr.render_and_apply(cfg)
+
+            # Persist state
+            self.state.save_last_applied(cfg)
+            print("[Agent] Applied and persisted new configuration")
+
+            # CRITICAL: Enforce routing invariants AFTER config rendering completes
+            # Must run after strongSwan/FRR rendering because those operations can
+            # trigger systemd-networkd reload, which causes DHCP renewal that adds
+            # back the problematic routes (table 220, broad APIPA 169.254.0.0/16)
+            if lock_fd is not None:
+                enforce_routing_invariants_locked(cfg)
+            else:
+                enforce_routing_invariants(cfg)
+        finally:
+            if lock_fd is not None:
+                try:
+                    os.close(lock_fd)
+                except Exception:
+                    pass
 
 
 def main() -> None:

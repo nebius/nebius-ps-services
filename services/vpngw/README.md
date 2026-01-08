@@ -150,6 +150,30 @@ xfrm*:
 
 **Note:** UFW is the default and recommended firewall. The system automatically enables and configures it during VM deployment.
 
+### Permanent MTU Strategy (XFRM)
+
+The gateway enforces a conservative MTU policy so workloads don't rely on PMTUD alone:
+
+- Always enable TCP MSS clamping on the gateway
+- Enable TCP MTU probing
+- Set XFRM MTU to parent MTU minus IPsec/NAT-T overhead (default 64 bytes)
+- Keep eth0 MTU unchanged
+- Expect PMTU ~1380-1386 for GCP HA VPN with NAT-T
+
+**Rules applied by the agent:**
+
+```bash
+iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+# nftables equivalent:
+nft add rule ip mangle forward tcp flags syn tcp option maxseg size set rt mtu
+```
+
+**Sysctl (persistent):**
+
+```bash
+net.ipv4.tcp_mtu_probing = 1
+```
+
 ### Required Information from Peer Gateway
 
 Before configuring your VPN gateway, collect the following information from your peer gateway (e.g., GCP Cloud Router, AWS VPN, Azure VPN Gateway):
@@ -600,6 +624,35 @@ nebius-vpngw list-routes-remote --local-config-file <file>
   - Visible via SSH queries to gateway VMs
 
 ## Routing Modes
+
+### Active/Passive HA for Multi-Tunnel Connections
+
+The gateway operates in **Active/Passive mode** to ensure symmetric routing without requiring workload VM configuration changes. When configuring multiple tunnels to the same peer (e.g., GCP HA VPN), **keep only one tunnel active** at a time.
+
+**Tunnel Mode Configuration:**
+
+| Desired Mode | Config Required | Description |
+| ------------ | --------------- | ----------- |
+| **active** | `ha_role: "active"` **OR** omit the field (default) | Primary tunnel with BGP local-preference 200. Carries all data traffic. |
+| **passive** | `ha_role: "passive"` (**must be explicit**) | Standby tunnel with BGP local-preference 100. Hot standby for automatic failover. |
+| **disable** | `ha_role: "disable"` (**must be explicit**) | Tunnel completely skipped (no IPsec, no BGP). |
+
+**Important:** If you omit `ha_role` on multiple tunnels, they will all default to `"active"`, creating ECMP load balancing that may cause asymmetric routing and packet loss. Always explicitly set one tunnel to `"passive"` in multi-tunnel configurations.
+
+**Example:**
+
+```yaml
+connections:
+  - name: "gcp-ha-vpn"
+    routing_mode: bgp
+    tunnels:
+      - name: "tunnel-1"
+        ha_role: "active"    # Primary - carries traffic
+        # ...
+      - name: "tunnel-2"
+        ha_role: "passive"   # Standby - automatic failover
+        # ...
+```
 
 ### BGP (Recommended)
 
@@ -1136,7 +1189,7 @@ This follows the same pattern as AWS/Azure/Juniper/Cisco routers when building s
 ```bash
 # Manual cleanup
 ssh ubuntu@<gateway-ip>
-sudo /usr/local/bin/nebius-vpngw-fix-routes.sh
+sudo systemctl start nebius-vpngw-fix-routes.service
 
 # Or trigger agent reload
 sudo systemctl reload nebius-vpngw-agent
@@ -1400,6 +1453,12 @@ pip install -e ".[dev]"
 python -m build --wheel
 ```
 
+### linting the codes
+
+```bash
+python -m ruff check src --fix
+```
+
 ## Release & Versioning
 
 - Versions are derived from annotated Git tags (`vMAJOR.MINOR.PATCH`) via `setuptools-scm`; no manual edits to `pyproject.toml` are needed. The generated version is written to `src/nebius_vpngw/_version.py` during build and surfaced via `nebius-vpngw --version`.
@@ -1417,7 +1476,7 @@ Bump **MINOR** for backward-compatible features.
 Bump **PATCH** for fixes only.
 **Current working version (including dev distance):** `python -m setuptools_scm`
 
-### Release workflow (example)
+### Release workflow (you can use the script)
 
 1. Ensure tooling: `python -m pip install --upgrade setuptools setuptools-scm build` and install GitHub CLI (`command -v gh || brew install gh` / `sudo apt-get install gh`), then `gh auth login`.
 2. Tag the release with SemVer: `git tag -a vX.Y.Z -m "Release vX.Y.Z" && git push origin vX.Y.Z`.
@@ -1494,9 +1553,9 @@ The script will:
 │   │   └── cisco.py
 │   └── systemd/                          # Systemd units/scripts
 │       ├── nebius-vpngw-agent.service    # Agent service unit
-│       ├── fix-routes.sh                 # Route cleanup helper (table 220/APIPA)
 │       ├── nebius-vpngw-fix-routes.service  # Service wrapper for route cleanup
-│       └── nebius-vpngw-fix-routes.timer    # Timer to enforce route cleanup periodically
+│       ├── nebius-vpngw-fix-routes.timer    # Timer to enforce route cleanup periodically
+│       └── setup-vpngw-firewall.sh          # UFW firewall initialization script
 ```
 
 ### Key Modules
@@ -1512,11 +1571,16 @@ The script will:
 **Agent (on VM):**
 
 - `main.py`: Daemon with idempotent config rendering and SIGHUP reload
-- `frr_renderer.py`: Generates FRR BGP configuration
-- `strongswan_renderer.py`: Generates strongSwan IPsec configuration
-- `routing_guard.py`: Enforces routing invariants, removes problematic routes
+- `frr_renderer.py`: Generates FRR BGP configuration with Active/Passive HA (local-preference inbound, MED outbound), prefix filtering, and route-maps
+- `strongswan_renderer.py`: Generates strongSwan IPsec configuration with XFRM interfaces
+- `xfrm_manager.py`: Manages XFRM tunnel interface lifecycle (create, IP config, MTU)
+- `routing_guard.py`: Enforces routing invariants, prevents local_prefix routes that break forwarding, cleans problematic routes
+- `fix_routes.py`: Standalone utility invoked by systemd timer to periodically enforce routing invariants
 - `firewall_manager.py`: Synchronizes UFW rules with active tunnels
+- `tunnel_iterator.py`: Centralized tunnel enumeration for consistent indexing
 - `state_store.py`: Persists last-applied state for idempotency
+- `status_check.py`: Health checks for tunnels, BGP, and routes
+- `sanity_check.py`: Routing validation troubleshooting tool
 
 **Deployment:**
 

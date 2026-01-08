@@ -14,14 +14,10 @@ def parse(text: str) -> dict:
     remote_asn = None
 
     # PSKs: "Pre-Shared Key" : xxxx
-    psks = re.findall(
-        r"(?i)pre\s*-\s*shared\s*key\s*[:=]\s*([A-Za-z0-9_!@#$%^&*\-]+)", text
-    )
+    psks = re.findall(r"(?i)pre\s*-\s*shared\s*key\s*[:=]\s*([A-Za-z0-9_!@#$%^&*\-]+)", text)
 
     # Inside CIDRs: "Inside IP Addresses: 169.254.x.x/30"
-    cidrs = re.findall(
-        r"(?i)inside\s*ip\s*addresses\s*[:=]\s*(169\.254\.\d+\.\d+/30)", text
-    )
+    cidrs = re.findall(r"(?i)inside\s*ip\s*addresses\s*[:=]\s*(169\.254\.\d+\.\d+/30)", text)
     local_ips = re.findall(
         r"(?i)customer\s*gateway\s*inside\s*address\s*[:=]\s*(169\.254\.\d+\.\d+)", text
     )

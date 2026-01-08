@@ -1,6 +1,6 @@
 # Nebius VPN Gateway (VM-Based) — Design Document
 
-> Version: v0.4
+> Version: v0.4.5
 > Designed by: Reza Bahmanzadeh, Nebius Professional Services, CX Org.
 > Copyright 2025 Nebius B.V.
 > Licensed under the Apache License, Version 2.0
@@ -387,7 +387,32 @@ gateway:
 - strongSwan config uses `if_id_in=100, if_id_out=100` (no marks)
 - Agent creates XFRM devices: `ip link add xfrm0 type xfrm dev eth0 if_id 100`
 - Inner APIPA addresses assigned to XFRM interfaces for BGP peering
-- MTU set to 1387 (GCP MTU 1460 - IPsec overhead 73 bytes)
+- MTU set on XFRM interfaces to parent MTU minus IPsec/NAT-T overhead (default 64 bytes)
+  (e.g., 1450 -> 1386; can be rounded down to 1380 for extra headroom)
+
+**MTU and PMTU Validation (Operational Guidance):**
+
+- Effective tunnel MTU is the largest IP packet that can traverse the XFRM interface without fragmentation.
+- Example: `eth0 MTU = 1450`, `xfrm MTU = 1386` (1450 - 64).
+- ICMP overhead is 28 bytes (20 IP + 8 ICMP), so the maximum safe `ping -s` payload is:
+  `1386 - 28 = 1358`.
+
+```bash
+# PMTU sanity check (should succeed)
+ping -M do -s 1358 <remote-ip>
+
+# If you round xfrm MTU down to 1380, use:
+# ping -M do -s 1352 <remote-ip>
+```
+
+**Best practice before bulk transfers:**
+
+- Keep TCP MSS clamping enabled on the gateway so forwarded TCP traffic never exceeds the route MTU.
+- This is the production-safe way to avoid fragmentation for workload traffic.
+
+```bash
+iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+```
 
 **Why XFRM:**
 
@@ -526,6 +551,289 @@ The configuration fields `local_prefixes` and `remote_prefixes` have different m
 - **Routes not installed:** FRR 8.4.4 bug, upgrade to 10.x
 - **Policy errors:** Add `no bgp ebgp-requires-policy` to config
 
+### Active/Passive HA Mode
+
+**Design Philosophy:**
+
+The Nebius VPN Gateway operates in **Active/Passive mode** by default to guarantee symmetric routing for customer workloads. This ensures compatibility with default Linux and Windows networking stacks without requiring any workload-side configuration changes.
+
+**Problem with ECMP (Equal-Cost Multi-Path):**
+
+When both tunnels have equal BGP preference, the kernel uses ECMP load balancing:
+
+- Parallel TCP flows (`iperf3 -P 4`) get distributed across tunnels
+- Return packets may arrive via a different tunnel than outbound packets went
+- Workload VMs with default `rp_filter` settings drop asymmetric return packets
+- Result: Connection hangs, packet loss, intermittent failures
+
+**Active/Passive Solution:**
+
+| Tunnel Role | BGP local-preference | IPsec Status | BGP Status | Traffic Handling |
+| ----------- | ------------------- | ------------ | ---------- | ---------------- |
+| **Active** | 200 (higher = preferred) | UP | ESTABLISHED | Carries all data traffic |
+| **Passive** | 100 (lower = standby) | UP | ESTABLISHED | Hot standby for failover |
+
+**How It Works:**
+
+1. **Both tunnels are UP** (IPsec CHILD_SA established, BGP sessions active)
+2. **FRR applies route-map** with `local-preference` based on `ha_role` config:
+
+   ```text
+   route-map SET-LOCAL-PREF-200 permit 10
+    set local-preference 200
+   
+   route-map SET-LOCAL-PREF-100 permit 10
+    set local-preference 100
+   ```
+
+3. **Kernel routing table** installs only the higher-preference route (active tunnel)
+4. **All flows** use the same tunnel → symmetric return paths → no rp_filter drops
+5. **Automatic failover:** If active tunnel fails, BGP immediately switches to passive (typically <10s)
+
+**Configuration Example:**
+
+```yaml
+connections:
+  - name: "gcp-ha-vpn"
+    routing_mode: bgp
+    tunnels:
+      - name: "gcp-ha-tunnel-1"
+        ha_role: "active"   # Primary tunnel (local-pref 200)
+        # ... tunnel config ...
+      - name: "gcp-ha-tunnel-2"
+        ha_role: "passive"  # Standby tunnel (local-pref 100)
+        # ... tunnel config ...
+```
+
+**Tunnel Mode Configuration Reference:**
+
+| Desired Mode | Config Required | Description |
+| ------------ | --------------- | ----------- |
+| **active** | `ha_role: "active"` **OR** omit the field (default) | Primary tunnel with BGP local-preference 200. **Keep only one tunnel active at a time** to ensure symmetric routing. |
+| **passive** | `ha_role: "passive"` (**must be explicit**) | Standby tunnel with BGP local-preference 100. Provides hot standby for automatic failover. |
+| **disable** | `ha_role: "disable"` (**must be explicit**) | Tunnel is completely skipped (no IPsec, no BGP). Use for maintenance or cost optimization. |
+
+**Important:** The Active/Passive design requires **exactly one active tunnel** per gateway to guarantee symmetric routing. If you omit `ha_role` on multiple tunnels, they will all default to `"active"` and create ECMP routing, which defeats the purpose of this design.
+
+**Benefits:**
+
+- ✅ **No workload VM changes required** (rp_filter stays at default)
+- ✅ **Works with any OS** (Linux, Windows, RHEL, Ubuntu)  
+- ✅ **Fast failover** (BGP detects failure and switches routes)
+- ✅ **Scalable** (handles `iperf3 -P 100` without packet loss)
+- ✅ **Production-proven** (same design as AWS VGW, Azure VPN Gateway, Cisco/Juniper)
+
+**Verification:**
+
+After deployment, check that only one route is active:
+
+```bash
+# On VPN gateway:
+ip route show 10.10.0.0/24
+# Expected: Single nexthop via active tunnel
+10.10.0.0/24 via 169.254.18.225 dev xfrm0 proto bgp metric 20
+
+# On workload VM:
+iperf3 -c 10.10.0.2 -t 10 -i 1 -P 4
+# Expected: No packet loss, stable throughput
+```
+
+**Migration from ECMP:**
+
+If you have existing ECMP configuration (both tunnels set to `ha_role: "active"`):
+
+1. Change one tunnel to `ha_role: "passive"` in your YAML config
+2. Deploy the updated configuration
+3. BGP will converge within one hold-time period (~60 seconds)
+4. Verify with `ip route show` and test with `iperf3 -P 4`
+
+### BGP MED (Multi-Exit Discriminator) for Peer-Side Path Selection
+
+**What is MED?**
+
+BGP MED (Multi-Exit Discriminator) is a BGP attribute that influences which path a remote peer chooses when multiple paths exist to the same destination. Unlike `local-preference` (which affects LOCAL routing decisions), MED is transmitted TO the peer and affects THEIR routing decisions.
+
+- **Lower MED = preferred path** (opposite of local-preference where higher = preferred)
+- **MED is non-transitive**: Not passed between AS boundaries (only visible to immediate peer)
+- **Default MED = 0** if not set explicitly
+
+**Active/Passive Design - Two Mechanisms Working Together:**
+
+The Nebius VPN Gateway uses **both** local-preference and MED to enforce Active/Passive routing in **both directions**:
+
+1. **Local-preference (inbound)**: Controls Nebius → GCP routing (Nebius egress traffic)
+   - Applied to routes **received FROM** GCP
+   - Active tunnel: local-pref 200 (Nebius prefers this path for outbound)
+   - Passive tunnel: local-pref 100 (Nebius uses as backup)
+
+2. **MED (outbound)**: Controls GCP → Nebius routing (GCP's return traffic)
+   - Applied to routes **sent TO** GCP (Nebius local prefixes)
+   - Active tunnel: MED=0 (GCP prefers this path for return traffic)
+   - Passive tunnel: MED=100 (GCP uses as backup)
+
+| Tunnel Role | Local-Pref (Inbound) | MED (Outbound) | Nebius Routing Decision | GCP Routing Decision |
+| ----------- | -------------------- | -------------- | ----------------------- | -------------------- |
+| **active** | 200 (prefer routes from GCP) | 0 (GCP prefers routes to Nebius) | Uses active tunnel for **egress** | Uses active tunnel for **return traffic** |
+| **passive** | 100 (deprioritize routes from GCP) | 100 (GCP deprioritizes routes to Nebius) | Uses as backup | Uses as backup |
+
+**Result**: **Symmetric routing** - both directions use the same tunnel, no ECMP, no asymmetric routing, no `rp_filter` issues.
+
+**How It Works:**
+
+1. **Inbound route-maps (local-preference)**: Control Nebius → GCP path selection
+
+   ```text
+   route-map SET-LOCAL-PREF-200 permit 10
+    set local-preference 200  # Prefer routes learned from active tunnel
+   
+   route-map SET-LOCAL-PREF-100 permit 10
+    set local-preference 100  # Deprioritize routes learned from passive tunnel
+
+   neighbor 169.254.18.225 route-map SET-LOCAL-PREF-200 in   # Active tunnel
+   neighbor 169.254.5.153 route-map SET-LOCAL-PREF-100 in    # Passive tunnel
+   ```
+
+2. **Outbound route-maps (MED)**: Control GCP → Nebius path selection
+
+   ```text
+   route-map ADVERTISE-ACTIVE permit 10
+    match ip address prefix-list ADVERTISE-LOCAL
+    set metric 0  # MED=0 sent to GCP (GCP prefers this path)
+
+   route-map ADVERTISE-PASSIVE permit 10
+    match ip address prefix-list ADVERTISE-LOCAL
+    set metric 100  # MED=100 sent to GCP (GCP deprioritizes this path)
+
+   neighbor 169.254.18.225 route-map ADVERTISE-ACTIVE out   # Active tunnel
+   neighbor 169.254.5.153 route-map ADVERTISE-PASSIVE out   # Passive tunnel
+   ```
+
+3. **Peer behavior**: GCP Cloud Router receives Nebius routes with different MED values:
+   - Route via active tunnel: `10.49.0.0/16` with MED=0 → **GCP prefers this path**
+   - Route via passive tunnel: `10.49.0.0/16` with MED=100 → **GCP uses as backup**
+
+4. **No GCP configuration needed**: GCP automatically uses MED for path selection - no manual configuration required on GCP side
+
+**GCP Cloud Router Verification:**
+
+GCP Cloud Router displays learned routes with their MED values converted to "priority" (lower = better):
+
+```bash
+gcloud compute routers get-status ROUTER_NAME --region=REGION --project=PROJECT_ID
+
+# Example output:
+bestRoutes:
+- destRange: 10.49.0.0/16
+  nextHopIp: 169.254.18.226  # Active tunnel
+  priority: 0                 # MED=0 from Nebius
+  
+- destRange: 10.49.0.0/16
+  nextHopIp: 169.254.5.154    # Passive tunnel  
+  priority: 100               # MED=100 from Nebius
+```
+
+**Verification Commands:**
+
+**On Nebius Gateway - Check Outbound Advertisements (MED):**
+
+```bash
+# Verify MED values being sent TO GCP:
+sudo vtysh -c "show bgp ipv4 unicast neighbors 169.254.18.225 advertised-routes"
+sudo vtysh -c "show bgp ipv4 unicast neighbors 169.254.5.153 advertised-routes"
+
+# Look for "metric" field - should see 0 for active, 100 for passive:
+# *> 10.49.0.0/16     0.0.0.0                            0         32768 ?
+#    Advertised to: 169.254.18.225
+#    metric 0  <-- Active tunnel
+```
+
+**On Nebius Gateway - Check Inbound Routes (Local-Preference):**
+
+```bash
+# Verify local-preference for routes received FROM GCP:
+sudo vtysh -c "show bgp ipv4 unicast"
+
+# Look for routes with different LocPrf values:
+# *>  10.10.0.0/24     169.254.18.225         100    200      0 65014 ?  # Active (LocPrf 200)
+# *   10.10.0.0/24     169.254.5.153          100    100      0 65014 ?  # Passive (LocPrf 100)
+```
+
+**On GCP Cloud Router - Check Learned Routes (MED):**
+
+```bash
+# Verify GCP is receiving and using MED values from Nebius:
+gcloud compute routers get-status ROUTER_NAME --region=REGION --project=PROJECT_ID
+
+# Look for your Nebius prefixes with different priorities:
+# Routes learned FROM Nebius (GCP's perspective):
+# - destRange: 10.49.0.0/16
+#   nextHopIp: 169.254.18.226  # Active tunnel
+#   priority: 0                 # Best route (MED=0)
+#   
+# - destRange: 10.49.0.0/16
+#   nextHopIp: 169.254.5.154    # Passive tunnel
+#   priority: 100               # Backup (MED=100)
+```
+
+**On GCP Console:**
+
+Navigate to: **Hybrid Connectivity → VPN → Cloud Routers → [Your Router] → Details Tab → Learned Routes**
+
+You should see your Nebius prefix (e.g., `10.49.0.0/16`) with:
+
+- One route with **priority 0** or **MED 0** (active tunnel)
+- One route with **priority 100** or **MED 100** (passive tunnel)
+
+**Important Notes:**
+
+- **No GCP configuration required**: Nebius sets MED outbound, GCP automatically uses it for path selection
+- **Symmetric routing guaranteed**: Both directions use the same tunnel (active)
+- **Automatic configuration**: MED and local-preference automatically derived from `ha_role`
+- **BGP import-check disabled**: Uses `no bgp network import-check` to allow advertising `local_prefixes` without kernel routes
+
+**Troubleshooting:**
+
+If GCP still shows both routes with same priority:
+
+1. **Verify MED is being sent**:
+
+   ```bash
+   sudo vtysh -c "show bgp ipv4 unicast neighbors <peer-ip> advertised-routes"
+   ```
+
+   Look for "metric" field in output
+
+2. **Check BGP sessions are established**:
+
+   ```bash
+   sudo vtysh -c "show bgp summary"
+   ```
+
+   Both neighbors should show "Established" state
+
+3. **Verify route-maps are applied**:
+
+   ```bash
+   sudo vtysh -c "show running-config" | grep -A 5 "route-map"
+   ```
+
+   Should see ADVERTISE-ACTIVE and ADVERTISE-PASSIVE with different metric values
+
+4. **Check GCP learned routes**:
+
+   ```bash
+   gcloud compute routers get-status ROUTER_NAME --region=REGION
+   ```
+
+   Should show different priority values (0 vs 100)
+
+5. **Test with tcpdump**: Confirm packets enter/exit via the same tunnel interface:
+
+   ```bash
+   sudo tcpdump -i xfrm0 -n icmp  # Should see both directions
+   sudo tcpdump -i xfrm1 -n icmp  # Should see nothing or minimal backup traffic
+   ```
+
 ## Static Routes Configuration
 
 ### VPC Route Management
@@ -634,6 +942,9 @@ File: `/etc/sysctl.d/99-zzz-vpngw.conf`
 ```bash
 # 1. IP Forwarding - Gateway must route packets
 net.ipv4.ip_forward = 1
+
+# 1.1 TCP MTU probing - recover when PMTUD is blocked
+net.ipv4.tcp_mtu_probing = 1
 
 # 2. Reverse Path Filtering - MUST BE DISABLED
 # XFRM tunnels create asymmetric routing that strict rp_filter blocks
@@ -917,6 +1228,16 @@ sudo ufw enable
 - **TCP 22** - SSH for management access (can be restricted to management CIDRs)
 - **ICMP** - For path MTU discovery and troubleshooting
 
+**TCP MSS Clamping (mandatory for XFRM):**
+
+The gateway clamps MSS for forwarded TCP traffic to avoid oversized packets:
+
+```bash
+iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+# nftables equivalent:
+nft add rule ip mangle forward tcp flags syn tcp option maxseg size set rt mtu
+```
+
 **Traffic Rules:**
 
 - **Default policy:** Deny incoming, allow outgoing
@@ -927,6 +1248,7 @@ sudo ufw enable
 - **Local VPC subnets:** Traffic from `gateway.local_prefixes` allowed for forwarding through the gateway
 - **Tunnel interfaces (xfrm*):** Unrestricted traffic allowed (BGP runs over these encrypted channels)
 - **ICMP:** Allowed on public interface for troubleshooting
+- **ICMP frag-needed:** Explicitly allowed (input/output) to support PMTUD when available
 
 **BGP (TCP/179) scope:**
 
@@ -1142,6 +1464,7 @@ nebius-vpngw apply --local-config-file test.config.yaml
 │   │   ├── strongswan_renderer.py        # strongSwan/IPsec config renderer
 │   │   ├── xfrm_manager.py               # XFRM interface lifecycle (create, address, route)
 │   │   ├── routing_guard.py              # Declarative route management & cleanup
+│   │   ├── fix_routes.py                 # Standalone route cleanup utility (called by systemd timer)
 │   │   ├── firewall_manager.py           # UFW firewall rule synchronization
 │   │   ├── tunnel_iterator.py            # Centralized tunnel enumeration
 │   │   ├── state_store.py                # Agent state persistence
@@ -1159,9 +1482,9 @@ nebius-vpngw apply --local-config-file test.config.yaml
 │   │   └── cisco.py                      # Cisco IOS config parser
 │   └── systemd/
 │       ├── nebius-vpngw-agent.service    # Agent systemd unit
-│       ├── fix-routes.sh                 # Route cleanup helper (table 220/APIPA)
 │       ├── nebius-vpngw-fix-routes.service  # Service wrapper for route cleanup
-│       └── nebius-vpngw-fix-routes.timer    # Timer to enforce route cleanup periodically
+│       ├── nebius-vpngw-fix-routes.timer    # Timer to enforce route cleanup periodically
+│       └── setup-vpngw-firewall.sh          # UFW firewall initialization script
 ```
 
 ### Module Descriptions
@@ -1178,14 +1501,16 @@ nebius-vpngw apply --local-config-file test.config.yaml
 **Agent (runs on gateway VM):**
 
 - `main.py`: Agent daemon, renders configs, applies idempotently, handles SIGHUP reload
-- `frr_renderer.py`: Generates FRR BGP configuration from YAML
-- `strongswan_renderer.py`: Generates strongSwan IPsec configuration
-- `routing_guard.py`: Enforces routing invariants, removes problematic routes
+- `frr_renderer.py`: Generates FRR BGP configuration with Active/Passive HA support (local-preference and MED route-maps), advertises local prefixes, applies inbound/outbound filters
+- `strongswan_renderer.py`: Generates strongSwan IPsec configuration with XFRM interfaces
+- `routing_guard.py`: Enforces routing invariants, prevents problematic local_prefix routes that break packet forwarding, removes table 220, cleans APIPA routes
+- `fix_routes.py`: Standalone utility invoked by systemd timer to periodically enforce routing invariants (calls routing_guard)
 - `firewall_manager.py`: Synchronizes UFW rules with active tunnels
-- `tunnel_iterator.py`: Centralized tunnel enumeration for consistent indexing
-- `state_store.py`: Persists last-applied state for idempotency
-- `status_check.py`: Collects health metrics for status command
-- `sanity_check.py`: Standalone routing validation tool
+- `xfrm_manager.py`: Manages XFRM tunnel interfaces lifecycle (create, configure IP addresses, MTU, bring up/down)
+- `tunnel_iterator.py`: Centralized tunnel enumeration for consistent indexing across all agent modules
+- `state_store.py`: Persists last-applied state for idempotency checks
+- `status_check.py`: Collects health metrics for status command (tunnel status, BGP sessions, routes)
+- `sanity_check.py`: Standalone routing validation tool for troubleshooting
 
 **Deployment:**
 

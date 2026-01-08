@@ -47,9 +47,7 @@ class RouteManager:
         nets: list[tuple[ipaddress._BaseNetwork, str]] = []
         alloc_to_ip: dict[str, str] = {}
         stub = allocation_service_pb2_grpc.AllocationServiceStub(channel)
-        req = allocation_service_pb2.ListAllocationsRequest(
-            parent_id=self.project_id or ""
-        )
+        req = allocation_service_pb2.ListAllocationsRequest(parent_id=self.project_id or "")
         resp = stub.List(req)
         for alloc in resp.items:
             cidr = alloc.status.details.allocated_cidr
@@ -155,9 +153,7 @@ class RouteManager:
 
             print(f"[dim]  Route Table ID: {rt_id} (default={rt_default})[/dim]")
 
-            routes = rstub.List(
-                route_service_pb2.ListRoutesRequest(parent_id=rt_id)
-            ).items
+            routes = rstub.List(route_service_pb2.ListRoutesRequest(parent_id=rt_id)).items
 
             if not routes:
                 print("[dim]  No routes in route table[/dim]")
@@ -207,9 +203,7 @@ class RouteManager:
         connections = local_cfg.get("connections", [])
 
         # Check if BGP is enabled for any connection
-        has_bgp = any(
-            (conn.get("routing_mode") or defaults_mode) == "bgp" for conn in connections
-        )
+        has_bgp = any((conn.get("routing_mode") or defaults_mode) == "bgp" for conn in connections)
 
         if not has_bgp:
             print("[dim]No BGP connections configured - routes are static[/dim]")
@@ -244,9 +238,7 @@ class RouteManager:
                 )
 
                 if result.returncode != 0:
-                    print(
-                        f"[yellow]Failed to query BGP summary: {result.stderr}[/yellow]"
-                    )
+                    print(f"[yellow]Failed to query BGP summary: {result.stderr}[/yellow]")
                     continue
 
                 bgp_summary = json.loads(result.stdout)
@@ -262,14 +254,12 @@ class RouteManager:
                     peer_asn = peer_info.get("remoteAs", "?")
 
                     # Find connection and tunnel name for this peer
-                    conn_name, tunnel_name, inner_local_ip = (
-                        self._find_connection_for_peer(peer_ip, connections, inst_cfg)
+                    conn_name, tunnel_name, inner_local_ip = self._find_connection_for_peer(
+                        peer_ip, connections, inst_cfg
                     )
 
                     if peer_state != "Established":
-                        print(
-                            f"\n[bold]Connection: {conn_name} | Tunnel: {tunnel_name}[/bold]"
-                        )
+                        print(f"\n[bold]Connection: {conn_name} | Tunnel: {tunnel_name}[/bold]")
                         print(
                             f"[yellow]  BGP Peer {peer_ip} (ASN {peer_asn}): {peer_state}[/yellow]"
                         )
@@ -292,12 +282,8 @@ class RouteManager:
                     )
 
                     if adv_result.returncode != 0:
-                        print(
-                            f"\n[bold]Connection: {conn_name} | Tunnel: {tunnel_name}[/bold]"
-                        )
-                        print(
-                            f"[yellow]  Failed to query advertised routes to {peer_ip}[/yellow]"
-                        )
+                        print(f"\n[bold]Connection: {conn_name} | Tunnel: {tunnel_name}[/bold]")
+                        print(f"[yellow]  Failed to query advertised routes to {peer_ip}[/yellow]")
                         continue
 
                     try:
@@ -305,18 +291,14 @@ class RouteManager:
                         advertised_routes = adv_data.get("advertisedRoutes", {})
 
                         if not advertised_routes:
-                            print(
-                                f"\n[bold]Connection: {conn_name} | Tunnel: {tunnel_name}[/bold]"
-                            )
+                            print(f"\n[bold]Connection: {conn_name} | Tunnel: {tunnel_name}[/bold]")
                             print(
                                 f"[dim]  BGP Peer {peer_ip} (ASN {peer_asn}): No routes advertised[/dim]"
                             )
                             continue
 
                         # Build table for this peer
-                        print(
-                            f"\n[bold]Connection: {conn_name} | Tunnel: {tunnel_name}[/bold]"
-                        )
+                        print(f"\n[bold]Connection: {conn_name} | Tunnel: {tunnel_name}[/bold]")
 
                         # Get local ASN from adv_data
                         local_asn = adv_data.get("localAS", "")
@@ -352,9 +334,7 @@ class RouteManager:
                         console.print(table)
 
                     except json.JSONDecodeError:
-                        print(
-                            f"\n[bold]Connection: {conn_name} | Tunnel: {tunnel_name}[/bold]"
-                        )
+                        print(f"\n[bold]Connection: {conn_name} | Tunnel: {tunnel_name}[/bold]")
                         print(
                             f"[yellow]  Failed to parse advertised routes JSON for {peer_ip}[/yellow]"
                         )
@@ -363,15 +343,11 @@ class RouteManager:
             except subprocess.TimeoutExpired:
                 print(f"[yellow]Timeout querying BGP data from {hostname}[/yellow]")
             except json.JSONDecodeError:
-                print(
-                    f"[yellow]Failed to parse BGP JSON output from {hostname}[/yellow]"
-                )
+                print(f"[yellow]Failed to parse BGP JSON output from {hostname}[/yellow]")
             except Exception as e:
                 print(f"[yellow]Error querying BGP data: {e}[/yellow]")
 
-    def _find_connection_for_peer(
-        self, peer_ip: str, connections: list[dict], inst_cfg
-    ) -> tuple:
+    def _find_connection_for_peer(self, peer_ip: str, connections: list[dict], inst_cfg) -> tuple:
         """Find connection and tunnel name for a BGP peer IP.
 
         Returns (connection_name, tunnel_name, inner_local_ip) tuple.
@@ -421,9 +397,7 @@ class RouteManager:
             auth_creds = grpc.metadata_call_credentials(auth_metadata_plugin)
             ssl_creds = grpc.ssl_channel_credentials()
             composite_creds = grpc.composite_channel_credentials(ssl_creds, auth_creds)
-            compute_channel = grpc.secure_channel(
-                "compute.api.nebius.cloud:443", composite_creds
-            )
+            compute_channel = grpc.secure_channel("compute.api.nebius.cloud:443", composite_creds)
         except Exception:
             compute_channel = None
 
@@ -445,9 +419,7 @@ class RouteManager:
             for p in (local_cfg.get("gateway", {}).get("local_prefixes") or [])
         ]
         if not gateway_prefixes:
-            print(
-                "[yellow]No gateway.local_prefixes; cannot determine relevant subnets.[/yellow]"
-            )
+            print("[yellow]No gateway.local_prefixes; cannot determine relevant subnets.[/yellow]")
             return
 
         # Determine routing mode and collect remote prefixes
@@ -488,9 +460,7 @@ class RouteManager:
             try:
                 pfx_net = ipaddress.ip_network(pfx)
                 # Skip if this prefix overlaps with any local prefix
-                is_local = any(
-                    pfx_net.overlaps(local_net) for local_net in local_networks
-                )
+                is_local = any(pfx_net.overlaps(local_net) for local_net in local_networks)
                 if is_local:
                     print(f"[dim]Skipping {pfx} (overlaps with local_prefixes)[/dim]")
                     continue
@@ -506,16 +476,12 @@ class RouteManager:
             )
             return
 
-        print(
-            f"[cyan]Found {len(remote_prefixes)} remote prefix(es) to add as VPC routes[/cyan]"
-        )
+        print(f"[cyan]Found {len(remote_prefixes)} remote prefix(es) to add as VPC routes[/cyan]")
 
         # Map gateway external IP to allocation id
         alloc_id = None
         if compute_channel:
-            alloc_id = self._find_gateway_private_allocation(
-                channel, compute_channel, plan
-            )
+            alloc_id = self._find_gateway_private_allocation(channel, compute_channel, plan)
         if not alloc_id:
             print(
                 "[yellow]Could not resolve private allocation_id for gateway; cannot create routes.[/yellow]"
@@ -552,13 +518,9 @@ class RouteManager:
 
                 # Check if route table already exists (idempotency)
                 existing_rts = rtstub.List(
-                    route_table_service_pb2.ListRouteTablesRequest(
-                        parent_id=self.project_id
-                    )
+                    route_table_service_pb2.ListRouteTablesRequest(parent_id=self.project_id)
                 ).items
-                existing_rt = next(
-                    (rt for rt in existing_rts if rt.metadata.name == rt_name), None
-                )
+                existing_rt = next((rt for rt in existing_rts if rt.metadata.name == rt_name), None)
 
                 if existing_rt:
                     rt_id = existing_rt.metadata.id
@@ -572,15 +534,11 @@ class RouteManager:
                             existing_ipv4_private_pools = getattr(
                                 sn.spec, "ipv4_private_pools", None
                             )
-                            existing_ipv4_public_pools = getattr(
-                                sn.spec, "ipv4_public_pools", None
-                            )
+                            existing_ipv4_public_pools = getattr(sn.spec, "ipv4_public_pools", None)
 
                             sstub.Update(
                                 subnet_service_pb2.UpdateSubnetRequest(
-                                    metadata=metadata_pb2.ResourceMetadata(
-                                        id=sn.metadata.id
-                                    ),
+                                    metadata=metadata_pb2.ResourceMetadata(id=sn.metadata.id),
                                     spec=subnet_pb2.SubnetSpec(
                                         network_id=sn.spec.network_id,
                                         route_table_id=rt_id,
@@ -599,9 +557,7 @@ class RouteManager:
                             continue
                 else:
                     # Create new route table and copy routes from default RT
-                    print(
-                        f"[yellow]⚠ Subnet {sn.metadata.name} uses default route table[/yellow]"
-                    )
+                    print(f"[yellow]⚠ Subnet {sn.metadata.name} uses default route table[/yellow]")
                     print(
                         f"[yellow]  Creating custom route table '{rt_name}' to add VPN routes[/yellow]"
                     )
@@ -616,9 +572,7 @@ class RouteManager:
                                     name=rt_name,
                                     parent_id=self.project_id,
                                 ),
-                                spec=route_table_pb2.RouteTableSpec(
-                                    network_id=sn.spec.network_id
-                                ),
+                                spec=route_table_pb2.RouteTableSpec(network_id=sn.spec.network_id),
                             )
                         )
                         new_rt_id = op.resource_id or ""
@@ -632,9 +586,7 @@ class RouteManager:
                         if default_rt_id:
                             try:
                                 default_routes = rstub.List(
-                                    route_service_pb2.ListRoutesRequest(
-                                        parent_id=default_rt_id
-                                    )
+                                    route_service_pb2.ListRoutesRequest(parent_id=default_rt_id)
                                 ).items
 
                                 if default_routes:
@@ -647,9 +599,7 @@ class RouteManager:
                                                 route_service_pb2.CreateRouteRequest(
                                                     metadata=metadata_pb2.ResourceMetadata(
                                                         parent_id=new_rt_id,
-                                                        name=f"{dr.metadata.name}-copy"[
-                                                            :63
-                                                        ],
+                                                        name=f"{dr.metadata.name}-copy"[:63],
                                                     ),
                                                     spec=dr.spec,
                                                 )
@@ -660,27 +610,19 @@ class RouteManager:
                                                 f"[dim]  Could not copy route {dr.spec.destination.cidr}: {copy_err}[/dim]"
                                             )
                                 else:
-                                    print(
-                                        "[dim]  No routes in default route table to copy[/dim]"
-                                    )
+                                    print("[dim]  No routes in default route table to copy[/dim]")
                             except Exception as list_err:
                                 print(
                                     f"[yellow]  Could not list default route table routes: {list_err}[/yellow]"
                                 )
 
                         # Attach to subnet - preserve IP pool configuration
-                        existing_ipv4_private_pools = getattr(
-                            sn.spec, "ipv4_private_pools", None
-                        )
-                        existing_ipv4_public_pools = getattr(
-                            sn.spec, "ipv4_public_pools", None
-                        )
+                        existing_ipv4_private_pools = getattr(sn.spec, "ipv4_private_pools", None)
+                        existing_ipv4_public_pools = getattr(sn.spec, "ipv4_public_pools", None)
 
                         sstub.Update(
                             subnet_service_pb2.UpdateSubnetRequest(
-                                metadata=metadata_pb2.ResourceMetadata(
-                                    id=sn.metadata.id
-                                ),
+                                metadata=metadata_pb2.ResourceMetadata(id=sn.metadata.id),
                                 spec=subnet_pb2.SubnetSpec(
                                     network_id=sn.spec.network_id,
                                     route_table_id=new_rt_id,
@@ -710,21 +652,15 @@ class RouteManager:
                 existing_routes = rstub.List(
                     route_service_pb2.ListRoutesRequest(parent_id=rt_id)
                 ).items
-                existing_route_cidrs = {
-                    r.spec.destination.cidr for r in existing_routes
-                }
+                existing_route_cidrs = {r.spec.destination.cidr for r in existing_routes}
             except Exception as e:
-                print(
-                    f"[yellow]Failed to list existing routes on {rt_id}: {e}[/yellow]"
-                )
+                print(f"[yellow]Failed to list existing routes on {rt_id}: {e}[/yellow]")
                 existing_route_cidrs = set()
 
             # Add routes for each remote prefix (skip if already exists)
             for pfx in remote_prefixes:
                 if pfx in existing_route_cidrs:
-                    print(
-                        f"[blue]Route {pfx} already exists on {rt_id}; skipping[/blue]"
-                    )
+                    print(f"[blue]Route {pfx} already exists on {rt_id}; skipping[/blue]")
                     continue
 
                 try:
@@ -742,19 +678,13 @@ class RouteManager:
                             ),
                         )
                     )
-                    print(
-                        f"[green]Added route {pfx} -> allocation {alloc_id} on {rt_id}[/green]"
-                    )
+                    print(f"[green]Added route {pfx} -> allocation {alloc_id} on {rt_id}[/green]")
                 except Exception as e:
                     err_str = str(e).lower()
                     if "already exists" in err_str or "duplicate" in err_str:
-                        print(
-                            f"[blue]Route {pfx} already exists on {rt_id}; skipping[/blue]"
-                        )
+                        print(f"[blue]Route {pfx} already exists on {rt_id}; skipping[/blue]")
                     else:
-                        print(
-                            f"[yellow]Failed to add route {pfx} on {rt_id}: {e}[/yellow]"
-                        )
+                        print(f"[yellow]Failed to add route {pfx} on {rt_id}: {e}[/yellow]")
 
     def _get_bgp_learned_routes(
         self, plan: ResolvedDeploymentPlan, conn: dict, local_cfg: dict
@@ -766,9 +696,7 @@ class RouteManager:
 
         conn_name = conn.get("name", "unnamed")
         whitelist = (
-            conn.get("remote_prefixes")
-            or (conn.get("bgp", {}) or {}).get("remote_prefixes")
-            or []
+            conn.get("remote_prefixes") or (conn.get("bgp", {}) or {}).get("remote_prefixes") or []
         )
 
         # Create whitelist networks for matching
@@ -788,9 +716,7 @@ class RouteManager:
             external_ip = inst_cfg.external_ip
 
             if not external_ip:
-                print(
-                    f"[yellow]Skipping {hostname}: no external IP for BGP route query[/yellow]"
-                )
+                print(f"[yellow]Skipping {hostname}: no external IP for BGP route query[/yellow]")
                 continue
 
             try:
@@ -864,9 +790,7 @@ class RouteManager:
             except json.JSONDecodeError:
                 print(f"[yellow]Failed to parse BGP JSON from {hostname}[/yellow]")
             except Exception as e:
-                print(
-                    f"[yellow]Error querying BGP routes from {hostname}: {e}[/yellow]"
-                )
+                print(f"[yellow]Error querying BGP routes from {hostname}: {e}[/yellow]")
 
         return learned_prefixes
 
@@ -894,9 +818,7 @@ class RouteManager:
         if connection_filter:
             connections = [c for c in connections if c.get("name") == connection_filter]
             if not connections:
-                print(
-                    f"[yellow]No connection found with name '{connection_filter}'[/yellow]"
-                )
+                print(f"[yellow]No connection found with name '{connection_filter}'[/yellow]")
                 return
 
         # Group by gateway VM and connection
@@ -918,9 +840,7 @@ class RouteManager:
                     conn.get("bgp", {}) or {}
                 ).get("remote_prefixes", [])
 
-                print(
-                    f"\n[bold]Connection: {conn_name}[/bold] (routing_mode: {routing_mode})"
-                )
+                print(f"\n[bold]Connection: {conn_name}[/bold] (routing_mode: {routing_mode})")
 
                 if routing_mode == "bgp":
                     self._list_bgp_routes(
@@ -1076,9 +996,7 @@ class RouteManager:
             console.print(table)
 
             if whitelist:
-                print(
-                    f"[dim]Note: remote_prefixes whitelist has {len(whitelist)} entries[/dim]"
-                )
+                print(f"[dim]Note: remote_prefixes whitelist has {len(whitelist)} entries[/dim]")
             else:
                 print(
                     "[dim]Note: No remote_prefixes whitelist configured - all BGP routes accepted[/dim]"
@@ -1105,9 +1023,7 @@ class RouteManager:
         from rich.table import Table
 
         if not remote_prefixes:
-            print(
-                "[yellow]No remote_prefixes configured in YAML for this connection[/yellow]"
-            )
+            print("[yellow]No remote_prefixes configured in YAML for this connection[/yellow]")
             return
 
         # Query kernel routing table via SSH
@@ -1166,9 +1082,7 @@ class RouteManager:
                     table.add_row(pfx, "[red]missing[/red]", "-", "-")
 
             console.print(table)
-            print(
-                f"[dim]Showing {len(remote_prefixes)} configured static remote prefixes[/dim]"
-            )
+            print(f"[dim]Showing {len(remote_prefixes)} configured static remote prefixes[/dim]")
 
         except subprocess.TimeoutExpired:
             print(f"[yellow]Timeout querying routes from {hostname}[/yellow]")

@@ -74,9 +74,7 @@ class VMSpec:
         disk_boot_image = source_image_id or "ubuntu24.04-driverless"
 
         # Count NICs
-        network_interfaces = getattr(
-            getattr(vm_obj, "spec", None), "network_interfaces", []
-        )
+        network_interfaces = getattr(getattr(vm_obj, "spec", None), "network_interfaces", [])
         num_nics = len(network_interfaces) if network_interfaces else 1
 
         return cls(
@@ -127,9 +125,7 @@ class VMDiff:
             # Don't show this for brand new VM creation
             if self.differences != ["VM does not exist (will create)"]:
                 lines.append("")
-                lines.append(
-                    "These will be applied via SSH config push (no VM recreation needed)."
-                )
+                lines.append("These will be applied via SSH config push (no VM recreation needed).")
 
             return "\n".join(lines)
 
@@ -173,25 +169,19 @@ class VMDiffAnalyzer:
         # Check platform
         if desired.platform != actual.platform:
             differences.append(f"platform: {actual.platform} → {desired.platform}")
-            destructive_fields.append(
-                f"platform ({actual.platform} → {desired.platform})"
-            )
+            destructive_fields.append(f"platform ({actual.platform} → {desired.platform})")
 
         # Check preset (only if both use preset-based sizing)
         if desired.preset and actual.preset:
             if desired.preset != actual.preset:
                 differences.append(f"preset: {actual.preset} → {desired.preset}")
-                destructive_fields.append(
-                    f"preset ({actual.preset} → {desired.preset})"
-                )
+                destructive_fields.append(f"preset ({actual.preset} → {desired.preset})")
         elif desired.preset and not actual.preset:
             # Switching from cores/memory to preset (safe if resources match)
             differences.append(f"switching to preset: {desired.preset}")
         elif not desired.preset and actual.preset:
             # Switching from preset to cores/memory
-            differences.append(
-                f"switching from preset {actual.preset} to explicit cores/memory"
-            )
+            differences.append(f"switching from preset {actual.preset} to explicit cores/memory")
 
         # Check disk image (comparing is tricky since live disk may only have image ID)
         # We'll flag any mismatch as potentially destructive
@@ -218,9 +208,7 @@ class VMDiffAnalyzer:
         # Check disk size (shrinking requires recreation, expanding is safe)
         if desired.disk_gb != actual.disk_gb:
             if desired.disk_gb < actual.disk_gb:
-                differences.append(
-                    f"disk_gb: {actual.disk_gb} → {desired.disk_gb} (SHRINKING)"
-                )
+                differences.append(f"disk_gb: {actual.disk_gb} → {desired.disk_gb} (SHRINKING)")
                 destructive_fields.append(
                     f"disk_gb shrink ({actual.disk_gb}GB → {desired.disk_gb}GB)"
                 )
@@ -245,9 +233,7 @@ class VMDiffAnalyzer:
                     f"num_nics: {actual.num_nics} → {desired.num_nics} (expanding - safe)"
                 )
             else:
-                differences.append(
-                    f"num_nics: {actual.num_nics} → {desired.num_nics} (SHRINKING)"
-                )
+                differences.append(f"num_nics: {actual.num_nics} → {desired.num_nics} (SHRINKING)")
                 destructive_fields.append(
                     f"num_nics shrink ({actual.num_nics} → {desired.num_nics})"
                 )
