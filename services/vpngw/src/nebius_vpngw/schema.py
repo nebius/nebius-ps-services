@@ -80,9 +80,7 @@ class DiskType(str, Enum):
 class IPsecMode(str, Enum):
     """IPsec interface mode."""
 
-    XFRM_INTERFACE = (
-        "xfrm-interface"  # Modern xfrm netdevs (default, avoids packet duplication)
-    )
+    XFRM_INTERFACE = "xfrm-interface"  # Modern xfrm netdevs (default, avoids packet duplication)
 
 
 # ============================================================================
@@ -136,8 +134,7 @@ def validate_apipa_cidr(v: str) -> str:
         # Check if it's a /30 (required for point-to-point tunnels)
         if network.prefixlen != 30:
             raise ValueError(
-                f"inner_cidr '{v}' must be a /30 subnet (4 IPs). "
-                f"Got /{network.prefixlen} instead."
+                f"inner_cidr '{v}' must be a /30 subnet (4 IPs). Got /{network.prefixlen} instead."
             )
 
         return v
@@ -152,9 +149,7 @@ def validate_apipa_ip(v: str, field_name: str) -> str:
         apipa_range = ipaddress.ip_network("169.254.0.0/16")
 
         if ip not in apipa_range:
-            raise ValueError(
-                f"{field_name} '{v}' must be in APIPA range 169.254.0.0/16"
-            )
+            raise ValueError(f"{field_name} '{v}' must be in APIPA range 169.254.0.0/16")
 
         return v
     except ipaddress.AddressValueError as e:
@@ -202,9 +197,7 @@ class DPDConfig(BaseModel):
     interval_seconds: int = Field(
         ..., ge=10, le=300, description="DPD check interval in seconds (10-300)"
     )
-    timeout_seconds: int = Field(
-        ..., ge=30, le=600, description="DPD timeout in seconds (30-600)"
-    )
+    timeout_seconds: int = Field(..., ge=30, le=600, description="DPD timeout in seconds (30-600)")
 
     @model_validator(mode="after")
     def validate_timeout_greater_than_interval(self) -> DPDConfig:
@@ -233,9 +226,7 @@ class BGPDefaults(BaseModel):
         le=1200,
         description="BGP keepalive interval in seconds (1-1200)",
     )
-    graceful_restart: bool = Field(
-        default=True, description="Enable BGP graceful restart"
-    )
+    graceful_restart: bool = Field(default=True, description="Enable BGP graceful restart")
     max_prefixes: int = Field(
         default=1000,
         ge=1,
@@ -274,9 +265,7 @@ class RoutingDefaults(BaseModel):
     mode: RoutingMode = Field(
         default=RoutingMode.BGP, description="Default routing mode for connections"
     )
-    bgp: BGPDefaults = Field(
-        default_factory=BGPDefaults, description="BGP-specific defaults"
-    )
+    bgp: BGPDefaults = Field(default_factory=BGPDefaults, description="BGP-specific defaults")
 
 
 class AuthConfig(BaseModel):
@@ -284,9 +273,7 @@ class AuthConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    method: AuthMethod = Field(
-        default=AuthMethod.PSK, description="Authentication method"
-    )
+    method: AuthMethod = Field(default=AuthMethod.PSK, description="Authentication method")
 
 
 class DefaultsConfig(BaseModel):
@@ -295,13 +282,9 @@ class DefaultsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     vpn_type: VPNType = Field(default=VPNType.IPSEC, description="VPN protocol type")
-    ike_version: int = Field(
-        default=2, ge=1, le=2, description="IKE protocol version (1 or 2)"
-    )
+    ike_version: int = Field(default=2, ge=1, le=2, description="IKE protocol version (1 or 2)")
     allow_ikev1: bool = Field(default=True, description="Allow IKEv1 fallback")
-    auth: AuthConfig = Field(
-        default_factory=AuthConfig, description="Authentication configuration"
-    )
+    auth: AuthConfig = Field(default_factory=AuthConfig, description="Authentication configuration")
     crypto: CryptoProposals = Field(..., description="Default cryptographic proposals")
     dpd: DPDConfig = Field(..., description="Dead Peer Detection configuration")
     routing: RoutingDefaults = Field(
@@ -330,9 +313,7 @@ class GatewayConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    local_asn: int = Field(
-        ..., description="Local BGP ASN (private: 64512-65534, public: 1-64511)"
-    )
+    local_asn: int = Field(..., description="Local BGP ASN (private: 64512-65534, public: 1-64511)")
     local_prefixes: list[str] = Field(
         ...,
         min_length=1,
@@ -343,9 +324,7 @@ class GatewayConfig(BaseModel):
         default=IPsecMode.XFRM_INTERFACE,
         description="IPsec interface mode (xfrm-interface only)",
     )
-    quotas: GatewayQuotas = Field(
-        default_factory=GatewayQuotas, description="Resource quotas"
-    )
+    quotas: GatewayQuotas = Field(default_factory=GatewayQuotas, description="Resource quotas")
 
     @field_validator("local_asn")
     @classmethod
@@ -377,9 +356,7 @@ class StaticRoutes(BaseModel):
 
     @field_validator("remote_prefixes")
     @classmethod
-    def validate_remote_prefixes(
-        cls, v: list[str] | None
-    ) -> list[str] | None:
+    def validate_remote_prefixes(cls, v: list[str] | None) -> list[str] | None:
         if v is None:
             return v
         return [validate_cidr(cidr) for cidr in v]
@@ -405,28 +382,16 @@ class TunnelConfig(BaseModel):
         ge=0,
         description="Index of local public IP to use (for multi-NIC)",
     )
-    ha_role: HARole = Field(
-        default=HARole.ACTIVE, description="HA role for this tunnel"
-    )
+    ha_role: HARole = Field(default=HARole.ACTIVE, description="HA role for this tunnel")
     ike_version: int | None = Field(
         default=None, ge=1, le=2, description="IKE version override (1 or 2)"
     )
     remote_public_ip: str = Field(..., description="Remote peer public IP address")
-    psk: str = Field(
-        ..., min_length=8, description="Pre-shared key (minimum 8 characters)"
-    )
-    inner_cidr: str = Field(
-        ..., description="Inner tunnel CIDR (must be /30 in 169.254.0.0/16)"
-    )
-    inner_local_ip: str = Field(
-        ..., description="Inner local IP (must be within inner_cidr)"
-    )
-    inner_remote_ip: str = Field(
-        ..., description="Inner remote IP (must be within inner_cidr)"
-    )
-    crypto: CryptoProposals | None = Field(
-        default=None, description="Crypto proposals override"
-    )
+    psk: str = Field(..., min_length=8, description="Pre-shared key (minimum 8 characters)")
+    inner_cidr: str = Field(..., description="Inner tunnel CIDR (must be /30 in 169.254.0.0/16)")
+    inner_local_ip: str = Field(..., description="Inner local IP (must be within inner_cidr)")
+    inner_remote_ip: str = Field(..., description="Inner remote IP (must be within inner_cidr)")
+    crypto: CryptoProposals | None = Field(default=None, description="Crypto proposals override")
     static_routes: StaticRoutes | None = Field(
         default=None, description="Static routing configuration (for static mode only)"
     )
@@ -543,9 +508,7 @@ class BGPConfig(BaseModel):
 
     @field_validator("remote_prefixes")
     @classmethod
-    def validate_remote_prefixes(
-        cls, v: list[str] | None
-    ) -> list[str] | None:
+    def validate_remote_prefixes(cls, v: list[str] | None) -> list[str] | None:
         if v is None:
             return v
         return [validate_cidr(cidr) for cidr in v]
@@ -573,9 +536,7 @@ class ConnectionConfig(BaseModel):
         default=None, max_length=256, description="Human-readable description"
     )
     vendor: VendorType = Field(..., description="Peer vendor type")
-    routing_mode: RoutingMode = Field(
-        ..., description="Routing mode for this connection"
-    )
+    routing_mode: RoutingMode = Field(..., description="Routing mode for this connection")
     remote_prefixes: list[str] | None = Field(
         default=None,
         description=(
@@ -586,9 +547,7 @@ class ConnectionConfig(BaseModel):
         ),
     )
     bgp: BGPConfig = Field(..., description="BGP configuration")
-    tunnels: list[TunnelConfig] = Field(
-        ..., min_length=1, description="Tunnel configurations"
-    )
+    tunnels: list[TunnelConfig] = Field(..., min_length=1, description="Tunnel configurations")
 
     # Optional escape hatch for custom metadata
     extensions: dict[str, t.Any] = Field(
@@ -597,9 +556,7 @@ class ConnectionConfig(BaseModel):
 
     @field_validator("remote_prefixes")
     @classmethod
-    def validate_remote_prefixes(
-        cls, v: list[str] | None
-    ) -> list[str] | None:
+    def validate_remote_prefixes(cls, v: list[str] | None) -> list[str] | None:
         if v is None:
             return v
         return [validate_cidr(cidr) for cidr in v]
@@ -612,8 +569,7 @@ class ConnectionConfig(BaseModel):
             if not self.remote_prefixes:
                 # Check if any tunnel has static_routes.remote_prefixes
                 has_tunnel_remote_prefixes = any(
-                    t.static_routes and t.static_routes.remote_prefixes
-                    for t in self.tunnels
+                    t.static_routes and t.static_routes.remote_prefixes for t in self.tunnels
                 )
                 if not has_tunnel_remote_prefixes:
                     raise ValueError(
@@ -659,9 +615,7 @@ class VMSpec(BaseModel):
     disk_boot_image: str = Field(
         ..., description="Boot disk image (e.g., 'ubuntu24.04-driverless')"
     )
-    disk_gb: int = Field(
-        ..., ge=20, le=2000, description="Boot disk size in GB (20-2000)"
-    )
+    disk_gb: int = Field(..., ge=20, le=2000, description="Boot disk size in GB (20-2000)")
     disk_type: DiskType = Field(..., description="Disk type")
     disk_block_bytes: int = Field(
         ..., ge=4096, description="Disk block size in bytes (minimum 4096)"
@@ -672,12 +626,8 @@ class VMSpec(BaseModel):
         le=1,  # Platform limitation
         description="Number of NICs (currently limited to 1)",
     )
-    ssh_public_key: str | None = Field(
-        default=None, description="SSH public key content (inline)"
-    )
-    ssh_public_key_path: str | None = Field(
-        default=None, description="Path to SSH public key file"
-    )
+    ssh_public_key: str | None = Field(default=None, description="SSH public key content (inline)")
+    ssh_public_key_path: str | None = Field(default=None, description="Path to SSH public key file")
     ssh_private_key_path: str | None = Field(
         default=None, description="Path to SSH private key file"
     )
@@ -705,9 +655,7 @@ class VMSpec(BaseModel):
     def validate_ssh_key_config(self) -> VMSpec:
         """Ensure either ssh_public_key or ssh_public_key_path is provided."""
         if not self.ssh_public_key and not self.ssh_public_key_path:
-            raise ValueError(
-                "Either ssh_public_key or ssh_public_key_path must be provided"
-            )
+            raise ValueError("Either ssh_public_key or ssh_public_key_path must be provided")
         return self
 
 
@@ -723,9 +671,7 @@ class GatewayGroup(BaseModel):
         pattern=r"^[a-z0-9]([a-z0-9\-]*[a-z0-9])?$",
         description="Gateway group name (lowercase, alphanumeric, hyphens)",
     )
-    instance_count: int = Field(
-        ..., ge=1, le=10, description="Number of gateway VMs (1-10)"
-    )
+    instance_count: int = Field(..., ge=1, le=10, description="Number of gateway VMs (1-10)")
     external_ips: list[list[str]] | None = Field(
         default=None,
         description=(
@@ -754,16 +700,12 @@ class GatewayGroup(BaseModel):
             )
         for item in v:
             if isinstance(item, (str, type(None))):
-                raise ValueError(
-                    "external_ips must be a list of lists (one list per instance)"
-                )
+                raise ValueError("external_ips must be a list of lists (one list per instance)")
         return v
 
     @field_validator("external_ips")
     @classmethod
-    def validate_external_ips(
-        cls, v: list[list[str]] | None
-    ) -> list[list[str]] | None:
+    def validate_external_ips(cls, v: list[list[str]] | None) -> list[list[str]] | None:
         if v is None:
             return v
 
@@ -798,13 +740,9 @@ class VPNGatewayConfig(BaseModel):
     tenant_id: str = Field(..., description="Nebius tenant ID")
     project_id: str = Field(..., description="Nebius project ID")
     region_id: str = Field(..., description="Nebius region ID (e.g., 'eu-north1-a')")
-    gateway_group: GatewayGroup = Field(
-        ..., description="Gateway infrastructure specification"
-    )
+    gateway_group: GatewayGroup = Field(..., description="Gateway infrastructure specification")
     gateway: GatewayConfig = Field(..., description="Gateway-wide parameters")
-    defaults: DefaultsConfig = Field(
-        ..., description="Global defaults for VPN behavior"
-    )
+    defaults: DefaultsConfig = Field(..., description="Global defaults for VPN behavior")
     connections: list[ConnectionConfig] = Field(
         ..., min_length=1, description="VPN connections to peers"
     )

@@ -84,9 +84,7 @@ def update_management_cidrs(cidrs: list[str]) -> bool:
     # Update if changed
     if new_content != current_content:
         MGMT_CIDRS_FILE.write_text(new_content)
-        print(
-            f"[FirewallMgr] Updated {MGMT_CIDRS_FILE} with {len(cidrs)} management CIDR(s)"
-        )
+        print(f"[FirewallMgr] Updated {MGMT_CIDRS_FILE} with {len(cidrs)} management CIDR(s)")
         return True
 
     return False
@@ -115,9 +113,7 @@ def update_local_prefixes(prefixes: list[str]) -> bool:
 
     if new_content != current_content:
         LOCAL_PREFIXES_FILE.write_text(new_content)
-        print(
-            f"[FirewallMgr] Updated {LOCAL_PREFIXES_FILE} with {len(prefixes)} prefix(es)"
-        )
+        print(f"[FirewallMgr] Updated {LOCAL_PREFIXES_FILE} with {len(prefixes)} prefix(es)")
         return True
 
     return False
@@ -133,9 +129,7 @@ def reload_firewall() -> bool:
         True if reload succeeded, False otherwise
     """
     if not FIREWALL_SETUP_SCRIPT.exists():
-        print(
-            f"[FirewallMgr] WARNING: Firewall setup script not found at {FIREWALL_SETUP_SCRIPT}"
-        )
+        print(f"[FirewallMgr] WARNING: Firewall setup script not found at {FIREWALL_SETUP_SCRIPT}")
         return False
 
     print("[FirewallMgr] Reloading UFW firewall rules...")
@@ -156,9 +150,7 @@ def reload_firewall() -> bool:
         return False
 
 
-def update_firewall_from_config(
-    cfg: dict[str, Any], mgmt_cidrs: list[str] = None
-) -> None:
+def update_firewall_from_config(cfg: dict[str, Any], mgmt_cidrs: list[str] = None) -> None:
     """Update firewall configuration from gateway config.
 
     This is the main entry point for firewall management. It:

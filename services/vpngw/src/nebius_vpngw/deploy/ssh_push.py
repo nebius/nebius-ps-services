@@ -65,9 +65,7 @@ class SSHPush:
                     for wheel in old_wheels:
                         wheel.unlink()
 
-            print(
-                "[SSHPush] Building nebius-vpngw wheel package with python -m build..."
-            )
+            print("[SSHPush] Building nebius-vpngw wheel package with python -m build...")
             try:
                 result = subprocess.run(
                     [sys.executable, "-m", "build", "--wheel"],
@@ -107,17 +105,13 @@ class SSHPush:
         self, ssh_target: str, inst_cfg: InstanceResolvedConfig, local_cfg: dict
     ) -> None:
         if not ssh_target:
-            print(
-                f"[SSHPush] No SSH target for instance {inst_cfg.instance_index}; skipping"
-            )
+            print(f"[SSHPush] No SSH target for instance {inst_cfg.instance_index}; skipping")
             return
 
         paramiko = self._ensure_paramiko()
         gg = local_cfg.get("gateway_group") or {}
         vm_spec = gg.get("vm_spec") or {}
-        username: str = vm_spec.get("ssh_username") or os.environ.get(
-            "VPNGW_SSH_USER", "ubuntu"
-        )
+        username: str = vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu")
         key_path: str | None = vm_spec.get("ssh_private_key_path") or os.environ.get(
             "VPNGW_SSH_KEY"
         )
@@ -146,24 +140,18 @@ class SSHPush:
                 print("⚠️  NETWORK CONNECTIVITY ISSUE DETECTED")
                 print("=" * 80)
                 print("The VM appears to be unreachable. This can happen if:")
-                print(
-                    "  1. The VM is still booting (cloud-init may be installing packages)"
-                )
+                print("  1. The VM is still booting (cloud-init may be installing packages)")
                 print("  2. Network configuration issues during VM initialization")
                 print("  3. Firewall or security group blocking SSH access")
                 print("\nRECOMMENDED ACTIONS:")
                 print("  • Wait 2-3 minutes and try running 'apply' again")
-                print(
-                    "  • Check VM status in Nebius Console (serial logs can show boot issues)"
-                )
-                print(
-                    "  • If the issue persists, restart the VM from the console and retry"
-                )
-                print(
-                    "  • As a last resort, run: nebius-vpngw destroy -y && nebius-vpngw apply"
-                )
+                print("  • Check VM status in Nebius Console (serial logs can show boot issues)")
+                print("  • If the issue persists, restart the VM from the console and retry")
+                print("  • As a last resort, run: nebius-vpngw destroy -y && nebius-vpngw apply")
                 print("=" * 80 + "\n")
             return
+
+        restart_agent = False
 
         # Always deploy the latest agent package from local build
         print("[SSHPush] Deploying latest nebius-vpngw package...")
@@ -184,13 +172,12 @@ class SSHPush:
                 # Use --ignore-installed to avoid conflicts with system-managed packages like typing_extensions
                 # Use 'python3 -m pip' instead of 'pip3' for Ubuntu 24.04 compatibility
                 install_cmd = f"sudo python3 -m pip install --upgrade --ignore-installed --break-system-packages {remote_wheel}"
-                stdin, stdout, stderr = client.exec_command(
-                    install_cmd, get_pty=True, timeout=120
-                )
+                stdin, stdout, stderr = client.exec_command(install_cmd, get_pty=True, timeout=120)
                 rc = stdout.channel.recv_exit_status()
                 out = stdout.read().decode().strip()
                 err = stderr.read().decode().strip()
                 if rc == 0:
+                    restart_agent = True
                     # Reinstall just our package to avoid stale version metadata, without touching deps
                     reinstall_cmd = (
                         f"sudo python3 -m pip install --upgrade --force-reinstall "
@@ -203,9 +190,7 @@ class SSHPush:
                     re_out = stdout_re.read().decode().strip()
                     re_err = stderr_re.read().decode().strip()
                     if rc_re != 0:
-                        print(
-                            "[SSHPush] WARNING: Forced reinstall failed; continuing anyway"
-                        )
+                        print("[SSHPush] WARNING: Forced reinstall failed; continuing anyway")
                         if re_out:
                             print(
                                 f"[SSHPush] stdout: {re_out[-500:]}"
@@ -221,7 +206,7 @@ class SSHPush:
 
                     # Verify package actually installed by importing it
                     verify_cmd = (
-                        "python3 -c \"import importlib.metadata as m, nebius_vpngw; "
+                        'python3 -c "import importlib.metadata as m, nebius_vpngw; '
                         "print('version=' + m.version('nebius-vpngw')); "
                         "print('path=' + nebius_vpngw.__file__)\""
                     )
@@ -232,22 +217,14 @@ class SSHPush:
                     verify_out = stdout_check.read().decode().strip()
                     verify_err = stderr_check.read().decode().strip()
                     if rc_check == 0 and verify_out:
-                        lines = [
-                            line.strip()
-                            for line in verify_out.splitlines()
-                            if line.strip()
-                        ]
+                        lines = [line.strip() for line in verify_out.splitlines() if line.strip()]
                         version_line = next(
                             (line for line in lines if line.startswith("version=")), ""
                         )
-                        path_line = next(
-                            (line for line in lines if line.startswith("path=")), ""
-                        )
+                        path_line = next((line for line in lines if line.startswith("path=")), "")
                         if version_line:
                             installed_version = version_line.split("=", 1)[1]
-                            installed_path = (
-                                path_line.split("=", 1)[1] if path_line else None
-                            )
+                            installed_path = path_line.split("=", 1)[1] if path_line else None
                             print(
                                 "[SSHPush] Package installed/upgraded successfully: "
                                 f"nebius-vpngw {installed_version}"
@@ -259,13 +236,9 @@ class SSHPush:
                                     "A system package may be shadowing the installed wheel."
                                 )
                                 if installed_path:
-                                    print(
-                                        f"[SSHPush] Installed package path: {installed_path}"
-                                    )
+                                    print(f"[SSHPush] Installed package path: {installed_path}")
                         else:
-                            print(
-                                "[SSHPush] WARNING: Could not read installed package version"
-                            )
+                            print("[SSHPush] WARNING: Could not read installed package version")
                     else:
                         print(
                             "[SSHPush] WARNING: pip install succeeded but package import check failed"
@@ -311,40 +284,30 @@ WantedBy=multi-user.target
                                 f.write(service_unit)
                             print("[SSHPush] Staged systemd unit update")
 
-                            # Deploy route fix script, service, and timer
+                            # Deploy route fix service and timer
                             # Use installed package location (works both in dev and deployed)
                             import nebius_vpngw
 
                             systemd_dir = Path(nebius_vpngw.__file__).parent / "systemd"
 
-                            fix_routes_script = systemd_dir / "fix-routes.sh"
-                            fix_routes_service = (
-                                systemd_dir / "nebius-vpngw-fix-routes.service"
-                            )
-                            fix_routes_timer = (
-                                systemd_dir / "nebius-vpngw-fix-routes.timer"
-                            )
-
-                            if fix_routes_script.exists():
-                                with sftp.file(
-                                    "/tmp/nebius-vpngw-fix-routes.sh", "w"
-                                ) as f:
-                                    f.write(fix_routes_script.read_text())
-                                print("[SSHPush] Staged route fix script")
+                            fix_routes_service = systemd_dir / "nebius-vpngw-fix-routes.service"
+                            fix_routes_timer = systemd_dir / "nebius-vpngw-fix-routes.timer"
 
                             if fix_routes_service.exists():
-                                with sftp.file(
-                                    "/tmp/nebius-vpngw-fix-routes.service", "w"
-                                ) as f:
+                                with sftp.file("/tmp/nebius-vpngw-fix-routes.service", "w") as f:
                                     f.write(fix_routes_service.read_text())
                                 print("[SSHPush] Staged route fix service")
 
                             if fix_routes_timer.exists():
-                                with sftp.file(
-                                    "/tmp/nebius-vpngw-fix-routes.timer", "w"
-                                ) as f:
+                                with sftp.file("/tmp/nebius-vpngw-fix-routes.timer", "w") as f:
                                     f.write(fix_routes_timer.read_text())
                                 print("[SSHPush] Staged route fix timer")
+
+                            firewall_script = systemd_dir / "setup-vpngw-firewall.sh"
+                            if firewall_script.exists():
+                                with sftp.file("/tmp/setup-vpngw-firewall.sh", "w") as f:
+                                    f.write(firewall_script.read_text())
+                                print("[SSHPush] Staged firewall setup script")
                     except Exception as e:
                         print(f"[SSHPush] Failed to stage systemd unit: {e}")
                 else:
@@ -361,18 +324,12 @@ WantedBy=multi-user.target
                             if len(err) > 500
                             else f"[SSHPush] stderr: {err}"
                         )
-                    print(
-                        "[SSHPush] WARNING: Continuing with config push, but agent may not work"
-                    )
+                    print("[SSHPush] WARNING: Continuing with config push, but agent may not work")
             except Exception as e:
                 print(f"[SSHPush] Failed to deploy package: {e}")
-                print(
-                    "[SSHPush] WARNING: Continuing with config push, but agent may not work"
-                )
+                print("[SSHPush] WARNING: Continuing with config push, but agent may not work")
         else:
-            print(
-                "[SSHPush] WARNING: Could not build wheel, skipping package deployment"
-            )
+            print("[SSHPush] WARNING: Could not build wheel, skipping package deployment")
 
         # Upload to /tmp then move with sudo
         tmp_path = f"/tmp/nebius-config-{inst_cfg.instance_index}.yaml"
@@ -385,40 +342,42 @@ WantedBy=multi-user.target
             client.close()
             return
 
+        agent_cmd = (
+            "sudo systemctl restart nebius-vpngw-agent"
+            if restart_agent
+            else "sudo systemctl is-active --quiet nebius-vpngw-agent && sudo systemctl reload nebius-vpngw-agent || sudo systemctl start nebius-vpngw-agent"
+        )
+
         # Move into place and trigger reload
         cmds = [
             "sudo mkdir -p /etc/nebius-vpngw",
             f"sudo mv {tmp_path} /etc/nebius-vpngw/config-resolved.yaml",
             "sudo chown root:root /etc/nebius-vpngw/config-resolved.yaml",
             "sudo chmod 0644 /etc/nebius-vpngw/config-resolved.yaml",
-            # Install route fix script, service, and timer if staged
-            "if [ -f /tmp/nebius-vpngw-fix-routes.sh ]; then sudo mv /tmp/nebius-vpngw-fix-routes.sh /usr/local/bin/nebius-vpngw-fix-routes.sh; fi",
-            "if [ -f /usr/local/bin/nebius-vpngw-fix-routes.sh ]; then sudo chmod 0755 /usr/local/bin/nebius-vpngw-fix-routes.sh; fi",
+            # Install route fix service and timer if staged
             "if [ -f /tmp/nebius-vpngw-fix-routes.service ]; then sudo mv /tmp/nebius-vpngw-fix-routes.service /etc/systemd/system/nebius-vpngw-fix-routes.service; fi",
             "if [ -f /tmp/nebius-vpngw-fix-routes.timer ]; then sudo mv /tmp/nebius-vpngw-fix-routes.timer /etc/systemd/system/nebius-vpngw-fix-routes.timer; fi",
             "if [ -f /etc/systemd/system/nebius-vpngw-fix-routes.service ]; then sudo chmod 0644 /etc/systemd/system/nebius-vpngw-fix-routes.service; fi",
             "if [ -f /etc/systemd/system/nebius-vpngw-fix-routes.timer ]; then sudo chmod 0644 /etc/systemd/system/nebius-vpngw-fix-routes.timer; fi",
+            "if [ -f /tmp/setup-vpngw-firewall.sh ]; then sudo mv /tmp/setup-vpngw-firewall.sh /usr/local/bin/setup-vpngw-firewall.sh; fi",
+            "if [ -f /usr/local/bin/setup-vpngw-firewall.sh ]; then sudo chmod 0755 /usr/local/bin/setup-vpngw-firewall.sh; fi",
             # Refresh systemd unit if staged
             "if [ -f /tmp/nebius-vpngw-agent.service ]; then sudo mv /tmp/nebius-vpngw-agent.service /etc/systemd/system/nebius-vpngw-agent.service; fi",
             "sudo chmod 0644 /etc/systemd/system/nebius-vpngw-agent.service",
             "sudo systemctl daemon-reload",
             # Enable and start route fix timer (only if service file exists)
             "if [ -f /etc/systemd/system/nebius-vpngw-fix-routes.timer ]; then sudo systemctl enable --now nebius-vpngw-fix-routes.timer; fi",
-            # CRITICAL: Force config re-render after package upgrade by removing state file
-            # This ensures code changes in renderers (StrongSwan, FRR, XFRM) are applied
-            # even when YAML config hasn't changed
-            "sudo rm -f /etc/nebius-vpngw/last-applied.json",
-            # Run route fix script immediately to remove Table 220 and broad APIPA routes before starting agent
-            "if [ -f /usr/local/bin/nebius-vpngw-fix-routes.sh ]; then sudo /usr/local/bin/nebius-vpngw-fix-routes.sh; fi",
-            # Start service if inactive, reload if active
-            "sudo systemctl is-active --quiet nebius-vpngw-agent && sudo systemctl reload nebius-vpngw-agent || sudo systemctl start nebius-vpngw-agent",
+            # Run route fix immediately before starting agent (non-fatal if unavailable)
+            'if python3 -c "import nebius_vpngw" >/dev/null 2>&1; then sudo /usr/bin/python3 -m nebius_vpngw.agent.fix_routes > /var/log/vpngw-fix-routes.log 2>&1 || true; fi',
+            # Apply firewall rules (including MSS clamp and ICMP allowances)
+            "if [ -f /usr/local/bin/setup-vpngw-firewall.sh ]; then sudo /usr/local/bin/setup-vpngw-firewall.sh > /var/log/vpngw-firewall-setup.log 2>&1 || true; fi",
+            # Start or reload agent
+            agent_cmd,
         ]
         had_failures = False
         for cmd in cmds:
             try:
-                stdin, stdout, stderr = client.exec_command(
-                    cmd, get_pty=True, timeout=20
-                )
+                stdin, stdout, stderr = client.exec_command(cmd, get_pty=True, timeout=20)
                 rc = stdout.channel.recv_exit_status()
                 if rc != 0:
                     err = stderr.read().decode().strip()
@@ -432,28 +391,37 @@ WantedBy=multi-user.target
                 had_failures = True
 
         if not had_failures:
-            print("[SSHPush] Applied config, systemd unit, and restarted agent")
+            if restart_agent:
+                print("[SSHPush] Applied config, systemd unit, and restarted agent")
+            else:
+                print("[SSHPush] Applied config, systemd unit, and reloaded agent")
 
-        # Verify routing table health after route fix script ran
+        # Verify routing table health after route fix ran
         try:
-            # Check if Table 220 exists (should be removed)
-            stdin, stdout, stderr = client.exec_command(
-                "ip rule list | grep -q 'lookup 220' && echo 'EXISTS' || echo 'OK'",
-                timeout=10,
-            )
-            table220_status = stdout.read().decode().strip()
 
-            # Check if broad APIPA route exists (should be removed)
-            stdin, stdout, stderr = client.exec_command(
-                "ip route show 169.254.0.0/16 2>/dev/null | grep -q eth0 && echo 'EXISTS' || echo 'OK'",
-                timeout=10,
-            )
-            apipa_status = stdout.read().decode().strip()
+            def _check_routing_health() -> tuple[str, str]:
+                stdin, stdout, stderr = client.exec_command(
+                    "ip rule list | grep -q 'lookup 220' && echo 'EXISTS' || echo 'OK'",
+                    timeout=10,
+                )
+                table220 = stdout.read().decode().strip()
+
+                stdin, stdout, stderr = client.exec_command(
+                    "ip route show 169.254.0.0/16 2>/dev/null | grep -q eth0 && echo 'EXISTS' || echo 'OK'",
+                    timeout=10,
+                )
+                apipa = stdout.read().decode().strip()
+                return table220, apipa
+
+            table220_status, apipa_status = _check_routing_health()
+            if table220_status != "OK" or apipa_status != "OK":
+                import time
+
+                time.sleep(5)
+                table220_status, apipa_status = _check_routing_health()
 
             if table220_status == "OK" and apipa_status == "OK":
-                print(
-                    "[SSHPush] ✓ Routing table clean (Table 220 and broad APIPA removed)"
-                )
+                print("[SSHPush] ✓ Routing table clean (Table 220 and broad APIPA removed)")
             else:
                 if table220_status == "EXISTS":
                     print(
@@ -479,9 +447,7 @@ WantedBy=multi-user.target
             if rc == 0 and status == "active":
                 print("[SSHPush] ✓ nebius-vpngw-agent is running")
             else:
-                print(
-                    f"[SSHPush] ✗ nebius-vpngw-agent is NOT running (status: {status})"
-                )
+                print(f"[SSHPush] ✗ nebius-vpngw-agent is NOT running (status: {status})")
                 # Get detailed status for troubleshooting
                 stdin, stdout, stderr = client.exec_command(
                     "sudo systemctl status nebius-vpngw-agent --no-pager -l", timeout=10
@@ -540,20 +506,18 @@ WantedBy=multi-user.target
                     (local_cfg.get("defaults", {}) or {}).get("routing", {}) or {}
                 ).get("mode", "bgp")
 
-                # Collect BGP peers for this instance
+                # Collect BGP peers for this instance (active and passive tunnels)
                 bgp_peers = []
                 for conn in local_cfg.get("connections") or []:
                     routing_mode = conn.get("routing_mode") or defaults_mode
                     if routing_mode != "bgp":
                         continue
                     for tun in conn.get("tunnels") or []:
-                        if (
-                            int(tun.get("gateway_instance_index", 0))
-                            != inst_cfg.instance_index
-                        ):
+                        if int(tun.get("gateway_instance_index", 0)) != inst_cfg.instance_index:
                             continue
-                        if tun.get("ha_role", "active") != "active":
-                            continue
+                        ha_role = tun.get("ha_role", "active")
+                        if ha_role == "disable":
+                            continue  # Skip only explicitly disabled tunnels
                         r_ip = tun.get("inner_remote_ip")
                         if r_ip:
                             bgp_peers.append(r_ip)
@@ -566,9 +530,7 @@ WantedBy=multi-user.target
                     print("[SSHPush] Waiting for IPsec tunnels to establish...")
                     time.sleep(10)
 
-                    print(
-                        f"[SSHPush] Verifying tunnel connectivity to {len(bgp_peers)} peer(s)..."
-                    )
+                    print(f"[SSHPush] Verifying tunnel connectivity to {len(bgp_peers)} peer(s)...")
 
                     # Step 1: Test ping connectivity to BGP peers
                     all_peers_reachable = True
@@ -577,9 +539,7 @@ WantedBy=multi-user.target
                         stdin, stdout, stderr = client.exec_command(cmd, timeout=10)
                         result = stdout.read().decode().strip()
                         if result == "OK":
-                            print(
-                                f"[SSHPush] ✓ Tunnel connectivity OK: {peer_ip} is reachable"
-                            )
+                            print(f"[SSHPush] ✓ Tunnel connectivity OK: {peer_ip} is reachable")
                         else:
                             print(
                                 f"[SSHPush] ✗ Tunnel connectivity FAILED: {peer_ip} is NOT reachable"
@@ -605,9 +565,7 @@ WantedBy=multi-user.target
 
                         try:
                             bgp_summary = json.loads(output) if output != "{}" else {}
-                            ipv4_peers = bgp_summary.get("ipv4Unicast", {}).get(
-                                "peers", {}
-                            )
+                            ipv4_peers = bgp_summary.get("ipv4Unicast", {}).get("peers", {})
 
                             established_count = 0
                             current_states = {}
@@ -622,10 +580,7 @@ WantedBy=multi-user.target
 
                             # Print state changes
                             for peer_ip, state in current_states.items():
-                                if (
-                                    peer_ip not in last_states
-                                    or last_states[peer_ip] != state
-                                ):
+                                if peer_ip not in last_states or last_states[peer_ip] != state:
                                     elapsed = int(time.time() - start_time)
                                     if state == "Established":
                                         print(
@@ -658,9 +613,7 @@ WantedBy=multi-user.target
                         )
                     else:
                         elapsed = int(time.time() - start_time)
-                        print(
-                            f"[SSHPush] ⚠ BGP sessions not yet established after {elapsed}s"
-                        )
+                        print(f"[SSHPush] ⚠ BGP sessions not yet established after {elapsed}s")
                         print(
                             f"[SSHPush]   Current states: {', '.join([f'{ip}={state}' for ip, state in last_states.items()])}"
                         )

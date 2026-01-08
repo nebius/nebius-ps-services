@@ -61,9 +61,9 @@ def check_routing_invariants():
 
     for _idx, iface_name, conn, tun in iter_active_tunnels(cfg):
         # Check if this is a BGP tunnel
-        routing_mode = conn.get("routing_mode") or cfg.get("defaults", {}).get(
-            "routing", {}
-        ).get("mode", "bgp")
+        routing_mode = conn.get("routing_mode") or cfg.get("defaults", {}).get("routing", {}).get(
+            "mode", "bgp"
+        )
         tun_mode = tun.get("routing_mode") or routing_mode
         bgp_enabled = conn.get("bgp", {}).get("enabled", False)
 
@@ -93,9 +93,7 @@ def check_routing_invariants():
                     if part.startswith("xfrm"):
                         actual_iface = part
                         break
-                print(
-                    f"❌ FAIL: {peer_ip} uses {actual_iface}, expected {expected_iface}"
-                )
+                print(f"❌ FAIL: {peer_ip} uses {actual_iface}, expected {expected_iface}")
                 all_good = False
 
     # Check 3: No orphaned routes

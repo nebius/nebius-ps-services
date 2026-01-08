@@ -14,9 +14,12 @@ Key advantages over VTI:
 from __future__ import annotations
 
 import ipaddress
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
+
+IPSEC_OVERHEAD_BYTES = 64  # NAT-T ESP overhead for IPv4 (bytes)
 
 
 class XFRMManager:
@@ -34,6 +37,14 @@ class XFRMManager:
         # Configure rp_filter for XFRM (relax reverse path filtering)
         self._configure_sysctl(parent_dev)
 
+        mtu_info = self._calculate_xfrm_mtu(parent_dev)
+        xfrm_mtu = None
+        if mtu_info is not None:
+            xfrm_mtu, parent_mtu = mtu_info
+            print(
+                f"[XFRM] Using xfrm MTU {xfrm_mtu} (parent {parent_dev} MTU {parent_mtu} - {IPSEC_OVERHEAD_BYTES})"
+            )
+
         for iface in interface_endpoints:
             name = iface["name"]
             if_id = iface["if_id"]
@@ -47,6 +58,10 @@ class XFRMManager:
 
             # Create XFRM device bound to if_id
             self._create_xfrm_device(name, parent_dev, if_id)
+
+            # Set MTU for XFRM devices to avoid PMTU confusion on the tunnel
+            if xfrm_mtu is not None:
+                self._set_mtu(name, xfrm_mtu)
 
             # Assign IP address if provided (required for BGP)
             if local_inner_ip and cidr:
@@ -66,9 +81,7 @@ class XFRMManager:
                 if remote_prefixes:
                     self._add_static_routes(name, remote_prefixes)
                 else:
-                    print(
-                        f"[XFRM] WARNING: Static mode interface {name} has no remote_prefixes"
-                    )
+                    print(f"[XFRM] WARNING: Static mode interface {name} has no remote_prefixes")
 
     def cleanup_interfaces(self, interface_names: list[str]) -> None:
         """Remove XFRM interfaces.
@@ -78,9 +91,7 @@ class XFRMManager:
         """
         for name in interface_names:
             print(f"[XFRM] Deleting interface {name}")
-            subprocess.run(
-                ["ip", "link", "del", name], capture_output=True, check=False
-            )
+            subprocess.run(["ip", "link", "del", name], capture_output=True, check=False)
 
     def _create_xfrm_device(self, name: str, parent_dev: str, if_id: int) -> None:
         """Create XFRM network device bound to if_id."""
@@ -118,29 +129,65 @@ class XFRMManager:
             addr_with_prefix = f"{local_ip}/{prefix}"
 
             result = subprocess.run(
-                ["ip", "addr", "add", addr_with_prefix, "dev", name],
+                ["ip", "addr", "replace", addr_with_prefix, "dev", name],
                 capture_output=True,
                 text=True,
             )
             if result.returncode != 0:
-                if "File exists" in result.stderr:
-                    print(f"[XFRM] IP {addr_with_prefix} already assigned to {name}")
-                else:
-                    print(f"[XFRM] ERROR assigning IP to {name}: {result.stderr}")
+                print(f"[XFRM] ERROR assigning IP to {name}: {result.stderr}")
             else:
-                print(f"[XFRM] ✓ Assigned {addr_with_prefix} to {name}")
+                print(f"[XFRM] ✓ Ensured {addr_with_prefix} on {name}")
         except Exception as e:
             print(f"[XFRM] ERROR: Failed to parse CIDR {cidr}: {e}")
 
     def _bring_up(self, name: str) -> None:
         """Bring XFRM interface up."""
-        result = subprocess.run(
-            ["ip", "link", "set", name, "up"], capture_output=True, text=True
-        )
+        result = subprocess.run(["ip", "link", "set", name, "up"], capture_output=True, text=True)
         if result.returncode == 0:
             print(f"[XFRM] ✓ Interface {name} is UP")
         else:
             print(f"[XFRM] ERROR bringing up {name}: {result.stderr}")
+
+    def _set_mtu(self, name: str, mtu: int) -> None:
+        """Set MTU on XFRM interface."""
+        result = subprocess.run(
+            ["ip", "link", "set", "dev", name, "mtu", str(mtu)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            print(f"[XFRM] ✓ Set {name} MTU to {mtu}")
+        else:
+            print(f"[XFRM] WARNING: Failed to set MTU on {name}: {result.stderr}")
+
+    def _get_interface_mtu(self, name: str) -> int | None:
+        """Read MTU for a given interface."""
+        result = subprocess.run(
+            ["ip", "-o", "link", "show", "dev", name],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            print(f"[XFRM] WARNING: Failed to read MTU for {name}: {result.stderr}")
+            return None
+        match = re.search(r"\bmtu (\d+)\b", result.stdout)
+        if not match:
+            print(f"[XFRM] WARNING: Could not parse MTU for {name}")
+            return None
+        return int(match.group(1))
+
+    def _calculate_xfrm_mtu(self, parent_dev: str) -> tuple[int, int] | None:
+        """Compute effective MTU for XFRM devices based on parent MTU."""
+        parent_mtu = self._get_interface_mtu(parent_dev)
+        if parent_mtu is None:
+            return None
+        effective_mtu = parent_mtu - IPSEC_OVERHEAD_BYTES
+        if effective_mtu <= 0:
+            print(
+                f"[XFRM] WARNING: Parent MTU {parent_mtu} too small for overhead {IPSEC_OVERHEAD_BYTES}"
+            )
+            return None
+        return effective_mtu, parent_mtu
 
     def _add_peer_route(self, name: str, remote_ip: str) -> None:
         """Add host route to BGP peer via XFRM interface."""
@@ -202,6 +249,7 @@ class XFRMManager:
             "net.ipv4.conf.all.rp_filter": "0",
             "net.ipv4.conf.default.rp_filter": "0",
             "net.ipv4.ip_forward": "1",
+            "net.ipv4.tcp_mtu_probing": "1",
         }
         existing_lines = []
         if sysctl_conf.exists():

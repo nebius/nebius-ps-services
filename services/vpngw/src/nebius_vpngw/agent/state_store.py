@@ -5,9 +5,11 @@ import hashlib
 import json
 from pathlib import Path
 
+RENDER_VERSION = 1
+
 
 def _get_package_version() -> str:
-    """Get the installed package version to detect code changes."""
+    """Get the installed package version for diagnostics."""
     try:
         from importlib.metadata import version
 
@@ -30,11 +32,10 @@ class StateStore:
             return None
 
     def _hash_cfg(self, resolved_config: dict) -> str:
-        # Include package version in hash so code changes trigger reapply
-        # This ensures that agent code updates force config regeneration
-        pkg_version = _get_package_version()
+        # Include render version to force reapply only when rendering logic changes
         s = json.dumps(
-            {"config": resolved_config, "version": pkg_version}, sort_keys=True
+            {"config": resolved_config, "render_version": RENDER_VERSION},
+            sort_keys=True,
         ).encode()
         return hashlib.sha256(s).hexdigest()
 
@@ -47,6 +48,7 @@ class StateStore:
         payload = {
             "config_hash": self._hash_cfg(resolved_config),
             "package_version": _get_package_version(),
+            "render_version": RENDER_VERSION,
             "timestamp": dt.datetime.utcnow().isoformat() + "Z",
             "resolved_config": resolved_config,
         }

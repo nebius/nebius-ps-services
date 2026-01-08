@@ -15,9 +15,7 @@ class FRRRenderer:
         if not DAEMONS_FILE.exists():
             print("[FRR] WARNING: /etc/frr/daemons not found; creating with bgpd=yes")
             DAEMONS_FILE.parent.mkdir(parents=True, exist_ok=True)
-            DAEMONS_FILE.write_text(
-                'bgpd=yes\nbgpd_options="   -A 0.0.0.0"\n', encoding="utf-8"
-            )
+            DAEMONS_FILE.write_text('bgpd=yes\nbgpd_options="   -A 0.0.0.0"\n', encoding="utf-8")
             return True
 
         text = DAEMONS_FILE.read_text(encoding="utf-8").splitlines()
@@ -51,77 +49,32 @@ class FRRRenderer:
 
         if changed:
             DAEMONS_FILE.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
-            print(
-                "[FRR] Configured bgpd to listen on all interfaces in /etc/frr/daemons"
-            )
+            print("[FRR] Configured bgpd to listen on all interfaces in /etc/frr/daemons")
             return True
         return False
 
-    def _ensure_local_prefix_routes(
-        self, local_prefixes: list[str], interface: str = "eth0"
-    ) -> None:
+    def ensure_local_prefix_routes(self, cfg: dict[str, Any]) -> None:
         """Ensure static routes exist for local_prefixes so BGP can advertise them.
 
         BGP requires routes to exist in the kernel routing table before advertising them.
         This is controlled by FRR's 'import-check' feature (enabled by default).
         Without a kernel route, BGP will mark the prefix as 'inaccessible' and not advertise it.
 
-        CRITICAL: We do NOT use 'scope link' as that marks the prefix as directly connected,
-        which prevents proper forwarding. Instead, we route via the VPC default gateway.
+        CRITICAL: Adding routes for local_prefixes that represent the source subnets
+        (workload VMs) breaks packet forwarding! The gateway receives packets FROM these
+        subnets and must forward them to the VPN tunnel, not route them back.
+        
+        Solution: Disable import-check in BGP configuration and skip adding these routes.
+        This allows BGP to advertise local_prefixes without breaking packet forwarding.
 
         Args:
-            local_prefixes: List of CIDR prefixes to add routes for
-            interface: Interface to use for the static route (default: eth0)
+            cfg: Gateway configuration dictionary
         """
-        # Get the default gateway IP for proper routing
-        try:
-            result = subprocess.run(
-                ["ip", "route", "show", "default"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if result.returncode == 0 and "via" in result.stdout:
-                # Extract gateway IP (e.g., "default via 169.254.169.1 dev eth0" -> "169.254.169.1")
-                gateway_ip = result.stdout.split("via")[1].split()[0]
-            else:
-                print(
-                    "[FRR] WARNING: Could not determine default gateway, skipping local prefix routes"
-                )
-                return
-        except Exception as e:
-            print(f"[FRR] WARNING: Error getting default gateway: {e}")
-            return
-
-        for prefix in local_prefixes:
-            # Check if route already exists
-            result = subprocess.run(
-                ["ip", "route", "show", prefix],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                print(
-                    f"[FRR] Route for {prefix} already exists: {result.stdout.strip()}"
-                )
-                continue
-
-            # Add static route via gateway (NOT scope link)
-            # This allows BGP to advertise the prefix while enabling proper packet forwarding
-            try:
-                subprocess.run(
-                    ["ip", "route", "add", prefix, "via", gateway_ip, "dev", interface],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                print(
-                    f"[FRR] Added static route: {prefix} via {gateway_ip} dev {interface}"
-                )
-            except subprocess.CalledProcessError as e:
-                print(f"[FRR] WARNING: Failed to add route for {prefix}: {e.stderr}")
+        # DO NOT add routes for local_prefixes as they break packet forwarding
+        # from the workload subnets. BGP will be configured with 'no bgp network import-check'
+        # to allow advertising these prefixes without requiring kernel routes.
+        print("[FRR] Skipping local_prefix routes (would break packet forwarding from workload VMs)")
+        return
 
     def render_and_apply(self, cfg: dict[str, Any]) -> None:
         """Render FRR bgpd.conf for BGP tunnels and prefix advertisement.
@@ -140,7 +93,7 @@ class FRRRenderer:
 
         # Ensure kernel routes exist for local_prefixes so BGP can advertise them
         if gateway_local_prefixes:
-            self._ensure_local_prefix_routes(gateway_local_prefixes)
+            self.ensure_local_prefix_routes(cfg)
 
         d_bgp = cfg.get("defaults", {}).get("routing", {}).get("bgp", {})
         hold = d_bgp.get("hold_time_seconds", 60)
@@ -154,15 +107,19 @@ class FRRRenderer:
         ]
 
         # Track prefix-list filters for inbound BGP routes (optional whitelist)
-        prefix_list_filters: dict[
-            str, list[str]
-        ] = {}  # neighbor_ip -> list of allowed prefixes
+        prefix_list_filters: dict[str, list[str]] = {}  # neighbor_ip -> list of allowed prefixes
 
         # Track which local prefixes should be advertised outbound
         # This prevents re-advertising routes learned from peers back to them
         outbound_prefix_list_needed = len(gateway_local_prefixes) > 0
 
-        # First pass: collect prefix-list filters
+        # Track which tunnels use which local-pref (for route-map generation)
+        tunnels_by_localpref: dict[int, list[str]] = {
+            200: [],  # Active tunnels
+            100: [],  # Passive tunnels
+        }
+
+        # First pass: collect tunnel info for route-maps and prefix-list filters
         for conn in cfg.get("connections", []):
             routing_mode = conn.get("routing_mode") or cfg.get("defaults", {}).get(
                 "routing", {}
@@ -171,18 +128,66 @@ class FRRRenderer:
                 continue
             conn_bgp = conn.get("bgp", {}) or {}
             conn_remote_prefixes = (
-                conn.get("remote_prefixes", [])
-                or conn_bgp.get("remote_prefixes", [])
-                or []
+                conn.get("remote_prefixes", []) or conn_bgp.get("remote_prefixes", []) or []
             )
 
             for tun in conn.get("tunnels", []):
-                if tun.get("ha_role", "active") != "active":
+                ha_role = tun.get("ha_role", "active")
+                if ha_role == "disable":
                     continue
+
                 tbgp = tun.get("bgp", {}) or {}
                 remote_ip = tbgp.get("remote_ip") or tun.get("inner_remote_ip")
-                if remote_ip and conn_remote_prefixes:
-                    prefix_list_filters[remote_ip] = conn_remote_prefixes
+
+                if remote_ip:
+                    # Track tunnel for local-pref route-map
+                    local_pref = 200 if ha_role == "active" else 100
+                    tunnels_by_localpref[local_pref].append(remote_ip)
+
+                    # Track prefix-list filters
+                    if conn_remote_prefixes:
+                        prefix_list_filters[remote_ip] = conn_remote_prefixes
+
+        # Define route-maps for Active/Passive HA (before prefix-lists)
+        # Active tunnels:
+        #   - local-preference 200 (inbound, LOCAL only) = preferred for outbound traffic
+        #   - MED 0 (outbound, TRANSMITTED to peer) = peer prefers this tunnel
+        # Passive tunnels:
+        #   - local-preference 100 (inbound, LOCAL only) = standby for outbound
+        #   - MED 100 (outbound, TRANSMITTED to peer) = peer deprioritizes this tunnel
+        # This prevents ECMP on both sides and ensures symmetric routing
+        if tunnels_by_localpref[200]:
+            lines.append("!")
+            lines.append("! Active/Passive HA: Active tunnel route-map")
+            lines.append("! Inbound: Set local-pref 200 (prefer for outbound on THIS router)")
+            lines.append("route-map SET-LOCAL-PREF-200 permit 10")
+            lines.append(" set local-preference 200")
+            lines.append("!")
+
+        if tunnels_by_localpref[100]:
+            lines.append("!")
+            lines.append("! Active/Passive HA: Passive tunnel route-map")
+            lines.append("! Inbound: Set local-pref 100 (deprioritize for outbound on THIS router)")
+            lines.append("route-map SET-LOCAL-PREF-100 permit 10")
+            lines.append(" set local-preference 100")
+            lines.append("!")
+
+        # Outbound route-maps: combine prefix-list filtering with MED setting
+        # Active tunnel: only advertise local prefixes, set MED=0
+        if outbound_prefix_list_needed and tunnels_by_localpref[200]:
+            lines.append("! Outbound for active tunnel: filter prefixes + set MED 0")
+            lines.append("route-map ADVERTISE-ACTIVE permit 10")
+            lines.append(" match ip address prefix-list ADVERTISE-LOCAL")
+            lines.append(" set metric 0")
+            lines.append("!")
+
+        # Passive tunnel: only advertise local prefixes, set MED=100
+        if outbound_prefix_list_needed and tunnels_by_localpref[100]:
+            lines.append("! Outbound for passive tunnel: filter prefixes + set MED 100")
+            lines.append("route-map ADVERTISE-PASSIVE permit 10")
+            lines.append(" match ip address prefix-list ADVERTISE-LOCAL")
+            lines.append(" set metric 100")
+            lines.append("!")
 
         # Define prefix-lists before router bgp section
         # Inbound filters (optional - only if remote_prefixes specified)
@@ -203,9 +208,7 @@ class FRRRenderer:
             lines.append("! This prevents re-advertising routes learned from peers")
             seq = 10
             for prefix in sorted(gateway_local_prefixes):
-                lines.append(
-                    f"ip prefix-list ADVERTISE-LOCAL seq {seq} permit {prefix}"
-                )
+                lines.append(f"ip prefix-list ADVERTISE-LOCAL seq {seq} permit {prefix}")
                 seq += 10
             lines.append("!")
 
@@ -218,11 +221,14 @@ class FRRRenderer:
             lines.append(" bgp graceful-restart")
         # Disable policy requirement for eBGP (FRR 8.4+)
         lines.append(" no bgp ebgp-requires-policy")
+        # Disable network import-check to allow advertising local_prefixes without kernel routes
+        # This is critical for VPN gateways where local_prefixes are source subnets
+        lines.append(" no bgp network import-check")
 
         # Track which prefixes to advertise (can vary per connection)
         advertised_prefixes: set[str] = set()
 
-        # Neighbors per active tunnel
+        # Neighbors per tunnel (both active and passive for Active/Passive HA)
         tunnel_index = 0  # Track tunnel interface index for logging
         for conn in cfg.get("connections", []):
             routing_mode = conn.get("routing_mode") or cfg.get("defaults", {}).get(
@@ -237,8 +243,10 @@ class FRRRenderer:
             remote_asn = conn_bgp.get("remote_asn")
 
             for tun in conn.get("tunnels", []):
-                if tun.get("ha_role", "active") != "active":
-                    continue
+                ha_role = tun.get("ha_role", "active")
+                if ha_role == "disable":
+                    continue  # Skip disabled tunnels entirely
+
                 tbgp = tun.get("bgp", {}) or {}
                 local_ip = tbgp.get("local_ip") or tun.get("inner_local_ip")
                 remote_ip = tbgp.get("remote_ip") or tun.get("inner_remote_ip")
@@ -248,9 +256,7 @@ class FRRRenderer:
 
                 lines.append(f" neighbor {remote_ip} remote-as {rasn}")
                 lines.append(f" neighbor {remote_ip} timers {keep} {hold}")
-                lines.append(
-                    f" neighbor {remote_ip} maximum-prefix {max_prefixes_default}"
-                )
+                lines.append(f" neighbor {remote_ip} maximum-prefix {max_prefixes_default}")
 
                 # CRITICAL: Configure update-source to use tunnel interface IP
                 # This ensures BGP packets use the correct source IP (APIPA inner IP)
@@ -259,7 +265,7 @@ class FRRRenderer:
                 if local_ip:
                     lines.append(f" neighbor {remote_ip} update-source {local_ip}")
                     print(
-                        f"[FRR] Configured neighbor {remote_ip} with update-source {local_ip}"
+                        f"[FRR] Configured neighbor {remote_ip} with update-source {local_ip} (ha_role={ha_role})"
                     )
 
                 tunnel_index += 1
@@ -274,29 +280,43 @@ class FRRRenderer:
         for pfx in sorted(advertised_prefixes):
             lines.append(f"  network {pfx}")
 
+        # Apply Active/Passive HA via BGP local-preference (inbound) and MED (outbound)
+        # Inbound: local-preference controls THIS router's path preference
+        #   - Active: 200 (higher = preferred for outbound traffic)
+        #   - Passive: 100 (lower = standby)
+        # Outbound: MED tells PEER which path to prefer
+        #   - Active: MED 0 (lower = preferred by peer)
+        #   - Passive: MED 100 (higher = deprioritized by peer)
+        # This ensures symmetric routing on BOTH sides without ECMP
+        for conn in cfg.get("connections", []):
+            routing_mode = conn.get("routing_mode") or cfg.get("defaults", {}).get(
+                "routing", {}
+            ).get("mode", "bgp")
+            if routing_mode != "bgp":
+                continue
+            for tun in conn.get("tunnels", []):
+                ha_role = tun.get("ha_role", "active")
+                if ha_role == "disable":
+                    continue
+                tbgp = tun.get("bgp", {}) or {}
+                remote_ip = tbgp.get("remote_ip") or tun.get("inner_remote_ip")
+                if remote_ip:
+                    # Inbound: Set local-preference for THIS router's path preference
+                    local_pref = 200 if ha_role == "active" else 100
+                    lines.append(f"  neighbor {remote_ip} route-map SET-LOCAL-PREF-{local_pref} in")
+                    
+                    # Outbound: Apply combined route-map (prefix filter + MED)
+                    if outbound_prefix_list_needed:
+                        route_map_name = "ADVERTISE-ACTIVE" if ha_role == "active" else "ADVERTISE-PASSIVE"
+                        lines.append(f"  neighbor {remote_ip} route-map {route_map_name} out")
+
         # Apply inbound prefix-list filters to neighbors (if configured)
         for neighbor_ip in prefix_list_filters:
             list_name = f"ALLOW-FROM-{neighbor_ip.replace('.', '-')}"
             lines.append(f"  neighbor {neighbor_ip} prefix-list {list_name} in")
 
-        # Apply outbound prefix-list filter to ALL neighbors
-        # This is CRITICAL to prevent route reflection (advertising learned routes back to peers)
-        if outbound_prefix_list_needed:
-            for conn in cfg.get("connections", []):
-                routing_mode = conn.get("routing_mode") or cfg.get("defaults", {}).get(
-                    "routing", {}
-                ).get("mode", "bgp")
-                if routing_mode != "bgp":
-                    continue
-                for tun in conn.get("tunnels", []):
-                    if tun.get("ha_role", "active") != "active":
-                        continue
-                    tbgp = tun.get("bgp", {}) or {}
-                    remote_ip = tbgp.get("remote_ip") or tun.get("inner_remote_ip")
-                    if remote_ip:
-                        lines.append(
-                            f"  neighbor {remote_ip} prefix-list ADVERTISE-LOCAL out"
-                        )
+        # NOTE: Outbound filtering is now combined with MED setting in ADVERTISE-ACTIVE/PASSIVE route-maps above
+        # No separate prefix-list application needed here
 
         # Set next-hop-self for all eBGP neighbors
         # This explicitly sets the next-hop to the update-source IP (XFRM interface IP)
@@ -308,7 +328,8 @@ class FRRRenderer:
             if routing_mode != "bgp":
                 continue
             for tun in conn.get("tunnels", []):
-                if tun.get("ha_role", "active") != "active":
+                ha_role = tun.get("ha_role", "active")
+                if ha_role == "disable":
                     continue
                 tbgp = tun.get("bgp", {}) or {}
                 remote_ip = tbgp.get("remote_ip") or tun.get("inner_remote_ip")
@@ -323,7 +344,8 @@ class FRRRenderer:
             if routing_mode != "bgp":
                 continue
             for tun in conn.get("tunnels", []):
-                if tun.get("ha_role", "active") != "active":
+                ha_role = tun.get("ha_role", "active")
+                if ha_role == "disable":
                     continue
                 tbgp = tun.get("bgp", {}) or {}
                 remote_ip = tbgp.get("remote_ip") or tun.get("inner_remote_ip")
@@ -335,9 +357,7 @@ class FRRRenderer:
         rendered = "\n".join(lines) + "\n"
         # FRR 8+ uses integrated config in frr.conf
         FRR_CONF.write_text(rendered, encoding="utf-8")
-        print(
-            f"[FRR] Wrote bgp config with {len(advertised_prefixes)} advertised prefix(es)"
-        )
+        print(f"[FRR] Wrote bgp config with {len(advertised_prefixes)} advertised prefix(es)")
         # Reload bgpd to apply config (soft reload if only bgp changed; restart if daemons changed)
         cmd = ["systemctl", "restart" if daemons_changed else "reload", "frr"]
         try:

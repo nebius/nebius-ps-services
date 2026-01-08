@@ -3,9 +3,15 @@ from __future__ import annotations
 import importlib.resources as resources
 import textwrap
 import typing as t
+from pathlib import Path
 
 from ..config_loader import GatewayGroupSpec
 from .vm_diff import VMDiffAnalyzer, VMSpec
+
+
+def _read_firewall_setup_script() -> str:
+    script_path = Path(__file__).resolve().parents[1] / "systemd" / "setup-vpngw-firewall.sh"
+    return script_path.read_text(encoding="utf-8")
 
 
 class VMManager:
@@ -63,9 +69,7 @@ class VMManager:
             disk_obj = self._get_disk_by_name(client, boot_disk_name)
 
             if disk_obj is None:
-                print(
-                    f"[VMManager] Warning: VM {inst_name} exists but boot disk not found"
-                )
+                print(f"[VMManager] Warning: VM {inst_name} exists but boot disk not found")
                 diff = self.diff_analyzer.compare(desired_spec, None)
                 results.append((inst_name, diff))
                 continue
@@ -254,9 +258,7 @@ class VMManager:
             pass
         return None
 
-    def wait_for_vm_network(
-        self, vm_name: str, ip_address: str, timeout: int = 180
-    ) -> bool:
+    def wait_for_vm_network(self, vm_name: str, ip_address: str, timeout: int = 180) -> bool:
         """Wait for VM to be reachable via ping.
 
         Args:
@@ -482,9 +484,7 @@ class VMManager:
             and result["strongswan_installed"]
             and result["frr_installed"]
         ):
-            result["message"] = (
-                "✓ VM ready: cloud-init complete, strongSwan and FRR installed"
-            )
+            result["message"] = "✓ VM ready: cloud-init complete, strongSwan and FRR installed"
             if result["agent_installed"]:
                 result["message"] += ", agent running"
         elif result["cloud_init_complete"]:
@@ -526,9 +526,7 @@ class VMManager:
         vm_ips: dict[str, str] = {}
 
         try:
-            print(
-                f"[VMManager] Using project_id={self.project_id} zone={self.zone or spec.region}"
-            )
+            print(f"[VMManager] Using project_id={self.project_id} zone={self.zone or spec.region}")
         except Exception:
             pass
         # Try actual SDK integration with defensive guards
@@ -622,9 +620,7 @@ class VMManager:
                     except Exception:
                         return attr
 
-                compute = _svc(client, "compute") or _svc(
-                    getattr(client, "cloud", None), "compute"
-                )
+                compute = _svc(client, "compute") or _svc(getattr(client, "cloud", None), "compute")
                 vpc = (
                     _svc(client, "vpc")
                     or _svc(getattr(client, "network", None), "vpc")
@@ -678,9 +674,7 @@ class VMManager:
                 if not existing:
                     print("[VMManager] No existing VMs found")
                 else:
-                    print(
-                        f"[VMManager] Found {len(existing)} existing VM(s) for recreation"
-                    )
+                    print(f"[VMManager] Found {len(existing)} existing VM(s) for recreation")
 
                 # Optionally delete existing VMs (preserves subnet and allocations)
                 # IMPORTANT: Only VMs are deleted. The following are preserved:
@@ -700,18 +694,15 @@ class VMManager:
                         f"[VMManager] Querying allocations from {len(existing)} existing VMs for preservation..."
                     )
                     for inst in existing:
-                        vm_name = getattr(
-                            getattr(inst, "metadata", None), "name", None
-                        ) or getattr(inst, "name", None)
+                        vm_name = getattr(getattr(inst, "metadata", None), "name", None) or getattr(
+                            inst, "name", None
+                        )
                         if vm_name:
                             allocs = self.get_vm_allocations(vm_name)
                             if allocs:
                                 # Store allocation IDs in NIC order
                                 alloc_ids = [
-                                    alloc_id
-                                    for _, alloc_id in sorted(
-                                        allocs, key=lambda x: x[0]
-                                    )
+                                    alloc_id for _, alloc_id in sorted(allocs, key=lambda x: x[0])
                                 ]
                                 preserved_allocations[vm_name] = alloc_ids
                                 print(
@@ -734,9 +725,7 @@ class VMManager:
                         isc = InstanceServiceClient(client)
                         dsc = DiskServiceClient(client)
                     except Exception as e:
-                        print(
-                            f"[VMManager] Cannot get service clients for deletion: {e}"
-                        )
+                        print(f"[VMManager] Cannot get service clients for deletion: {e}")
 
                     if isc:
                         # Step 1: Delete VMs (allocations will auto-detach)
@@ -754,9 +743,7 @@ class VMManager:
                             ) or getattr(inst, "name", "unknown")
                             if inst_id:
                                 try:
-                                    print(
-                                        f"[VMManager] Deleting VM {inst_name} (id={inst_id})..."
-                                    )
+                                    print(f"[VMManager] Deleting VM {inst_name} (id={inst_id})...")
                                     from nebius.api.nebius.compute.v1 import (
                                         DeleteInstanceRequest,
                                     )  # type: ignore
@@ -766,25 +753,19 @@ class VMManager:
                                     # Wait for deletion to complete before proceeding
                                     if hasattr(op, "wait"):
                                         op.wait()
-                                        print(
-                                            f"[VMManager] VM {inst_name} deletion initiated"
-                                        )
+                                        print(f"[VMManager] VM {inst_name} deletion initiated")
                                     else:
                                         # Fallback: brief sleep if no wait() available
                                         import time
 
                                         time.sleep(5)
                                 except Exception as e:
-                                    print(
-                                        f"[VMManager] Failed to delete VM {inst_name}: {e}"
-                                    )
+                                    print(f"[VMManager] Failed to delete VM {inst_name}: {e}")
                     else:
                         print(
                             "[VMManager] ERROR: Cannot delete VMs - InstanceServiceClient not available"
                         )
-                        raise RuntimeError(
-                            "Cannot proceed with --recreate-gw: VM deletion failed"
-                        )
+                        raise RuntimeError("Cannot proceed with --recreate-gw: VM deletion failed")
 
                     # Wait for VM deletions to fully propagate before deleting disks
                     if existing:
@@ -825,9 +806,7 @@ class VMManager:
                                                     DeleteDiskRequest,
                                                 )  # type: ignore
 
-                                                delete_disk_req = DeleteDiskRequest(
-                                                    id=disk_id
-                                                )
+                                                delete_disk_req = DeleteDiskRequest(id=disk_id)
                                                 disk_op = dsc.delete(delete_disk_req)
                                                 if hasattr(disk_op, "wait"):
                                                     disk_op.wait()
@@ -838,9 +817,7 @@ class VMManager:
                                             except Exception as disk_err:
                                                 if "FAILED_PRECONDITION" in str(
                                                     disk_err
-                                                ) and "read-write attachments" in str(
-                                                    disk_err
-                                                ):
+                                                ) and "read-write attachments" in str(disk_err):
                                                     if attempt < max_retries - 1:
                                                         wait_time = 10 * (
                                                             attempt + 1
@@ -885,9 +862,7 @@ class VMManager:
                         if vm_obj is not None:
                             vm_exists = True
                         # Fallback to legacy instance_api if SDK check failed
-                        elif instance_api is not None and hasattr(
-                            instance_api, "get_by_name"
-                        ):
+                        elif instance_api is not None and hasattr(instance_api, "get_by_name"):
                             try:
                                 inst = instance_api.get_by_name(
                                     name=inst_name, project_id=self.project_id
@@ -990,9 +965,7 @@ class VMManager:
                                             name=boot_disk_name,
                                         )
                                     ).wait()
-                                    boot_disk_id = getattr(
-                                        disk_obj, "id", None
-                                    ) or getattr(
+                                    boot_disk_id = getattr(disk_obj, "id", None) or getattr(
                                         getattr(disk_obj, "metadata", None), "id", None
                                     )
 
@@ -1006,10 +979,7 @@ class VMManager:
                                         )
 
                                         # If disk is deleting, wait for it to finish
-                                        if (
-                                            disk_state
-                                            and "DELET" in str(disk_state).upper()
-                                        ):
+                                        if disk_state and "DELET" in str(disk_state).upper():
                                             print(
                                                 f"[VMManager] Disk {boot_disk_name} is in state {disk_state}, waiting for deletion to complete..."
                                             )
@@ -1017,9 +987,7 @@ class VMManager:
 
                                             max_wait = 60
                                             wait_interval = 5
-                                            for wait_attempt in range(
-                                                max_wait // wait_interval
-                                            ):
+                                            for wait_attempt in range(max_wait // wait_interval):
                                                 time.sleep(wait_interval)
                                                 try:
                                                     disk_obj = dsc.get_by_name(
@@ -1028,20 +996,15 @@ class VMManager:
                                                             name=boot_disk_name,
                                                         )
                                                     ).wait()
-                                                    disk_status = getattr(
-                                                        disk_obj, "status", None
-                                                    )
+                                                    disk_status = getattr(disk_obj, "status", None)
                                                     disk_state = (
-                                                        getattr(
-                                                            disk_status, "status", None
-                                                        )
+                                                        getattr(disk_status, "status", None)
                                                         if disk_status
                                                         else None
                                                     )
                                                     if (
                                                         disk_state
-                                                        and "DELET"
-                                                        in str(disk_state).upper()
+                                                        and "DELET" in str(disk_state).upper()
                                                     ):
                                                         print(
                                                             f"[VMManager] Still deleting... ({(wait_attempt + 1) * wait_interval}s)"
@@ -1084,13 +1047,10 @@ class VMManager:
                                     # Derive routing code from project_id (e.g., project-e01... -> e01)
                                     routing_code = None
                                     try:
-                                        if (
-                                            self.project_id
-                                            and self.project_id.startswith("project-")
+                                        if self.project_id and self.project_id.startswith(
+                                            "project-"
                                         ):
-                                            routing_code = (
-                                                self.project_id.split("-")[1] or ""
-                                            )[:3]
+                                            routing_code = (self.project_id.split("-")[1] or "")[:3]
                                     except Exception:
                                         routing_code = None
                                     # Prefer region-matched public images catalog
@@ -1100,23 +1060,15 @@ class VMManager:
                                             f"project-{routing_code}public-images"
                                         )
                                     # Also try no parent and the global u00 catalog as fallbacks
-                                    parents_to_try.extend(
-                                        [None, "project-u00public-images"]
-                                    )
+                                    parents_to_try.extend([None, "project-u00public-images"])
                                     for parent in parents_to_try:
                                         try:
                                             req = GetImageLatestByFamilyRequest(
                                                 image_family=boot_image,
-                                                **(
-                                                    {"parent_id": parent}
-                                                    if parent
-                                                    else {}
-                                                ),
+                                                **({"parent_id": parent} if parent else {}),
                                             )
                                             img = imgc.get_latest_by_family(req).wait()
-                                            cand_id = getattr(
-                                                img, "id", None
-                                            ) or getattr(
+                                            cand_id = getattr(img, "id", None) or getattr(
                                                 getattr(img, "metadata", None),
                                                 "id",
                                                 None,
@@ -1168,9 +1120,7 @@ class VMManager:
                                 # Try to extract id from operation result first
                                 try:
                                     res = getattr(op, "result", None)
-                                    rid = getattr(
-                                        getattr(res, "resource", None), "id", None
-                                    )
+                                    rid = getattr(getattr(res, "resource", None), "id", None)
                                     if rid:
                                         boot_disk_id = rid
                                 except Exception:
@@ -1184,9 +1134,7 @@ class VMManager:
                                         )  # type: ignore
 
                                         lst = dsc.list(
-                                            ListDisksRequest(
-                                                parent_id=self.project_id or ""
-                                            )
+                                            ListDisksRequest(parent_id=self.project_id or "")
                                         ).wait()
                                         items = getattr(lst, "items", []) or []
                                         for d in items:
@@ -1198,9 +1146,7 @@ class VMManager:
                                                 )
                                                 == boot_disk_name
                                             ):
-                                                boot_disk_id = getattr(
-                                                    d, "id", None
-                                                ) or getattr(
+                                                boot_disk_id = getattr(d, "id", None) or getattr(
                                                     getattr(d, "metadata", None),
                                                     "id",
                                                     None,
@@ -1231,8 +1177,7 @@ class VMManager:
                                 print(f"[VMManager] Disk create exception: {msg}")
                                 if (
                                     "ALREADY_EXISTS" in msg
-                                    or f'disk with name "{boot_disk_name}" already exists'
-                                    in msg
+                                    or f'disk with name "{boot_disk_name}" already exists' in msg
                                 ):
                                     # During recreation, old disk might still be deleting
                                     if recreate:
@@ -1243,9 +1188,7 @@ class VMManager:
 
                                         max_wait = 60  # Wait up to 60 seconds
                                         wait_interval = 5
-                                        for wait_attempt in range(
-                                            max_wait // wait_interval
-                                        ):
+                                        for wait_attempt in range(max_wait // wait_interval):
                                             time.sleep(wait_interval)
                                             try:
                                                 # Check if disk still exists
@@ -1274,13 +1217,9 @@ class VMManager:
                                                         pass
                                                     # Extract disk ID from operation result
                                                     try:
-                                                        res = getattr(
-                                                            op, "result", None
-                                                        )
+                                                        res = getattr(op, "result", None)
                                                         rid = getattr(
-                                                            getattr(
-                                                                res, "resource", None
-                                                            ),
+                                                            getattr(res, "resource", None),
                                                             "id",
                                                             None,
                                                         )
@@ -1297,16 +1236,10 @@ class VMManager:
 
                                                             lst = dsc.list(
                                                                 ListDisksRequest(
-                                                                    parent_id=self.project_id
-                                                                    or ""
+                                                                    parent_id=self.project_id or ""
                                                                 )
                                                             ).wait()
-                                                            items = (
-                                                                getattr(
-                                                                    lst, "items", []
-                                                                )
-                                                                or []
-                                                            )
+                                                            items = getattr(lst, "items", []) or []
                                                             for d in items:
                                                                 if (
                                                                     getattr(
@@ -1320,21 +1253,18 @@ class VMManager:
                                                                     )
                                                                     == boot_disk_name
                                                                 ):
-                                                                    boot_disk_id = (
+                                                                    boot_disk_id = getattr(
+                                                                        d,
+                                                                        "id",
+                                                                        None,
+                                                                    ) or getattr(
                                                                         getattr(
                                                                             d,
-                                                                            "id",
+                                                                            "metadata",
                                                                             None,
-                                                                        )
-                                                                        or getattr(
-                                                                            getattr(
-                                                                                d,
-                                                                                "metadata",
-                                                                                None,
-                                                                            ),
-                                                                            "id",
-                                                                            None,
-                                                                        )
+                                                                        ),
+                                                                        "id",
+                                                                        None,
                                                                     )
                                                                     break
                                                         except Exception:
@@ -1351,9 +1281,7 @@ class VMManager:
                                             )
                                     else:
                                         # Not recreating - just refetch existing disk
-                                        print(
-                                            "[VMManager] Disk already exists, refetching ID..."
-                                        )
+                                        print("[VMManager] Disk already exists, refetching ID...")
                                         if self.project_id:
                                             try:
                                                 if hasattr(dsc, "get_by_name"):
@@ -1366,9 +1294,7 @@ class VMManager:
                                                     boot_disk_id = getattr(
                                                         disk_obj, "id", None
                                                     ) or getattr(
-                                                        getattr(
-                                                            disk_obj, "metadata", None
-                                                        ),
+                                                        getattr(disk_obj, "metadata", None),
                                                         "id",
                                                         None,
                                                     )
@@ -1381,19 +1307,13 @@ class VMManager:
                                                     )  # type: ignore
 
                                                     lst = dsc.list(
-                                                        ListDisksRequest(
-                                                            parent_id=self.project_id
-                                                        )
+                                                        ListDisksRequest(parent_id=self.project_id)
                                                     ).wait()
-                                                    items = (
-                                                        getattr(lst, "items", []) or []
-                                                    )
+                                                    items = getattr(lst, "items", []) or []
                                                     for d in items:
                                                         if (
                                                             getattr(
-                                                                getattr(
-                                                                    d, "metadata", None
-                                                                ),
+                                                                getattr(d, "metadata", None),
                                                                 "name",
                                                                 None,
                                                             )
@@ -1402,9 +1322,7 @@ class VMManager:
                                                             boot_disk_id = getattr(
                                                                 d, "id", None
                                                             ) or getattr(
-                                                                getattr(
-                                                                    d, "metadata", None
-                                                                ),
+                                                                getattr(d, "metadata", None),
                                                                 "id",
                                                                 None,
                                                             )
@@ -1413,13 +1331,9 @@ class VMManager:
                                                             )
                                                             break
                                             except Exception as refetch_err:
-                                                print(
-                                                    f"[VMManager] Refetch failed: {refetch_err}"
-                                                )
+                                                print(f"[VMManager] Refetch failed: {refetch_err}")
                                         else:
-                                            print(
-                                                "[VMManager] Cannot refetch: project_id is None"
-                                            )
+                                            print("[VMManager] Cannot refetch: project_id is None")
                                 else:
                                     print(f"[VMManager] boot disk create failed: {e}")
                     except Exception:
@@ -1428,9 +1342,7 @@ class VMManager:
                             try:
                                 if hasattr(disk_api, "get_by_name"):
                                     disk_obj = disk_api.get_by_name(name=boot_disk_name)
-                                    boot_disk_id = getattr(
-                                        disk_obj, "id", None
-                                    ) or getattr(
+                                    boot_disk_id = getattr(disk_obj, "id", None) or getattr(
                                         getattr(disk_obj, "metadata", None), "id", None
                                     )
                             except Exception:
@@ -1442,11 +1354,7 @@ class VMManager:
                                     "type": disk_type,
                                     "source_image_family": boot_image,
                                     "block_size_bytes": disk_block_bytes,
-                                    **(
-                                        {"project_id": self.project_id}
-                                        if self.project_id
-                                        else {}
-                                    ),
+                                    **({"project_id": self.project_id} if self.project_id else {}),
                                     **(
                                         {"zone": self.zone or spec.region}
                                         if (self.zone or spec.region)
@@ -1454,16 +1362,12 @@ class VMManager:
                                     ),
                                 }
                                 try:
-                                    print(
-                                        f"[VMManager] Creating boot disk {boot_disk_name} ..."
-                                    )
+                                    print(f"[VMManager] Creating boot disk {boot_disk_name} ...")
                                     try:
                                         disk_obj = disk_api.create(**disk_req)  # type: ignore
                                     except TypeError:
                                         disk_obj = disk_api.create(disk_req)
-                                    boot_disk_id = getattr(
-                                        disk_obj, "id", None
-                                    ) or getattr(
+                                    boot_disk_id = getattr(disk_obj, "id", None) or getattr(
                                         getattr(disk_obj, "metadata", None), "id", None
                                     )
                                 except Exception as e:
@@ -1499,9 +1403,7 @@ class VMManager:
                             instance_external_ips = inst_ips
                     if instance_external_ips:
                         # Take first num_nics IPs for this instance
-                        desired_ips = [
-                            ip for ip in instance_external_ips[:num_nics] if ip
-                        ]
+                        desired_ips = [ip for ip in instance_external_ips[:num_nics] if ip]
 
                     # Check if we have preserved allocations from VM recreation (Section 16)
                     preserved_alloc_ids = preserved_allocations.get(inst_name, [])
@@ -1511,9 +1413,7 @@ class VMManager:
                         for nic_index in range(num_nics):
                             nic_name = f"eth{nic_index}"
                             desired_ip = (
-                                desired_ips[nic_index]
-                                if nic_index < len(desired_ips)
-                                else None
+                                desired_ips[nic_index] if nic_index < len(desired_ips) else None
                             )
                             alloc_obj = None
 
@@ -1528,9 +1428,7 @@ class VMManager:
                             # Priority 1: Match existing allocation by IP if provided in YAML
                             if desired_ip:
                                 try:
-                                    get_by_addr = getattr(
-                                        alloc_api, "get_by_address", None
-                                    )
+                                    get_by_addr = getattr(alloc_api, "get_by_address", None)
                                     if get_by_addr:
                                         alloc_obj = get_by_addr(
                                             address=desired_ip,
@@ -1614,13 +1512,11 @@ class VMManager:
                                             )
                                             or getattr(alloc_obj, "id", None)
                                         )
-                                        alloc_obj = (
-                                            self._migrate_allocation_to_vpngw_subnet(
-                                                alloc_client,
-                                                alloc_obj,
-                                                nic.get("subnet_id"),
-                                                byname_ip,
-                                            )
+                                        alloc_obj = self._migrate_allocation_to_vpngw_subnet(
+                                            alloc_client,
+                                            alloc_obj,
+                                            nic.get("subnet_id"),
+                                            byname_ip,
                                         )
                                 except Exception:
                                     alloc_obj = None
@@ -1668,9 +1564,7 @@ class VMManager:
                                                     )
                                                 ),
                                             )
-                                            op = alloc_client.create(
-                                                req
-                                            ).wait()  # Operation
+                                            op = alloc_client.create(req).wait()  # Operation
                                             try:
                                                 op.sync_wait()
                                             except Exception:
@@ -1687,9 +1581,7 @@ class VMManager:
                                                 )
                                                 if rid:
                                                     # Construct a minimal object-like dict to carry id
-                                                    alloc_obj = type(
-                                                        "Alloc", (), {"id": rid}
-                                                    )()
+                                                    alloc_obj = type("Alloc", (), {"id": rid})()
                                             except Exception:
                                                 alloc_obj = None
                                             if alloc_obj is None:
@@ -1700,8 +1592,7 @@ class VMManager:
 
                                                     alloc_obj = alloc_client.get_by_name(
                                                         GetAllocationByNameRequest(
-                                                            parent_id=self.project_id
-                                                            or "",
+                                                            parent_id=self.project_id or "",
                                                             name=alloc_name,
                                                         )
                                                     ).wait()
@@ -1821,9 +1712,7 @@ class VMManager:
                                                     )
                                                 ),
                                             )
-                                            op = alloc_client.create(
-                                                req
-                                            ).wait()  # Operation
+                                            op = alloc_client.create(req).wait()  # Operation
                                             try:
                                                 op.sync_wait()
                                             except Exception:
@@ -1853,8 +1742,7 @@ class VMManager:
 
                                                     private_alloc_obj = alloc_client.get_by_name(
                                                         GetAllocationByNameRequest(
-                                                            parent_id=self.project_id
-                                                            or "",
+                                                            parent_id=self.project_id or "",
                                                             name=private_alloc_name,
                                                         )
                                                     ).wait()
@@ -1870,28 +1758,21 @@ class VMManager:
                                                     GetAllocationByNameRequest,
                                                 )  # type: ignore
 
-                                                private_alloc_obj = (
-                                                    alloc_client.get_by_name(
-                                                        GetAllocationByNameRequest(
-                                                            parent_id=self.project_id
-                                                            or "",
-                                                            name=private_alloc_name,
-                                                        )
-                                                    ).wait()
-                                                )
+                                                private_alloc_obj = alloc_client.get_by_name(
+                                                    GetAllocationByNameRequest(
+                                                        parent_id=self.project_id or "",
+                                                        name=private_alloc_name,
+                                                    )
+                                                ).wait()
                                             except Exception:
                                                 pass
                                 except Exception as e:
-                                    print(
-                                        f"[VMManager] private allocation create failed: {e}"
-                                    )
+                                    print(f"[VMManager] private allocation create failed: {e}")
 
                             # Extract private allocation id
                             private_alloc_id = None
                             if private_alloc_obj is not None:
-                                private_alloc_id = getattr(
-                                    private_alloc_obj, "id", None
-                                )
+                                private_alloc_id = getattr(private_alloc_obj, "id", None)
                                 if not private_alloc_id:
                                     private_alloc_id = getattr(
                                         getattr(private_alloc_obj, "metadata", None),
@@ -1902,12 +1783,10 @@ class VMManager:
                                 # Store private allocation ID (we'll need a separate list)
                                 if not hasattr(self, "_private_alloc_ids"):
                                     self._private_alloc_ids = {}
-                                self._private_alloc_ids[inst_name] = (
-                                    self._private_alloc_ids.get(inst_name, [])
+                                self._private_alloc_ids[inst_name] = self._private_alloc_ids.get(
+                                    inst_name, []
                                 )
-                                self._private_alloc_ids[inst_name].append(
-                                    private_alloc_id
-                                )
+                                self._private_alloc_ids[inst_name].append(private_alloc_id)
                                 print(
                                     f"[VMManager] Private IP allocation {private_alloc_name} ready: {private_alloc_id}"
                                 )
@@ -1916,11 +1795,7 @@ class VMManager:
                     inst_req = {
                         "metadata": {
                             "name": inst_name,
-                            **(
-                                {"parent_id": self.project_id}
-                                if self.project_id
-                                else {}
-                            ),
+                            **({"parent_id": self.project_id} if self.project_id else {}),
                         },
                         "spec": {
                             # Resources
@@ -1947,14 +1822,13 @@ class VMManager:
                                     "name": f"eth{nic_idx}",
                                     "ip_address": (
                                         {
-                                            "allocation_id": self._private_alloc_ids[
-                                                inst_name
-                                            ][nic_idx]
+                                            "allocation_id": self._private_alloc_ids[inst_name][
+                                                nic_idx
+                                            ]
                                         }
                                         if hasattr(self, "_private_alloc_ids")
                                         and inst_name in self._private_alloc_ids
-                                        and nic_idx
-                                        < len(self._private_alloc_ids[inst_name])
+                                        and nic_idx < len(self._private_alloc_ids[inst_name])
                                         else {}
                                     ),
                                     "public_ip_address": (
@@ -1986,13 +1860,9 @@ class VMManager:
                             dsc2 = DiskServiceClient(client)  # type: ignore
                             if hasattr(dsc2, "get_by_name"):
                                 disk_obj = dsc2.get_by_name(
-                                    GetByNameRequest(
-                                        parent_id=self.project_id, name=boot_disk_name
-                                    )
+                                    GetByNameRequest(parent_id=self.project_id, name=boot_disk_name)
                                 ).wait()
-                                candidate_disk_id = getattr(
-                                    disk_obj, "id", None
-                                ) or getattr(
+                                candidate_disk_id = getattr(disk_obj, "id", None) or getattr(
                                     getattr(disk_obj, "metadata", None), "id", None
                                 )
 
@@ -2005,10 +1875,7 @@ class VMManager:
                                         else None
                                     )
 
-                                    if (
-                                        disk_state
-                                        and "DELET" in str(disk_state).upper()
-                                    ):
+                                    if disk_state and "DELET" in str(disk_state).upper():
                                         print(
                                             f"[VMManager] Final fallback: disk {boot_disk_name} is deleting (state={disk_state}), waiting up to 120s..."
                                         )
@@ -2016,9 +1883,7 @@ class VMManager:
 
                                         max_wait = 120  # Wait longer in fallback since we're about to create VM
                                         wait_interval = 5
-                                        for wait_attempt in range(
-                                            max_wait // wait_interval
-                                        ):
+                                        for wait_attempt in range(max_wait // wait_interval):
                                             time.sleep(wait_interval)
                                             try:
                                                 disk_obj = dsc2.get_by_name(
@@ -2027,9 +1892,7 @@ class VMManager:
                                                         name=boot_disk_name,
                                                     )
                                                 ).wait()
-                                                disk_status = getattr(
-                                                    disk_obj, "status", None
-                                                )
+                                                disk_status = getattr(disk_obj, "status", None)
                                                 disk_state = (
                                                     getattr(disk_status, "status", None)
                                                     if disk_status
@@ -2037,8 +1900,7 @@ class VMManager:
                                                 )
                                                 if (
                                                     disk_state
-                                                    and "DELET"
-                                                    in str(disk_state).upper()
+                                                    and "DELET" in str(disk_state).upper()
                                                 ):
                                                     print(
                                                         f"[VMManager] Still deleting... ({(wait_attempt + 1) * wait_interval}s / {max_wait}s)"
@@ -2093,9 +1955,7 @@ class VMManager:
                             f"[VMManager] Creating instance {inst_name} via InstanceServiceClient (project_id={self.project_id}) ..."
                         )
                         # Build protobuf messages per SDK types
-                        metadata = ResourceMetadata(
-                            name=inst_name, parent_id=self.project_id or ""
-                        )
+                        metadata = ResourceMetadata(name=inst_name, parent_id=self.project_id or "")
                         resources = ResourcesSpec(
                             platform=platform, **({"preset": preset} if preset else {})
                         )
@@ -2129,9 +1989,7 @@ class VMManager:
                             # Public IP allocation for external connectivity
                             pub = None
                             if nic_idx < len(alloc_ids):
-                                pub = PublicIPAddress(
-                                    allocation_id=alloc_ids[nic_idx], static=True
-                                )
+                                pub = PublicIPAddress(allocation_id=alloc_ids[nic_idx], static=True)
 
                             # Private IP allocation for route next hops (static allocation)
                             priv = None
@@ -2141,9 +1999,7 @@ class VMManager:
                                 and inst_name in self._private_alloc_ids
                             ):
                                 if nic_idx < len(self._private_alloc_ids[inst_name]):
-                                    priv_alloc_id = self._private_alloc_ids[inst_name][
-                                        nic_idx
-                                    ]
+                                    priv_alloc_id = self._private_alloc_ids[inst_name][nic_idx]
                                     priv = IPAddress(allocation_id=priv_alloc_id)
 
                             # If no private allocation, use auto-assigned (for backward compatibility)
@@ -2154,9 +2010,7 @@ class VMManager:
                                 NetworkInterfaceSpec(
                                     name=nic_name,
                                     ip_address=priv,
-                                    public_ip_address=pub
-                                    if pub is not None
-                                    else PublicIPAddress(),
+                                    public_ip_address=pub if pub is not None else PublicIPAddress(),
                                     subnet_id=nic["subnet_id"],
                                 )
                             )
@@ -2193,14 +2047,10 @@ class VMManager:
                             except Exception:
                                 pass
                             created = True
-                            print(
-                                f"[VMManager] Instance {inst_name} created successfully via SDK"
-                            )
+                            print(f"[VMManager] Instance {inst_name} created successfully via SDK")
 
                             # Wait for VM to be fully ready with public IP assigned
-                            print(
-                                f"[VMManager] Waiting for {inst_name} to receive public IP..."
-                            )
+                            print(f"[VMManager] Waiting for {inst_name} to receive public IP...")
                             import time
 
                             max_ip_wait = 60  # Wait up to 60 seconds for IP assignment
@@ -2209,9 +2059,7 @@ class VMManager:
                                 time.sleep(ip_wait_interval)
                                 vm_ip = self.get_vm_public_ip(inst_name)
                                 if vm_ip:
-                                    print(
-                                        f"[VMManager] {inst_name} ready with IP: {vm_ip}"
-                                    )
+                                    print(f"[VMManager] {inst_name} ready with IP: {vm_ip}")
                                     vm_ips[inst_name] = vm_ip
                                     break
                                 if attempt < (max_ip_wait // ip_wait_interval) - 1:
@@ -2223,16 +2071,12 @@ class VMManager:
                                     f"[VMManager] Warning: {inst_name} did not receive public IP within {max_ip_wait}s"
                                 )
                         except Exception as e:
-                            print(
-                                f"[VMManager] InstanceServiceClient create failed: {e}"
-                            )
+                            print(f"[VMManager] InstanceServiceClient create failed: {e}")
                             import traceback
 
                             traceback.print_exc()
                     except Exception as e:
-                        print(
-                            f"[VMManager] InstanceServiceClient initialization failed: {e}"
-                        )
+                        print(f"[VMManager] InstanceServiceClient initialization failed: {e}")
                         pass
                     if not created:
                         if instance_api is not None and hasattr(instance_api, "create"):
@@ -2251,9 +2095,7 @@ class VMManager:
                 # Fallback logging only
                 for i in range(spec.instance_count):
                     inst_name = f"{spec.name}-{i}"
-                    inst_ips = (
-                        spec.external_ips[i] if i < len(spec.external_ips) else []
-                    )
+                    inst_ips = spec.external_ips[i] if i < len(spec.external_ips) else []
                     pub_ip = inst_ips[0] if inst_ips else None
                     print(
                         f"[VMManager] ensure instance {inst_name} pub_ip={pub_ip} platform={spec.vm_spec.get('platform')} subnet=vpngw-subnet"
@@ -2263,9 +2105,7 @@ class VMManager:
 
         return vm_ips
 
-    def _ensure_vpngw_subnet(
-        self, client: t.Any, spec: GatewayGroupSpec
-    ) -> str | None:
+    def _ensure_vpngw_subnet(self, client: t.Any, spec: GatewayGroupSpec) -> str | None:
         """Ensure a single gateway subnet named 'vpngw-subnet' (/24) exists in the chosen network.
 
         Resolution:
@@ -2305,9 +2145,7 @@ class VMManager:
             if network_id:
                 # User explicitly specified network_id
                 try:
-                    network_obj = net_client.get(
-                        GetNetworkRequest(id=network_id)
-                    ).wait()
+                    network_obj = net_client.get(GetNetworkRequest(id=network_id)).wait()
                     print(f"[VMManager] Using network from YAML: {network_id}")
                 except Exception as e:
                     raise RuntimeError(
@@ -2350,9 +2188,7 @@ class VMManager:
                                 "name",
                                 "unknown",
                             )
-                            print(
-                                f"[VMManager] Found single custom network: {net_name}, using it"
-                            )
+                            print(f"[VMManager] Found single custom network: {net_name}, using it")
                         else:
                             # Multiple networks - ambiguous
                             net_names = [
@@ -2380,17 +2216,14 @@ class VMManager:
                 getattr(network_obj, "metadata", None), "id", None
             )
             net_name = (
-                getattr(getattr(network_obj, "metadata", None), "name", None)
-                or "default-network"
+                getattr(getattr(network_obj, "metadata", None), "name", None) or "default-network"
             )
             subnet_obj = None
             subnet_needs_recreation = False
             try:
                 # First attempt: direct by-name lookup (project-scoped)
                 candidate = subnet_client.get_by_name(
-                    GetSubnetByNameRequest(
-                        parent_id=self.project_id or "", name="vpngw-subnet"
-                    )
+                    GetSubnetByNameRequest(parent_id=self.project_id or "", name="vpngw-subnet")
                 ).wait()
                 # Validate it belongs to the resolved network
                 if candidate is not None:
@@ -2421,9 +2254,7 @@ class VMManager:
                                 sp_cidrs = getattr(sp_pool, "cidrs", []) or []
                                 for c in sp_cidrs:
                                     existing_cidr = getattr(c, "cidr", None)
-                                    existing_max_mask = getattr(
-                                        c, "max_mask_length", None
-                                    )
+                                    existing_max_mask = getattr(c, "max_mask_length", None)
                                     print(
                                         f"[VMManager] Found existing vpngw-subnet with CIDR: {existing_cidr} (max_mask_length: {existing_max_mask}, use_network_pools: {use_network_pools})"
                                     )
@@ -2434,10 +2265,7 @@ class VMManager:
                     ).wait()
                     items = getattr(lst, "items", []) or []
                     for s in items:
-                        if (
-                            getattr(getattr(s, "metadata", None), "name", None)
-                            == "vpngw-subnet"
-                        ):
+                        if getattr(getattr(s, "metadata", None), "name", None) == "vpngw-subnet":
                             subnet_obj = s
                             # Check use_network_pools setting
                             s_spec = getattr(s, "spec", None)
@@ -2489,9 +2317,7 @@ class VMManager:
                     if private_pool_id:
                         try:
                             pool_client = PoolServiceClient(client)  # type: ignore
-                            pool_obj = pool_client.get(
-                                GetPoolRequest(id=private_pool_id)
-                            ).wait()
+                            pool_obj = pool_client.get(GetPoolRequest(id=private_pool_id)).wait()
                             # Read pool CIDRs (take the first)
                             pool_spec = getattr(pool_obj, "spec", None)
                             pool_cidrs = getattr(pool_spec, "cidrs", []) or []
@@ -2518,16 +2344,12 @@ class VMManager:
                                         sp = getattr(s_spec, "ipv4_private_pools", None)
                                         sp_pools = getattr(sp, "pools", []) or []
                                         for sp_pool in sp_pools:
-                                            sp_cidrs = (
-                                                getattr(sp_pool, "cidrs", []) or []
-                                            )
+                                            sp_cidrs = getattr(sp_pool, "cidrs", []) or []
                                             for c in sp_cidrs:
                                                 cstr = getattr(c, "cidr", None)
                                                 if cstr:
                                                     try:
-                                                        existing.append(
-                                                            _ip.ip_network(cstr)
-                                                        )
+                                                        existing.append(_ip.ip_network(cstr))
                                                         print(
                                                             f"[VMManager]   - Existing subnet: {cstr}"
                                                         )
@@ -2544,14 +2366,10 @@ class VMManager:
                                 )
                                 found_count = 0
                                 for candidate in pool_net.subnets(new_prefix=24):
-                                    overlap = any(
-                                        candidate.overlaps(e) for e in existing
-                                    )
+                                    overlap = any(candidate.overlaps(e) for e in existing)
                                     if not overlap:
                                         cidr_to_use = str(candidate)
-                                        print(
-                                            f"[VMManager] Selected free /24: {cidr_to_use}"
-                                        )
+                                        print(f"[VMManager] Selected free /24: {cidr_to_use}")
                                         break
                                     found_count += 1
                                     if found_count <= 3:
@@ -2559,9 +2377,7 @@ class VMManager:
                                             f"[VMManager]   - Skipping {candidate} (overlaps with existing)"
                                         )
                         except Exception as calc_err:
-                            print(
-                                f"[VMManager] Warning: Failed to calculate free /24: {calc_err}"
-                            )
+                            print(f"[VMManager] Warning: Failed to calculate free /24: {calc_err}")
                             cidr_to_use = None
 
                     # Validate we have a proper CIDR
@@ -2612,24 +2428,18 @@ class VMManager:
 
                     # Fetch the subnet to verify
                     subnet_obj = subnet_client.get_by_name(
-                        GetSubnetByNameRequest(
-                            parent_id=self.project_id or "", name="vpngw-subnet"
-                        )
+                        GetSubnetByNameRequest(parent_id=self.project_id or "", name="vpngw-subnet")
                     ).wait()
 
                     if subnet_obj:
-                        print(
-                            "[VMManager] ✓ Subnet 'vpngw-subnet' created successfully"
-                        )
+                        print("[VMManager] ✓ Subnet 'vpngw-subnet' created successfully")
 
                         # Verify use_network_pools is False to prevent /13 inheritance
                         s_spec = getattr(subnet_obj, "spec", None)
                         if s_spec:
                             sp = getattr(s_spec, "ipv4_private_pools", None)
                             if sp:
-                                use_net_pools_actual = getattr(
-                                    sp, "use_network_pools", True
-                                )
+                                use_net_pools_actual = getattr(sp, "use_network_pools", True)
                                 if use_net_pools_actual:
                                     raise RuntimeError(
                                         "[VMManager] CRITICAL: Subnet was created but use_network_pools=true! "
@@ -2658,9 +2468,7 @@ class VMManager:
             print(f"[VMManager] Error in _ensure_vpngw_subnet: {e}")
             return None
 
-    def _ensure_vpngw_route_table(
-        self, client: t.Any, subnet_id: str | None
-    ) -> None:
+    def _ensure_vpngw_route_table(self, client: t.Any, subnet_id: str | None) -> None:
         """Ensure route table exists for vpngw-subnet and is properly configured.
 
         This method is idempotent - it checks if RT exists, creates if missing.
@@ -2692,22 +2500,15 @@ class VMManager:
 
             # Check if subnet has route table attached
             subnet_spec = getattr(subnet_obj, "spec", None)
-            rt_id = (
-                getattr(subnet_spec, "route_table_id", None) if subnet_spec else None
-            )
+            rt_id = getattr(subnet_spec, "route_table_id", None) if subnet_spec else None
 
             if rt_id:
                 # Route table exists, verify it's valid
                 try:
                     rt_client = RouteTableServiceClient(client)  # type: ignore
                     rt_obj = rt_client.get(GetRouteTableRequest(id=rt_id)).wait()
-                    rt_name = (
-                        getattr(getattr(rt_obj, "metadata", None), "name", None)
-                        or "unknown"
-                    )
-                    print(
-                        f"[VMManager] Route table '{rt_name}' already attached to vpngw-subnet"
-                    )
+                    rt_name = getattr(getattr(rt_obj, "metadata", None), "name", None) or "unknown"
+                    print(f"[VMManager] Route table '{rt_name}' already attached to vpngw-subnet")
                     return
                 except Exception:
                     # RT ID exists but not found - will recreate
@@ -2795,9 +2596,7 @@ class VMManager:
                 # Fallback: let API keep the same IP by using /32 request semantics
                 ip_cidr = "/32"
 
-            print(
-                f"[VMManager] Attempting to migrate allocation {ip_cidr} to vpngw-subnet..."
-            )
+            print(f"[VMManager] Attempting to migrate allocation {ip_cidr} to vpngw-subnet...")
 
             # Get allocation ID and metadata
             if not alloc_id:
@@ -2824,9 +2623,7 @@ class VMManager:
 
             # Update allocation to new subnet
             update_req = UpdateAllocationRequest(
-                metadata=ResourceMetadata(
-                    id=alloc_id, parent_id=parent_id, name=alloc_name
-                ),
+                metadata=ResourceMetadata(id=alloc_id, parent_id=parent_id, name=alloc_name),
                 spec=AllocationSpec(
                     ipv4_public=IPv4PublicAllocationSpec(
                         subnet_id=target_subnet_id,
@@ -2846,12 +2643,8 @@ class VMManager:
                 try:
                     from nebius.api.nebius.vpc.v1 import GetAllocationRequest  # type: ignore
 
-                    updated_alloc = alloc_client.get(
-                        GetAllocationRequest(id=alloc_id)
-                    ).wait()
-                    print(
-                        f"[VMManager] ✓ Migrated allocation {ip_cidr} to vpngw-subnet"
-                    )
+                    updated_alloc = alloc_client.get(GetAllocationRequest(id=alloc_id)).wait()
+                    print(f"[VMManager] ✓ Migrated allocation {ip_cidr} to vpngw-subnet")
                     return updated_alloc
                 except Exception as e:
                     print(f"[VMManager] Migration completed but could not refetch: {e}")
@@ -2872,9 +2665,7 @@ class VMManager:
                         "(best effort only)."
                     ) from e
                 print(f"[VMManager] Could not migrate allocation {ip_cidr}: {e}")
-                print(
-                    "[VMManager] Continuing with existing allocation in current subnet"
-                )
+                print("[VMManager] Continuing with existing allocation in current subnet")
                 return alloc_obj
 
         except Exception as e:
@@ -2882,9 +2673,7 @@ class VMManager:
             print("[VMManager] Continuing with existing allocation in current subnet")
             return alloc_obj
 
-    def _create_vpngw_route_table(
-        self, client: t.Any, subnet_obj: t.Any, network_id: str
-    ) -> None:
+    def _create_vpngw_route_table(self, client: t.Any, subnet_obj: t.Any, network_id: str) -> None:
         """Create a dedicated route table for vpngw-subnet with default egress route.
 
         Args:
@@ -2920,9 +2709,7 @@ class VMManager:
                 print("[VMManager] Cannot create route table: subnet_id not found")
                 return
 
-            print(
-                f"[VMManager] Creating dedicated route table '{rt_name}' for vpngw-subnet..."
-            )
+            print(f"[VMManager] Creating dedicated route table '{rt_name}' for vpngw-subnet...")
 
             # Create route table (handle ALREADY_EXISTS)
             rt_id = None
@@ -2943,9 +2730,7 @@ class VMManager:
                 rt_id = rt_op.resource_id or ""
             except Exception as e:
                 if "ALREADY_EXISTS" in str(e) or "already exists" in str(e):
-                    print(
-                        f"[VMManager] Route table '{rt_name}' already exists, reusing..."
-                    )
+                    print(f"[VMManager] Route table '{rt_name}' already exists, reusing...")
                     # Get existing route table by name
                     try:
                         from nebius.api.nebius.vpc.v1 import GetRouteTableByNameRequest
@@ -2959,9 +2744,7 @@ class VMManager:
                             getattr(rt_obj, "metadata", None), "id", None
                         )
                     except Exception as get_err:
-                        print(
-                            f"[VMManager] Could not retrieve existing route table: {get_err}"
-                        )
+                        print(f"[VMManager] Could not retrieve existing route table: {get_err}")
                         return
                 else:
                     print(f"[VMManager] Error creating route table: {e}")
@@ -2992,9 +2775,7 @@ class VMManager:
                 if "ALREADY_EXISTS" in err_str or "already exists" in err_str:
                     print("[VMManager] Default egress route already exists, skipping")
                 else:
-                    print(
-                        f"[VMManager] Warning: Could not create default egress route: {e}"
-                    )
+                    print(f"[VMManager] Warning: Could not create default egress route: {e}")
 
             # Attach route table to subnet
             try:
@@ -3011,12 +2792,8 @@ class VMManager:
 
                     # CRITICAL: Preserve existing ipv4_private_pools when updating
                     # If we don't include it, the API resets use_network_pools=true!
-                    existing_ipv4_private_pools = getattr(
-                        subnet_spec, "ipv4_private_pools", None
-                    )
-                    existing_ipv4_public_pools = getattr(
-                        subnet_spec, "ipv4_public_pools", None
-                    )
+                    existing_ipv4_private_pools = getattr(subnet_spec, "ipv4_private_pools", None)
+                    existing_ipv4_public_pools = getattr(subnet_spec, "ipv4_public_pools", None)
 
                     # ResourceMetadata requires: id, parent_id (required), and name (validated)
                     # SubnetSpec requires: network_id (required) and route_table_id (what we're updating)
@@ -3034,17 +2811,11 @@ class VMManager:
                         ),
                     )
                     subnet_client.update(update_req).wait()
-                    print(
-                        f"[VMManager] ✓ Attached route table '{rt_name}' to vpngw-subnet"
-                    )
+                    print(f"[VMManager] ✓ Attached route table '{rt_name}' to vpngw-subnet")
                 else:
-                    print(
-                        "[VMManager] Warning: Could not get subnet metadata/spec for update"
-                    )
+                    print("[VMManager] Warning: Could not get subnet metadata/spec for update")
             except Exception as e:
-                print(
-                    f"[VMManager] Warning: Could not attach route table to subnet: {e}"
-                )
+                print(f"[VMManager] Warning: Could not attach route table to subnet: {e}")
 
         except Exception as e:
             print(f"[VMManager] Error creating route table for vpngw-subnet: {e}")
@@ -3074,9 +2845,7 @@ class VMManager:
         """
         try:
             with resources.as_file(
-                resources.files("nebius_vpngw").joinpath(
-                    "systemd/nebius-vpngw-agent.service"
-                )
+                resources.files("nebius_vpngw").joinpath("systemd/nebius-vpngw-agent.service")
             ) as p:
                 unit_text = p.read_text(encoding="utf-8")
         except Exception:
@@ -3107,10 +2876,7 @@ class VMManager:
         users_section = ""
         if ssh_key:
             users_section = (
-                "users:\n"
-                "  - name: ubuntu\n"
-                "    ssh_authorized_keys:\n"
-                f"      - {ssh_key}\n"
+                f"users:\n  - name: ubuntu\n    ssh_authorized_keys:\n      - {ssh_key}\n"
             )
 
         cloud = (
@@ -3250,143 +3016,15 @@ class VMManager:
             for prefix in local_prefixes:
                 cloud += f"            {prefix}\n"
 
+        firewall_script = _read_firewall_setup_script()
         cloud += (
             "  - path: /usr/local/bin/setup-vpngw-firewall.sh\n"
             '    permissions: "0755"\n'
             "    owner: root:root\n"
-            "    content: |\n"
-            "            #!/bin/bash\n"
-            "            set -euo pipefail\n"
-            "            \n"
-            '            PUBLIC_IF="eth0"\n'
-            "            # Get public IP - try metadata endpoint first, fall back to ip command\n"
-            "            PUBLIC_IP=\"$(curl -s -m 5 http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null | grep -E '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$' || ip -4 addr show dev eth0 | grep -oP '(?<=inet\\s)\\d+(\\.\\d+){3}' | head -1 || echo '')\"\n"
-            "            \n"
-            "            # Load peer IPs from config file (will be populated by agent)\n"
-            '            PEER_IP_FILE="/etc/vpngw_peer_ips"\n'
-            "            mapfile -t PEER_IPS < <(grep -vE '^[[:space:]]*(#|$)' \"$PEER_IP_FILE\" 2>/dev/null || true)\n"
-            "            \n"
-            "            # Load management CIDRs\n"
-            '            MGMT_CIDR_FILE="/etc/vpngw_mgmt_cidrs"\n'
-            "            mapfile -t MGMT_CIDRS < <(grep -vE '^[[:space:]]*(#|$)' \"$MGMT_CIDR_FILE\" 2>/dev/null || true)\n"
-            "            \n"
-            '            logger -t vpngw-firewall "Setting up UFW for VPN gateway"\n'
-            "            \n"
-            "            # Reset and set defaults\n"
-            "            ufw --force reset\n"
-            "            ufw default deny incoming\n"
-            "            ufw default allow outgoing\n"
-            "            \n"
-            "            # Allow loopback\n"
-            "            ufw allow in on lo\n"
-            "            \n"
-            "            # Allow SSH from management CIDRs only\n"
-            '            if [ "${#MGMT_CIDRS[@]}" -gt 0 ]; then\n'
-            '              for cidr in "${MGMT_CIDRS[@]}"; do\n'
-            '                ufw allow in on "$PUBLIC_IF" proto tcp from "$cidr" to any port 22 comment "SSH from management"\n'
-            "              done\n"
-            '              logger -t vpngw-firewall "Allowed SSH from ${#MGMT_CIDRS[@]} management CIDR(s)"\n'
-            "            else\n"
-            "              # Fallback: allow SSH from anywhere (will be restricted by fail2ban)\n"
-            '              logger -t vpngw-firewall "WARNING: No management CIDRs configured, allowing SSH from anywhere"\n'
-            '              ufw allow in on "$PUBLIC_IF" proto tcp to any port 22 comment "SSH (unrestricted)"\n'
-            "            fi\n"
-            "            \n"
-            "            # Allow IPsec protocols from peer IPs\n"
-            '            if [ "${#PEER_IPS[@]}" -gt 0 ]; then\n'
-            '              for peer in "${PEER_IPS[@]}"; do\n'
-            "                # IKE (Internet Key Exchange)\n"
-            '                ufw allow in on "$PUBLIC_IF" proto udp from "$peer" to "$PUBLIC_IP" port 500 comment "IKE from $peer"\n'
-            "                # NAT-T (NAT Traversal)\n"
-            '                ufw allow in on "$PUBLIC_IF" proto udp from "$peer" to "$PUBLIC_IP" port 4500 comment "NAT-T from $peer"\n'
-            "                # ESP (Encapsulating Security Payload)\n"
-            '                ufw allow in on "$PUBLIC_IF" proto esp from "$peer" to "$PUBLIC_IP" comment "ESP from $peer"\n'
-            "              done\n"
-            '              logger -t vpngw-firewall "Allowed IPsec from ${#PEER_IPS[@]} peer(s)"\n'
-            "            else\n"
-            "              # No peers yet - allow from anywhere (will be restricted later by agent)\n"
-            '              logger -t vpngw-firewall "WARNING: No peer IPs configured yet, allowing IPsec from anywhere temporarily"\n'
-            '              ufw allow in on "$PUBLIC_IF" proto udp to any port 500 comment "IKE (unrestricted)"\n'
-            '              ufw allow in on "$PUBLIC_IF" proto udp to any port 4500 comment "NAT-T (unrestricted)"\n'
-            '              ufw allow in on "$PUBLIC_IF" proto esp comment "ESP (unrestricted)"\n'
-            "            fi\n"
-            "            \n"
-            "            # BGP runs only over XFRM interfaces; do not expose TCP 179 on public interface\n"
-            "            # Remove any existing TCP/179 allow rule (if present)\n"
-            "            if ufw --force delete allow 179/tcp >/dev/null 2>&1; then\n"
-            '              logger -t vpngw-firewall "Removed TCP/179 allow rule"\n'
-            "            else\n"
-            '              logger -t vpngw-firewall "No TCP/179 allow rule to remove"\n'
-            "            fi\n"
-            "            \n"
-            "            # Allow traffic from local VPC subnets (forwarding through gateway)\n"
-            "            # This enables VMs in the VPC to reach remote networks via VPN\n"
-            '            LOCAL_PREFIXES_FILE="/etc/vpngw_local_prefixes"\n'
-            '            if [ -f "$LOCAL_PREFIXES_FILE" ]; then\n'
-            "              mapfile -t LOCAL_PREFIXES < <(grep -vE '^[[:space:]]*(#|$)' \"$LOCAL_PREFIXES_FILE\" 2>/dev/null || true)\n"
-            '              for prefix in "${LOCAL_PREFIXES[@]}"; do\n'
-            '                ufw allow from "$prefix" comment "Local VPC subnet"\n'
-            '                logger -t vpngw-firewall "Allowed traffic from local subnet: $prefix"\n'
-            "              done\n"
-            "            fi\n"
-            "            \n"
-            "            # CRITICAL: Do NOT filter tunnel interfaces - BGP runs on them\n"
-            "            # UFW by default only filters on eth0, but let's be explicit\n"
-            "            # Allow all traffic on tunnel interfaces (XFRM xfrm-*)\n"
-            '            logger -t vpngw-firewall "Tunnel interfaces are not filtered - BGP traffic allowed"\n'
-            "            \n"
-            "            # Explicitly allow all traffic on XFRM interfaces (xfrm-*)\n"
-            "            for xfrm_if in $(ip link show type xfrm 2>/dev/null | grep -oP '^[0-9]+: \\K[^:]+'); do\n"
-            '              ufw allow in on "$xfrm_if"\n'
-            '              ufw allow out on "$xfrm_if"\n'
-            '              logger -t vpngw-firewall "Allowed traffic on XFRM interface: $xfrm_if"\n'
-            "            done\n"
-            "            \n"
-            "            # Ensure ICMP is allowed on eth0 via /etc/ufw/before.rules\n"
-            '            BEFORE_RULES="/etc/ufw/before.rules"\n'
-            '            if [ -f "$BEFORE_RULES" ] && ! grep -q "vpngw-icmp-allow" "$BEFORE_RULES"; then\n'
-            "            python3 - <<'PY'\n"
-            "            from pathlib import Path\n"
-            "            path = Path(\"/etc/ufw/before.rules\")\n"
-            "            marker = \"# vpngw-icmp-allow\"\n"
-            "            try:\n"
-            "                text = path.read_text()\n"
-            "                if marker not in text:\n"
-            "                    insert = \"\\n\".join([\n"
-            "                        marker,\n"
-            "                        \"-A ufw-before-input -i eth0 -p icmp --icmp-type destination-unreachable -j ACCEPT\",\n"
-            "                        \"-A ufw-before-input -i eth0 -p icmp --icmp-type time-exceeded -j ACCEPT\",\n"
-            "                        \"-A ufw-before-input -i eth0 -p icmp --icmp-type parameter-problem -j ACCEPT\",\n"
-            "                        \"-A ufw-before-input -i eth0 -p icmp --icmp-type echo-request -j ACCEPT\",\n"
-            "                        \"# vpngw-icmp-allow-end\",\n"
-            "                    ]) + \"\\n\"\n"
-            "                    if \"COMMIT\\n\" in text:\n"
-            "                        text = text.replace(\"COMMIT\\n\", insert + \"COMMIT\\n\", 1)\n"
-            "                    else:\n"
-            "                        text = text + \"\\n\" + insert\n"
-            "                    path.write_text(text)\n"
-            "            except Exception as exc:\n"
-            "                print(f\"[vpngw-firewall] Failed to update before.rules: {exc}\")\n"
-            "            PY\n"
-            "            fi\n"
-            "            \n"
-            "            # Allow ICMP for troubleshooting (ufw may not support proto icmp directly)\n"
-            '            if ufw allow in on "$PUBLIC_IF" proto icmp comment "ICMP for troubleshooting" >/dev/null 2>&1; then\n'
-            '              logger -t vpngw-firewall "Allowed ICMP on $PUBLIC_IF via UFW rule"\n'
-            "            else\n"
-            '              logger -t vpngw-firewall "UFW does not support proto icmp; relying on /etc/ufw/before.rules"\n'
-            "            fi\n"
-            "            \n"
-            "            # CRITICAL: Set forward policy to ACCEPT for VPN routing\n"
-            "            # Default is DROP which blocks all forwarded packets\n"
-            '            logger -t vpngw-firewall "Setting DEFAULT_FORWARD_POLICY to ACCEPT"\n'
-            '            sed -i \'s/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/\' /etc/default/ufw\n'
-            "            \n"
-            "            # Enable firewall\n"
-            "            ufw --force enable\n"
-            "            \n"
-            '            logger -t vpngw-firewall "UFW configuration complete"\n'
-            "            ufw status verbose | logger -t vpngw-firewall\n"
+            "    content: |\n" + textwrap.indent(firewall_script.rstrip() + "\n", "            ")
+        )
+
+        cloud += (
             "  - path: /etc/frr/daemons\n"
             '    permissions: "0644"\n'
             "    owner: frr:frr\n"
@@ -3419,6 +3057,9 @@ class VMManager:
             "            \n"
             "            # 1. Global forwarding – the box is a router\n"
             "            net.ipv4.ip_forward = 1\n"
+            "            \n"
+            "            # 1.1 TCP MTU probing – recover when PMTUD is blocked\n"
+            "            net.ipv4.tcp_mtu_probing = 1\n"
             "            \n"
             "            # 2. Reverse path filtering\n"
             "            # Route-based IPsec with xfrm-interfaces often looks asymmetric to the kernel.\n"
@@ -3457,7 +3098,7 @@ class VMManager:
             "            [Unit]\n"
             "            After=network-online.target cloud-init.service\n"
             "            Wants=network-online.target\n"
-            "  - path: /etc/systemd/system/strongswan.service.d/override.conf\n"
+            "  - path: /etc/systemd/system/strongswan-starter.service.d/override.conf\n"
             '    permissions: "0644"\n'
             "    owner: root:root\n"
             "    content: |\n"
@@ -3469,15 +3110,15 @@ class VMManager:
             "    owner: root:root\n"
             "    content: |\n"
             "            [Unit]\n"
-            "            After=strongswan.service\n"
-            "            Wants=strongswan.service\n"
+            "            After=strongswan-starter.service\n"
+            "            Wants=strongswan-starter.service\n"
             "  - path: /etc/systemd/system/nebius-vpngw-agent.service.d/override.conf\n"
             '    permissions: "0644"\n'
             "    owner: root:root\n"
             "    content: |\n"
             "            [Unit]\n"
-            "            After=strongswan.service frr.service\n"
-            "            Wants=strongswan.service frr.service\n"
+            "            After=strongswan-starter.service frr.service\n"
+            "            Wants=strongswan-starter.service frr.service\n"
         )
 
         # Add runcmd section

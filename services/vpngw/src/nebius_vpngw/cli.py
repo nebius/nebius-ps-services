@@ -87,15 +87,11 @@ def _ensure_authentication(
             # Authentication failed or timed out
             if required:
                 print("[red]✗ Authentication failed or timed out[/red]")
-                print(
-                    "[yellow]Please ensure you're logged in: nebius auth login[/yellow]"
-                )
+                print("[yellow]Please ensure you're logged in: nebius auth login[/yellow]")
                 raise typer.Exit(code=1)
             else:
                 if show_progress:
-                    print(
-                        "[yellow]⚠️  Authentication failed - continuing without token[/yellow]"
-                    )
+                    print("[yellow]⚠️  Authentication failed - continuing without token[/yellow]")
                 return None
 
     except typer.Exit:
@@ -135,17 +131,11 @@ def _resolve_local_config(
     print(f"[green]✓ Created config template at[/green] {default_path}")
     print()
     print("[bold]Next steps:[/bold]")
-    print(
-        "  1. Edit the file to set your project context (tenant_id, project_id, region_id)"
-    )
+    print("  1. Edit the file to set your project context (tenant_id, project_id, region_id)")
     print("  2. Configure gateway VMs (instance_count, vm_spec, external_ips)")
     print("  3. Define connections and tunnels with peer details")
-    print(
-        "  4. Set secrets via environment variables (e.g., export GCP_TUNNEL_1_PSK=...)"
-    )
-    print(
-        "  5. Validate: [cyan]nebius-vpngw validate-config nebius-vpngw.config.yaml[/cyan]"
-    )
+    print("  4. Set secrets via environment variables (e.g., export GCP_TUNNEL_1_PSK=...)")
+    print("  5. Validate: [cyan]nebius-vpngw validate-config nebius-vpngw.config.yaml[/cyan]")
     print("  6. Deploy: [cyan]nebius-vpngw apply[/cyan]")
     print()
 
@@ -187,21 +177,15 @@ def apply(
     local_config_file: Path | None = typer.Option(
         None, exists=True, readable=True, help=f"Path to {DEFAULT_CONFIG_FILENAME}"
     ),
-    recreate_gw: bool = typer.Option(
-        False, help="Delete and recreate gateway VMs before applying"
-    ),
+    recreate_gw: bool = typer.Option(False, help="Delete and recreate gateway VMs before applying"),
     sa: str | None = typer.Option(
         None,
         hidden=True,
         help="If provided, ensure a Service Account with this name and use it for auth",
     ),
-    project_id: str | None = typer.Option(
-        None, help="Nebius project/folder identifier"
-    ),
+    project_id: str | None = typer.Option(None, help="Nebius project/folder identifier"),
     zone: str | None = typer.Option(None, help="Nebius zone for gateway VMs"),
-    dry_run: bool = typer.Option(
-        False, hidden=True, help="Render actions without applying"
-    ),
+    dry_run: bool = typer.Option(False, hidden=True, help="Render actions without applying"),
 ):
     """Apply desired state to Nebius: create/update gateway VMs and push config."""
     local_config_file = _resolve_local_config(
@@ -334,8 +318,7 @@ def apply(
 
     # Determine appropriate action message based on whether VMs exist
     has_existing_vms = any(
-        diff.change_type.value != "safe"
-        or "does not exist" not in " ".join(diff.differences)
+        diff.change_type.value != "safe" or "does not exist" not in " ".join(diff.differences)
         for _, diff in changes
     )
     if has_existing_vms or recreate_gw:
@@ -467,9 +450,7 @@ def validate_config(
 
         # Extract key metrics for summary
         connections_count = len(local_cfg.get("connections", []))
-        tunnels_count = sum(
-            len(c.get("tunnels", [])) for c in local_cfg.get("connections", [])
-        )
+        tunnels_count = sum(len(c.get("tunnels", [])) for c in local_cfg.get("connections", []))
         instance_count = local_cfg.get("gateway_group", {}).get("instance_count", 1)
 
         # Success message with summary
@@ -508,8 +489,7 @@ def validate_config(
         console.print()
         console.print(
             Panel.fit(
-                f"[bold red]✗ Unexpected error during validation[/bold red]\n\n"
-                f"{str(e)}",
+                f"[bold red]✗ Unexpected error during validation[/bold red]\n\n{str(e)}",
                 title="[red]Error[/red]",
                 border_style="red",
             )
@@ -522,9 +502,7 @@ def create_config(
     config_file: Path = typer.Argument(
         ..., help="Path for new configuration file (recommended: *.config.yaml)"
     ),
-    force: bool = typer.Option(
-        False, "--force", "-f", help="Overwrite existing file if it exists"
-    ),
+    force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing file if it exists"),
 ):
     """Create a new configuration file from template.
 
@@ -616,8 +594,7 @@ def create_config(
         console.print()
         console.print(
             Panel.fit(
-                f"[bold red]✗ Failed to create configuration file[/bold red]\n\n"
-                f"{str(e)}",
+                f"[bold red]✗ Failed to create configuration file[/bold red]\n\n{str(e)}",
                 title="[red]Error[/red]",
                 border_style="red",
             )
@@ -633,19 +610,16 @@ def create_from_peer_config(
     peer_config_file: list[Path] = typer.Option(
         ..., exists=True, readable=True, help="Vendor peer config file(s)"
     ),
-    force: bool = typer.Option(
-        False, "--force", "-f", help="Overwrite existing file if it exists"
-    ),
+    force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing file if it exists"),
 ):
     """Create a new configuration file by merging peer configs into the template.
 
     This generates a standalone YAML config file aligned with the schema for
     review and validation before deployment.
     """
+    import yaml
     from rich.console import Console
     from rich.panel import Panel
-
-    import yaml
 
     console = Console()
 
@@ -707,9 +681,7 @@ def create_from_peer_config(
                 "Review the file and fill in any missing fields manually.[/yellow]"
             )
 
-        config_file.write_text(
-            yaml.safe_dump(merged_cfg, sort_keys=False), encoding="utf-8"
-        )
+        config_file.write_text(yaml.safe_dump(merged_cfg, sort_keys=False), encoding="utf-8")
 
         console.print()
         console.print(
@@ -735,8 +707,7 @@ def create_from_peer_config(
         console.print()
         console.print(
             Panel.fit(
-                f"[bold red]✗ Failed to create configuration file[/bold red]\n\n"
-                f"{str(e)}",
+                f"[bold red]✗ Failed to create configuration file[/bold red]\n\n{str(e)}",
                 title="[red]Error[/red]",
                 border_style="red",
             )
@@ -749,9 +720,7 @@ def status(
     local_config_file: Path | None = typer.Option(
         None, exists=True, readable=True, help=f"Path to {DEFAULT_CONFIG_FILENAME}"
     ),
-    project_id: str | None = typer.Option(
-        None, help="Nebius project/folder identifier"
-    ),
+    project_id: str | None = typer.Option(None, help="Nebius project/folder identifier"),
     zone: str | None = typer.Option(None, help="Nebius zone for gateway VMs"),
 ):
     """Show status of VPN tunnels and gateway health."""
@@ -821,18 +790,13 @@ def status(
             console.print(
                 f"[yellow]No gateway VMs found matching pattern '{plan.gateway_group.name}-*'[/yellow]"
             )
-            console.print(
-                "[yellow]Run 'nebius-vpngw apply' to create gateway VMs first.[/yellow]"
-            )
+            console.print("[yellow]Run 'nebius-vpngw apply' to create gateway VMs first.[/yellow]")
             raise typer.Exit(0)
 
     print("[bold]Collecting gateway VM status...[/bold]")
     vm_ips = {}
     for inst_cfg in plan.iter_instance_configs():
-        ip = (
-            vm_mgr.get_vm_public_ip(inst_cfg.hostname)
-            or (inst_cfg.external_ip or "").strip()
-        )
+        ip = vm_mgr.get_vm_public_ip(inst_cfg.hostname) or (inst_cfg.external_ip or "").strip()
         if ip:
             vm_ips[inst_cfg.hostname] = ip
         else:
@@ -842,9 +806,7 @@ def status(
             )
 
     # Create status table
-    table = Table(
-        title="VPN Gateway Status", show_header=True, header_style="bold cyan"
-    )
+    table = Table(title="VPN Gateway Status", show_header=True, header_style="bold cyan")
     table.add_column("Tunnel", style="white")
     table.add_column("Gateway VM", style="white")
     table.add_column("Status", style="white")
@@ -855,9 +817,7 @@ def status(
 
     # Build mapping of tunnel -> BGP peer IP per instance (for BGP status lookup)
     tunnel_bgp_map: dict[str, dict[str, str]] = {}
-    defaults_mode = (local_cfg.get("defaults", {}).get("routing", {}) or {}).get(
-        "mode"
-    ) or "bgp"
+    defaults_mode = (local_cfg.get("defaults", {}).get("routing", {}) or {}).get("mode") or "bgp"
     for conn in local_cfg.get("connections") or []:
         conn_mode = (conn.get("routing_mode") or defaults_mode) or "bgp"
         if conn_mode != "bgp":
@@ -871,9 +831,7 @@ def status(
             tunnel_bgp_map.setdefault(hostname, {})
             peer_ip = tun.get("inner_remote_ip")
             if peer_ip:
-                tunnel_bgp_map[hostname][tun.get("name") or f"tunnel{inst_idx}"] = str(
-                    peer_ip
-                )
+                tunnel_bgp_map[hostname][tun.get("name") or f"tunnel{inst_idx}"] = str(peer_ip)
 
     # Check each gateway VM's tunnels
     for inst_cfg in plan.iter_instance_configs():
@@ -949,8 +907,7 @@ def status(
                                     # Validate it's an IP
                                     octets = parts[0].split(".")
                                     if len(octets) == 4 and all(
-                                        o.isdigit() and 0 <= int(o) <= 255
-                                        for o in octets
+                                        o.isdigit() and 0 <= int(o) <= 255 for o in octets
                                     ):
                                         # Last column is typically the state
                                         state = parts[-1]
@@ -996,9 +953,7 @@ def status(
                 import re
 
                 # Parse the uptime string
-                match = re.match(
-                    r"(\d+)\s+(second|minute|hour|day)s?\s+ago", uptime_str
-                )
+                match = re.match(r"(\d+)\s+(second|minute|hour|day)s?\s+ago", uptime_str)
                 if not match:
                     # If we can't parse it, return as-is
                     return uptime_str
@@ -1442,16 +1397,10 @@ print(json.dumps(health))
                 subnet_cidr = subnet_cidrs[0] if subnet_cidrs else "unknown"
 
                 # Get route table ID
-                rt_id = (
-                    getattr(subnet_spec, "route_table_id", None)
-                    if subnet_spec
-                    else None
-                )
+                rt_id = getattr(subnet_spec, "route_table_id", None) if subnet_spec else None
 
                 if not rt_id:
-                    console.print(
-                        f"[yellow]Subnet: vpngw-subnet ({subnet_cidr})[/yellow]"
-                    )
+                    console.print(f"[yellow]Subnet: vpngw-subnet ({subnet_cidr})[/yellow]")
                     console.print("[yellow]  No route table attached[/yellow]")
                 else:
                     # Get route table details
@@ -1474,18 +1423,12 @@ print(json.dumps(health))
                         pass
 
                     console.print(f"Subnet: vpngw-subnet ({subnet_cidr})")
-                    console.print(
-                        f"  Route Table: {rt_name} (ID: {rt_id}, default={is_default})"
-                    )
+                    console.print(f"  Route Table: {rt_name} (ID: {rt_id}, default={is_default})")
 
                     # Get routes in the table
-                    routes_list_op = route_client.list(
-                        ListRoutesRequest(parent_id=rt_id)
-                    )
+                    routes_list_op = route_client.list(ListRoutesRequest(parent_id=rt_id))
                     routes_list = (
-                        routes_list_op.wait()
-                        if hasattr(routes_list_op, "wait")
-                        else routes_list_op
+                        routes_list_op.wait() if hasattr(routes_list_op, "wait") else routes_list_op
                     )
 
                     route_items = []
@@ -1496,9 +1439,7 @@ print(json.dumps(health))
 
                     if route_items:
                         # Create routes table
-                        routes_table = Table(
-                            show_header=True, header_style="bold cyan", box=None
-                        )
+                        routes_table = Table(show_header=True, header_style="bold cyan", box=None)
                         routes_table.add_column("Destination", style="white")
                         routes_table.add_column("Next Hop", style="white")
 
@@ -1509,24 +1450,18 @@ print(json.dumps(health))
 
                             # Get destination
                             dest = getattr(route_spec, "destination", None)
-                            dest_cidr = (
-                                getattr(dest, "cidr", None) if dest else "unknown"
-                            )
+                            dest_cidr = getattr(dest, "cidr", None) if dest else "unknown"
 
                             # Get next hop
                             next_hop_text = "unknown"
                             next_hop = getattr(route_spec, "next_hop", None)
                             if next_hop:
                                 # Check for default_egress_gateway field
-                                if hasattr(
-                                    next_hop, "default_egress_gateway"
-                                ) and getattr(
+                                if hasattr(next_hop, "default_egress_gateway") and getattr(
                                     next_hop, "default_egress_gateway", False
                                 ):
                                     next_hop_text = "default-egress"
-                                elif hasattr(
-                                    next_hop, "default_internet_gateway"
-                                ) and getattr(
+                                elif hasattr(next_hop, "default_internet_gateway") and getattr(
                                     next_hop, "default_internet_gateway", False
                                 ):
                                     next_hop_text = "default-gateway"
@@ -1543,9 +1478,7 @@ print(json.dumps(health))
                         console.print("  [dim]No routes in table[/dim]")
 
             except Exception as e:
-                console.print(
-                    f"[yellow]Could not fetch vpngw-subnet route table: {e}[/yellow]"
-                )
+                console.print(f"[yellow]Could not fetch vpngw-subnet route table: {e}[/yellow]")
     except Exception as e:
         console.print(f"[yellow]Error displaying route table: {e}[/yellow]")
 
@@ -1555,9 +1488,7 @@ def add_routes_local(
     local_config_file: Path | None = typer.Option(
         None, exists=True, readable=True, help=f"Path to {DEFAULT_CONFIG_FILENAME}"
     ),
-    project_id: str | None = typer.Option(
-        None, help="Nebius project/folder identifier"
-    ),
+    project_id: str | None = typer.Option(None, help="Nebius project/folder identifier"),
 ):
     """Add VPC routes for gateway.local_prefixes pointing to VPN gateway (Nebius → Remote).
 
@@ -1595,9 +1526,7 @@ def list_routes_local(
     local_config_file: Path | None = typer.Option(
         None, exists=True, readable=True, help=f"Path to {DEFAULT_CONFIG_FILENAME}"
     ),
-    project_id: str | None = typer.Option(
-        None, help="Nebius project/folder identifier"
-    ),
+    project_id: str | None = typer.Option(None, help="Nebius project/folder identifier"),
 ):
     """List VPC routes for gateway.local_prefixes (Nebius → Remote) and BGP advertised routes.
 
@@ -1668,9 +1597,7 @@ def destroy(
     local_config_file: Path | None = typer.Option(
         None, exists=True, readable=True, help=f"Path to {DEFAULT_CONFIG_FILENAME}"
     ),
-    project_id: str | None = typer.Option(
-        None, help="Nebius project/folder identifier"
-    ),
+    project_id: str | None = typer.Option(None, help="Nebius project/folder identifier"),
     zone: str | None = typer.Option(None, help="Nebius zone for gateway VMs"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ):
@@ -1706,9 +1633,7 @@ def destroy(
     # Confirmation prompt
     if not yes:
         print("\n[yellow]⚠️  WARNING: This will:[/yellow]")
-        print(
-            f"[yellow]  • Delete all gateway VMs ({plan.gateway_group.name}-*)[/yellow]"
-        )
+        print(f"[yellow]  • Delete all gateway VMs ({plan.gateway_group.name}-*)[/yellow]")
         print("[yellow]  • Delete all boot disks[/yellow]")
         print("[yellow]  • Delete static private IP allocations[/yellow]")
         print("[yellow]  • Delete VPC routes pointing to gateway[/yellow]")
@@ -1802,9 +1727,7 @@ def destroy(
         ]
 
         if not existing:
-            print(
-                f"[yellow]No VMs found matching '{plan.gateway_group.name}-*'.[/yellow]"
-            )
+            print(f"[yellow]No VMs found matching '{plan.gateway_group.name}-*'.[/yellow]")
         else:
             print(f"[yellow]Found {len(existing)} VM(s) to delete[/yellow]")
 
@@ -1812,20 +1735,14 @@ def destroy(
         # Method 1: From existing VMs (if any)
         private_alloc_ids = []
         for inst in existing:
-            inst_name = (
-                getattr(getattr(inst, "metadata", None), "name", None) or "unknown"
-            )
+            inst_name = getattr(getattr(inst, "metadata", None), "name", None) or "unknown"
             # Get network interfaces from VM status
             if hasattr(inst, "status") and hasattr(inst.status, "network_interfaces"):
                 for ni in inst.status.network_interfaces:
                     # Private IP allocation (we want to delete these)
-                    if hasattr(ni, "ip_address") and hasattr(
-                        ni.ip_address, "allocation_id"
-                    ):
+                    if hasattr(ni, "ip_address") and hasattr(ni.ip_address, "allocation_id"):
                         if ni.ip_address.allocation_id:
-                            private_alloc_ids.append(
-                                (inst_name, ni.ip_address.allocation_id)
-                            )
+                            private_alloc_ids.append((inst_name, ni.ip_address.allocation_id))
                             print(
                                 f"[dim]Found private allocation from VM {inst_name}: {ni.ip_address.allocation_id}[/dim]"
                             )
@@ -1835,11 +1752,7 @@ def destroy(
             from nebius.api.nebius.vpc.v1 import ListAllocationsRequest
 
             alloc_list_op = asc.list(ListAllocationsRequest(parent_id=proj_id or ""))
-            alloc_list = (
-                alloc_list_op.wait()
-                if hasattr(alloc_list_op, "wait")
-                else alloc_list_op
-            )
+            alloc_list = alloc_list_op.wait() if hasattr(alloc_list_op, "wait") else alloc_list_op
 
             alloc_items = []
             if hasattr(alloc_list, "items"):
@@ -1877,9 +1790,7 @@ def destroy(
             inst_id = getattr(inst, "id", None) or getattr(
                 getattr(inst, "metadata", None), "id", None
             )
-            inst_name = (
-                getattr(getattr(inst, "metadata", None), "name", None) or "unknown"
-            )
+            inst_name = getattr(getattr(inst, "metadata", None), "name", None) or "unknown"
 
             if inst_id:
                 try:
@@ -1933,9 +1844,7 @@ def destroy(
                             disk_op = dsc.delete(delete_disk_req)
                             if hasattr(disk_op, "wait"):
                                 disk_op.wait()
-                                print(
-                                    f"[green]✓ Boot disk {boot_disk_name} deleted[/green]"
-                                )
+                                print(f"[green]✓ Boot disk {boot_disk_name} deleted[/green]")
                             break
                         except Exception as disk_err:
                             if "FAILED_PRECONDITION" in str(
@@ -1963,9 +1872,7 @@ def destroy(
                 )
 
         # Step 4: Delete VPC routes (MUST happen before deleting private IP allocations)
-        print(
-            "[bold]Step 4/5: Deleting VPC routes pointing to gateway allocations...[/bold]"
-        )
+        print("[bold]Step 4/5: Deleting VPC routes pointing to gateway allocations...[/bold]")
         deleted_routes = []
         try:
             from nebius.api.nebius.vpc.v1 import (
@@ -1993,9 +1900,7 @@ def destroy(
                 rt_id = getattr(rt, "id", None) or getattr(
                     getattr(rt, "metadata", None), "id", None
                 )
-                rt_name = (
-                    getattr(getattr(rt, "metadata", None), "name", None) or "unknown"
-                )
+                rt_name = getattr(getattr(rt, "metadata", None), "name", None) or "unknown"
 
                 if not rt_id:
                     continue
@@ -2004,9 +1909,7 @@ def destroy(
                 try:
                     routes_list_op = rsc.list(ListRoutesRequest(parent_id=rt_id))
                     routes_list = (
-                        routes_list_op.wait()
-                        if hasattr(routes_list_op, "wait")
-                        else routes_list_op
+                        routes_list_op.wait() if hasattr(routes_list_op, "wait") else routes_list_op
                     )
 
                     route_items = []
@@ -2020,8 +1923,7 @@ def destroy(
                             getattr(route, "metadata", None), "id", None
                         )
                         route_name = (
-                            getattr(getattr(route, "metadata", None), "name", None)
-                            or "unknown"
+                            getattr(getattr(route, "metadata", None), "name", None) or "unknown"
                         )
                         spec = getattr(route, "spec", None)
                         next_hop = getattr(spec, "next_hop", None) if spec else None
@@ -2036,29 +1938,21 @@ def destroy(
                                     if nh_alloc_id == alloc_id:
                                         # Delete this route
                                         try:
-                                            print(
-                                                f"Deleting route {route_name} → {alloc_id}"
-                                            )
+                                            print(f"Deleting route {route_name} → {alloc_id}")
                                             from nebius.api.nebius.vpc.v1 import (
                                                 DeleteRouteRequest,
                                             )
 
-                                            delete_route_req = DeleteRouteRequest(
-                                                id=route_id
-                                            )
+                                            delete_route_req = DeleteRouteRequest(id=route_id)
                                             route_op = rsc.delete(delete_route_req)
                                             if hasattr(route_op, "wait"):
                                                 route_op.wait()
                                                 deleted_routes.append(route_id)
                                         except Exception as e:
-                                            print(
-                                                f"[yellow]Could not delete route: {e}[/yellow]"
-                                            )
+                                            print(f"[yellow]Could not delete route: {e}[/yellow]")
                                         break
                 except Exception as e:
-                    print(
-                        f"[yellow]Could not list routes for table {rt_name}: {e}[/yellow]"
-                    )
+                    print(f"[yellow]Could not list routes for table {rt_name}: {e}[/yellow]")
 
             if deleted_routes:
                 print(f"[green]Deleted {len(deleted_routes)} route(s)[/green]")
@@ -2091,19 +1985,15 @@ def destroy(
                         print(
                             "[dim]Private IP allocation already deleted (auto-managed by network interface)[/dim]"
                         )
-                    elif "FAILED_PRECONDITION" in str(
+                    elif "FAILED_PRECONDITION" in str(e) and "used as next hop for routes" in str(
                         e
-                    ) and "used as next hop for routes" in str(e):
+                    ):
                         print(
                             f"[yellow]Could not delete private IP allocation (still used by routes): {e}[/yellow]"
                         )
-                        print(
-                            "[yellow]This may require manual cleanup via console or CLI[/yellow]"
-                        )
+                        print("[yellow]This may require manual cleanup via console or CLI[/yellow]")
                     else:
-                        print(
-                            f"[yellow]Could not delete private IP allocation: {e}[/yellow]"
-                        )
+                        print(f"[yellow]Could not delete private IP allocation: {e}[/yellow]")
         else:
             print("[dim]No private IP allocations found to delete[/dim]")
 
@@ -2111,17 +2001,11 @@ def destroy(
         print("[green]✓ Destroy completed successfully.[/green]")
         print("[dim]Preserved resources:[/dim]")
         print("[dim]  • Network resources (VPC, subnets)[/dim]")
-        print(
-            "[dim]  • Public IP allocations (reusable via external_ips in config)[/dim]"
-        )
+        print("[dim]  • Public IP allocations (reusable via external_ips in config)[/dim]")
         print("")
         print("[yellow]⚠️  IMPORTANT: After recreating VMs, you must run:[/yellow]")
-        print(
-            "[bold]  nebius-vpngw add-routes-local --local-config-file <your-config.yaml>[/bold]"
-        )
-        print(
-            "[dim]This will create new routes with the new static private IP allocations.[/dim]"
-        )
+        print("[bold]  nebius-vpngw add-routes-local --local-config-file <your-config.yaml>[/bold]")
+        print("[dim]This will create new routes with the new static private IP allocations.[/dim]")
 
     except Exception as e:
         print(f"[red]Error during destroy: {e}[/red]")

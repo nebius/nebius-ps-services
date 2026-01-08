@@ -42,19 +42,11 @@ def parse(text: str) -> dict:
             except ValueError:
                 normalized.append(c)
         cidrs = normalized
-    local_ips = re.findall(
-        r"(?i)(?:local|customer)\s*ip\s*[:=]\s*(169\.254\.\d+\.\d+)", text
-    )
-    remote_ips = re.findall(
-        r"(?i)(?:remote|cloud)\s*ip\s*[:=]\s*(169\.254\.\d+\.\d+)", text
-    )
+    local_ips = re.findall(r"(?i)(?:local|customer)\s*ip\s*[:=]\s*(169\.254\.\d+\.\d+)", text)
+    remote_ips = re.findall(r"(?i)(?:remote|cloud)\s*ip\s*[:=]\s*(169\.254\.\d+\.\d+)", text)
     # GCP Cloud Router YAML: peerIpAddress = customer side, ipAddress = GCP side
-    gcp_peer_ips = re.findall(
-        r"(?mi)^\s*peerIpAddress:\s*(169\.254\.\d+\.\d+)", text
-    )
-    gcp_router_ips = re.findall(
-        r"(?mi)^\s*ipAddress:\s*(169\.254\.\d+\.\d+)", text
-    )
+    gcp_peer_ips = re.findall(r"(?mi)^\s*peerIpAddress:\s*(169\.254\.\d+\.\d+)", text)
+    gcp_router_ips = re.findall(r"(?mi)^\s*ipAddress:\s*(169\.254\.\d+\.\d+)", text)
     local_ips.extend(gcp_peer_ips)
     remote_ips.extend(gcp_router_ips)
 

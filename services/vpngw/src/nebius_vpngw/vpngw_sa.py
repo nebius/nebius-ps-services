@@ -110,9 +110,7 @@ def ensure_service_account_and_token(
             except Exception:
                 sa = None
         if sa is None and hasattr(sa_ops, "create"):
-            print(
-                f"[SA] Creating Service Account '{sa_name}' in project {project_id}..."
-            )
+            print(f"[SA] Creating Service Account '{sa_name}' in project {project_id}...")
             sa = sa_ops.create(
                 name=sa_name,
                 project_id=project_id,
@@ -125,15 +123,11 @@ def ensure_service_account_and_token(
     # Grant Editor role if possible
     try:
         if sa is not None:
-            bindings = getattr(iam, "bindings", None) or getattr(
-                iam, "role_binding", None
-            )
+            bindings = getattr(iam, "bindings", None) or getattr(iam, "role_binding", None)
             editor_role_id = "roles/editor"
             if bindings and hasattr(bindings, "grant"):
                 print(f"[SA] Granting role {editor_role_id} to {sa_name}...")
-                bindings.grant(
-                    principal=sa, role_id=editor_role_id, project_id=project_id
-                )
+                bindings.grant(principal=sa, role_id=editor_role_id, project_id=project_id)
     except Exception as e:
         print(f"[SA] Failed to grant Editor role: {e}")
 
@@ -248,9 +242,7 @@ def ensure_cli_access_token(timeout_seconds: int = 60) -> str | None:
                 else:
                     obj = None
                 if obj is not None:
-                    return getattr(obj, "access_token", None) or getattr(
-                        obj, "token", None
-                    )
+                    return getattr(obj, "access_token", None) or getattr(obj, "token", None)
         except Exception:
             pass
         return None
@@ -262,15 +254,9 @@ def ensure_cli_access_token(timeout_seconds: int = 60) -> str | None:
             if result:
                 return result
     except FutureTimeoutError:
-        print(
-            f"[yellow]⚠️  SDK authentication timed out after {timeout_seconds}s.[/yellow]"
-        )
-        print(
-            "[yellow]   This usually means browser authentication is pending.[/yellow]"
-        )
-        print(
-            "[yellow]   Please complete authentication or run: nebius auth login[/yellow]"
-        )
+        print(f"[yellow]⚠️  SDK authentication timed out after {timeout_seconds}s.[/yellow]")
+        print("[yellow]   This usually means browser authentication is pending.[/yellow]")
+        print("[yellow]   Please complete authentication or run: nebius auth login[/yellow]")
     except Exception:
         pass
 

@@ -1,7 +1,7 @@
 [Unit]
 Description=Nebius VPNGW Agent
-After=network-online.target
-Wants=network-online.target
+After=network-online.target strongswan-starter.service frr.service
+Wants=network-online.target strongswan-starter.service frr.service
 
 [Service]
 Type=simple

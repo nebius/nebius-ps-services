@@ -13,9 +13,7 @@ def build_binary() -> None:
       - __main__.py present to serve as entry point
     """
     if shutil.which("pyinstaller") is None:
-        print(
-            "[build-binary] PyInstaller not found. Install with: pip install pyinstaller"
-        )
+        print("[build-binary] PyInstaller not found. Install with: pip install pyinstaller")
         sys.exit(1)
 
     entry = Path(__file__).parent / "__main__.py"
