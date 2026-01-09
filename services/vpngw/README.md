@@ -277,11 +277,20 @@ connections:
     tunnels:
       - name: tunnel-1
         gateway_instance_index: 0
+        ha_role: "active"
         psk: ${GCP_TUNNEL_1_PSK}
         remote_public_ip: "203.0.113.1"
         inner_cidr: "169.254.10.0/30"
         inner_local_ip: "169.254.10.1"
         inner_remote_ip: "169.254.10.2"
+      - name: tunnel-2
+        gateway_instance_index: 0
+        ha_role: "passive"
+        psk: ${GCP_TUNNEL_2_PSK}
+        remote_public_ip: "203.0.113.2"
+        inner_cidr: "169.254.10.4/30"
+        inner_local_ip: "169.254.10.5"
+        inner_remote_ip: "169.254.10.6"
 ```
 
 **3. Set environment variables:**
@@ -290,7 +299,8 @@ connections:
 export TENANT_ID="my-tenant-id"
 export PROJECT_ID="my-project-id"
 export REGION_ID="eu-north1"
-export GCP_TUNNEL_1_PSK="your-pre-shared-key"
+export GCP_TUNNEL_1_PSK="your-pre-shared-key-1"
+export GCP_TUNNEL_2_PSK="your-pre-shared-key-2"
 ```
 
 **4. Validate configuration:**
@@ -622,6 +632,95 @@ nebius-vpngw list-routes-remote --local-config-file <file>
   - BGP mode: Dynamically learned via FRR and installed in kernel
   - Static mode: Manually configured in YAML
   - Visible via SSH queries to gateway VMs
+
+**Tunnel Management:**
+
+```bash
+# Manually restart a specific tunnel
+nebius-vpngw restart-tunnel gcp-ha-tunnel-1 --local-config-file <file>
+
+# Restart all tunnels on all gateway VMs
+nebius-vpngw restart-tunnel all --local-config-file <file>
+```
+
+**When to use:**
+
+- Recovering from tunnel state desynchronization issues
+- After detecting connectivity failures
+- During maintenance windows
+- Testing failover behavior
+
+**What it does:**
+
+- SSHs to each gateway VM
+- Restarts the `nebius-vpngw-agent` service
+- Agent teardown and recreates IPsec tunnels
+- XFRM interfaces are recreated
+- BGP sessions are reset
+
+**Recovery time:** 10-15 seconds (tunnel establishment + BGP convergence)
+
+### Automated Health Monitoring
+
+The gateway includes an automated health monitoring system that detects and recovers from tunnel failures.
+
+**Configuration:**
+
+Add to your `nebius-vpngw.config.yaml`:
+
+```yaml
+defaults:
+  health_monitoring:
+    enabled: true                          # Enable automated monitoring
+    check_interval_seconds: 60             # Check every 60 seconds
+    max_failures_before_restart: 2         # Restart after 2 consecutive failures
+    proactive_refresh_enabled: false       # Reactive mode (detect & fix)
+    proactive_refresh_hours: 8             # Unused (proactive mode disabled)
+```
+
+**Monitoring Modes:**
+
+| Mode                   | Behavior                                      | Downtime                  | Use Case                    |
+|------------------------|-----------------------------------------------|---------------------------|-----------------------------|
+| **Reactive (default)** | Detect failures, restart only when broken     | ~65s during failures      | 100% uptime priority        |
+| **Proactive**          | Periodic restart every N hours (preventive)   | ~10-15s every N hours     | Prevent stale state buildup |
+
+**Detection Timing:**
+
+With `max_failures_before_restart: 2` and `check_interval_seconds: 60`:
+
+1. **t=0s:** Normal operation
+2. **t=60s:** First failure detected → Immediate re-check in 5 seconds
+3. **t=65s:** Second failure confirmed → Tunnel restarted immediately
+4. **t=85s:** Tunnel re-established, traffic flows
+
+**Total detection time: ~65 seconds** (not 120s)
+**Total recovery time: ~85 seconds** (detection + restart)
+
+**Service Management:**
+
+The health monitor runs as a systemd service on each gateway VM:
+
+```bash
+# Check monitor status (SSH to gateway VM)
+sudo systemctl status nebius-vpngw-health-monitor
+
+# View monitor logs
+sudo journalctl -u nebius-vpngw-health-monitor -f
+
+# Restart monitor
+sudo systemctl restart nebius-vpngw-health-monitor
+```
+
+**Keepalive Strategy:**
+
+The gateway uses three layers of keepalive to maintain tunnel health:
+
+1. **NAT-T Keepalives (20s):** Prevent NAT session timeouts
+2. **DPD (30s checks, 120s timeout):** Detect IKE control plane failures
+3. **Health Monitor (60s checks):** Detect data plane failures
+
+This multi-layer approach ensures rapid detection and recovery from various failure modes.
 
 ## Routing Modes
 
@@ -1538,7 +1637,8 @@ The script will:
 │   │   ├── tunnel_iterator.py            # Tunnel enumeration
 │   │   ├── state_store.py                # State persistence
 │   │   ├── status_check.py               # Health checks
-│   │   └── sanity_check.py               # Routing validation tool
+│   │   ├── sanity_check.py               # Routing validation tool
+│   │   └── tunnel_health_monitor.py      # Automated tunnel health monitoring
 │   ├── deploy/                           # Deployment orchestration
 │   │   ├── vm_manager.py                 # VM lifecycle
 │   │   ├── vm_diff.py                    # VM change detection
@@ -1552,10 +1652,11 @@ The script will:
 │   │   ├── azure.py
 │   │   └── cisco.py
 │   └── systemd/                          # Systemd units/scripts
-│       ├── nebius-vpngw-agent.service    # Agent service unit
-│       ├── nebius-vpngw-fix-routes.service  # Service wrapper for route cleanup
-│       ├── nebius-vpngw-fix-routes.timer    # Timer to enforce route cleanup periodically
-│       └── setup-vpngw-firewall.sh          # UFW firewall initialization script
+│       ├── nebius-vpngw-agent.service          # Agent service unit
+│       ├── nebius-vpngw-health-monitor.service # Tunnel health monitor service unit
+│       ├── nebius-vpngw-fix-routes.service     # Service wrapper for route cleanup
+│       ├── nebius-vpngw-fix-routes.timer       # Timer to enforce route cleanup periodically
+│       └── setup-vpngw-firewall.sh             # UFW firewall initialization script
 ```
 
 ### Key Modules
@@ -1581,6 +1682,7 @@ The script will:
 - `state_store.py`: Persists last-applied state for idempotency
 - `status_check.py`: Health checks for tunnels, BGP, and routes
 - `sanity_check.py`: Routing validation troubleshooting tool
+- `tunnel_health_monitor.py`: Automated tunnel health monitoring with 65s failure detection (immediate re-check), supports reactive/proactive modes
 
 **Deployment:**
 

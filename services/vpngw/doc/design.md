@@ -414,6 +414,30 @@ ping -M do -s 1358 <remote-ip>
 iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
 ```
 
+### Permanent MTU Strategy (XFRM)
+
+The gateway enforces a conservative MTU policy so workloads don't rely on PMTUD alone:
+
+- Always enable TCP MSS clamping on the gateway
+- Enable TCP MTU probing
+- Set XFRM MTU to parent MTU minus IPsec/NAT-T overhead (default 64 bytes)
+- Keep eth0 MTU unchanged
+- Expect PMTU ~1380-1386 for GCP HA VPN with NAT-T
+
+**Rules applied by the agent:**
+
+```bash
+iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+# nftables equivalent:
+nft add rule ip mangle forward tcp flags syn tcp option maxseg size set rt mtu
+```
+
+**Sysctl (persistent):**
+
+```bash
+net.ipv4.tcp_mtu_probing = 1
+```
+
 **Why XFRM:**
 
 - Modern Linux kernel interface (5.4+)
@@ -1354,6 +1378,206 @@ Per-VM routing validation:
 - Orphaned routes count
 - Overall health: Healthy/Degraded
 
+### Tunnel Keepalive & Health Monitoring
+
+**Purpose:** Detect and automatically recover from IPsec tunnel state desynchronization issues where tunnels appear ESTABLISHED in strongSwan but the XFRM interface drops all packets.
+
+**Problem:** In rare cases (observed during load testing), IPsec CHILD_SAs enter a stale state where:
+
+- `ipsec statusall` shows ESTABLISHED
+- `xfrmX` interface exists with correct IPs
+- BGP session remains up
+- **All packets sent through the tunnel are dropped** (visible in `ip -s link show xfrmX` RX/TX errors)
+- Connectivity is completely broken until tunnel restart
+
+#### Multi-Layer Keepalive Strategy
+
+The gateway uses a **defense-in-depth** approach with three keepalive mechanisms:
+
+##### 1. NAT-T Keepalives (20-second interval)
+
+File: `strongswan_renderer.py`
+
+```python
+# Per-tunnel configuration
+keep_alive = 20s  # Send UDP keepalive every 20 seconds
+```
+
+- **Purpose:** Keep NAT mappings alive for tunnels behind NAT
+- **Mechanism:** strongSwan sends UDP packets over the tunnel every 20s
+- **Benefit:** Prevents NAT session timeouts
+- **Limitation:** Does not detect data plane failures (keepalive packets may succeed while actual traffic fails)
+
+##### 2. DPD (Dead Peer Detection) - 30s interval, 120s timeout
+
+File: `strongswan_renderer.py`
+
+```python
+# IKE SA configuration
+dpd_action = restart
+dpd_delay = 30s    # Check every 30 seconds
+dpd_timeout = 120s  # Consider peer dead after 120s without response
+```
+
+- **Purpose:** Detect IKE SA failures and control plane issues
+- **Mechanism:** strongSwan exchanges DPD messages with peer
+- **Benefit:** Restarts tunnels if IKE SA becomes unresponsive
+- **Limitation:** DPD operates at control plane; may not detect data plane failures where IKE still works but XFRM packet processing fails
+
+##### 3. Automated Health Monitoring (60s checks, 65s detection)
+
+File: `tunnel_health_monitor.py`, systemd service: `nebius-vpngw-health-monitor.service`
+
+- **Purpose:** Detect data plane failures by actively probing tunnel connectivity
+- **Mechanism:** Periodic ICMP ping through each tunnel interface
+- **Detection time:** ~65 seconds (60s initial check + 5s immediate re-check after first failure)
+- **Recovery:** Automatic tunnel restart after 2 consecutive failures
+
+**Why Three Layers?**
+
+| Layer           | Detects             | Response Time    | Recovery Action   |
+|-----------------|---------------------|------------------|-------------------|
+| NAT-T Keepalive | NAT timeout         | N/A (preventive) | Keep NAT mappings |
+| DPD             | IKE failures        | 30-120s          | Restart tunnel    |
+| Health Monitor  | Data plane failures | ~65s             | Restart tunnel    |
+
+- **NAT-T:** Prevents the problem (NAT timeouts)
+- **DPD:** Catches IKE layer failures
+- **Health Monitor:** Catches data plane failures that NAT-T and DPD miss
+
+#### Health Monitoring Configuration
+
+File: `nebius-gcp-ha-vpngw.config.yaml`
+
+```yaml
+defaults:
+  health_monitoring:
+    enabled: true                          # Enable automated monitoring
+    check_interval_seconds: 60             # Check every 60 seconds
+    max_failures_before_restart: 2         # Restart after 2 consecutive failures
+    proactive_refresh_enabled: false       # Reactive mode (detect & fix)
+    proactive_refresh_hours: 8             # Unused (proactive mode disabled)
+```
+
+**Reactive vs Proactive Modes:**
+
+| Mode                   | Behavior                                      | Downtime                  | Use Case                    |
+|------------------------|-----------------------------------------------|---------------------------|-----------------------------|
+| **Reactive (default)** | Detect failures, restart only when broken     | ~65s during failures      | 100% uptime priority        |
+| **Proactive**          | Periodic restart every N hours (preventive)   | ~10-15s every N hours     | Prevent stale state buildup |
+
+**Default: Reactive mode** (`proactive_refresh_enabled: false`) prioritizes zero planned downtime.
+
+#### Failure Detection Timing
+
+**Question:** With `max_failures_before_restart: 2` and `check_interval_seconds: 60`, does this mean 120 seconds of downtime (60s + 60s)?
+
+**Answer:** No. The monitor uses **immediate re-check** after the first failure:
+
+1. **t=0s:** Tunnel healthy (normal operation)
+2. **t=60s:** First health check fails
+   - Monitor logs failure
+   - **Immediately waits only 5 seconds** (not 60s)
+   - Runs second health check at t=65s
+3. **t=65s:** Second health check
+   - If **still failing:** Restart tunnel immediately
+   - If **recovered:** Reset counter, continue monitoring
+4. **t=75s:** Tunnel restarted, IKE/BGP negotiation begins
+5. **t=85s:** Tunnel ESTABLISHED, traffic flows
+
+**Total detection time: ~65 seconds** (60s initial + 5s re-check)
+**Total recovery time: ~85 seconds** (65s detection + 20s restart)
+
+This is **significantly faster** than waiting 120 seconds (60s × 2 failures).
+
+**Code Implementation:**
+
+File: `tunnel_health_monitor.py`, lines 397-465
+
+```python
+# After first failure, immediately re-check instead of waiting full interval
+if not health.is_healthy:
+    if consecutive_failures < max_failures_before_restart:
+        print(f"[TunnelMonitor] 🔄 Immediate re-check in 5 seconds...")
+        time.sleep(5)  # Immediate re-check, not full check_interval
+        health_recheck = self.check_tunnel_health(...)
+        if not health_recheck.is_healthy:
+            consecutive_failures += 1  # Second failure confirmed
+            # Check threshold and restart if max_failures reached
+```
+
+#### Manual Tunnel Restart
+
+**Command:**
+
+```bash
+# Restart specific tunnel
+nebius-vpngw restart-tunnel gcp-ha-tunnel-1
+
+# Restart all tunnels (for all gateways)
+nebius-vpngw restart-tunnel all
+
+# With custom config file
+nebius-vpngw restart-tunnel all --local-config-file my-config.yaml
+```
+
+**What it does:**
+
+1. Loads deployment plan to get gateway VM IPs
+2. SSHs to each gateway VM
+3. Executes: `sudo systemctl restart nebius-vpngw-agent`
+4. Agent restart triggers:
+   - strongSwan tunnel teardown (`ipsec down <tunnel-name>`)
+   - XFRM interface recreation
+   - strongSwan reload (`ipsec reload`)
+   - Tunnel re-establishment (`ipsec up <tunnel-name>`)
+   - FRR BGP session reset
+
+**Use cases:**
+
+- Manual recovery after detecting connectivity issues
+- Testing tunnel failover behavior
+- Maintenance window operations
+
+**Recovery time:** 10-15 seconds (tunnel establishment + BGP convergence)
+
+#### Systemd Service Integration
+
+The health monitor runs as a systemd service on each gateway VM:
+
+**Service file:** `nebius-vpngw-health-monitor.service`
+
+```ini
+[Unit]
+Description=Nebius VPN Gateway Health Monitor
+After=network-online.target strongswan-starter.service frr.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/nebius-vpngw-agent --monitor
+Restart=always
+RestartSec=30s
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**Management commands:**
+
+```bash
+# Check monitor status
+sudo systemctl status nebius-vpngw-health-monitor
+
+# View monitor logs
+sudo journalctl -u nebius-vpngw-health-monitor -f
+
+# Restart monitor
+sudo systemctl restart nebius-vpngw-health-monitor
+```
+
+**Automatic deployment:** The monitor service is installed and enabled during `nebius-vpngw apply`.
+
 ## Peer Config Import
 
 ### Supported Vendors
@@ -1469,7 +1693,8 @@ nebius-vpngw apply --local-config-file test.config.yaml
 │   │   ├── tunnel_iterator.py            # Centralized tunnel enumeration
 │   │   ├── state_store.py                # Agent state persistence
 │   │   ├── status_check.py               # Tunnel/BGP/service health checks
-│   │   └── sanity_check.py               # Routing invariant validation tool
+│   │   ├── sanity_check.py               # Routing invariant validation tool
+│   │   └── tunnel_health_monitor.py      # Automated tunnel health monitoring with immediate re-check
 │   ├── deploy/
 │   │   ├── vm_manager.py                 # VM lifecycle (create/delete/recreate)
 │   │   ├── vm_diff.py                    # VM configuration change detection
@@ -1481,10 +1706,11 @@ nebius-vpngw apply --local-config-file test.config.yaml
 │   │   ├── azure.py                      # Azure VPN Gateway config parser
 │   │   └── cisco.py                      # Cisco IOS config parser
 │   └── systemd/
-│       ├── nebius-vpngw-agent.service    # Agent systemd unit
-│       ├── nebius-vpngw-fix-routes.service  # Service wrapper for route cleanup
-│       ├── nebius-vpngw-fix-routes.timer    # Timer to enforce route cleanup periodically
-│       └── setup-vpngw-firewall.sh          # UFW firewall initialization script
+│       ├── nebius-vpngw-agent.service          # Agent systemd unit
+│       ├── nebius-vpngw-health-monitor.service # Tunnel health monitor systemd unit
+│       ├── nebius-vpngw-fix-routes.service     # Service wrapper for route cleanup
+│       ├── nebius-vpngw-fix-routes.timer       # Timer to enforce route cleanup periodically
+│       └── setup-vpngw-firewall.sh             # UFW firewall initialization script
 ```
 
 ### Module Descriptions
@@ -1511,6 +1737,7 @@ nebius-vpngw apply --local-config-file test.config.yaml
 - `state_store.py`: Persists last-applied state for idempotency checks
 - `status_check.py`: Collects health metrics for status command (tunnel status, BGP sessions, routes)
 - `sanity_check.py`: Standalone routing validation tool for troubleshooting
+- `tunnel_health_monitor.py`: Automated tunnel health monitoring daemon with immediate re-check after first failure (65s detection time), supports reactive and proactive modes, integrates with systemd for continuous monitoring
 
 **Deployment:**
 
