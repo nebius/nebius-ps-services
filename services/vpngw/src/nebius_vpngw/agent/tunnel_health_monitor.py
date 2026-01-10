@@ -28,7 +28,10 @@ Best Practice References:
 from __future__ import annotations
 
 import argparse
+import errno
+import fcntl
 import json
+import os
 import subprocess
 import time
 from dataclasses import dataclass
@@ -37,7 +40,10 @@ from typing import Any
 
 import yaml
 
+from .tunnel_iterator import iter_active_tunnels
+
 CONFIG_PATH = Path("/etc/nebius-vpngw/config-resolved.yaml")
+LOCK_PATH = Path("/run/nebius-vpngw/health-monitor.lock")
 
 
 @dataclass
@@ -64,6 +70,7 @@ class TunnelHealth:
     bgp_peer: str | None
     bgp_status: str | None  # Established, Idle, Connect, etc.
     stats: TunnelStats
+    xfrm_present: bool
     is_healthy: bool
     failure_reasons: list[str]
     last_check_time: float
@@ -77,6 +84,8 @@ class TunnelHealthMonitor:
         check_interval_seconds: int = 60,
         enable_proactive_refresh: bool = False,
         proactive_refresh_hours: int = 8,
+        max_failures_before_restart: int = 2,
+        ping_enabled: bool = True,
     ) -> None:
         """Initialize tunnel health monitor.
 
@@ -84,11 +93,14 @@ class TunnelHealthMonitor:
             check_interval_seconds: How often to check tunnel health (default: 60s)
             enable_proactive_refresh: Enable periodic tunnel refresh (default: False)
             proactive_refresh_hours: Hours between proactive refreshes (default: 8)
+            max_failures_before_restart: Consecutive failures before restart (default: 2)
+            ping_enabled: Enable ICMP ping to BGP peer (default: True)
         """
         self.check_interval = check_interval_seconds
         self.tunnel_states: dict[str, TunnelHealth] = {}
         self.consecutive_failures: dict[str, int] = {}
-        self.max_failures_before_restart = 2  # Restart after 2 consecutive failures
+        self.max_failures_before_restart = max_failures_before_restart
+        self.ping_enabled = ping_enabled
 
         # Proactive refresh settings (optional, disabled by default)
         self.enable_proactive_refresh = enable_proactive_refresh
@@ -245,27 +257,44 @@ class TunnelHealthMonitor:
             is_healthy = False
             failure_reasons.append(f"IPsec status: {ipsec_status}")
 
-        # Check 2: If IPsec shows ESTABLISHED, xfrm interface must pass traffic
-        if stats and ipsec_status == "ESTABLISHED":
-            # Critical: TX drops indicate tunnel is not forwarding
-            if stats.tx_dropped > 0:
-                is_healthy = False
-                failure_reasons.append(f"TX drops detected: {stats.tx_dropped} packets dropped")
+        # Check 1b: XFRM interface should exist when tunnel is up
+        if stats is None:
+            is_healthy = False
+            failure_reasons.append(f"XFRM interface missing: {interface}")
 
-            # Warning: If tunnel has been up for a while but RX is still zero,
-            # either no traffic or tunnel is one-way
-            # We only flag this if TX is also happening (indicates attempted communication)
-            if stats.rx_packets == 0 and stats.tx_packets > 100:
-                is_healthy = False
-                failure_reasons.append(
-                    "No RX traffic despite TX activity (possible one-way tunnel)"
-                )
-
-        # Check 3: BGP session should be Established for BGP tunnels
+        # Check 2: BGP session should be Established for BGP tunnels
         if bgp_peer and bgp_status:
             if bgp_status.lower() != "established":
                 is_healthy = False
                 failure_reasons.append(f"BGP state: {bgp_status}")
+
+        # Check 3: Ping BGP peer to verify tunnel data plane is working
+        # This is the most reliable check - if we can ping the BGP peer (169.254.x.x),
+        # the tunnel XFRM interface is working correctly for data forwarding.
+        # Note: We only test BGP peer connectivity, not remote networks, because
+        # the gateway is a forwarder/router and shouldn't initiate traffic to remote networks.
+        if self.ping_enabled and bgp_peer and ipsec_status == "ESTABLISHED":
+            try:
+                # Ping BGP peer (169.254.x.x address on the XFRM interface)
+                # Use -c 2 for 2 packets, -W 1 for 1 second timeout
+                result = subprocess.run(
+                    ["ping", "-c", "2", "-W", "1", "-I", interface, bgp_peer],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                
+                if result.returncode != 0:
+                    is_healthy = False
+                    failure_reasons.append(
+                        f"BGP peer {bgp_peer} unreachable (tunnel data plane broken)"
+                    )
+            except subprocess.TimeoutExpired:
+                is_healthy = False
+                failure_reasons.append(f"Ping to BGP peer {bgp_peer} timed out")
+            except Exception as e:
+                # Don't fail health check on ping errors, just log
+                print(f"[TunnelMonitor] ⚠ Ping check error for {bgp_peer}: {e}")
 
         return TunnelHealth(
             name=tunnel_name,
@@ -274,6 +303,7 @@ class TunnelHealthMonitor:
             bgp_peer=bgp_peer,
             bgp_status=bgp_status,
             stats=stats or TunnelStats(interface, 0, 0, 0, 0, 0, 0, 0),
+            xfrm_present=stats is not None,
             is_healthy=is_healthy,
             failure_reasons=failure_reasons,
             last_check_time=time.time(),
@@ -301,7 +331,7 @@ class TunnelHealthMonitor:
 
             if result.returncode != 0:
                 print(f"[TunnelMonitor] ⚠ Failed to bring down {tunnel_name}: {result.stderr}")
-                return False
+                print("[TunnelMonitor] ⚠ Proceeding with tunnel up attempt anyway")
 
             # Wait briefly for cleanup
             time.sleep(2)
@@ -338,24 +368,27 @@ class TunnelHealthMonitor:
             cfg = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
             tunnels = []
 
-            idx = 0
-            for conn in cfg.get("connections", []):
-                for tun in conn.get("tunnels", []):
-                    ha_role = tun.get("ha_role", "active")
-                    if ha_role == "disable":
-                        continue
+            defaults_routing = cfg.get("defaults", {}).get("routing") or {}
+            defaults_mode = defaults_routing.get("mode", "bgp")
+            defaults_mode = getattr(defaults_mode, "value", defaults_mode)
+            defaults_mode = str(defaults_mode).lower()
 
-                    name = tun.get("name") or f"tunnel{idx}"
-                    interface = f"xfrm{idx}"
+            def _normalize_mode(mode: Any, fallback: str) -> str:
+                value = fallback if mode is None else mode
+                value = getattr(value, "value", value)
+                return str(value).lower()
 
-                    # Get BGP peer if this is a BGP tunnel
-                    bgp_peer = None
-                    routing_mode = tun.get("routing_mode") or conn.get("routing_mode")
-                    if routing_mode == "bgp" or routing_mode is None:
-                        bgp_peer = tun.get("inner_remote_ip")
+            for idx, iface_name, conn, tun in iter_active_tunnels(cfg):
+                name = tun.get("name") or f"tunnel{idx}"
+                conn_mode = _normalize_mode(conn.get("routing_mode"), defaults_mode)
+                tun_mode = _normalize_mode(tun.get("routing_mode"), conn_mode)
+                bgp_enabled = (conn.get("bgp") or {}).get("enabled")
 
-                    tunnels.append((name, interface, bgp_peer))
-                    idx += 1
+                bgp_peer = None
+                if tun_mode == "bgp" and bgp_enabled is not False:
+                    bgp_peer = tun.get("inner_remote_ip")
+
+                tunnels.append((name, iface_name, bgp_peer))
 
             return tunnels
 
@@ -377,7 +410,24 @@ class TunnelHealthMonitor:
         current_time = time.time()
 
         for tunnel_name, interface, bgp_peer in tunnels:
+            previous_health = self.tunnel_states.get(tunnel_name)
             health = self.check_tunnel_health(tunnel_name, interface, bgp_peer)
+
+            if previous_health and previous_health.xfrm_present and health.xfrm_present:
+                stats = health.stats
+                prev_stats = previous_health.stats
+                delta_tx_dropped = stats.tx_dropped - prev_stats.tx_dropped
+                delta_tx_errors = stats.tx_errors - prev_stats.tx_errors
+                delta_rx_errors = stats.rx_errors - prev_stats.rx_errors
+
+                if delta_tx_dropped > 0 or delta_tx_errors > 0 or delta_rx_errors > 0:
+                    health.is_healthy = False
+                    health.failure_reasons.append(
+                        "XFRM errors increased "
+                        f"(tx_dropped +{delta_tx_dropped}, "
+                        f"tx_errors +{delta_tx_errors}, "
+                        f"rx_errors +{delta_rx_errors})"
+                    )
             results[tunnel_name] = health
 
             # Proactive refresh (optional, preventive maintenance)
@@ -606,6 +656,9 @@ def main() -> None:
     config_check_interval = args.check_interval
     config_proactive = args.proactive_refresh
     config_refresh_hours = args.refresh_hours
+    config_max_failures = 2
+    config_enabled = True
+    config_ping_enabled = True
 
     if args.config:
         try:
@@ -631,20 +684,58 @@ def main() -> None:
                         config_proactive = health_config.get("proactive_refresh_enabled", False)
                     if args.refresh_hours == 8:  # Default value
                         config_refresh_hours = health_config.get("proactive_refresh_hours", 8)
+                    config_max_failures = int(
+                        health_config.get("max_failures_before_restart", config_max_failures)
+                    )
+                    config_enabled = health_config.get("enabled", True)
+                    config_ping_enabled = health_config.get("ping_enabled", True)
 
                     print(f"[TunnelMonitor] 📝 Loaded config from: {args.config}")
                     print(f"[TunnelMonitor]    check_interval: {config_check_interval}s")
                     print(f"[TunnelMonitor]    proactive_refresh: {config_proactive}")
+                    print(
+                        f"[TunnelMonitor]    max_failures_before_restart: {config_max_failures}"
+                    )
+                    print(f"[TunnelMonitor]    ping_enabled: {config_ping_enabled}")
                     if config_proactive:
                         print(f"[TunnelMonitor]    refresh_hours: {config_refresh_hours}h")
         except Exception as e:
             print(f"[TunnelMonitor] ⚠️  Failed to load config: {e}")
             print("[TunnelMonitor] Using command-line defaults")
 
+    if args.config and not config_enabled and not args.once:
+        print("[TunnelMonitor] Health monitoring disabled in config; exiting")
+        return
+
+    lock_file = None
+    if not args.once:
+        try:
+            LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+            lock_file = LOCK_PATH.open("w")
+            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            lock_file.write(str(os.getpid()))
+            lock_file.flush()
+        except OSError as e:
+            if e.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
+                print(
+                    "[TunnelMonitor] Another health monitor instance is already running; exiting"
+                )
+            elif e.errno in (errno.EACCES, errno.EPERM, errno.EROFS):
+                print(f"[TunnelMonitor] Lock path not writable: {LOCK_PATH} ({e})")
+            elif e.errno == errno.ENOENT:
+                print(
+                    f"[TunnelMonitor] Lock directory missing: {LOCK_PATH.parent} ({e})"
+                )
+            else:
+                print(f"[TunnelMonitor] Failed to initialize lock file: {e}")
+            return
+
     monitor = TunnelHealthMonitor(
         check_interval_seconds=config_check_interval,
         enable_proactive_refresh=config_proactive,
         proactive_refresh_hours=config_refresh_hours,
+        max_failures_before_restart=config_max_failures,
+        ping_enabled=config_ping_enabled,
     )
 
     if args.once:
@@ -694,23 +785,27 @@ def main() -> None:
         else:
             print("[TunnelMonitor] Proactive refresh DISABLED (reactive mode only)")
 
-        while True:
-            try:
-                monitor.run_health_check()
-                summary = monitor.get_health_summary()
+        try:
+            while True:
+                try:
+                    monitor.run_health_check()
+                    summary = monitor.get_health_summary()
 
-                print(
-                    f"[TunnelMonitor] Health: {summary['healthy_tunnels']}/{summary['total_tunnels']} healthy"
-                )
+                    print(
+                        f"[TunnelMonitor] Health: {summary['healthy_tunnels']}/{summary['total_tunnels']} healthy"
+                    )
 
-                time.sleep(config_check_interval)
+                    time.sleep(config_check_interval)
 
-            except KeyboardInterrupt:
-                print("\n[TunnelMonitor] Stopping monitor")
-                break
-            except Exception as e:
-                print(f"[TunnelMonitor] Error in monitoring loop: {e}")
-                time.sleep(config_check_interval)
+                except KeyboardInterrupt:
+                    print("\n[TunnelMonitor] Stopping monitor")
+                    break
+                except Exception as e:
+                    print(f"[TunnelMonitor] Error in monitoring loop: {e}")
+                    time.sleep(config_check_interval)
+        finally:
+            if lock_file is not None:
+                lock_file.close()
 
 
 if __name__ == "__main__":

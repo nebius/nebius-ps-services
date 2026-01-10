@@ -2046,7 +2046,9 @@ def restart_tunnel(
     """
     try:
         # Resolve config path
-        config_path = _resolve_local_config(local_config_file)
+        config_path = _resolve_local_config(
+            local_config_file, create_if_missing=False, exit_after_create=False
+        )
         if not config_path:
             raise typer.Exit(code=1)
 
@@ -2075,9 +2077,7 @@ def restart_tunnel(
         key_path_str = vm_spec.get("ssh_private_key_path") or os.environ.get("VPNGW_SSH_KEY")
         key_path = Path(key_path_str).expanduser() if key_path_str else None
 
-        from .config_loader import load_resolved_plan
-
-        plan = load_resolved_plan(config_path)
+        plan: ResolvedDeploymentPlan = merge_with_peer_configs(local_cfg, [])
 
         success_count = 0
 
@@ -2146,8 +2146,6 @@ def restart_tunnel(
             )
             raise typer.Exit(code=1)
         else:
-            print("[red]✗ Failed to restart on any gateway[/red]")
-            raise typer.Exit(code=1)
             print("[red]✗ Failed to restart on any gateway[/red]")
             raise typer.Exit(code=1)
 

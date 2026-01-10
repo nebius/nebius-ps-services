@@ -6,13 +6,13 @@ Wants=strongswan-starter.service frr.service
 
 [Service]
 Type=simple
-# Default: Reactive mode with manual override options
-ExecStart=/usr/bin/python3 -m nebius_vpngw.agent.tunnel_health_monitor --check-interval 60
+# Load from YAML config file (reads defaults.health_monitoring section)
+ExecStart=/usr/bin/python3 -m nebius_vpngw.agent.tunnel_health_monitor --config /etc/nebius-vpngw/config-resolved.yaml
 
 # Alternative configurations (uncomment ONE of these if needed):
 #
-# Option 1: Load from YAML config file (reads defaults.health_monitoring section)
-# ExecStart=/usr/bin/python3 -m nebius_vpngw.agent.tunnel_health_monitor --config /etc/nebius-vpngw/config.yaml
+# Option 1: Manual intervals without config file
+# ExecStart=/usr/bin/python3 -m nebius_vpngw.agent.tunnel_health_monitor --check-interval 60
 #
 # Option 2: Proactive refresh mode (restart every 8 hours regardless of health)
 # ExecStart=/usr/bin/python3 -m nebius_vpngw.agent.tunnel_health_monitor --check-interval 60 --proactive-refresh --refresh-hours 8
@@ -31,7 +31,9 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/log
+RuntimeDirectory=nebius-vpngw
+RuntimeDirectoryMode=0755
+ReadWritePaths=/var/log /run/nebius-vpngw
 # Need CAP_NET_ADMIN to restart IPsec tunnels
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW

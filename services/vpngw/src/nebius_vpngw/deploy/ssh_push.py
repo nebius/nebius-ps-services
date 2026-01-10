@@ -303,6 +303,13 @@ WantedBy=multi-user.target
                                     f.write(fix_routes_timer.read_text())
                                 print("[SSHPush] Staged route fix timer")
 
+                            # Deploy health monitoring service
+                            health_monitor_service = systemd_dir / "nebius-vpngw-health-monitor.service"
+                            if health_monitor_service.exists():
+                                with sftp.file("/tmp/nebius-vpngw-health-monitor.service", "w") as f:
+                                    f.write(health_monitor_service.read_text())
+                                print("[SSHPush] Staged health monitoring service")
+
                             firewall_script = systemd_dir / "setup-vpngw-firewall.sh"
                             if firewall_script.exists():
                                 with sftp.file("/tmp/setup-vpngw-firewall.sh", "w") as f:
@@ -359,6 +366,9 @@ WantedBy=multi-user.target
             "if [ -f /tmp/nebius-vpngw-fix-routes.timer ]; then sudo mv /tmp/nebius-vpngw-fix-routes.timer /etc/systemd/system/nebius-vpngw-fix-routes.timer; fi",
             "if [ -f /etc/systemd/system/nebius-vpngw-fix-routes.service ]; then sudo chmod 0644 /etc/systemd/system/nebius-vpngw-fix-routes.service; fi",
             "if [ -f /etc/systemd/system/nebius-vpngw-fix-routes.timer ]; then sudo chmod 0644 /etc/systemd/system/nebius-vpngw-fix-routes.timer; fi",
+            # Install health monitoring service if staged
+            "if [ -f /tmp/nebius-vpngw-health-monitor.service ]; then sudo mv /tmp/nebius-vpngw-health-monitor.service /etc/systemd/system/nebius-vpngw-health-monitor.service; fi",
+            "if [ -f /etc/systemd/system/nebius-vpngw-health-monitor.service ]; then sudo chmod 0644 /etc/systemd/system/nebius-vpngw-health-monitor.service; fi",
             "if [ -f /tmp/setup-vpngw-firewall.sh ]; then sudo mv /tmp/setup-vpngw-firewall.sh /usr/local/bin/setup-vpngw-firewall.sh; fi",
             "if [ -f /usr/local/bin/setup-vpngw-firewall.sh ]; then sudo chmod 0755 /usr/local/bin/setup-vpngw-firewall.sh; fi",
             # Refresh systemd unit if staged
@@ -367,6 +377,8 @@ WantedBy=multi-user.target
             "sudo systemctl daemon-reload",
             # Enable and start route fix timer (only if service file exists)
             "if [ -f /etc/systemd/system/nebius-vpngw-fix-routes.timer ]; then sudo systemctl enable --now nebius-vpngw-fix-routes.timer; fi",
+            # Enable and start health monitoring service (only if service file exists)
+            "if [ -f /etc/systemd/system/nebius-vpngw-health-monitor.service ]; then sudo systemctl enable --now nebius-vpngw-health-monitor.service; fi",
             # Run route fix immediately before starting agent (non-fatal if unavailable)
             'if python3 -c "import nebius_vpngw" >/dev/null 2>&1; then sudo /usr/bin/python3 -m nebius_vpngw.agent.fix_routes > /var/log/vpngw-fix-routes.log 2>&1 || true; fi',
             # Apply firewall rules (including MSS clamp and ICMP allowances)
@@ -434,6 +446,40 @@ WantedBy=multi-user.target
         except Exception:
             # Non-critical check, don't fail deployment
             pass
+
+        # Ensure FRR is installed (cloud-init can fail if repo/version is unavailable)
+        try:
+            stdin, stdout, stderr = client.exec_command(
+                "dpkg -l frr 2>/dev/null | grep -q '^ii'", timeout=10
+            )
+            rc = stdout.channel.recv_exit_status()
+            if rc != 0:
+                print("[SSHPush] ⚠ FRR package missing; attempting install...")
+                install_cmd = (
+                    "sudo bash -lc '"
+                    "set -e;"
+                    "if ! dpkg -l frr 2>/dev/null | grep -q \"^ii\"; then "
+                    "command -v curl >/dev/null 2>&1 || (apt-get update && apt-get install -y curl); "
+                    "if [ ! -f /etc/apt/sources.list.d/frr.list ]; then "
+                    "curl -s https://deb.frrouting.org/frr/keys.asc | tee /usr/share/keyrings/frrouting.asc > /dev/null; "
+                    "UBUNTU_CODENAME=$(lsb_release -cs); "
+                    "echo \"deb [signed-by=/usr/share/keyrings/frrouting.asc] https://deb.frrouting.org/frr $UBUNTU_CODENAME frr-stable\" > /etc/apt/sources.list.d/frr.list; "
+                    "fi; "
+                    "apt-get update; "
+                    "DEBIAN_FRONTEND=noninteractive apt-get install -y frr frr-pythontools; "
+                    "fi'"
+                )
+                stdin, stdout, stderr = client.exec_command(
+                    install_cmd, timeout=300, get_pty=True
+                )
+                install_rc = stdout.channel.recv_exit_status()
+                if install_rc == 0:
+                    print("[SSHPush] ✓ FRR installed")
+                else:
+                    err = stderr.read().decode().strip()
+                    print(f"[SSHPush] ✗ FRR install failed: {err}")
+        except Exception as e:
+            print(f"[SSHPush] ⚠ FRR install check failed: {e}")
 
         # Verify service is actually running
         try:

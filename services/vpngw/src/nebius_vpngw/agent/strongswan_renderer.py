@@ -121,10 +121,18 @@ class StrongSwanRenderer:
 
                 # Traffic selectors: limit local side to inner CIDR + gateway.local_prefixes
                 # to avoid capturing public traffic/SSH; allow any remote (routes decide what flows)
+                # NOTE: For passive tunnels, only include the /30 to avoid overlapping policies
+                # when if_id is not supported by ipsec.conf (prevents policy flipping).
                 local_ts: list[str] = []
                 if inner_cidr:
                     local_ts.append(inner_cidr)
-                local_ts.extend(gateway_local_prefixes)
+                if ha_role != "passive":
+                    local_ts.extend(gateway_local_prefixes)
+                elif gateway_local_prefixes:
+                    print(
+                        f"[StrongSwan] Passive tunnel {name}: skipping gateway.local_prefixes "
+                        "to avoid overlapping policies"
+                    )
                 if local_ts:
                     conn_lines.append(f"    leftsubnet={','.join(local_ts)}")
                 else:

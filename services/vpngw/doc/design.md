@@ -552,6 +552,7 @@ The configuration fields `local_prefixes` and `remote_prefixes` have different m
 - Runs over XFRM interfaces using APIPA inner IPs
 - Configurable timers: hold time (60s), keepalive (20s)
 - Graceful restart enabled by default
+- Install policy: use FRR 10.x from the official repo without pinning a single build (repo rotations can remove older builds). Apply performs a fallback install if FRR is missing.
 
 ### APIPA Inner IPs
 
@@ -1429,7 +1430,7 @@ dpd_timeout = 120s  # Consider peer dead after 120s without response
 File: `tunnel_health_monitor.py`, systemd service: `nebius-vpngw-health-monitor.service`
 
 - **Purpose:** Detect data plane failures by actively probing tunnel connectivity
-- **Mechanism:** Periodic ICMP ping through each tunnel interface
+- **Mechanism:** Periodic health checks using IPsec status, BGP state, XFRM error deltas, and optional ICMP ping to the BGP peer (controlled by `ping_enabled`)
 - **Detection time:** ~65 seconds (60s initial check + 5s immediate re-check after first failure)
 - **Recovery:** Automatic tunnel restart after 2 consecutive failures
 
@@ -1457,7 +1458,14 @@ defaults:
     max_failures_before_restart: 2         # Restart after 2 consecutive failures
     proactive_refresh_enabled: false       # Reactive mode (detect & fix)
     proactive_refresh_hours: 8             # Unused (proactive mode disabled)
+    ping_enabled: true                     # ICMP probe to BGP peer (disable if peer blocks ICMP)
 ```
+
+**Why `ping_enabled` may be disabled:** Some peers (notably GCP HA VPN) do not respond to ICMP on APIPA unless explicitly allowed by firewall rules. When ICMP is blocked, the monitor would falsely mark tunnels unhealthy and trigger restarts. In those environments, set `ping_enabled: false` and rely on IPsec/BGP state plus XFRM error counters.
+
+**XFRM stale detection without ICMP:** The monitor compares `ip -s link show xfrmX` counters between checks and treats increases in `tx_dropped`, `tx_errors`, or `rx_errors` as a data-plane failure even if BGP stays up.
+
+**Single-instance guard:** The monitor acquires a lock at `/run/nebius-vpngw/health-monitor.lock` to prevent accidental duplicate monitors (e.g., a manual `python -m ...` left running). systemd creates `/run/nebius-vpngw` via `RuntimeDirectory=nebius-vpngw` even with `ProtectSystem=strict`.
 
 **Reactive vs Proactive Modes:**
 
@@ -1550,18 +1558,23 @@ The health monitor runs as a systemd service on each gateway VM:
 ```ini
 [Unit]
 Description=Nebius VPN Gateway Health Monitor
-After=network-online.target strongswan-starter.service frr.service
-Wants=network-online.target
+After=network.target strongswan-starter.service frr.service
+Wants=strongswan-starter.service frr.service
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/nebius-vpngw-agent --monitor
-Restart=always
-RestartSec=30s
+ExecStart=/usr/bin/python3 -m nebius_vpngw.agent.tunnel_health_monitor --config /etc/nebius-vpngw/config-resolved.yaml
+Restart=on-failure
+RestartSec=10
+RuntimeDirectory=nebius-vpngw
+RuntimeDirectoryMode=0755
+ReadWritePaths=/var/log /run/nebius-vpngw
 
 [Install]
 WantedBy=multi-user.target
 ```
+
+**Config source:** `/etc/nebius-vpngw/config-resolved.yaml` (per-VM resolved config deployed during `nebius-vpngw apply`).
 
 **Management commands:**
 

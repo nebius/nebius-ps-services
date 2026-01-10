@@ -307,6 +307,10 @@ class HealthMonitoringConfig(BaseModel):
         le=72,
         description="Hours between proactive tunnel refreshes (1-72). Only used if proactive_refresh_enabled=true",
     )
+    ping_enabled: bool = Field(
+        default=True,
+        description="Enable ICMP ping to BGP peer for data-plane validation",
+    )
 
 
 class DefaultsConfig(BaseModel):

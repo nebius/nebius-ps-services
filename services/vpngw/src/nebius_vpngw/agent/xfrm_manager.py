@@ -200,7 +200,45 @@ class XFRMManager:
         if result.returncode == 0:
             print(f"[XFRM] ✓ Added peer route {remote_ip}/32 via {name}")
         else:
-            print(f"[XFRM] WARNING: Failed to add peer route: {result.stderr}")
+            print(f"[XFRM] ERROR adding peer route to {name}: {result.stderr}")
+
+        # Add permanent neighbor entry for NOARP interfaces
+        # XFRM interfaces don't support ARP, so we need static neighbor entries
+        # to avoid packet loss while the kernel tries (and fails) to do ARP resolution
+        self._add_permanent_neighbor(name, remote_ip)
+
+    def _add_permanent_neighbor(self, name: str, remote_ip: str) -> None:
+        """Add permanent neighbor entry for NOARP interfaces.
+        
+        XFRM interfaces are NOARP (link/none) and don't support ARP protocol.
+        Without static neighbor entries, the kernel tries ARP resolution which
+        times out (~6-10 seconds), causing initial packet loss.
+        
+        We use a null MAC address (00:00:00:00:00:00) since XFRM interfaces
+        don't have real link-layer addresses - they operate at layer 3.
+        """
+        result = subprocess.run(
+            ["ip", "neigh", "add", remote_ip, "dev", name, "lladdr", "00:00:00:00:00:00", "nud", "permanent"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            print(f"[XFRM] ✓ Added permanent neighbor {remote_ip} on {name}")
+        elif "File exists" in result.stderr:
+            # Neighbor already exists, try to replace it instead
+            result = subprocess.run(
+                ["ip", "neigh", "replace", remote_ip, "dev", name, "lladdr", "00:00:00:00:00:00", "nud", "permanent"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0:
+                print(f"[XFRM] ✓ Replaced neighbor {remote_ip} on {name}")
+            else:
+                print(f"[XFRM] WARNING: Failed to replace neighbor {remote_ip} on {name}: {result.stderr}")
+        else:
+            print(f"[XFRM] WARNING: Failed to add neighbor {remote_ip} on {name}: {result.stderr}")
 
     def _add_static_routes(self, name: str, remote_prefixes: list[str]) -> None:
         """Add static routes for remote prefixes via XFRM interface."""
