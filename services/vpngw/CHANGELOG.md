@@ -14,6 +14,14 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [v0.4.6] - 2026-01-10
+
+- Added health monitor improvements: respect `health_monitoring.ping_enabled`, detect stale XFRM tunnels via error-counter deltas, and guard against duplicate monitor instances.
+- Updated health monitor systemd unit to use a runtime directory and writable path for the lock under `/run/nebius-vpngw`.
+- Fixed `restart-tunnel` ImportError by using the resolved plan merge path in the CLI.
+- Avoided overlapping XFRM policies in HA by excluding local prefixes from passive tunnel `leftsubnet`.
+- Stabilized FRR installation on Ubuntu 24.04 by removing the pinned package version and adding an apply-time install fallback.
+
 ## [v0.4.5] - 2026-01-07
 
 - Added Active/Passive HA support with BGP MED (Multi-Exit Discriminator) and local-preference for bidirectional path control.

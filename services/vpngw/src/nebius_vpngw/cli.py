@@ -2012,6 +2012,153 @@ def destroy(
         raise typer.Exit(code=1) from e
 
 
+@app.command(name="restart-tunnel")
+def restart_tunnel(
+    tunnel_name: str = typer.Argument(
+        ...,
+        help="Name of the tunnel to restart (use 'all' to restart all tunnels). Use 'nebius-vpngw status' to find tunnel names.",
+    ),
+    local_config_file: Path = typer.Option(
+        None,
+        "--local-config-file",
+        "-c",
+        help="Path to local config file",
+        show_default="nebius-vpngw.config.yaml in current directory",
+    ),
+) -> None:
+    """
+    Manually restart IPsec tunnel(s) to recover from stale state.
+
+    This command connects to the gateway VMs via SSH and executes the tunnel
+    restart procedure. Useful for immediate recovery from tunnel state desync
+    or after network maintenance.
+
+    Examples:
+
+      # Restart specific tunnel
+      nebius-vpngw restart-tunnel gcp-ha-tunnel-1
+
+      # Restart all tunnels
+      nebius-vpngw restart-tunnel all
+
+      # Use custom config file
+      nebius-vpngw restart-tunnel gcp-ha-tunnel-1 -c my-config.yaml
+    """
+    try:
+        # Resolve config path
+        config_path = _resolve_local_config(
+            local_config_file, create_if_missing=False, exit_after_create=False
+        )
+        if not config_path:
+            raise typer.Exit(code=1)
+
+        print(f"[bold]Loading config from:[/bold] {config_path}")
+        local_cfg = load_local_config(config_path)
+
+        # Get gateway instances
+        gateway_group = local_cfg.get("gateway_group", {})
+        instance_count = gateway_group.get("instance_count", 1)
+
+        print(f"[bold]Found {instance_count} gateway instance(s)[/bold]")
+
+        # Construct restart command
+        if tunnel_name.lower() == "all":
+            cmd = "python3 -m nebius_vpngw.agent.tunnel_health_monitor --restart-tunnel all"
+            action_desc = "all tunnels"
+        else:
+            cmd = f"python3 -m nebius_vpngw.agent.tunnel_health_monitor --restart-tunnel {tunnel_name}"
+            action_desc = f"tunnel '{tunnel_name}'"
+
+        print(f"[bold]Restarting {action_desc}...[/bold]")
+
+        # Get SSH credentials and resolved deployment plan
+        vm_spec = gateway_group.get("vm_spec", {})
+        username = vm_spec.get("ssh_username", os.environ.get("VPNGW_SSH_USER", "ubuntu"))
+        key_path_str = vm_spec.get("ssh_private_key_path") or os.environ.get("VPNGW_SSH_KEY")
+        key_path = Path(key_path_str).expanduser() if key_path_str else None
+
+        plan: ResolvedDeploymentPlan = merge_with_peer_configs(local_cfg, [])
+
+        success_count = 0
+
+        for inst in plan.per_instance:
+            hostname = inst.hostname
+            external_ip = inst.external_ip
+
+            if not external_ip:
+                print(f"[yellow]⚠️  No external IP for {hostname}, skipping[/yellow]")
+                continue
+
+            print(f"\\n[dim]Connecting to {hostname} ({external_ip})...[/dim]")
+
+            # Build SSH command
+            ssh_cmd = ["ssh"]
+            if key_path:
+                ssh_cmd.extend(["-i", str(key_path)])
+            ssh_cmd.extend(
+                [
+                    "-o",
+                    "StrictHostKeyChecking=no",
+                    "-o",
+                    "UserKnownHostsFile=/dev/null",
+                    "-o",
+                    "ConnectTimeout=10",
+                    f"{username}@{external_ip}",
+                    cmd,
+                ]
+            )
+
+            try:
+                import subprocess
+
+                result = subprocess.run(
+                    ssh_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+
+                if result.returncode == 0:
+                    print(f"[green]✓ Successfully restarted on {hostname}[/green]")
+                    if result.stdout.strip():
+                        print(f"[dim]{result.stdout.strip()}[/dim]")
+                    success_count += 1
+                else:
+                    print(f"[red]✗ Failed on {hostname}[/red]")
+                    if result.stderr:
+                        print(f"[dim]{result.stderr.strip()}[/dim]")
+            except subprocess.TimeoutExpired:
+                print(f"[red]✗ Timeout connecting to {hostname}[/red]")
+            except Exception as e:
+                print(f"[red]✗ Error connecting to {hostname}: {e}[/red]")
+
+        print()
+        if success_count == instance_count:
+            print(
+                f"[green]✓ Successfully restarted {action_desc} on all {instance_count} gateway(s)[/green]"
+            )
+            print(
+                "[dim]Tunnels should re-establish within 10-15 seconds. Run 'nebius-vpngw status' to verify.[/dim]"
+            )
+        elif success_count > 0:
+            print(
+                f"[yellow]⚠️  Partial success: restarted on {success_count}/{instance_count} gateway(s)[/yellow]"
+            )
+            raise typer.Exit(code=1)
+        else:
+            print("[red]✗ Failed to restart on any gateway[/red]")
+            raise typer.Exit(code=1)
+
+    except typer.Exit:
+        raise
+    except Exception as e:
+        print(f"[red]Error during tunnel restart: {e}[/red]")
+        import traceback
+
+        print(f"[dim]{traceback.format_exc()}[/dim]")
+        raise typer.Exit(code=1) from e
+
+
 # init_config command removed; auto-creation occurs on first run without --local-config-file
 
 

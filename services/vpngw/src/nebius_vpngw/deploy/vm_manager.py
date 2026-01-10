@@ -3126,12 +3126,11 @@ class VMManager:
             "runcmd:\n"
             '  - [ bash, -lc, "mkdir -p /etc/nebius-vpngw" ]\n'
             '  - [ bash, -lc, "mkdir -p /etc/ipsec.d" ]\n'
-            "  # Install FRR 10.5.0 from official repository (fixes route installation bug in 8.4.4)\n"
-            "  # Detect Ubuntu version and use appropriate repository\n"
+            "  # Install FRR 10.x from official repository (fixes route installation bug in 8.4.4)\n"
             '  - [ bash, -c, "curl -s https://deb.frrouting.org/frr/keys.asc | tee /usr/share/keyrings/frrouting.asc > /dev/null" ]\n'
             '  - [ bash, -c, "UBUNTU_CODENAME=$(lsb_release -cs); echo \\"deb [signed-by=/usr/share/keyrings/frrouting.asc] https://deb.frrouting.org/frr $UBUNTU_CODENAME frr-stable\\" > /etc/apt/sources.list.d/frr.list" ]\n'
             "  - [ apt-get, update ]\n"
-            '  - [ bash, -c, "UBUNTU_VERSION=$(lsb_release -rs); if [ \\"$UBUNTU_VERSION\\" = \\"24.04\\" ]; then apt-get install -y frr=10.5.0-0~ubuntu24.04.1 frr-pythontools; else apt-get install -y frr frr-pythontools; fi" ]\n'
+            '  - [ bash, -c, "DEBIAN_FRONTEND=noninteractive apt-get install -y frr frr-pythontools" ]\n'
             "  # Comment out conflicting sysctl settings in /etc/sysctl.conf (prevents our 99-zzz-vpngw.conf from being overridden)\n"
             "  - [ bash, -c, \"sed -i 's/^net.ipv4.ip_forward=.*/#&  # Overridden by 99-zzz-vpngw.conf/' /etc/sysctl.conf\" ]\n"
             "  - [ bash, -c, \"sed -i 's/^net.ipv4.conf.all.rp_filter=.*/#&  # Overridden by 99-zzz-vpngw.conf/' /etc/sysctl.conf\" ]\n"

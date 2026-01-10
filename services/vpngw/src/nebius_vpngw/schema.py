@@ -276,6 +276,43 @@ class AuthConfig(BaseModel):
     method: AuthMethod = Field(default=AuthMethod.PSK, description="Authentication method")
 
 
+class HealthMonitoringConfig(BaseModel):
+    """Tunnel health monitoring configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(
+        default=True,
+        description="Enable automatic tunnel health monitoring and recovery",
+    )
+    check_interval_seconds: int = Field(
+        default=60,
+        ge=10,
+        le=300,
+        description="Health check interval in seconds (10-300)",
+    )
+    max_failures_before_restart: int = Field(
+        default=2,
+        ge=1,
+        le=10,
+        description="Number of consecutive failures before auto-restart (1-10)",
+    )
+    proactive_refresh_enabled: bool = Field(
+        default=False,
+        description="Enable proactive tunnel refresh (periodic restart regardless of health)",
+    )
+    proactive_refresh_hours: int = Field(
+        default=8,
+        ge=1,
+        le=72,
+        description="Hours between proactive tunnel refreshes (1-72). Only used if proactive_refresh_enabled=true",
+    )
+    ping_enabled: bool = Field(
+        default=True,
+        description="Enable ICMP ping to BGP peer for data-plane validation",
+    )
+
+
 class DefaultsConfig(BaseModel):
     """Global defaults for VPN behavior."""
 
@@ -289,6 +326,10 @@ class DefaultsConfig(BaseModel):
     dpd: DPDConfig = Field(..., description="Dead Peer Detection configuration")
     routing: RoutingDefaults = Field(
         default_factory=RoutingDefaults, description="Routing configuration defaults"
+    )
+    health_monitoring: HealthMonitoringConfig = Field(
+        default_factory=HealthMonitoringConfig,
+        description="Tunnel health monitoring and auto-recovery configuration",
     )
 
 

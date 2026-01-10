@@ -149,6 +149,20 @@ defaults:
     interval_seconds: 30   # Check every 30 seconds
     timeout_seconds: 120   # Consider peer dead after 120 seconds
 
+  # Tunnel Health Monitoring (automatic failure detection and recovery)
+  health_monitoring:
+    enabled: true                      # Enable automatic health checks
+    check_interval_seconds: 60         # Check tunnel health every 60 seconds
+    max_failures_before_restart: 2     # Auto-restart after 2 consecutive failures
+    proactive_refresh_enabled: false   # Disable periodic restart (reactive mode)
+    proactive_refresh_hours: 8         # Hours between restarts if proactive enabled
+    ping_enabled: true                 # ICMP probe to BGP peer (disable if peer blocks ICMP)
+    # Notes:
+    # - Reactive mode (default): Restarts only on detected failures, 100% uptime when healthy
+    # - Proactive mode: Restarts every X hours regardless of health (AWS-style maintenance)
+    # - Use proactive mode only if failures occur >3 times/day despite NAT keepalives
+    # - See REACTIVE_VS_PROACTIVE_MODES.md for detailed trade-off analysis
+
   # Routing mode
   routing:
     mode: "bgp"  # Options: "bgp" or "static"
