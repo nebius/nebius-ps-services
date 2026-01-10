@@ -120,8 +120,9 @@ if marker not in text:
 
 release_header = f"## [{tag}] - {date_str}"
 
-# If this release already exists in the changelog, do nothing (idempotent)
-if release_header in text:
+# If this release already exists in the changelog (any date), do nothing
+tag_pattern = re.compile(rf"^## \[{re.escape(tag)}\] -", re.MULTILINE)
+if tag_pattern.search(text):
     sys.exit(0)
 
 # Replace the first Unreleased heading with a new Unreleased + release header
@@ -162,7 +163,7 @@ prep_release() {
   echo "==> Pushing current branch..."
   git push
 
-  echo "==> Done. Open a PR when ready (e.g., gh pr create)."
+  echo "==> Done. Open a PR when ready."
 }
 
 require_main_clean() {

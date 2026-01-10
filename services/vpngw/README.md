@@ -1575,28 +1575,13 @@ Bump **MINOR** for backward-compatible features.
 Bump **PATCH** for fixes only.
 **Current working version (including dev distance):** `python -m setuptools_scm`
 
-### Release workflow (you can use the script)
+### How to create a release for this project
 
-1. Ensure tooling: `python -m pip install --upgrade setuptools setuptools-scm build` and install GitHub CLI (`command -v gh || brew install gh` / `sudo apt-get install gh`), then `gh auth login`.
-2. Tag the release with SemVer: `git tag -a vX.Y.Z -m "Release vX.Y.Z" && git push origin vX.Y.Z`.
-3. Build from a clean tree so the wheel matches the tag: `rm -rf dist && python -m build --wheel` (the wheel filename should be `nebius_vpngw-X.Y.Z-py3-none-any.whl`; do not rename it by hand).
-4. Publish the wheel to GitHub Releases: `gh release create vX.Y.Z ./dist/nebius_vpngw-X.Y.Z-py3-none-any.whl --title "vX.Y.Z" --notes "Release notes..."`.
-5. End users install or upgrade via pipx using the published wheel (see Installation). Verify with `nebius-vpngw --version` and ensure it matches the tag.
+1. Prepare on your working branch: `./release.sh --prep vX.Y.Z`
+2. Open a PR and merge it to `main`.
+3. On `main`, publish the release: `./release.sh --publish vX.Y.Z`
 
-### One-shot release script (Mac/Linux)
-
-Use `release.sh` to commit, tag, build, and publish in one go:
-
-```bash
-chmod +x release.sh
-./release.sh vX.Y.Z
-```
-
-The script will:
-
-- Commit staged changes (if any) with `Release vX.Y.Z commit`, push the branch, create/push tag `vX.Y.Z`.
-- Build the wheel (`python -m build --wheel`) and upload it to a GitHub Release `vX.Y.Z`.
-- Auto-install `gh` (brew/apt) if missing and handle auth via `GH_TOKEN`/`GITHUB_TOKEN`, or fall back to `gh auth login` if needed.
+Note: `--publish` requires `main` to be clean and up to date with `origin/main`.
 
 ### Optional: build a single-file binary (PyInstaller)
 
