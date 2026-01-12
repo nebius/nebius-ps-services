@@ -1,6 +1,6 @@
 # Nebius VPN Gateway (VM-Based) — Design Document
 
-> Version: v0.4.6
+> Version: v0.4.7
 > Designed by: Reza Bahmanzadeh, Nebius Professional Services, CX Org.
 > Copyright 2025 Nebius B.V.
 > Licensed under the Apache License, Version 2.0
@@ -17,6 +17,7 @@
 - [Routing Modes & Local Prefixes](#routing-modes--local-prefixes)
 - [IPsec Configuration](#ipsec-configuration)
 - [BGP Configuration](#bgp-configuration)
+- [Failover](#failover)
 - [Static Routes Configuration](#static-routes-configuration)
 - [XFRM Routing Stack](#xfrm-routing-stack)
 - [Security Hardening](#security-hardening)
@@ -33,6 +34,7 @@
 ## XFRM Mode Summary (current, required)
 
 - XFRM netdevices (`xfrm0`, `xfrm1`, …) bound via `if_id` in strongSwan; no marks or updown scripts.
+- strongSwan connections are loaded via `swanctl` (VICI). `ipsec.conf` is a minimal starter-only config; tunnel CHILD_SAs include `if_id_in/if_id_out` for deterministic XFRM binding.
 - Traffic selectors: local side is scoped to the tunnel’s inner /30 plus `gateway.local_prefixes`; remote stays `0.0.0.0/0`. This keeps SSH/ping to the public IP off the tunnel while allowing any remote prefixes to traverse.
 - Routing hygiene: table 220 is removed; the broad `169.254.0.0/16` DHCP route is removed while preserving metadata routes (`169.254.169.x`). Prevents policy routing and APIPA from stealing tunnel/management traffic.
 - Sysctl: `rp_filter=0` on all/default/eth0 (required for XFRM), IP forwarding enabled, redirects off, ARP hardened.
@@ -51,7 +53,7 @@ Deliver a VM-based site-to-site VPN gateway for Nebius AI Cloud using IPsec (str
 
 **Goals:**
 
-- IKEv2 (default) with IKEv1 fallback, PSK authentication
+- IKEv2 default; IKEv1 optional (disabled by default), PSK authentication
 - Strong cryptography: AES-256, SHA-256/384/512, DH groups 14/20/24
 - BGP routing (preferred) with static routing fallback
 - Repeatable, idempotent deployments with minimal operator state
@@ -353,7 +355,7 @@ Global default under `defaults.routing.mode`; override per connection/tunnel.
 ### strongSwan
 
 - Route-based VPN using XFRM interfaces (default)
-- IKEv2 default, IKEv1 fallback configurable
+- IKEv2 default, IKEv1 optional (disabled by default)
 - PSK authentication
 - DPD (Dead Peer Detection) for tunnel liveness
 
@@ -379,7 +381,7 @@ gateway:
   local_asn: 65010
   local_prefixes:
     - "10.0.0.0/16"
-  ipsec_mode: xfrm-interface  # Default (can omit)
+  ipsec_mode: xfrm-interface  # Default
 ```
 
 **XFRM Setup:**
@@ -536,13 +538,11 @@ The configuration fields `local_prefixes` and `remote_prefixes` have different m
 
 - `aes256gcm16-prfsha256-modp2048` (modern AEAD)
 - `aes256-sha256-modp2048` (compatible)
-- `aes256-sha1-modp1024` (legacy fallback)
 
 **ESP (Phase 2):**
 
 - `aes256gcm16-modp2048` (modern AEAD)
 - `aes256-sha256-modp2048` (compatible)
-- `aes256-sha1-modp1024` (legacy fallback)
 
 ## BGP Configuration
 
@@ -550,9 +550,17 @@ The configuration fields `local_prefixes` and `remote_prefixes` have different m
 
 - `bgpd` daemon for BGP routing
 - Runs over XFRM interfaces using APIPA inner IPs
-- Configurable timers: hold time (60s), keepalive (20s)
-- Graceful restart enabled by default
+- Configurable timers with a baseline 3:1 ratio (hold time = 3 × keepalive)
+- Optional BFD for sub-second failure detection (disabled by default; requires peer support)
+- Graceful restart is optional; disable for faster withdrawal if needed
 - Install policy: use FRR 10.x from the official repo without pinning a single build (repo rotations can remove older builds). Apply performs a fallback install if FRR is missing.
+
+### Timer Best Practices (BGP + DPD)
+
+- **3:1 baseline:** `hold_time = 3 × keepalive`, `dpd_timeout = 3 × dpd_interval`
+- **Faster convergence:** Enable BFD instead of pushing BGP timers too low
+- **Routing-first failover:** Keep BGP hold shorter than DPD timeout so routes withdraw before IPsec cleanup
+- **Noisy links:** Increase timers if you see route flapping from transient loss
 
 ### APIPA Inner IPs
 
@@ -613,11 +621,16 @@ When both tunnels have equal BGP preference, the kernel uses ECMP load balancing
 
 3. **Kernel routing table** installs only the higher-preference route (active tunnel)
 4. **All flows** use the same tunnel → symmetric return paths → no rp_filter drops
-5. **Automatic failover:** If active tunnel fails, BGP immediately switches to passive (typically <10s)
+5. **Automatic failover:** BGP switches to passive within the hold timer; with BFD enabled this can be sub-second
+6. **Traffic selectors** include the tunnel inner /30 plus `gateway.local_prefixes` on **both** active and passive tunnels so the passive tunnel can carry data immediately after failover.
 
 **Configuration Example:**
 
 ```yaml
+defaults:
+  # Optional; defaults to active-passive if omitted
+  ha_mode: "active-passive"
+
 connections:
   - name: "gcp-ha-vpn"
     routing_mode: bgp
@@ -638,7 +651,9 @@ connections:
 | **passive** | `ha_role: "passive"` (**must be explicit**) | Standby tunnel with BGP local-preference 100. Provides hot standby for automatic failover. |
 | **disable** | `ha_role: "disable"` (**must be explicit**) | Tunnel is completely skipped (no IPsec, no BGP). Use for maintenance or cost optimization. |
 
-**Important:** The Active/Passive design requires **exactly one active tunnel** per gateway to guarantee symmetric routing. If you omit `ha_role` on multiple tunnels, they will all default to `"active"` and create ECMP routing, which defeats the purpose of this design.
+**Important:** The Active/Passive design requires **exactly one active tunnel** per connection **per gateway instance** to guarantee symmetric routing. Schema validation enforces this, and `defaults.ha_mode` is **required** and locked to `"active-passive"` (the only supported mode in current releases). If you omit `ha_role` on multiple tunnels, they will all default to `"active"` and create ECMP routing, which defeats the purpose of this design.
+
+**Implementation note:** To allow the passive tunnel to carry data immediately after failover, **both tunnels** include `gateway.local_prefixes` in traffic selectors. This requires `if_id_in/if_id_out` binding via `swanctl` (VICI). The legacy `ipsec.conf` parser does **not** support `if_id_*`, so `swanctl` is mandatory for deterministic XFRM selection.
 
 **Benefits:**
 
@@ -669,7 +684,7 @@ If you have existing ECMP configuration (both tunnels set to `ha_role: "active"`
 
 1. Change one tunnel to `ha_role: "passive"` in your YAML config
 2. Deploy the updated configuration
-3. BGP will converge within one hold-time period (~60 seconds)
+3. BGP will converge within one hold-time period (default 6 seconds, or faster with BFD)
 4. Verify with `ip route show` and test with `iperf3 -P 4`
 
 ### BGP MED (Multi-Exit Discriminator) for Peer-Side Path Selection
@@ -858,6 +873,42 @@ If GCP still shows both routes with same priority:
    sudo tcpdump -i xfrm0 -n icmp  # Should see both directions
    sudo tcpdump -i xfrm1 -n icmp  # Should see nothing or minimal backup traffic
    ```
+
+## Failover
+
+### Automatic Failover (Active/Passive)
+
+- Both tunnels stay UP (IPsec + BGP), but only the **active** path is used for data.
+- **Local selection:** FRR applies `local-preference` (active 200, passive 100) to pick the active path.
+- **Peer selection:** MED (active 0, passive 100) nudges the peer to return on the same active tunnel.
+- **Failure detection order (fastest → slowest):**
+  - **BFD (optional):** sub-second detection when supported by the peer.
+  - **BGP hold timer:** default 6s (keepalive 2s) when BFD is not active.
+  - **DPD:** default 5s/15s (control-plane cleanup).
+
+**Design rule:** Keep `BGP hold < DPD timeout` so routes withdraw before IPsec cleanup.
+
+**BFD compatibility:** Enabling BFD on the Nebius side is safe; if the peer does not support BFD, the session stays down and BGP falls back to its timers. If the peer supports BFD and it is enabled on both sides, BFD becomes the fast failure detector.
+
+### Manual Failover (CLI)
+
+Use the CLI to force traffic onto the passive tunnel by shutting down the active BGP neighbor (IPsec stays up):
+
+```bash
+# If exactly two tunnels exist, auto-select the passive tunnel
+nebius-vpngw failover --local-config-file <file>
+
+# If more than two tunnels exist, specify the passive tunnel explicitly
+nebius-vpngw failover --tunnel-failover <passive-tunnel-name> --local-config-file <file>
+```
+
+**Restore active tunnel:**
+
+```bash
+sudo vtysh -c "configure terminal" -c "router bgp <ASN>" -c "no neighbor <peer-ip> shutdown"
+```
+
+Or reapply config / restart FRR to reset running state.
 
 ## Static Routes Configuration
 
@@ -1409,15 +1460,15 @@ keep_alive = 20s  # Send UDP keepalive every 20 seconds
 - **Benefit:** Prevents NAT session timeouts
 - **Limitation:** Does not detect data plane failures (keepalive packets may succeed while actual traffic fails)
 
-##### 2. DPD (Dead Peer Detection) - 30s interval, 120s timeout
+##### 2. DPD (Dead Peer Detection) - 3:1 ratio (example: 5s / 15s)
 
 File: `strongswan_renderer.py`
 
 ```python
 # IKE SA configuration
 dpd_action = restart
-dpd_delay = 30s    # Check every 30 seconds
-dpd_timeout = 120s  # Consider peer dead after 120s without response
+dpd_delay = 5s     # Check every 5 seconds
+dpd_timeout = 15s  # Consider peer dead after 15s without response
 ```
 
 - **Purpose:** Detect IKE SA failures and control plane issues
@@ -1425,13 +1476,13 @@ dpd_timeout = 120s  # Consider peer dead after 120s without response
 - **Benefit:** Restarts tunnels if IKE SA becomes unresponsive
 - **Limitation:** DPD operates at control plane; may not detect data plane failures where IKE still works but XFRM packet processing fails
 
-##### 3. Automated Health Monitoring (60s checks, 65s detection)
+##### 3. Automated Health Monitoring (10s checks, ~15s detection)
 
 File: `tunnel_health_monitor.py`, systemd service: `nebius-vpngw-health-monitor.service`
 
 - **Purpose:** Detect data plane failures by actively probing tunnel connectivity
 - **Mechanism:** Periodic health checks using IPsec status, BGP state, XFRM error deltas, and optional ICMP ping to the BGP peer (controlled by `ping_enabled`)
-- **Detection time:** ~65 seconds (60s initial check + 5s immediate re-check after first failure)
+- **Detection time:** ~15 seconds (10s initial check + 5s immediate re-check after first failure)
 - **Recovery:** Automatic tunnel restart after 2 consecutive failures
 
 **Why Three Layers?**
@@ -1439,8 +1490,8 @@ File: `tunnel_health_monitor.py`, systemd service: `nebius-vpngw-health-monitor.
 | Layer           | Detects             | Response Time    | Recovery Action   |
 |-----------------|---------------------|------------------|-------------------|
 | NAT-T Keepalive | NAT timeout         | N/A (preventive) | Keep NAT mappings |
-| DPD             | IKE failures        | 30-120s          | Restart tunnel    |
-| Health Monitor  | Data plane failures | ~65s             | Restart tunnel    |
+| DPD             | IKE failures        | 5-15s            | Restart tunnel    |
+| Health Monitor  | Data plane failures | ~15s             | Restart tunnel    |
 
 - **NAT-T:** Prevents the problem (NAT timeouts)
 - **DPD:** Catches IKE layer failures
@@ -1454,11 +1505,11 @@ File: `nebius-gcp-ha-vpngw.config.yaml`
 defaults:
   health_monitoring:
     enabled: true                          # Enable automated monitoring
-    check_interval_seconds: 60             # Check every 60 seconds
+    check_interval_seconds: 10             # Check every 10 seconds
     max_failures_before_restart: 2         # Restart after 2 consecutive failures
     proactive_refresh_enabled: false       # Reactive mode (detect & fix)
     proactive_refresh_hours: 8             # Unused (proactive mode disabled)
-    ping_enabled: true                     # ICMP probe to BGP peer (disable if peer blocks ICMP)
+    ping_enabled: false                    # Enable only if peer allows ICMP to APIPA
 ```
 
 **Why `ping_enabled` may be disabled:** Some peers (notably GCP HA VPN) do not respond to ICMP on APIPA unless explicitly allowed by firewall rules. When ICMP is blocked, the monitor would falsely mark tunnels unhealthy and trigger restarts. In those environments, set `ping_enabled: false` and rely on IPsec/BGP state plus XFRM error counters.
@@ -1471,32 +1522,32 @@ defaults:
 
 | Mode                   | Behavior                                      | Downtime                  | Use Case                    |
 |------------------------|-----------------------------------------------|---------------------------|-----------------------------|
-| **Reactive (default)** | Detect failures, restart only when broken     | ~65s during failures      | 100% uptime priority        |
+| **Reactive (default)** | Detect failures, restart only when broken     | ~35s during failures      | 100% uptime priority        |
 | **Proactive**          | Periodic restart every N hours (preventive)   | ~10-15s every N hours     | Prevent stale state buildup |
 
 **Default: Reactive mode** (`proactive_refresh_enabled: false`) prioritizes zero planned downtime.
 
 #### Failure Detection Timing
 
-**Question:** With `max_failures_before_restart: 2` and `check_interval_seconds: 60`, does this mean 120 seconds of downtime (60s + 60s)?
+**Question:** With `max_failures_before_restart: 2` and `check_interval_seconds: 10`, does this mean 20 seconds of downtime (10s + 10s)?
 
 **Answer:** No. The monitor uses **immediate re-check** after the first failure:
 
 1. **t=0s:** Tunnel healthy (normal operation)
-2. **t=60s:** First health check fails
+2. **t=10s:** First health check fails
    - Monitor logs failure
-   - **Immediately waits only 5 seconds** (not 60s)
-   - Runs second health check at t=65s
-3. **t=65s:** Second health check
+   - **Immediately waits only 5 seconds** (not 10s)
+   - Runs second health check at t=15s
+3. **t=15s:** Second health check
    - If **still failing:** Restart tunnel immediately
    - If **recovered:** Reset counter, continue monitoring
-4. **t=75s:** Tunnel restarted, IKE/BGP negotiation begins
-5. **t=85s:** Tunnel ESTABLISHED, traffic flows
+4. **t=25s:** Tunnel restarted, IKE/BGP negotiation begins
+5. **t=35s:** Tunnel ESTABLISHED, traffic flows
 
-**Total detection time: ~65 seconds** (60s initial + 5s re-check)
-**Total recovery time: ~85 seconds** (65s detection + 20s restart)
+**Total detection time: ~15 seconds** (10s initial + 5s re-check)
+**Total recovery time: ~35 seconds** (15s detection + 20s restart)
 
-This is **significantly faster** than waiting 120 seconds (60s × 2 failures).
+This is **significantly faster** than waiting 20 seconds (10s × 2 failures).
 
 **Code Implementation:**
 
@@ -1750,7 +1801,7 @@ nebius-vpngw apply --local-config-file test.config.yaml
 - `state_store.py`: Persists last-applied state for idempotency checks
 - `status_check.py`: Collects health metrics for status command (tunnel status, BGP sessions, routes)
 - `sanity_check.py`: Standalone routing validation tool for troubleshooting
-- `tunnel_health_monitor.py`: Automated tunnel health monitoring daemon with immediate re-check after first failure (65s detection time), supports reactive and proactive modes, integrates with systemd for continuous monitoring
+- `tunnel_health_monitor.py`: Automated tunnel health monitoring daemon with immediate re-check after first failure (~15s detection time), supports reactive and proactive modes, integrates with systemd for continuous monitoring
 
 **Deployment:**
 

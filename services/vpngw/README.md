@@ -1,7 +1,5 @@
 # Nebius VPN Gateway (VM-Based)
 
-> Note: Legacy VTI support has been removed. XFRM interfaces are the only supported mode going forward.
-
 VM-based site-to-site IPsec/BGP VPN gateway for Nebius AI Cloud. Supports GCP HA VPN, AWS Site-to-Site VPN, Azure VPN Gateway, Cisco IOS, and custom peers.
 
 ## Table of Contents
@@ -184,8 +182,8 @@ Before configuring your VPN gateway, collect the following information from your
 
 - Remote ASN number (e.g., `65014`)
 - BGP timers (optional, defaults shown):
-  - `hold_time_seconds: 60`
-  - `keepalive_seconds: 20`
+  - `hold_time_seconds: 6`
+  - `keepalive_seconds: 2`
 - Number of tunnels (e.g., `2` for HA VPN)
 
 **For static mode:**
@@ -238,12 +236,12 @@ gateway:
   local_asn: 64512
   local_prefixes:
     - "10.0.0.0/16"
-  # ipsec_mode: xfrm-interface  # Default: modern XFRM (recommended)
+  ipsec_mode: xfrm-interface  # Default: modern XFRM (recommended)
 
 defaults:
   vpn_type: ipsec
   ike_version: 2
-  allow_ikev1: true
+  allow_ikev1: false
   auth:
     method: psk
   crypto:
@@ -256,15 +254,21 @@ defaults:
     dh_groups:
       - 14
   dpd:
-    interval_seconds: 30
-    timeout_seconds: 120
+    interval_seconds: 5
+    timeout_seconds: 15
+  ha_mode: active-passive
   routing:
     mode: bgp
     bgp:
-      hold_time_seconds: 60
-      keepalive_seconds: 20
-      graceful_restart: true
+      hold_time_seconds: 6
+      keepalive_seconds: 2
+      graceful_restart: false
       max_prefixes: 1000
+      bfd:
+        enabled: false
+        transmit_interval_ms: 300
+        receive_interval_ms: 300
+        detect_multiplier: 3
     
 connections:
   - name: gcp-ha-vpn
@@ -372,11 +376,12 @@ gateway:
   local_prefixes:
     - "10.0.0.0/16"
     - "10.1.0.0/16"
+  ipsec_mode: xfrm-interface
 
 defaults:
   vpn_type: ipsec
   ike_version: 2
-  allow_ikev1: true
+  allow_ikev1: false
   auth:
     method: psk
   crypto:
@@ -389,15 +394,21 @@ defaults:
     dh_groups:
       - 14
   dpd:
-    interval_seconds: 30
-    timeout_seconds: 120
+    interval_seconds: 5
+    timeout_seconds: 15
+  ha_mode: active-passive
   routing:
     mode: bgp
     bgp:
-      hold_time_seconds: 60
-      keepalive_seconds: 20
-      graceful_restart: true
+      hold_time_seconds: 6
+      keepalive_seconds: 2
+      graceful_restart: false
       max_prefixes: 1000
+      bfd:
+        enabled: false
+        transmit_interval_ms: 300
+        receive_interval_ms: 300
+        detect_multiplier: 3
 
 connections:
   - name: peer-vpn
@@ -597,13 +608,14 @@ nebius-vpngw apply --local-config-file <file> --project-id <id> --zone <zone>
 nebius-vpngw status --local-config-file <file>
 ```
 
-Shows tunnel status, BGP sessions, service health, routing validation.
+Shows tunnel status (including active/passive role), carrying-traffic indicator, BGP sessions, service health, routing validation.
 
 **Manage routes:**
 
 ```bash
 # List local routes (Nebius VPC → Remote)
 # Shows route tables for subnets matching gateway.local_prefixes
+# BGP advertised routes include tunnel role (active/passive)
 nebius-vpngw list-routes-local --local-config-file <file>
 
 # Add local routes (Nebius VPC → Remote)
@@ -641,6 +653,17 @@ nebius-vpngw restart-tunnel gcp-ha-tunnel-1 --local-config-file <file>
 
 # Restart all tunnels on all gateway VMs
 nebius-vpngw restart-tunnel all --local-config-file <file>
+
+# Manual failover to passive tunnel
+# - If exactly two tunnels exist, passive is auto-selected
+# - If more than two tunnels exist, specify the passive tunnel
+nebius-vpngw failover --local-config-file <file>
+nebius-vpngw failover --tunnel-failover gcp-ha-tunnel-2 --local-config-file <file>
+
+# Manual failback to restore the active tunnel (does not disable passive)
+# - If multiple active tunnels exist, specify the active tunnel
+nebius-vpngw failback --local-config-file <file>
+nebius-vpngw failback --tunnel-failback gcp-ha-tunnel-1 --local-config-file <file>
 ```
 
 **When to use:**
@@ -664,6 +687,13 @@ nebius-vpngw restart-tunnel all --local-config-file <file>
 
 The gateway includes an automated health monitoring system that detects and recovers from tunnel failures.
 
+**What it checks:**
+
+- IPsec state (CHILD_SA installed)
+- BGP neighbor state (Established for BGP tunnels)
+- XFRM interface error counters
+- Optional ICMP ping to the BGP peer (`ping_enabled`)
+
 **Configuration:**
 
 Add to your `nebius-vpngw.config.yaml`:
@@ -672,30 +702,31 @@ Add to your `nebius-vpngw.config.yaml`:
 defaults:
   health_monitoring:
     enabled: true                          # Enable automated monitoring
-    check_interval_seconds: 60             # Check every 60 seconds
+    check_interval_seconds: 10             # Check every 10 seconds
     max_failures_before_restart: 2         # Restart after 2 consecutive failures
     proactive_refresh_enabled: false       # Reactive mode (detect & fix)
     proactive_refresh_hours: 8             # Unused (proactive mode disabled)
+    ping_enabled: false                    # Enable only if peer allows ICMP to APIPA
 ```
 
 **Monitoring Modes:**
 
 | Mode                   | Behavior                                      | Downtime                  | Use Case                    |
 |------------------------|-----------------------------------------------|---------------------------|-----------------------------|
-| **Reactive (default)** | Detect failures, restart only when broken     | ~65s during failures      | 100% uptime priority        |
+| **Reactive (default)** | Detect failures, restart only when broken     | ~35s during failures      | 100% uptime priority        |
 | **Proactive**          | Periodic restart every N hours (preventive)   | ~10-15s every N hours     | Prevent stale state buildup |
 
 **Detection Timing:**
 
-With `max_failures_before_restart: 2` and `check_interval_seconds: 60`:
+With `max_failures_before_restart: 2` and `check_interval_seconds: 10`:
 
 1. **t=0s:** Normal operation
-2. **t=60s:** First failure detected → Immediate re-check in 5 seconds
-3. **t=65s:** Second failure confirmed → Tunnel restarted immediately
-4. **t=85s:** Tunnel re-established, traffic flows
+2. **t=10s:** First failure detected → Immediate re-check in 5 seconds
+3. **t=15s:** Second failure confirmed → Tunnel restarted immediately
+4. **t=35s:** Tunnel re-established, traffic flows
 
-**Total detection time: ~65 seconds** (not 120s)
-**Total recovery time: ~85 seconds** (detection + restart)
+**Total detection time: ~15 seconds** (not 20s)
+**Total recovery time: ~35 seconds** (detection + restart)
 
 **Service Management:**
 
@@ -717,8 +748,8 @@ sudo systemctl restart nebius-vpngw-health-monitor
 The gateway uses three layers of keepalive to maintain tunnel health:
 
 1. **NAT-T Keepalives (20s):** Prevent NAT session timeouts
-2. **DPD (30s checks, 120s timeout):** Detect IKE control plane failures
-3. **Health Monitor (60s checks):** Detect data plane failures
+2. **DPD (5s checks, 15s timeout):** Detect IKE control plane failures
+3. **Health Monitor (10s checks):** Detect data plane failures
 
 This multi-layer approach ensures rapid detection and recovery from various failure modes.
 
@@ -727,6 +758,7 @@ This multi-layer approach ensures rapid detection and recovery from various fail
 ### Active/Passive HA for Multi-Tunnel Connections
 
 The gateway operates in **Active/Passive mode** to ensure symmetric routing without requiring workload VM configuration changes. When configuring multiple tunnels to the same peer (e.g., GCP HA VPN), **keep only one tunnel active** at a time.
+`defaults.ha_mode` is required in the YAML config and must be set to `active-passive` in current releases.
 
 **Tunnel Mode Configuration:**
 
@@ -883,16 +915,23 @@ tunnels:
 
 ### BGP Timers
 
-Customize defaults:
+Customize defaults (baseline 3:1 ratio; enable BFD for sub-second detection):
 
 ```yaml
 defaults:
   routing:
     bgp:
-      hold_time_seconds: 60
-      keepalive_seconds: 20
-      graceful_restart: true
+      hold_time_seconds: 6
+      keepalive_seconds: 2
+      graceful_restart: false
+      bfd:
+        enabled: false
+        transmit_interval_ms: 300
+        receive_interval_ms: 300
+        detect_multiplier: 3
 ```
+
+**BFD behavior:** If the peer does not support BFD, the BFD session stays down and BGP continues with normal timers. Enable BFD only when both sides support it.
 
 ### BGP Troubleshooting
 
@@ -1077,6 +1116,7 @@ nebius-vpngw status --local-config-file <file>
 **Reports:**
 
 - Tunnel status (ESTABLISHED, CONNECTING, DOWN)
+- Carrying traffic indicator (runtime active tunnel)
 - BGP session state and route counts
 - Service health (agent, strongSwan, FRR)
 - Routing validation (table 220, APIPA routes, orphaned routes)
@@ -1086,6 +1126,7 @@ nebius-vpngw status --local-config-file <file>
 Per-tunnel information:
 
 - Gateway VM assignment
+- Carrying traffic (runtime active tunnel)
 - Peer IP address
 - Encryption algorithm (e.g., AES_GCM_16-256)
 - Uptime
@@ -1667,7 +1708,7 @@ Note: `--publish` requires `main` to be clean and up to date with `origin/main`.
 - `state_store.py`: Persists last-applied state for idempotency
 - `status_check.py`: Health checks for tunnels, BGP, and routes
 - `sanity_check.py`: Routing validation troubleshooting tool
-- `tunnel_health_monitor.py`: Automated tunnel health monitoring with 65s failure detection (immediate re-check), supports reactive/proactive modes
+- `tunnel_health_monitor.py`: Automated tunnel health monitoring with ~15s failure detection (immediate re-check), supports reactive/proactive modes
 
 **Deployment:**
 

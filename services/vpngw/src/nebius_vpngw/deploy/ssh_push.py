@@ -481,6 +481,32 @@ WantedBy=multi-user.target
         except Exception as e:
             print(f"[SSHPush] ⚠ FRR install check failed: {e}")
 
+        # Ensure swanctl is installed (required for if_id_in/out and VICI config loading)
+        try:
+            stdin, stdout, stderr = client.exec_command(
+                "dpkg -l strongswan-swanctl 2>/dev/null | grep -q '^ii'", timeout=10
+            )
+            rc = stdout.channel.recv_exit_status()
+            if rc != 0:
+                print("[SSHPush] ⚠ strongswan-swanctl missing; attempting install...")
+                install_cmd = (
+                    "sudo bash -lc '"
+                    "set -e;"
+                    "apt-get update; "
+                    "DEBIAN_FRONTEND=noninteractive apt-get install -y strongswan-swanctl'"
+                )
+                stdin, stdout, stderr = client.exec_command(
+                    install_cmd, timeout=300, get_pty=True
+                )
+                install_rc = stdout.channel.recv_exit_status()
+                if install_rc == 0:
+                    print("[SSHPush] ✓ strongswan-swanctl installed")
+                else:
+                    err = stderr.read().decode().strip()
+                    print(f"[SSHPush] ✗ strongswan-swanctl install failed: {err}")
+        except Exception as e:
+            print(f"[SSHPush] ⚠ strongswan-swanctl install check failed: {e}")
+
         # Verify service is actually running
         try:
             print("[SSHPush] Verifying service status...")

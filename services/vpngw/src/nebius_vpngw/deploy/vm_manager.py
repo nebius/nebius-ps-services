@@ -2886,6 +2886,7 @@ class VMManager:
             "package_upgrade: true\n"
             "packages:\n"
             "  - strongswan\n"
+            "  - strongswan-swanctl\n"
             "  - strongswan-pki\n"
             "  - libcharon-extra-plugins\n"
             "  - python3\n"

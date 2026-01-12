@@ -8,6 +8,12 @@ from ..config_loader import ResolvedDeploymentPlan
 
 
 class RouteManager:
+    @staticmethod
+    def _normalize_value(value) -> str:
+        if hasattr(value, "value"):
+            value = value.value
+        return str(value or "").strip().lower()
+
     def __init__(self, project_id: str | None, auth_token: str | None = None) -> None:
         self.project_id = project_id
         self.auth_token = auth_token
@@ -197,13 +203,16 @@ class RouteManager:
         )
 
         # Get routing mode and connections
-        defaults_mode = (local_cfg.get("defaults", {}).get("routing", {}) or {}).get(
-            "mode"
+        defaults_mode = self._normalize_value(
+            (local_cfg.get("defaults", {}).get("routing", {}) or {}).get("mode")
         ) or "bgp"
         connections = local_cfg.get("connections", [])
 
         # Check if BGP is enabled for any connection
-        has_bgp = any((conn.get("routing_mode") or defaults_mode) == "bgp" for conn in connections)
+        has_bgp = any(
+            self._normalize_value(conn.get("routing_mode") or defaults_mode) == "bgp"
+            for conn in connections
+        )
 
         if not has_bgp:
             print("[dim]No BGP connections configured - routes are static[/dim]")
@@ -254,12 +263,15 @@ class RouteManager:
                     peer_asn = peer_info.get("remoteAs", "?")
 
                     # Find connection and tunnel name for this peer
-                    conn_name, tunnel_name, inner_local_ip = self._find_connection_for_peer(
-                        peer_ip, connections, inst_cfg
+                    conn_name, tunnel_name, inner_local_ip, ha_role = (
+                        self._find_connection_for_peer(peer_ip, connections, inst_cfg)
                     )
+                    role_label = ha_role or "unknown"
 
                     if peer_state != "Established":
-                        print(f"\n[bold]Connection: {conn_name} | Tunnel: {tunnel_name}[/bold]")
+                        print(
+                            f"\n[bold]Connection: {conn_name} | Tunnel: {tunnel_name} ({role_label})[/bold]"
+                        )
                         print(
                             f"[yellow]  BGP Peer {peer_ip} (ASN {peer_asn}): {peer_state}[/yellow]"
                         )
@@ -282,7 +294,9 @@ class RouteManager:
                     )
 
                     if adv_result.returncode != 0:
-                        print(f"\n[bold]Connection: {conn_name} | Tunnel: {tunnel_name}[/bold]")
+                        print(
+                            f"\n[bold]Connection: {conn_name} | Tunnel: {tunnel_name} ({role_label})[/bold]"
+                        )
                         print(f"[yellow]  Failed to query advertised routes to {peer_ip}[/yellow]")
                         continue
 
@@ -291,14 +305,18 @@ class RouteManager:
                         advertised_routes = adv_data.get("advertisedRoutes", {})
 
                         if not advertised_routes:
-                            print(f"\n[bold]Connection: {conn_name} | Tunnel: {tunnel_name}[/bold]")
+                            print(
+                                f"\n[bold]Connection: {conn_name} | Tunnel: {tunnel_name} ({role_label})[/bold]"
+                            )
                             print(
                                 f"[dim]  BGP Peer {peer_ip} (ASN {peer_asn}): No routes advertised[/dim]"
                             )
                             continue
 
                         # Build table for this peer
-                        print(f"\n[bold]Connection: {conn_name} | Tunnel: {tunnel_name}[/bold]")
+                        print(
+                            f"\n[bold]Connection: {conn_name} | Tunnel: {tunnel_name} ({role_label})[/bold]"
+                        )
 
                         # Get local ASN from adv_data
                         local_asn = adv_data.get("localAS", "")
@@ -334,7 +352,9 @@ class RouteManager:
                         console.print(table)
 
                     except json.JSONDecodeError:
-                        print(f"\n[bold]Connection: {conn_name} | Tunnel: {tunnel_name}[/bold]")
+                        print(
+                            f"\n[bold]Connection: {conn_name} | Tunnel: {tunnel_name} ({role_label})[/bold]"
+                        )
                         print(
                             f"[yellow]  Failed to parse advertised routes JSON for {peer_ip}[/yellow]"
                         )
@@ -350,7 +370,7 @@ class RouteManager:
     def _find_connection_for_peer(self, peer_ip: str, connections: list[dict], inst_cfg) -> tuple:
         """Find connection and tunnel name for a BGP peer IP.
 
-        Returns (connection_name, tunnel_name, inner_local_ip) tuple.
+        Returns (connection_name, tunnel_name, inner_local_ip, ha_role) tuple.
         """
         # Peer IP is the tunnel's inner_remote_ip (APIPA address on the tunnel interface)
         for conn in connections:
@@ -368,10 +388,11 @@ class RouteManager:
                 if inner_remote == peer_ip or bgp_remote == peer_ip:
                     tunnel_name = tunnel.get("name") or "unnamed-tunnel"
                     inner_local_ip = tunnel.get("inner_local_ip", "0.0.0.0")
-                    return (conn_name, tunnel_name, inner_local_ip)
+                    ha_role = self._normalize_value(tunnel.get("ha_role") or "active") or "active"
+                    return (conn_name, tunnel_name, inner_local_ip, ha_role)
 
         # Fallback if not found
-        return ("unknown", "unknown", "0.0.0.0")
+        return ("unknown", "unknown", "0.0.0.0", "unknown")
 
     def add_routes(self, plan: ResolvedDeploymentPlan, local_cfg: dict) -> None:
         """Ensure routes for connection.remote_prefixes and assign custom route tables when needed."""

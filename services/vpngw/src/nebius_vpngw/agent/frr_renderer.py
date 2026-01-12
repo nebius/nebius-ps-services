@@ -10,17 +10,22 @@ DAEMONS_FILE = Path("/etc/frr/daemons")
 
 
 class FRRRenderer:
-    def _ensure_bgpd_enabled(self) -> bool:
+    def _ensure_bgpd_enabled(self, enable_bfd: bool = False) -> bool:
         """Ensure bgpd daemon is enabled and listening on all interfaces."""
         if not DAEMONS_FILE.exists():
             print("[FRR] WARNING: /etc/frr/daemons not found; creating with bgpd=yes")
             DAEMONS_FILE.parent.mkdir(parents=True, exist_ok=True)
-            DAEMONS_FILE.write_text('bgpd=yes\nbgpd_options="   -A 0.0.0.0"\n', encoding="utf-8")
+            bfdd_value = "yes" if enable_bfd else "no"
+            DAEMONS_FILE.write_text(
+                f'bgpd=yes\nbgpd_options="   -A 0.0.0.0"\nbfdd={bfdd_value}\n',
+                encoding="utf-8",
+            )
             return True
 
         text = DAEMONS_FILE.read_text(encoding="utf-8").splitlines()
         bgpd_seen = False
         bgpd_options_seen = False
+        bfdd_seen = False
         changed = False
         new_lines: list[str] = []
         for line in text:
@@ -37,6 +42,13 @@ class FRRRenderer:
                 bgpd_options_seen = True
                 if line != new_line:
                     changed = True
+            elif stripped.startswith("bfdd="):
+                bfdd_value = "yes" if enable_bfd else "no"
+                new_line = f"bfdd={bfdd_value}"
+                new_lines.append(new_line)
+                bfdd_seen = True
+                if line != new_line:
+                    changed = True
             else:
                 new_lines.append(line)
 
@@ -45,6 +57,10 @@ class FRRRenderer:
             changed = True
         if not bgpd_options_seen:
             new_lines.append('bgpd_options="   -A 0.0.0.0"')
+            changed = True
+        if not bfdd_seen:
+            bfdd_value = "yes" if enable_bfd else "no"
+            new_lines.append(f"bfdd={bfdd_value}")
             changed = True
 
         if changed:
@@ -83,7 +99,14 @@ class FRRRenderer:
         Advertises gateway.local_prefixes to neighbors where connection.bgp.advertise_local_prefixes=true.
         Supports hold/keepalive and graceful-restart defaults.
         """
-        daemons_changed = self._ensure_bgpd_enabled()
+        d_bgp = cfg.get("defaults", {}).get("routing", {}).get("bgp", {})
+        bfd_cfg = d_bgp.get("bfd", {}) or {}
+        bfd_enabled = bool(bfd_cfg.get("enabled", False))
+        bfd_tx = int(bfd_cfg.get("transmit_interval_ms", 300))
+        bfd_rx = int(bfd_cfg.get("receive_interval_ms", 300))
+        bfd_multiplier = int(bfd_cfg.get("detect_multiplier", 3))
+
+        daemons_changed = self._ensure_bgpd_enabled(enable_bfd=bfd_enabled)
         BGPD_CONF.parent.mkdir(parents=True, exist_ok=True)
 
         gateway = cfg.get("gateway", {})
@@ -95,7 +118,6 @@ class FRRRenderer:
         if gateway_local_prefixes:
             self.ensure_local_prefix_routes(cfg)
 
-        d_bgp = cfg.get("defaults", {}).get("routing", {}).get("bgp", {})
         hold = d_bgp.get("hold_time_seconds", 60)
         keep = d_bgp.get("keepalive_seconds", 20)
         router_id = d_bgp.get("router_id")
@@ -118,6 +140,7 @@ class FRRRenderer:
             200: [],  # Active tunnels
             100: [],  # Passive tunnels
         }
+        bfd_peers: set[str] = set()
 
         # First pass: collect tunnel info for route-maps and prefix-list filters
         for conn in cfg.get("connections", []):
@@ -147,6 +170,20 @@ class FRRRenderer:
                     # Track prefix-list filters
                     if conn_remote_prefixes:
                         prefix_list_filters[remote_ip] = conn_remote_prefixes
+                    if bfd_enabled:
+                        bfd_peers.add(remote_ip)
+
+        if bfd_enabled and bfd_peers:
+            lines.append("!")
+            lines.append("! BFD peers for fast failure detection (if supported by peer)")
+            lines.append("bfd")
+            for peer_ip in sorted(bfd_peers):
+                lines.append(f" peer {peer_ip}")
+                lines.append(f"  transmit-interval {bfd_tx}")
+                lines.append(f"  receive-interval {bfd_rx}")
+                lines.append(f"  detect-multiplier {bfd_multiplier}")
+                lines.append(" !")
+            lines.append("!")
 
         # Define route-maps for Active/Passive HA (before prefix-lists)
         # Active tunnels:
@@ -257,6 +294,8 @@ class FRRRenderer:
                 lines.append(f" neighbor {remote_ip} remote-as {rasn}")
                 lines.append(f" neighbor {remote_ip} timers {keep} {hold}")
                 lines.append(f" neighbor {remote_ip} maximum-prefix {max_prefixes_default}")
+                if bfd_enabled:
+                    lines.append(f" neighbor {remote_ip} bfd")
 
                 # CRITICAL: Configure update-source to use tunnel interface IP
                 # This ensures BGP packets use the correct source IP (APIPA inner IP)

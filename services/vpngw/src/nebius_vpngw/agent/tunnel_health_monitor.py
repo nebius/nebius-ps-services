@@ -36,6 +36,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
+import shutil
 from typing import Any
 
 import yaml
@@ -81,20 +82,20 @@ class TunnelHealthMonitor:
 
     def __init__(
         self,
-        check_interval_seconds: int = 60,
+        check_interval_seconds: int = 10,
         enable_proactive_refresh: bool = False,
         proactive_refresh_hours: int = 8,
         max_failures_before_restart: int = 2,
-        ping_enabled: bool = True,
+        ping_enabled: bool = False,
     ) -> None:
         """Initialize tunnel health monitor.
 
         Args:
-            check_interval_seconds: How often to check tunnel health (default: 60s)
+            check_interval_seconds: How often to check tunnel health (default: 10s)
             enable_proactive_refresh: Enable periodic tunnel refresh (default: False)
             proactive_refresh_hours: Hours between proactive refreshes (default: 8)
             max_failures_before_restart: Consecutive failures before restart (default: 2)
-            ping_enabled: Enable ICMP ping to BGP peer (default: True)
+            ping_enabled: Enable ICMP ping to BGP peer (default: False)
         """
         self.check_interval = check_interval_seconds
         self.tunnel_states: dict[str, TunnelHealth] = {}
@@ -181,6 +182,24 @@ class TunnelHealthMonitor:
         Returns:
             "ESTABLISHED", "CONNECTING", or "DOWN"
         """
+        if shutil.which("swanctl"):
+            try:
+                result = subprocess.run(
+                    ["swanctl", "--list-sas"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                if result.returncode == 0 and result.stdout:
+                    for line in result.stdout.splitlines():
+                        if tunnel_name in line and "ESTABLISHED" in line.upper():
+                            return "ESTABLISHED"
+                        if tunnel_name in line and "CONNECTING" in line.upper():
+                            return "CONNECTING"
+                return "DOWN"
+            except subprocess.TimeoutExpired:
+                return "UNKNOWN"
+
         try:
             result = subprocess.run(
                 ["ipsec", "status", tunnel_name],
@@ -321,32 +340,55 @@ class TunnelHealthMonitor:
         print(f"[TunnelMonitor] 🔄 Restarting tunnel: {tunnel_name}")
 
         try:
-            # Down the tunnel
-            result = subprocess.run(
-                ["ipsec", "down", tunnel_name],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
+            if shutil.which("swanctl"):
+                result = subprocess.run(
+                    ["swanctl", "--terminate", "--ike", tunnel_name],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                if result.returncode != 0:
+                    print(f"[TunnelMonitor] ⚠ Failed to terminate {tunnel_name}: {result.stderr}")
+                    print("[TunnelMonitor] ⚠ Proceeding with tunnel initiate anyway")
 
-            if result.returncode != 0:
-                print(f"[TunnelMonitor] ⚠ Failed to bring down {tunnel_name}: {result.stderr}")
-                print("[TunnelMonitor] ⚠ Proceeding with tunnel up attempt anyway")
+                time.sleep(2)
 
-            # Wait briefly for cleanup
-            time.sleep(2)
+                result = subprocess.run(
+                    ["swanctl", "--initiate", "--child", tunnel_name],
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                )
+                if result.returncode != 0:
+                    print(f"[TunnelMonitor] ⚠ Failed to initiate {tunnel_name}: {result.stderr}")
+                    return False
+            else:
+                # Down the tunnel
+                result = subprocess.run(
+                    ["ipsec", "down", tunnel_name],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
 
-            # Up the tunnel
-            result = subprocess.run(
-                ["ipsec", "up", tunnel_name],
-                capture_output=True,
-                text=True,
-                timeout=20,
-            )
+                if result.returncode != 0:
+                    print(f"[TunnelMonitor] ⚠ Failed to bring down {tunnel_name}: {result.stderr}")
+                    print("[TunnelMonitor] ⚠ Proceeding with tunnel up attempt anyway")
 
-            if result.returncode != 0:
-                print(f"[TunnelMonitor] ⚠ Failed to bring up {tunnel_name}: {result.stderr}")
-                return False
+                # Wait briefly for cleanup
+                time.sleep(2)
+
+                # Up the tunnel
+                result = subprocess.run(
+                    ["ipsec", "up", tunnel_name],
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                )
+
+                if result.returncode != 0:
+                    print(f"[TunnelMonitor] ⚠ Failed to bring up {tunnel_name}: {result.stderr}")
+                    return False
 
             print(f"[TunnelMonitor] ✓ Successfully restarted tunnel: {tunnel_name}")
             return True
@@ -486,7 +528,7 @@ class TunnelHealthMonitor:
                             )
                 else:
                     # Immediate re-check after first failure (don't wait full interval)
-                    # This reduces detection time from 120s to ~65s (60s + 5s re-check)
+                    # This reduces detection time from 20s to ~15s (10s + 5s re-check)
                     print("[TunnelMonitor] 🔄 Immediate re-check in 5 seconds...")
                     time.sleep(5)
                     health_recheck = self.check_tunnel_health(tunnel_name, interface, bgp_peer)
@@ -575,7 +617,7 @@ def main() -> None:
             "  # Check health once\\n"
             "  python3 -m nebius_vpngw.agent.tunnel_health_monitor --once\\n\\n"
             "  # Continuous monitoring (reactive mode)\\n"
-            "  python3 -m nebius_vpngw.agent.tunnel_health_monitor --check-interval 60\\n\\n"
+            "  python3 -m nebius_vpngw.agent.tunnel_health_monitor --check-interval 10\\n\\n"
             "  # Restart specific tunnel manually\\n"
             "  python3 -m nebius_vpngw.agent.tunnel_health_monitor --restart-tunnel gcp-ha-tunnel-1\\n\\n"
             "  # Restart all tunnels\\n"
@@ -586,8 +628,8 @@ def main() -> None:
     parser.add_argument(
         "--check-interval",
         type=int,
-        default=60,
-        help="Health check interval in seconds (default: 60)",
+        default=10,
+        help="Health check interval in seconds (default: 10)",
     )
     parser.add_argument(
         "--once",
@@ -615,7 +657,7 @@ def main() -> None:
         type=str,
         metavar="TUNNEL_NAME",
         help="Manually restart a specific tunnel by name, or 'all' to restart all tunnels. "
-        "Use with 'ipsec statusall' to find tunnel names. This is useful for quick "
+        "Use with 'swanctl --list-sas' (or 'ipsec statusall') to find tunnel names. This is useful for quick "
         "recovery from stale tunnel state without waiting for automatic detection.",
     )
     parser.add_argument(
@@ -629,7 +671,7 @@ def main() -> None:
 
     # Handle manual tunnel restart
     if args.restart_tunnel:
-        monitor_temp = TunnelHealthMonitor(check_interval_seconds=60)
+        monitor_temp = TunnelHealthMonitor(check_interval_seconds=10)
 
         if args.restart_tunnel.lower() == "all":
             print("[TunnelMonitor] 🔄 Restarting ALL tunnels...")
@@ -658,7 +700,7 @@ def main() -> None:
     config_refresh_hours = args.refresh_hours
     config_max_failures = 2
     config_enabled = True
-    config_ping_enabled = True
+    config_ping_enabled = False
 
     if args.config:
         try:
@@ -678,8 +720,8 @@ def main() -> None:
 
                 if health_config:
                     # Override with config file values if not explicitly set via CLI
-                    if args.check_interval == 60:  # Default value
-                        config_check_interval = health_config.get("check_interval_seconds", 60)
+                    if args.check_interval == 10:  # Default value
+                        config_check_interval = health_config.get("check_interval_seconds", 10)
                     if not args.proactive_refresh:  # Not set via CLI
                         config_proactive = health_config.get("proactive_refresh_enabled", False)
                     if args.refresh_hours == 8:  # Default value
@@ -688,7 +730,7 @@ def main() -> None:
                         health_config.get("max_failures_before_restart", config_max_failures)
                     )
                     config_enabled = health_config.get("enabled", True)
-                    config_ping_enabled = health_config.get("ping_enabled", True)
+                    config_ping_enabled = health_config.get("ping_enabled", False)
 
                     print(f"[TunnelMonitor] 📝 Loaded config from: {args.config}")
                     print(f"[TunnelMonitor]    check_interval: {config_check_interval}s")

@@ -5,6 +5,8 @@ including tunnel status, BGP sessions, and routing table invariants.
 """
 
 import json
+import re
+import shutil
 import subprocess
 from typing import Any
 
@@ -84,6 +86,32 @@ def check_strongswan_tunnels() -> dict[str, Any]:
         - tunnels: List[Dict] with name, status, peer_ip, uptime
         - overall_status: "healthy" | "degraded" | "error"
     """
+    if shutil.which("swanctl"):
+        result = subprocess.run(["swanctl", "--list-sas"], capture_output=True, text=True)
+        if result.returncode == 0 and result.stdout:
+            tunnels = []
+            tunnel_pattern = re.compile(
+                r"^(\S+?)(?:\[\d+\])?:\s+.*\b(ESTABLISHED|CONNECTING)\b",
+                re.IGNORECASE,
+            )
+
+            for line in result.stdout.splitlines():
+                match = tunnel_pattern.search(line)
+                if not match:
+                    continue
+                tunnels.append(
+                    {
+                        "name": match.group(1),
+                        "status": match.group(2).upper(),
+                        "uptime": "n/a",
+                        "peer_ip": "",
+                    }
+                )
+
+            if tunnels:
+                overall = "healthy" if all(t["status"] == "ESTABLISHED" for t in tunnels) else "degraded"
+                return {"tunnels": tunnels, "overall_status": overall}
+
     result = subprocess.run(["ipsec", "statusall"], capture_output=True, text=True)
 
     if result.returncode != 0:
@@ -92,8 +120,6 @@ def check_strongswan_tunnels() -> dict[str, Any]:
             "overall_status": "error",
             "error": result.stderr.strip(),
         }
-
-    import re
 
     def parse_strongswan_uptime(uptime_str: str) -> str:
         """Parse strongSwan uptime format (e.g., '5 hours ago', '32 minutes ago') and convert to 'Xh Ym Zs' format."""
