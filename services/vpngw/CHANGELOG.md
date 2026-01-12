@@ -14,6 +14,17 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [v0.4.7] - 2026-01-12
+
+- Added `defaults.ha_mode` (active-passive default) and schema validation enforcing exactly one active tunnel per connection per gateway instance.
+- Ensured passive tunnels include `gateway.local_prefixes` in traffic selectors so failover carries data, backed by swanctl/VICI `if_id` binding.
+- Switched strongSwan rendering to swanctl (VICI) for deterministic XFRM interface binding and updated docs accordingly.
+- Added manual `failover` and `failback` commands with BGP confirmation + elapsed time reporting; status now displays admin-down neighbors as `Down (Admin)`.
+- Status output now includes tunnel role, carrying-traffic indicator, encryption, and d:h:m:s uptime, with swanctl de-duplication; list-routes-local shows role labels.
+- Improved swanctl/VICI load reliability with socket readiness checks and retries.
+- Updated defaults/template: IKEv1 disabled, SHA1/MODP1024 removed, BFD support kept optional (bfdd toggled when enabled) with default disabled, DPD/BGP timers set to 5/15 and 2/6, health monitor interval 10s with ping disabled, and `gateway.ipsec_mode` explicit; condensed template comments.
+- Health monitor defaults/docs now reflect 10s checks and faster detection timing; ping checks remain optional.
+
 ## [v0.4.6] - 2026-01-10
 
 - Added health monitor improvements: respect `health_monitoring.ping_enabled`, detect stale XFRM tunnels via error-counter deltas, and guard against duplicate monitor instances.

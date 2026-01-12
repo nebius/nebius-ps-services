@@ -1,6 +1,8 @@
 import os
 import re
 import sys
+import time
+import typing as t
 from pathlib import Path
 
 import typer
@@ -808,6 +810,8 @@ def status(
     # Create status table
     table = Table(title="VPN Gateway Status", show_header=True, header_style="bold cyan")
     table.add_column("Tunnel", style="white")
+    table.add_column("Role", style="white")
+    table.add_column("Carrying Traffic", style="white")
     table.add_column("Gateway VM", style="white")
     table.add_column("Status", style="white")
     table.add_column("BGP", style="white")
@@ -815,13 +819,28 @@ def status(
     table.add_column("Encryption", style="white")
     table.add_column("Uptime", style="white")
 
-    # Build mapping of tunnel -> BGP peer IP per instance (for BGP status lookup)
+    # Build mapping of tunnel -> BGP peer IP, remote public IP, and ha_role per instance
     tunnel_bgp_map: dict[str, dict[str, str]] = {}
-    defaults_mode = (local_cfg.get("defaults", {}).get("routing", {}) or {}).get("mode") or "bgp"
+    tunnel_peer_map: dict[str, dict[str, str]] = {}
+    tunnel_role_map: dict[str, dict[str, str]] = {}
+
+    def _normalize_mode(value: t.Any) -> str:
+        if hasattr(value, "value"):
+            value = value.value
+        value = str(value or "").strip().lower()
+        return value or "bgp"
+
+    def _normalize_role(value: t.Any) -> str:
+        if hasattr(value, "value"):
+            value = value.value
+        value = str(value or "").strip().lower()
+        return value or "unknown"
+
+    defaults_mode = _normalize_mode(
+        (local_cfg.get("defaults", {}).get("routing", {}) or {}).get("mode")
+    )
     for conn in local_cfg.get("connections") or []:
-        conn_mode = (conn.get("routing_mode") or defaults_mode) or "bgp"
-        if conn_mode != "bgp":
-            continue
+        conn_mode = _normalize_mode(conn.get("routing_mode") or defaults_mode)
         for tun in conn.get("tunnels") or []:
             try:
                 inst_idx = int(tun.get("gateway_instance_index", 0))
@@ -829,9 +848,118 @@ def status(
                 inst_idx = 0
             hostname = f"{plan.gateway_group.name}-{inst_idx}"
             tunnel_bgp_map.setdefault(hostname, {})
-            peer_ip = tun.get("inner_remote_ip")
-            if peer_ip:
-                tunnel_bgp_map[hostname][tun.get("name") or f"tunnel{inst_idx}"] = str(peer_ip)
+            tunnel_peer_map.setdefault(hostname, {})
+            tunnel_role_map.setdefault(hostname, {})
+            if conn_mode == "bgp":
+                peer_ip = tun.get("inner_remote_ip")
+                if peer_ip:
+                    tunnel_bgp_map[hostname][tun.get("name") or f"tunnel{inst_idx}"] = str(
+                        peer_ip
+                    )
+            remote_public_ip = tun.get("remote_public_ip")
+            if remote_public_ip:
+                tunnel_peer_map[hostname][tun.get("name") or f"tunnel{inst_idx}"] = str(
+                    remote_public_ip
+                )
+            ha_role = _normalize_role(tun.get("ha_role") or "active")
+            tunnel_role_map[hostname][tun.get("name") or f"tunnel{inst_idx}"] = ha_role
+
+    def format_role(role: str | None) -> str:
+        role_value = role or "-"
+        if hasattr(role_value, "value"):
+            role_value = role_value.value  # type: ignore[assignment]
+        role_value = str(role_value).lower()
+        if role_value == "active":
+            return "[green]active[/green]"
+        if role_value == "passive":
+            return "[yellow]passive[/yellow]"
+        if role_value == "disable":
+            return "[red]disabled[/red]"
+        return role_value
+
+    def format_bgp_status(bgp_status: str | None) -> str:
+        if not bgp_status or bgp_status == "-":
+            return "-"
+        state = str(bgp_status).strip()
+        state_lower = state.lower()
+        if state_lower == "established":
+            return "[green]Established[/green]"
+        if "admin" in state_lower:
+            return "[red]Down (Admin)[/red]"
+        if state_lower.startswith("idle") or state_lower in ("connect", "active"):
+            label = state.split()[0].capitalize()
+            return f"[red]Down ({label})[/red]"
+        return f"[red]{state}[/red]"
+
+    def select_carrying_tunnel(
+        hostname: str,
+        tunnel_names: list[str],
+        tunnel_statuses: dict[str, str],
+        bgp_states: dict[str, str],
+    ) -> str | None:
+        established: list[str] = []
+        if bgp_states:
+            for name in tunnel_names:
+                peer_ip = tunnel_bgp_map.get(hostname, {}).get(name)
+                if not peer_ip:
+                    continue
+                state = str(bgp_states.get(peer_ip, "")).strip().lower()
+                if state == "established":
+                    established.append(name)
+        if not established:
+            for name in tunnel_names:
+                if str(tunnel_statuses.get(name, "")).upper() == "ESTABLISHED":
+                    established.append(name)
+        if len(established) == 1:
+            return established[0]
+        if len(established) > 1:
+            for name in established:
+                role_value = _normalize_role(tunnel_role_map.get(hostname, {}).get(name))
+                if role_value == "active":
+                    return name
+            return established[0]
+        return None
+
+    def format_carrying(tunnel_name: str, carrying_tunnel: str | None) -> str:
+        if not carrying_tunnel:
+            return "-"
+        if tunnel_name == carrying_tunnel:
+            return "[green]yes[/green]"
+        return "[dim]no[/dim]"
+
+    def _uptime_seconds(text: str) -> int | None:
+        value_text = text.strip().lower()
+        if value_text.endswith("ago"):
+            value_text = value_text[:-3].strip()
+
+        short_match = re.match(r"(\d+)\s*([smhd])$", value_text)
+        if short_match:
+            value = int(short_match.group(1))
+            unit = short_match.group(2)
+            multiplier = {"s": 1, "m": 60, "h": 3600, "d": 86400}[unit]
+            return value * multiplier
+
+        word_match = re.match(r"(\d+)\s+(second|minute|hour|day)s?$", value_text)
+        if word_match:
+            value = int(word_match.group(1))
+            unit = word_match.group(2)
+            multiplier = {"second": 1, "minute": 60, "hour": 3600, "day": 86400}[unit]
+            return value * multiplier
+
+        return None
+
+    def _format_uptime(seconds: int) -> str:
+        days, remainder = divmod(seconds, 86400)
+        hours, remainder = divmod(remainder, 3600)
+        minutes, secs = divmod(remainder, 60)
+        return f"{days}:{hours:02d}:{minutes:02d}:{secs:02d}"
+
+    def parse_strongswan_uptime(uptime_str: str) -> str:
+        """Parse strongSwan uptime and return d:h:m:s."""
+        seconds = _uptime_seconds(uptime_str)
+        if seconds is None:
+            return uptime_str.strip()
+        return _format_uptime(seconds)
 
     # Check each gateway VM's tunnels
     for inst_cfg in plan.iter_instance_configs():
@@ -909,16 +1037,146 @@ def status(
                                     if len(octets) == 4 and all(
                                         o.isdigit() and 0 <= int(o) <= 255 for o in octets
                                     ):
-                                        # Last column is typically the state
+                                        # Last column is typically the state or prefix count
                                         state = parts[-1]
+                                        if state.isdigit():
+                                            state = "Established"
                                         bgp_states[parts[0]] = state
                                 except (ValueError, IndexError):
                                     continue
             except Exception:
                 pass
 
-        # Run ipsec status command
+        # Run swanctl status command (preferred for VICI-based configs)
         try:
+            result = subprocess.run(
+                [
+                    "ssh",
+                    "-o",
+                    "StrictHostKeyChecking=no",
+                    "-o",
+                    "ConnectTimeout=10",
+                    f"ubuntu@{target}",
+                    "sudo swanctl --list-sas",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+
+            output = result.stdout if result.returncode == 0 else ""
+            if output:
+                import re
+
+                tunnel_statuses: dict[str, str] = {}
+                tunnel_uptime: dict[str, str] = {}
+                tunnel_uptime_seconds: dict[str, int] = {}
+                tunnel_encryption: dict[str, list[str]] = {}
+                tunnel_ike_encryption: dict[str, list[str]] = {}
+                tunnel_order: list[str] = []
+                current_tunnel: str | None = None
+                header_pattern = re.compile(r"^(\S+?):\s+#\d+,", re.IGNORECASE)
+                status_pattern = re.compile(r"\b(ESTABLISHED|CONNECTING)\b", re.IGNORECASE)
+                uptime_pattern = re.compile(r"established\s+(\S+)\s+ago", re.IGNORECASE)
+                esp_pattern = re.compile(r"\bESP:([^,]+)", re.IGNORECASE)
+                for line in output.splitlines():
+                    header_match = header_pattern.match(line)
+                    if header_match:
+                        name = header_match.group(1)
+                        status_match = status_pattern.search(line)
+                        status = status_match.group(1).upper() if status_match else "CONNECTING"
+                        if name not in tunnel_statuses:
+                            tunnel_statuses[name] = status
+                            tunnel_order.append(name)
+                        elif tunnel_statuses[name] != "ESTABLISHED" and status == "ESTABLISHED":
+                            tunnel_statuses[name] = status
+                        current_tunnel = name
+                        continue
+
+                    if not current_tunnel:
+                        continue
+
+                    uptime_match = uptime_pattern.search(line)
+                    if uptime_match:
+                        uptime_token = uptime_match.group(1)
+                        uptime_display = parse_strongswan_uptime(uptime_token)
+                        uptime_seconds = _uptime_seconds(uptime_token)
+                        if uptime_seconds is None:
+                            if current_tunnel not in tunnel_uptime:
+                                tunnel_uptime[current_tunnel] = uptime_display
+                        else:
+                            prev = tunnel_uptime_seconds.get(current_tunnel)
+                            if prev is None or uptime_seconds < prev:
+                                tunnel_uptime_seconds[current_tunnel] = uptime_seconds
+                                tunnel_uptime[current_tunnel] = uptime_display
+
+                    esp_match = esp_pattern.search(line)
+                    if esp_match:
+                        algo = esp_match.group(1).strip()
+                        if algo:
+                            algos = tunnel_encryption.setdefault(current_tunnel, [])
+                            if algo not in algos:
+                                algos.append(algo)
+
+                    if line.startswith("  "):
+                        algo_line = line.strip()
+                        if "PRF_" in algo_line and "MODP_" in algo_line and "/" in algo_line:
+                            ike_algos = tunnel_ike_encryption.setdefault(current_tunnel, [])
+                            if algo_line not in ike_algos:
+                                ike_algos.append(algo_line)
+
+                if tunnel_statuses:
+                    carrying_tunnel = select_carrying_tunnel(
+                        inst_cfg.hostname,
+                        tunnel_order,
+                        tunnel_statuses,
+                        bgp_states,
+                    )
+                    for tunnel_name in tunnel_order:
+                        status_text = tunnel_statuses[tunnel_name]
+                        if status_text == "ESTABLISHED":
+                            status_display = "[green]Established[/green]"
+                        elif status_text == "CONNECTING":
+                            status_display = "[yellow]Connecting[/yellow]"
+                        else:
+                            status_display = f"[red]{status_text.capitalize()}[/red]"
+
+                        peer_cfg_ip = tunnel_bgp_map.get(inst_cfg.hostname, {}).get(tunnel_name)
+                        if peer_cfg_ip and peer_cfg_ip in bgp_states:
+                            bgp_status = bgp_states[peer_cfg_ip]
+                        else:
+                            bgp_status = "-"
+
+                        bgp_display = format_bgp_status(bgp_status)
+
+                        peer_display = (
+                            tunnel_peer_map.get(inst_cfg.hostname, {}).get(tunnel_name) or "-"
+                        )
+                        role = format_role(
+                            tunnel_role_map.get(inst_cfg.hostname, {}).get(tunnel_name)
+                        )
+                        carrying_display = format_carrying(tunnel_name, carrying_tunnel)
+                        enc_algos = tunnel_encryption.get(tunnel_name) or []
+                        if not enc_algos:
+                            enc_algos = tunnel_ike_encryption.get(tunnel_name) or []
+                        encryption_display = ", ".join(enc_algos) if enc_algos else "n/a"
+                        uptime_display = tunnel_uptime.get(tunnel_name, "n/a")
+
+                        table.add_row(
+                            tunnel_name,
+                            role,
+                            carrying_display,
+                            inst_cfg.hostname,
+                            status_display,
+                            bgp_display,
+                            peer_display,
+                            encryption_display,
+                            uptime_display,
+                        )
+
+                    continue
+
+            # Fall back to ipsec statusall if swanctl is unavailable
             result = subprocess.run(
                 [
                     "ssh",
@@ -937,6 +1195,8 @@ def status(
             if result.returncode != 0:
                 table.add_row(
                     "All tunnels",
+                    "-",
+                    "-",
                     inst_cfg.hostname,
                     "[red]ERROR[/red]",
                     "-",
@@ -947,31 +1207,6 @@ def status(
                 continue
 
             output = result.stdout
-
-            def parse_strongswan_uptime(uptime_str: str) -> str:
-                """Parse strongSwan uptime format (e.g., '5 hours ago', '32 minutes ago') and keep it in readable format."""
-                import re
-
-                # Parse the uptime string
-                match = re.match(r"(\d+)\s+(second|minute|hour|day)s?\s+ago", uptime_str)
-                if not match:
-                    # If we can't parse it, return as-is
-                    return uptime_str
-
-                value = int(match.group(1))
-                unit = match.group(2)
-
-                # Format based on the unit
-                if unit == "second":
-                    return f"{value}s ago"
-                elif unit == "minute":
-                    return f"{value}m ago"
-                elif unit == "hour":
-                    return f"{value}h ago"
-                elif unit == "day":
-                    return f"{value}d ago"
-                else:
-                    return uptime_str
 
             # Parse IPsec status output
             # Look for patterns like: "gcp-classic-tunnel-0[202]: ESTABLISHED 8 minutes ago, 10.48.0.13[10.48.0.13]...34.155.169.244[34.155.169.244]"
@@ -992,6 +1227,9 @@ def status(
                     "peer_ip": peer_ip,
                     "encryption": "Unknown",
                     "bgp": "-",
+                    "role": format_role(
+                        tunnel_role_map.get(inst_cfg.hostname, {}).get(tunnel_name)
+                    ),
                 }
 
             # Parse encryption from IKE proposal lines
@@ -1016,6 +1254,9 @@ def status(
                         "peer_ip": match.group(2),
                         "encryption": "Unknown",
                         "bgp": "-",
+                        "role": format_role(
+                            tunnel_role_map.get(inst_cfg.hostname, {}).get(match.group(1))
+                        ),
                     }
 
             # Attach BGP states where we know the peer IP from config
@@ -1034,6 +1275,15 @@ def status(
 
             # Add rows to table
             if tunnels:
+                tunnel_statuses = {
+                    name: str(info.get("status", "")).upper() for name, info in tunnels.items()
+                }
+                carrying_tunnel = select_carrying_tunnel(
+                    inst_cfg.hostname,
+                    list(tunnels.keys()),
+                    tunnel_statuses,
+                    bgp_states,
+                )
                 for tunnel_name, info in tunnels.items():
                     status_text = info["status"]
                     if status_text == "ESTABLISHED":
@@ -1045,19 +1295,13 @@ def status(
 
                     # Format BGP status with colors
                     bgp_status = info.get("bgp", "-")
-                    if bgp_status and bgp_status != "-":
-                        if bgp_status.lower() == "established":
-                            bgp_display = "[green]Established[/green]"
-                        elif bgp_status.lower() in ("idle", "connect", "active"):
-                            # These are failure states when persistent - show as Down in red
-                            bgp_display = f"[red]Down ({bgp_status.capitalize()})[/red]"
-                        else:
-                            bgp_display = f"[red]{bgp_status}[/red]"
-                    else:
-                        bgp_display = "-"
+                    bgp_display = format_bgp_status(bgp_status)
+                    carrying_display = format_carrying(tunnel_name, carrying_tunnel)
 
                     table.add_row(
                         tunnel_name,
+                        info.get("role", "-"),
+                        carrying_display,
                         inst_cfg.hostname,
                         status_display,
                         bgp_display,
@@ -1070,6 +1314,8 @@ def status(
                 if "no matching" in output.lower() or "no active" in output.lower():
                     table.add_row(
                         "No tunnels",
+                        "-",
+                        "-",
                         inst_cfg.hostname,
                         "[yellow]NONE[/yellow]",
                         "-",
@@ -1080,6 +1326,8 @@ def status(
                 else:
                     table.add_row(
                         "Unknown",
+                        "-",
+                        "-",
                         inst_cfg.hostname,
                         "[red]PARSE ERROR[/red]",
                         "-",
@@ -1096,6 +1344,8 @@ def status(
         except subprocess.TimeoutExpired:
             table.add_row(
                 "All tunnels",
+                "-",
+                "-",
                 inst_cfg.hostname,
                 "[red]TIMEOUT[/red]",
                 "-",
@@ -1106,6 +1356,8 @@ def status(
         except Exception as e:
             table.add_row(
                 "All tunnels",
+                "-",
+                "-",
                 inst_cfg.hostname,
                 "[red]ERROR[/red]",
                 "-",
@@ -2153,6 +2405,544 @@ def restart_tunnel(
         raise
     except Exception as e:
         print(f"[red]Error during tunnel restart: {e}[/red]")
+        import traceback
+
+        print(f"[dim]{traceback.format_exc()}[/dim]")
+        raise typer.Exit(code=1) from e
+
+
+@app.command(name="failover")
+def tunnel_failover(
+    tunnel_name: str | None = typer.Option(
+        None,
+        "--tunnel-failover",
+        help=(
+            "Passive tunnel name to fail over to. Required when more than two enabled tunnels "
+            "exist in the config."
+        ),
+    ),
+    local_config_file: Path = typer.Option(
+        None,
+        "--local-config-file",
+        "-c",
+        help="Path to local config file",
+        show_default="nebius-vpngw.config.yaml in current directory",
+    ),
+) -> None:
+    """Manually fail over traffic to a passive tunnel by disabling the active BGP neighbor."""
+    try:
+        config_path = _resolve_local_config(
+            local_config_file, create_if_missing=False, exit_after_create=False
+        )
+        if not config_path:
+            raise typer.Exit(code=1)
+
+        print(f"[bold]Loading config from:[/bold] {config_path}")
+        local_cfg = load_local_config(config_path)
+
+        gateway = local_cfg.get("gateway") or {}
+        local_asn = gateway.get("local_asn")
+        if not local_asn:
+            print("[red]gateway.local_asn is required for BGP failover.[/red]")
+            raise typer.Exit(code=1)
+
+        defaults_mode = (local_cfg.get("defaults", {}).get("routing", {}) or {}).get("mode") or "bgp"
+
+        enabled_tunnels: list[dict[str, object]] = []
+        for conn in local_cfg.get("connections") or []:
+            conn_mode = (conn.get("routing_mode") or defaults_mode) or "bgp"
+            for tun in conn.get("tunnels") or []:
+                ha_role = (tun.get("ha_role") or "active").lower()
+                if ha_role == "disable":
+                    continue
+                enabled_tunnels.append(
+                    {
+                        "name": tun.get("name"),
+                        "ha_role": ha_role,
+                        "conn_name": conn.get("name"),
+                        "conn_mode": conn_mode,
+                        "instance_index": int(tun.get("gateway_instance_index", 0) or 0),
+                        "inner_remote_ip": tun.get("inner_remote_ip")
+                        or (tun.get("bgp", {}) or {}).get("remote_ip"),
+                        "inner_local_ip": tun.get("inner_local_ip")
+                        or (tun.get("bgp", {}) or {}).get("local_ip"),
+                    }
+                )
+
+        if not enabled_tunnels:
+            print("[red]No enabled tunnels found in config.[/red]")
+            raise typer.Exit(code=1)
+
+        target = None
+        if tunnel_name:
+            for tun in enabled_tunnels:
+                if tun.get("name") == tunnel_name:
+                    target = tun
+                    break
+            if not target:
+                names = sorted(t.get("name") or "" for t in enabled_tunnels)
+                print(
+                    f"[red]Tunnel '{tunnel_name}' not found. Available: {', '.join(n for n in names if n)}[/red]"
+                )
+                raise typer.Exit(code=1)
+        else:
+            if len(enabled_tunnels) != 2:
+                print(
+                    "[red]Multiple tunnels found. Use --tunnel-failover <tunnel-name> to select a passive tunnel.[/red]"
+                )
+                raise typer.Exit(code=1)
+            passives = [t for t in enabled_tunnels if t.get("ha_role") == "passive"]
+            if len(passives) != 1:
+                print(
+                    "[red]Expected exactly one passive tunnel. Check ha_role settings in your config.[/red]"
+                )
+                raise typer.Exit(code=1)
+            target = passives[0]
+
+        if (target.get("ha_role") or "").lower() != "passive":
+            print("[red]Selected tunnel is not passive. Choose a passive tunnel for failover.[/red]")
+            raise typer.Exit(code=1)
+
+        if (target.get("conn_mode") or "").lower() != "bgp":
+            print("[red]Manual failover is only supported for BGP routing mode.[/red]")
+            raise typer.Exit(code=1)
+
+        conn_name = target.get("conn_name") or "unknown"
+        instance_index = int(target.get("instance_index") or 0)
+
+        active = None
+        for tun in enabled_tunnels:
+            if (
+                tun.get("conn_name") == conn_name
+                and int(tun.get("instance_index") or 0) == instance_index
+                and tun.get("ha_role") == "active"
+            ):
+                active = tun
+                break
+
+        if not active:
+            print("[red]No active tunnel found for the selected connection/instance.[/red]")
+            raise typer.Exit(code=1)
+
+        active_peer_ip = active.get("inner_remote_ip")
+        if not active_peer_ip:
+            print("[red]Active tunnel missing inner_remote_ip; cannot fail over.[/red]")
+            raise typer.Exit(code=1)
+        passive_peer_ip = target.get("inner_remote_ip")
+        if not passive_peer_ip:
+            print("[red]Passive tunnel missing inner_remote_ip; cannot fail over.[/red]")
+            raise typer.Exit(code=1)
+
+        plan: ResolvedDeploymentPlan = merge_with_peer_configs(local_cfg, [])
+        target_instance = None
+        for inst in plan.per_instance:
+            if inst.instance_index == instance_index:
+                target_instance = inst
+                break
+
+        if not target_instance or not target_instance.external_ip:
+            print("[red]Could not resolve gateway VM IP for failover.[/red]")
+            raise typer.Exit(code=1)
+
+        gateway_group = local_cfg.get("gateway_group", {})
+        vm_spec = gateway_group.get("vm_spec", {})
+        username = vm_spec.get("ssh_username", os.environ.get("VPNGW_SSH_USER", "ubuntu"))
+        key_path_str = vm_spec.get("ssh_private_key_path") or os.environ.get("VPNGW_SSH_KEY")
+        key_path = Path(key_path_str).expanduser() if key_path_str else None
+
+        print(
+            f"[bold]Failing over connection '{conn_name}' on {target_instance.hostname}:[/bold] "
+            f"{active.get('name')} → {target.get('name')}"
+        )
+
+        cmd = (
+            f"sudo vtysh -c 'configure terminal' -c 'router bgp {local_asn}' "
+            f"-c 'neighbor {active_peer_ip} shutdown'"
+        )
+        ssh_cmd = ["ssh"]
+        if key_path:
+            ssh_cmd.extend(["-i", str(key_path)])
+        ssh_cmd.extend(
+            [
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-o",
+                "ConnectTimeout=10",
+                f"{username}@{target_instance.external_ip}",
+                cmd,
+            ]
+        )
+
+        import subprocess
+
+        result = subprocess.run(
+            ssh_cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            err = result.stderr.strip() or result.stdout.strip()
+            print(f"[red]Failover command failed: {err}[/red]")
+            raise typer.Exit(code=1)
+
+        ssh_base = ["ssh"]
+        if key_path:
+            ssh_base.extend(["-i", str(key_path)])
+        ssh_base.extend(
+            [
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-o",
+                "ConnectTimeout=10",
+            ]
+        )
+        ssh_target = f"{username}@{target_instance.external_ip}"
+
+        def _fetch_bgp_states() -> dict[str, str]:
+            import json
+
+            summary_cmd = "sudo vtysh -c 'show bgp ipv4 unicast summary json'"
+            result = subprocess.run(
+                ssh_base + [ssh_target, summary_cmd],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0 and result.stdout:
+                try:
+                    data = json.loads(result.stdout)
+                    peers = (data.get("ipv4Unicast") or {}).get("peers") or data.get("peers") or {}
+                    states: dict[str, str] = {}
+                    for ip, info in peers.items():
+                        state = (
+                            info.get("state")
+                            or info.get("state_name")
+                            or info.get("stateName")
+                            or info.get("peerState")
+                            or info.get("bgpState")
+                        )
+                        if state:
+                            states[ip] = str(state)
+                    if states:
+                        return states
+                except json.JSONDecodeError:
+                    pass
+
+            text_cmd = "sudo vtysh -c 'show bgp summary'"
+            result = subprocess.run(
+                ssh_base + [ssh_target, text_cmd],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            states: dict[str, str] = {}
+            if result.returncode == 0 and result.stdout:
+                for line in result.stdout.splitlines():
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[0] and "." in parts[0]:
+                        octets = parts[0].split(".")
+                        if len(octets) == 4 and all(
+                            o.isdigit() and 0 <= int(o) <= 255 for o in octets
+                        ):
+                            state = parts[-1]
+                            if state.isdigit():
+                                state = "Established"
+                            states[parts[0]] = state
+            return states
+
+        start = time.monotonic()
+        timeout_seconds = 30
+        active_state = "-"
+        passive_state = "-"
+        confirmed = False
+        while time.monotonic() - start < timeout_seconds:
+            states = _fetch_bgp_states()
+            active_state = states.get(str(active_peer_ip), "-")
+            passive_state = states.get(str(passive_peer_ip), "-")
+            if (
+                str(passive_state).strip().lower() == "established"
+                and str(active_state).strip().lower() != "established"
+            ):
+                confirmed = True
+                break
+            time.sleep(1)
+
+        elapsed = time.monotonic() - start
+        if confirmed:
+            print(
+                "[green]✓ Failover confirmed.[/green] "
+                f"{active.get('name')} BGP={active_state} "
+                f"{target.get('name')} BGP={passive_state} "
+                f"(elapsed {elapsed:.1f}s)"
+            )
+        else:
+            print(
+                "[yellow]⚠ Failover triggered but not confirmed within timeout.[/yellow] "
+                f"{active.get('name')} BGP={active_state} "
+                f"{target.get('name')} BGP={passive_state} "
+                f"(elapsed {elapsed:.1f}s)"
+            )
+            print("[dim]Run 'nebius-vpngw status' to verify current states.[/dim]")
+
+    except typer.Exit:
+        raise
+    except Exception as e:
+        print(f"[red]Error during failover: {e}[/red]")
+        import traceback
+
+        print(f"[dim]{traceback.format_exc()}[/dim]")
+        raise typer.Exit(code=1) from e
+
+
+@app.command(name="failback")
+def tunnel_failback(
+    tunnel_name: str | None = typer.Option(
+        None,
+        "--tunnel-failback",
+        help=(
+            "Active tunnel name to restore. Required when multiple active tunnels exist in the "
+            "config."
+        ),
+    ),
+    local_config_file: Path = typer.Option(
+        None,
+        "--local-config-file",
+        "-c",
+        help="Path to local config file",
+        show_default="nebius-vpngw.config.yaml in current directory",
+    ),
+) -> None:
+    """Restore traffic to the active tunnel by re-enabling its BGP neighbor."""
+    try:
+        config_path = _resolve_local_config(
+            local_config_file, create_if_missing=False, exit_after_create=False
+        )
+        if not config_path:
+            raise typer.Exit(code=1)
+
+        print(f"[bold]Loading config from:[/bold] {config_path}")
+        local_cfg = load_local_config(config_path)
+
+        gateway = local_cfg.get("gateway") or {}
+        local_asn = gateway.get("local_asn")
+        if not local_asn:
+            print("[red]gateway.local_asn is required for BGP failback.[/red]")
+            raise typer.Exit(code=1)
+
+        defaults_mode = (local_cfg.get("defaults", {}).get("routing", {}) or {}).get("mode") or "bgp"
+
+        enabled_tunnels: list[dict[str, object]] = []
+        for conn in local_cfg.get("connections") or []:
+            conn_mode = (conn.get("routing_mode") or defaults_mode) or "bgp"
+            for tun in conn.get("tunnels") or []:
+                ha_role = (tun.get("ha_role") or "active").lower()
+                if ha_role == "disable":
+                    continue
+                enabled_tunnels.append(
+                    {
+                        "name": tun.get("name"),
+                        "ha_role": ha_role,
+                        "conn_name": conn.get("name"),
+                        "conn_mode": conn_mode,
+                        "instance_index": int(tun.get("gateway_instance_index", 0) or 0),
+                        "inner_remote_ip": tun.get("inner_remote_ip")
+                        or (tun.get("bgp", {}) or {}).get("remote_ip"),
+                    }
+                )
+
+        active_tunnels = [t for t in enabled_tunnels if t.get("ha_role") == "active"]
+        if not active_tunnels:
+            print("[red]No active tunnels found in config.[/red]")
+            raise typer.Exit(code=1)
+
+        target = None
+        if tunnel_name:
+            for tun in active_tunnels:
+                if tun.get("name") == tunnel_name:
+                    target = tun
+                    break
+            if not target:
+                names = sorted(t.get("name") or "" for t in active_tunnels)
+                print(
+                    f"[red]Active tunnel '{tunnel_name}' not found. Available: {', '.join(n for n in names if n)}[/red]"
+                )
+                raise typer.Exit(code=1)
+        else:
+            if len(active_tunnels) != 1:
+                print(
+                    "[red]Multiple active tunnels found. Use --tunnel-failback <tunnel-name> to select one.[/red]"
+                )
+                raise typer.Exit(code=1)
+            target = active_tunnels[0]
+
+        if (target.get("conn_mode") or "").lower() != "bgp":
+            print("[red]Manual failback is only supported for BGP routing mode.[/red]")
+            raise typer.Exit(code=1)
+
+        active_peer_ip = target.get("inner_remote_ip")
+        if not active_peer_ip:
+            print("[red]Active tunnel missing inner_remote_ip; cannot fail back.[/red]")
+            raise typer.Exit(code=1)
+
+        conn_name = target.get("conn_name") or "unknown"
+        instance_index = int(target.get("instance_index") or 0)
+
+        plan: ResolvedDeploymentPlan = merge_with_peer_configs(local_cfg, [])
+        target_instance = None
+        for inst in plan.per_instance:
+            if inst.instance_index == instance_index:
+                target_instance = inst
+                break
+
+        if not target_instance or not target_instance.external_ip:
+            print("[red]Could not resolve gateway VM IP for failback.[/red]")
+            raise typer.Exit(code=1)
+
+        gateway_group = local_cfg.get("gateway_group", {})
+        vm_spec = gateway_group.get("vm_spec", {})
+        username = vm_spec.get("ssh_username", os.environ.get("VPNGW_SSH_USER", "ubuntu"))
+        key_path_str = vm_spec.get("ssh_private_key_path") or os.environ.get("VPNGW_SSH_KEY")
+        key_path = Path(key_path_str).expanduser() if key_path_str else None
+
+        print(
+            f"[bold]Failing back connection '{conn_name}' on {target_instance.hostname}:[/bold] "
+            f"restore {target.get('name')}"
+        )
+
+        cmd = (
+            f"sudo vtysh -c 'configure terminal' -c 'router bgp {local_asn}' "
+            f"-c 'no neighbor {active_peer_ip} shutdown'"
+        )
+        ssh_cmd = ["ssh"]
+        if key_path:
+            ssh_cmd.extend(["-i", str(key_path)])
+        ssh_cmd.extend(
+            [
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-o",
+                "ConnectTimeout=10",
+                f"{username}@{target_instance.external_ip}",
+                cmd,
+            ]
+        )
+
+        import subprocess
+
+        result = subprocess.run(
+            ssh_cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            err = result.stderr.strip() or result.stdout.strip()
+            print(f"[red]Failback command failed: {err}[/red]")
+            raise typer.Exit(code=1)
+
+        ssh_base = ["ssh"]
+        if key_path:
+            ssh_base.extend(["-i", str(key_path)])
+        ssh_base.extend(
+            [
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-o",
+                "ConnectTimeout=10",
+            ]
+        )
+        ssh_target = f"{username}@{target_instance.external_ip}"
+
+        def _fetch_bgp_states() -> dict[str, str]:
+            import json
+
+            summary_cmd = "sudo vtysh -c 'show bgp ipv4 unicast summary json'"
+            result = subprocess.run(
+                ssh_base + [ssh_target, summary_cmd],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0 and result.stdout:
+                try:
+                    data = json.loads(result.stdout)
+                    peers = (data.get("ipv4Unicast") or {}).get("peers") or data.get("peers") or {}
+                    states: dict[str, str] = {}
+                    for ip, info in peers.items():
+                        state = (
+                            info.get("state")
+                            or info.get("state_name")
+                            or info.get("stateName")
+                            or info.get("peerState")
+                            or info.get("bgpState")
+                        )
+                        if state:
+                            states[ip] = str(state)
+                    if states:
+                        return states
+                except json.JSONDecodeError:
+                    pass
+
+            text_cmd = "sudo vtysh -c 'show bgp summary'"
+            result = subprocess.run(
+                ssh_base + [ssh_target, text_cmd],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            states: dict[str, str] = {}
+            if result.returncode == 0 and result.stdout:
+                for line in result.stdout.splitlines():
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[0] and "." in parts[0]:
+                        octets = parts[0].split(".")
+                        if len(octets) == 4 and all(
+                            o.isdigit() and 0 <= int(o) <= 255 for o in octets
+                        ):
+                            state = parts[-1]
+                            if state.isdigit():
+                                state = "Established"
+                            states[parts[0]] = state
+            return states
+
+        start = time.monotonic()
+        timeout_seconds = 30
+        active_state = "-"
+        confirmed = False
+        while time.monotonic() - start < timeout_seconds:
+            states = _fetch_bgp_states()
+            active_state = states.get(str(active_peer_ip), "-")
+            if str(active_state).strip().lower() == "established":
+                confirmed = True
+                break
+            time.sleep(1)
+
+        elapsed = time.monotonic() - start
+        if confirmed:
+            print(
+                "[green]✓ Failback confirmed.[/green] "
+                f"{target.get('name')} BGP={active_state} (elapsed {elapsed:.1f}s)"
+            )
+        else:
+            print(
+                "[yellow]⚠ Failback triggered but not confirmed within timeout.[/yellow] "
+                f"{target.get('name')} BGP={active_state} (elapsed {elapsed:.1f}s)"
+            )
+            print("[dim]Run 'nebius-vpngw status' to verify current states.[/dim]")
+
+    except typer.Exit:
+        raise
+    except Exception as e:
+        print(f"[red]Error during failback: {e}[/red]")
         import traceback
 
         print(f"[dim]{traceback.format_exc()}[/dim]")

@@ -5,7 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 
-RENDER_VERSION = 1
+RENDER_VERSION = 3
 
 
 def _get_package_version() -> str:

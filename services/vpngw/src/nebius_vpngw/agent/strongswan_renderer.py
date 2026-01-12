@@ -3,12 +3,14 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
 IPSEC_CONF = Path("/etc/ipsec.conf")
-IPSEC_SECRETS = Path("/etc/ipsec.secrets")
 STRONGSWAN_CONF_DIR = Path("/etc/strongswan.d/charon")
+SWANCTL_CONF = Path("/etc/swanctl/swanctl.conf")
+VICI_SOCKET = Path("/var/run/charon.vici")
 
 
 def _write_secret_file(path: Path, content: str) -> None:
@@ -33,14 +35,25 @@ def _write_secret_file(path: Path, content: str) -> None:
             tmp_path.unlink()
 
 
+def _wait_for_vici_socket(timeout_seconds: float = 15.0, interval_seconds: float = 0.5) -> bool:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        if VICI_SOCKET.exists():
+            return True
+        time.sleep(interval_seconds)
+    return False
+
+
 class StrongSwanRenderer:
-    def _collect_tunnel_state(self, cfg: dict[str, Any]) -> tuple[list[str], list[str], list[dict]]:
-        connections: list[str] = []
-        secrets_lines: list[str] = []
+    def _collect_tunnel_state(
+        self, cfg: dict[str, Any]
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+        tunnels: list[dict[str, Any]] = []
+        secrets: list[dict[str, Any]] = []
 
         defaults = cfg.get("defaults", {})
         global_ike_version = defaults.get("ike_version", 2)
-        allow_ikev1 = defaults.get("allow_ikev1", True)
+        allow_ikev1 = defaults.get("allow_ikev1", False)
         crypto_defaults = defaults.get("crypto", {})
         dpd = defaults.get("dpd", {})
 
@@ -90,59 +103,30 @@ class StrongSwanRenderer:
                     "esp_lifetime_seconds", 3600
                 )
 
-                # Build connection stanza
-                conn_lines = [f"conn {name}"]
-
                 # IKE version
                 if ike_version == 2:
-                    conn_lines.append("    keyexchange=ikev2")
+                    ike_version = 2
                 elif ike_version == 1 and allow_ikev1:
-                    conn_lines.append("    keyexchange=ikev1")
+                    ike_version = 1
                 else:
                     print(
                         f"[StrongSwan] WARNING: Unsupported IKE version {ike_version} for {name}; skipping"
                     )
                     continue
 
-                # Local/Remote endpoints
-                if local_public_ip:
-                    # VM has internal IP, use %any for local and set leftid to external IP
-                    conn_lines.append("    left=%any")
-                    conn_lines.append(f"    leftid={local_public_ip}")
-                else:
-                    conn_lines.append("    left=%any")  # Auto-detect local IP
-                conn_lines.append(f"    right={remote_public_ip}")
-
-                # Authentication
-                conn_lines.append("    authby=psk")
-
-                # Tunnel mode and subnets
-                conn_lines.append("    type=tunnel")
-
                 # Traffic selectors: limit local side to inner CIDR + gateway.local_prefixes
-                # to avoid capturing public traffic/SSH; allow any remote (routes decide what flows)
-                # NOTE: For passive tunnels, only include the /30 to avoid overlapping policies
-                # when if_id is not supported by ipsec.conf (prevents policy flipping).
+                # to avoid capturing public traffic/SSH; allow any remote (routes decide what flows).
+                # Include local_prefixes on all tunnels so passive can carry traffic on failover.
                 local_ts: list[str] = []
                 if inner_cidr:
                     local_ts.append(inner_cidr)
-                if ha_role != "passive":
+                if gateway_local_prefixes:
                     local_ts.extend(gateway_local_prefixes)
-                elif gateway_local_prefixes:
-                    print(
-                        f"[StrongSwan] Passive tunnel {name}: skipping gateway.local_prefixes "
-                        "to avoid overlapping policies"
-                    )
-                if local_ts:
-                    conn_lines.append(f"    leftsubnet={','.join(local_ts)}")
-                else:
-                    conn_lines.append("    leftsubnet=0.0.0.0/0")
-                conn_lines.append("    rightsubnet=0.0.0.0/0")
+                if not local_ts:
+                    local_ts = ["0.0.0.0/0"]
 
                 # XFRM interface binding
                 if_id = base_if_id + idx
-                conn_lines.append(f"    if_id_in={if_id}")
-                conn_lines.append(f"    if_id_out={if_id}")
                 interface_name = f"xfrm{idx}"
 
                 # Collect remote_prefixes for static mode (used later for kernel route installation)
@@ -152,26 +136,22 @@ class StrongSwanRenderer:
                     # Fall back to connection-level remote_prefixes
                     tunnel_remote_prefixes = conn.get("remote_prefixes", []) or []
 
-                # Crypto proposals
-                if ike_props:
-                    conn_lines.append(f"    ike={','.join(ike_props)}")
-                if esp_props:
-                    conn_lines.append(f"    esp={','.join(esp_props)}")
-
-                # Lifetimes
-                conn_lines.append(f"    ikelifetime={int(ike_life)}s")
-                conn_lines.append(f"    keylife={int(esp_life)}s")
-
-                # DPD (Dead Peer Detection)
-                if dpd:
-                    conn_lines.append(f"    dpddelay={int(dpd.get('interval_seconds', 30))}s")
-                    conn_lines.append(f"    dpdtimeout={int(dpd.get('timeout_seconds', 120))}s")
-                    conn_lines.append("    dpdaction=restart")
-
-                # Auto-start
-                conn_lines.append("    auto=start")
-
-                connections.append("\n".join(conn_lines))
+                tunnels.append(
+                    {
+                        "name": name,
+                        "ike_version": ike_version,
+                        "local_public_ip": local_public_ip,
+                        "remote_public_ip": remote_public_ip,
+                        "local_ts": local_ts,
+                        "remote_ts": "0.0.0.0/0",
+                        "if_id": if_id,
+                        "ike_props": ike_props,
+                        "esp_props": esp_props,
+                        "ike_life": ike_life,
+                        "esp_life": esp_life,
+                        "dpd": dpd,
+                    }
+                )
 
                 # Track interface setup for route installation and device management
                 interface_info = {
@@ -190,13 +170,17 @@ class StrongSwanRenderer:
 
                 # PSK secret
                 if psk:
-                    # Format: local_ip remote_ip : PSK "secret"
-                    # Using %any for local allows auto-detection
-                    secrets_lines.append(f'%any {remote_public_ip} : PSK "{psk}"')
+                    secrets.append(
+                        {
+                            "local_id": local_public_ip or "%any",
+                            "remote_id": remote_public_ip,
+                            "secret": psk,
+                        }
+                    )
 
                 idx += 1
 
-        return connections, secrets_lines, interface_endpoints
+        return tunnels, secrets, interface_endpoints
 
     def build_interface_endpoints(self, cfg: dict[str, Any]) -> list[dict]:
         _, _, interface_endpoints = self._collect_tunnel_state(cfg)
@@ -205,11 +189,12 @@ class StrongSwanRenderer:
     def render_and_apply(self, cfg: dict[str, Any]) -> None:
         """Render strongSwan config based on resolved per-VM YAML.
 
-        Generates ipsec.conf with one connection per active tunnel and ipsec.secrets for PSKs.
+        Uses swanctl (VICI) to load per-tunnel connections with if_id_in/out for deterministic
+        XFRM binding. Writes a minimal ipsec.conf to start charon via strongswan-starter.
         Supports IKEv1/IKEv2, configurable crypto proposals, DPD, and both BGP and static routing
         using XFRM interfaces.
         """
-        connections, secrets_lines, interface_endpoints = self._collect_tunnel_state(cfg)
+        tunnels, secrets, interface_endpoints = self._collect_tunnel_state(cfg)
 
         # Write strongSwan plugin configuration based on mode
         STRONGSWAN_CONF_DIR.mkdir(parents=True, exist_ok=True)
@@ -288,25 +273,83 @@ network:
         else:
             print(f"[StrongSwan] ⚠ netplan apply failed: {result.stderr}")
 
-        # Write ipsec.conf
-        conf_text = [
+        # Write minimal ipsec.conf so strongswan-starter can launch charon without parsing tunnels.
+        ipsec_text = [
             "# generated by nebius-vpngw-agent",
             "config setup",
             '    charondebug="ike 1, knl 1, net 1, cfg 1"',
             "    uniqueids=no",
             "",
-        ] + connections
+        ]
+        IPSEC_CONF.write_text("\n".join(ipsec_text) + "\n", encoding="utf-8")
+        print(f"[StrongSwan] Wrote {IPSEC_CONF} (starter-only config)")
 
-        IPSEC_CONF.write_text("\n".join(conf_text) + "\n", encoding="utf-8")
-        print(f"[StrongSwan] Wrote {IPSEC_CONF} with {len(connections)} tunnel(s)")
+        # Write swanctl.conf (includes secrets)
+        SWANCTL_CONF.parent.mkdir(parents=True, exist_ok=True)
+        swanctl_lines = ["# generated by nebius-vpngw-agent", "connections {"]
+        for tun in tunnels:
+            name = tun["name"]
+            swanctl_lines.append(f"  {name} {{")
+            swanctl_lines.append(f"    version = {tun['ike_version']}")
+            swanctl_lines.append("    local_addrs = %any")
+            swanctl_lines.append(f"    remote_addrs = {tun['remote_public_ip']}")
+            if tun["ike_props"]:
+                swanctl_lines.append(f"    proposals = {','.join(tun['ike_props'])}")
+            swanctl_lines.append(f"    rekey_time = {int(tun['ike_life'])}s")
+            swanctl_lines.append("    local {")
+            swanctl_lines.append("      auth = psk")
+            if tun["local_public_ip"]:
+                swanctl_lines.append(f"      id = {tun['local_public_ip']}")
+            swanctl_lines.append("    }")
+            swanctl_lines.append("    remote {")
+            swanctl_lines.append("      auth = psk")
+            swanctl_lines.append(f"      id = {tun['remote_public_ip']}")
+            swanctl_lines.append("    }")
+            dpd = tun.get("dpd") or {}
+            if dpd:
+                swanctl_lines.append(f"    dpd_delay = {int(dpd.get('interval_seconds', 30))}s")
+                swanctl_lines.append(f"    dpd_timeout = {int(dpd.get('timeout_seconds', 120))}s")
+            swanctl_lines.append("    children {")
+            swanctl_lines.append(f"      {name} {{")
+            swanctl_lines.append(f"        local_ts = {','.join(tun['local_ts'])}")
+            swanctl_lines.append(f"        remote_ts = {tun['remote_ts']}")
+            if tun["esp_props"]:
+                swanctl_lines.append(f"        esp_proposals = {','.join(tun['esp_props'])}")
+            swanctl_lines.append(f"        rekey_time = {int(tun['esp_life'])}s")
+            swanctl_lines.append("        mode = tunnel")
+            swanctl_lines.append("        start_action = start")
+            swanctl_lines.append("        close_action = restart")
+            swanctl_lines.append(f"        if_id_in = {tun['if_id']}")
+            swanctl_lines.append(f"        if_id_out = {tun['if_id']}")
+            swanctl_lines.append("      }")
+            swanctl_lines.append("    }")
+            swanctl_lines.append("  }")
+        swanctl_lines.append("}")
 
-        # Write ipsec.secrets
-        # codeql[py/clear-text-storage-sensitive-data] - strongSwan requires PSKs on disk; atomic write with 0600 perms
-        secrets_text = ["# generated by nebius-vpngw-agent", ""] + secrets_lines
-        # codeql[py/clear-text-storage-sensitive-data] - strongSwan requires PSKs on disk; atomic write with 0600 perms
-        secrets_content = "\n".join(secrets_text) + "\n"
-        _write_secret_file(IPSEC_SECRETS, secrets_content)
-        print("[StrongSwan] Wrote IPsec secrets file (permissions: 0600)")
+        if secrets:
+            swanctl_lines.append("secrets {")
+            for idx, secret in enumerate(secrets, start=1):
+                swanctl_lines.append(f"  ike-psk-{idx} {{")
+                swanctl_lines.append(f"    id-1 = {secret['local_id']}")
+                swanctl_lines.append(f"    id-2 = {secret['remote_id']}")
+                swanctl_lines.append(f"    secret = \"{secret['secret']}\"")
+                swanctl_lines.append("  }")
+            swanctl_lines.append("}")
+
+        swanctl_content = "\n".join(swanctl_lines) + "\n"
+        _write_secret_file(SWANCTL_CONF, swanctl_content)
+        print(f"[StrongSwan] Wrote {SWANCTL_CONF} (permissions: 0600)")
+
+        # Enable VICI plugin so swanctl can talk to charon
+        vici_conf = """# generated by nebius-vpngw-agent
+vici {
+  load = yes
+}
+"""
+        vici_conf_path = STRONGSWAN_CONF_DIR / "vici.conf"
+        vici_conf_path.write_text(vici_conf, encoding="utf-8")
+        print(f"[StrongSwan] Wrote {vici_conf_path} (enabled vici plugin)")
+
         # Reload strongSwan to pick up new configs
         try:
             subprocess.run(
@@ -319,6 +362,45 @@ network:
             )
         except Exception as e:
             print(f"[StrongSwan] WARNING: failed to restart strongswan-starter: {e}")
+
+        # Load swanctl connections and secrets via VICI
+        try:
+            load_result = None
+            for attempt in range(1, 4):
+                if not _wait_for_vici_socket():
+                    print("[StrongSwan] WARNING: VICI socket not ready; retrying swanctl load")
+                    time.sleep(1)
+                    continue
+                load_result = subprocess.run(
+                    ["swanctl", "--load-all"],
+                    check=False,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=20,
+                )
+                if load_result.returncode == 0:
+                    break
+                print(
+                    f"[StrongSwan] WARNING: swanctl load failed (attempt {attempt}): "
+                    f"{(load_result.stderr or '').strip()}"
+                )
+                time.sleep(1)
+
+            if load_result and load_result.returncode == 0:
+                for tun in tunnels:
+                    subprocess.run(
+                        ["swanctl", "--initiate", "--child", tun["name"]],
+                        check=False,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=20,
+                    )
+            else:
+                print("[StrongSwan] WARNING: swanctl load did not succeed; skipping initiate")
+        except Exception as e:
+            print(f"[StrongSwan] WARNING: failed to load swanctl config: {e}")
 
         # Return interface configuration for external management (XFRM device creation, routing)
         # XFRM interfaces must be created externally before/after strongSwan starts

@@ -63,6 +63,13 @@ class HARole(str, Enum):
     DISABLE = "disable"
 
 
+class HAMode(str, Enum):
+    """High availability mode for tunnel selection."""
+
+    ACTIVE_PASSIVE = "active-passive"
+    ACTIVE_ACTIVE = "active-active"
+
+
 class Platform(str, Enum):
     """Nebius compute platform."""
 
@@ -195,9 +202,9 @@ class DPDConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     interval_seconds: int = Field(
-        ..., ge=10, le=300, description="DPD check interval in seconds (10-300)"
+        ..., ge=5, le=300, description="DPD check interval in seconds (5-300)"
     )
-    timeout_seconds: int = Field(..., ge=30, le=600, description="DPD timeout in seconds (30-600)")
+    timeout_seconds: int = Field(..., ge=15, le=600, description="DPD timeout in seconds (15-600)")
 
     @model_validator(mode="after")
     def validate_timeout_greater_than_interval(self) -> DPDConfig:
@@ -209,6 +216,29 @@ class DPDConfig(BaseModel):
         return self
 
 
+class BFDConfig(BaseModel):
+    """Bidirectional Forwarding Detection (BFD) configuration for BGP."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(default=False, description="Enable BFD for BGP neighbors")
+    transmit_interval_ms: int = Field(
+        default=300,
+        ge=50,
+        le=10000,
+        description="BFD transmit interval in milliseconds (50-10000)",
+    )
+    receive_interval_ms: int = Field(
+        default=300,
+        ge=50,
+        le=10000,
+        description="BFD receive interval in milliseconds (50-10000)",
+    )
+    detect_multiplier: int = Field(
+        default=3, ge=1, le=50, description="BFD detection multiplier (1-50)"
+    )
+
+
 class BGPDefaults(BaseModel):
     """Default BGP configuration."""
 
@@ -218,20 +248,24 @@ class BGPDefaults(BaseModel):
         default=None, description="BGP router ID (IPv4 format, e.g., '169.254.50.1')"
     )
     hold_time_seconds: int = Field(
-        default=60, ge=3, le=3600, description="BGP hold time in seconds (3-3600)"
+        default=6, ge=3, le=3600, description="BGP hold time in seconds (3-3600)"
     )
     keepalive_seconds: int = Field(
-        default=20,
+        default=2,
         ge=1,
         le=1200,
         description="BGP keepalive interval in seconds (1-1200)",
     )
-    graceful_restart: bool = Field(default=True, description="Enable BGP graceful restart")
+    graceful_restart: bool = Field(default=False, description="Enable BGP graceful restart")
     max_prefixes: int = Field(
         default=1000,
         ge=1,
         le=10000,
         description="Maximum number of prefixes to accept (1-10000)",
+    )
+    bfd: BFDConfig = Field(
+        default_factory=BFDConfig,
+        description="BFD settings for faster BGP failure detection (optional)",
     )
 
     @field_validator("router_id")
@@ -286,10 +320,10 @@ class HealthMonitoringConfig(BaseModel):
         description="Enable automatic tunnel health monitoring and recovery",
     )
     check_interval_seconds: int = Field(
-        default=60,
-        ge=10,
+        default=10,
+        ge=5,
         le=300,
-        description="Health check interval in seconds (10-300)",
+        description="Health check interval in seconds (5-300)",
     )
     max_failures_before_restart: int = Field(
         default=2,
@@ -308,7 +342,7 @@ class HealthMonitoringConfig(BaseModel):
         description="Hours between proactive tunnel refreshes (1-72). Only used if proactive_refresh_enabled=true",
     )
     ping_enabled: bool = Field(
-        default=True,
+        default=False,
         description="Enable ICMP ping to BGP peer for data-plane validation",
     )
 
@@ -320,10 +354,14 @@ class DefaultsConfig(BaseModel):
 
     vpn_type: VPNType = Field(default=VPNType.IPSEC, description="VPN protocol type")
     ike_version: int = Field(default=2, ge=1, le=2, description="IKE protocol version (1 or 2)")
-    allow_ikev1: bool = Field(default=True, description="Allow IKEv1 fallback")
+    allow_ikev1: bool = Field(default=False, description="Allow IKEv1 fallback")
     auth: AuthConfig = Field(default_factory=AuthConfig, description="Authentication configuration")
     crypto: CryptoProposals = Field(..., description="Default cryptographic proposals")
     dpd: DPDConfig = Field(..., description="Dead Peer Detection configuration")
+    ha_mode: HAMode = Field(
+        ...,
+        description="High availability mode for tunnel selection (required: active-passive)",
+    )
     routing: RoutingDefaults = Field(
         default_factory=RoutingDefaults, description="Routing configuration defaults"
     )
@@ -795,6 +833,33 @@ class VPNGatewayConfig(BaseModel):
         duplicates = [n for n in names if names.count(n) > 1]
         if duplicates:
             raise ValueError(f"Duplicate connection names found: {set(duplicates)}")
+        return self
+
+    @model_validator(mode="after")
+    def validate_single_active_tunnel_per_instance(self) -> VPNGatewayConfig:
+        """Enforce exactly one active tunnel per connection per gateway instance."""
+        if self.defaults.ha_mode == HAMode.ACTIVE_ACTIVE:
+            raise ValueError(
+                "ha_mode 'active-active' is reserved for future use; "
+                "current releases require ha_mode='active-passive'."
+            )
+
+        for conn in self.connections:
+            active_counts: dict[int, int] = {}
+            for tunnel in conn.tunnels:
+                instance_index = tunnel.gateway_instance_index
+                active_counts.setdefault(instance_index, 0)
+                if tunnel.ha_role == HARole.ACTIVE:
+                    active_counts[instance_index] += 1
+
+            for instance_index, active_count in active_counts.items():
+                if active_count != 1:
+                    raise ValueError(
+                        f"Connection '{conn.name}' (gateway_instance_index={instance_index}) "
+                        f"must have exactly one active tunnel; found {active_count}. "
+                        "Set one tunnel ha_role='active' and others 'passive' or 'disable'."
+                    )
+
         return self
 
     @model_validator(mode="after")
