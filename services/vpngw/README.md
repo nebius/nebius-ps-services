@@ -141,10 +141,11 @@ xfrm*:
 
 **Peer Gateway Requirements:**
 
-- **GCP Cloud VPN:** No additional firewall configuration needed (handled automatically by GCP)
-- **AWS VPN Gateway:** No additional firewall configuration needed (handled automatically by AWS)
-- **Azure VPN Gateway:** No additional firewall configuration needed (handled automatically by Azure)
-- **On-premises/Cisco:** Ensure firewall allows UDP 500, UDP 4500, and ESP (protocol 50) from/to Nebius gateway public IP
+- **IPsec/IKE:** Allow UDP 500 and UDP 4500 plus ESP (IP protocol 50) between the peer gateway public IP(s) and Nebius gateway public IP(s)
+- **BGP:** Allow TCP 179 only over the tunnel interface between inner tunnel IPs (APIPA `169.254.x.x/30`); do not expose TCP/179 on the public interface
+- **ICMP (optional):** Allow ICMP between inner tunnel IPs if you plan to use ping-based tunnel health checks
+- **Workload/application traffic:** Allow required application ports between the private subnets on both sides
+- **Managed cloud VPNs:** IPsec/BGP allowances are handled by the provider; typically only workload firewall rules are required in your VPC (e.g., GCP HA VPN/Cloud Router handles IKE/IPsec and BGP on the managed gateway)
 
 **Note:** UFW is the default and recommended firewall. The system automatically enables and configures it during VM deployment.
 

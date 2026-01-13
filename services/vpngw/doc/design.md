@@ -1346,6 +1346,13 @@ xfrm*:
   allow all (includes tcp/179 between APIPA peers)
 ```
 
+**Peer Gateway Expectations:**
+
+- **IPsec/IKE:** Allow UDP 500 and UDP 4500 plus ESP (IP protocol 50) between the peer gateway public IP(s) and Nebius gateway public IP(s)
+- **BGP:** Allow TCP 179 only on the tunnel interface between inner tunnel IPs (APIPA `169.254.x.x/30`)
+- **ICMP (optional):** Allow ICMP between inner tunnel IPs if using ping-based tunnel health checks
+- **Workload/application traffic:** Allow required application ports between private subnets on both sides (managed cloud VPNs typically only need these VPC firewall rules; e.g., GCP HA VPN/Cloud Router handles IKE/IPsec and BGP on the managed gateway)
+
 **Dynamic Updates:** The agent (`firewall_manager.py`) synchronizes UFW rules with active tunnels:
 
 - Adds peer IPs dynamically as tunnels are configured
