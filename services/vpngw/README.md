@@ -50,11 +50,24 @@ VM-based site-to-site IPsec/BGP VPN gateway for Nebius AI Cloud. Supports GCP HA
   - Ubuntu/Debian: `sudo apt-get install pipx && pipx ensurepath`
   - If you must use pip: `python3 -m pip install --user pipx --break-system-packages && python3 -m pipx ensurepath`
 - Download the latest `nebius_vpngw-<version>-py3-none-any.whl` from this repository’s GitHub Release assets (version comes from the Git tag).
+  - macOS/Linux (wget):
+
+    ```bash
+    mkdir -p nebius-vpngw-release
+    cd nebius-vpngw-release
+    wget <release-wheel-url>
+    ```
+
+  - Windows:
+    - Download the latest wheel from the GitHub Releases page and copy it into `nebius-vpngw-release`:
+      - `https://github.com/nebius/nebius-ps-services/releases`
+    - Create a folder and copy the file there.
+
 - Install with pipx:
 
-```bash
-pipx install /path/to/nebius_vpngw-<version>-py3-none-any.whl
-```
+  ```bash
+  pipx install ./nebius_vpngw-<version>-py3-none-any.whl
+  ```
 
 If pipx reports that its bin dir is not on PATH (e.g., `~/.local/bin`), run:
 
@@ -94,6 +107,18 @@ pip install -e ".[dev]"
 - Nebius AI Cloud account
 - Nebius AI Cloud project with VPC network
 - Python 3.10–3.12 runtime (install the CLI with pipx or via editable install as above)
+
+### Nebius-Side Networking Prerequisites (Fixed Public IP, GCP Example)
+
+If you need a stable public IP to give your peer (e.g., GCP External VPN Gateway), reserve it first:
+
+- Optional: use a dedicated Nebius project for clean networking.
+- Ensure your target VPC has a /24 available for the gateway subnet (the deployer auto-creates `vpngw-subnet` if missing).
+- If you prefer to create it manually, create a subnet named `vpngw-subnet` (e.g., `10.48.0.0/24`) inside the target VPC.
+- Reserve a public IP allocation in `vpngw-subnet` (name can be anything).
+- Put that reserved IP into `gateway_group.external_ips` so the gateway reuses it and you can share it with GCP.
+
+**Note:** If you pre-create an allocation but leave `external_ips` empty, the deployer will create its own allocation unless your allocation name matches the default pattern (`<gateway_group.name>-<index>-eth0-ip`).
 
 ### Firewall Requirements
 
@@ -141,10 +166,11 @@ xfrm*:
 
 **Peer Gateway Requirements:**
 
-- **GCP Cloud VPN:** No additional firewall configuration needed (handled automatically by GCP)
-- **AWS VPN Gateway:** No additional firewall configuration needed (handled automatically by AWS)
-- **Azure VPN Gateway:** No additional firewall configuration needed (handled automatically by Azure)
-- **On-premises/Cisco:** Ensure firewall allows UDP 500, UDP 4500, and ESP (protocol 50) from/to Nebius gateway public IP
+- **IPsec/IKE:** Allow UDP 500 and UDP 4500 plus ESP (IP protocol 50) between the peer gateway public IP(s) and Nebius gateway public IP(s)
+- **BGP:** Allow TCP 179 only over the tunnel interface between inner tunnel IPs (APIPA `169.254.x.x/30`); do not expose TCP/179 on the public interface
+- **ICMP (optional):** Allow ICMP between inner tunnel IPs if you plan to use ping-based tunnel health checks
+- **Workload/application traffic:** Allow required application ports between the private subnets on both sides
+- **Managed cloud VPNs:** IPsec/BGP allowances are handled by the provider; typically only workload firewall rules are required in your VPC (e.g., GCP HA VPN/Cloud Router handles IKE/IPsec and BGP on the managed gateway)
 
 **Note:** UFW is the default and recommended firewall. The system automatically enables and configures it during VM deployment.
 
@@ -1097,6 +1123,10 @@ gateway_group:
   external_ips:
     - ["203.0.113.10"]  # VM 0
     - ["203.0.113.20"]  # VM 1
+  # OR (future multi-NIC example)
+  external_ips:
+    - ["66.201.0.131", "66.201.0.132"]  # VM 0: NIC0, NIC1
+    - ["66.201.0.133", "66.201.0.134"]  # VM 1: NIC0, NIC1
 ```
 
 **Behavior:**

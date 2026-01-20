@@ -1,6 +1,6 @@
 # Nebius VPN Gateway (VM-Based) — Design Document
 
-> Version: v0.4.7
+> Version: v0.4.8
 > Designed by: Reza Bahmanzadeh, Nebius Professional Services, CX Org.
 > Copyright 2025 Nebius B.V.
 > Licensed under the Apache License, Version 2.0
@@ -182,6 +182,11 @@ external_ips: [["203.0.113.10"]]
 
 # Two VMs, existing IPs
 external_ips: [["203.0.113.10"], ["203.0.113.20"]]
+
+# Two VMs, two NICs each (future multi-NIC example)
+external_ips:
+  - ["66.201.0.131", "66.201.0.132"]  # VM 0: NIC0, NIC1
+  - ["66.201.0.133", "66.201.0.134"]  # VM 1: NIC0, NIC1
 ```
 
 ## Configuration Model
@@ -1346,6 +1351,13 @@ xfrm*:
   allow all (includes tcp/179 between APIPA peers)
 ```
 
+**Peer Gateway Expectations:**
+
+- **IPsec/IKE:** Allow UDP 500 and UDP 4500 plus ESP (IP protocol 50) between the peer gateway public IP(s) and Nebius gateway public IP(s)
+- **BGP:** Allow TCP 179 only on the tunnel interface between inner tunnel IPs (APIPA `169.254.x.x/30`)
+- **ICMP (optional):** Allow ICMP between inner tunnel IPs if using ping-based tunnel health checks
+- **Workload/application traffic:** Allow required application ports between private subnets on both sides (managed cloud VPNs typically only need these VPC firewall rules; e.g., GCP HA VPN/Cloud Router handles IKE/IPsec and BGP on the managed gateway)
+
 **Dynamic Updates:** The agent (`firewall_manager.py`) synchronizes UFW rules with active tunnels:
 
 - Adds peer IPs dynamically as tunnels are configured
@@ -1708,6 +1720,8 @@ During recreation:
 3. Deploy: `nebius-vpngw apply` (uploads new wheel automatically)
 
 Agent is installed on remote VMs, not in local virtualenv.
+For pipx/release installs, `apply` uses a local wheel (current directory or `./dist`);
+it does not rebuild from source.
 
 ### Testing Changes
 

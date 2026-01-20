@@ -14,6 +14,12 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [v0.4.8] - 2026-01-20
+
+- Adjusted SSH deploy to avoid rebuilding wheels for pipx/release installs and to prefer local release wheels when applying.
+- Made SSH usage more Windows-friendly with OpenSSH presence checks and OS-aware null device handling.
+- Updated install docs to emphasize downloading release wheels (Windows) and local wheel usage for pipx installs.
+
 ## [v0.4.7] - 2026-01-12
 
 - Added `defaults.ha_mode` (active-passive default) and schema validation enforcing exactly one active tunnel per connection per gateway instance.

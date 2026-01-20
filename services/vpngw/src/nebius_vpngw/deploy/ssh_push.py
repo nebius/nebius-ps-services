@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from importlib import metadata
 from pathlib import Path
 
 from ..config_loader import InstanceResolvedConfig
@@ -29,26 +30,71 @@ class SSHPush:
             self._paramiko = paramiko
         return self._paramiko
 
+    def _find_project_root(self) -> Path | None:
+        """Locate repo root based on the installed module path."""
+        current = Path(__file__).resolve()
+        for parent in current.parents:
+            if (parent / "pyproject.toml").exists():
+                return parent
+        return None
+
+    def _select_wheel_from_dirs(self, search_dirs: list[Path]) -> Path | None:
+        """Pick the best available wheel from search dirs, preferring current version."""
+        version = None
+        try:
+            version = metadata.version("nebius-vpngw")
+        except metadata.PackageNotFoundError:
+            version = None
+
+        candidates: list[Path] = []
+        for directory in search_dirs:
+            if not directory.exists():
+                continue
+            wheels = sorted(
+                directory.glob("nebius_vpngw-*.whl"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            if not wheels:
+                continue
+            if version:
+                for wheel in wheels:
+                    if f"nebius_vpngw-{version}-" in wheel.name:
+                        return wheel
+            candidates.extend(wheels)
+
+        if not candidates:
+            return None
+        return sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)[0]
+
     def _build_wheel(self) -> Path | None:
         """Build the nebius-vpngw wheel package if not already built."""
         if self._wheel_path and self._wheel_path.exists():
             return self._wheel_path
 
-        # Find project root (where pyproject.toml is). Prefer cwd if running from source tree,
-        # else fall back to the installed module location.
-        project_root = None
-        cwd = Path.cwd()
-        if (cwd / "pyproject.toml").exists():
-            project_root = cwd
-        else:
-            current = Path(__file__).resolve()
-            for parent in current.parents:
-                if (parent / "pyproject.toml").exists():
-                    project_root = parent
-                    break
+        wheel_override = os.environ.get("VPNGW_AGENT_WHEEL")
+        if wheel_override:
+            override_path = Path(wheel_override).expanduser()
+            if override_path.is_file():
+                self._wheel_path = override_path
+                print(f"[SSHPush] Using wheel from VPNGW_AGENT_WHEEL: {override_path.name}")
+                return self._wheel_path
+            print(f"[SSHPush] WARNING: VPNGW_AGENT_WHEEL not found: {override_path}")
 
+        # Find project root (where pyproject.toml is) from the installed module path.
+        project_root = self._find_project_root()
         if not project_root:
-            print("[SSHPush] WARNING: Could not find project root with pyproject.toml")
+            # Release/pipx install: look for a local wheel in cwd or ./dist
+            local_wheel = self._select_wheel_from_dirs([Path.cwd(), Path.cwd() / "dist"])
+            if local_wheel:
+                self._wheel_path = local_wheel
+                print(f"[SSHPush] Using local wheel: {self._wheel_path.name}")
+                return self._wheel_path
+            print(
+                "[SSHPush] WARNING: No local wheel found. "
+                "Download the release wheel and set VPNGW_AGENT_WHEEL, "
+                "or run apply from a directory containing the wheel (or ./dist)."
+            )
             return None
 
         dist_dir = project_root / "dist"
@@ -84,22 +130,16 @@ class SSHPush:
                 print(f"[SSHPush] Wheel build error: {e}")
 
         # Reuse newest existing wheel (works with python -m build)
+        wheel = self._select_wheel_from_dirs([dist_dir]) if dist_dir.exists() else None
+        if wheel:
+            self._wheel_path = wheel
+            print(f"[SSHPush] Using wheel: {self._wheel_path.name}")
+            return self._wheel_path
         if dist_dir.exists():
-            wheels = sorted(
-                dist_dir.glob("nebius_vpngw-*.whl"),
-                key=lambda p: p.stat().st_mtime,
-                reverse=True,
-            )
-            if wheels:
-                self._wheel_path = wheels[0]
-                print(f"[SSHPush] Using wheel: {self._wheel_path.name}")
-                return self._wheel_path
-            else:
-                print("[SSHPush] No wheel found in dist/ after build attempt")
-                return None
+            print("[SSHPush] No wheel found in dist/ after build attempt")
         else:
             print("[SSHPush] dist/ directory not found; wheel not built")
-            return None
+        return None
 
     def push_config_and_reload(
         self, ssh_target: str, inst_cfg: InstanceResolvedConfig, local_cfg: dict
