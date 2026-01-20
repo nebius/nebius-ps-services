@@ -31,7 +31,11 @@ region_id: "${{REGION_ID}}"  # e.g., eu-north1
 gateway_group:
   name: "nebius-vpn-gw"
   instance_count: 1
-  external_ips: []  # []=auto, or [["203.0.113.10"], ["203.0.113.20"]] per VM/NIC
+  external_ips: []  # []=auto
+  # Example (list per VM, inner list per NIC):
+  # external_ips:
+  #   - ["203.0.113.10"]  # VM0 NIC0
+  #   - ["203.0.113.20"]  # VM1 NIC0
 
   vm_spec:
     platform: "cpu-d3"          # cpu-e2|cpu-d3

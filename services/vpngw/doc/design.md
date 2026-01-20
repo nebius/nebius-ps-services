@@ -1,6 +1,6 @@
 # Nebius VPN Gateway (VM-Based) — Design Document
 
-> Version: v0.4.7
+> Version: v0.4.8
 > Designed by: Reza Bahmanzadeh, Nebius Professional Services, CX Org.
 > Copyright 2025 Nebius B.V.
 > Licensed under the Apache License, Version 2.0
@@ -182,6 +182,11 @@ external_ips: [["203.0.113.10"]]
 
 # Two VMs, existing IPs
 external_ips: [["203.0.113.10"], ["203.0.113.20"]]
+
+# Two VMs, two NICs each (future multi-NIC example)
+external_ips:
+  - ["66.201.0.131", "66.201.0.132"]  # VM 0: NIC0, NIC1
+  - ["66.201.0.133", "66.201.0.134"]  # VM 1: NIC0, NIC1
 ```
 
 ## Configuration Model
@@ -1715,6 +1720,8 @@ During recreation:
 3. Deploy: `nebius-vpngw apply` (uploads new wheel automatically)
 
 Agent is installed on remote VMs, not in local virtualenv.
+For pipx/release installs, `apply` uses a local wheel (current directory or `./dist`);
+it does not rebuild from source.
 
 ### Testing Changes
 

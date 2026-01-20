@@ -1,5 +1,6 @@
 import os
-import re
+import platform
+import shutil
 import sys
 import time
 import typing as t
@@ -38,6 +39,51 @@ def _version_callback(value: bool) -> bool:
         print(f"nebius-vpngw {__version__}")
         raise typer.Exit()
     return value
+
+
+def _is_windows() -> bool:
+    return os.name == "nt" or platform.system().lower() == "windows"
+
+
+def _ssh_null_device() -> str:
+    # os.devnull is "nul" on Windows and "/dev/null" on POSIX.
+    return os.devnull
+
+
+def _ensure_ssh_available() -> None:
+    if shutil.which("ssh"):
+        return
+    if _is_windows():
+        print("[red]OpenSSH client not found in PATH.[/red]")
+        print(
+            "[yellow]Install it via Settings > Apps > Optional features > OpenSSH Client, "
+            "or run: Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0[/yellow]"
+        )
+        print("[yellow]Alternatively, run the CLI from WSL.[/yellow]")
+    else:
+        print("[red]ssh client not found in PATH.[/red]")
+        print(
+            "[yellow]Install OpenSSH client (e.g., apt-get install openssh-client or brew install openssh).[/yellow]"
+        )
+    raise typer.Exit(code=1)
+
+
+def _build_ssh_base_cmd(key_path: Path | None) -> list[str]:
+    _ensure_ssh_available()
+    cmd = ["ssh"]
+    if key_path:
+        cmd.extend(["-i", str(key_path)])
+    cmd.extend(
+        [
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            f"UserKnownHostsFile={_ssh_null_device()}",
+            "-o",
+            "ConnectTimeout=10",
+        ]
+    )
+    return cmd
 
 
 def _create_config_from_template(output_path: Path) -> None:
@@ -2344,21 +2390,8 @@ def restart_tunnel(
             print(f"\\n[dim]Connecting to {hostname} ({external_ip})...[/dim]")
 
             # Build SSH command
-            ssh_cmd = ["ssh"]
-            if key_path:
-                ssh_cmd.extend(["-i", str(key_path)])
-            ssh_cmd.extend(
-                [
-                    "-o",
-                    "StrictHostKeyChecking=no",
-                    "-o",
-                    "UserKnownHostsFile=/dev/null",
-                    "-o",
-                    "ConnectTimeout=10",
-                    f"{username}@{external_ip}",
-                    cmd,
-                ]
-            )
+            ssh_cmd = _build_ssh_base_cmd(key_path)
+            ssh_cmd.extend([f"{username}@{external_ip}", cmd])
 
             try:
                 import subprocess
@@ -2559,21 +2592,8 @@ def tunnel_failover(
             f"sudo vtysh -c 'configure terminal' -c 'router bgp {local_asn}' "
             f"-c 'neighbor {active_peer_ip} shutdown'"
         )
-        ssh_cmd = ["ssh"]
-        if key_path:
-            ssh_cmd.extend(["-i", str(key_path)])
-        ssh_cmd.extend(
-            [
-                "-o",
-                "StrictHostKeyChecking=no",
-                "-o",
-                "UserKnownHostsFile=/dev/null",
-                "-o",
-                "ConnectTimeout=10",
-                f"{username}@{target_instance.external_ip}",
-                cmd,
-            ]
-        )
+        ssh_cmd = _build_ssh_base_cmd(key_path)
+        ssh_cmd.extend([f"{username}@{target_instance.external_ip}", cmd])
 
         import subprocess
 
@@ -2588,19 +2608,7 @@ def tunnel_failover(
             print(f"[red]Failover command failed: {err}[/red]")
             raise typer.Exit(code=1)
 
-        ssh_base = ["ssh"]
-        if key_path:
-            ssh_base.extend(["-i", str(key_path)])
-        ssh_base.extend(
-            [
-                "-o",
-                "StrictHostKeyChecking=no",
-                "-o",
-                "UserKnownHostsFile=/dev/null",
-                "-o",
-                "ConnectTimeout=10",
-            ]
-        )
+        ssh_base = _build_ssh_base_cmd(key_path)
         ssh_target = f"{username}@{target_instance.external_ip}"
 
         def _fetch_bgp_states() -> dict[str, str]:
@@ -2818,21 +2826,8 @@ def tunnel_failback(
             f"sudo vtysh -c 'configure terminal' -c 'router bgp {local_asn}' "
             f"-c 'no neighbor {active_peer_ip} shutdown'"
         )
-        ssh_cmd = ["ssh"]
-        if key_path:
-            ssh_cmd.extend(["-i", str(key_path)])
-        ssh_cmd.extend(
-            [
-                "-o",
-                "StrictHostKeyChecking=no",
-                "-o",
-                "UserKnownHostsFile=/dev/null",
-                "-o",
-                "ConnectTimeout=10",
-                f"{username}@{target_instance.external_ip}",
-                cmd,
-            ]
-        )
+        ssh_cmd = _build_ssh_base_cmd(key_path)
+        ssh_cmd.extend([f"{username}@{target_instance.external_ip}", cmd])
 
         import subprocess
 
@@ -2847,19 +2842,7 @@ def tunnel_failback(
             print(f"[red]Failback command failed: {err}[/red]")
             raise typer.Exit(code=1)
 
-        ssh_base = ["ssh"]
-        if key_path:
-            ssh_base.extend(["-i", str(key_path)])
-        ssh_base.extend(
-            [
-                "-o",
-                "StrictHostKeyChecking=no",
-                "-o",
-                "UserKnownHostsFile=/dev/null",
-                "-o",
-                "ConnectTimeout=10",
-            ]
-        )
+        ssh_base = _build_ssh_base_cmd(key_path)
         ssh_target = f"{username}@{target_instance.external_ip}"
 
         def _fetch_bgp_states() -> dict[str, str]:
