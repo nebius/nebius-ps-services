@@ -1305,7 +1305,7 @@ sudo ufw enable
 - **UDP 500** - IKE (Internet Key Exchange) for IPsec tunnel establishment
 - **UDP 4500** - IPsec NAT-T (NAT Traversal) for ESP over UDP when behind NAT
 - **ESP (IP Protocol 50)** - Encapsulating Security Payload for encrypted VPN data
-- **TCP 179** - BGP for dynamic routing (over xfrm* only; not exposed on public interface)
+- **TCP 179** - BGP for dynamic routing only (over xfrm* only; not exposed on public interface)
 - **TCP 22** - SSH for management access (can be restricted to management CIDRs)
 - **ICMP** - For path MTU discovery and troubleshooting
 
@@ -1354,9 +1354,12 @@ xfrm*:
 **Peer Gateway Expectations:**
 
 - **IPsec/IKE:** Allow UDP 500 and UDP 4500 plus ESP (IP protocol 50) between the peer gateway public IP(s) and Nebius gateway public IP(s)
-- **BGP:** Allow TCP 179 only on the tunnel interface between inner tunnel IPs (APIPA `169.254.x.x/30`)
+- **Dynamic routing (BGP only):** Allow TCP 179 only on the tunnel interface between inner tunnel IPs (APIPA `169.254.x.x/30`)
+- **Static routing:** No BGP/TCP 179 required; IPsec/IKE + workload rules are sufficient
 - **ICMP (optional):** Allow ICMP between inner tunnel IPs if using ping-based tunnel health checks
-- **Workload/application traffic:** Allow required application ports between private subnets on both sides (managed cloud VPNs typically only need these VPC firewall rules; e.g., GCP HA VPN/Cloud Router handles IKE/IPsec and BGP on the managed gateway)
+- **Workload/application traffic:** Allow required application ports between private subnets on both sides (managed cloud VPNs typically only need these VPC firewall rules; e.g., GCP HA VPN/Cloud Router handles IKE/IPsec and BGP on the managed gateway when using dynamic routing)
+
+**Routing note (shared routing domain):** If multiple Nebius gateways connect to the same routing domain (e.g., a single Cloud Router/VPC), ensure each gateway advertises distinct `gateway.local_prefixes`. Overlapping prefixes will conflict and only one path will be selected.
 
 **Dynamic Updates:** The agent (`firewall_manager.py`) synchronizes UFW rules with active tunnels:
 

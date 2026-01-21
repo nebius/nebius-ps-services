@@ -77,10 +77,13 @@ pipx ensurepath
 exec $SHELL
 ```
 
-- Upgrade when a new tag is released: `pipx upgrade nebius-vpngw`.
-- Verify: `nebius-vpngw --version`.
+- Upgrade when a new tag is released (release wheels, not PyPI):
 
-**Version:** Sourced from Git tags (SemVer). Run `nebius-vpngw --version` after install.
+  ```bash
+  pipx install --force ./nebius_vpngw-<version>-py3-none-any.whl
+  ```
+
+- Verify: `nebius-vpngw --version`.
 
 ### Developers (editable install)
 
@@ -124,79 +127,16 @@ If you need a stable public IP to give your peer (e.g., GCP External VPN Gateway
 
 The VPN gateway automatically configures UFW on the VPN gateway with the following rules:
 
-**Required Ports (automatically configured):**
-
-> Public (eth0):  IKE / ESP only, SSH, ICMP
-> Tunnel (xfrm*): BGP (tcp/179), ICMP, routed traffic
-
-- **UDP 500** - IKE (Internet Key Exchange) for IPsec tunnel establishment
-- **UDP 4500** - IPsec NAT-T (NAT Traversal) for ESP over UDP
-- **ESP (IP Protocol 50)** - Encapsulating Security Payload for encrypted data
-- **TCP 22** - SSH for management access
-- **ICMP** - For troubleshooting and diagnostics
-- **TCP 179** - BGP for dynamic routing (over xfrm* only; not exposed on public interface)
-
-**BGP (TCP/179) scope:**
-
-- Allowed only on xfrm interfaces, between APIPA peers (inner_local_ip ↔ inner_remote_ip)
-- APIPA inner IPs are assigned to xfrm interfaces and only exist after IPsec decryption
-- TCP/179 is NOT opened on the public interface (eth0)
-
-**Interface-specific rules (conceptual):**
-
-```text
-eth0 (public):
-  allow udp/500 from <peer_public_ips>
-  allow udp/4500 from <peer_public_ips>
-  allow esp from <peer_public_ips>
-  allow tcp/22 from <management_cidrs> (or anywhere if unset)
-  allow icmp
-
-xfrm*:
-  allow all (includes tcp/179 between APIPA peers)
-```
-
-**Traffic Flow:**
-
-- **Inbound:** Restricted to peer VPN gateway IPs (for IPsec) and management CIDRs (for SSH)
-- **Outbound:** Unrestricted (default allow)
-- **Local VPC subnets:** Allowed to forward traffic through the gateway
-- **Tunnel interfaces (xfrm*):** Unrestricted (required for BGP and encrypted traffic)
-- **BGP:** Runs only over xfrm* using APIPA inner IPs (no TCP/179 on eth0)
-
-**Peer Gateway Requirements:**
+**Peer Gateway Firewall Requirements:**
 
 - **IPsec/IKE:** Allow UDP 500 and UDP 4500 plus ESP (IP protocol 50) between the peer gateway public IP(s) and Nebius gateway public IP(s)
-- **BGP:** Allow TCP 179 only over the tunnel interface between inner tunnel IPs (APIPA `169.254.x.x/30`); do not expose TCP/179 on the public interface
+- **Dynamic routing (BGP only):** Allow TCP 179 only over the tunnel interface between inner tunnel IPs (APIPA `169.254.x.x/30`); do not expose TCP/179 on the public interface
+- **Static routing:** No BGP/TCP 179 required; IPsec/IKE + workload rules are sufficient
 - **ICMP (optional):** Allow ICMP between inner tunnel IPs if you plan to use ping-based tunnel health checks
 - **Workload/application traffic:** Allow required application ports between the private subnets on both sides
-- **Managed cloud VPNs:** IPsec/BGP allowances are handled by the provider; typically only workload firewall rules are required in your VPC (e.g., GCP HA VPN/Cloud Router handles IKE/IPsec and BGP on the managed gateway)
+- **Managed cloud VPNs (dynamic):** GCP HA VPN/Cloud Router automatically allows IKE/IPsec and BGP on the managed gateway when using dynamic routing; typically only workload firewall rules are required in your VPC
 
 **Note:** UFW is the default and recommended firewall. The system automatically enables and configures it during VM deployment.
-
-### Permanent MTU Strategy (XFRM)
-
-The gateway enforces a conservative MTU policy so workloads don't rely on PMTUD alone:
-
-- Always enable TCP MSS clamping on the gateway
-- Enable TCP MTU probing
-- Set XFRM MTU to parent MTU minus IPsec/NAT-T overhead (default 64 bytes)
-- Keep eth0 MTU unchanged
-- Expect PMTU ~1380-1386 for GCP HA VPN with NAT-T
-
-**Rules applied by the agent:**
-
-```bash
-iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
-# nftables equivalent:
-nft add rule ip mangle forward tcp flags syn tcp option maxseg size set rt mtu
-```
-
-**Sysctl (persistent):**
-
-```bash
-net.ipv4.tcp_mtu_probing = 1
-```
 
 ### Required Information from Peer Gateway
 
@@ -211,6 +151,8 @@ Before configuring your VPN gateway, collect the following information from your
   - `hold_time_seconds: 6`
   - `keepalive_seconds: 2`
 - Number of tunnels (e.g., `2` for HA VPN)
+
+**Routing note:** If multiple Nebius gateways connect to the same routing domain (e.g., a single Cloud Router/VPC), ensure each Nebius gateway advertises **distinct** `gateway.local_prefixes`. Overlapping prefixes will conflict and only one path will be selected.
 
 **For static mode:**
 
