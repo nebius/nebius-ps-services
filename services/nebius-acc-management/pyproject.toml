@@ -43,7 +43,7 @@ nebius_acc = ["config_schema.json"]
 version_scheme = "python-simplified-semver"
 local_scheme = "no-local-version"
 write_to = "src/nebius_acc/_version.py"
-tag_regex = "^v?(?P<version>\\d+\\.\\d+\\.\\d+)$"
+tag_regex = "^nebius-acc-v(?P<version>\\d+\\.\\d+\\.\\d+)$"
 fallback_version = "0.0.0"
 search_parent_directories = true
 

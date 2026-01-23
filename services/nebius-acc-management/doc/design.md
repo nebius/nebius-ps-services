@@ -15,6 +15,7 @@
 - [Quota Handling](#quota-handling)
 - [Error Handling](#error-handling)
 - [Security Considerations](#security-considerations)
+- [Release & Versioning](#release--versioning)
 - [Future API Layer](#future-api-layer)
 
 ## Overview
@@ -132,6 +133,12 @@ This separation allows a future API layer to reuse the same core logic.
 - Secrets are never written to disk or logged.
 - Quota files should be kept outside the repo to avoid leaking customer details.
 - The CLI attempts to resolve an IAM token at startup (environment, CLI config, or CLI token helper).
+
+## Release & Versioning
+
+- Tag releases with a project prefix to avoid collisions in this shared repo.
+- Format: `nebius-acc-vMAJOR.MINOR.PATCH` (SemVer).
+- Use `release.sh` for prep/publish to keep the changelog and tag format consistent.
 
 ## Future API Layer
 
