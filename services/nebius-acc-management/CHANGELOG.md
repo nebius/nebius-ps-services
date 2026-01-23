@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.1.0] - 2026-01-23
+
 - Initial project scaffolding.
 - Use the Nebius Python SDK for IAM, quotas, and federation operations.
 - Auto-fetch IAM token on CLI start when not provided via environment.

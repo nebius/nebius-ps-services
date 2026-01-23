@@ -2,17 +2,30 @@
 set -euo pipefail
 
 usage() {
+  local bold reset cyan yellow
+  if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+    bold=$'\033[1m'
+    cyan=$'\033[36m'
+    yellow=$'\033[33m'
+    reset=$'\033[0m'
+  else
+    bold=""
+    cyan=""
+    yellow=""
+    reset=""
+  fi
+
   cat <<EOF
-Usage:
-  ./release.sh --prep vX.Y.Z
+${bold}Usage:${reset}
+  ${cyan}./release.sh${reset} ${yellow}--prep${reset} vX.Y.Z
     # update changelog, commit, push branch
-  ./release.sh --publish vX.Y.Z
+  ${cyan}./release.sh${reset} ${yellow}--publish${reset} vX.Y.Z
     # main only, clean, up-to-date; tag/build/release
-  ./release.sh --verify vX.Y.Z
+  ${cyan}./release.sh${reset} ${yellow}--verify${reset} vX.Y.Z
     # verify existing release asset
 
-Options:
-  --force-retag
+${bold}Options:${reset}
+  ${yellow}--force-retag${reset}
     # allow deleting/recreating tag (publish only)
 EOF
 }
