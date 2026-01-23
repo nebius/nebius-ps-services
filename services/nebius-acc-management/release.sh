@@ -2,6 +2,7 @@
 set -euo pipefail
 
 TAG_PREFIX="nebius-acc"
+WHEEL_PATTERN="nebius_acc-*.whl"
 
 usage() {
   local bold reset cyan yellow
@@ -142,10 +143,22 @@ retag_cleanup() {
 ensure_tag_available() {
   local tag="$1"
   if git rev-parse --verify --quiet "$tag" >/dev/null 2>&1; then
+    local tag_commit head_commit
+    tag_commit="$(git rev-parse "$tag")"
+    head_commit="$(git rev-parse HEAD)"
+
     if [[ "${ALLOW_RETAG:-0}" != "1" ]]; then
-      die "tag exists; use --force-retag"
+      if [[ "${tag_commit}" == "${head_commit}" ]]; then
+        die "tag ${tag} already exists on current HEAD; use --verify or --force-retag"
+      fi
+      die "tag ${tag} exists at ${tag_commit} (current HEAD is ${head_commit}); use --force-retag to overwrite"
     fi
-    confirm "Retag ${tag}? This deletes existing tag/release." || exit 1
+
+    echo "WARNING: tag ${tag} already exists."
+    echo "Tag commit : ${tag_commit}"
+    echo "HEAD commit: ${head_commit}"
+    echo "This will delete the existing tag and any GitHub release named ${tag}."
+    confirm "Proceed with retagging ${tag}?" || exit 1
     get_token
     retag_cleanup "$tag"
   fi
@@ -154,16 +167,24 @@ ensure_tag_available() {
 verify_release_asset() {
   local tag="$1"
   ensure_gh
+  echo "==> Downloading wheel from GitHub release ${tag} to verify integrity..."
   local tmp_dir
   tmp_dir="$(mktemp -d)"
   gh release download "$tag" \
-    --pattern '*.whl' \
+    --pattern "${WHEEL_PATTERN}" \
     --dir "$tmp_dir" \
     --clobber >/dev/null
   local wheel
-  wheel="$(find "$tmp_dir" -maxdepth 1 -type f -name '*.whl' -print -quit)"
-  [[ -n "$wheel" ]] || die "no wheel downloaded"
-  python -m zipfile -t "$wheel" >/dev/null 2>&1 || die "wheel corrupt"
+  wheel="$(find "$tmp_dir" -maxdepth 1 -type f -name "${WHEEL_PATTERN}" -print -quit)"
+  if [[ -z "$wheel" ]]; then
+    rm -rf "$tmp_dir"
+    die "no wheel downloaded"
+  fi
+  echo "==> Verifying downloaded wheel zip structure..."
+  if ! python -m zipfile -t "$wheel" >/dev/null 2>&1; then
+    rm -rf "$tmp_dir"
+    die "wheel corrupt"
+  fi
   rm -rf "$tmp_dir"
   echo "Release asset OK."
 }
@@ -176,39 +197,80 @@ publish_release() {
   git tag -a "$tag" -m "Release ${tag}"
   git push origin "$tag"
   get_token
-  rm -rf dist
-  python -m build --wheel
-  local wheel expected
-  wheel="$(ls dist/*.whl | head -n 1)"
-  [[ -n "$wheel" ]] || die "wheel not found"
-  expected="${tag#${TAG_PREFIX}-v}"
-  python - "$wheel" "$expected" <<'PY'
+  local release_exists=0
+  if gh release view "$tag" >/dev/null 2>&1; then
+    release_exists=1
+    echo "Release ${tag} already exists; skipping build and release creation."
+  fi
+
+  if [[ "$release_exists" -eq 0 ]]; then
+    rm -rf dist
+    python -m build --wheel
+    local wheel expected wheel_version
+    mapfile -t wheels < <(find dist -maxdepth 1 -type f -name "${WHEEL_PATTERN}" | sort)
+    if [[ "${#wheels[@]}" -eq 0 ]]; then
+      die "wheel not found in dist/"
+    fi
+    if [[ "${#wheels[@]}" -gt 1 ]]; then
+      echo "Multiple wheels found, using the first one:"
+      printf '  %s\n' "${wheels[@]}"
+    fi
+    wheel="${wheels[0]}"
+    expected="${tag#${TAG_PREFIX}-v}"
+    wheel_version="$(python - "$wheel" <<'PY'
 import sys
 import zipfile
 from email import message_from_bytes
 
-wheel, expected = sys.argv[1], sys.argv[2]
-with zipfile.ZipFile(wheel) as zf:
+w = sys.argv[1]
+with zipfile.ZipFile(w) as zf:
     meta = [n for n in zf.namelist() if n.endswith("METADATA")][0]
     msg = message_from_bytes(zf.read(meta))
-    version = msg.get("Version", "")
-    if version != expected:
-        raise SystemExit(f"Wheel version {version} != {expected}")
+    print(msg.get("Version", ""))
 PY
-  gh release create "$tag" "$wheel" \
-    --title "$tag" \
-    --notes "Release $tag"
-  verify_release_asset "$tag"
+)"
+    if [[ -z "${wheel_version}" ]]; then
+      die "could not read wheel version from ${wheel}"
+    fi
+    if [[ "${wheel_version}" != "${expected}" ]]; then
+      die "wheel version ${wheel_version} != ${expected}"
+    fi
+    gh release create "$tag" "$wheel" \
+      --title "$tag" \
+      --notes "Release $tag"
+    verify_release_asset "$tag"
+    echo "Done. Published ${tag} with asset: ${wheel}"
+  else
+    echo "Done. Release ${tag} already existed; no new asset published."
+  fi
 }
 
 MODE=""
 FORCE_RETAG=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --prep|--publish|--verify) MODE="${1#--}"; shift ;;
-    --force-retag) FORCE_RETAG=1; shift ;;
-    --help|-h) usage; exit 0 ;;
-    *) break ;;
+    --prep|--publish|--verify)
+      MODE="${1#--}"
+      shift
+      ;;
+    --force-retag)
+      FORCE_RETAG=1
+      shift
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      die "unknown flag: $1"
+      ;;
+    *)
+      break
+      ;;
   esac
 done
 
@@ -216,6 +278,9 @@ TAG="${TAG:-${1-}}"
 if [[ -z "$MODE" || -z "$TAG" ]]; then
   usage
   exit 1
+fi
+if [[ -n "${2-}" ]]; then
+  die "unexpected extra arguments: ${*:2}"
 fi
 if [[ ! "$TAG" =~ ^${TAG_PREFIX}-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   die "Tag must be ${TAG_PREFIX}-vMAJOR.MINOR.PATCH"
