@@ -1,11 +1,51 @@
+# Byte-compiled / optimized / compiled files
 __pycache__/
-*.pyc
-*.pyo
-*.egg-info/
-*.config.yaml
-.venv/
-.dist/
-dist/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
 build/
+dist/
+.dist/
+*.whl
+*.egg
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+.env/
+
+# Env files (keep examples)
+.env
+.env.*
+!.env.example
+!.env.template
+!.env.sample
+
+# Test / coverage
 .pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+
+# Lint / type check caches
 .ruff_cache/
+.mypy_cache/
+.pyright/
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Project-specific generated files
+src/nebius_acc/_version.py
+*.config.yaml
