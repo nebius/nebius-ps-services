@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+TAG_PREFIX="nebius-acc"
+
 usage() {
   local bold reset cyan yellow
   if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
@@ -17,16 +19,20 @@ usage() {
 
   cat <<EOF
 ${bold}Usage:${reset}
-  ${cyan}./release.sh${reset} ${yellow}--prep${reset} vX.Y.Z
+  ${cyan}./release.sh${reset} ${yellow}--prep${reset} ${TAG_PREFIX}-vX.Y.Z
     # update changelog, commit, push branch
-  ${cyan}./release.sh${reset} ${yellow}--publish${reset} vX.Y.Z
+  ${cyan}./release.sh${reset} ${yellow}--publish${reset} ${TAG_PREFIX}-vX.Y.Z
     # main only, clean, up-to-date; tag/build/release
-  ${cyan}./release.sh${reset} ${yellow}--verify${reset} vX.Y.Z
+  ${cyan}./release.sh${reset} ${yellow}--verify${reset} ${TAG_PREFIX}-vX.Y.Z
     # verify existing release asset
 
 ${bold}Options:${reset}
   ${yellow}--force-retag${reset}
     # allow deleting/recreating tag (publish only)
+
+${bold}Tag format:${reset}
+  ${yellow}${TAG_PREFIX}-vMAJOR.MINOR.PATCH${reset}
+    # required to avoid tag collisions in this multi-project repo
 EOF
 }
 
@@ -175,7 +181,7 @@ publish_release() {
   local wheel expected
   wheel="$(ls dist/*.whl | head -n 1)"
   [[ -n "$wheel" ]] || die "wheel not found"
-  expected="${tag#v}"
+  expected="${tag#${TAG_PREFIX}-v}"
   python - "$wheel" "$expected" <<'PY'
 import sys
 import zipfile
@@ -211,8 +217,8 @@ if [[ -z "$MODE" || -z "$TAG" ]]; then
   usage
   exit 1
 fi
-if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  die "Tag must be vMAJOR.MINOR.PATCH"
+if [[ ! "$TAG" =~ ^${TAG_PREFIX}-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  die "Tag must be ${TAG_PREFIX}-vMAJOR.MINOR.PATCH"
 fi
 if [[ "$FORCE_RETAG" -eq 1 && "$MODE" != "publish" ]]; then
   die "--force-retag only valid with --publish"

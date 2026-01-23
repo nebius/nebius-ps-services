@@ -230,8 +230,9 @@ Notes:
 
 ## Release & Versioning
 
-- Versions are derived from annotated Git tags (`vMAJOR.MINOR.PATCH`) via
-  `setuptools-scm`.
+- Versions are derived from annotated Git tags (`nebius-acc-vMAJOR.MINOR.PATCH`)
+  via `setuptools-scm`.
+- Tags are prefixed with the project name to avoid collisions in this shared repo.
 - Semantic Versioning:
   - **MAJOR:** breaking changes
   - **MINOR:** backward-compatible features
@@ -240,9 +241,9 @@ Notes:
 
 ### How to create a release
 
-1. Prepare on your working branch: `./release.sh --prep vX.Y.Z`
+1. Prepare on your working branch: `./release.sh --prep nebius-acc-vX.Y.Z`
 2. Open a PR and merge it to `main`.
-3. On `main`, publish the release: `./release.sh --publish vX.Y.Z`
+3. On `main`, publish the release: `./release.sh --publish nebius-acc-vX.Y.Z`
 
 Note: `--publish` requires `main` to be clean and up to date with
 `origin/main`.
