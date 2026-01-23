@@ -1,0 +1,53 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "nebius-acc config",
+  "type": "object",
+  "additionalProperties": false,
+  "definitions": {
+    "projectConfig": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false
+        },
+        {"type": "null"}
+      ]
+    },
+    "regionProjects": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {"$ref": "#/definitions/projectConfig"}
+    }
+  },
+  "properties": {
+    "version": {"type": "integer", "minimum": 1},
+    "tenant_id": {"type": "string", "minLength": 1},
+    "group_name": {"type": "string", "minLength": 1},
+    "role": {
+      "type": "string",
+      "enum": ["auditor", "viewer", "editor", "admin"]
+    },
+    "projects": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {"$ref": "#/definitions/regionProjects"}
+    },
+    "configure_sso": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "tenant_id": {"type": "string", "minLength": 1},
+        "name": {"type": "string", "minLength": 1},
+        "sso_url": {"type": "string", "minLength": 1},
+        "idp_issuer": {"type": "string", "minLength": 1},
+        "auto_create_users": {"type": "boolean"},
+        "active": {"type": "boolean"},
+        "force_authn": {"type": "boolean"},
+        "cert_file": {"type": "string", "minLength": 1},
+        "cert_description": {"type": "string"}
+      }
+    }
+  },
+  "required": ["version", "tenant_id", "role", "projects"]
+}

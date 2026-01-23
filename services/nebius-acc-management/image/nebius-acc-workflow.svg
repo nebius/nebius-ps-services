@@ -1,0 +1,288 @@
+<?xml version='1.0' encoding='utf-8'?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="716pt" height="787pt" viewBox="0.00 0.00 716.00 787.00">
+<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 782.9)">
+<title>nebius_acc_workflow</title>
+<polygon fill="white" stroke="none" points="-4,4 -4,-782.9 712,-782.9 712,4 -4,4" />
+<g id="clust1" class="cluster">
+<title>cluster_inputs</title>
+<path fill="none" stroke="#b0bec5" d="M267,-639.69C267,-639.69 688,-639.69 688,-639.69 694,-639.69 700,-645.69 700,-651.69 700,-651.69 700,-705.44 700,-705.44 700,-711.44 694,-717.44 688,-717.44 688,-717.44 267,-717.44 267,-717.44 261,-717.44 255,-711.44 255,-705.44 255,-705.44 255,-651.69 255,-651.69 255,-645.69 261,-639.69 267,-639.69" />
+<text xml:space="preserve" text-anchor="middle" x="477.5" y="-702.04" font-family="Helvetica,sans-Serif" font-size="12.00">Inputs (YAML)</text>
+</g>
+<g id="clust2" class="cluster">
+<title>cluster_apply</title>
+<path fill="none" stroke="#90caf9" d="M283,-259.69C283,-259.69 417,-259.69 417,-259.69 423,-259.69 429,-265.69 429,-271.69 429,-271.69 429,-526.44 429,-526.44 429,-532.44 423,-538.44 417,-538.44 417,-538.44 283,-538.44 283,-538.44 277,-538.44 271,-532.44 271,-526.44 271,-526.44 271,-271.69 271,-271.69 271,-265.69 277,-259.69 283,-259.69" />
+<text xml:space="preserve" text-anchor="middle" x="350" y="-523.04" font-family="Helvetica,sans-Serif" font-size="12.00">Apply Workflow (ordered)</text>
+</g>
+<g id="clust3" class="cluster">
+<title>cluster_resources</title>
+<path fill="none" stroke="#c8e6c9" d="M20,-8C20,-8 410,-8 410,-8 416,-8 422,-14 422,-20 422,-20 422,-234.1 422,-234.1 422,-240.1 416,-246.1 410,-246.1 410,-246.1 20,-246.1 20,-246.1 14,-246.1 8,-240.1 8,-234.1 8,-234.1 8,-20 8,-20 8,-14 14,-8 20,-8" />
+<text xml:space="preserve" text-anchor="middle" x="215" y="-230.7" font-family="Helvetica,sans-Serif" font-size="12.00">Tenant Resources</text>
+</g>
+
+<g id="node1" class="node">
+<title>start</title>
+<ellipse fill="#e8f0fe" stroke="#444444" cx="486" cy="-755.3" rx="23.6" ry="23.6" />
+<text xml:space="preserve" text-anchor="middle" x="486" y="-750.85" font-family="Helvetica,sans-Serif" font-size="11.00">Start</text>
+</g>
+
+<g id="node3" class="node">
+<title>config</title>
+<path fill="#f7f7f7" stroke="#444444" d="M375.38,-688.69C375.38,-688.69 274.62,-688.69 274.62,-688.69 268.62,-688.69 262.62,-682.69 262.62,-676.69 262.62,-676.69 262.62,-659.69 262.62,-659.69 262.62,-653.69 268.62,-647.69 274.62,-647.69 274.62,-647.69 375.38,-647.69 375.38,-647.69 381.38,-647.69 387.38,-653.69 387.38,-659.69 387.38,-659.69 387.38,-676.69 387.38,-676.69 387.38,-682.69 381.38,-688.69 375.38,-688.69" />
+<text xml:space="preserve" text-anchor="start" x="281.88" y="-675.24" font-family="Helvetica,sans-Serif" font-size="11.00">      </text>
+<text xml:space="preserve" text-anchor="start" x="299.88" y="-675.24" font-family="Helvetica,sans-Serif" font-weight="bold" font-size="11.00">Config YAML</text>
+<text xml:space="preserve" text-anchor="start" x="270.62" y="-664.24" font-family="Helvetica,sans-Serif" font-size="11.00">      tenant_id, projects,</text>
+<text xml:space="preserve" text-anchor="start" x="276.62" y="-653.24" font-family="Helvetica,sans-Serif" font-size="11.00">role, group_name    </text>
+</g>
+
+<g id="edge1" class="edge">
+<title>start-&gt;config</title>
+<path fill="none" stroke="#555555" d="M462.24,-755C417.46,-755 325,-755 325,-755 325,-755 325,-700.28 325,-700.28" />
+<polygon fill="#555555" stroke="#555555" points="328.5,-700.28 325,-690.28 321.5,-700.28 328.5,-700.28" />
+</g>
+
+<g id="node4" class="node">
+<title>quota</title>
+<path fill="#f7f7f7" stroke="#444444" d="M543.5,-688.69C543.5,-688.69 428.5,-688.69 428.5,-688.69 422.5,-688.69 416.5,-682.69 416.5,-676.69 416.5,-676.69 416.5,-659.69 416.5,-659.69 416.5,-653.69 422.5,-647.69 428.5,-647.69 428.5,-647.69 543.5,-647.69 543.5,-647.69 549.5,-647.69 555.5,-653.69 555.5,-659.69 555.5,-659.69 555.5,-676.69 555.5,-676.69 555.5,-682.69 549.5,-688.69 543.5,-688.69" />
+<text xml:space="preserve" text-anchor="start" x="444.75" y="-675.24" font-family="Helvetica,sans-Serif" font-size="11.00">      </text>
+<text xml:space="preserve" text-anchor="start" x="462.75" y="-675.24" font-family="Helvetica,sans-Serif" font-weight="bold" font-size="11.00">Quota YAML</text>
+<text xml:space="preserve" text-anchor="start" x="453.38" y="-664.24" font-family="Helvetica,sans-Serif" font-size="11.00">      tenant_id,</text>
+<text xml:space="preserve" text-anchor="start" x="424.5" y="-653.24" font-family="Helvetica,sans-Serif" font-size="11.00">regions/projects quotas    </text>
+</g>
+
+<g id="edge2" class="edge">
+<title>start-&gt;quota</title>
+<path fill="none" stroke="#555555" d="M486,-731.5C486,-731.5 486,-700.52 486,-700.52" />
+<polygon fill="#555555" stroke="#555555" points="489.5,-700.52 486,-690.52 482.5,-700.52 489.5,-700.52" />
+</g>
+
+<g id="node5" class="node">
+<title>invite</title>
+<path fill="#f7f7f7" stroke="#444444" d="M679.75,-688.69C679.75,-688.69 596.25,-688.69 596.25,-688.69 590.25,-688.69 584.25,-682.69 584.25,-676.69 584.25,-676.69 584.25,-659.69 584.25,-659.69 584.25,-653.69 590.25,-647.69 596.25,-647.69 596.25,-647.69 679.75,-647.69 679.75,-647.69 685.75,-647.69 691.75,-653.69 691.75,-659.69 691.75,-659.69 691.75,-676.69 691.75,-676.69 691.75,-682.69 685.75,-688.69 679.75,-688.69" />
+<text xml:space="preserve" text-anchor="start" x="598.25" y="-675.24" font-family="Helvetica,sans-Serif" font-size="11.00">      </text>
+<text xml:space="preserve" text-anchor="start" x="616.25" y="-675.24" font-family="Helvetica,sans-Serif" font-weight="bold" font-size="11.00">Invite YAML</text>
+<text xml:space="preserve" text-anchor="start" x="605.38" y="-664.24" font-family="Helvetica,sans-Serif" font-size="11.00">      tenant_id,</text>
+<text xml:space="preserve" text-anchor="start" x="592.25" y="-653.24" font-family="Helvetica,sans-Serif" font-size="11.00">project -&gt; emails    </text>
+</g>
+
+<g id="edge3" class="edge">
+<title>start-&gt;invite</title>
+<path fill="none" stroke="#555555" d="M510.08,-755C552.94,-755 638,-755 638,-755 638,-755 638,-700.28 638,-700.28" />
+<polygon fill="#555555" stroke="#555555" points="641.5,-700.28 638,-690.28 634.5,-700.28 641.5,-700.28" />
+</g>
+
+<g id="node2" class="node">
+<title>end</title>
+<ellipse fill="#e8f0fe" stroke="#444444" cx="468" cy="-199.35" rx="21.35" ry="21.35" />
+<ellipse fill="none" stroke="#444444" cx="468" cy="-199.35" rx="25.35" ry="25.35" />
+<text xml:space="preserve" text-anchor="middle" x="468" y="-194.9" font-family="Helvetica,sans-Serif" font-size="11.00">End</text>
+</g>
+
+<g id="node15" class="node">
+<title>config_snip</title>
+<polygon fill="#fffde7" stroke="#444444" points="374.38,-604.69 291.62,-604.69 291.62,-552.69 380.38,-552.69 380.38,-598.69 374.38,-604.69" />
+<polyline fill="none" stroke="#444444" points="374.38,-604.69 374.38,-598.69" />
+<polyline fill="none" stroke="#444444" points="380.38,-598.69 374.38,-598.69" />
+<text xml:space="preserve" text-anchor="start" x="299.62" y="-591.24" font-family="Helvetica,sans-Serif" font-size="11.00">    </text>
+<text xml:space="preserve" text-anchor="start" x="311.62" y="-591.24" font-family="Helvetica,sans-Serif" font-weight="bold" font-size="11.00">config.yaml</text>
+<text xml:space="preserve" text-anchor="start" x="299.62" y="-580.24" font-family="Helvetica,sans-Serif" font-size="11.00">    tenant_id: ...</text>
+<text xml:space="preserve" text-anchor="start" x="299.62" y="-569.24" font-family="Helvetica,sans-Serif" font-size="11.00">    projects: ...</text>
+<text xml:space="preserve" text-anchor="start" x="301.5" y="-558.24" font-family="Helvetica,sans-Serif" font-size="11.00">    role: editor  </text>
+</g>
+
+<g id="edge4" class="edge">
+<title>config-&gt;config_snip</title>
+<path fill="none" stroke="#555555" d="M336,-647.44C336,-647.44 336,-616.64 336,-616.64" />
+<polygon fill="#555555" stroke="#555555" points="339.5,-616.64 336,-606.64 332.5,-616.64 339.5,-616.64" />
+</g>
+
+<g id="node16" class="node">
+<title>quota_snip</title>
+<polygon fill="#fffde7" stroke="#444444" points="523.62,-509.69 442.38,-509.69 442.38,-457.69 529.62,-457.69 529.62,-503.69 523.62,-509.69" />
+<polyline fill="none" stroke="#444444" points="523.62,-509.69 523.62,-503.69" />
+<polyline fill="none" stroke="#444444" points="529.62,-503.69 523.62,-503.69" />
+<text xml:space="preserve" text-anchor="start" x="450.38" y="-496.24" font-family="Helvetica,sans-Serif" font-size="11.00">    </text>
+<text xml:space="preserve" text-anchor="start" x="462.38" y="-496.24" font-family="Helvetica,sans-Serif" font-weight="bold" font-size="11.00">quota.yaml</text>
+<text xml:space="preserve" text-anchor="start" x="450.38" y="-485.24" font-family="Helvetica,sans-Serif" font-size="11.00">    tenant_id: ...</text>
+<text xml:space="preserve" text-anchor="start" x="450.38" y="-474.24" font-family="Helvetica,sans-Serif" font-size="11.00">    regions: ...</text>
+<text xml:space="preserve" text-anchor="start" x="450.75" y="-463.24" font-family="Helvetica,sans-Serif" font-size="11.00">    projects: ...  </text>
+</g>
+
+<g id="edge6" class="edge">
+<title>quota-&gt;quota_snip</title>
+<path fill="none" stroke="#555555" d="M486,-647.39C486,-647.39 486,-521.57 486,-521.57" />
+<polygon fill="#555555" stroke="#555555" points="489.5,-521.57 486,-511.57 482.5,-521.57 489.5,-521.57" />
+</g>
+
+<g id="node17" class="node">
+<title>invite_snip</title>
+<polygon fill="#fffde7" stroke="#444444" points="570.62,-409.19 489.38,-409.19 489.38,-368.19 576.62,-368.19 576.62,-403.19 570.62,-409.19" />
+<polyline fill="none" stroke="#444444" points="570.62,-409.19 570.62,-403.19" />
+<polyline fill="none" stroke="#444444" points="576.62,-403.19 570.62,-403.19" />
+<text xml:space="preserve" text-anchor="start" x="497.38" y="-395.74" font-family="Helvetica,sans-Serif" font-size="11.00">    </text>
+<text xml:space="preserve" text-anchor="start" x="509.38" y="-395.74" font-family="Helvetica,sans-Serif" font-weight="bold" font-size="11.00">invite.yaml</text>
+<text xml:space="preserve" text-anchor="start" x="497.38" y="-384.74" font-family="Helvetica,sans-Serif" font-size="11.00">    tenant_id: ...</text>
+<text xml:space="preserve" text-anchor="start" x="501.5" y="-373.74" font-family="Helvetica,sans-Serif" font-size="11.00">    invites: ...  </text>
+</g>
+
+<g id="edge8" class="edge">
+<title>invite-&gt;invite_snip</title>
+<path fill="none" stroke="#555555" d="M583.84,-668C573.62,-668 566.06,-668 566.06,-668 566.06,-668 566.06,-421.2 566.06,-421.2" />
+<polygon fill="#555555" stroke="#555555" points="569.56,-421.2 566.06,-411.2 562.56,-421.2 569.56,-421.2" />
+</g>
+
+<g id="node6" class="node">
+<title>step1</title>
+<path fill="#e3f2fd" stroke="#444444" d="M401.25,-509.69C401.25,-509.69 290.75,-509.69 290.75,-509.69 284.75,-509.69 278.75,-503.69 278.75,-497.69 278.75,-497.69 278.75,-469.69 278.75,-469.69 278.75,-463.69 284.75,-457.69 290.75,-457.69 290.75,-457.69 401.25,-457.69 401.25,-457.69 407.25,-457.69 413.25,-463.69 413.25,-469.69 413.25,-469.69 413.25,-497.69 413.25,-497.69 413.25,-503.69 407.25,-509.69 401.25,-509.69" />
+<text xml:space="preserve" text-anchor="start" x="320.5" y="-496.24" font-family="Helvetica,sans-Serif" font-size="11.00">      </text>
+<text xml:space="preserve" text-anchor="start" x="338.5" y="-496.24" font-family="Helvetica,sans-Serif" font-weight="bold" font-size="11.00">Step 1</text>
+<text xml:space="preserve" text-anchor="start" x="300.25" y="-485.24" font-family="Helvetica,sans-Serif" font-size="11.00">      Create projects</text>
+<text xml:space="preserve" text-anchor="start" x="302.5" y="-474.24" font-family="Helvetica,sans-Serif" font-size="11.00">      Create groups</text>
+<text xml:space="preserve" text-anchor="start" x="286.75" y="-463.24" font-family="Helvetica,sans-Serif" font-size="11.00">      Grant role (permit)    </text>
+</g>
+
+<g id="node7" class="node">
+<title>step2</title>
+<path fill="#e3f2fd" stroke="#444444" d="M408.62,-414.69C408.62,-414.69 291.38,-414.69 291.38,-414.69 285.38,-414.69 279.38,-408.69 279.38,-402.69 279.38,-402.69 279.38,-374.69 279.38,-374.69 279.38,-368.69 285.38,-362.69 291.38,-362.69 291.38,-362.69 408.62,-362.69 408.62,-362.69 414.62,-362.69 420.62,-368.69 420.62,-374.69 420.62,-374.69 420.62,-402.69 420.62,-402.69 420.62,-408.69 414.62,-414.69 408.62,-414.69" />
+<text xml:space="preserve" text-anchor="start" x="324.5" y="-401.24" font-family="Helvetica,sans-Serif" font-size="11.00">      </text>
+<text xml:space="preserve" text-anchor="start" x="342.5" y="-401.24" font-family="Helvetica,sans-Serif" font-weight="bold" font-size="11.00">Step 2</text>
+<text xml:space="preserve" text-anchor="start" x="310.25" y="-390.24" font-family="Helvetica,sans-Serif" font-size="11.00">      Apply quotas</text>
+<text xml:space="preserve" text-anchor="start" x="293.75" y="-379.24" font-family="Helvetica,sans-Serif" font-size="11.00">      Default tenant limits</text>
+<text xml:space="preserve" text-anchor="start" x="287.38" y="-368.24" font-family="Helvetica,sans-Serif" font-size="11.00">      Override per project    </text>
+</g>
+
+<g id="edge18" class="edge">
+<title>step1-&gt;step2</title>
+<path fill="none" stroke="#555555" d="M346.31,-457.23C346.31,-457.23 346.31,-426.53 346.31,-426.53" />
+<polygon fill="#555555" stroke="#555555" points="349.81,-426.53 346.31,-416.53 342.81,-426.53 349.81,-426.53" />
+</g>
+
+<g id="node9" class="node">
+<title>projects</title>
+<path fill="#f7f7f7" stroke="#444444" d="M118.12,-217.35C118.12,-217.35 27.87,-217.35 27.87,-217.35 21.87,-217.35 15.87,-211.35 15.87,-205.35 15.87,-205.35 15.87,-193.35 15.87,-193.35 15.87,-187.35 21.87,-181.35 27.87,-181.35 27.87,-181.35 118.12,-181.35 118.12,-181.35 124.12,-181.35 130.12,-187.35 130.12,-193.35 130.12,-193.35 130.12,-205.35 130.12,-205.35 130.12,-211.35 124.12,-217.35 118.12,-217.35" />
+<text xml:space="preserve" text-anchor="middle" x="73" y="-194.9" font-family="Helvetica,sans-Serif" font-size="11.00">Projects (per region)</text>
+</g>
+
+<g id="edge10" class="edge">
+<title>step1-&gt;projects</title>
+<path fill="none" stroke="#555555" d="M278.52,-484C197.67,-484 73,-484 73,-484 73,-484 73,-229.1 73,-229.1" />
+<polygon fill="#555555" stroke="#555555" points="76.5,-229.1 73,-219.1 69.5,-229.1 76.5,-229.1" />
+</g>
+
+<g id="node8" class="node">
+<title>step3</title>
+<path fill="#e3f2fd" stroke="#444444" d="M409.38,-319.69C409.38,-319.69 290.62,-319.69 290.62,-319.69 284.62,-319.69 278.62,-313.69 278.62,-307.69 278.62,-307.69 278.62,-279.69 278.62,-279.69 278.62,-273.69 284.62,-267.69 290.62,-267.69 290.62,-267.69 409.38,-267.69 409.38,-267.69 415.38,-267.69 421.38,-273.69 421.38,-279.69 421.38,-279.69 421.38,-307.69 421.38,-307.69 421.38,-313.69 415.38,-319.69 409.38,-319.69" />
+<text xml:space="preserve" text-anchor="start" x="324.5" y="-306.24" font-family="Helvetica,sans-Serif" font-size="11.00">      </text>
+<text xml:space="preserve" text-anchor="start" x="342.5" y="-306.24" font-family="Helvetica,sans-Serif" font-weight="bold" font-size="11.00">Step 3</text>
+<text xml:space="preserve" text-anchor="start" x="292.25" y="-295.24" font-family="Helvetica,sans-Serif" font-size="11.00">      Invite users by email</text>
+<text xml:space="preserve" text-anchor="start" x="295.62" y="-284.24" font-family="Helvetica,sans-Serif" font-size="11.00">      User accepts invite</text>
+<text xml:space="preserve" text-anchor="start" x="286.62" y="-273.24" font-family="Helvetica,sans-Serif" font-size="11.00">      Add to project group    </text>
+</g>
+
+<g id="edge19" class="edge">
+<title>step2-&gt;step3</title>
+<path fill="none" stroke="#555555" d="M350,-362.23C350,-362.23 350,-331.53 350,-331.53" />
+<polygon fill="#555555" stroke="#555555" points="353.5,-331.53 350,-321.53 346.5,-331.53 353.5,-331.53" />
+</g>
+
+<g id="node12" class="node">
+<title>quotas</title>
+<path fill="#f7f7f7" stroke="#444444" d="M259,-217.35C259,-217.35 171,-217.35 171,-217.35 165,-217.35 159,-211.35 159,-205.35 159,-205.35 159,-193.35 159,-193.35 159,-187.35 165,-181.35 171,-181.35 171,-181.35 259,-181.35 259,-181.35 265,-181.35 271,-187.35 271,-193.35 271,-193.35 271,-205.35 271,-205.35 271,-211.35 265,-217.35 259,-217.35" />
+<text xml:space="preserve" text-anchor="middle" x="215" y="-194.9" font-family="Helvetica,sans-Serif" font-size="11.00">Quotas (per project)</text>
+</g>
+
+<g id="edge13" class="edge">
+<title>step2-&gt;quotas</title>
+<path fill="none" stroke="#555555" d="M279.09,-389C271.69,-389 266.81,-389 266.81,-389 266.81,-389 266.81,-229.05 266.81,-229.05" />
+<polygon fill="#555555" stroke="#555555" points="270.31,-229.05 266.81,-219.05 263.31,-229.05 270.31,-229.05" />
+</g>
+
+<g id="edge20" class="edge">
+<title>step3-&gt;end</title>
+<path fill="none" stroke="#555555" d="M417.75,-267.45C417.75,-246.63 417.75,-221 417.75,-221 417.75,-221 442.49,-221 442.49,-221" />
+<polygon fill="#555555" stroke="#555555" points="442.49,-224.5 452.49,-221 442.49,-217.5 442.49,-224.5" />
+</g>
+
+<g id="node13" class="node">
+<title>invitations</title>
+<path fill="#f7f7f7" stroke="#444444" d="M402.12,-217.35C402.12,-217.35 311.88,-217.35 311.88,-217.35 305.88,-217.35 299.88,-211.35 299.88,-205.35 299.88,-205.35 299.88,-193.35 299.88,-193.35 299.88,-187.35 305.88,-181.35 311.88,-181.35 311.88,-181.35 402.12,-181.35 402.12,-181.35 408.12,-181.35 414.12,-187.35 414.12,-193.35 414.12,-193.35 414.12,-205.35 414.12,-205.35 414.12,-211.35 408.12,-217.35 402.12,-217.35" />
+<text xml:space="preserve" text-anchor="middle" x="357" y="-194.9" font-family="Helvetica,sans-Serif" font-size="11.00">Invitations (by email)</text>
+</g>
+
+<g id="edge14" class="edge">
+<title>step3-&gt;invitations</title>
+<path fill="none" stroke="#555555" d="M357,-267.41C357,-267.41 357,-229.24 357,-229.24" />
+<polygon fill="#555555" stroke="#555555" points="360.5,-229.24 357,-219.24 353.5,-229.24 360.5,-229.24" />
+</g>
+
+<g id="node10" class="node">
+<title>groups</title>
+<path fill="#f7f7f7" stroke="#444444" d="M125.5,-131C125.5,-131 28.5,-131 28.5,-131 22.5,-131 16.5,-125 16.5,-119 16.5,-119 16.5,-107 16.5,-107 16.5,-101 22.5,-95 28.5,-95 28.5,-95 125.5,-95 125.5,-95 131.5,-95 137.5,-101 137.5,-107 137.5,-107 137.5,-119 137.5,-119 137.5,-125 131.5,-131 125.5,-131" />
+<text xml:space="preserve" text-anchor="middle" x="77" y="-108.55" font-family="Helvetica,sans-Serif" font-size="11.00">Groups (grp-{project})</text>
+</g>
+
+<g id="edge11" class="edge">
+<title>projects-&gt;groups</title>
+<path fill="none" stroke="#555555" d="M73.31,-181.04C73.31,-181.04 73.31,-142.8 73.31,-142.8" />
+<polygon fill="#555555" stroke="#555555" points="76.81,-142.8 73.31,-132.8 69.81,-142.8 76.81,-142.8" />
+</g>
+
+<g id="node11" class="node">
+<title>permits</title>
+<path fill="#f7f7f7" stroke="#444444" d="M323.5,-131C323.5,-131 178.5,-131 178.5,-131 172.5,-131 166.5,-125 166.5,-119 166.5,-119 166.5,-107 166.5,-107 166.5,-101 172.5,-95 178.5,-95 178.5,-95 323.5,-95 323.5,-95 329.5,-95 335.5,-101 335.5,-107 335.5,-107 335.5,-119 335.5,-119 335.5,-125 329.5,-131 323.5,-131" />
+<text xml:space="preserve" text-anchor="middle" x="251" y="-108.55" font-family="Helvetica,sans-Serif" font-size="11.00">Access Permits (role on project)</text>
+</g>
+
+<g id="edge12" class="edge">
+<title>projects-&gt;permits</title>
+<path fill="none" stroke="#555555" d="M130.42,-199C140.72,-199 148.25,-199 148.25,-199 148.25,-199 148.25,-113 148.25,-113 148.25,-113 154.63,-113 154.63,-113" />
+<polygon fill="#555555" stroke="#555555" points="154.63,-116.5 164.63,-113 154.63,-109.5 154.63,-116.5" />
+</g>
+
+<g id="node14" class="node">
+<title>memberships</title>
+<path fill="#f7f7f7" stroke="#444444" d="M261.75,-52C261.75,-52 172.25,-52 172.25,-52 166.25,-52 160.25,-46 160.25,-40 160.25,-40 160.25,-28 160.25,-28 160.25,-22 166.25,-16 172.25,-16 172.25,-16 261.75,-16 261.75,-16 267.75,-16 273.75,-22 273.75,-28 273.75,-28 273.75,-40 273.75,-40 273.75,-46 267.75,-52 261.75,-52" />
+<text xml:space="preserve" text-anchor="middle" x="217" y="-35.55" font-family="Helvetica,sans-Serif" font-size="11.00">Group Memberships</text>
+<text xml:space="preserve" text-anchor="middle" x="217" y="-23.55" font-family="Helvetica,sans-Serif" font-size="11.00">(after acceptance)</text>
+</g>
+
+<g id="edge17" class="edge">
+<title>groups-&gt;memberships</title>
+<path fill="none" stroke="#555555" d="M77,-94.68C77,-71.34 77,-34 77,-34 77,-34 148.54,-34 148.54,-34" />
+<polygon fill="#555555" stroke="#555555" points="148.54,-37.5 158.54,-34 148.54,-30.5 148.54,-37.5" />
+</g>
+
+<g id="node18" class="node">
+<title>user</title>
+<image x="430.0" y="-131.0" width="54.0" height="36.0" preserveAspectRatio="xMidYMid meet" href="data:image/png;base64,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" xlink:href="data:image/png;base64,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" /></g>
+
+<g id="edge15" class="edge">
+<title>invitations-&gt;user</title>
+<path fill="none" stroke="#555555" d="M414.55,-199C426.83,-199 436.19,-199 436.19,-199 436.19,-199 436.19,-136.47 436.19,-136.47" />
+<polygon fill="#555555" stroke="#555555" points="439.69,-136.47 436.19,-126.47 432.69,-136.47 439.69,-136.47" />
+</g>
+
+<g id="edge5" class="edge">
+<title>config_snip-&gt;step1</title>
+<path fill="none" stroke="#555555" d="M336,-552.23C336,-552.23 336,-521.53 336,-521.53" />
+<polygon fill="#555555" stroke="#555555" points="339.5,-521.53 336,-511.53 332.5,-521.53 339.5,-521.53" />
+</g>
+
+<g id="edge7" class="edge">
+<title>quota_snip-&gt;step2</title>
+<path fill="none" stroke="#555555" d="M466.01,-457.32C466.01,-429.3 466.01,-389 466.01,-389 466.01,-389 432.34,-389 432.34,-389" />
+<polygon fill="#555555" stroke="#555555" points="432.34,-385.5 422.34,-389 432.34,-392.5 432.34,-385.5" />
+</g>
+
+<g id="edge9" class="edge">
+<title>invite_snip-&gt;step3</title>
+<path fill="none" stroke="#555555" d="M534.99,-368.15C534.99,-340.3 534.99,-294 534.99,-294 534.99,-294 433.3,-294 433.3,-294" />
+<polygon fill="#555555" stroke="#555555" points="433.3,-290.5 423.3,-294 433.3,-297.5 433.3,-290.5" />
+</g>
+
+<g id="edge16" class="edge">
+<title>user-&gt;memberships</title>
+<path fill="none" stroke="#555555" d="M457,-94.68C457,-71.34 457,-34 457,-34 457,-34 285.69,-34 285.69,-34" />
+<polygon fill="#555555" stroke="#555555" points="285.69,-30.5 275.69,-34 285.69,-37.5 285.69,-30.5" />
+</g>
+</g>
+</svg>

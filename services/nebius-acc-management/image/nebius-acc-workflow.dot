@@ -1,0 +1,119 @@
+digraph nebius_acc_workflow {
+  rankdir=TB;
+  splines=ortho;
+  nodesep=0.4;
+  ranksep=0.6;
+  fontname="Helvetica";
+  fontsize=12;
+
+  node [shape=box, style="rounded,filled", fillcolor="#F7F7F7", color="#444444", fontname="Helvetica", fontsize=11];
+  edge [color="#555555", fontname="Helvetica", fontsize=10];
+
+  start [shape=circle, label="Start", fillcolor="#E8F0FE"];
+  end [shape=doublecircle, label="End", fillcolor="#E8F0FE"];
+
+  subgraph cluster_inputs {
+    label="Inputs (YAML)";
+    color="#B0BEC5";
+    style="rounded";
+
+    config [label=<
+      <b>Config YAML</b><br/>
+      tenant_id, projects,<br/>role, group_name
+    >];
+
+    quota [label=<
+      <b>Quota YAML</b><br/>
+      tenant_id,<br/>regions/projects quotas
+    >];
+
+    invite [label=<
+      <b>Invite YAML</b><br/>
+      tenant_id,<br/>project -&gt; emails
+    >];
+  }
+
+  subgraph cluster_apply {
+    label="Apply Workflow (ordered)";
+    color="#90CAF9";
+    style="rounded";
+
+    step1 [label=<
+      <b>Step 1</b><br/>
+      Create projects<br/>
+      Create groups<br/>
+      Grant role (permit)
+    >, fillcolor="#E3F2FD"];
+
+    step2 [label=<
+      <b>Step 2</b><br/>
+      Apply quotas<br/>
+      Default tenant limits<br/>
+      Override per project
+    >, fillcolor="#E3F2FD"];
+
+    step3 [label=<
+      <b>Step 3</b><br/>
+      Invite users by email<br/>
+      User accepts invite<br/>
+      Add to project group
+    >, fillcolor="#E3F2FD"];
+  }
+
+  subgraph cluster_resources {
+    label="Tenant Resources";
+    color="#C8E6C9";
+    style="rounded";
+
+    projects [label="Projects (per region)"];
+    groups [label="Groups (grp-{project})"];
+    permits [label="Access Permits (role on project)"];
+    quotas [label="Quotas (per project)"];
+    invitations [label="Invitations (by email)"];
+    memberships [label="Group Memberships\n(after acceptance)"];
+  }
+
+  config_snip [shape=note, fillcolor="#FFFDE7", label=<
+    <b>config.yaml</b><br align="left"/>
+    tenant_id: ...<br align="left"/>
+    projects: ...<br align="left"/>
+    role: editor
+  >];
+
+  quota_snip [shape=note, fillcolor="#FFFDE7", label=<
+    <b>quota.yaml</b><br align="left"/>
+    tenant_id: ...<br align="left"/>
+    regions: ...<br align="left"/>
+    projects: ...
+  >];
+
+  invite_snip [shape=note, fillcolor="#FFFDE7", label=<
+    <b>invite.yaml</b><br align="left"/>
+    tenant_id: ...<br align="left"/>
+    invites: ...
+  >];
+
+  user [shape=ellipse, fillcolor="#F3E5F5", label="User"];
+
+  start -> config;
+  start -> quota;
+  start -> invite;
+
+  config -> config_snip -> step1;
+  quota -> quota_snip -> step2;
+  invite -> invite_snip -> step3;
+
+  step1 -> projects;
+  projects -> groups;
+  projects -> permits;
+
+  step2 -> quotas;
+
+  step3 -> invitations;
+  invitations -> user -> memberships;
+  groups -> memberships;
+
+  step1 -> step2 -> step3 -> end;
+
+  // Intentionally no explicit rank assignment to avoid cluster/rank conflicts.
+}
