@@ -2,6 +2,33 @@
 
 Nebius account management CLI to help tenant administrators create projects, manage project-level IAM groups and access permits, and apply project quotas in batch.
 
+## Installation
+
+Install pipx (once):
+
+```bash
+python -m pip install --user pipx
+python -m pipx ensurepath
+```
+
+Install from a GitHub release asset:
+
+```bash
+pipx install <release-asset-url>
+```
+
+Upgrade:
+
+```bash
+pipx upgrade nebius-acc
+```
+
+Verify:
+
+```bash
+nebius-acc --version
+```
+
 ## Features
 
 - Keep automation stateless: no client lists stored in the repo.
