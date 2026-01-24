@@ -7,6 +7,7 @@ from typing import Literal
 
 import typer
 
+from . import __version__
 from .auth import ensure_access_token
 from .config_loader import (
     ConfigFile,
@@ -60,6 +61,12 @@ Provide inputs via CLI flags or via YAML using the apply command.
 )
 
 
+def version_callback(value: bool) -> None:
+    if value:
+        typer.echo(__version__)
+        raise typer.Exit()
+
+
 @dataclass
 class AppContext:
     config_file: Path | None
@@ -81,6 +88,13 @@ def main(
         None,
         "--config-file",
         help=f"Path to {DEFAULT_CONFIG_FILENAME} (used by apply/validate).",
+    ),
+    version: bool = typer.Option(
+        False,
+        "--version",
+        callback=version_callback,
+        is_eager=True,
+        help="Show version and exit.",
     ),
     nebius_profile: str | None = typer.Option(None, "--nebius-profile", help="Nebius SDK profile."),
     nebius_config: Path | None = typer.Option(
