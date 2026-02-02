@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+TAG_PREFIX="nebius-vpngw"
+WHEEL_PATTERN="nebius_vpngw-*.whl"
+
 usage() {
   local b=$'\033[1m'
   local g=$'\033[32m'
@@ -8,12 +11,15 @@ usage() {
   local r=$'\033[0m'
   cat <<EOF
 ${b}Usage:${r}
-  ${g}./release.sh${r} ${c}--prep vX.Y.Z${r}     # prepare changelog commit and push branch
-  ${g}./release.sh${r} ${c}--publish vX.Y.Z${r}  # main only, clean, up-to-date; tag/build/release
-  ${g}./release.sh${r} ${c}--verify vX.Y.Z${r}   # verify an existing release asset only
+  ${g}./release.sh${r} ${c}--prep ${TAG_PREFIX}-vX.Y.Z${r}     # prepare changelog commit and push branch
+  ${g}./release.sh${r} ${c}--publish ${TAG_PREFIX}-vX.Y.Z${r}  # main only, clean, up-to-date; tag/build/release
+  ${g}./release.sh${r} ${c}--verify ${TAG_PREFIX}-vX.Y.Z${r}   # verify an existing release asset only
 
 ${b}Options:${r}
   ${c}--force-retag${r}                          # allow deleting/recreating existing tag (publish only)
+
+${b}Tag format:${r}
+  ${c}${TAG_PREFIX}-vMAJOR.MINOR.PATCH${r}       # required to avoid tag collisions in this multi-project repo
 EOF
 }
 
@@ -52,12 +58,12 @@ verify_release_asset() {
   local tmp_dir
   tmp_dir="$(mktemp -d)"
   gh release download "${tag}" \
-    --pattern 'nebius_vpngw-*.whl' \
+    --pattern "${WHEEL_PATTERN}" \
     --dir "${tmp_dir}" \
     --clobber >/dev/null
 
   local downloaded
-  downloaded="$(find "${tmp_dir}" -maxdepth 1 -type f -name 'nebius_vpngw-*.whl' -print -quit)"
+  downloaded="$(find "${tmp_dir}" -maxdepth 1 -type f -name "${WHEEL_PATTERN}" -print -quit)"
   if [[ -z "${downloaded}" ]]; then
     echo "ERROR: Could not find downloaded wheel in ${tmp_dir}; aborting integrity check." >&2
     rm -rf "${tmp_dir}"
@@ -271,7 +277,7 @@ publish_release() {
     rm -rf dist
     python -m build --wheel
 
-    mapfile -t wheels < <(find dist -maxdepth 1 -type f -name "nebius_vpngw-*.whl" | sort)
+    mapfile -t wheels < <(find dist -maxdepth 1 -type f -name "${WHEEL_PATTERN}" | sort)
     if [[ "${#wheels[@]}" -eq 0 ]]; then
       echo "Wheel not found in dist/. Aborting."
       exit 1
@@ -282,7 +288,7 @@ publish_release() {
     fi
     WHEEL_PATH="${wheels[0]}"
 
-    EXPECTED_VERSION="${tag#v}"
+    EXPECTED_VERSION="${tag#${TAG_PREFIX}-v}"
     WHEEL_VERSION="$(python - "$WHEEL_PATH" <<'PY'
 import sys
 import zipfile
@@ -382,8 +388,8 @@ if [[ -n "${2-}" ]]; then
   die "Unexpected extra arguments: ${*:2}"
 fi
 
-if [[ ! "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  die "Tag must be in form vMAJOR.MINOR.PATCH (e.g., v0.4.0)"
+if [[ ! "${TAG}" =~ ^${TAG_PREFIX}-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  die "Tag must be in form ${TAG_PREFIX}-vMAJOR.MINOR.PATCH (e.g., ${TAG_PREFIX}-v0.4.0)"
 fi
 
 ALLOW_RETAG="${ALLOW_RETAG:-0}"

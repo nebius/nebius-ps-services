@@ -3,7 +3,7 @@ name = "nebius-vpngw"
 dynamic = ["version"]
 description = "Nebius VM-based VPN Gateway orchestrator and agent"
 readme = "README.md"
-authors = [ { name = "Reza. B.", email = "rezab@nebius.com" } ]
+authors = [ { name = "Reza. B." } ]
 requires-python = ">=3.10,<3.13"
 license = { file = "LICENSE" }
 classifiers = [
@@ -47,7 +47,7 @@ nebius_vpngw = ["systemd/*"]
 version_scheme = "python-simplified-semver"
 local_scheme = "no-local-version"
 write_to = "src/nebius_vpngw/_version.py"
-tag_regex = "^v?(?P<version>\\d+\\.\\d+\\.\\d+)$"
+tag_regex = "^nebius-vpngw-v(?P<version>\\d+\\.\\d+\\.\\d+)$"
 fallback_version = "0.0.0"
 search_parent_directories = true
 

@@ -1,6 +1,6 @@
-# Nebius VPN Gateway (VM-Based)
+# Nebius VPN Gateway
 
-VM-based site-to-site IPsec/BGP VPN gateway for Nebius AI Cloud. Supports GCP HA VPN, AWS Site-to-Site VPN, Azure VPN Gateway, Cisco IOS, and custom peers.
+Site-to-site IPsec/BGP VPN gateway for Nebius AI Cloud. Supports GCP HA VPN, AWS Site-to-Site VPN, Azure VPN Gateway, Cisco IOS, and custom peers.
 
 ## Table of Contents
 
@@ -1573,13 +1573,13 @@ python -m ruff check src --fix
 
 ## Release & Versioning
 
-- Versions are derived from annotated Git tags (`vMAJOR.MINOR.PATCH`) via `setuptools-scm`; no manual edits to `pyproject.toml` are needed. The generated version is written to `src/nebius_vpngw/_version.py` during build and surfaced via `nebius-vpngw --version`.
+- Versions are derived from annotated Git tags (`nebius-vpngw-vMAJOR.MINOR.PATCH`) via `setuptools-scm`; no manual edits to `pyproject.toml` are needed. The generated version is written to `src/nebius_vpngw/_version.py` during build and surfaced via `nebius-vpngw --version`.
 - Semantic Versioning policy:
   - **MAJOR:** breaking changes (CLI flags removed/changed, behavior changes that could break scripts).
   - **MINOR:** backward-compatible features (new options, new Nebius resources supported).
   - **PATCH:** bug fixes only (no breaking behavior, no new major capability).
 - Keep `CHANGELOG.md` updated before tagging; the changelog is the human-friendly record of what changed.
-- If you build without a tag, `setuptools-scm` will fall back to `0.0.0`; create a proper `vX.Y.Z` tag before shipping artifacts.
+- If you build without a tag, `setuptools-scm` will fall back to `0.0.0`; create a proper `nebius-vpngw-vX.Y.Z` tag before shipping artifacts.
 
 ### Choosing the next SemVer
 
@@ -1590,9 +1590,9 @@ Bump **PATCH** for fixes only.
 
 ### How to create a release for this project
 
-1. Prepare on your working branch: `./release.sh --prep vX.Y.Z`
+1. Prepare on your working branch: `./release.sh --prep nebius-vpngw-vX.Y.Z`
 2. Open a PR and merge it to `main`.
-3. On `main`, publish the release: `./release.sh --publish vX.Y.Z`
+3. On `main`, publish the release: `./release.sh --publish nebius-vpngw-vX.Y.Z`
 
 Note: `--publish` requires `main` to be clean and up to date with `origin/main`.
 

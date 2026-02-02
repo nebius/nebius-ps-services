@@ -8,11 +8,15 @@ All notable changes to this project are tracked here. This changelog follows
 
 - Keep `## [Unreleased]` at the top and add bullets as changes land.
 - Before tagging, move items from `Unreleased` into a new
-  `## [X.Y.Z] - YYYY-MM-DD` section, then leave an empty `Unreleased` section.
+  `## [nebius-vpngw-vX.Y.Z] - YYYY-MM-DD` section, then leave an empty `Unreleased` section.
 - Newer releases go above older ones; do not reorder entries within a release.
-- The release script (`release.sh`) automates rolling `Unreleased` into a dated `## [vX.Y.Z] - YYYY-MM-DD` and re-adding an empty `Unreleased`.
+- The release script (`release.sh`) automates rolling `Unreleased` into a dated `## [nebius-vpngw-vX.Y.Z] - YYYY-MM-DD` and re-adding an empty `Unreleased`.
 
 ## [Unreleased]
+
+## [nebius-vpngw-v0.4.9] - 2026-02-02
+
+- Updated the release tagging to the prefixed format so tags include the app name (e.g., nebius-vpngw-v0.4.9), matching the multi-project release style.
 
 ## [v0.4.8] - 2026-01-20
 
