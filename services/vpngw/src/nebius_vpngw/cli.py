@@ -164,6 +164,12 @@ def _resolve_local_config(
 ) -> Path:
     """Resolve config path, optionally creating from embedded template and exiting."""
     if local_config_file is not None:
+        if not local_config_file.exists():
+            print(f"[red]Error: Config file not found at {local_config_file}[/red]")
+            print(
+                "[yellow]Use 'nebius-vpngw create-config <path>' to create a template.[/yellow]"
+            )
+            raise typer.Exit(code=1)
         return local_config_file
 
     default_path = Path.cwd() / DEFAULT_CONFIG_FILENAME
@@ -191,6 +197,67 @@ def _resolve_local_config(
         raise typer.Exit(code=0)
 
     return default_path
+
+
+def _ensure_gateway_vms_exist(
+    plan: ResolvedDeploymentPlan,
+    *,
+    project_id: str | None,
+    zone: str | None,
+    auth_token: str | None,
+    tenant_id: str | None,
+    region_id: str | None,
+    action: str,
+) -> None:
+    if not project_id:
+        print(f"[red]Error: project_id is required to {action}.[/red]")
+        raise typer.Exit(code=1)
+
+    vm_mgr = VMManager(
+        project_id=project_id,
+        zone=zone or plan.gateway_group.region,
+        auth_token=auth_token,
+        tenant_id=tenant_id,
+        region_id=region_id,
+    )
+
+    client = vm_mgr._get_client()
+    if client is None:
+        print(
+            "[red]Error: Nebius SDK client not available; cannot verify gateway VMs.[/red]"
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        from nebius.api.nebius.compute.v1 import InstanceServiceClient, ListInstancesRequest
+
+        isc = InstanceServiceClient(client)
+        ilist_op = isc.list(ListInstancesRequest(parent_id=project_id))
+        ilist = ilist_op.wait() if hasattr(ilist_op, "wait") else ilist_op
+
+        items = []
+        if hasattr(ilist, "items"):
+            items = ilist.items
+        elif hasattr(ilist, "__iter__"):
+            items = list(ilist)
+    except Exception as e:
+        print(f"[red]Error: Failed to query gateway VMs:[/red] {e}")
+        raise typer.Exit(code=1)
+
+    existing_vms = [
+        inst
+        for inst in items
+        if getattr(getattr(inst, "metadata", None), "name", "").startswith(
+            f"{plan.gateway_group.name}-"
+        )
+    ]
+
+    if not existing_vms:
+        print(
+            f"[red]No gateway VMs found matching pattern '{plan.gateway_group.name}-*'.[/red]"
+        )
+        print("[yellow]Run 'nebius-vpngw apply' to create gateway VMs first.[/yellow]")
+        raise typer.Exit(code=1)
 
 
 @app.callback(invoke_without_command=True)
@@ -1845,14 +1912,30 @@ def list_routes_local(
     plan: ResolvedDeploymentPlan = merge_with_peer_configs(local_cfg, [])
 
     proj_id = project_id or (local_cfg.get("project_id") or "").strip() or None
+    tenant_id = (local_cfg.get("tenant_id") or "").strip() or None
+    region_id = (local_cfg.get("region_id") or "").strip() or None
 
     # Get token for API access (required for route management)
     auth_token = _ensure_authentication(required=True, show_progress=True)
 
+    _ensure_gateway_vms_exist(
+        plan,
+        project_id=proj_id,
+        zone=plan.gateway_group.region,
+        auth_token=auth_token,
+        tenant_id=tenant_id,
+        region_id=region_id,
+        action="list local routes",
+    )
+
     routes = RouteManager(project_id=proj_id, auth_token=auth_token)
 
     print("[bold]Listing VPC routes for local prefixes...[/bold]")
-    routes.list_routes(plan, local_cfg)
+    try:
+        routes.list_routes(plan, local_cfg)
+    except Exception as e:
+        print(f"[red]Failed to list routes:[/red] {e}")
+        raise typer.Exit(code=1)
 
 
 @app.command(name="list-routes-remote")
@@ -1887,7 +1970,11 @@ def list_routes_remote(
     routes = RouteManager(project_id=proj_id, auth_token=None)
 
     print("[bold]Querying remote routes from gateway VMs...[/bold]")
-    routes.list_remote_routes(plan, local_cfg, connection_filter=connection)
+    try:
+        routes.list_remote_routes(plan, local_cfg, connection_filter=connection)
+    except Exception as e:
+        print(f"[red]Failed to list remote routes:[/red] {e}")
+        raise typer.Exit(code=1)
 
 
 @app.command()

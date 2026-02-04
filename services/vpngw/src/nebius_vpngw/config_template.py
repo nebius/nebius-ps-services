@@ -124,8 +124,7 @@ connections:
         ha_role: "active"  # exactly one active per connection per VM
         remote_public_ip: "203.0.113.1"
         psk: "${{GCP_TUNNEL_1_PSK}}"
-        # inner_* must be /30 in 169.254.0.0/16
-        inner_cidr: "169.254.10.0/30"
+        inner_cidr: "169.254.10.0/30"  # inner_cidr must be /30
         inner_local_ip: "169.254.10.1"
         inner_remote_ip: "169.254.10.2"
       - name: "gcp-ha-tunnel-2"
@@ -134,7 +133,7 @@ connections:
         ha_role: "passive"
         remote_public_ip: "203.0.113.2"
         psk: "${{GCP_TUNNEL_2_PSK}}"
-        inner_cidr: "169.254.11.0/30"
+        inner_cidr: "169.254.11.0/30"  # inner_cidr must be /30
         inner_local_ip: "169.254.11.1"
         inner_remote_ip: "169.254.11.2"
 
