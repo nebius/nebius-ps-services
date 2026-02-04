@@ -14,6 +14,12 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [nebius-vpngw-v0.5.1] - 2026-02-04
+
+- Fail fast when `--local-config-file` is provided but the config path does not exist.
+- Fail fast for `list-routes-local` when gateway VMs are missing, and avoid traceback leaks on route listing errors.
+- Inline `inner_cidr` `/30` guidance in the generated config template.
+
 ## [nebius-vpngw-v0.4.9] - 2026-02-02
 
 - Updated the release tagging to the prefixed format so tags include the app name (e.g., nebius-vpngw-v0.4.9), matching the multi-project release style.
