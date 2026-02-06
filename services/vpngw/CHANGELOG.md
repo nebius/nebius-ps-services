@@ -19,6 +19,9 @@ All notable changes to this project are tracked here. This changelog follows
 - Fail fast when `--local-config-file` is provided but the config path does not exist.
 - Fail fast for `list-routes-local` when gateway VMs are missing, and avoid traceback leaks on route listing errors.
 - Inline `inner_cidr` `/30` guidance in the generated config template.
+- Added `prep-network` command to create `vpngw-subnet`, reserve public IPs, and write them into `gateway_group.external_ips` (or allocate requested IPs when provided).
+- `prep-network` now waits briefly and retries when a requested IP is still releasing.
+- Status now uses BGP session uptime (from `show bgp summary`) when available.
 
 ## [nebius-vpngw-v0.4.9] - 2026-02-02
 

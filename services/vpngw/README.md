@@ -48,7 +48,9 @@ Site-to-site IPsec/BGP VPN gateway for Nebius AI Cloud. Supports GCP HA VPN, AWS
 - Install pipx (preferred via package manager to avoid PEP 668 errors):
   - macOS (Homebrew): `brew install pipx && pipx ensurepath`
   - Ubuntu/Debian: `sudo apt-get install pipx && pipx ensurepath`
-  - If you must use pip: `python3 -m pip install --user pipx --break-system-packages && python3 -m pipx ensurepath`
+  - If your distro has no pipx package: `python3 -m pip install --user pipx && python3 -m pipx ensurepath`
+  - If pip blocks with "externally managed environment" (PEP 668), rerun with `--break-system-packages` only if you accept the risk:
+    `python3 -m pip install --user pipx --break-system-packages && python3 -m pipx ensurepath`
 - Download the latest `nebius_vpngw-<version>-py3-none-any.whl` from this repository’s GitHub Release assets (version comes from the Git tag).
   - macOS/Linux (wget):
 
@@ -120,6 +122,9 @@ If you need a stable public IP to give your peer (e.g., GCP External VPN Gateway
 - If you prefer to create it manually, create a subnet named `vpngw-subnet` (e.g., `10.48.0.0/24`) inside the target VPC.
 - Reserve a public IP allocation in `vpngw-subnet` (name can be anything).
 - Put that reserved IP into `gateway_group.external_ips` so the gateway reuses it and you can share it with GCP.
+- Recommended shortcut: after you fill the top of the YAML (tenant/project/region + gateway_group), run
+  `nebius-vpngw prep-network --local-config-file <file>` to create `vpngw-subnet`, reserve public IPs,
+  print them, and write them into `gateway_group.external_ips`.
 
 **Note:** If you pre-create an allocation but leave `external_ips` empty, the deployer will create its own allocation unless your allocation name matches the default pattern (`<gateway_group.name>-<index>-eth0-ip`).
 
@@ -177,7 +182,16 @@ Before configuring your VPN gateway, collect the following information from your
 nebius-vpngw create-config my-vpn.config.yaml
 ```
 
-**2. Edit configuration:**
+**2. (Optional but recommended) Reserve Nebius public IPs before creating the peer:**
+
+- Fill `tenant_id`, `project_id`, `region_id`, and `gateway_group` in the YAML.
+- Run:
+
+  ```bash
+  nebius-vpngw prep-network --local-config-file my-vpn.config.yaml
+  ```
+
+**3. Edit configuration:**
 
 ```yaml
 version: 1
@@ -265,7 +279,9 @@ connections:
         inner_remote_ip: "169.254.10.6"
 ```
 
-**3. Set environment variables:**
+**4. Set environment variables (only if you used `${VAR}` placeholders):**
+
+Either set values directly in the YAML **or** use environment variables; do not mix both for the same field.
 
 ```bash
 export TENANT_ID="my-tenant-id"
@@ -275,19 +291,19 @@ export GCP_TUNNEL_1_PSK="your-pre-shared-key-1"
 export GCP_TUNNEL_2_PSK="your-pre-shared-key-2"
 ```
 
-**4. Validate configuration:**
+**5. Validate configuration:**
 
 ```bash
 nebius-vpngw validate-config my-vpn.config.yaml
 ```
 
-**5. Deploy:**
+**6. Deploy:**
 
 ```bash
 nebius-vpngw apply --local-config-file my-vpn.config.yaml
 ```
 
-**6. Check status:**
+**7. Check status:**
 
 ```bash
 nebius-vpngw status --local-config-file my-vpn.config.yaml
@@ -545,6 +561,18 @@ nebius-vpngw validate-config <file>
 ```
 
 **Note:** `validate-config` takes the config file as a positional argument, not as `--local-config-file`. This is different from other commands which use the flag syntax.
+
+**Prepare network and reserve public IPs:**
+
+```bash
+nebius-vpngw prep-network --local-config-file <file>
+```
+
+Ensures `vpngw-subnet` and the route table exist.
+
+- If `gateway_group.external_ips` is empty, it reserves public IPs, prints them, and writes them into the YAML.
+- If `gateway_group.external_ips` is set, it verifies those IPs and creates allocations for them if needed.
+- If an IP was just released, it will wait briefly (up to ~10s) and retry before giving up.
 
 **Generate from peer config (no deployment):**
 
@@ -1595,6 +1623,7 @@ Bump **PATCH** for fixes only.
 3. On `main`, publish the release: `./release.sh --publish nebius-vpngw-vX.Y.Z`
 
 Note: `--publish` requires `main` to be clean and up to date with `origin/main`.
+Note: `--prep` is idempotent. You can run it multiple times for the same tag; it keeps `## [Unreleased]` empty and merges any new Unreleased entries into the target tag section without duplication.
 
 ### Optional: build a single-file binary (PyInstaller)
 

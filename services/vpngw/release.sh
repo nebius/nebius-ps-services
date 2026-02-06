@@ -126,30 +126,71 @@ if marker not in text:
 
 release_header = f"## [{tag}] - {date_str}"
 
-# If this release already exists in the changelog (any date), do nothing
-tag_pattern = re.compile(rf"^## \[{re.escape(tag)}\] -", re.MULTILINE)
-if tag_pattern.search(text):
-    sys.exit(0)
+header_re = re.compile(r"^## \[.+?\].*$", re.MULTILINE)
+headers = list(header_re.finditer(text))
+if not headers:
+    print("No CHANGELOG headers found", file=sys.stderr)
+    sys.exit(1)
 
-# Replace the first Unreleased heading with a new Unreleased + release header
-pattern = re.compile(r"^## \[Unreleased\]\s*$", re.MULTILINE)
-match = pattern.search(text)
-if not match:
+preamble = text[: headers[0].start()]
+sections = []
+for i, h in enumerate(headers):
+    start = h.start()
+    end = headers[i + 1].start() if i + 1 < len(headers) else len(text)
+    header = h.group(0)
+    content = text[h.end() : end]
+    sections.append((header, content))
+
+def normalize_content(content: str) -> str:
+    stripped = content.strip("\n")
+    if not stripped.strip():
+        return "\n"
+    return "\n\n" + stripped + "\n"
+
+def merge_content(new_part: str, existing: str) -> str:
+    parts = []
+    if new_part.strip():
+        parts.append(new_part.strip("\n"))
+    if existing.strip():
+        parts.append(existing.strip("\n"))
+    if not parts:
+        return "\n"
+    return "\n\n" + "\n\n".join(parts) + "\n"
+
+unreleased_idx = None
+tag_idx = None
+for idx, (header, _) in enumerate(sections):
+    if header.strip() == "## [Unreleased]":
+        unreleased_idx = idx
+    if header.startswith(f"## [{tag}] -"):
+        tag_idx = idx
+
+if unreleased_idx is None:
     print("Unable to locate Unreleased heading", file=sys.stderr)
     sys.exit(1)
 
-# Ensure we keep the content that followed Unreleased, normalized to a single blank line
-post = text[match.end():]
-post = post.lstrip("\n")
+unreleased_header, unreleased_content = sections[unreleased_idx]
+unreleased_payload = unreleased_content.strip("\n")
 
-new_text = (
-    text[: match.start()]
-    + "## [Unreleased]\n\n"
-    + release_header
-    + "\n\n"
-    + post
-)
+if tag_idx is None:
+    # Insert new release header after Unreleased
+    new_sections = []
+    for idx, (header, content) in enumerate(sections):
+        if idx == unreleased_idx:
+            new_sections.append((header, "\n\n"))
+            new_sections.append((release_header, normalize_content(unreleased_payload)))
+        else:
+            new_sections.append((header, content))
+    sections = new_sections
+else:
+    # Move Unreleased payload into existing tag section
+    if unreleased_payload.strip():
+        tag_header, tag_content = sections[tag_idx]
+        sections[tag_idx] = (tag_header, merge_content(unreleased_payload, tag_content))
+    # Always clear Unreleased content
+    sections[unreleased_idx] = (unreleased_header, "\n\n")
 
+new_text = preamble + "".join(f"{h}{c}" for h, c in sections)
 path.write_text(new_text)
 PY
 }

@@ -5,9 +5,9 @@ description = "Nebius VM-based VPN Gateway orchestrator and agent"
 readme = "README.md"
 authors = [ { name = "Reza. B." } ]
 requires-python = ">=3.10,<3.13"
-license = { file = "LICENSE" }
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 classifiers = [
-	"License :: Copyright 2025 Nebius B.V.",
 	"Programming Language :: Python :: 3",
 	"Programming Language :: Python :: 3 :: Only"
 ]

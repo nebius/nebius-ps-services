@@ -20,6 +20,7 @@ DEFAULT_CONFIG_TEMPLATE = f"""\
 # - Override order: tunnel > connection > defaults
 # - gateway.local_prefixes is the source of truth
 # - Use ${{VAR}} for secrets; keep *.config.yaml out of git
+# - Set values directly in YAML OR via ${{VAR}} envs (do not mix for the same field)
 
 version: {SCHEMA_VERSION}
 

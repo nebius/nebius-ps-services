@@ -1,6 +1,6 @@
 # Nebius VPN Gateway (VM-Based) — Design Document
 
-> Version: v0.4.8
+> Version: v0.5.1
 > Designed by: Reza Bahmanzadeh, Nebius Professional Services, CX Org.
 > Copyright 2025 Nebius B.V.
 > Licensed under the Apache License, Version 2.0
@@ -29,7 +29,7 @@
 - [Project Structure](#project-structure)
 - [Tips & Troubleshooting](#tips--troubleshooting)
 
-> Note: Legacy VTI support has been removed. XFRM interfaces are the only > supported mode going forward.
+> Note: Legacy VTI support has been removed. XFRM interfaces are the only supported mode going forward.
 
 ## XFRM Mode Summary (current, required)
 
@@ -163,6 +163,8 @@ Configuration shape: `external_ips[instance_index][nic_index]` → IP string (fl
 - Insufficient: Create missing allocations
 - Auto naming: `{instance}-eth{N}-ip`
 
+**Pre-allocation workflow:** `nebius-vpngw prep-network` can create `vpngw-subnet` and reserve public IPs before peer setup. If `gateway_group.external_ips` is empty, it allocates new IPs and writes them into the YAML. If `external_ips` is set, it verifies and allocates those specific IPs when needed. If an IP was just released, it waits briefly (~10s) and retries before failing.
+
 **Preservation:** Allocations are kept and reattached during VM recreation. No downtime for IP addresses, only for tunnel establishment.
 
 **Subnet constraint:** Nebius does not allow changing `subnet_id` on an existing public allocation. If you supply `external_ips` and the found allocation belongs to a different subnet than the target gateway subnet, we fail fast with guidance:
@@ -274,6 +276,14 @@ nebius-vpngw validate-config <config-file>
 ```
 
 Validates configuration against schema without deployment. Performs full validation including types, constraints, and logical consistency. Returns exit code 0 (valid) or 1 (invalid). Use before deployment to catch errors early.
+
+**Network Preparation (pre-allocate public IPs):**
+
+```bash
+nebius-vpngw prep-network --local-config-file <file>
+```
+
+Ensures `vpngw-subnet` and route table exist. If `gateway_group.external_ips` is empty, reserves public IPs, prints them, and writes them into the YAML.
 
 **Deployment:**
 

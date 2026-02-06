@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.resources as resources
 import textwrap
+import time
 import typing as t
 from pathlib import Path
 
@@ -2104,6 +2105,308 @@ class VMManager:
             print(f"[VMManager] ensure_group failed: {e}. Proceeding in scaffold mode.")
 
         return vm_ips
+
+    def prepare_network(
+        self,
+        spec: GatewayGroupSpec,
+        *,
+        allocate_ips: bool = True,
+        desired_external_ips: list[list[str]] | None = None,
+    ) -> list[list[str]]:
+        """Ensure vpngw-subnet exists and optionally reserve public IP allocations.
+
+        Returns a list of public IPs per instance (list-of-lists, NIC order).
+        """
+        client = self._get_client()
+        if client is None:
+            raise RuntimeError("Nebius SDK client not available; cannot prepare network.")
+
+        subnet_id = self._ensure_vpngw_subnet(client, spec)
+        if not subnet_id:
+            raise RuntimeError("Failed to resolve or create vpngw-subnet.")
+
+        # Ensure route table exists for vpngw-subnet (idempotent).
+        self._ensure_vpngw_route_table(client, subnet_id)
+
+        if not allocate_ips:
+            return []
+
+        # CURRENT PLATFORM LIMITATION: num_nics=1 (enforced elsewhere on apply).
+        num_nics = int(spec.vm_spec.get("num_nics", 1))
+        if num_nics > 1:
+            print(
+                f"[VMManager] WARNING: num_nics={num_nics} but current platform only supports 1 NIC. Using num_nics=1."
+            )
+            num_nics = 1
+
+        from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
+        from nebius.api.nebius.vpc.v1 import (  # type: ignore
+            AllocationServiceClient,
+            AllocationSpec,
+            CreateAllocationRequest,
+            GetAllocationByNameRequest,
+            GetAllocationRequest,
+            IPv4PublicAllocationSpec,
+        )
+
+        alloc_client = AllocationServiceClient(client)
+
+        desired_matrix = desired_external_ips or []
+        desired_any = any(
+            isinstance(row, list) and any(str(ip or "").strip() for ip in row)
+            for row in desired_matrix
+        )
+
+        def _normalize_ip(ip_val: str | None) -> str | None:
+            if not ip_val:
+                return None
+            return str(ip_val).strip().split("/")[0]
+
+        def _allocation_ip_from_obj(alloc_obj: t.Any) -> str | None:
+            try:
+                spec_obj = getattr(alloc_obj, "spec", None)
+                if spec_obj:
+                    ipv4_public = getattr(spec_obj, "ipv4_public", None)
+                    if ipv4_public:
+                        addr = getattr(ipv4_public, "address", None)
+                        if addr:
+                            return _normalize_ip(str(addr))
+                status = getattr(alloc_obj, "status", None)
+                details = getattr(status, "details", None) if status else None
+                cidr = getattr(details, "allocated_cidr", None) if details else None
+                if cidr:
+                    return _normalize_ip(str(cidr))
+            except Exception:
+                return None
+            return None
+
+        def _list_allocations_by_ip() -> dict[str, t.Any]:
+            try:
+                from nebius.api.nebius.vpc.v1 import ListAllocationsRequest  # type: ignore
+
+                resp = alloc_client.list(ListAllocationsRequest(parent_id=self.project_id or ""))
+                items = []
+                if hasattr(resp, "items"):
+                    items = resp.items
+                elif hasattr(resp, "__iter__"):
+                    items = list(resp)
+                mapping: dict[str, t.Any] = {}
+                for alloc in items:
+                    ip_val = _allocation_ip_from_obj(alloc)
+                    if ip_val:
+                        mapping[ip_val] = alloc
+                return mapping
+            except Exception:
+                return {}
+
+        def _allocation_state(alloc_obj: t.Any) -> str | None:
+            for path in (
+                ("status", "state"),
+                ("status", "state_name"),
+                ("status", "lifecycle_state"),
+                ("status", "phase"),
+                ("status", "details", "state"),
+                ("status", "details", "lifecycle_state"),
+            ):
+                cur = alloc_obj
+                for key in path:
+                    cur = getattr(cur, key, None)
+                    if cur is None:
+                        break
+                if cur:
+                    try:
+                        if hasattr(cur, "value"):
+                            cur = cur.value
+                    except Exception:
+                        pass
+                    return str(cur)
+            return None
+
+        def _allocation_is_attached(alloc_obj: t.Any) -> bool:
+            for path in (
+                ("status", "details", "attachments"),
+                ("status", "attachments"),
+                ("status", "details", "attached_to"),
+                ("status", "details", "instance_id"),
+                ("status", "details", "resource_id"),
+                ("spec", "ipv4_public", "attached_to"),
+                ("spec", "ipv4_public", "instance_id"),
+            ):
+                cur = alloc_obj
+                for key in path:
+                    cur = getattr(cur, key, None)
+                    if cur is None:
+                        break
+                if cur:
+                    if isinstance(cur, list):
+                        return len(cur) > 0
+                    return True
+            return False
+
+        allocations_by_ip: dict[str, t.Any] = _list_allocations_by_ip() if desired_any else {}
+
+        allocated_ips: list[list[str]] = []
+
+        for inst_index in range(spec.instance_count):
+            inst_name = f"{spec.name}-{inst_index}"
+            inst_ips: list[str] = []
+
+            for nic_index in range(num_nics):
+                nic_name = f"eth{nic_index}"
+                alloc_name = f"{inst_name}-{nic_name}-ip"
+                alloc_obj = None
+                desired_ip = None
+                if inst_index < len(desired_matrix):
+                    row = desired_matrix[inst_index]
+                    if isinstance(row, list) and nic_index < len(row):
+                        desired_ip = _normalize_ip(str(row[nic_index])) if row[nic_index] else None
+
+                # If user provided a desired IP, try to find existing allocation by IP first
+                if desired_ip and desired_ip in allocations_by_ip:
+                    alloc_obj = allocations_by_ip.get(desired_ip)
+                    state = _allocation_state(alloc_obj)
+                    if state and any(token in state.lower() for token in ("delet", "releas", "pending")):
+                        print(
+                            f"[VMManager] Allocation {desired_ip} appears to be releasing ({state}). "
+                            "Waiting up to 10s before retry..."
+                        )
+                        for _ in range(5):
+                            time.sleep(2)
+                            allocations_by_ip = _list_allocations_by_ip()
+                            alloc_obj = allocations_by_ip.get(desired_ip)
+                            if not alloc_obj:
+                                break
+                            state = _allocation_state(alloc_obj)
+                            if not state or not any(
+                                token in state.lower() for token in ("delet", "releas", "pending")
+                            ):
+                                break
+                    before_ip = _allocation_ip_from_obj(alloc_obj)
+                    alloc_obj = self._migrate_allocation_to_vpngw_subnet(
+                        alloc_client, alloc_obj, subnet_id, desired_ip
+                    )
+                    after_ip = _allocation_ip_from_obj(alloc_obj) if alloc_obj else None
+                    if before_ip and after_ip and before_ip != after_ip:
+                        print(
+                            f"[VMManager] Note: Requested IP {before_ip} could not be migrated; "
+                            f"continuing with allocation in its existing subnet (IP {after_ip})."
+                        )
+                    if alloc_obj and _allocation_is_attached(alloc_obj):
+                        print(
+                            f"[VMManager] Warning: Requested IP {desired_ip} is already attached to a resource."
+                        )
+
+                # Try by-name (idempotent)
+                try:
+                    alloc_obj = alloc_client.get_by_name(
+                        GetAllocationByNameRequest(
+                            parent_id=self.project_id or "",
+                            name=alloc_name,
+                        )
+                    ).wait()
+                except Exception:
+                    alloc_obj = None
+
+                # If found, ensure it belongs to vpngw-subnet
+                if alloc_obj is not None:
+                    alloc_id = getattr(alloc_obj, "id", None) or getattr(
+                        getattr(alloc_obj, "metadata", None), "id", None
+                    )
+                    alloc_ip = self.get_allocation_ip(str(alloc_id)) if alloc_id else None
+                    alloc_obj = self._migrate_allocation_to_vpngw_subnet(
+                        alloc_client, alloc_obj, subnet_id, alloc_ip
+                    )
+                    if desired_ip and alloc_ip and alloc_ip != desired_ip:
+                        print(
+                            f"[VMManager] Note: Allocation {alloc_name} has IP {alloc_ip} "
+                            f"which differs from requested {desired_ip}."
+                        )
+
+                # Create if missing
+                if alloc_obj is None:
+                    req = CreateAllocationRequest(
+                        metadata=ResourceMetadata(
+                            name=alloc_name,
+                            parent_id=self.project_id or "",
+                        ),
+                        spec=AllocationSpec(
+                            ipv4_public=IPv4PublicAllocationSpec(
+                                subnet_id=subnet_id,
+                                cidr=desired_ip if desired_ip else "/32",
+                            )
+                        ),
+                    )
+                    try:
+                        op = alloc_client.create(req).wait()
+                        try:
+                            op.sync_wait()
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        err_str = str(e).lower()
+                        if "already exists" in err_str or "duplicate" in err_str:
+                            # Best-effort: allocation likely exists; try to refetch by name
+                            pass
+                        elif desired_ip and ("immutable" in err_str or "subnet" in err_str):
+                            print(
+                                f"[VMManager] Requested IP {desired_ip} could not be allocated in vpngw-subnet: {e}"
+                            )
+                        else:
+                            raise RuntimeError(
+                                f"Failed to create public IP allocation {alloc_name}: {e}"
+                            ) from e
+
+                    try:
+                        alloc_obj = alloc_client.get_by_name(
+                            GetAllocationByNameRequest(
+                                parent_id=self.project_id or "",
+                                name=alloc_name,
+                            )
+                        ).wait()
+                    except Exception as e:
+                        if desired_ip and desired_ip in allocations_by_ip:
+                            alloc_obj = allocations_by_ip[desired_ip]
+                        else:
+                            raise RuntimeError(
+                                f"Failed to fetch allocation {alloc_name} after creation: {e}"
+                            ) from e
+
+                alloc_id = getattr(alloc_obj, "id", None) or getattr(
+                    getattr(alloc_obj, "metadata", None), "id", None
+                )
+                if not alloc_id:
+                    if desired_ip:
+                        inst_ips.append(desired_ip)
+                        continue
+                    raise RuntimeError(f"Allocation {alloc_name} returned no id.")
+
+                alloc_ip = _allocation_ip_from_obj(alloc_obj)
+                if not alloc_ip:
+                    for _ in range(3):
+                        alloc_ip = self.get_allocation_ip(str(alloc_id))
+                        if alloc_ip:
+                            break
+                        try:
+                            alloc_obj = alloc_client.get(GetAllocationRequest(id=alloc_id)).wait()
+                        except Exception:
+                            alloc_obj = None
+                        alloc_ip = _allocation_ip_from_obj(alloc_obj) if alloc_obj else None
+                        if alloc_ip:
+                            break
+                        time.sleep(1)
+                if not alloc_ip:
+                    if desired_ip:
+                        inst_ips.append(desired_ip)
+                        continue
+                    raise RuntimeError(
+                        f"Allocation {alloc_name} returned no IP address (API may be delayed)."
+                    )
+
+                inst_ips.append(alloc_ip)
+
+            allocated_ips.append(inst_ips)
+
+        return allocated_ips
 
     def _ensure_vpngw_subnet(self, client: t.Any, spec: GatewayGroupSpec) -> str | None:
         """Ensure a single gateway subnet named 'vpngw-subnet' (/24) exists in the chosen network.
