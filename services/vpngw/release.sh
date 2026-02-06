@@ -325,11 +325,11 @@ publish_release() {
 
   if [[ "${TAG_EXISTS_ON_HEAD}" -eq 1 ]]; then
     echo "==> Tag ${tag} already exists on current HEAD. Pushing tag to origin if needed..."
-    git push origin "${tag}"
+    git push origin "refs/tags/${tag}"
   else
     echo "==> Creating tag ${tag} and pushing..."
     git tag -a "${tag}" -m "Release ${tag}"
-    git push origin "${tag}"
+    git push origin "refs/tags/${tag}"
   fi
 
   echo "==> Building wheel from tagged state..."
