@@ -1,5 +1,6 @@
 import os
 import platform
+import re
 import shutil
 import sys
 import time
@@ -11,6 +12,7 @@ from rich import print
 
 from . import __version__
 from .config_loader import (
+    GatewayGroupSpec,
     ResolvedDeploymentPlan,
     load_local_config,
     merge_peer_configs_into_local_config,
@@ -164,6 +166,12 @@ def _resolve_local_config(
 ) -> Path:
     """Resolve config path, optionally creating from embedded template and exiting."""
     if local_config_file is not None:
+        if not local_config_file.exists():
+            print(f"[red]Error: Config file not found at {local_config_file}[/red]")
+            print(
+                "[yellow]Use 'nebius-vpngw create-config <path>' to create a template.[/yellow]"
+            )
+            raise typer.Exit(code=1)
         return local_config_file
 
     default_path = Path.cwd() / DEFAULT_CONFIG_FILENAME
@@ -191,6 +199,181 @@ def _resolve_local_config(
         raise typer.Exit(code=0)
 
     return default_path
+
+
+_ENV_PATTERN = re.compile(r"\$\{([A-Za-z0-9_]+)\}")
+
+
+def _expand_env_value(val: str) -> str:
+    def repl(match: re.Match[str]) -> str:
+        name = match.group(1)
+        env_val = os.environ.get(name)
+        return env_val if env_val else match.group(0)
+
+    return _ENV_PATTERN.sub(repl, val)
+
+
+def _expand_env(obj: t.Any) -> t.Any:
+    if isinstance(obj, dict):
+        return {k: _expand_env(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_expand_env(v) for v in obj]
+    if isinstance(obj, str):
+        return _expand_env_value(obj)
+    return obj
+
+
+def _external_ips_assigned(external_ips: t.Any) -> bool:
+    if not external_ips:
+        return False
+    if isinstance(external_ips, list):
+        for entry in external_ips:
+            if isinstance(entry, list):
+                for ip in entry:
+                    if (
+                        isinstance(ip, str)
+                        and ip.strip()
+                        and not _ENV_PATTERN.fullmatch(ip.strip())
+                    ):
+                        return True
+            elif (
+                isinstance(entry, str)
+                and entry.strip()
+                and not _ENV_PATTERN.fullmatch(entry.strip())
+            ):
+                return True
+    return False
+
+
+def _format_external_ips_block(indent: str, external_ips: list[list[str]]) -> list[str]:
+    lines = [f"{indent}external_ips:"]
+    for inst_ips in external_ips:
+        if not inst_ips:
+            lines.append(f"{indent}  - []")
+            continue
+        ip_items = ", ".join(f"\"{ip}\"" for ip in inst_ips)
+        lines.append(f"{indent}  - [{ip_items}]")
+    return lines
+
+
+def _update_external_ips_in_yaml(path: Path, external_ips: list[list[str]]) -> None:
+    text = path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+
+    # Try to replace existing external_ips block first
+    for i, line in enumerate(lines):
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            continue
+        match = re.match(r"^(\s*)external_ips\s*:(.*)$", line)
+        if not match:
+            continue
+        indent = match.group(1)
+        # Remove existing block lines (indented more than external_ips)
+        j = i + 1
+        while j < len(lines):
+            next_line = lines[j]
+            if next_line.strip() == "":
+                break
+            next_indent = len(next_line) - len(next_line.lstrip())
+            if next_indent <= len(indent):
+                break
+            j += 1
+        new_block = _format_external_ips_block(indent, external_ips)
+        lines = lines[:i] + new_block + lines[j:]
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return
+
+    # If external_ips not found, insert under gateway_group
+    for i, line in enumerate(lines):
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            continue
+        if re.match(r"^gateway_group\s*:", stripped):
+            base_indent = " " * (len(line) - len(stripped))
+            insert_indent = base_indent + "  "
+            insert_at = i + 1
+            j = i + 1
+            while j < len(lines):
+                next_line = lines[j]
+                if next_line.strip() == "":
+                    j += 1
+                    continue
+                next_indent = len(next_line) - len(next_line.lstrip())
+                if next_indent <= len(base_indent):
+                    break
+                if next_line.lstrip().startswith("instance_count:") or (
+                    next_line.lstrip().startswith("name:") and insert_at == i + 1
+                ):
+                    insert_at = j + 1
+                j += 1
+            new_block = _format_external_ips_block(insert_indent, external_ips)
+            lines = lines[:insert_at] + new_block + lines[insert_at:]
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            return
+
+    raise ValueError("Unable to locate gateway_group or external_ips in YAML.")
+
+
+def _ensure_gateway_vms_exist(
+    plan: ResolvedDeploymentPlan,
+    *,
+    project_id: str | None,
+    zone: str | None,
+    auth_token: str | None,
+    tenant_id: str | None,
+    region_id: str | None,
+    action: str,
+) -> None:
+    if not project_id:
+        print(f"[red]Error: project_id is required to {action}.[/red]")
+        raise typer.Exit(code=1)
+
+    vm_mgr = VMManager(
+        project_id=project_id,
+        zone=zone or plan.gateway_group.region,
+        auth_token=auth_token,
+        tenant_id=tenant_id,
+        region_id=region_id,
+    )
+
+    client = vm_mgr._get_client()
+    if client is None:
+        print(
+            "[red]Error: Nebius SDK client not available; cannot verify gateway VMs.[/red]"
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        from nebius.api.nebius.compute.v1 import InstanceServiceClient, ListInstancesRequest
+
+        isc = InstanceServiceClient(client)
+        ilist_op = isc.list(ListInstancesRequest(parent_id=project_id))
+        ilist = ilist_op.wait() if hasattr(ilist_op, "wait") else ilist_op
+
+        items = []
+        if hasattr(ilist, "items"):
+            items = ilist.items
+        elif hasattr(ilist, "__iter__"):
+            items = list(ilist)
+    except Exception as e:
+        print(f"[red]Error: Failed to query gateway VMs:[/red] {e}")
+        raise typer.Exit(code=1)
+
+    existing_vms = [
+        inst
+        for inst in items
+        if getattr(getattr(inst, "metadata", None), "name", "").startswith(
+            f"{plan.gateway_group.name}-"
+        )
+    ]
+
+    if not existing_vms:
+        print(
+            f"[red]No gateway VMs found matching pattern '{plan.gateway_group.name}-*'.[/red]"
+        )
+        print("[yellow]Run 'nebius-vpngw apply' to create gateway VMs first.[/yellow]")
+        raise typer.Exit(code=1)
 
 
 @app.callback(invoke_without_command=True)
@@ -650,6 +833,163 @@ def create_config(
         raise typer.Exit(code=1) from e
 
 
+@app.command(name="prep-network")
+def prep_network(
+    local_config_file: Path | None = typer.Option(
+        None, "--local-config-file", "-c", help="Path to local config file"
+    ),
+    zone: str | None = typer.Option(None, help="Nebius zone for gateway VMs"),
+):
+    """Prepare gateway subnet and reserve public IPs (before peer setup)."""
+    import yaml
+    from rich.console import Console
+    from rich.panel import Panel
+
+    console = Console()
+
+    local_config_file = _resolve_local_config(
+        local_config_file,
+        create_if_missing=False,
+        exit_after_create=False,
+    )
+
+    try:
+        raw_cfg = yaml.safe_load(local_config_file.read_text(encoding="utf-8")) or {}
+    except Exception as e:
+        console.print(
+            Panel.fit(
+                f"[bold red]✗ Failed to read YAML[/bold red]\n\n{str(e)}",
+                title="[red]Error[/red]",
+                border_style="red",
+            )
+        )
+        raise typer.Exit(code=1) from e
+
+    cfg = _expand_env(raw_cfg)
+
+    tenant_id = str(cfg.get("tenant_id") or "").strip() or None
+    project_id = str(cfg.get("project_id") or "").strip() or None
+    region_id = str(cfg.get("region_id") or "").strip() or None
+
+    if not project_id or "${" in project_id:
+        console.print(
+            Panel.fit(
+                "[bold red]✗ project_id is required for prep-network[/bold red]\n\n"
+                "Set project_id directly in YAML or via ${PROJECT_ID} env var.",
+                title="[red]Error[/red]",
+                border_style="red",
+            )
+        )
+        raise typer.Exit(code=1)
+
+    gg = cfg.get("gateway_group", {}) or {}
+    name = gg.get("name") or "nebius-vpn-gw"
+    instance_count = int(gg.get("instance_count", 1))
+    if instance_count < 1:
+        console.print(
+            Panel.fit(
+                "[bold red]✗ instance_count must be >= 1[/bold red]",
+                title="[red]Error[/red]",
+                border_style="red",
+            )
+        )
+        raise typer.Exit(code=1)
+
+    vm_spec = gg.get("vm_spec", {}) or {}
+    external_ips = gg.get("external_ips", []) or []
+
+    has_assigned_ips = _external_ips_assigned(external_ips)
+
+    spec = GatewayGroupSpec(
+        name=name,
+        instance_count=instance_count,
+        region=gg.get("region") or region_id or "eu-north1-a",
+        external_ips=external_ips,
+        vm_spec=vm_spec,
+    )
+
+    auth_token = _ensure_authentication(required=True, show_progress=True)
+
+    vm_mgr = VMManager(
+        project_id=project_id,
+        zone=zone or spec.region,
+        auth_token=auth_token,
+        tenant_id=tenant_id,
+        region_id=region_id,
+    )
+
+    try:
+        desired_external_ips = external_ips if has_assigned_ips else []
+        allocated_ips = vm_mgr.prepare_network(
+            spec,
+            allocate_ips=True,
+            desired_external_ips=desired_external_ips,
+        )
+    except Exception as e:
+        console.print(
+            Panel.fit(
+                f"[bold red]✗ Failed to prepare network[/bold red]\n\n{str(e)}",
+                title="[red]Error[/red]",
+                border_style="red",
+            )
+        )
+        raise typer.Exit(code=1) from e
+
+    if has_assigned_ips:
+        console.print(
+            Panel.fit(
+                "[bold green]external_ips set in YAML.[/bold green]\n\n"
+                "Subnet/route table were ensured and requested IP allocations were verified/created.",
+                title="[green]Prep Completed[/green]",
+                border_style="yellow",
+            )
+        )
+        console.print()
+        console.print("[bold]Public IPs:[/bold]")
+        for inst_index, inst_ips in enumerate(allocated_ips):
+            for nic_index, ip in enumerate(inst_ips):
+                console.print(f"  - {name}-{inst_index} eth{nic_index}: [cyan]{ip}[/cyan]")
+        return
+
+    if not allocated_ips:
+        console.print(
+            Panel.fit(
+                "[bold red]✗ No public IPs were allocated.[/bold red]",
+                title="[red]Error[/red]",
+                border_style="red",
+            )
+        )
+        raise typer.Exit(code=1)
+
+    console.print()
+    console.print("[bold]Reserved public IPs:[/bold]")
+    for inst_index, inst_ips in enumerate(allocated_ips):
+        for nic_index, ip in enumerate(inst_ips):
+            console.print(f"  - {name}-{inst_index} eth{nic_index}: [cyan]{ip}[/cyan]")
+
+    try:
+        _update_external_ips_in_yaml(local_config_file, allocated_ips)
+    except Exception as e:
+        console.print(
+            Panel.fit(
+                f"[bold red]✗ Failed to update YAML with allocated IPs[/bold red]\n\n{str(e)}",
+                title="[red]Error[/red]",
+                border_style="red",
+            )
+        )
+        raise typer.Exit(code=1) from e
+
+    console.print()
+    console.print(
+        Panel.fit(
+            f"[bold green]✓ Updated config with allocated IPs[/bold green]\n\n"
+            f"File: [cyan]{local_config_file}[/cyan]",
+            title="[green]Success[/green]",
+            border_style="green",
+        )
+    )
+
+
 @app.command(options_metavar="")
 def create_from_peer_config(
     config_file: Path = typer.Argument(
@@ -863,7 +1203,7 @@ def status(
     table.add_column("BGP", style="white")
     table.add_column("Peer IP", style="white")
     table.add_column("Encryption", style="white")
-    table.add_column("Uptime", style="white")
+    table.add_column("BGP Uptime", style="white")
 
     # Build mapping of tunnel -> BGP peer IP, remote public IP, and ha_role per instance
     tunnel_bgp_map: dict[str, dict[str, str]] = {}
@@ -978,6 +1318,9 @@ def status(
         if value_text.endswith("ago"):
             value_text = value_text[:-3].strip()
 
+        if value_text.isdigit():
+            return int(value_text)
+
         short_match = re.match(r"(\d+)\s*([smhd])$", value_text)
         if short_match:
             value = int(short_match.group(1))
@@ -1007,6 +1350,45 @@ def status(
             return uptime_str.strip()
         return _format_uptime(seconds)
 
+    def _bgp_uptime_seconds(token: str) -> int | None:
+        value_text = token.strip().lower()
+        if not value_text or value_text in {"never", "n/a", "unknown", "idle"}:
+            return None
+
+        if value_text.isdigit():
+            return int(value_text)
+
+        colon_match = re.match(r"^(\d+):(\d{2}):(\d{2})$", value_text)
+        if colon_match:
+            hours = int(colon_match.group(1))
+            minutes = int(colon_match.group(2))
+            seconds = int(colon_match.group(3))
+            return hours * 3600 + minutes * 60 + seconds
+
+        total = 0
+        matched = False
+        for unit, multiplier in (
+            ("w", 604800),
+            ("d", 86400),
+            ("h", 3600),
+            ("m", 60),
+            ("s", 1),
+        ):
+            match = re.search(rf"(\d+){unit}", value_text)
+            if match:
+                total += int(match.group(1)) * multiplier
+                matched = True
+        if matched:
+            return total
+
+        return None
+
+    def parse_bgp_uptime(uptime_str: str) -> str:
+        seconds = _bgp_uptime_seconds(uptime_str)
+        if seconds is None:
+            return _format_uptime(0)
+        return _format_uptime(seconds)
+
     # Check each gateway VM's tunnels
     for inst_cfg in plan.iter_instance_configs():
         target = vm_ips.get(inst_cfg.hostname)
@@ -1015,6 +1397,7 @@ def status(
 
         # Pull BGP neighbor states (if any BGP tunnels on this instance)
         bgp_states: dict[str, str] = {}
+        bgp_uptime: dict[str, str] = {}
         if tunnel_bgp_map.get(inst_cfg.hostname):
             try:
                 # Try JSON output first
@@ -1051,11 +1434,26 @@ def status(
                             )
                             if state:
                                 bgp_states[ip] = state
+                            uptime_token = (
+                                info.get("peerUptime")
+                                or info.get("upDownTime")
+                                or info.get("upDownTimeStr")
+                                or info.get("upTime")
+                                or info.get("uptime")
+                            )
+                            if uptime_token is None and info.get("peerUptimeMsec") is not None:
+                                try:
+                                    ms_val = int(info.get("peerUptimeMsec"))
+                                    bgp_uptime[ip] = _format_uptime(int(ms_val / 1000))
+                                except Exception:
+                                    pass
+                            elif uptime_token is not None:
+                                bgp_uptime[ip] = parse_bgp_uptime(str(uptime_token))
                     except json.JSONDecodeError:
                         pass
 
-                # If JSON parsing didn't work, fall back to text parsing
-                if not bgp_states:
+                # If JSON parsing didn't work (or no uptime), fall back to text parsing
+                if not bgp_states or not bgp_uptime:
                     bgp_out = subprocess.run(
                         [
                             "ssh",
@@ -1071,9 +1469,19 @@ def status(
                         timeout=10,
                     )
                     if bgp_out.returncode == 0 and bgp_out.stdout:
+                        header_cols: list[str] | None = None
+                        updown_idx: int | None = None
+                        state_idx: int | None = None
                         # Parse text output: look for neighbor lines
                         # Example: "169.254.5.153    4 65014      123      456       0    0 01:23:45 Established"
                         for line in bgp_out.stdout.splitlines():
+                            if line.startswith("Neighbor"):
+                                header_cols = line.split()
+                                if "Up/Down" in header_cols:
+                                    updown_idx = header_cols.index("Up/Down")
+                                if "State/PfxRcd" in header_cols:
+                                    state_idx = header_cols.index("State/PfxRcd")
+                                continue
                             parts = line.split()
                             # Look for lines starting with an IP address
                             if len(parts) >= 2 and parts[0] and "." in parts[0]:
@@ -1084,14 +1492,74 @@ def status(
                                         o.isdigit() and 0 <= int(o) <= 255 for o in octets
                                     ):
                                         # Last column is typically the state or prefix count
-                                        state = parts[-1]
+                                        state = (
+                                            parts[state_idx]
+                                            if state_idx is not None and len(parts) > state_idx
+                                            else parts[-1]
+                                        )
                                         if state.isdigit():
                                             state = "Established"
                                         bgp_states[parts[0]] = state
+
+                                        if updown_idx is not None and len(parts) > updown_idx:
+                                            uptime_token = parts[updown_idx]
+                                        else:
+                                            uptime_token = next(
+                                                (
+                                                    p
+                                                    for p in parts
+                                                    if _bgp_uptime_seconds(p) is not None
+                                                ),
+                                                None,
+                                            )
+                                        if uptime_token and parts[0] not in bgp_uptime:
+                                            bgp_uptime[parts[0]] = parse_bgp_uptime(uptime_token)
                                 except (ValueError, IndexError):
                                     continue
             except Exception:
                 pass
+
+        # If any expected peers are missing uptime/state, query neighbors directly
+        try:
+            expected_peers = set(tunnel_bgp_map.get(inst_cfg.hostname, {}).values())
+            missing_peers = [
+                peer
+                for peer in expected_peers
+                if peer not in bgp_uptime or peer not in bgp_states
+            ]
+            neighbor_state_re = re.compile(r"BGP state = ([^,]+), up for (.+)$")
+            for peer_ip in sorted(missing_peers):
+                try:
+                    neigh_out = subprocess.run(
+                        [
+                            "ssh",
+                            "-o",
+                            "StrictHostKeyChecking=no",
+                            "-o",
+                            "ConnectTimeout=10",
+                            f"ubuntu@{target}",
+                            f"sudo vtysh -c 'show bgp neighbors {peer_ip}'",
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+                    if neigh_out.returncode != 0 or not neigh_out.stdout:
+                        continue
+                    for line in neigh_out.stdout.splitlines():
+                        match = neighbor_state_re.search(line.strip())
+                        if match:
+                            state = match.group(1).strip()
+                            uptime_token = match.group(2).strip()
+                            if peer_ip not in bgp_states and state:
+                                bgp_states[peer_ip] = state
+                            if peer_ip not in bgp_uptime and uptime_token:
+                                bgp_uptime[peer_ip] = parse_bgp_uptime(uptime_token)
+                            break
+                except Exception:
+                    continue
+        except Exception:
+            pass
 
         # Run swanctl status command (preferred for VICI-based configs)
         try:
@@ -1112,8 +1580,6 @@ def status(
 
             output = result.stdout if result.returncode == 0 else ""
             if output:
-                import re
-
                 tunnel_statuses: dict[str, str] = {}
                 tunnel_uptime: dict[str, str] = {}
                 tunnel_uptime_seconds: dict[str, int] = {}
@@ -1206,7 +1672,10 @@ def status(
                         if not enc_algos:
                             enc_algos = tunnel_ike_encryption.get(tunnel_name) or []
                         encryption_display = ", ".join(enc_algos) if enc_algos else "n/a"
-                        uptime_display = tunnel_uptime.get(tunnel_name, "n/a")
+                        if peer_cfg_ip and peer_cfg_ip in bgp_uptime:
+                            uptime_display = bgp_uptime[peer_cfg_ip]
+                        else:
+                            uptime_display = tunnel_uptime.get(tunnel_name, "n/a")
 
                         table.add_row(
                             tunnel_name,
@@ -1343,6 +1812,9 @@ def status(
                     bgp_status = info.get("bgp", "-")
                     bgp_display = format_bgp_status(bgp_status)
                     carrying_display = format_carrying(tunnel_name, carrying_tunnel)
+
+                    if peer_cfg_ip and peer_cfg_ip in bgp_uptime:
+                        info["uptime"] = bgp_uptime[peer_cfg_ip]
 
                     table.add_row(
                         tunnel_name,
@@ -1845,14 +2317,30 @@ def list_routes_local(
     plan: ResolvedDeploymentPlan = merge_with_peer_configs(local_cfg, [])
 
     proj_id = project_id or (local_cfg.get("project_id") or "").strip() or None
+    tenant_id = (local_cfg.get("tenant_id") or "").strip() or None
+    region_id = (local_cfg.get("region_id") or "").strip() or None
 
     # Get token for API access (required for route management)
     auth_token = _ensure_authentication(required=True, show_progress=True)
 
+    _ensure_gateway_vms_exist(
+        plan,
+        project_id=proj_id,
+        zone=plan.gateway_group.region,
+        auth_token=auth_token,
+        tenant_id=tenant_id,
+        region_id=region_id,
+        action="list local routes",
+    )
+
     routes = RouteManager(project_id=proj_id, auth_token=auth_token)
 
     print("[bold]Listing VPC routes for local prefixes...[/bold]")
-    routes.list_routes(plan, local_cfg)
+    try:
+        routes.list_routes(plan, local_cfg)
+    except Exception as e:
+        print(f"[red]Failed to list routes:[/red] {e}")
+        raise typer.Exit(code=1)
 
 
 @app.command(name="list-routes-remote")
@@ -1887,7 +2375,11 @@ def list_routes_remote(
     routes = RouteManager(project_id=proj_id, auth_token=None)
 
     print("[bold]Querying remote routes from gateway VMs...[/bold]")
-    routes.list_remote_routes(plan, local_cfg, connection_filter=connection)
+    try:
+        routes.list_remote_routes(plan, local_cfg, connection_filter=connection)
+    except Exception as e:
+        print(f"[red]Failed to list remote routes:[/red] {e}")
+        raise typer.Exit(code=1)
 
 
 @app.command()
