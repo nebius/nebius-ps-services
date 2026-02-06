@@ -82,6 +82,7 @@ verify_release_asset() {
 }
 
 TOKEN=""
+TAG_EXISTS_ON_HEAD=0
 
 get_token() {
   if [[ -n "${GH_TOKEN:-}" ]]; then
@@ -257,15 +258,36 @@ retag_cleanup() {
 
 ensure_tag_available() {
   local tag="$1"
+  TAG_EXISTS_ON_HEAD=0
   if git rev-parse --verify --quiet "${tag}" >/dev/null 2>&1; then
     local tag_commit head_commit
     tag_commit="$(git rev-parse "${tag}")"
     head_commit="$(git rev-parse HEAD)"
+    get_token
+    local release_exists=0
+    if gh release view "${tag}" >/dev/null 2>&1; then
+      release_exists=1
+    fi
+
+    if [[ "${tag_commit}" == "${head_commit}" && "${release_exists}" -eq 0 ]]; then
+      echo "==> Tag ${tag} already exists on current HEAD and no GitHub release was found. Reusing tag."
+      TAG_EXISTS_ON_HEAD=1
+      return 0
+    fi
 
     if [[ "${ALLOW_RETAG}" != "1" ]]; then
+      if [[ "${release_exists}" -eq 0 ]]; then
+        echo "WARNING: tag ${tag} exists at ${tag_commit} (current HEAD is ${head_commit}), but no GitHub release was found."
+        echo "This typically means the tag was created during a previous attempt."
+        if ! confirm "Retag ${tag} to current HEAD?"; then
+          exit 1
+        fi
+        retag_cleanup "${tag}"
+        return 0
+      fi
       if [[ "${tag_commit}" == "${head_commit}" ]]; then
-        echo "ERROR: tag ${tag} already exists on current HEAD."
-        echo "This may be a mistake. Use --force-retag to recreate it, or use --verify to check the release asset."
+        echo "ERROR: tag ${tag} already exists on current HEAD and a GitHub release was found."
+        echo "Use --verify to check the release asset, or --force-retag to recreate it."
       else
         echo "ERROR: tag ${tag} exists at ${tag_commit} (current HEAD is ${head_commit})."
         echo "Refusing to retag by default. Use --force-retag to overwrite."
@@ -301,11 +323,14 @@ publish_release() {
     exit 1
   fi
 
-  echo "==> Creating tag ${tag} and pushing..."
-  git tag -a "${tag}" -m "Release ${tag}"
-  git push origin "${tag}"
-
-  get_token
+  if [[ "${TAG_EXISTS_ON_HEAD}" -eq 1 ]]; then
+    echo "==> Tag ${tag} already exists on current HEAD. Pushing tag to origin if needed..."
+    git push origin "${tag}"
+  else
+    echo "==> Creating tag ${tag} and pushing..."
+    git tag -a "${tag}" -m "Release ${tag}"
+    git push origin "${tag}"
+  fi
 
   echo "==> Building wheel from tagged state..."
   RELEASE_EXISTS=0
