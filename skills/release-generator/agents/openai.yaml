@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release Generator"
+  short_description: "Generate and publish GitHub releases"
+  default_prompt: "Use $release-generator to prepare, publish, or verify releases with the bundled release.sh template."
