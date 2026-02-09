@@ -1,0 +1,4 @@
+interface:
+  display_name: "Gitignore"
+  short_description: "Create and standardize .gitignore files"
+  default_prompt: "Use $gitignore to create or update a clean, stack-aware .gitignore for this repository."
