@@ -14,7 +14,7 @@ Shell installer to sync Codex skills into `~/.agents/skills`.
 
 - `bash`
 - `rsync`
-- `git` (required for `--pull` and GitHub sources)
+- `git` (required for GitHub sources)
 
 ## Usage
 
@@ -24,7 +24,9 @@ Shell installer to sync Codex skills into `~/.agents/skills`.
 
 ### Source
 
-- Local directory path (default: script directory).
+- Local directory path (default: script directory). Can be either:
+  - a folder containing multiple skills
+  - a single skill folder (contains `SKILL.md`)
 - GitHub repository URL: `https://github.com/<owner>/<repo>`
 - GitHub nested folder URL: `https://github.com/<owner>/<repo>/tree/<ref>/<subpath>`
 
@@ -34,12 +36,18 @@ Shell installer to sync Codex skills into `~/.agents/skills`.
 
 ### Options
 
-- `--pull`: Run `git pull --ff-only` for a local git source before syncing.
 - `-h`, `--help`: Show help.
 
-### Automatic Behavior
+### VS Code Refresh
 
-- If one or more skills are installed/updated, the script triggers `Developer: Restart Extension Host` automatically (best effort on macOS, non-fatal).
+- The script does not restart VS Code automatically.
+- If newly installed skills are not visible, run `Developer: Restart Extension Host` manually in VS Code.
+
+### Output Styling
+
+- The script uses colored/styled terminal output for status messages.
+- Colors are automatically disabled for non-interactive output.
+- Set `NO_COLOR=1` to force plain output.
 
 ## Examples
 
@@ -48,13 +56,13 @@ Shell installer to sync Codex skills into `~/.agents/skills`.
 ./install-skills.sh
 
 # Install from explicit local source folder
-./install-skills.sh /Users/rezab/test
-
-# Pull latest changes from local git repo then install
-./install-skills.sh --pull /path/to/local/skills-repo
+./install-skills.sh /Users/example/test
 
 # Install from GitHub nested skills folder
 ./install-skills.sh "https://github.com/openai/skills/tree/main/skills"
+
+# Install one specific skill from a nested GitHub path
+./install-skills.sh "https://github.com/openai/skills/tree/main/skills/.curated/openai-docs"
 
 # Install from GitHub nested skills folder to custom destination
 ./install-skills.sh "https://github.com/openai/skills/tree/main/skills" "~/.agents/skills"
@@ -62,7 +70,6 @@ Shell installer to sync Codex skills into `~/.agents/skills`.
 
 ## Notes
 
-- `--pull` only works with local git working trees and fails on dirty/detached state.
 - Existing unmanaged folders in destination are never overwritten.
 - If a skill exists but belongs to another source, it is skipped.
 - A valid skill folder must contain `SKILL.md`.

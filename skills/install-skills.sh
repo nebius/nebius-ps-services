@@ -8,6 +8,7 @@ set -euo pipefail
 #
 # Source options:
 #   - Local directory path (default: script directory)
+#     Can be either a folder containing multiple skills or a single skill folder.
 #   - GitHub URL:
 #       https://github.com/<owner>/<repo>
 #       https://github.com/<owner>/<repo>/tree/<ref>/<subpath>
@@ -16,7 +17,6 @@ set -euo pipefail
 #   ~/.agents/skills
 #
 # Options:
-#   --pull          Refresh local source via git pull --ff-only (local source only)
 #   -h, --help      Show this help
 #
 # Safety/idempotency:
@@ -27,37 +27,74 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_SRC_DIR="${SCRIPT_DIR}"
 
+# Color/style output (auto-disabled for non-interactive terminals or NO_COLOR).
+S_RESET=""
+S_BOLD=""
+S_DIM=""
+S_RED=""
+S_YELLOW=""
+S_GREEN=""
+S_CYAN=""
+
+init_output_style() {
+  if [[ ( -t 1 || -t 2 ) && "${TERM:-}" != "dumb" && -z "${NO_COLOR:-}" ]]; then
+    S_RESET=$'\033[0m'
+    S_BOLD=$'\033[1m'
+    S_DIM=$'\033[2m'
+    S_RED=$'\033[31m'
+    S_YELLOW=$'\033[33m'
+    S_GREEN=$'\033[32m'
+    S_CYAN=$'\033[36m'
+  fi
+}
+
+log_success() {
+  printf '%b\n' "${S_GREEN}${1}${S_RESET}"
+}
+
+log_warn() {
+  printf '%b\n' "${S_YELLOW}${1}${S_RESET}" >&2
+}
+
+log_note() {
+  printf '%b\n' "${S_DIM}${1}${S_RESET}"
+}
+
+log_error() {
+  printf '%b\n' "${S_RED}${S_BOLD}ERROR:${S_RESET}${S_RED} ${1}${S_RESET}" >&2
+}
+
 show_usage() {
-  cat <<'EOF'
-Usage:
-  ./install-skills.sh [options] [source] [destination_dir]
+  printf '%b\n' "${S_BOLD}Usage:${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}[options] [source] [destination_dir]${S_RESET}"
+  printf '\n'
 
-Source:
-  - Local directory path (default: script directory)
-  - GitHub URL:
-      https://github.com/<owner>/<repo>
-      https://github.com/<owner>/<repo>/tree/<ref>/<subpath>
+  printf '%b\n' "${S_BOLD}Source:${S_RESET}"
+  printf '%b\n' "  - Local directory path ${S_DIM}(default: script directory; supports multi-skill or single-skill folder)${S_RESET}"
+  printf '%b\n' "  - GitHub URL:"
+  printf '%b\n' "      ${S_CYAN}https://github.com/<owner>/<repo>${S_RESET}"
+  printf '%b\n' "      ${S_CYAN}https://github.com/<owner>/<repo>/tree/<ref>/<subpath>${S_RESET}"
+  printf '\n'
 
-Destination (default):
-  ~/.agents/skills
+  printf '%b\n' "${S_BOLD}Destination (default):${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}~/.agents/skills${S_RESET}"
+  printf '\n'
 
-Options:
-  --pull          Refresh local source via git pull --ff-only (local source only)
-  -h, --help      Show this help
+  printf '%b\n' "${S_BOLD}Options:${S_RESET}"
+  printf '%b\n' "  ${S_YELLOW}-h, --help${S_RESET}      Show this help"
+  printf '\n'
 
-Examples:
-  ./install-skills.sh
-  ./install-skills.sh /Users/rezab/test
-  ./install-skills.sh --pull /path/to/local/skills-repo
-  ./install-skills.sh "https://github.com/openai/skills/tree/main/skills" "~/.agents/skills"
+  printf '%b\n' "${S_BOLD}Examples:${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./install-skills.sh /Users/example/test${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./install-skills.sh \"https://github.com/openai/skills/tree/main/skills\" \"~/.agents/skills\"${S_RESET}"
+  printf '\n'
 
-Notes:
-  - --pull only works with local git working trees and fails on dirty/detached state.
-  - If skills were installed/updated, extension-host restart is triggered automatically (best effort, non-fatal).
-  - Existing unmanaged folders in destination are never overwritten.
-  - If a skill exists but belongs to another source, it is skipped.
-  - A valid skill folder must contain SKILL.md.
-EOF
+  printf '%b\n' "${S_BOLD}Notes:${S_RESET}"
+  printf '%b\n' "  - If newly installed skills are not visible, restart extension host manually in VS Code ${S_DIM}(Developer: Restart Extension Host)${S_RESET}."
+  printf '%b\n' "  - Existing unmanaged folders in destination are never overwritten."
+  printf '%b\n' "  - If a skill exists but belongs to another source, it is skipped."
+  printf '%b\n' "  - A valid skill folder must contain ${S_CYAN}SKILL.md${S_RESET}."
 }
 
 is_github_source() {
@@ -81,52 +118,6 @@ hash_string() {
   printf '%s' "${value}" | tr '/ :@' '____'
 }
 
-pull_local_source() {
-  local source_dir="$1"
-
-  if ! command -v git >/dev/null 2>&1; then
-    echo "ERROR: git is required for --pull." >&2
-    exit 1
-  fi
-  if ! git -C "${source_dir}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    echo "ERROR: --pull requested but source is not in a git work tree: ${source_dir}" >&2
-    exit 1
-  fi
-  if [[ -n "$(git -C "${source_dir}" status --porcelain)" ]]; then
-    echo "ERROR: --pull refused because source has uncommitted changes: ${source_dir}" >&2
-    echo "Commit/stash changes, or run without --pull." >&2
-    exit 1
-  fi
-  if [[ -z "$(git -C "${source_dir}" symbolic-ref -q HEAD || true)" ]]; then
-    echo "ERROR: --pull refused on detached HEAD in: ${source_dir}" >&2
-    exit 1
-  fi
-
-  echo "Refreshing source via git pull --ff-only: ${source_dir}"
-  git -C "${source_dir}" pull --ff-only
-}
-
-restart_vscode_extension_host_background() {
-  if [[ "$(uname -s)" != "Darwin" ]]; then
-    echo "Skip extension-host restart: supported on macOS only."
-    return 0
-  fi
-  if ! command -v open >/dev/null 2>&1; then
-    echo "Skip extension-host restart: open command not available."
-    return 0
-  fi
-  if ! pgrep -x "Code" >/dev/null 2>&1; then
-    echo "Skip extension-host restart: Visual Studio Code is not running."
-    return 0
-  fi
-
-  (
-    open -g "vscode://command/workbench.action.restartExtensionHost" >/dev/null 2>&1 || true
-  ) >/dev/null 2>&1 &
-
-  echo "Requested VS Code command: Developer: Restart Extension Host."
-}
-
 read_target_owner() {
   local target_dir="$1"
   local marker_new="${target_dir}/.install-source-id"
@@ -148,14 +139,29 @@ read_target_owner() {
   printf '%s' "${owner}"
 }
 
-DO_PULL=0
+extract_meaningful_rsync_changes() {
+  local output="$1"
+
+  # Ignore timestamp-only metadata churn (e.g. .f..t.... / .f..T.... / .d..t....).
+  # Those happen frequently for freshly cloned GitHub sources and do not indicate
+  # content changes.
+  printf '%s\n' "${output}" | awk '
+    NF == 0 { next }
+    {
+      code = $1
+      if (code ~ /^\.[^[:space:]]\.\.[tT]\.+$/) {
+        next
+      }
+      print
+    }
+  '
+}
+
+init_output_style
+
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --pull)
-      DO_PULL=1
-      shift
-      ;;
     -h|--help)
       show_usage
       exit 0
@@ -168,7 +174,7 @@ while [[ $# -gt 0 ]]; do
       done
       ;;
     -*)
-      echo "ERROR: unknown option: $1" >&2
+      log_error "unknown option: $1"
       show_usage >&2
       exit 1
       ;;
@@ -180,7 +186,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "${#POSITIONAL[@]}" -gt 2 ]]; then
-  echo "ERROR: too many positional arguments." >&2
+  log_error "too many positional arguments."
   show_usage >&2
   exit 1
 fi
@@ -189,12 +195,13 @@ SOURCE_SPEC="${POSITIONAL[0]:-${DEFAULT_SRC_DIR}}"
 DEST_DIR="${POSITIONAL[1]:-${HOME}/.agents/skills}"
 
 if ! command -v rsync >/dev/null 2>&1; then
-  echo "ERROR: rsync is required but was not found in PATH." >&2
+  log_error "rsync is required but was not found in PATH."
   exit 1
 fi
 
 TMP_MANIFEST=""
 TMP_CLONE_ROOT=""
+RSYNC_COMPARE_FLAGS=()
 cleanup() {
   rm -f "${TMP_MANIFEST:-}" >/dev/null 2>&1 || true
   if [[ -n "${TMP_CLONE_ROOT}" && -d "${TMP_CLONE_ROOT}" ]]; then
@@ -206,11 +213,7 @@ trap cleanup EXIT
 SOURCE_ID=""
 if is_github_source "${SOURCE_SPEC}"; then
   if ! command -v git >/dev/null 2>&1; then
-    echo "ERROR: git is required to use a remote GitHub source." >&2
-    exit 1
-  fi
-  if [[ "${DO_PULL}" -eq 1 ]]; then
-    echo "ERROR: --pull is only supported for local source directories." >&2
+    log_error "git is required to use a remote GitHub source."
     exit 1
   fi
 
@@ -226,8 +229,8 @@ if is_github_source "${SOURCE_SPEC}"; then
     ref="HEAD"
     subpath="."
   else
-    echo "ERROR: unsupported GitHub source format: ${SOURCE_SPEC}" >&2
-    echo "Use https://github.com/<owner>/<repo> or /tree/<ref>/<subpath>" >&2
+    log_error "unsupported GitHub source format: ${SOURCE_SPEC}"
+    log_warn "Use https://github.com/<owner>/<repo> or /tree/<ref>/<subpath>"
     exit 1
   fi
 
@@ -244,30 +247,28 @@ if is_github_source "${SOURCE_SPEC}"; then
 
   SRC_DIR="${clone_dir}/${subpath}"
   if [[ ! -d "${SRC_DIR}" ]]; then
-    echo "ERROR: source subpath not found in remote repo: ${subpath}" >&2
+    log_error "source subpath not found in remote repo: ${subpath}"
     exit 1
   fi
   SRC_DIR="$(cd "${SRC_DIR}" && pwd -P)"
   SOURCE_ID="github:${owner}/${repo}@${ref}:${subpath}"
+  # Remote sources are freshly cloned each run, so mtime-only checks are noisy.
+  RSYNC_COMPARE_FLAGS+=(--checksum)
 else
   if [[ ! -d "${SOURCE_SPEC}" ]]; then
-    echo "ERROR: source directory does not exist: ${SOURCE_SPEC}" >&2
+    log_error "source directory does not exist: ${SOURCE_SPEC}"
     exit 1
   fi
 
   SRC_DIR="$(cd "${SOURCE_SPEC}" && pwd -P)"
   SOURCE_ID="local:${SRC_DIR}"
-
-  if [[ "${DO_PULL}" -eq 1 ]]; then
-    pull_local_source "${SRC_DIR}"
-  fi
 fi
 
 mkdir -p "${DEST_DIR}"
 DEST_DIR="$(cd "${DEST_DIR}" && pwd -P)"
 
 if [[ "${SRC_DIR}" == "${DEST_DIR}" ]]; then
-  echo "ERROR: source and destination must be different directories." >&2
+  log_error "source and destination must be different directories."
   exit 1
 fi
 
@@ -278,16 +279,29 @@ SOURCE_MANIFEST="${STATE_DIR}/${SOURCE_KEY}.skills"
 TMP_MANIFEST="$(mktemp)"
 
 installed=0
+unchanged=0
 skipped=0
 removed=0
 
-shopt -s nullglob
-for d in "${SRC_DIR}"/*; do
+skill_dirs=()
+if [[ -f "${SRC_DIR}/SKILL.md" ]]; then
+  # Source is a single skill directory.
+  skill_dirs+=("${SRC_DIR}")
+else
+  shopt -s nullglob
+  for d in "${SRC_DIR}"/*; do
+    [[ -d "${d}" ]] || continue
+    skill_dirs+=("${d}")
+  done
+  shopt -u nullglob
+fi
+
+for d in "${skill_dirs[@]}"; do
   [[ -d "${d}" ]] || continue
 
   name="$(basename "${d}")"
   if [[ ! -f "${d}/SKILL.md" ]]; then
-    echo "Skip (no SKILL.md): ${name}"
+    log_note "Skip (no SKILL.md): ${name}"
     skipped=$((skipped + 1))
     continue
   fi
@@ -298,12 +312,12 @@ for d in "${SRC_DIR}"/*; do
     target_owner="$(read_target_owner "${target}")"
     if [[ -n "${target_owner}" ]]; then
       if [[ "${target_owner}" != "${SOURCE_ID}" ]]; then
-        echo "Skip (owned by different source): ${name}"
+        log_note "Skip (owned by different source): ${name}"
         skipped=$((skipped + 1))
         continue
       fi
     else
-      echo "Skip (existing unmanaged directory): ${name}"
+      log_note "Skip (existing unmanaged directory): ${name}"
       skipped=$((skipped + 1))
       continue
     fi
@@ -311,16 +325,38 @@ for d in "${SRC_DIR}"/*; do
 
   mkdir -p "${target}"
 
-  # Keep installed skill folders in sync with source.
-  rsync -a --delete --exclude ".DS_Store" --exclude ".install-source" --exclude ".install-source-id" "${d}/" "${target}/"
-  printf '%s\n' "${SOURCE_ID}" > "${marker}"
-  rm -f "${target}/.install-source"
+  # Keep installed skill folders in sync with source and detect whether anything changed.
+  rsync_output="$(
+    rsync -ai --delete --omit-dir-times "${RSYNC_COMPARE_FLAGS[@]}" --exclude ".DS_Store" --exclude ".install-source" --exclude ".install-source-id" "${d}/" "${target}/"
+  )"
+  meaningful_rsync_output="$(extract_meaningful_rsync_changes "${rsync_output}")"
+
+  marker_updated=0
+  marker_owner=""
+  if [[ -f "${marker}" ]]; then
+    marker_owner="$(cat "${marker}" 2>/dev/null || true)"
+  fi
+  if [[ "${marker_owner}" != "${SOURCE_ID}" ]]; then
+    printf '%s\n' "${SOURCE_ID}" > "${marker}"
+    marker_updated=1
+  fi
+
+  legacy_marker_removed=0
+  if [[ -f "${target}/.install-source" ]]; then
+    rm -f "${target}/.install-source"
+    legacy_marker_removed=1
+  fi
+
   printf '%s\n' "${name}" >> "${TMP_MANIFEST}"
 
-  echo "Installed/updated: ${name} -> ${target}"
-  installed=$((installed + 1))
+  if [[ -n "${meaningful_rsync_output}" || "${marker_updated}" -eq 1 || "${legacy_marker_removed}" -eq 1 ]]; then
+    log_success "Installed/updated: ${name} -> ${target}"
+    installed=$((installed + 1))
+  else
+    log_note "Unchanged: ${name}"
+    unchanged=$((unchanged + 1))
+  fi
 done
-shopt -u nullglob
 
 sort -u "${TMP_MANIFEST}" -o "${TMP_MANIFEST}"
 
@@ -334,7 +370,7 @@ if [[ -f "${SOURCE_MANIFEST}" ]]; then
         old_owner="$(read_target_owner "${old_target}")"
         if [[ "${old_owner}" == "${SOURCE_ID}" ]]; then
           rm -rf "${old_target}"
-          echo "Removed stale skill: ${old_name}"
+          log_success "Removed stale skill: ${old_name}"
           removed=$((removed + 1))
         fi
       fi
@@ -345,12 +381,11 @@ fi
 mkdir -p "${STATE_DIR}"
 cp "${TMP_MANIFEST}" "${SOURCE_MANIFEST}"
 
-echo "Done. Installed/updated: ${installed}, skipped: ${skipped}, removed: ${removed}"
-if [[ "${installed}" -eq 0 ]]; then
-  echo "Warning: no skills were installed from ${SRC_DIR}" >&2
-fi
-if [[ "${installed}" -gt 0 ]]; then
-  restart_vscode_extension_host_background
+log_success "Done. Installed/updated: ${installed}, unchanged: ${unchanged}, skipped: ${skipped}, removed: ${removed}"
+if [[ $((installed + unchanged + removed)) -eq 0 ]]; then
+  log_warn "Warning: no skills were installed from ${SRC_DIR}"
+elif [[ $((installed + removed)) -gt 0 ]]; then
+  log_note "If new skills are not showing up, run 'Developer: Restart Extension Host' in VS Code."
 else
-  echo "If Codex is running, restart it so it reloads skills."
+  log_note "No changes detected."
 fi
