@@ -1,28 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Install Codex skills from a local folder or GitHub source into ~/.agents/skills.
+# Script helper to install Codex skills into ~/.agents/skills.
 #
-# Usage:
-#   ./install-skills.sh [options] [source] [destination_dir]
+# Usage: ./install-skills.sh [options] [source] [destination_dir]
+# Source: local directory (default: script directory) or GitHub URL:
+#   - https://github.com/<owner>/<repo>
+#   - https://github.com/<owner>/<repo>/tree/<ref>/<subpath>
 #
-# Source options:
-#   - Local directory path (default: script directory)
-#     Can be either a folder containing multiple skills or a single skill folder.
-#   - GitHub URL:
-#       https://github.com/<owner>/<repo>
-#       https://github.com/<owner>/<repo>/tree/<ref>/<subpath>
-#
-# Destination (default):
-#   ~/.agents/skills
-#
-# Options:
-#   -h, --help      Show this help
-#
-# Safety/idempotency:
-#   - Re-runs converge to the same state.
-#   - Skills are source-owned via marker files and are not overwritten by other sources.
-#   - Cleanup removes stale skills only for the same source identity.
+# Requirements: bash, rsync, and git (GitHub sources only).
+# How behavior is enforced:
+#   - Skill detection: only directories containing SKILL.md are treated as skills.
+#   - Idempotency: rsync keeps destination in sync (--delete, --omit-dir-times) and
+#     non-meaningful timestamp noise is ignored; reruns converge to "Unchanged".
+#   - Source safety: each installed skill writes .install-source-id; existing folders
+#     owned by another source (or unmanaged) are skipped, never overwritten.
+#   - Scoped cleanup: per-source manifests remove stale skills only when the recorded
+#     owner matches the current SOURCE_ID.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_SRC_DIR="${SCRIPT_DIR}"
@@ -62,6 +56,17 @@ log_note() {
 
 log_error() {
   printf '%b\n' "${S_RED}${S_BOLD}ERROR:${S_RESET}${S_RED} ${1}${S_RESET}" >&2
+}
+
+require_command() {
+  local cmd="$1"
+  local reason="$2"
+
+  if ! command -v "${cmd}" >/dev/null 2>&1; then
+    log_error "'${cmd}' is required ${reason}."
+    log_note "Install '${cmd}' and run again."
+    exit 1
+  fi
 }
 
 show_usage() {
@@ -120,31 +125,20 @@ hash_string() {
 
 read_target_owner() {
   local target_dir="$1"
-  local marker_new="${target_dir}/.install-source-id"
-  local marker_legacy="${target_dir}/.install-source"
-  local owner=""
+  local marker="${target_dir}/.install-source-id"
 
-  if [[ -f "${marker_new}" ]]; then
-    owner="$(cat "${marker_new}")"
-  elif [[ -f "${marker_legacy}" ]]; then
-    owner="$(cat "${marker_legacy}")"
-    # Legacy marker format: absolute local source path from previous script version.
-    if [[ "${owner}" == "${SRC_DIR}" ]]; then
-      owner="${SOURCE_ID}"
-      printf '%s\n' "${owner}" > "${marker_new}"
-      rm -f "${marker_legacy}"
-    fi
+  if [[ -f "${marker}" ]]; then
+    cat "${marker}"
+    return
   fi
 
-  printf '%s' "${owner}"
+  printf ''
 }
 
 extract_meaningful_rsync_changes() {
   local output="$1"
 
-  # Ignore timestamp-only metadata churn (e.g. .f..t.... / .f..T.... / .d..t....).
-  # Those happen frequently for freshly cloned GitHub sources and do not indicate
-  # content changes.
+  # Ignore timestamp-only rsync noise from freshly cloned GitHub sources.
   printf '%s\n' "${output}" | awk '
     NF == 0 { next }
     {
@@ -194,9 +188,9 @@ fi
 SOURCE_SPEC="${POSITIONAL[0]:-${DEFAULT_SRC_DIR}}"
 DEST_DIR="${POSITIONAL[1]:-${HOME}/.agents/skills}"
 
-if ! command -v rsync >/dev/null 2>&1; then
-  log_error "rsync is required but was not found in PATH."
-  exit 1
+require_command "rsync" "for skill synchronization"
+if is_github_source "${SOURCE_SPEC}"; then
+  require_command "git" "for GitHub sources"
 fi
 
 TMP_MANIFEST=""
@@ -212,11 +206,6 @@ trap cleanup EXIT
 
 SOURCE_ID=""
 if is_github_source "${SOURCE_SPEC}"; then
-  if ! command -v git >/dev/null 2>&1; then
-    log_error "git is required to use a remote GitHub source."
-    exit 1
-  fi
-
   source_no_trailing="${SOURCE_SPEC%/}"
   if [[ "${source_no_trailing}" =~ ^https://github\.com/([^/]+)/([^/]+)/tree/([^/]+)/(.+)$ ]]; then
     owner="${BASH_REMATCH[1]}"
@@ -252,7 +241,7 @@ if is_github_source "${SOURCE_SPEC}"; then
   fi
   SRC_DIR="$(cd "${SRC_DIR}" && pwd -P)"
   SOURCE_ID="github:${owner}/${repo}@${ref}:${subpath}"
-  # Remote sources are freshly cloned each run, so mtime-only checks are noisy.
+  # Fresh clones reset mtimes; checksum avoids false-positive updates.
   RSYNC_COMPARE_FLAGS+=(--checksum)
 else
   if [[ ! -d "${SOURCE_SPEC}" ]]; then
@@ -325,9 +314,9 @@ for d in "${skill_dirs[@]}"; do
 
   mkdir -p "${target}"
 
-  # Keep installed skill folders in sync with source and detect whether anything changed.
+  # Sync skill folder and capture whether meaningful changes occurred.
   rsync_output="$(
-    rsync -ai --delete --omit-dir-times "${RSYNC_COMPARE_FLAGS[@]}" --exclude ".DS_Store" --exclude ".install-source" --exclude ".install-source-id" "${d}/" "${target}/"
+    rsync -ai --delete --omit-dir-times "${RSYNC_COMPARE_FLAGS[@]}" --exclude ".DS_Store" --exclude ".install-source-id" "${d}/" "${target}/"
   )"
   meaningful_rsync_output="$(extract_meaningful_rsync_changes "${rsync_output}")"
 
@@ -341,15 +330,9 @@ for d in "${skill_dirs[@]}"; do
     marker_updated=1
   fi
 
-  legacy_marker_removed=0
-  if [[ -f "${target}/.install-source" ]]; then
-    rm -f "${target}/.install-source"
-    legacy_marker_removed=1
-  fi
-
   printf '%s\n' "${name}" >> "${TMP_MANIFEST}"
 
-  if [[ -n "${meaningful_rsync_output}" || "${marker_updated}" -eq 1 || "${legacy_marker_removed}" -eq 1 ]]; then
+  if [[ -n "${meaningful_rsync_output}" || "${marker_updated}" -eq 1 ]]; then
     log_success "Installed/updated: ${name} -> ${target}"
     installed=$((installed + 1))
   else
@@ -360,7 +343,7 @@ done
 
 sort -u "${TMP_MANIFEST}" -o "${TMP_MANIFEST}"
 
-# Remove skills previously installed from this source that no longer exist in source.
+# Remove previously installed skills from this source when they no longer exist.
 if [[ -f "${SOURCE_MANIFEST}" ]]; then
   while IFS= read -r old_name; do
     [[ -n "${old_name}" ]] || continue

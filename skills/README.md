@@ -1,6 +1,6 @@
 # Skills Installer
 
-Shell installer to sync Codex skills into `~/.agents/skills`.
+Script helper to install Codex skills into `~/.agents/skills`.
 
 ## What it does
 
@@ -37,17 +37,6 @@ Shell installer to sync Codex skills into `~/.agents/skills`.
 ### Options
 
 - `-h`, `--help`: Show help.
-
-### VS Code Refresh
-
-- The script does not restart VS Code automatically.
-- If newly installed skills are not visible, run `Developer: Restart Extension Host` manually in VS Code.
-
-### Output Styling
-
-- The script uses colored/styled terminal output for status messages.
-- Colors are automatically disabled for non-interactive output.
-- Set `NO_COLOR=1` to force plain output.
 
 ## Examples
 
