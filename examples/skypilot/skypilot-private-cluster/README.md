@@ -11,17 +11,18 @@ Quick Start Path:
 ```sh
 ./skypilot-install.sh
 source ~/venvs/skypilot-env/bin/activate
-./nebiaus-sa-setup.sh
+# Requires: nebius CLI, jq, aws CLI
+./nebius-sa-setup.sh
 # If prompted, edit ./.env with real TENANT_ID/PROJECT_ID/REGION_ID/JUMP_HOST_IP and re-run
 ```
 
-1) Verify
+2) Verify
 
 ```sh
 sky check nebius
 ```
 
-1) Launch and connect
+3) Launch and connect
 
 ```sh
 sky launch -c mycluster vmtask.yaml
@@ -47,7 +48,7 @@ This example demonstrates how to use a project-scoped SkyPilot configuration (`.
 - Reach those nodes easily through a jump host using `ssh_proxy_command`
 - Keep settings (Region/Project) scoped per project
 - Make SSH key usage explicit and deterministic on the jump host
-- Global AWS profile for Nebius S3: configures `~/.aws` with profiles `nebius` and region-scoped `nebius-<region>` so `sky check nebius` that read `~/.aws` work reliably. The optional bootstrap can mount your global `~/.aws` into the VM.
+- Global AWS profile for Nebius S3: configures `~/.aws` with profiles `nebius` and region-scoped `nebius-<region>` so tools that read `~/.aws` (including `sky check nebius`) work reliably. The optional bootstrap can mount your global `~/.aws` into the VM.
 - Auto-load of `.envrc` on entry to the folder. `.envrc` loads only `.env` for this project.
 - SSH to the cluster using `ssh cluster-name` without worrying about public IPs
 
@@ -69,10 +70,12 @@ This example demonstrates how to use a project-scoped SkyPilot configuration (`.
 - Run the Nebius setup, first run it generates a `.env` file from `.env.placeholder`, and then you are able to enter the values in `.env` :
 
   ```sh
-  ./nebiaus-sa-setup.sh
+  ./nebius-sa-setup.sh
   ```
 
-- So if `.env` has placeholder values (e.g., `tenant-EXAMPLE_ID`, `project-EXAMPLE_ID`), the script exits with an error. Open `./.env`, set real values for `TENANT_ID`, `PROJECT_ID`, `REGION_ID`, and `JUMP_HOST_IP`, then rerun `./nebiaus-sa-setup.sh`.
+- If `.env` still has placeholder values for `TENANT_ID` or `PROJECT_ID` (for example `tenant-EXAMPLE_ID`, `project-EXAMPLE_ID`), the script exits with an error.
+- If `JUMP_HOST_IP` is still a placeholder, the script prints a warning (it does not exit).
+- Open `./.env`, set real values for `TENANT_ID`, `PROJECT_ID`, `REGION_ID`, and `JUMP_HOST_IP`, then rerun `./nebius-sa-setup.sh`.
 
 - Auto-load the `.envrc` when you cd to the folder. The setup script configures direnv and runs `direnv allow` so `.env` loads automatically. If direnv isn't available, you can enable it later; otherwise use the manual fallback below.
 
@@ -92,17 +95,17 @@ This example demonstrates how to use a project-scoped SkyPilot configuration (`.
 
 - Ensure the jump host is reachable at `<JUMP_PUBLIC_IP>` and you can log in with your chosen key:
   - Place your key at `~/.ssh/id_ed25519` (or set the path you use in `.sky.yaml`).
-  - Add the jump host to `~/.ssh/known_hosts` (required because StrictHostKeyChecking=yes). If you have logged in one time to the jumphost from your laptop directly it's added already.
+  - Add the jump host to `~/.ssh/known_hosts` (required because `StrictHostKeyChecking=yes`). If you have logged in at least once directly to the jump host from your laptop, it is likely already added.
 
-1) Make sure you have set your environment variables properly in .env file for the Region/Project and jump host IP address.
+2) Set your environment variables in `./.env` for region/project and jump host IP.
 
-2) Launch a cluster
+3) Launch a cluster
 
 - From this project directory, run your normal SkyPilot workflows (examples):
-  - `sky launch -c cluster7 mytask.yaml`
+  - `sky launch -c cluster7 vmtask.yaml`
   - Reuse clusters with `-c <name>`
 
-1) Connect via SSH
+4) Connect via SSH
 
   `ssh <cluster-name>`
 
@@ -117,10 +120,12 @@ You will connect to the Head node of the cluster.
 - `.env` — Project secrets/config (gitignored, user-specific).
 - `.env.placeholder` — Example env file to copy and fill in.
 - `.envrc` — Loads `.env` on entering the directory if direnv is enabled.
-- `nebiaus-sa-setup.sh` — Script to create Nebius service account, credentials, and configure AWS CLI profiles for Nebius S3 access.
+- `nebius-sa-setup.sh` — Script to create Nebius service account, credentials, and configure AWS CLI profiles for Nebius S3 access.
 - `bootstrap-awscli-only.sky.yaml` — Optional bootstrap to mount your global `~/.aws/*` into the VM and install `awscli`. Use only if your VM workload calls the AWS CLI.
 - `skypilot-install.sh` — Idempotent SkyPilot install script (creates venv, installs SkyPilot).
 - `generate-sky-config.sh` — Renders `.sky.yaml` from `.sky.yaml.template` using envsubst.
+- `vmtask.yaml` — Example SkyPilot VM task for Nebius.
+- `k8s-gpu-task.yaml` — Example SkyPilot Kubernetes GPU smoke task.
 - `.gitignore` — Ensures secrets/configs are not committed (includes `.env`, `.sky.yaml`).
 
 SkyPilot automatically reads `.sky.yaml` when you run `sky` commands inside this folder. It overrides user-global config for this project only, making it easy to manage per-project defaults.
@@ -131,6 +136,6 @@ SkyPilot automatically reads `.sky.yaml` when you run `sky` commands inside this
 
 - If StrictHostKeyChecking blocks you, connect once directly to the jump host to add it to `known_hosts`.
 - SkyPilot auto-generates SSH config under `~/.sky/generated/ssh` when you launch or start clusters. If entries look stale after changes, run a SkyPilot stop/start command to refresh them, then try SSH again.
-- Switching regions: set `REGION_ID` in `.env`, rerun `./nebiaus-sa-setup.sh` to refresh profiles; for VM-side AWS CLI, always pass `--profile`.
+- Switching regions: set `REGION_ID` in `.env`, rerun `./nebius-sa-setup.sh` to refresh profiles; for VM-side AWS CLI, always pass `--profile`.
 - In this setup SkyPilot provisions Nebius instances with internal/private IPs.
 - You connect to them via a proxy (jump host) using `ssh_proxy_command`.
