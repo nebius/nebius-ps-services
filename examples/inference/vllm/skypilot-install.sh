@@ -17,6 +17,7 @@ else
 fi
 
 # Activate the virtual environment
+# shellcheck source=/dev/null
 source "$VENV_DIR/bin/activate"
 
 
