@@ -5,6 +5,7 @@ This project uses the following third-party models and tools. Please review thei
 ---
 
 ## BLOOM-176B
+
 - Model: [bigscience/bloom](https://huggingface.co/bigscience/bloom)
 - License: [BigScience RAIL License 1.0](https://huggingface.co/spaces/bigscience/license)
 - Summary: Open for research and commercial use, with restrictions on unlawful, harmful, or discriminatory uses. Attribution required. See full license for details.
@@ -13,6 +14,7 @@ This project uses the following third-party models and tools. Please review thei
 ---
 
 ## Qwen-72B
+
 - Model: [Qwen/Qwen-72B](https://huggingface.co/Qwen/Qwen-72B)
 - License: [Tongyi Qianwen License](https://huggingface.co/Qwen/Qwen-72B/blob/main/LICENSE)
 - Summary: Open for research and commercial use, but commercial users may need to register or obtain approval. Attribution required. See full license for details.
@@ -21,6 +23,7 @@ This project uses the following third-party models and tools. Please review thei
 ---
 
 ## vLLM
+
 - Tool: [vLLM](https://github.com/vllm-project/vllm)
 - License: [Apache License 2.0](https://github.com/vllm-project/vllm/blob/main/LICENSE)
 - Summary: Open source, high-throughput inference engine for large language models. Commercial and non-commercial use allowed. Attribution required. See full license for details.
@@ -29,6 +32,7 @@ This project uses the following third-party models and tools. Please review thei
 ---
 
 ## SkyPilot
+
 - Tool: [SkyPilot](https://github.com/skypilot-org/skypilot)
 - License: [Apache License 2.0](https://github.com/skypilot-org/skypilot/blob/master/LICENSE)
 - Summary: Open source scheduler for cloud compute. Commercial and non-commercial use allowed. Attribution required. See full license for details.

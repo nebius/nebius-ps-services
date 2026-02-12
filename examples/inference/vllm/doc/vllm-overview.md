@@ -37,7 +37,7 @@ This section provides a step-by-step guide for deploying vLLM as a high-performa
   ```
 - **Set Up Credentials:**
   ```sh
-  ./nebiaus-sa-setup.sh
+  ./nebius-sa-setup.sh
   ```
   This creates a `.env` file for your project. Fill in the required values (see `.template.env` for reference).
 - **Generate SkyPilot Config:**
