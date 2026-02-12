@@ -1,0 +1,4 @@
+interface:
+  display_name: "Linter"
+  short_description: "Lint shell, markdown, and python files"
+  default_prompt: "Use $linter to lint shell scripts, markdown files, and Python files with auto-fix first and minimal config fallback."
