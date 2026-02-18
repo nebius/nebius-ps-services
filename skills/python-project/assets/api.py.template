@@ -1,0 +1,17 @@
+"""ASGI application for {{package_name}}."""
+
+from __future__ import annotations
+
+from fastapi import FastAPI
+
+app = FastAPI(title="{{project_slug}} API", version="0.0.0")
+
+
+@app.get("/healthz")
+def healthz() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/readyz")
+def readyz() -> dict[str, str]:
+    return {"status": "ready"}

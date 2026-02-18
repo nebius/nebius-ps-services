@@ -1,0 +1,75 @@
+[project]
+name = "{{project_slug}}"
+dynamic = ["version"]
+description = "{{short_description}}"
+readme = "README.md"
+authors = [{ name = "{{author_name}}" }]
+requires-python = ">=3.11,<3.14"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+]
+dependencies = [
+  "pydantic>=2.10.0,<3.0.0",
+  "rich>=13.9.0,<15.0.0",
+  "typer>=0.12.0,<1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.0,<9.0.0",
+  "ruff>=0.6.0,<1.0.0",
+  "mypy>=1.11.0,<2.0.0",
+  "build>=1.2.0,<2.0.0",
+  "setuptools-scm>=8.0.0,<9.0.0",
+  "pip-audit>=2.7.0,<3.0.0",
+]
+api = [
+  "fastapi>=0.116.0,<1.0.0",
+  "uvicorn[standard]>=0.30.0,<1.0.0",
+]
+ui = [
+  "streamlit>=1.39.0,<2.0.0",
+]
+ml = [
+  "numpy>=2.1.0,<3.0.0",
+  "pandas>=2.2.0,<3.0.0",
+  "scikit-learn>=1.5.0,<2.0.0",
+]
+
+[project.scripts]
+{{project_slug}} = "{{package_name}}.__main__:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["{{package_name}}*"]
+
+[tool.setuptools.package-data]
+{{package_name}} = ["systemd/*"]
+
+[tool.setuptools_scm]
+version_scheme = "python-simplified-semver"
+local_scheme = "no-local-version"
+write_to = "src/{{package_name}}/_version.py"
+tag_regex = "^{{project_slug}}-v(?P<version>\\d+\\.\\d+\\.\\d+)$"
+fallback_version = "0.0.0"
+search_parent_directories = true
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests"]
+extend-exclude = ["dist", "build", ".venv", "src/{{package_name}}/_version.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+ignore = ["B008", "E501"]
+
+[build-system]
+requires = ["setuptools>=69", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"

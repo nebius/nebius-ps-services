@@ -1,0 +1,27 @@
+"""CLI entrypoints for {{package_name}}."""
+
+from __future__ import annotations
+
+import json
+from typing import Annotated
+
+import typer
+from rich.console import Console
+
+app = typer.Typer(help="{{project_slug}} command line interface")
+console = Console()
+
+
+@app.command()
+def health(
+    output: Annotated[str, typer.Option(help="text or json")] = "text",
+) -> None:
+    payload = {"status": "ok", "service": "{{project_slug}}"}
+    if output == "json":
+        print(json.dumps(payload))
+        return
+    console.print(f"[green]status:[/green] {payload['status']}")
+
+
+def main() -> None:
+    app()
