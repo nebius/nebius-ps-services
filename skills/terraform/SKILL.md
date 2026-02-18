@@ -1,0 +1,154 @@
+---
+name: terraform
+description: Generate and harden Terraform repositories for reusable modules and multi-environment infrastructure deployments. Use when users ask to scaffold, standardize, or improve Terraform project structure, state/backends, environment layout, module interfaces, security controls, validation, CI checks, or Terraform best practices.
+---
+
+# Terraform
+
+Generate production-grade Terraform scaffolding and enforce module and environment best practices.
+
+## Scope and Guardrails
+
+- Treat Terraform as infrastructure/platform IaC only (networking, IAM, compute, managed Kubernetes infrastructure, storage, observability foundations).
+- Do not implement application deployment workflows in Terraform; recommend GitOps or CI/CD for app rollout.
+- Never write real secrets to files or output.
+- Never commit secret-bearing `*.tfvars`.
+- Prefer vendor-documented Terraform language/provider features.
+- Verify behavior against official Terraform documentation before asserting feature support.
+- Do not conflate features across Terraform versions.
+- State Terraform/backend/provider version constraints explicitly when behavior depends on version/capability.
+
+## Workflow
+
+1. Collect missing essentials only; ask concise follow-ups for only what is missing:
+   - Project/module name and short purpose.
+   - Target Terraform version (default: `>= 1.10.0`).
+   - Providers and version constraints.
+   - Remote state choice:
+     - HCP Terraform (`cloud` block) or backend (`s3`, `azurerm`, `gcs`, etc).
+     - State naming scheme (`org`, `project`, `env`, `region`) and environments (default: `dev`, `stage`, `prod`).
+   - Secret handling policy:
+     - Allowed in state for credentials/passwords (default: no), or must be omitted from state/plan where possible.
+2. Generate the repository layout where the repo root is a reusable module and `envs/<env>/` are environment root modules that call it.
+3. Provide output in this exact order:
+   - Directory tree.
+   - Full contents of each created file (one file at a time).
+   - Short "How to use" with exact commands (`init`, `plan`, `apply`) and safe environment/var-file handling.
+   - Notes on security, state, locking, upgrades, and CI hooks.
+
+## Default Layout
+
+Use this structure unless the user requests changes:
+
+```text
+.
+├── README.md
+├── CHANGELOG.md
+├── LICENSE
+├── .gitignore
+├── .pre-commit-config.yaml
+├── Makefile
+├── main.tf
+├── variables.tf
+├── outputs.tf
+├── versions.tf
+├── locals.tf
+├── modules/
+│   └── <component>/
+│       ├── main.tf
+│       ├── variables.tf
+│       ├── outputs.tf
+│       ├── versions.tf
+│       └── README.md
+└── envs/
+    ├── dev/
+    │   ├── main.tf
+    │   ├── versions.tf
+    │   ├── backend.tf
+    │   ├── terraform.tfvars.example
+    │   └── README.md
+    ├── stage/
+    │   └── (same as dev)
+    └── prod/
+        └── (same as dev)
+```
+
+If using HCP Terraform `cloud` blocks, omit per-env `backend.tf`.
+
+## Implementation Standards
+
+1. Module consumability and versioning:
+   - Make root module externally consumable.
+   - Show Git tag source example: `source = "git::<REPO_URL>?ref=vX.Y.Z"`.
+   - Show registry example: `source = "<namespace>/<name>/<provider>"` with `version = "~> X.Y"`.
+   - Include `CHANGELOG.md` and upgrade expectations.
+   - Pin provider versions with sensible constraints.
+   - Instruct committing `terraform.lock.hcl` after `terraform init`.
+2. Terraform language structure:
+   - Include `main.tf`, `variables.tf`, `outputs.tf`, `versions.tf` at root.
+   - `versions.tf` defines `required_version` and `required_providers`.
+   - In `variables.tf`, include `type`, `description`, `nullable` where relevant, and validation for critical inputs (names, CIDRs, regions).
+   - Use defaults only for non-sensitive, non-env-specific values.
+   - In `outputs.tf`, add descriptions and mark sensitive outputs appropriately.
+   - Use `locals.tf` for naming/tag conventions and computed values.
+3. Sensitive data handling:
+   - Use placeholders in examples; no real secrets.
+   - Provide `terraform.tfvars.example` with comments.
+   - Handle features by Terraform version:
+     - Terraform `>= 0.15`: use `sensitive = true` on variables/outputs to redact CLI/HCP UI output only; values still persist in state and plan.
+     - Terraform `>= 1.10`: use `ephemeral = true` on variables and child module outputs, and use `ephemeral` blocks; ephemeral values are omitted from state/plan and have reference restrictions.
+     - Terraform `>= 1.11`: use provider-supported write-only managed resource arguments for secrets that must not persist in plan/state.
+   - Apply this decision logic when secrets must be omitted from state/plan:
+     - If Terraform `>= 1.11` and provider/resource supports write-only arguments, use write-only arguments.
+     - Else if Terraform `>= 1.10`, use ephemeral variables, child module outputs, and ephemeral blocks; document reference limits.
+     - Else, omission is unsupported; fall back to `sensitive = true`, hardened remote state, and secret-manager injection.
+   - `.gitignore` guidance (include and briefly explain intent):
+     - `.terraform/`: local working directory and cached backend/provider data.
+     - `*.tfstate`, `*.tfstate.*`, `*.tfstate.backup`, `.terraform.tfstate.lock.info`: state and lock artifacts that can contain sensitive data.
+     - `*.tfvars`, `*.tfvars.json`, `terraform.tfvars`: local variable files that often contain secrets.
+     - `.terraformrc`, `terraform.rc`: local CLI configuration files.
+     - `*.tfplan`, `plan.out`: plan artifacts that can embed sensitive values.
+4. Remote state and locking:
+   - Default to remote state for team/shared infrastructure.
+   - Do not hardcode backend credentials.
+   - Use partial backend configuration and identity/env credentials.
+   - Note backend limitation: backend blocks cannot use variables/locals.
+   - Explain locking expectations:
+     - `s3`: use S3 native locking where available; DynamoDB locking only for legacy compatibility.
+     - `azurerm`: rely on Azure Blob lease-based native locking.
+   - Document safe lock recovery (`force-unlock` only with confirmed lock ID).
+5. Environment management:
+   - `envs/<env>/` is each environment root.
+   - Each env calls root module with `source = "../.."` for local development.
+   - Also show remote source pinning for real usage (Git tag or registry).
+   - Use unique backend key naming per environment.
+   - Provide secure variable guidance (CI secrets, secret manager, `TF_VAR_*`, or HCP variables).
+   - Do not rely on Terraform workspaces for isolation or secret separation unless explicitly requested; assume single-workspace by default.
+6. Quality gates:
+   - Recommend at minimum:
+     - `terraform fmt -check`
+     - `terraform validate`
+     - `tflint` (if enabled)
+     - `checkov` or `tfsec`
+   - Provide minimal pre-commit and CI setup.
+   - Include `Makefile` targets (`fmt`, `validate`, `lint`, `plan`, `apply`) unless user asks not to.
+
+## Documentation Requirements
+
+`README.md` must include:
+
+- What the module does and does not do.
+- Usage examples for local path, Git tag, and registry.
+- Inputs/outputs summary and optional `terraform-docs` regeneration note.
+- Backend/state expectations and environment workflow.
+
+## Generation Rules
+
+- Use clear placeholders and `TODO` markers where user-specific values are required.
+- Keep naming consistent and predictable.
+- Avoid provider config in child modules unless required; if required, explain why.
+- Split into `modules/<component>/` submodules where reuse/separation improves clarity.
+- Prefer this secret-handling order and state assumptions explicitly: write-only arguments (when available), then ephemeral values, then `sensitive = true` plus hardened remote state and secret manager.
+- Keep output concise and technically precise.
+- Include minimal Terraform snippets only when they materially clarify implementation.
+- Do not guess provider behavior; if provider support cannot be confirmed from official docs, explicitly state that uncertainty.

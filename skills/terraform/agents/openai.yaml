@@ -1,0 +1,4 @@
+interface:
+  display_name: "Terraform"
+  short_description: "Generate secure Terraform scaffolds"
+  default_prompt: "Use $terraform to scaffold a production-grade Terraform module with multi-environment structure, remote state, and security best practices."
