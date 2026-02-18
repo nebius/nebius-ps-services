@@ -1,4 +1,8 @@
-# Skills Installer
+# Skills
+
+This folder contains multiple ready-to-use Codex skills for developers.
+
+## Skills Installer
 
 Script helper to install Codex skills into `~/.agents/skills`.
 
@@ -41,7 +45,7 @@ Script helper to install Codex skills into `~/.agents/skills`.
 ## Examples
 
 ```bash
-# Install from default source (script directory)
+# Install from default source (script directory) to the default destination
 ./install-skills.sh
 
 # Install from explicit local source folder
