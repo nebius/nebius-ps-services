@@ -135,11 +135,11 @@ def create_app(
             except MysteryBoxClientError as exc:
                 logger.warning("mysterybox read failed: %s", exc)
                 REQUEST_COUNTER.labels(endpoint=endpoint, status="502").inc()
-                return jsonify({"error": str(exc)}), 502
-            except Exception as exc:  # pragma: no cover - defensive
+                return jsonify({"error": "mysterybox read failed"}), 502
+            except Exception:  # pragma: no cover - defensive
                 logger.exception("unexpected bridge error")
                 REQUEST_COUNTER.labels(endpoint=endpoint, status="500").inc()
-                return jsonify({"error": f"unexpected error: {exc}"}), 500
+                return jsonify({"error": "unexpected bridge error"}), 500
 
             REQUEST_COUNTER.labels(endpoint=endpoint, status="200").inc()
             return jsonify({"value": value}), 200
