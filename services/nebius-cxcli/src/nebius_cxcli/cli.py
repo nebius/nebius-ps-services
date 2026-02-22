@@ -699,7 +699,10 @@ def _auto_bootstrap_ci_auth_and_secrets(
             token=github_token,
             secrets={FLUX_SECRET_KEY: github_token},
         )
-        console.print(f"Configured missing GitHub secret(s) in {repo_slug}: {', '.join(updated)}")
+        console.print(
+            f"Configured missing GitHub secret(s) in {repo_slug} "
+            f"({len(updated)} secret(s))"
+        )
         return
 
     result = bootstrap_ci_service_account(
@@ -726,7 +729,10 @@ def _auto_bootstrap_ci_auth_and_secrets(
         ci_secrets=ci_secrets,
         include_flux_token=True,
     )
-    console.print(f"Bootstrapped and synced CI auth secrets to {repo_slug}: {', '.join(updated)}")
+    console.print(
+        f"Bootstrapped and synced CI auth secrets to {repo_slug} "
+        f"({len(updated)} secret(s))"
+    )
 
 
 @dataclass(frozen=True)
@@ -1263,13 +1269,6 @@ def auth_bootstrap_command(
             help="Also set FLUX_GITHUB_TOKEN to the GitHub API token used for sync",
         ),
     ] = True,
-    print_secrets: Annotated[
-        bool,
-        typer.Option(
-            "--print-secrets",
-            help="Print secret values to stdout (disabled by default for safer operation)",
-        ),
-    ] = False,
 ) -> None:
     """Create/reuse CI service account and output GitHub secret values."""
     try:
@@ -1334,14 +1333,8 @@ def auth_bootstrap_command(
             )
 
         if json_output:
-            safe_summary = {
-                "status": "ok",
-                "project_id": resolved_project_id,
-                "github_sync": github_sync,
-                "github_synced_repo": synced_repo_slug,
-                "private_key_written": private_key_out is not None,
-            }
-            print(json.dumps(safe_summary, sort_keys=True))
+            # Keep JSON output constant and non-secret-bearing.
+            print(json.dumps({"status": "ok"}, sort_keys=True))
             return
 
         console.print(
@@ -1355,22 +1348,17 @@ def auth_bootstrap_command(
         console.print(f"Authorized key created: {result.auth_public_key_id}")
         console.print(f"Object Storage access key created: {result.s3_access_key_id}")
         if private_key_out is not None:
-            console.print(f"Private key written: {private_key_out.resolve()}")
+            console.print("Private key file written.")
         if github_sync and synced_repo_slug is not None:
             console.print(
-                f"Synced GitHub Actions secrets to {synced_repo_slug}: "
-                f"{', '.join(synced_secret_names)}"
+                f"Synced GitHub Actions secrets to {synced_repo_slug} "
+                f"({len(synced_secret_names)} secret(s))"
             )
 
-        if (not github_sync) or print_secrets:
-            console.print("\nSet these GitHub Actions secrets:")
-            console.print(f"NEBIUS_SA_ID={result.service_account_id}")
-            console.print(f"NEBIUS_AUTH_PUBLIC_KEY_ID={result.auth_public_key_id}")
-            console.print(f"NEBIUS_S3_ACCESS_KEY_ID={result.s3_access_key_id}")
-            console.print(f"NEBIUS_S3_SECRET_ACCESS_KEY={result.s3_secret_access_key}")
-            console.print("NEBIUS_AUTH_PRIVATE_KEY_PEM<<EOF")
-            console.print(result.auth_private_key_pem.rstrip())
-            console.print("EOF")
+        if not github_sync:
+            console.print(
+                "GitHub sync is disabled. Generated secret values are intentionally not printed."
+            )
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 

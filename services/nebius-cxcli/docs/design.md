@@ -511,8 +511,7 @@ Expected secret names:
 Secrets are auto-synced during `create --bootstrap-ci` (required; command fails
 when GitHub token context is missing).
 Use `nebius-cxcli auth bootstrap` for explicit rotation/resync flows.
-If using `auth bootstrap --print-secrets`, run only in trusted operator
-sessions and avoid persisting output in shared logs.
+`auth bootstrap` intentionally never prints raw secret values to stdout.
 
 ## 11. Extensibility model
 

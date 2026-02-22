@@ -880,7 +880,7 @@ def test_list_schema_rejects_all_with_other_filters() -> None:
     assert "Use only one of --required, --optional, or --all" in result.output
 
 
-def test_auth_bootstrap_renders_secret_contract(monkeypatch) -> None:
+def test_auth_bootstrap_no_github_sync_does_not_print_secret_values(monkeypatch) -> None:
     expected = CIBootstrapResult(
         project_id="project-456",
         service_account_name="nebius-cxcli-ci",
@@ -912,11 +912,11 @@ def test_auth_bootstrap_renders_secret_contract(monkeypatch) -> None:
     assert result.exit_code == 0, result.output
     assert "Service account: serviceaccount-123 (created)" in result.output
     assert "Roles granted: roles/editor" in result.output
-    assert "NEBIUS_SA_ID=serviceaccount-123" in result.output
-    assert "NEBIUS_AUTH_PUBLIC_KEY_ID=publickey-123" in result.output
-    assert "NEBIUS_S3_ACCESS_KEY_ID=AKIAXAMPLE" in result.output
-    assert "NEBIUS_S3_SECRET_ACCESS_KEY=secret-value" in result.output
-    assert "NEBIUS_AUTH_PRIVATE_KEY_PEM<<EOF" in result.output
+    assert "GitHub sync is disabled. Generated secret values are intentionally not printed." in (
+        result.output
+    )
+    assert "NEBIUS_S3_SECRET_ACCESS_KEY=secret-value" not in result.output
+    assert "NEBIUS_AUTH_PRIVATE_KEY_PEM<<EOF" not in result.output
 
 
 def test_auth_bootstrap_can_use_instance_config_for_project_id(tmp_path: Path, monkeypatch) -> None:
@@ -967,10 +967,7 @@ def test_auth_bootstrap_can_use_instance_config_for_project_id(tmp_path: Path, m
     )
     assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)
-    assert payload["status"] == "ok"
-    assert payload["project_id"] == "project-from-config"
-    assert "github_secret_keys" not in payload
-    assert "github_secrets" not in payload
+    assert payload == {"status": "ok"}
     assert captured["project_id"] == "project-from-config"
 
 

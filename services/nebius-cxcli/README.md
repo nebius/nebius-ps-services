@@ -381,8 +381,8 @@ nebius-cxcli auth bootstrap --project-id project-456
 # Same bootstrap, but infer project_id from an existing instance config.
 nebius-cxcli auth bootstrap --instance-config "$CFG"
 
-# Print secrets to stdout instead of syncing to GitHub.
-nebius-cxcli auth bootstrap --project-id project-456 --no-github-sync --print-secrets
+# Disable GitHub sync (no secret values are printed to stdout).
+nebius-cxcli auth bootstrap --project-id project-456 --no-github-sync
 
 # Optional: overwrite existing config for this target.
 nebius-cxcli create /path/to/customer-repo/deployments-root \
@@ -510,6 +510,5 @@ pre-commit install
 - `create --bootstrap-ci` auto-syncs these secrets and fails if GH token/repo
   context is missing.
 - Use `auth bootstrap` for explicit rotation or to resync manually.
-- If using `--print-secrets`, run only in trusted shells and avoid persisting
-  stdout in shared logs.
+- `auth bootstrap` intentionally never prints raw secret values to stdout.
 - `generated/` files are machine-generated and should not contain raw credentials.
