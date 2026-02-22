@@ -64,7 +64,7 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
 
               - uses: actions/setup-python@v5
                 with:
-                  python-version: "3.11"
+                  python-version: "3.12"
 
               - name: Install nebius-cxcli
                 run: |
@@ -89,7 +89,7 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
 
               - uses: actions/setup-python@v5
                 with:
-                  python-version: "3.11"
+                  python-version: "3.12"
 
               - name: Install nebius-cxcli
                 run: |
@@ -140,7 +140,7 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
 
               - uses: actions/setup-python@v5
                 with:
-                  python-version: "3.11"
+                  python-version: "3.12"
 
               - name: Install nebius-cxcli
                 run: |

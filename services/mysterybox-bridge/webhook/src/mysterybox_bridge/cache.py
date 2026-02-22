@@ -2,13 +2,9 @@ from __future__ import annotations
 
 import time
 from threading import Lock
-from typing import Generic, TypeVar
-
-K = TypeVar("K")
-V = TypeVar("V")
 
 
-class TTLCache(Generic[K, V]):
+class TTLCache[K, V]:
     """Small thread-safe in-memory TTL cache."""
 
     def __init__(self) -> None:

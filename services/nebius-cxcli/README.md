@@ -287,6 +287,8 @@ CSI supports two modes:
 
 ## Install (CLI via pipx wheel)
 
+Python requirement: `3.12+`.
+
 ```bash
 brew install pipx
 pipx ensurepath

@@ -4,6 +4,8 @@
 MysteryBox values into Kubernetes `Secret` objects through
 [External Secrets Operator (ESO)](https://external-secrets.io/latest/).
 
+Python requirement: `3.12+`.
+
 ## Usage Modes
 
 1. Standalone in any Kubernetes project that uses ESO.

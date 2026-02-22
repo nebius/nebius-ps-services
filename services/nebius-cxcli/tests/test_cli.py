@@ -592,7 +592,8 @@ def test_create_keep_client_info_can_infer_target_path_from_config_file(tmp_path
     )
     assert reused.exit_code == 0, reused.output
     assert "Deployments root:" in reused.output
-    assert str(deployments_root.name) in reused.output
+    normalized_output = "".join(reused.output.splitlines())
+    assert str(deployments_root.name) in normalized_output
 
 
 def test_create_interactive_creates_instance(tmp_path: Path) -> None:
