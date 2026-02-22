@@ -1333,23 +1333,17 @@ def auth_bootstrap_command(
                 include_flux_token=github_set_flux_token,
             )
 
-        output = {
-            "project_id": result.project_id,
-            "service_account_name": result.service_account_name,
-            "service_account_id": result.service_account_id,
-            "service_account_created": result.service_account_created,
-            "roles_created": result.roles_created,
-            "roles_already_present": result.roles_already_present,
-            "github_secret_keys": sorted(NEBIUS_CI_SECRET_KEYS),
-            "github_sync": github_sync,
-            "github_synced_repo": synced_repo_slug,
-            "github_synced_secret_names": synced_secret_names,
-        }
-        if private_key_out is not None:
-            output["private_key_out"] = str(private_key_out.resolve())
-
         if json_output:
-            print(json.dumps(output, sort_keys=True))
+            safe_summary = {
+                "status": "ok",
+                "project_id": resolved_project_id,
+                "github_secret_keys": sorted(NEBIUS_CI_SECRET_KEYS),
+                "github_sync": github_sync,
+                "github_synced_repo": synced_repo_slug,
+                "github_synced_secret_count": len(synced_secret_names),
+                "private_key_written": private_key_out is not None,
+            }
+            print(json.dumps(safe_summary, sort_keys=True))
             return
 
         console.print(
