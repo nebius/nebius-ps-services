@@ -1337,10 +1337,8 @@ def auth_bootstrap_command(
             safe_summary = {
                 "status": "ok",
                 "project_id": resolved_project_id,
-                "github_secret_keys": sorted(NEBIUS_CI_SECRET_KEYS),
                 "github_sync": github_sync,
                 "github_synced_repo": synced_repo_slug,
-                "github_synced_secret_count": len(synced_secret_names),
                 "private_key_written": private_key_out is not None,
             }
             print(json.dumps(safe_summary, sort_keys=True))
