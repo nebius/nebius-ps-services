@@ -213,7 +213,7 @@ gateway_group:
     disk_block_bytes: 4096
     num_nics: 1
     ssh_public_key_path: "~/.ssh/id_ed25519.pub"
-  
+
 gateway:
   local_asn: 64512
   local_prefixes:
@@ -251,7 +251,7 @@ defaults:
         transmit_interval_ms: 300
         receive_interval_ms: 300
         detect_multiplier: 3
-    
+
 connections:
   - name: gcp-ha-vpn
     vendor: gcp
@@ -803,12 +803,12 @@ connections:
 defaults:
   routing:
     mode: bgp
-    
+
 gateway:
   local_asn: 64512
   local_prefixes:
     - "10.0.0.0/16"
-    
+
 connections:
   - name: peer
     vendor: generic
@@ -848,7 +848,7 @@ connections:
 defaults:
   routing:
     mode: static
-    
+
 connections:
   - name: peer
     vendor: generic

@@ -32,11 +32,11 @@ import errno
 import fcntl
 import json
 import os
+import shutil
 import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-import shutil
 from typing import Any
 
 import yaml
@@ -302,7 +302,7 @@ class TunnelHealthMonitor:
                     text=True,
                     timeout=5,
                 )
-                
+
                 if result.returncode != 0:
                     is_healthy = False
                     failure_reasons.append(
@@ -735,9 +735,7 @@ def main() -> None:
                     print(f"[TunnelMonitor] 📝 Loaded config from: {args.config}")
                     print(f"[TunnelMonitor]    check_interval: {config_check_interval}s")
                     print(f"[TunnelMonitor]    proactive_refresh: {config_proactive}")
-                    print(
-                        f"[TunnelMonitor]    max_failures_before_restart: {config_max_failures}"
-                    )
+                    print(f"[TunnelMonitor]    max_failures_before_restart: {config_max_failures}")
                     print(f"[TunnelMonitor]    ping_enabled: {config_ping_enabled}")
                     if config_proactive:
                         print(f"[TunnelMonitor]    refresh_hours: {config_refresh_hours}h")
@@ -759,15 +757,11 @@ def main() -> None:
             lock_file.flush()
         except OSError as e:
             if e.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
-                print(
-                    "[TunnelMonitor] Another health monitor instance is already running; exiting"
-                )
+                print("[TunnelMonitor] Another health monitor instance is already running; exiting")
             elif e.errno in (errno.EACCES, errno.EPERM, errno.EROFS):
                 print(f"[TunnelMonitor] Lock path not writable: {LOCK_PATH} ({e})")
             elif e.errno == errno.ENOENT:
-                print(
-                    f"[TunnelMonitor] Lock directory missing: {LOCK_PATH.parent} ({e})"
-                )
+                print(f"[TunnelMonitor] Lock directory missing: {LOCK_PATH.parent} ({e})")
             else:
                 print(f"[TunnelMonitor] Failed to initialize lock file: {e}")
             return

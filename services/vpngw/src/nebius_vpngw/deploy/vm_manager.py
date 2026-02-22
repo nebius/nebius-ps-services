@@ -2265,7 +2265,9 @@ class VMManager:
                 if desired_ip and desired_ip in allocations_by_ip:
                     alloc_obj = allocations_by_ip.get(desired_ip)
                     state = _allocation_state(alloc_obj)
-                    if state and any(token in state.lower() for token in ("delet", "releas", "pending")):
+                    if state and any(
+                        token in state.lower() for token in ("delet", "releas", "pending")
+                    ):
                         print(
                             f"[VMManager] Allocation {desired_ip} appears to be releasing ({state}). "
                             "Waiting up to 10s before retry..."

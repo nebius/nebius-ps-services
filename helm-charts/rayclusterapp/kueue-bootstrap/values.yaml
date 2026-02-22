@@ -54,6 +54,6 @@ clusterQueues:
               - name: cpu
                 nominalQuota: "16000"
               - name: memory
-                nominalQuota: "64Gi"  
+                nominalQuota: "64Gi"
               - name: nvidia.com/gpu
-                nominalQuota: "0"                              
+                nominalQuota: "0"

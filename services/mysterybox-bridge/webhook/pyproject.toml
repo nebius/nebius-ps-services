@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=69", "setuptools-scm>=8", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mysterybox-bridge-webhook"
+dynamic = ["version"]
+description = "ESO webhook bridge for Nebius MysteryBox"
+readme = "README.md"
+requires-python = ">=3.12,<3.15"
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+  "Flask>=3.0,<4.0",
+  "gunicorn>=22.0,<24.0",
+  "prometheus-client>=0.20,<1.0",
+  "nebius>=0.3,<0.4",
+]
+
+[project.optional-dependencies]
+dev = [
+  "build>=1.2,<2",
+  "pytest>=8.2,<9",
+  "ruff>=0.6,<1",
+]
+
+[project.scripts]
+mysterybox-bridge-webhook = "mysterybox_bridge.__main__:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["mysterybox_bridge*"]
+
+[tool.setuptools_scm]
+version_scheme = "python-simplified-semver"
+local_scheme = "no-local-version"
+write_to = "src/mysterybox_bridge/_version.py"
+tag_regex = "^mysterybox-bridge-v(?P<version>\\d+\\.\\d+\\.\\d+)$"
+git_describe_command = "git describe --dirty --tags --long --match mysterybox-bridge-v*"
+fallback_version = "0.1.0"
+search_parent_directories = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+extend-exclude = ["dist", "build", ".venv", "src/mysterybox_bridge/_version.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]

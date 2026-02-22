@@ -2,6 +2,16 @@
 
 This folder contains multiple ready-to-use Codex skills for developers.
 
+## Included Skills
+
+- `gitignore`
+- `helmchart`
+- `linter`
+- `python-project`
+- `release-generator`
+- `shell-scripting`
+- `terraform`
+
 ## Skills Installer
 
 Script helper to install Codex skills into `~/.agents/skills`.

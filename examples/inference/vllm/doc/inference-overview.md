@@ -54,8 +54,8 @@ Different models use different methods for positional encoding, such as ALiBi (u
 
 0. **Model and Weights Loading:** Before inference begins, the model architecture and its learned weights are loaded from disk (or remote storage) into CPU/GPU memory. This step happens once, before any prompts are processed. Basically the model should be loaded and all the layers state ready to receive the input tokens (in fact embeddings).
 1. **Input Preparation:** You provide a prompt (text or chat history) to the model.
-2. **Tokenization:** The model uses its tokenizer to split your text into tokens (words, subwords, or special symbols), and maps each token to a unique token ID (an integer) using the tokenizer and vocab files from the model artifacts. 
-3. **Embedding Lookup:** Each token ID is used to look up a learned embedding vector from the model's `embedding matrix` that is saved as the model artifacts as well. These vectors represent the tokens in a way the neural network can process them in the neurons. 
+2. **Tokenization:** The model uses its tokenizer to split your text into tokens (words, subwords, or special symbols), and maps each token to a unique token ID (an integer) using the tokenizer and vocab files from the model artifacts.
+3. **Embedding Lookup:** Each token ID is used to look up a learned embedding vector from the model's `embedding matrix` that is saved as the model artifacts as well. These vectors represent the tokens in a way the neural network can process them in the neurons.
 4. **Prefill Phase:** The "Prefill Phase" is when the model processes your input tokens which are already converted to embeddings through its layers (using the already-loaded weights) to set up its internal state for generation of output tokens. If the model is using KV cache (which normally they should use), then during the Prefill phase, the model processes the prompt and fills the KV cache with key/value tensors for all input tokens.
 5. **Decoding Phase:** The model generates output tokens one by one. For each step, it uses the current context to predict the next token. The current context is saved in a cache called KV cache. In the Decoding phase, the model uses the cached keys and values to efficiently generate each new output token, avoiding recomputation for the entire prompt.
 6. **Sampling:** At each decoding step, the model assigns probability scores to possible next tokens. It uses sampling parameters (like `temperature`, `top_k`, `top_p`) to select one token from the most likely candidates. This controls how creative or focused the output is.
@@ -117,7 +117,7 @@ Suppose we have:
 1. **Tokenization:**
   - The prompt "how are you?" is split into tokens: ["how", "are", "you", "?"]
   - Each token is mapped to a token ID (an integer) in this phase.
-  
+
 2. **Input Layer:**
   - In the Input layer (embedding layer), each token ID is used to look up its embedding vector (e.g., [0.1, 0.2, 0.3, 0.4]) from the embedding matrix.
   - The output of the Input layer is the embedding vectors for each token, these are the numeric representations ready for deeper layers. They are not activations; activations are produced by hidden layers after further processing.

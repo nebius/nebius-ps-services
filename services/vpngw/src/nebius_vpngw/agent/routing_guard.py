@@ -483,26 +483,28 @@ def _collect_remote_prefixes(
 def ensure_local_prefix_routes(cfg: dict[str, Any], interface: str = "eth0") -> int:
     """CRITICAL: Adding kernel routes for local_prefixes that represent SOURCE subnets
     breaks packet forwarding from workload VMs!
-    
+
     When a packet from 10.49.0.47 arrives at the gateway destined for 10.10.0.2:
     1. Gateway must FORWARD it to the VPN tunnel (xfrm0)
     2. Route "10.49.0.0/16 via 169.254.169.1 dev eth0" makes the gateway route packets
        FROM the workload subnet BACK to the VPC gateway instead of forwarding to VPN
     3. This breaks all connectivity
-    
+
     Solution: Use FRR's "no bgp network import-check" instead to allow advertising without
     kernel routes. This is configured in frr_renderer.py.
-    
+
     Args:
         cfg: Gateway configuration (unused)
         interface: Interface (unused)
-    
+
     Returns:
         Always 0 (no routes added)
     """
-    print("[RoutingGuard] Skipping local_prefix routes (would break packet forwarding from workload VMs)")
+    print(
+        "[RoutingGuard] Skipping local_prefix routes (would break packet forwarding from workload VMs)"
+    )
     return 0
-    
+
     local_prefixes = cfg.get("gateway", {}).get("local_prefixes", [])
     if not local_prefixes:
         return 0

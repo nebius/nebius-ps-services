@@ -44,7 +44,7 @@ Before using this project, ensure you have the following prerequisites set up:
 
     - This script creates the Nebius service account credentials and configures
       global AWS profiles for Nebius Object Storage.
-3. **Generate sky.yaml**  
+3. **Generate sky.yaml**
     - Generate Sky config: `./generate-sky-config.sh` (it renders `.sky.yaml`
       from `template.sky.yaml`).
     - Edit `template.sky.yaml` and re-run the script when you need to change

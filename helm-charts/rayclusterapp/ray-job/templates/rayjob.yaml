@@ -6,7 +6,7 @@ metadata:
     app: {{ include "rayjob.name" . }}
     {{- if .Values.kueue.enabled }}
     kueue.x-k8s.io/queue-name: {{ .Values.kueue.localQueueName | quote }}
-    {{- end }}  
+    {{- end }}
 spec:
   entrypoint: {{ .Values.entrypoint | quote }}
   runtimeEnvYAML: |
@@ -39,7 +39,7 @@ spec:
             resources:
               {{- toYaml .Values.head.resources | nindent 14 }}
             securityContext:
-              {{- toYaml .Values.head.securityContext | nindent 14 }}  
+              {{- toYaml .Values.head.securityContext | nindent 14 }}
           affinity:
             {{- toYaml .Values.head.affinity | nindent 12 }}
 
@@ -58,7 +58,7 @@ spec:
             resources:
               {{- toYaml .Values.worker.resources | nindent 14 }}
             securityContext:
-              {{- toYaml .Values.worker.securityContext | nindent 14 }}  
+              {{- toYaml .Values.worker.securityContext | nindent 14 }}
           affinity:
             {{- toYaml .Values.worker.affinity | nindent 12 }}
 {{- else }}

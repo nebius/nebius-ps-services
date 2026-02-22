@@ -79,7 +79,7 @@ class FRRRenderer:
         CRITICAL: Adding routes for local_prefixes that represent the source subnets
         (workload VMs) breaks packet forwarding! The gateway receives packets FROM these
         subnets and must forward them to the VPN tunnel, not route them back.
-        
+
         Solution: Disable import-check in BGP configuration and skip adding these routes.
         This allows BGP to advertise local_prefixes without breaking packet forwarding.
 
@@ -89,7 +89,9 @@ class FRRRenderer:
         # DO NOT add routes for local_prefixes as they break packet forwarding
         # from the workload subnets. BGP will be configured with 'no bgp network import-check'
         # to allow advertising these prefixes without requiring kernel routes.
-        print("[FRR] Skipping local_prefix routes (would break packet forwarding from workload VMs)")
+        print(
+            "[FRR] Skipping local_prefix routes (would break packet forwarding from workload VMs)"
+        )
         return
 
     def render_and_apply(self, cfg: dict[str, Any]) -> None:
@@ -343,10 +345,12 @@ class FRRRenderer:
                     # Inbound: Set local-preference for THIS router's path preference
                     local_pref = 200 if ha_role == "active" else 100
                     lines.append(f"  neighbor {remote_ip} route-map SET-LOCAL-PREF-{local_pref} in")
-                    
+
                     # Outbound: Apply combined route-map (prefix filter + MED)
                     if outbound_prefix_list_needed:
-                        route_map_name = "ADVERTISE-ACTIVE" if ha_role == "active" else "ADVERTISE-PASSIVE"
+                        route_map_name = (
+                            "ADVERTISE-ACTIVE" if ha_role == "active" else "ADVERTISE-PASSIVE"
+                        )
                         lines.append(f"  neighbor {remote_ip} route-map {route_map_name} out")
 
         # Apply inbound prefix-list filters to neighbors (if configured)

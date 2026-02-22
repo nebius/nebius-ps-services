@@ -1,0 +1,16 @@
+# Python cache and virtualenv
+__pycache__/
+*.py[cod]
+.venv/
+
+# Local tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Tests and docs are not required at runtime
+tests/
+
+# VCS metadata
+.git/
+.gitignore

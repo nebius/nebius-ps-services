@@ -281,7 +281,9 @@ def create_projects(
         None,
         help="Comma-separated project names (positional).",
     ),
-    projects_arg: str | None = typer.Option(None, "--projects", help="Comma-separated project names."),
+    projects_arg: str | None = typer.Option(
+        None, "--projects", help="Comma-separated project names."
+    ),
     tenant_id: str | None = typer.Option(None, "--tenant-id", "--tenant_id", help="Tenant ID."),
     region_id: str | None = typer.Option(
         None,
@@ -409,7 +411,9 @@ def configure_sso(
         help="Force authentication at the IdP.",
     ),
     cert_file: Path | None = typer.Option(None, "--cert-file", help="Federation certificate file."),
-    cert_description: str | None = typer.Option(None, "--cert-description", help="Certificate note."),
+    cert_description: str | None = typer.Option(
+        None, "--cert-description", help="Certificate note."
+    ),
 ) -> None:
     """Configure SSO federation for a tenant via CLI flags."""
     app_ctx = ctx.obj

@@ -15,5 +15,3 @@ Then, include the image in the document as follows:
 ![Simple Neural Network](../image/simple_nn.png)
 ![Simple Neural Network](../image/kv_attention_example.png)
 ```
-
-

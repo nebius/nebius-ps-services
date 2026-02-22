@@ -1,0 +1,86 @@
+# Optional component. Not required for the default nebius-cxcli flow.
+enabled: false
+
+global:
+  partOf: mysterybox-bridge
+  labels: {}
+  annotations: {}
+  imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  # Keep this image separate from webhook image in production.
+  repository: quay.io/nebius/mysterybox-jwt-minter
+  tag: "0.1.0"
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+serviceAccount:
+  create: true
+  name: ""
+  # This job needs API access to create/update Secrets.
+  automountServiceAccountToken: true
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+tmpDir:
+  enabled: true
+  mountPath: /tmp
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+
+# Secret containing service-account private key and IDs used for JWT signing.
+sourceSecret:
+  name: nebius-mysterybox-auth
+  optional: false
+
+# Secret written by minter (consumed by webhook/ESO pattern if needed).
+outputSecret:
+  name: mysterybox-jwt
+  key: token
+  # Empty means release namespace.
+  namespace: ""
+
+schedule: "*/10 * * * *"
+concurrencyPolicy: Forbid
+startingDeadlineSeconds: 120
+successfulJobsHistoryLimit: 1
+failedJobsHistoryLimit: 3
+
+job:
+  backoffLimit: 1
+  activeDeadlineSeconds: 120
+  ttlSecondsAfterFinished: 3600
+
+token:
+  ttlSeconds: 600
+  refreshBeforeSeconds: 60
+  clockSkewSeconds: 30
+
+extraEnv: []
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

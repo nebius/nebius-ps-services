@@ -1,0 +1,190 @@
+name: nebius-cxcli-release
+
+on:
+  workflow_run:
+    workflows: ["nebius-cxcli-ci"]
+    types: [completed]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nebius-cxcli-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/nebius-cxcli
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Resolve release version and tag
+        id: version
+        run: |
+          set -euo pipefail
+          VERSION="$(python - <<'PY'
+          import pathlib
+          import re
+
+          changelog = pathlib.Path("CHANGELOG.md")
+          for line in changelog.read_text(encoding="utf-8").splitlines():
+              match = re.match(r"^##\s+\[?([0-9]+\.[0-9]+\.[0-9]+)\]?(?:\s+-.*)?$", line.strip())
+              if match:
+                  print(match.group(1))
+                  break
+          else:
+              raise SystemExit("No release version heading found in CHANGELOG.md")
+          PY
+          )"
+          TAG="nebius-cxcli-v${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Check tag and release state
+        id: state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.version.outputs.tag }}"
+
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "tag_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "release_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "release_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
+
+      - name: Create and push tag
+        if: steps.state.outputs.tag_exists == 'false'
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.version.outputs.tag }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG}" -m "Release ${TAG}" "${GITHUB_SHA}"
+          git push origin "refs/tags/${TAG}"
+
+      - name: Checkout release tag
+        if: steps.state.outputs.release_exists == 'false'
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.version.outputs.tag }}"
+          git fetch --force --tags origin
+          git checkout --detach "${TAG}"
+
+      - name: Build wheel
+        if: steps.state.outputs.release_exists == 'false'
+        run: |
+          set -euo pipefail
+          rm -rf dist
+          python -m build --wheel
+
+      - name: Resolve and verify wheel
+        if: steps.state.outputs.release_exists == 'false'
+        id: wheel
+        run: |
+          set -euo pipefail
+          WHEEL="$(ls dist/*.whl | head -n 1)"
+          if [[ -z "${WHEEL}" ]]; then
+            echo "No wheel found in dist/"
+            exit 1
+          fi
+
+          WHEEL_VERSION="$(python - "$WHEEL" <<'PY'
+          import sys
+          import zipfile
+          from email import message_from_bytes
+
+          wheel = sys.argv[1]
+          with zipfile.ZipFile(wheel) as zf:
+              metadata_names = [n for n in zf.namelist() if n.endswith("METADATA")]
+              if not metadata_names:
+                  raise SystemExit("No METADATA found in wheel")
+              metadata = message_from_bytes(zf.read(metadata_names[0]))
+              print(metadata.get("Version", ""))
+          PY
+          )"
+
+          if [[ "${WHEEL_VERSION}" != "${{ steps.version.outputs.version }}" ]]; then
+            echo "Wheel version (${WHEEL_VERSION}) does not match release version (${{ steps.version.outputs.version }})"
+            exit 1
+          fi
+
+          echo "path=${WHEEL}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release notes
+        if: steps.state.outputs.release_exists == 'false'
+        id: notes
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          python - "${VERSION}" <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          version = sys.argv[1]
+          changelog = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8").splitlines()
+          heading = re.compile(rf"^##\s+\[?{re.escape(version)}\]?(?:\s+-.*)?$")
+          any_heading = re.compile(r"^##\s+")
+
+          capture = False
+          notes = []
+          for line in changelog:
+              stripped = line.strip()
+              if not capture and heading.match(stripped):
+                  capture = True
+                  continue
+              if capture and any_heading.match(stripped):
+                  break
+              if capture:
+                  notes.append(line)
+
+          notes_text = "\n".join(notes).strip()
+          if not notes_text:
+              notes_text = f"Release nebius-cxcli-v{version}"
+
+          pathlib.Path("release-notes.md").write_text(notes_text + "\n", encoding="utf-8")
+          PY
+          echo "path=release-notes.md" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release and upload wheel
+        if: steps.state.outputs.release_exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "${{ steps.version.outputs.tag }}" "${{ steps.wheel.outputs.path }}" \
+            --title "${{ steps.version.outputs.tag }}" \
+            --notes-file "${{ steps.notes.outputs.path }}"
+
+      - name: Release already exists
+        if: steps.state.outputs.release_exists == 'true'
+        run: |
+          echo "Release ${{ steps.version.outputs.tag }} already exists. Skipping."

@@ -78,8 +78,7 @@ def parse_quota_file_spec(data: dict[str, Any]) -> QuotaSpec:
         raise ConfigError("Quota file version must be an integer >= 1")
     if version != QUOTA_SCHEMA_VERSION:
         raise ConfigError(
-            f"Unsupported quota file version: {version}. "
-            f"Expected version {QUOTA_SCHEMA_VERSION}."
+            f"Unsupported quota file version: {version}. Expected version {QUOTA_SCHEMA_VERSION}."
         )
     tenant_id = data.get("tenant_id")
     if not tenant_id or not isinstance(tenant_id, str):
@@ -155,9 +154,7 @@ def parse_quota_entries(
                 f"{context} quota '{name}' requires a region (set 'region' or use region key)"
             )
         if default_region and item.get("region") and item["region"] != default_region:
-            raise ConfigError(
-                f"{context} quota '{name}' region must match '{default_region}'"
-            )
+            raise ConfigError(f"{context} quota '{name}' region must match '{default_region}'")
         if require_region and not item.get("region"):
             raise ConfigError(f"{context} quota '{name}' requires a region")
         quotas.append(QuotaEntry(name=name, limit=limit, region=region))
@@ -226,7 +223,9 @@ def _parse_limit_string(raw: str) -> int:
         return _decimal_to_int(number)
     unit_key = unit.upper()
     if unit_key not in _UNIT_MULTIPLIERS:
-        raise ConfigError(f"Unsupported quota unit '{unit}'. Use KiB/MiB/GiB/TiB/PiB or plain numbers.")
+        raise ConfigError(
+            f"Unsupported quota unit '{unit}'. Use KiB/MiB/GiB/TiB/PiB or plain numbers."
+        )
     return _decimal_to_int(number * _UNIT_MULTIPLIERS[unit_key])
 
 

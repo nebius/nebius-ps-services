@@ -629,7 +629,7 @@ When both tunnels have equal BGP preference, the kernel uses ECMP load balancing
    ```text
    route-map SET-LOCAL-PREF-200 permit 10
     set local-preference 200
-   
+
    route-map SET-LOCAL-PREF-100 permit 10
     set local-preference 100
    ```
@@ -673,7 +673,7 @@ connections:
 **Benefits:**
 
 - ✅ **No workload VM changes required** (rp_filter stays at default)
-- ✅ **Works with any OS** (Linux, Windows, RHEL, Ubuntu)  
+- ✅ **Works with any OS** (Linux, Windows, RHEL, Ubuntu)
 - ✅ **Fast failover** (BGP detects failure and switches routes)
 - ✅ **Scalable** (handles `iperf3 -P 100` without packet loss)
 - ✅ **Production-proven** (same design as AWS VGW, Azure VPN Gateway, Cisco/Juniper)
@@ -740,7 +740,7 @@ The Nebius VPN Gateway uses **both** local-preference and MED to enforce Active/
    ```text
    route-map SET-LOCAL-PREF-200 permit 10
     set local-preference 200  # Prefer routes learned from active tunnel
-   
+
    route-map SET-LOCAL-PREF-100 permit 10
     set local-preference 100  # Deprioritize routes learned from passive tunnel
 
@@ -781,9 +781,9 @@ bestRoutes:
 - destRange: 10.49.0.0/16
   nextHopIp: 169.254.18.226  # Active tunnel
   priority: 0                 # MED=0 from Nebius
-  
+
 - destRange: 10.49.0.0/16
-  nextHopIp: 169.254.5.154    # Passive tunnel  
+  nextHopIp: 169.254.5.154    # Passive tunnel
   priority: 100               # MED=100 from Nebius
 ```
 
@@ -824,7 +824,7 @@ gcloud compute routers get-status ROUTER_NAME --region=REGION --project=PROJECT_
 # - destRange: 10.49.0.0/16
 #   nextHopIp: 169.254.18.226  # Active tunnel
 #   priority: 0                 # Best route (MED=0)
-#   
+#
 # - destRange: 10.49.0.0/16
 #   nextHopIp: 169.254.5.154    # Passive tunnel
 #   priority: 100               # Backup (MED=100)

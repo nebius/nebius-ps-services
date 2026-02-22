@@ -1,0 +1,15 @@
+{{- if .Values.enabled }}
+jwt-minter scaffold installed.
+
+Cron schedule:
+  {{ .Values.schedule }}
+
+Target output Secret:
+  {{ default .Release.Namespace .Values.outputSecret.namespace }}/{{ .Values.outputSecret.name }} (key: {{ .Values.outputSecret.key }})
+
+Reminder:
+  This chart provides secure scaffolding only. Implement the actual JWT mint
+  and Secret update logic in the container command or image entrypoint.
+{{- else }}
+jwt-minter is disabled (enabled=false).
+{{- end }}

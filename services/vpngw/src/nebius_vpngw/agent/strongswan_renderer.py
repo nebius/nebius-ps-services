@@ -332,7 +332,7 @@ network:
                 swanctl_lines.append(f"  ike-psk-{idx} {{")
                 swanctl_lines.append(f"    id-1 = {secret['local_id']}")
                 swanctl_lines.append(f"    id-2 = {secret['remote_id']}")
-                swanctl_lines.append(f"    secret = \"{secret['secret']}\"")
+                swanctl_lines.append(f'    secret = "{secret["secret"]}"')
                 swanctl_lines.append("  }")
             swanctl_lines.append("}")
 

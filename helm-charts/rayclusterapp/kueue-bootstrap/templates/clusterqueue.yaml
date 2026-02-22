@@ -5,7 +5,7 @@ metadata:
   name: {{ .name }}
 spec:
   cohort: {{ .cohort }}
-  namespaceSelector: 
+  namespaceSelector:
 {{ toYaml .namespaceSelector | indent 4 }}
   resourceGroups:
     {{- range .resourceGroups }}
@@ -25,4 +25,3 @@ spec:
     {{- end }}
 ---
 {{- end }}
-

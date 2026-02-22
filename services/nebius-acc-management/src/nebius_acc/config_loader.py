@@ -52,8 +52,7 @@ def validate_config_data(data: dict[str, Any], path: Path | None = None) -> None
         raise ConfigError("Config version must be an integer >= 1")
     if version != CONFIG_SCHEMA_VERSION:
         raise ConfigError(
-            f"Unsupported config version: {version}. "
-            f"Expected version {CONFIG_SCHEMA_VERSION}."
+            f"Unsupported config version: {version}. Expected version {CONFIG_SCHEMA_VERSION}."
         )
 
 

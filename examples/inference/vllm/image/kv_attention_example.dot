@@ -178,7 +178,7 @@ digraph KVAttention {
       <TR><TD BGCOLOR="#f0e0fa">Argmax</TD><TD>Pick output token</TD></TR>
       <TR><TD BGCOLOR="#f0fff0">Detokenize</TD><TD>Convert to text</TD></TR>
       <TR><TD BGCOLOR="#c2ffc2">Output Token</TD><TD>"I", "am"</TD></TR>
-      
+
     </TABLE>
   >, shape=plaintext, width=6, height=2.5, fontsize=40, fontname="Arial"]
 

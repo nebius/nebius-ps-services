@@ -209,16 +209,27 @@ class XFRMManager:
 
     def _add_permanent_neighbor(self, name: str, remote_ip: str) -> None:
         """Add permanent neighbor entry for NOARP interfaces.
-        
+
         XFRM interfaces are NOARP (link/none) and don't support ARP protocol.
         Without static neighbor entries, the kernel tries ARP resolution which
         times out (~6-10 seconds), causing initial packet loss.
-        
+
         We use a null MAC address (00:00:00:00:00:00) since XFRM interfaces
         don't have real link-layer addresses - they operate at layer 3.
         """
         result = subprocess.run(
-            ["ip", "neigh", "add", remote_ip, "dev", name, "lladdr", "00:00:00:00:00:00", "nud", "permanent"],
+            [
+                "ip",
+                "neigh",
+                "add",
+                remote_ip,
+                "dev",
+                name,
+                "lladdr",
+                "00:00:00:00:00:00",
+                "nud",
+                "permanent",
+            ],
             capture_output=True,
             text=True,
             check=False,
@@ -228,7 +239,18 @@ class XFRMManager:
         elif "File exists" in result.stderr:
             # Neighbor already exists, try to replace it instead
             result = subprocess.run(
-                ["ip", "neigh", "replace", remote_ip, "dev", name, "lladdr", "00:00:00:00:00:00", "nud", "permanent"],
+                [
+                    "ip",
+                    "neigh",
+                    "replace",
+                    remote_ip,
+                    "dev",
+                    name,
+                    "lladdr",
+                    "00:00:00:00:00:00",
+                    "nud",
+                    "permanent",
+                ],
                 capture_output=True,
                 text=True,
                 check=False,
@@ -236,7 +258,9 @@ class XFRMManager:
             if result.returncode == 0:
                 print(f"[XFRM] ✓ Replaced neighbor {remote_ip} on {name}")
             else:
-                print(f"[XFRM] WARNING: Failed to replace neighbor {remote_ip} on {name}: {result.stderr}")
+                print(
+                    f"[XFRM] WARNING: Failed to replace neighbor {remote_ip} on {name}: {result.stderr}"
+                )
         else:
             print(f"[XFRM] WARNING: Failed to add neighbor {remote_ip} on {name}: {result.stderr}")
 
