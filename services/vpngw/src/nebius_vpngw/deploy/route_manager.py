@@ -203,9 +203,12 @@ class RouteManager:
         )
 
         # Get routing mode and connections
-        defaults_mode = self._normalize_value(
-            (local_cfg.get("defaults", {}).get("routing", {}) or {}).get("mode")
-        ) or "bgp"
+        defaults_mode = (
+            self._normalize_value(
+                (local_cfg.get("defaults", {}).get("routing", {}) or {}).get("mode")
+            )
+            or "bgp"
+        )
         connections = local_cfg.get("connections", [])
 
         # Check if BGP is enabled for any connection

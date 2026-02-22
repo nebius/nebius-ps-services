@@ -1,0 +1,52 @@
+name: mysterybox-bridge-charts-ci
+
+on:
+  pull_request:
+    paths:
+      - "services/mysterybox-bridge/charts/**"
+      - ".github/workflows/mysterybox-bridge-charts-ci.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mysterybox-bridge-charts-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ct-lint:
+    name: chart-testing-lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.15.4
+
+      - name: Set up chart-testing
+        uses: helm/chart-testing-action@v2.7.0
+
+      - name: Run ct lint
+        run: |
+          ct lint --config services/mysterybox-bridge/charts/ct.yaml --target-branch "${{ github.base_ref }}"
+
+  golden:
+    name: golden-template-tests
+    runs-on: ubuntu-latest
+    needs: [ct-lint]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.15.4
+
+      - name: Verify golden manifests
+        run: python3 services/mysterybox-bridge/charts/tests/golden_test.py

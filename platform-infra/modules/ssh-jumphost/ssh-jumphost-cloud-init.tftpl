@@ -1,0 +1,146 @@
+#cloud-config
+users:
+  - name: ${ssh_user_name}
+    gecos: SSH Jump Host User
+    groups: [sudo]
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+      - ${ssh_public_key}
+
+package_update: true
+package_upgrade: true
+packages:
+  - openssh-server
+  - ufw
+  - fail2ban
+  - unattended-upgrades
+  - auditd
+  - ca-certificates
+  - curl
+
+write_files:
+  - path: /etc/bastion_allowed_cidrs
+    owner: root:root
+    permissions: "0644"
+    content: |
+      # One CIDR per line to allow SSH (port 22) from those sources.
+      %{ for cidr in allowed_cidrs ~}
+      ${cidr}
+      %{ endfor ~}
+
+  - path: /etc/ssh/sshd_config.d/50-bastion.conf
+    owner: root:root
+    permissions: "0644"
+    content: |
+      Port 22
+      AddressFamily any
+      ListenAddress 0.0.0.0
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      ChallengeResponseAuthentication no
+      PubkeyAuthentication yes
+      AuthenticationMethods publickey
+      PermitEmptyPasswords no
+      UsePAM yes
+      X11Forwarding no
+      AllowAgentForwarding no
+      AllowTcpForwarding yes
+      GatewayPorts no
+      PermitTunnel no
+      PermitUserEnvironment no
+      MaxAuthTries 3
+      LoginGraceTime 30
+      ClientAliveInterval 300
+      ClientAliveCountMax 2
+      MaxStartups 10:30:60
+      LogLevel VERBOSE
+      AcceptEnv LANG LC_*
+
+  - path: /etc/fail2ban/jail.d/sshd.conf
+    owner: root:root
+    permissions: "0644"
+    content: |
+      [sshd]
+      enabled = true
+      port = ssh
+      backend = systemd
+      maxretry = 3
+      findtime = 600
+      bantime = 3600
+      banaction = ufw
+
+  - path: /etc/audit/rules.d/50-bastion.rules
+    owner: root:root
+    permissions: "0640"
+    content: |
+      -w /etc/ssh/ -p wa -k ssh_config
+      -w /etc/sudoers -p wa -k sudoers
+      -w /etc/sudoers.d/ -p wa -k sudoers
+      -w /etc/passwd -p wa -k identity
+      -w /etc/shadow -p wa -k identity
+      -w /etc/group -p wa -k identity
+      -w /etc/gshadow -p wa -k identity
+
+  - path: /etc/apt/apt.conf.d/50unattended-upgrades
+    owner: root:root
+    permissions: "0644"
+    content: |
+      Unattended-Upgrade::Allowed-Origins {
+          "$${distro_id}:$${distro_codename}-security";
+      };
+      Unattended-Upgrade::Automatic-Reboot "false";
+      Unattended-Upgrade::Automatic-Reboot-Time "02:00";
+
+  - path: /etc/sudoers.d/90-${ssh_user_name}
+    owner: root:root
+    permissions: "0440"
+    content: |
+      ${ssh_user_name} ALL=(ALL) NOPASSWD:ALL
+
+  - path: /usr/local/bin/setup-bastion.sh
+    owner: root:root
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      export PATH="/usr/sbin:/usr/bin:/sbin:/bin"
+      ALLOWED_CIDR_FILE=/etc/bastion_allowed_cidrs
+      if [ ! -f "$ALLOWED_CIDR_FILE" ]; then
+        echo "Missing $ALLOWED_CIDR_FILE; refusing to open SSH access." >&2
+        exit 1
+      fi
+      mapfile -t ALLOWED_CIDRS < <(awk '!/^[[:space:]]*(#|$)/ {print}' "$ALLOWED_CIDR_FILE")
+      if [ "$${#ALLOWED_CIDRS[@]}" -eq 0 ]; then
+        echo "No SSH source CIDRs configured; set allowed_cidrs and re-apply." >&2
+        exit 1
+      fi
+
+      ufw --force reset
+      ufw default deny incoming
+      ufw default allow outgoing
+      ufw logging on
+      ufw allow from 127.0.0.1 to any port 22 proto tcp
+      for cidr in "$${ALLOWED_CIDRS[@]}"; do
+        ufw allow from "$cidr" to any port 22 proto tcp
+      done
+      ufw --force enable
+
+      if grep -qE '^[[:space:]]*Subsystem[[:space:]]+sftp[[:space:]]+' /etc/ssh/sshd_config; then
+        sed -i -E 's#^[[:space:]]*Subsystem[[:space:]]+sftp[[:space:]]+.*#Subsystem sftp internal-sftp#' /etc/ssh/sshd_config
+      else
+        printf '\nSubsystem sftp internal-sftp\n' >> /etc/ssh/sshd_config
+      fi
+
+      sshd -t
+      augenrules --load
+      systemctl daemon-reload
+      systemctl enable --now auditd
+      systemctl enable --now fail2ban
+      systemctl enable --now ssh
+      systemctl reload ssh
+
+runcmd:
+  - [ bash, -lc, "/usr/local/bin/setup-bastion.sh > /var/log/bastion-setup.log 2>&1" ]

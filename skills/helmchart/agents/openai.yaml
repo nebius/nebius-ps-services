@@ -1,0 +1,4 @@
+interface:
+  display_name: "Helm Chart"
+  short_description: "Apply Helm chart best practices and validate templates"
+  default_prompt: "Use $helmchart to harden Helm charts, enforce structure/metadata/security best practices, and validate templates with lint/render checks."

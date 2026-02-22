@@ -98,7 +98,7 @@ Actions:
   ```
   kubectl port-forward pod/mda-notebook 8889:8889
   ```
-- Jupyter Lab becomes available at:  
+- Jupyter Lab becomes available at:
   **http://localhost:8889/lab/tree/project/run_from_pod.ipynb**
 
 Inside Jupyter, start the Dask cluster from the notebook.
@@ -120,7 +120,7 @@ Actions:
   ```
   kubectl port-forward <scheduler-pod> 8787:8787
   ```
-- Dask dashboard becomes available at:  
+- Dask dashboard becomes available at:
   **http://localhost:8787**
 
 ---

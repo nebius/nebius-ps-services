@@ -1,0 +1,379 @@
+"""Nebius IAM bootstrap helpers for CI service-account authentication."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+
+@dataclass(frozen=True)
+class CIBootstrapResult:
+    """Result values needed to configure CI secrets."""
+
+    project_id: str
+    service_account_name: str
+    service_account_id: str
+    service_account_created: bool
+    roles_created: list[str]
+    roles_already_present: list[str]
+    auth_public_key_id: str
+    auth_private_key_pem: str
+    s3_access_key_id: str
+    s3_secret_access_key: str
+
+
+def _is_not_found_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "not found" in message or "statuscode.not_found" in message
+
+
+def _is_already_exists_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "already exists" in message or "statuscode.already_exists" in message
+
+
+def _init_sdk(
+    *,
+    profile: str | None,
+    endpoint: str | None,
+    config_file: Path | None,
+):
+    try:
+        from nebius.aio.cli_config import Config
+        from nebius.sdk import SDK
+    except Exception as exc:  # pragma: no cover - import guard
+        raise RuntimeError(
+            'Nebius SDK is required for auth bootstrap. Install dependencies with `pip install -e ".[dev]"`.'
+        ) from exc
+
+    config_kwargs: dict[str, object] = {}
+    if profile:
+        config_kwargs["profile"] = profile
+    if endpoint:
+        config_kwargs["endpoint"] = endpoint
+    if config_file is not None:
+        config_kwargs["config_file"] = config_file
+
+    try:
+        cfg = Config(**config_kwargs)
+        return SDK(config_reader=cfg)
+    except Exception as exc:  # pragma: no cover - runtime integration
+        raise RuntimeError(
+            "Failed to initialize Nebius SDK credentials. "
+            "Set NEBIUS_IAM_TOKEN (short-lived) or configure ~/.nebius/config.yaml with `nebius auth login`."
+        ) from exc
+
+
+def _account_ref(service_account_id: str):
+    from nebius.api.nebius.iam.v1 import Account
+
+    return Account(service_account=Account.ServiceAccount(id=service_account_id))
+
+
+def _ensure_service_account(
+    *,
+    service_accounts,
+    project_id: str,
+    service_account_name: str,
+    service_account_description: str,
+) -> tuple[str, bool]:
+    from nebius.api.nebius.common.v1 import ResourceMetadata
+    from nebius.api.nebius.iam.v1 import (
+        CreateServiceAccountRequest,
+        GetServiceAccountByNameRequest,
+        ServiceAccountSpec,
+    )
+
+    try:
+        existing = service_accounts.get_by_name(
+            GetServiceAccountByNameRequest(parent_id=project_id, name=service_account_name)
+        ).wait()
+        existing_id = getattr(getattr(existing, "metadata", None), "id", "")
+        if existing_id:
+            return existing_id, False
+    except Exception as exc:
+        if not _is_not_found_error(exc):
+            raise RuntimeError(
+                f"Failed to fetch service account '{service_account_name}': {exc}"
+            ) from exc
+
+    try:
+        operation = service_accounts.create(
+            CreateServiceAccountRequest(
+                metadata=ResourceMetadata(parent_id=project_id, name=service_account_name),
+                spec=ServiceAccountSpec(description=service_account_description),
+            )
+        ).wait()
+    except Exception as exc:
+        if _is_already_exists_error(exc):
+            existing = service_accounts.get_by_name(
+                GetServiceAccountByNameRequest(parent_id=project_id, name=service_account_name)
+            ).wait()
+            existing_id = getattr(getattr(existing, "metadata", None), "id", "")
+            if existing_id:
+                return existing_id, False
+        raise RuntimeError(
+            f"Failed to create service account '{service_account_name}': {exc}"
+        ) from exc
+
+    service_account_id = getattr(operation, "resource_id", "")
+    if service_account_id:
+        return service_account_id, True
+
+    existing = service_accounts.get_by_name(
+        GetServiceAccountByNameRequest(parent_id=project_id, name=service_account_name)
+    ).wait()
+    existing_id = getattr(getattr(existing, "metadata", None), "id", "")
+    if existing_id:
+        return existing_id, True
+
+    raise RuntimeError(
+        f"Service account '{service_account_name}' was created but its ID could not be resolved"
+    )
+
+
+def _ensure_project_role_permits(
+    *,
+    access_permits,
+    service_account_id: str,
+    project_id: str,
+    role_ids: list[str],
+) -> tuple[list[str], list[str]]:
+    from nebius.api.nebius.common.v1 import ResourceMetadata
+    from nebius.api.nebius.iam.v1 import (
+        AccessPermitSpec,
+        CreateAccessPermitRequest,
+        ListAccessPermitRequest,
+    )
+
+    existing_roles: set[str] = set()
+    page_token: str | None = None
+    while True:
+        response = access_permits.list(
+            ListAccessPermitRequest(parent_id=service_account_id, page_token=page_token)
+        ).wait()
+        for item in list(getattr(response, "items", [])):
+            spec = getattr(item, "spec", None)
+            if spec is None:
+                continue
+            if getattr(spec, "resource_id", "") == project_id:
+                role = getattr(spec, "role", "")
+                if role:
+                    existing_roles.add(role)
+        page_token = getattr(response, "next_page_token", "") or None
+        if not page_token:
+            break
+
+    created: list[str] = []
+    already_present: list[str] = []
+    for role_id in role_ids:
+        if role_id in existing_roles:
+            already_present.append(role_id)
+            continue
+        try:
+            access_permits.create(
+                CreateAccessPermitRequest(
+                    metadata=ResourceMetadata(parent_id=service_account_id),
+                    spec=AccessPermitSpec(resource_id=project_id, role=role_id),
+                )
+            ).wait()
+            created.append(role_id)
+        except Exception as exc:
+            if _is_already_exists_error(exc):
+                already_present.append(role_id)
+                continue
+            raise RuntimeError(
+                f"Failed to grant role '{role_id}' to service account '{service_account_id}': {exc}"
+            ) from exc
+
+    return created, already_present
+
+
+def _generate_rsa_key_pair_pem() -> tuple[str, str]:
+    try:
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+    except Exception as exc:  # pragma: no cover - runtime integration
+        raise RuntimeError(
+            "cryptography package is required to generate authorized key pairs for IAM bootstrap"
+        ) from exc
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=4096)
+    private_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("utf-8")
+    public_ssh = (
+        private_key.public_key()
+        .public_bytes(
+            encoding=serialization.Encoding.OpenSSH,
+            format=serialization.PublicFormat.OpenSSH,
+        )
+        .decode("utf-8")
+    )
+    return private_pem, public_ssh
+
+
+def _create_auth_public_key(
+    *,
+    auth_keys,
+    project_id: str,
+    service_account_id: str,
+    description: str,
+) -> tuple[str, str]:
+    from nebius.api.nebius.common.v1 import ResourceMetadata
+    from nebius.api.nebius.iam.v1 import AuthPublicKeySpec, CreateAuthPublicKeyRequest
+
+    private_pem, public_ssh = _generate_rsa_key_pair_pem()
+    try:
+        operation = auth_keys.create(
+            CreateAuthPublicKeyRequest(
+                metadata=ResourceMetadata(parent_id=project_id),
+                spec=AuthPublicKeySpec(
+                    account=_account_ref(service_account_id),
+                    description=description,
+                    data=public_ssh,
+                ),
+            )
+        ).wait()
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to create auth public key for service account '{service_account_id}': {exc}"
+        ) from exc
+
+    auth_public_key_id = getattr(operation, "resource_id", "")
+    if not auth_public_key_id:
+        raise RuntimeError("Auth public key was created but key ID could not be resolved")
+
+    return auth_public_key_id, private_pem
+
+
+def _create_object_storage_access_key(
+    *,
+    access_keys,
+    project_id: str,
+    service_account_id: str,
+    description: str,
+) -> tuple[str, str]:
+    from nebius.api.nebius.common.v1 import ResourceMetadata
+    from nebius.api.nebius.iam.v2 import (
+        AccessKeySpec,
+        CreateAccessKeyRequest,
+        GetAccessKeyRequest,
+        GetAccessKeySecretRequest,
+    )
+
+    try:
+        operation = access_keys.create(
+            CreateAccessKeyRequest(
+                metadata=ResourceMetadata(parent_id=project_id),
+                spec=AccessKeySpec(
+                    account=_account_ref(service_account_id), description=description
+                ),
+            )
+        ).wait()
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to create access key for service account '{service_account_id}': {exc}"
+        ) from exc
+
+    access_key_id = getattr(operation, "resource_id", "")
+    if not access_key_id:
+        raise RuntimeError("Access key was created but key ID could not be resolved")
+
+    try:
+        secret_response = access_keys.get_secret(GetAccessKeySecretRequest(id=access_key_id)).wait()
+    except Exception as exc:
+        raise RuntimeError(
+            "Access key was created but retrieving secret failed. "
+            "Create a new access key and capture its secret immediately."
+        ) from exc
+
+    aws_access_key_id = getattr(secret_response, "aws_access_key_id", "")
+    s3_secret_access_key = getattr(secret_response, "secret", "")
+
+    if not aws_access_key_id:
+        # Fallback for SDK variants where aws_access_key_id is absent on GetAccessKeySecret response.
+        key = access_keys.get(GetAccessKeyRequest(id=access_key_id)).wait()
+        aws_access_key_id = getattr(getattr(key, "status", None), "aws_access_key_id", "")
+
+    if not aws_access_key_id or not s3_secret_access_key:
+        raise RuntimeError(
+            "Access key secret response did not include expected values (aws_access_key_id/secret)"
+        )
+
+    return aws_access_key_id, s3_secret_access_key
+
+
+def bootstrap_ci_service_account(
+    *,
+    project_id: str,
+    service_account_name: str,
+    service_account_description: str,
+    role_ids: list[str],
+    auth_key_description: str,
+    access_key_description: str,
+    profile: str | None,
+    endpoint: str | None,
+    config_file: Path | None,
+) -> CIBootstrapResult:
+    """Ensure SA + role grants and create auth/access keys for CI usage."""
+
+    if not role_ids:
+        raise ValueError("role_ids must not be empty")
+
+    sdk = _init_sdk(profile=profile, endpoint=endpoint, config_file=config_file)
+
+    from nebius.api.nebius.iam.v1 import (
+        AccessPermitServiceClient,
+        AuthPublicKeyServiceClient,
+        ServiceAccountServiceClient,
+    )
+    from nebius.api.nebius.iam.v2 import AccessKeyServiceClient
+
+    service_accounts = ServiceAccountServiceClient(sdk)
+    access_permits = AccessPermitServiceClient(sdk)
+    auth_keys = AuthPublicKeyServiceClient(sdk)
+    access_keys = AccessKeyServiceClient(sdk)
+
+    service_account_id, service_account_created = _ensure_service_account(
+        service_accounts=service_accounts,
+        project_id=project_id,
+        service_account_name=service_account_name,
+        service_account_description=service_account_description,
+    )
+
+    roles_created, roles_already_present = _ensure_project_role_permits(
+        access_permits=access_permits,
+        service_account_id=service_account_id,
+        project_id=project_id,
+        role_ids=role_ids,
+    )
+
+    auth_public_key_id, auth_private_key_pem = _create_auth_public_key(
+        auth_keys=auth_keys,
+        project_id=project_id,
+        service_account_id=service_account_id,
+        description=auth_key_description,
+    )
+
+    s3_access_key_id, s3_secret_access_key = _create_object_storage_access_key(
+        access_keys=access_keys,
+        project_id=project_id,
+        service_account_id=service_account_id,
+        description=access_key_description,
+    )
+
+    return CIBootstrapResult(
+        project_id=project_id,
+        service_account_name=service_account_name,
+        service_account_id=service_account_id,
+        service_account_created=service_account_created,
+        roles_created=roles_created,
+        roles_already_present=roles_already_present,
+        auth_public_key_id=auth_public_key_id,
+        auth_private_key_pem=auth_private_key_pem,
+        s3_access_key_id=s3_access_key_id,
+        s3_secret_access_key=s3_secret_access_key,
+    )

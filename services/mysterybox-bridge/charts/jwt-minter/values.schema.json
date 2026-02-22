@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "enabled": { "type": "boolean" },
+    "image": {
+      "type": "object",
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string" },
+        "digest": { "type": "string" },
+        "pullPolicy": {
+          "type": "string",
+          "enum": ["Always", "IfNotPresent", "Never"]
+        }
+      },
+      "required": ["repository", "pullPolicy"]
+    },
+    "schedule": { "type": "string", "minLength": 1 },
+    "sourceSecret": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "optional": { "type": "boolean" }
+      },
+      "required": ["optional"]
+    },
+    "outputSecret": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "key": { "type": "string", "minLength": 1 },
+        "namespace": { "type": "string" }
+      },
+      "required": ["name", "key"]
+    },
+    "job": {
+      "type": "object",
+      "properties": {
+        "backoffLimit": { "type": "integer", "minimum": 0 },
+        "activeDeadlineSeconds": { "type": "integer", "minimum": 1 },
+        "ttlSecondsAfterFinished": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "token": {
+      "type": "object",
+      "properties": {
+        "ttlSeconds": { "type": "integer", "minimum": 1 },
+        "refreshBeforeSeconds": { "type": "integer", "minimum": 0 },
+        "clockSkewSeconds": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["ttlSeconds", "refreshBeforeSeconds", "clockSkewSeconds"]
+    }
+  }
+}

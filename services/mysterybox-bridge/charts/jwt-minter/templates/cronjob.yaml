@@ -1,0 +1,126 @@
+{{- if and .Values.enabled .Values.outputSecret.namespace (ne .Values.outputSecret.namespace .Release.Namespace) }}
+{{- fail "outputSecret.namespace must match release namespace for this namespaced Role/RoleBinding scaffold" }}
+{{- end }}
+{{- if and .Values.enabled (not .Values.sourceSecret.optional) (not .Values.sourceSecret.name) }}
+{{- fail "sourceSecret.name is required when sourceSecret.optional=false" }}
+{{- end }}
+{{- if and .Values.enabled (not .Values.outputSecret.name) }}
+{{- fail "outputSecret.name is required when enabled=true" }}
+{{- end }}
+{{- if and .Values.enabled (not .Values.outputSecret.key) }}
+{{- fail "outputSecret.key is required when enabled=true" }}
+{{- end }}
+{{- if .Values.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "jwt-minter.fullname" . }}
+  labels:
+    {{- include "jwt-minter.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.schedule | quote }}
+  concurrencyPolicy: {{ .Values.concurrencyPolicy }}
+  startingDeadlineSeconds: {{ .Values.startingDeadlineSeconds }}
+  successfulJobsHistoryLimit: {{ .Values.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: {{ .Values.job.backoffLimit }}
+      activeDeadlineSeconds: {{ .Values.job.activeDeadlineSeconds }}
+      ttlSecondsAfterFinished: {{ .Values.job.ttlSecondsAfterFinished }}
+      template:
+        metadata:
+          labels:
+            {{- include "jwt-minter.selectorLabels" . | nindent 12 }}
+            {{- with .Values.podLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if or .Values.global.annotations .Values.podAnnotations }}
+          annotations:
+            {{- with .Values.global.annotations }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- with .Values.podAnnotations }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+        spec:
+          serviceAccountName: {{ include "jwt-minter.serviceAccountName" . }}
+          automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+          restartPolicy: OnFailure
+          {{- if .Values.podSecurityContext }}
+          securityContext:
+            {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          {{- end }}
+          {{- if or .Values.global.imagePullSecrets .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- range .Values.global.imagePullSecrets }}
+            - name: {{ . | quote }}
+            {{- end }}
+            {{- range .Values.imagePullSecrets }}
+            - name: {{ . | quote }}
+            {{- end }}
+          {{- end }}
+          containers:
+            - name: jwt-minter
+              image: "{{ include "jwt-minter.image" . }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  echo "jwt-minter scaffold: implement token mint + Secret upsert logic";
+                  echo "sourceSecret=$SOURCE_SECRET_NAME outputSecret=$OUTPUT_SECRET_NAME/$OUTPUT_SECRET_KEY namespace=$OUTPUT_SECRET_NAMESPACE";
+              env:
+                - name: SOURCE_SECRET_NAME
+                  value: {{ .Values.sourceSecret.name | quote }}
+                - name: OUTPUT_SECRET_NAME
+                  value: {{ .Values.outputSecret.name | quote }}
+                - name: OUTPUT_SECRET_KEY
+                  value: {{ .Values.outputSecret.key | quote }}
+                - name: OUTPUT_SECRET_NAMESPACE
+                  value: {{ default .Release.Namespace .Values.outputSecret.namespace | quote }}
+                - name: TOKEN_TTL_SECONDS
+                  value: {{ .Values.token.ttlSeconds | quote }}
+                - name: TOKEN_REFRESH_BEFORE_SECONDS
+                  value: {{ .Values.token.refreshBeforeSeconds | quote }}
+                - name: TOKEN_CLOCK_SKEW_SECONDS
+                  value: {{ .Values.token.clockSkewSeconds | quote }}
+                {{- with .Values.extraEnv }}
+                {{- toYaml . | nindent 16 }}
+                {{- end }}
+              {{- if .Values.sourceSecret.name }}
+              envFrom:
+                - secretRef:
+                    name: {{ .Values.sourceSecret.name }}
+                    optional: {{ .Values.sourceSecret.optional }}
+              {{- end }}
+              {{- if .Values.securityContext }}
+              securityContext:
+                {{- toYaml .Values.securityContext | nindent 16 }}
+              {{- end }}
+              resources:
+                {{- toYaml .Values.resources | nindent 16 }}
+              {{- if .Values.tmpDir.enabled }}
+              volumeMounts:
+                - name: tmp
+                  mountPath: {{ .Values.tmpDir.mountPath | quote }}
+              {{- end }}
+          {{- if .Values.tmpDir.enabled }}
+          volumes:
+            - name: tmp
+              emptyDir: {}
+          {{- end }}
+          {{- with .Values.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}

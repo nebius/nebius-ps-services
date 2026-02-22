@@ -1,0 +1,35 @@
+name: nebius-cxcli-ci
+
+on:
+  pull_request:
+    paths:
+      - "services/nebius-cxcli/**"
+      - ".github/workflows/nebius-cxcli-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "services/nebius-cxcli/**"
+      - ".github/workflows/nebius-cxcli-ci.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/nebius-cxcli
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Lint
+        run: python -m ruff check src tests
+      - name: Test
+        run: python -m pytest -q

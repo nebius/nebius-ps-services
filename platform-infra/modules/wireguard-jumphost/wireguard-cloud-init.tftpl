@@ -1,0 +1,219 @@
+#cloud-config
+users:
+  - name: ${ssh_user_name}
+    gecos: WireGuard Administration User
+    groups: [sudo]
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+      - ${ssh_public_key}
+
+package_update: true
+package_upgrade: true
+packages:
+  - wireguard
+  - wireguard-tools
+  - openssh-server
+  - ufw
+  - curl
+  - ca-certificates
+  - python3
+
+write_files:
+  - path: /usr/local/bin/setup-wireguard.sh
+    owner: root:root
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      export PATH="/usr/sbin:/usr/bin:/sbin:/bin"
+      if [ "$EUID" -ne 0 ]; then
+        echo "setup-wireguard.sh must run as root" >&2
+        exit 1
+      fi
+
+      for cmd in wg wg-quick iptables ufw sysctl; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+          echo "required command not found: $cmd" >&2
+          exit 1
+        fi
+      done
+
+      WG_IF="wg0"
+      WG_TUNNEL_CIDR="${wireguard_tunnel_cidr}"
+      SERVER_WG_IP="$${WG_TUNNEL_CIDR%/*}"
+      WG_PORT="${wireguard_listen_port}"
+      NAT_MODE="${nat_mode}"
+      ENDPOINT_HOST_OVERRIDE="${endpoint_host}"
+      CLIENTS_DIR="/var/lib/wireguard/clients"
+      WG_DIR="/etc/wireguard"
+
+      install -d -m 0700 "$WG_DIR"
+      install -d -m 0750 "$CLIENTS_DIR"
+
+      if [ ! -f "$WG_DIR/private.key" ]; then
+        wg genkey > "$WG_DIR/private.key"
+        chmod 0600 "$WG_DIR/private.key"
+      fi
+      if [ ! -f "$WG_DIR/public.key" ]; then
+        wg pubkey < "$WG_DIR/private.key" > "$WG_DIR/public.key"
+        chmod 0644 "$WG_DIR/public.key"
+      fi
+
+      SERVER_PRIVATE_KEY="$(cat "$WG_DIR/private.key")"
+      SERVER_PUBLIC_KEY="$(cat "$WG_DIR/public.key")"
+      WAN_IF="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $5; exit}' || true)"
+      if [ -z "$WAN_IF" ]; then
+        WAN_IF="eth0"
+      fi
+
+      WG_NET="$(
+        python3 - <<'PY'
+      import ipaddress
+      print(ipaddress.ip_interface("${wireguard_tunnel_cidr}").network.with_prefixlen)
+      PY
+      )"
+
+      SERVER_ENDPOINT_HOST="$ENDPOINT_HOST_OVERRIDE"
+      if [ -z "$SERVER_ENDPOINT_HOST" ]; then
+        SERVER_ENDPOINT_HOST="$(curl -fsS --max-time 5 https://api.ipify.org || true)"
+      fi
+      if [ -z "$SERVER_ENDPOINT_HOST" ]; then
+        SERVER_ENDPOINT_HOST="REPLACE_WITH_SERVER_PUBLIC_IP_OR_DNS"
+      fi
+
+      cat > "$WG_DIR/$WG_IF.conf" <<EOF
+      [Interface]
+      PrivateKey = $SERVER_PRIVATE_KEY
+      Address = $WG_TUNNEL_CIDR
+      ListenPort = $WG_PORT
+      SaveConfig = false
+      PostUp = sysctl -w net.ipv4.ip_forward=1
+      PostUp = iptables -A FORWARD -i %i -j ACCEPT
+      PostUp = iptables -A FORWARD -o %i -m state --state RELATED,ESTABLISHED -j ACCEPT
+      %{ if nat_mode ~}
+      PostUp = iptables -t nat -A POSTROUTING -s $WG_NET -o $WAN_IF -j MASQUERADE
+      %{ endif ~}
+      PostDown = iptables -D FORWARD -i %i -j ACCEPT
+      PostDown = iptables -D FORWARD -o %i -m state --state RELATED,ESTABLISHED -j ACCEPT
+      %{ if nat_mode ~}
+      PostDown = iptables -t nat -D POSTROUTING -s $WG_NET -o $WAN_IF -j MASQUERADE
+      %{ endif ~}
+      EOF
+
+      %{ for c in clients ~}
+      CLIENT_NAME_RAW="${c.name}"
+      CLIENT_NAME="$(printf '%s' "$CLIENT_NAME_RAW" | sed 's/[^A-Za-z0-9._-]/_/g')"
+      CLIENT_ALLOWED_IPS="${join(",", c.allowed_ips)}"
+      CLIENT_DNS="${join(",", c.dns)}"
+      CLIENT_KEEPALIVE="${c.persistent_keepalive}"
+      CLIENT_WRITE_SSH_CONFIG="${c.write_ssh_config}"
+      CLIENT_PATH="$CLIENTS_DIR/$CLIENT_NAME"
+
+      install -d -m 0700 "$CLIENT_PATH"
+
+      if [ ! -f "$CLIENT_PATH/private.key" ]; then
+        wg genkey > "$CLIENT_PATH/private.key"
+        chmod 0600 "$CLIENT_PATH/private.key"
+      fi
+      if [ ! -f "$CLIENT_PATH/public.key" ]; then
+        wg pubkey < "$CLIENT_PATH/private.key" > "$CLIENT_PATH/public.key"
+        chmod 0644 "$CLIENT_PATH/public.key"
+      fi
+
+      CLIENT_PRIVATE_KEY="$(cat "$CLIENT_PATH/private.key")"
+      CLIENT_PUBLIC_KEY="$(cat "$CLIENT_PATH/public.key")"
+      if [ ! -f "$CLIENT_PATH/preshared.key" ]; then
+        wg genpsk > "$CLIENT_PATH/preshared.key"
+        chmod 0600 "$CLIENT_PATH/preshared.key"
+      fi
+      CLIENT_PRESHARED_KEY="$(cat "$CLIENT_PATH/preshared.key")"
+
+      cat >> "$WG_DIR/$WG_IF.conf" <<EOF
+      [Peer]
+      # $CLIENT_NAME_RAW
+      PublicKey = $CLIENT_PUBLIC_KEY
+      PresharedKey = $CLIENT_PRESHARED_KEY
+      AllowedIPs = ${c.address}
+      EOF
+
+      if [ -z "$CLIENT_ALLOWED_IPS" ]; then
+        CLIENT_ALLOWED_IPS="$WG_NET"
+      fi
+      if [ -z "$CLIENT_DNS" ]; then
+        CLIENT_DNS="1.1.1.1"
+      fi
+
+      cat > "$CLIENT_PATH/${c.name}.conf" <<EOF
+      [Interface]
+      PrivateKey = $CLIENT_PRIVATE_KEY
+      Address = ${c.address}
+      DNS = $CLIENT_DNS
+
+      [Peer]
+      PublicKey = $SERVER_PUBLIC_KEY
+      PresharedKey = $CLIENT_PRESHARED_KEY
+      Endpoint = $SERVER_ENDPOINT_HOST:$WG_PORT
+      AllowedIPs = $CLIENT_ALLOWED_IPS
+      PersistentKeepalive = $CLIENT_KEEPALIVE
+      EOF
+      chmod 0600 "$CLIENT_PATH/${c.name}.conf"
+
+      if [ "$CLIENT_WRITE_SSH_CONFIG" = "true" ]; then
+        cat > "$CLIENT_PATH/ssh_config" <<EOF
+      Host ${c.name}-via-wg-jumphost
+        HostName REPLACE_WITH_PRIVATE_VM_IP
+        User REPLACE_WITH_VM_USER
+        ProxyJump ${ssh_user_name}@$SERVER_WG_IP
+      EOF
+        chmod 0600 "$CLIENT_PATH/ssh_config"
+      fi
+      %{ endfor ~}
+
+      chmod 0600 "$WG_DIR/$WG_IF.conf"
+      if ! wg-quick strip "$WG_DIR/$WG_IF.conf" >/dev/null; then
+        echo "generated WireGuard config is invalid: $WG_DIR/$WG_IF.conf" >&2
+        exit 1
+      fi
+
+      cat > /etc/sysctl.d/99-wireguard.conf <<EOF
+      net.ipv4.ip_forward=1
+      EOF
+      sysctl --system
+
+      if [ -f /etc/default/ufw ]; then
+        sed -i 's/^DEFAULT_FORWARD_POLICY=.*/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
+      fi
+      ufw --force reset
+      ufw default deny incoming
+      ufw default allow outgoing
+      ufw logging on
+
+      ufw allow "$WG_PORT"/udp
+      ufw allow OpenSSH
+      if [ "$NAT_MODE" = "true" ]; then
+        ufw route allow in on "$WG_IF" out on "$WAN_IF"
+        ufw route allow in on "$WAN_IF" out on "$WG_IF"
+      fi
+      ufw --force enable
+
+      if systemctl list-unit-files | grep -q '^ssh\\.service'; then
+        systemctl enable --now ssh
+        systemctl reload ssh
+      elif systemctl list-unit-files | grep -q '^sshd\\.service'; then
+        systemctl enable --now sshd
+        systemctl reload sshd
+      else
+        echo "no ssh service found (ssh/sshd)" >&2
+        exit 1
+      fi
+
+      systemctl enable --now "wg-quick@$WG_IF.service"
+      if ! systemctl is-active --quiet "wg-quick@$WG_IF.service"; then
+        journalctl -u "wg-quick@$WG_IF.service" -n 200 --no-pager >&2 || true
+        exit 1
+      fi
+
+runcmd:
+  - [ bash, -lc, "/usr/local/bin/setup-wireguard.sh > /var/log/wireguard-setup.log 2>&1" ]

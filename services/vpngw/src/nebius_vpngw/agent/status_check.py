@@ -109,7 +109,9 @@ def check_strongswan_tunnels() -> dict[str, Any]:
                 )
 
             if tunnels:
-                overall = "healthy" if all(t["status"] == "ESTABLISHED" for t in tunnels) else "degraded"
+                overall = (
+                    "healthy" if all(t["status"] == "ESTABLISHED" for t in tunnels) else "degraded"
+                )
                 return {"tunnels": tunnels, "overall_status": overall}
 
     result = subprocess.run(["ipsec", "statusall"], capture_output=True, text=True)

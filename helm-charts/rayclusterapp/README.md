@@ -4,7 +4,7 @@ Two Helm charts are provided:
     https://docs.ray.io/en/latest/cluster/kubernetes/examples/rayjob-kueue-gang-scheduling.html
 
 - ray-job : This helm chart is used to submit a Rayjob to a Ray cluster:
-    https://docs.ray.io/en/latest/cluster/kubernetes/getting-started/rayjob-quick-start.html 
+    https://docs.ray.io/en/latest/cluster/kubernetes/getting-started/rayjob-quick-start.html
 
 ## Instructions to install Kuberay operator and a Ray cluster
 ### Make sure to set the raycluster-values.yaml file based on your settings

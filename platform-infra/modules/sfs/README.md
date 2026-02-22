@@ -1,0 +1,97 @@
+# sfs module
+
+Reusable Terraform module that creates a Nebius Shared File System (SFS).
+
+Resources managed:
+
+- `nebius_compute_v1_filesystem`
+
+Out of scope:
+
+- CSI driver installation
+- `StorageClass`, `PersistentVolume`, and `PersistentVolumeClaim` lifecycle
+- workload-level mounts
+
+Those in-cluster Kubernetes resources are expected to be managed by Flux/GitOps.
+
+## Usage
+
+### Local path source
+
+```hcl
+module "sfs" {
+  source = "./platform-infra/modules/sfs"
+
+  enabled        = true
+  parent_id      = "project-xxxxxxxx"
+  name           = "client-a-prod-sfs"
+  size_gib       = 500
+  block_size_kib = 4
+}
+```
+
+### Git tag source
+
+```hcl
+module "sfs" {
+  source = "git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/sfs?ref=v0.1.0"
+
+  enabled        = true
+  parent_id      = "project-xxxxxxxx"
+  name           = "client-a-prod-sfs"
+  size_gib       = 500
+  block_size_kib = 4
+}
+```
+
+### Registry source (when published)
+
+```hcl
+module "sfs" {
+  source  = "nebius/sfs/nebius"
+  version = "~> 0.1"
+
+  enabled        = true
+  parent_id      = "project-xxxxxxxx"
+  name           = "client-a-prod-sfs"
+  size_gib       = 500
+  block_size_kib = 4
+}
+```
+
+## Inputs summary
+
+- Required:
+  - `parent_id`
+- Enablement:
+  - `enabled` (default `false`)
+- Filesystem controls:
+  - `name`
+  - `size_gib`
+  - `block_size_kib`
+  - `type` (default `NETWORK_SSD`)
+- Runtime preconditions:
+  - when `enabled = true`, `name` must be non-empty and `size_gib >= 1`
+
+## Outputs summary
+
+- `filesystem_id`
+- `size_bytes`
+
+## nebius-cxcli mapping
+
+When consumed through `platform-infra/stacks/customer-platform`,
+`nebius-cxcli` maps:
+
+- `infra.sfs.enabled` -> `sfs_enabled`
+- `infra.sfs.name` -> `sfs_name`
+- `infra.sfs.size_gib` -> `sfs_size_gib`
+- `infra.sfs.block_size_kib` -> `sfs_block_size_kib`
+
+## Validation commands
+
+```bash
+terraform fmt -recursive
+terraform init -backend=false
+terraform validate
+```

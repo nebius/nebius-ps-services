@@ -1,7 +1,7 @@
 image:
     repository: rezabah/rayclusterapp-py39-cu128
     tag: "0.1.2"
-    pullPolicy: IfNotPresent 
+    pullPolicy: IfNotPresent
 
 head:
   # you can find out the Ray version by running this command for your image, as an example:
@@ -20,11 +20,11 @@ head:
                 operator: DoesNotExist
   resources:
     requests:
-      cpu: "4"          
-      memory: "8Gi"    
+      cpu: "4"
+      memory: "8Gi"
     limits:
-      cpu: "4"          
-      memory: "8Gi"  
+      cpu: "4"
+      memory: "8Gi"
   rayStartParams:
     dashboard-host: "0.0.0.0"
     metrics-export-port: "9090"
@@ -50,7 +50,7 @@ worker:
     requests:
       cpu: "4"
       memory: "16Gi"
-      nvidia.com/gpu: 1 
+      nvidia.com/gpu: 1
     limits:
       cpu: "4"
       memory: "16Gi"

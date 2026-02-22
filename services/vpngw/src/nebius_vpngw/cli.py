@@ -168,9 +168,7 @@ def _resolve_local_config(
     if local_config_file is not None:
         if not local_config_file.exists():
             print(f"[red]Error: Config file not found at {local_config_file}[/red]")
-            print(
-                "[yellow]Use 'nebius-vpngw create-config <path>' to create a template.[/yellow]"
-            )
+            print("[yellow]Use 'nebius-vpngw create-config <path>' to create a template.[/yellow]")
             raise typer.Exit(code=1)
         return local_config_file
 
@@ -251,7 +249,7 @@ def _format_external_ips_block(indent: str, external_ips: list[list[str]]) -> li
         if not inst_ips:
             lines.append(f"{indent}  - []")
             continue
-        ip_items = ", ".join(f"\"{ip}\"" for ip in inst_ips)
+        ip_items = ", ".join(f'"{ip}"' for ip in inst_ips)
         lines.append(f"{indent}  - [{ip_items}]")
     return lines
 
@@ -339,9 +337,7 @@ def _ensure_gateway_vms_exist(
 
     client = vm_mgr._get_client()
     if client is None:
-        print(
-            "[red]Error: Nebius SDK client not available; cannot verify gateway VMs.[/red]"
-        )
+        print("[red]Error: Nebius SDK client not available; cannot verify gateway VMs.[/red]")
         raise typer.Exit(code=1)
 
     try:
@@ -369,9 +365,7 @@ def _ensure_gateway_vms_exist(
     ]
 
     if not existing_vms:
-        print(
-            f"[red]No gateway VMs found matching pattern '{plan.gateway_group.name}-*'.[/red]"
-        )
+        print(f"[red]No gateway VMs found matching pattern '{plan.gateway_group.name}-*'.[/red]")
         print("[yellow]Run 'nebius-vpngw apply' to create gateway VMs first.[/yellow]")
         raise typer.Exit(code=1)
 
@@ -1239,9 +1233,7 @@ def status(
             if conn_mode == "bgp":
                 peer_ip = tun.get("inner_remote_ip")
                 if peer_ip:
-                    tunnel_bgp_map[hostname][tun.get("name") or f"tunnel{inst_idx}"] = str(
-                        peer_ip
-                    )
+                    tunnel_bgp_map[hostname][tun.get("name") or f"tunnel{inst_idx}"] = str(peer_ip)
             remote_public_ip = tun.get("remote_public_ip")
             if remote_public_ip:
                 tunnel_peer_map[hostname][tun.get("name") or f"tunnel{inst_idx}"] = str(
@@ -1523,9 +1515,7 @@ def status(
         try:
             expected_peers = set(tunnel_bgp_map.get(inst_cfg.hostname, {}).values())
             missing_peers = [
-                peer
-                for peer in expected_peers
-                if peer not in bgp_uptime or peer not in bgp_states
+                peer for peer in expected_peers if peer not in bgp_uptime or peer not in bgp_states
             ]
             neighbor_state_re = re.compile(r"BGP state = ([^,]+), up for (.+)$")
             for peer_ip in sorted(missing_peers):
@@ -2971,7 +2961,9 @@ def tunnel_failover(
             print("[red]gateway.local_asn is required for BGP failover.[/red]")
             raise typer.Exit(code=1)
 
-        defaults_mode = (local_cfg.get("defaults", {}).get("routing", {}) or {}).get("mode") or "bgp"
+        defaults_mode = (local_cfg.get("defaults", {}).get("routing", {}) or {}).get(
+            "mode"
+        ) or "bgp"
 
         enabled_tunnels: list[dict[str, object]] = []
         for conn in local_cfg.get("connections") or []:
@@ -3025,7 +3017,9 @@ def tunnel_failover(
             target = passives[0]
 
         if (target.get("ha_role") or "").lower() != "passive":
-            print("[red]Selected tunnel is not passive. Choose a passive tunnel for failover.[/red]")
+            print(
+                "[red]Selected tunnel is not passive. Choose a passive tunnel for failover.[/red]"
+            )
             raise typer.Exit(code=1)
 
         if (target.get("conn_mode") or "").lower() != "bgp":
@@ -3234,7 +3228,9 @@ def tunnel_failback(
             print("[red]gateway.local_asn is required for BGP failback.[/red]")
             raise typer.Exit(code=1)
 
-        defaults_mode = (local_cfg.get("defaults", {}).get("routing", {}) or {}).get("mode") or "bgp"
+        defaults_mode = (local_cfg.get("defaults", {}).get("routing", {}) or {}).get(
+            "mode"
+        ) or "bgp"
 
         enabled_tunnels: list[dict[str, object]] = []
         for conn in local_cfg.get("connections") or []:

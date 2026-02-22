@@ -1,0 +1,17 @@
+apiVersion: v2
+name: mysterybox-webhook
+description: ESO webhook bridge for Nebius MysteryBox
+type: application
+version: 0.2.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.26.0-0"
+home: https://github.com/nebius/nebius-ps-services
+sources:
+  - https://github.com/nebius/nebius-ps-services/tree/main/services/mysterybox-bridge
+keywords:
+  - external-secrets
+  - mysterybox
+  - webhook
+maintainers:
+  - name: Nebius PS
+    url: https://github.com/nebius/nebius-ps-services

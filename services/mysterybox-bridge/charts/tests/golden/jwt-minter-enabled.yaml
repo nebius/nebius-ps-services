@@ -1,0 +1,137 @@
+---
+# Source: jwt-minter/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: golden-jwt-minter
+  labels:
+    helm.sh/chart: jwt-minter-0.2.0
+    app.kubernetes.io/name: jwt-minter
+    app.kubernetes.io/instance: golden-jwt-minter
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: "mysterybox-bridge"
+automountServiceAccountToken: true
+---
+# Source: jwt-minter/templates/role.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: golden-jwt-minter
+  labels:
+    helm.sh/chart: jwt-minter-0.2.0
+    app.kubernetes.io/name: jwt-minter
+    app.kubernetes.io/instance: golden-jwt-minter
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: "mysterybox-bridge"
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "update", "patch"]
+---
+# Source: jwt-minter/templates/rolebinding.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: golden-jwt-minter
+  labels:
+    helm.sh/chart: jwt-minter-0.2.0
+    app.kubernetes.io/name: jwt-minter
+    app.kubernetes.io/instance: golden-jwt-minter
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: "mysterybox-bridge"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: golden-jwt-minter
+subjects:
+  - kind: ServiceAccount
+    name: golden-jwt-minter
+    namespace: external-secrets
+---
+# Source: jwt-minter/templates/cronjob.yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: golden-jwt-minter
+  labels:
+    helm.sh/chart: jwt-minter-0.2.0
+    app.kubernetes.io/name: jwt-minter
+    app.kubernetes.io/instance: golden-jwt-minter
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: "mysterybox-bridge"
+spec:
+  schedule: "*/10 * * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 120
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 120
+      ttlSecondsAfterFinished: 3600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: jwt-minter
+            app.kubernetes.io/instance: golden-jwt-minter
+        spec:
+          serviceAccountName: golden-jwt-minter
+          automountServiceAccountToken: true
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: jwt-minter
+              image: "quay.io/nebius/mysterybox-jwt-minter:0.1.0"
+              imagePullPolicy: IfNotPresent
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  echo "jwt-minter scaffold: implement token mint + Secret upsert logic";
+                  echo "sourceSecret=$SOURCE_SECRET_NAME outputSecret=$OUTPUT_SECRET_NAME/$OUTPUT_SECRET_KEY namespace=$OUTPUT_SECRET_NAMESPACE";
+              env:
+                - name: SOURCE_SECRET_NAME
+                  value: "nebius-mysterybox-auth"
+                - name: OUTPUT_SECRET_NAME
+                  value: "mysterybox-jwt"
+                - name: OUTPUT_SECRET_KEY
+                  value: "token"
+                - name: OUTPUT_SECRET_NAMESPACE
+                  value: "external-secrets"
+                - name: TOKEN_TTL_SECONDS
+                  value: "600"
+                - name: TOKEN_REFRESH_BEFORE_SECONDS
+                  value: "60"
+                - name: TOKEN_CLOCK_SKEW_SECONDS
+                  value: "30"
+              envFrom:
+                - secretRef:
+                    name: nebius-mysterybox-auth
+                    optional: false
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                  - ALL
+                readOnlyRootFilesystem: true
+              resources:
+                limits:
+                  cpu: 200m
+                  memory: 256Mi
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+              volumeMounts:
+                - name: tmp
+                  mountPath: "/tmp"
+          volumes:
+            - name: tmp
+              emptyDir: {}

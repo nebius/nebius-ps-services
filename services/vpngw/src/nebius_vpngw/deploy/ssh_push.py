@@ -344,9 +344,13 @@ WantedBy=multi-user.target
                                 print("[SSHPush] Staged route fix timer")
 
                             # Deploy health monitoring service
-                            health_monitor_service = systemd_dir / "nebius-vpngw-health-monitor.service"
+                            health_monitor_service = (
+                                systemd_dir / "nebius-vpngw-health-monitor.service"
+                            )
                             if health_monitor_service.exists():
-                                with sftp.file("/tmp/nebius-vpngw-health-monitor.service", "w") as f:
+                                with sftp.file(
+                                    "/tmp/nebius-vpngw-health-monitor.service", "w"
+                                ) as f:
                                     f.write(health_monitor_service.read_text())
                                 print("[SSHPush] Staged health monitoring service")
 
@@ -498,20 +502,18 @@ WantedBy=multi-user.target
                 install_cmd = (
                     "sudo bash -lc '"
                     "set -e;"
-                    "if ! dpkg -l frr 2>/dev/null | grep -q \"^ii\"; then "
+                    'if ! dpkg -l frr 2>/dev/null | grep -q "^ii"; then '
                     "command -v curl >/dev/null 2>&1 || (apt-get update && apt-get install -y curl); "
                     "if [ ! -f /etc/apt/sources.list.d/frr.list ]; then "
                     "curl -s https://deb.frrouting.org/frr/keys.asc | tee /usr/share/keyrings/frrouting.asc > /dev/null; "
                     "UBUNTU_CODENAME=$(lsb_release -cs); "
-                    "echo \"deb [signed-by=/usr/share/keyrings/frrouting.asc] https://deb.frrouting.org/frr $UBUNTU_CODENAME frr-stable\" > /etc/apt/sources.list.d/frr.list; "
+                    'echo "deb [signed-by=/usr/share/keyrings/frrouting.asc] https://deb.frrouting.org/frr $UBUNTU_CODENAME frr-stable" > /etc/apt/sources.list.d/frr.list; '
                     "fi; "
                     "apt-get update; "
                     "DEBIAN_FRONTEND=noninteractive apt-get install -y frr frr-pythontools; "
                     "fi'"
                 )
-                stdin, stdout, stderr = client.exec_command(
-                    install_cmd, timeout=300, get_pty=True
-                )
+                stdin, stdout, stderr = client.exec_command(install_cmd, timeout=300, get_pty=True)
                 install_rc = stdout.channel.recv_exit_status()
                 if install_rc == 0:
                     print("[SSHPush] ✓ FRR installed")
@@ -535,9 +537,7 @@ WantedBy=multi-user.target
                     "apt-get update; "
                     "DEBIAN_FRONTEND=noninteractive apt-get install -y strongswan-swanctl'"
                 )
-                stdin, stdout, stderr = client.exec_command(
-                    install_cmd, timeout=300, get_pty=True
-                )
+                stdin, stdout, stderr = client.exec_command(install_cmd, timeout=300, get_pty=True)
                 install_rc = stdout.channel.recv_exit_status()
                 if install_rc == 0:
                     print("[SSHPush] ✓ strongswan-swanctl installed")

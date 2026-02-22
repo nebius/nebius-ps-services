@@ -1,0 +1,33 @@
+{{- if and .Values.tls.enabled .Values.tls.certManager.enabled }}
+{{- if not (.Capabilities.APIVersions.Has "cert-manager.io/v1/Certificate") }}
+{{- fail "tls.certManager.enabled=true requires cert-manager CRDs (cert-manager.io/v1)" }}
+{{- end }}
+{{- $issuerName := default (printf "%s-selfsigned" (include "mysterybox-webhook.fullname" .)) .Values.tls.certManager.selfSignedIssuer.name }}
+{{- if .Values.tls.certManager.selfSignedIssuer.create }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ $issuerName }}
+  labels:
+    {{- include "mysterybox-webhook.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+{{- end }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "mysterybox-webhook.fullname" . }}-tls
+  labels:
+    {{- include "mysterybox-webhook.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "mysterybox-webhook.tlsSecretName" . }}
+  duration: {{ .Values.tls.certManager.certificate.duration }}
+  renewBefore: {{ .Values.tls.certManager.certificate.renewBefore }}
+  issuerRef:
+    kind: Issuer
+    name: {{ $issuerName }}
+  dnsNames:
+    - {{ include "mysterybox-webhook.fullname" . }}.{{ .Release.Namespace }}.svc
+    - {{ include "mysterybox-webhook.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+{{- end }}

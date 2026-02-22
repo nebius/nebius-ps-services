@@ -2,7 +2,7 @@
 
 **Nebius Professional Services – AI/ML Deployment Solutions**
 
-Welcome to the official repository of the **Nebius Professional Services (PS)** team.  
+Welcome to the official repository of the **Nebius Professional Services (PS)** team.
 This repository provides a curated set of **Terraform modules** and **Helm charts** designed to streamline the deployment, orchestration, and scaling of AI/ML workloads on the **Nebius AI Cloud** platform.
 
 ---
@@ -25,7 +25,7 @@ These tools are built for **production-readiness**, **scalability**, and **perfo
 
 ## 🪪 License
 
-Copyright 2025 Nebius B.V. 
+Copyright 2025 Nebius B.V.
 
 Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License.
 

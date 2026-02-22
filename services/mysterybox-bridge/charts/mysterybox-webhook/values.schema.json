@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "replicaCount": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "image": {
+      "type": "object",
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string", "minLength": 1 },
+        "digest": { "type": "string" },
+        "pullPolicy": {
+          "type": "string",
+          "enum": ["Always", "IfNotPresent", "Never"]
+        }
+      },
+      "required": ["repository", "pullPolicy"]
+    },
+    "serviceAccount": {
+      "type": "object",
+      "properties": {
+        "create": { "type": "boolean" },
+        "name": { "type": "string" },
+        "automountServiceAccountToken": { "type": "boolean" }
+      }
+    },
+    "authSecret": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "optional": { "type": "boolean" }
+      },
+      "required": ["optional"]
+    },
+    "requestAuth": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "headerName": { "type": "string" },
+        "tokenSecretName": { "type": "string" },
+        "tokenSecretKey": { "type": "string" }
+      },
+      "required": ["enabled", "headerName", "tokenSecretName", "tokenSecretKey"]
+    },
+    "service": {
+      "type": "object",
+      "properties": {
+        "type": { "type": "string" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      },
+      "required": ["type", "port"]
+    },
+    "probes": {
+      "type": "object",
+      "properties": {
+        "readiness": { "type": "object" },
+        "liveness": { "type": "object" },
+        "startup": { "type": "object" }
+      }
+    },
+    "tls": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "secretName": { "type": "string" },
+        "mountPath": { "type": "string" },
+        "certFile": { "type": "string" },
+        "keyFile": { "type": "string" },
+        "certManager": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "hpa": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minReplicas": { "type": "integer", "minimum": 1 },
+        "maxReplicas": { "type": "integer", "minimum": 1 },
+        "targetCPUUtilizationPercentage": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "targetMemoryUtilizationPercentage": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "maximum": 100
+        }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "ingressFrom": {
+          "type": "array",
+          "items": { "type": "object" }
+        }
+      }
+    },
+    "monitoring": {
+      "type": "object",
+      "properties": {
+        "serviceMonitor": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "interval": { "type": "string" },
+            "scrapeTimeout": { "type": "string" },
+            "honorLabels": { "type": "boolean" },
+            "scheme": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,190 @@
+{{- if and (not .Values.authSecret.optional) (not .Values.authSecret.name) }}
+{{- fail "authSecret.name is required when authSecret.optional=false" }}
+{{- end }}
+{{- if and .Values.tls.enabled (not .Values.tls.certManager.enabled) (not .Values.tls.secretName) }}
+{{- fail "tls.secretName is required when tls.enabled=true and tls.certManager.enabled=false" }}
+{{- end }}
+{{- if .Values.requestAuth.enabled }}
+{{- if not .Values.requestAuth.tokenSecretName }}
+{{- fail "requestAuth.tokenSecretName is required when requestAuth.enabled=true" }}
+{{- end }}
+{{- if not .Values.requestAuth.tokenSecretKey }}
+{{- fail "requestAuth.tokenSecretKey is required when requestAuth.enabled=true" }}
+{{- end }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mysterybox-webhook.fullname" . }}
+  labels:
+    {{- include "mysterybox-webhook.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
+  strategy:
+    {{- toYaml .Values.strategy | nindent 4 }}
+  selector:
+    matchLabels:
+      {{- include "mysterybox-webhook.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "mysterybox-webhook.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- if or .Values.global.annotations .Values.podAnnotations }}
+      annotations:
+        {{- with .Values.global.annotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "mysterybox-webhook.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- if .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- end }}
+      {{- if or .Values.global.imagePullSecrets .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- range .Values.global.imagePullSecrets }}
+        - name: {{ . | quote }}
+        {{- end }}
+        {{- range .Values.imagePullSecrets }}
+        - name: {{ . | quote }}
+        {{- end }}
+      {{- end }}
+      containers:
+        - name: webhook
+          image: "{{ include "mysterybox-webhook.image" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["gunicorn"]
+          args:
+            - "--workers={{ .Values.gunicorn.workers }}"
+            - "--bind={{ .Values.gunicorn.bindHost }}:{{ .Values.service.port }}"
+            - "--log-level={{ .Values.gunicorn.logLevel }}"
+            {{- if .Values.gunicorn.factory }}
+            - "--factory"
+            {{- end }}
+            {{- if .Values.tls.enabled }}
+            - "--certfile={{ .Values.tls.mountPath }}/{{ .Values.tls.certFile }}"
+            - "--keyfile={{ .Values.tls.mountPath }}/{{ .Values.tls.keyFile }}"
+            {{- end }}
+            - "{{ .Values.gunicorn.appModule }}"
+            {{- with .Values.gunicorn.extraArgs }}
+            {{- range . }}
+            - {{ . | quote }}
+            {{- end }}
+            {{- end }}
+          {{- if .Values.authSecret.name }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.authSecret.name }}
+                optional: {{ .Values.authSecret.optional }}
+          {{- end }}
+          {{- if or .Values.requestAuth.enabled .Values.extraEnv }}
+          env:
+            {{- if .Values.requestAuth.enabled }}
+            - name: MYSTERYBOX_WEBHOOK_AUTH_HEADER
+              value: {{ .Values.requestAuth.headerName | quote }}
+            - name: MYSTERYBOX_WEBHOOK_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.requestAuth.tokenSecretName }}
+                  key: {{ .Values.requestAuth.tokenSecretKey }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          ports:
+            - containerPort: {{ .Values.service.port }}
+              name: http
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.readiness.path | quote }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probes.liveness.path | quote }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          {{- if .Values.probes.startup.enabled }}
+          startupProbe:
+            httpGet:
+              path: {{ .Values.probes.startup.path | quote }}
+              port: http
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          {{- end }}
+          {{- if .Values.securityContext }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          {{- end }}
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -ec
+                  - sleep {{ .Values.preStopSleepSeconds }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- if .Values.tmpDir.enabled }}
+          volumeMounts:
+            - name: tmp
+              mountPath: {{ .Values.tmpDir.mountPath | quote }}
+            {{- if .Values.tls.enabled }}
+            - name: tls
+              mountPath: {{ .Values.tls.mountPath | quote }}
+              readOnly: true
+            {{- end }}
+          {{- else if .Values.tls.enabled }}
+          volumeMounts:
+            - name: tls
+              mountPath: {{ .Values.tls.mountPath | quote }}
+              readOnly: true
+          {{- end }}
+      {{- if .Values.tmpDir.enabled }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        {{- if .Values.tls.enabled }}
+        - name: tls
+          secret:
+            secretName: {{ include "mysterybox-webhook.tlsSecretName" . }}
+        {{- end }}
+      {{- else if .Values.tls.enabled }}
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ include "mysterybox-webhook.tlsSecretName" . }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -129,9 +129,7 @@ def ensure_group(sdk: NebiusSdk, tenant_id: str, name: str) -> tuple[str, bool]:
 
 def get_group_by_name(sdk: NebiusSdk, tenant_id: str, name: str) -> str | None:
     try:
-        group = sdk.groups.get_by_name(
-            GetGroupByNameRequest(parent_id=tenant_id, name=name)
-        ).wait()
+        group = sdk.groups.get_by_name(GetGroupByNameRequest(parent_id=tenant_id, name=name)).wait()
     except NebiusRequestError as exc:
         if _is_not_found_error(exc):
             return None
@@ -397,12 +395,7 @@ def _list_quota_allowances(sdk: NebiusSdk, project_id: str) -> list:
 
 
 def _find_quota_allowance(items: list, quota: QuotaEntry):
-    matches = [
-        item
-        for item in items
-        if item.metadata
-        and item.metadata.name == quota.name
-    ]
+    matches = [item for item in items if item.metadata and item.metadata.name == quota.name]
     if not matches:
         return None
     for item in matches:
@@ -632,13 +625,18 @@ def _list_federation_certificates(sdk: NebiusSdk, federation_id: str) -> list:
 def _is_not_found_error(exc: NebiusRequestError) -> bool:
     if exc.status.code == StatusCode.NOT_FOUND:
         return True
-    return any(getattr(err, "resource_not_found", None) is not None for err in exc.status.service_errors)
+    return any(
+        getattr(err, "resource_not_found", None) is not None for err in exc.status.service_errors
+    )
 
 
 def _is_already_exists_error(exc: NebiusRequestError) -> bool:
     if exc.status.code == StatusCode.ALREADY_EXISTS:
         return True
-    return any(getattr(err, "resource_already_exists", None) is not None for err in exc.status.service_errors)
+    return any(
+        getattr(err, "resource_already_exists", None) is not None
+        for err in exc.status.service_errors
+    )
 
 
 def _raise_request_error(action: str, exc: NebiusRequestError) -> None:
