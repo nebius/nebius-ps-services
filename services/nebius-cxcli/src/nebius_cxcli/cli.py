@@ -276,11 +276,6 @@ def _mysterybox_secret_metadata_for_tf_var(config: ConfigV1) -> list[dict[str, o
     return metadata
 
 
-def _redacted_secret_presence(secret_map: dict[str, str]) -> dict[str, str]:
-    # Keep key names for operator visibility without exposing secret material.
-    return {name: "<set>" if bool(value) else "<empty>" for name, value in secret_map.items()}
-
-
 def _ensure_private_key_file_env() -> None:
     current_path = os.environ.get("NEBIUS_AUTH_PRIVATE_KEY_FILE", "").strip()
     if current_path:
@@ -1237,7 +1232,7 @@ def auth_bootstrap_command(
         bool,
         typer.Option(
             "--json",
-            help="Print machine-readable JSON output (secret values are redacted)",
+            help="Print machine-readable JSON output (secret values are omitted)",
         ),
     ] = False,
     github_sync: Annotated[
@@ -1345,7 +1340,7 @@ def auth_bootstrap_command(
             "service_account_created": result.service_account_created,
             "roles_created": result.roles_created,
             "roles_already_present": result.roles_already_present,
-            "github_secrets": _redacted_secret_presence(ci_secrets),
+            "github_secret_keys": sorted(NEBIUS_CI_SECRET_KEYS),
             "github_sync": github_sync,
             "github_synced_repo": synced_repo_slug,
             "github_synced_secret_names": synced_secret_names,
