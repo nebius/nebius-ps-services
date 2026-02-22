@@ -274,25 +274,6 @@ def _node_group_overrides_payload(config: Any) -> dict[str, Any] | None:
     return payload or None
 
 
-def _mysterybox_secrets_payload(config: ConfigV1) -> list[dict[str, Any]]:
-    payload: list[dict[str, Any]] = []
-    for secret in config.infra.mysterybox.secrets:
-        item: dict[str, Any] = {
-            "id": secret.id,
-            "scope": secret.scope,
-            "name": secret.name,
-            "labels": secret.labels,
-            "set_primary": secret.set_primary,
-            "payload_keys": [entry.key for entry in secret.entries],
-        }
-        if secret.description is not None:
-            item["description"] = secret.description
-        if secret.version_description is not None:
-            item["version_description"] = secret.version_description
-        payload.append(item)
-    return payload
-
-
 def _terraform_tfvars(config: ConfigV1) -> dict[str, Any]:
     cluster_overrides = config.infra.mk8s.cluster_overrides
     cluster_public_endpoint = config.infra.mk8s.api_endpoint.public
@@ -369,7 +350,6 @@ def _terraform_tfvars(config: ConfigV1) -> dict[str, Any]:
             config.infra.object_storage.inventory_bucket.protect_from_destroy
         ),
         "mysterybox_enabled": mysterybox.enabled,
-        "mysterybox_secrets": _mysterybox_secrets_payload(config),
         "wireguard_enabled": wireguard.enabled,
         "wireguard_name": wireguard.name,
         "wireguard_platform": wireguard.platform,

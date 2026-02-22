@@ -47,9 +47,21 @@ def test_terraform_runtime_env_builds_mysterybox_tf_var(tmp_path: Path, monkeypa
 
     runtime_env = _terraform_runtime_env(cfg)
 
+    assert "TF_VAR_mysterybox_secrets" in runtime_env
     assert "TF_VAR_mysterybox_secret_values" in runtime_env
-    payload = json.loads(runtime_env["TF_VAR_mysterybox_secret_values"])
-    assert payload == {
+    secret_defs = json.loads(runtime_env["TF_VAR_mysterybox_secrets"])
+    assert secret_defs == [
+        {
+            "id": "n8n-runtime",
+            "labels": {},
+            "name": "n8n-runtime",
+            "payload_keys": ["N8N_ENCRYPTION_KEY", "N8N_BASIC_AUTH_PASSWORD"],
+            "scope": "apps",
+            "set_primary": True,
+        }
+    ]
+    secret_values = json.loads(runtime_env["TF_VAR_mysterybox_secret_values"])
+    assert secret_values == {
         "n8n-runtime": {
             "N8N_ENCRYPTION_KEY": "enc-key",
             "N8N_BASIC_AUTH_PASSWORD": "pass-123",

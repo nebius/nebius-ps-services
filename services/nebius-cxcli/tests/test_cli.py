@@ -968,7 +968,7 @@ def test_auth_bootstrap_can_use_instance_config_for_project_id(tmp_path: Path, m
     assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)
     assert payload["project_id"] == "project-from-config"
-    assert payload["github_secrets"]["NEBIUS_SA_ID"] == "serviceaccount-321"
+    assert payload["github_secrets"]["NEBIUS_SA_ID"] == "<set>"
     assert captured["project_id"] == "project-from-config"
 
 

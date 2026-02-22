@@ -257,6 +257,30 @@ def _mysterybox_secret_values_from_env(config: ConfigV1) -> dict[str, dict[str, 
     return values
 
 
+def _mysterybox_secret_metadata_for_tf_var(config: ConfigV1) -> list[dict[str, object]]:
+    metadata: list[dict[str, object]] = []
+    for secret in config.infra.mysterybox.secrets:
+        item: dict[str, object] = {
+            "id": secret.id,
+            "scope": secret.scope,
+            "name": secret.name,
+            "labels": secret.labels,
+            "set_primary": secret.set_primary,
+            "payload_keys": [entry.key for entry in secret.entries],
+        }
+        if secret.description is not None:
+            item["description"] = secret.description
+        if secret.version_description is not None:
+            item["version_description"] = secret.version_description
+        metadata.append(item)
+    return metadata
+
+
+def _redacted_secret_presence(secret_map: dict[str, str]) -> dict[str, str]:
+    # Keep key names for operator visibility without exposing secret material.
+    return {name: "<set>" if bool(value) else "<empty>" for name, value in secret_map.items()}
+
+
 def _ensure_private_key_file_env() -> None:
     current_path = os.environ.get("NEBIUS_AUTH_PRIVATE_KEY_FILE", "").strip()
     if current_path:
@@ -364,10 +388,12 @@ def _ensure_runtime_auth_material(
 
 
 def _terraform_runtime_env(config: ConfigV1) -> dict[str, str]:
-    secret_values = _mysterybox_secret_values_from_env(config)
-    if not secret_values:
+    if not config.infra.mysterybox.enabled:
         return {}
+    secret_metadata = _mysterybox_secret_metadata_for_tf_var(config)
+    secret_values = _mysterybox_secret_values_from_env(config)
     return {
+        "TF_VAR_mysterybox_secrets": json.dumps(secret_metadata, sort_keys=True),
         "TF_VAR_mysterybox_secret_values": json.dumps(secret_values, sort_keys=True),
     }
 
@@ -1211,7 +1237,7 @@ def auth_bootstrap_command(
         bool,
         typer.Option(
             "--json",
-            help="Print machine-readable JSON output (includes secret values)",
+            help="Print machine-readable JSON output (secret values are redacted)",
         ),
     ] = False,
     github_sync: Annotated[
@@ -1319,7 +1345,7 @@ def auth_bootstrap_command(
             "service_account_created": result.service_account_created,
             "roles_created": result.roles_created,
             "roles_already_present": result.roles_already_present,
-            "github_secrets": ci_secrets,
+            "github_secrets": _redacted_secret_presence(ci_secrets),
             "github_sync": github_sync,
             "github_synced_repo": synced_repo_slug,
             "github_synced_secret_names": synced_secret_names,

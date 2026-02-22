@@ -83,7 +83,7 @@ def test_render_creates_expected_outputs(tmp_path: Path) -> None:
     assert tfvars["ssh_public_key"].startswith("ssh-ed25519 ")
     assert tfvars["ssh_jumphost_enabled"] is False
     assert tfvars["mysterybox_enabled"] is False
-    assert isinstance(tfvars["mysterybox_secrets"], list)
+    assert "mysterybox_secrets" not in tfvars
 
     assert len(result.files_written) >= 6
 
@@ -194,16 +194,7 @@ def test_render_writes_mysterybox_tfvars_without_payload_values(tmp_path: Path) 
         (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
     )
     assert tfvars["mysterybox_enabled"] is True
-    assert tfvars["mysterybox_secrets"] == [
-        {
-            "id": "n8n-runtime",
-            "scope": "apps",
-            "name": "n8n-runtime",
-            "labels": {"app": "n8n"},
-            "set_primary": True,
-            "payload_keys": ["N8N_ENCRYPTION_KEY", "N8N_BASIC_AUTH_PASSWORD"],
-        }
-    ]
+    assert "mysterybox_secrets" not in tfvars
     assert "mysterybox_secret_values" not in tfvars
 
 
