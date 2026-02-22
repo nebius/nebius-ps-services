@@ -910,8 +910,11 @@ def test_auth_bootstrap_no_github_sync_does_not_print_secret_values(monkeypatch)
         ],
     )
     assert result.exit_code == 0, result.output
-    assert "Service account: serviceaccount-123 (created)" in result.output
-    assert "Roles granted: roles/editor" in result.output
+    assert "CI auth bootstrap completed." in result.output
+    assert "Service account created." in result.output
+    assert "Role grants applied." in result.output
+    assert "Authorized key created." in result.output
+    assert "Object Storage access key created." in result.output
     assert "GitHub sync is disabled. Generated secret values are intentionally not printed." in (
         result.output
     )

@@ -700,8 +700,7 @@ def _auto_bootstrap_ci_auth_and_secrets(
             secrets={FLUX_SECRET_KEY: github_token},
         )
         console.print(
-            f"Configured missing GitHub secret(s) in {repo_slug} "
-            f"({len(updated)} secret(s))"
+            f"Configured missing GitHub secret(s) in {repo_slug} ({len(updated)} secret(s))"
         )
         return
 
@@ -730,8 +729,7 @@ def _auto_bootstrap_ci_auth_and_secrets(
         include_flux_token=True,
     )
     console.print(
-        f"Bootstrapped and synced CI auth secrets to {repo_slug} "
-        f"({len(updated)} secret(s))"
+        f"Bootstrapped and synced CI auth secrets to {repo_slug} ({len(updated)} secret(s))"
     )
 
 
@@ -1337,16 +1335,17 @@ def auth_bootstrap_command(
             print(json.dumps({"status": "ok"}, sort_keys=True))
             return
 
-        console.print(
-            f"Service account: {result.service_account_id} "
-            f"({'created' if result.service_account_created else 'existing'})"
-        )
+        console.print("CI auth bootstrap completed.")
+        if result.service_account_created:
+            console.print("Service account created.")
+        else:
+            console.print("Service account reused.")
         if result.roles_created:
-            console.print(f"Roles granted: {', '.join(result.roles_created)}")
+            console.print("Role grants applied.")
         if result.roles_already_present:
-            console.print(f"Roles already present: {', '.join(result.roles_already_present)}")
-        console.print(f"Authorized key created: {result.auth_public_key_id}")
-        console.print(f"Object Storage access key created: {result.s3_access_key_id}")
+            console.print("Role grants already present.")
+        console.print("Authorized key created.")
+        console.print("Object Storage access key created.")
         if private_key_out is not None:
             console.print("Private key file written.")
         if github_sync and synced_repo_slug is not None:

@@ -89,11 +89,11 @@ def create_app(
         try:
             context.mysterybox_client.readiness_check()
             return "ready", 200
-        except MysteryBoxClientError as exc:
-            logger.warning("readiness check failed: %s", exc)
+        except MysteryBoxClientError:
+            logger.warning("readiness check failed")
             return "not ready", 503
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("unexpected readiness check failure: %s", exc)
+        except Exception:  # pragma: no cover - defensive
+            logger.warning("unexpected readiness check failure")
             return "not ready", 503
 
     @app.get("/metrics")
@@ -132,12 +132,12 @@ def create_app(
                     key=payload_key,
                     version=version,
                 )
-            except MysteryBoxClientError as exc:
-                logger.warning("mysterybox read failed: %s", exc)
+            except MysteryBoxClientError:
+                logger.warning("mysterybox read failed")
                 REQUEST_COUNTER.labels(endpoint=endpoint, status="502").inc()
                 return jsonify({"error": "mysterybox read failed"}), 502
             except Exception:  # pragma: no cover - defensive
-                logger.exception("unexpected bridge error")
+                logger.error("unexpected bridge error")
                 REQUEST_COUNTER.labels(endpoint=endpoint, status="500").inc()
                 return jsonify({"error": "unexpected bridge error"}), 500
 
