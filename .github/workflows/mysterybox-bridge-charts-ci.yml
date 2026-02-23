@@ -35,8 +35,8 @@ jobs:
         run: |
           ct lint --config services/mysterybox-bridge/charts/ct.yaml --target-branch "${{ github.base_ref }}"
 
-  golden:
-    name: golden-template-tests
+  render-snapshots:
+    name: render-snapshot-tests
     runs-on: ubuntu-latest
     needs: [ct-lint]
     steps:
@@ -48,5 +48,5 @@ jobs:
         with:
           version: v3.15.4
 
-      - name: Verify golden manifests
-        run: python3 services/mysterybox-bridge/charts/tests/golden_test.py
+      - name: Verify chart render snapshots
+        run: python3 services/mysterybox-bridge/charts/tests/all_tests.py

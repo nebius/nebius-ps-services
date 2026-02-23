@@ -471,7 +471,7 @@ def _seed_external_secrets_mysterybox_auth_secret(config: ConfigV1) -> None:
             {"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": namespace}}
         )
 
-    endpoint = os.environ.get("NEBIUS_ENDPOINT", "api.nebius.cloud:443").strip()
+    endpoint = os.environ.get("NEBIUS_API_ENDPOINT", "api.nebius.cloud:443").strip()
     secret_doc = {
         "apiVersion": "v1",
         "kind": "Secret",
@@ -485,7 +485,7 @@ def _seed_external_secrets_mysterybox_auth_secret(config: ConfigV1) -> None:
             "NEBIUS_SA_ID": os.environ["NEBIUS_SA_ID"],
             "NEBIUS_AUTH_PUBLIC_KEY_ID": os.environ["NEBIUS_AUTH_PUBLIC_KEY_ID"],
             "NEBIUS_AUTH_PRIVATE_KEY_PEM": os.environ["NEBIUS_AUTH_PRIVATE_KEY_PEM"],
-            "NEBIUS_ENDPOINT": endpoint or "api.nebius.cloud:443",
+            "NEBIUS_API_ENDPOINT": endpoint or "api.nebius.cloud:443",
         },
     }
     _apply_kubernetes_doc(secret_doc)
