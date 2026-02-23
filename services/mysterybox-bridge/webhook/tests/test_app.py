@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import replace
-
 from mysterybox_bridge.app import create_app
 from mysterybox_bridge.config import Settings
 
@@ -70,18 +68,13 @@ def test_secret_endpoint_returns_value() -> None:
     assert fake.calls == [("my-secret", "password", "v1")]
 
 
-def test_secret_endpoint_reads_post_body_when_query_missing() -> None:
-    settings = replace(_settings(), webhook_auth_header=None, webhook_auth_token=None)
-    fake = FakeMysteryBoxClient(value="abc")
-    app = create_app(settings=settings, mysterybox_client=fake)
+def test_secret_endpoint_rejects_post_requests() -> None:
+    settings = _settings()
+    app = create_app(settings=settings, mysterybox_client=FakeMysteryBoxClient())
     client = app.test_client()
 
-    response = client.post(
-        "/v1/secret",
-        json={"secret": "n8n-runtime", "key": "N8N_ENCRYPTION_KEY"},
-    )
-    assert response.status_code == 200
-    assert response.get_json() == {"value": "abc"}
+    response = client.post("/v1/secret", json={"secret": "n8n-runtime", "key": "API_KEY"})
+    assert response.status_code == 405
 
 
 def test_readyz_returns_200_when_bridge_is_ready() -> None:

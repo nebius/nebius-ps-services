@@ -282,8 +282,14 @@ def test_render_writes_external_secrets_mysterybox_flux_artifacts(tmp_path: Path
     )
     assert bridge_deploy_doc["spec"]["template"]["spec"]["containers"][0]["command"][0] == "/bin/sh"
     assert (
-        "app:create_app()"
+        "--factory mysterybox_bridge.app:create_app"
         in bridge_deploy_doc["spec"]["template"]["spec"]["containers"][0]["command"][2]
+    )
+    assert (
+        bridge_deploy_doc["spec"]["template"]["spec"]["containers"][0]["readinessProbe"][
+            "httpGet"
+        ]["path"]
+        == "/readyz"
     )
     assert (
         bridge_deploy_doc["spec"]["template"]["spec"]["containers"][0]["env"][1]["name"]

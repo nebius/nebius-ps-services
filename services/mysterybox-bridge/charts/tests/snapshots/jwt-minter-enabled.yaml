@@ -3,11 +3,11 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: golden-jwt-minter
+  name: snapshot-jwt-minter
   labels:
     helm.sh/chart: jwt-minter-0.2.0
     app.kubernetes.io/name: jwt-minter
-    app.kubernetes.io/instance: golden-jwt-minter
+    app.kubernetes.io/instance: snapshot-jwt-minter
     app.kubernetes.io/version: "0.1.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: "mysterybox-bridge"
@@ -17,11 +17,11 @@ automountServiceAccountToken: true
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: golden-jwt-minter
+  name: snapshot-jwt-minter
   labels:
     helm.sh/chart: jwt-minter-0.2.0
     app.kubernetes.io/name: jwt-minter
-    app.kubernetes.io/instance: golden-jwt-minter
+    app.kubernetes.io/instance: snapshot-jwt-minter
     app.kubernetes.io/version: "0.1.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: "mysterybox-bridge"
@@ -34,32 +34,32 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: golden-jwt-minter
+  name: snapshot-jwt-minter
   labels:
     helm.sh/chart: jwt-minter-0.2.0
     app.kubernetes.io/name: jwt-minter
-    app.kubernetes.io/instance: golden-jwt-minter
+    app.kubernetes.io/instance: snapshot-jwt-minter
     app.kubernetes.io/version: "0.1.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: "mysterybox-bridge"
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: golden-jwt-minter
+  name: snapshot-jwt-minter
 subjects:
   - kind: ServiceAccount
-    name: golden-jwt-minter
+    name: snapshot-jwt-minter
     namespace: external-secrets
 ---
 # Source: jwt-minter/templates/cronjob.yaml
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: golden-jwt-minter
+  name: snapshot-jwt-minter
   labels:
     helm.sh/chart: jwt-minter-0.2.0
     app.kubernetes.io/name: jwt-minter
-    app.kubernetes.io/instance: golden-jwt-minter
+    app.kubernetes.io/instance: snapshot-jwt-minter
     app.kubernetes.io/version: "0.1.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: "mysterybox-bridge"
@@ -78,9 +78,9 @@ spec:
         metadata:
           labels:
             app.kubernetes.io/name: jwt-minter
-            app.kubernetes.io/instance: golden-jwt-minter
+            app.kubernetes.io/instance: snapshot-jwt-minter
         spec:
-          serviceAccountName: golden-jwt-minter
+          serviceAccountName: snapshot-jwt-minter
           automountServiceAccountToken: true
           restartPolicy: OnFailure
           securityContext:

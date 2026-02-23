@@ -343,18 +343,18 @@ If the target secret is not created, inspect:
 
 - PR chart CI workflow:
   - `.github/workflows/mysterybox-bridge-charts-ci.yml`
-  - runs `ct lint` and golden manifest tests
+  - runs `ct lint` and chart render snapshot tests
 
 - Local validation:
 
 ```bash
 helm lint services/mysterybox-bridge/charts/mysterybox-webhook
 helm lint services/mysterybox-bridge/charts/jwt-minter
-python3 services/mysterybox-bridge/charts/tests/golden_test.py
+python3 services/mysterybox-bridge/charts/tests/all_tests.py
 ```
 
-- Update golden snapshots after intentional chart rendering changes:
+- Update snapshots after intentional chart rendering changes:
 
 ```bash
-python3 services/mysterybox-bridge/charts/tests/golden_test.py --update
+python3 services/mysterybox-bridge/charts/tests/all_tests.py --update
 ```

@@ -234,7 +234,7 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                   NEBIUS_SA_ID: ${{{{ secrets.NEBIUS_SA_ID }}}}
                   NEBIUS_AUTH_PUBLIC_KEY_ID: ${{{{ secrets.NEBIUS_AUTH_PUBLIC_KEY_ID }}}}
                   NEBIUS_AUTH_PRIVATE_KEY_PEM: ${{{{ secrets.NEBIUS_AUTH_PRIVATE_KEY_PEM }}}}
-                  NEBIUS_ENDPOINT: api.nebius.cloud:443
+                  NEBIUS_API_ENDPOINT: api.nebius.cloud:443
                 run: |
                   nebius-cxcli flux bootstrap "${{{{ matrix.config }}}}"
 

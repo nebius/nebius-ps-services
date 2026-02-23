@@ -40,13 +40,10 @@ def _request_auth_ok(settings: Settings) -> bool:
     return provided == (settings.webhook_auth_token or "")
 
 
-def _request_param(name: str, body: dict[str, Any]) -> str | None:
+def _request_query_param(name: str) -> str | None:
     value = request.args.get(name)
     if value is not None and value.strip():
         return value.strip()
-    raw = body.get(name)
-    if isinstance(raw, str) and raw.strip():
-        return raw.strip()
     return None
 
 
@@ -100,7 +97,7 @@ def create_app(
     def metrics() -> tuple[bytes, int, dict[str, str]]:
         return generate_latest(), 200, {"Content-Type": CONTENT_TYPE_LATEST}
 
-    @app.route(context.settings.secret_endpoint_path, methods=["GET", "POST"])
+    @app.get(context.settings.secret_endpoint_path)
     def get_secret() -> Any:
         endpoint = context.settings.secret_endpoint_path
 
@@ -108,11 +105,10 @@ def create_app(
             REQUEST_COUNTER.labels(endpoint=endpoint, status="403").inc()
             return jsonify({"error": "forbidden"}), 403
 
-        body = request.get_json(silent=True) or {}
         with REQUEST_DURATION.labels(endpoint=endpoint).time():
-            secret_reference = _request_param("secret", body)
-            payload_key = _request_param("key", body)
-            version = _request_param("version", body)
+            secret_reference = _request_query_param("secret")
+            payload_key = _request_query_param("key")
+            version = _request_query_param("version")
 
             if not secret_reference or not payload_key:
                 REQUEST_COUNTER.labels(endpoint=endpoint, status="400").inc()

@@ -9,7 +9,7 @@ Python requirement: `3.12+`.
 ## Usage Modes
 
 1. Standalone in any Kubernetes project that uses ESO.
-2. Integrated via `services/nebius-cxcli` (Flux manifests rendered automatically).
+2. Integrated via [`services/nebius-cxcli`](../nebius-cxcli/) (Flux manifests rendered automatically).
 
 ## High-Level Flow
 
@@ -19,52 +19,128 @@ Python requirement: `3.12+`.
 4. Bridge resolves secret name/ID and reads the payload entry from MysteryBox.
 5. Bridge returns `{ "value": "..." }`; ESO writes/updates the target Kubernetes Secret.
 
-## Project Structure
+## Standalone Use (Manual Workflow)
 
-```text
-services/mysterybox-bridge/
-  docs/
-    design.md
-  webhook/
-    Dockerfile
-    Makefile
-    pyproject.toml
-    README.md
-    src/
-      mysterybox_bridge/
-        __init__.py
-        __main__.py
-        app.py
-        config.py
-        iam.py
-        cache.py
-        mysterybox_client.py
-    tests/
-      test_app.py
-      test_iam.py
-  charts/
-    mysterybox-webhook/
-    jwt-minter/
-```
+When you do not use `nebius-cxcli`, you install ESO and create all required
+resources manually.
 
-## Webhook Local Dev
+### 1. Install ESO via Helm
+
+Use the official ESO Helm installation flow:
+[Install with Helm](https://external-secrets.io/latest/introduction/getting-started/#installing-with-helm)
+using chart repo [`https://charts.external-secrets.io`](https://charts.external-secrets.io).
 
 ```bash
-cd services/mysterybox-bridge/webhook
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-python -m ruff check src tests
-python -m pytest -q
+helm repo add external-secrets https://charts.external-secrets.io
+helm repo update
+
+kubectl create namespace external-secrets --dry-run=client -o yaml | kubectl apply -f -
+
+helm upgrade --install external-secrets external-secrets/external-secrets \
+  --namespace external-secrets
 ```
 
-## Standalone Use
+### 2. Deploy mysterybox-bridge webhook chart
 
-1. Install ESO in your cluster.
-2. Build and push bridge image (`quay.io/nebius/mysterybox-bridge:<tag>`).
-3. Deploy `charts/mysterybox-webhook`.
-4. Create a `ClusterSecretStore` webhook config pointing to `/v1/secret`.
-5. Create `ExternalSecret` resources with MysteryBox secret reference + payload key.
+```bash
+helm upgrade --install mysterybox-webhook ./charts/mysterybox-webhook \
+  --namespace external-secrets \
+  --create-namespace \
+  --set image.repository=quay.io/nebius/mysterybox-bridge \
+  --set image.tag=<tag>
+```
+
+### 3. Create required Secrets (manual, no automation)
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: nebius-mysterybox-auth
+  namespace: external-secrets
+type: Opaque
+stringData:
+  NEBIUS_PROJECT_ID: "<project-id>"
+  NEBIUS_SA_ID: "<service-account-id>"
+  NEBIUS_AUTH_PUBLIC_KEY_ID: "<auth-public-key-id>"
+  NEBIUS_AUTH_PRIVATE_KEY_PEM: |
+    -----BEGIN PRIVATE KEY-----
+    ...
+    -----END PRIVATE KEY-----
+```
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mysterybox-bridge-webhook-auth
+  namespace: external-secrets
+  labels:
+    external-secrets.io/type: webhook
+type: Opaque
+stringData:
+  token: "<shared-webhook-token>"
+```
+
+### 4. Create ClusterSecretStore CR
+
+```yaml
+apiVersion: external-secrets.io/v1
+kind: ClusterSecretStore
+metadata:
+  name: nebius-mysterybox
+spec:
+  provider:
+    webhook:
+      url: >-
+        http://mysterybox-webhook.external-secrets.svc.cluster.local:8080
+        /v1/secret?secret={{ .remoteRef.key }}&key={{ .remoteRef.property }}
+        &version={{ .remoteRef.version }}
+      method: GET
+      result:
+        jsonPath: "$.value"
+      headers:
+        X-MBX-Request: "{{ .bridgeAuth.token }}"
+      secrets:
+        - name: bridgeAuth
+          secretRef:
+            name: mysterybox-bridge-webhook-auth
+            namespace: external-secrets
+```
+
+### 5. Create ExternalSecret CR
+
+```yaml
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: app-runtime-secrets
+  namespace: default
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: nebius-mysterybox
+    kind: ClusterSecretStore
+  target:
+    name: app-runtime-secrets
+    creationPolicy: Owner
+    deletionPolicy: Retain
+  data:
+    - secretKey: API_KEY
+      remoteRef:
+        # MysteryBox secret name or mbsec-* id.
+        key: my-app-runtime
+        property: API_KEY
+```
+
+### 6. Verify
+
+```bash
+kubectl -n external-secrets get pods
+kubectl -n external-secrets logs deploy/mysterybox-webhook --tail=100
+kubectl -n default get externalsecret app-runtime-secrets
+kubectl -n default get secret app-runtime-secrets -o yaml
+```
 
 See:
 
@@ -75,12 +151,14 @@ See:
 
 ## Optional Chart Features
 
-- TLS for webhook service is optional (`tls.enabled=false` by default).
-  - Maintenance-friendly option: `tls.certManager.enabled=true` to auto-rotate
-    self-signed server certs.
-- Prometheus `ServiceMonitor` is optional (`monitoring.serviceMonitor.enabled=false` by default).
-  - Requires Prometheus Operator CRDs in the cluster.
+- TLS is optional (`tls.enabled=false` by default).
+- If you enable `tls.certManager.enabled=true`, cert-manager must be installed
+  in the cluster (CRDs + controller).
+- `ServiceMonitor` is optional (`monitoring.serviceMonitor.enabled=false` by default)
+  and requires Prometheus Operator CRDs.
 - Optional `NetworkPolicy`, `PodDisruptionBudget`, and configurable HPA are available.
+- When using `nebius-cxcli`, required platform apps are installed end-to-end via
+  automation based on your enabled configuration.
 
 ## nebius-cxcli Integration
 
@@ -112,7 +190,7 @@ It also seeds required runtime Kubernetes Secrets used by bridge auth.
 - Trigger: PRs that touch `services/mysterybox-bridge/charts/**`
 - Checks:
   - `ct lint` (chart-testing)
-  - golden manifest snapshot tests
+  - chart rendering snapshot tests (`all_tests.py`)
 
 ### Run chart checks locally
 
@@ -121,9 +199,98 @@ It also seeds required runtime Kubernetes Secrets used by bridge auth.
 helm lint services/mysterybox-bridge/charts/mysterybox-webhook
 helm lint services/mysterybox-bridge/charts/jwt-minter
 
-# Verify golden manifests
-python3 services/mysterybox-bridge/charts/tests/golden_test.py
+# Verify chart rendering snapshots
+python3 services/mysterybox-bridge/charts/tests/all_tests.py
 
-# Update golden manifests after intentional chart output changes
-python3 services/mysterybox-bridge/charts/tests/golden_test.py --update
+# Refresh snapshots after intentional rendering changes
+python3 services/mysterybox-bridge/charts/tests/all_tests.py --update
+```
+
+`all_tests.py` validates rendered manifests for these scenarios:
+
+- `mysterybox-webhook` default values.
+- `mysterybox-webhook` with `hpa.enabled=true`.
+- `mysterybox-webhook` with `tls.enabled=true` and cert-manager mode.
+- `mysterybox-webhook` with `monitoring.serviceMonitor.enabled=true`.
+- `jwt-minter` with `enabled=true`.
+
+`--update` re-renders those scenarios and overwrites files in
+`services/mysterybox-bridge/charts/tests/snapshots/`. Use it only when chart output
+changes are intentional, then review and commit the updated snapshots.
+
+## Webhook Local Dev
+
+```bash
+cd services/mysterybox-bridge/webhook
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+python -m ruff check src tests
+python -m pytest -q
+```
+
+## Project Structure
+
+```text
+services/mysterybox-bridge/
+  README.md                                  # Top-level overview and standalone workflow.
+  docs/
+    design.md                                # Detailed architecture and design decisions.
+  webhook/
+    Dockerfile                               # Webhook container image build.
+    Makefile                                 # Local install/lint/test/build helpers.
+    pyproject.toml                           # Python package metadata and tool config.
+    README.md                                # Webhook-only local development notes.
+    src/
+      mysterybox_bridge/
+        __init__.py                          # Package init and version export.
+        __main__.py                          # CLI entrypoint (`python -m mysterybox_bridge`).
+        app.py                               # Flask routes (`/healthz`, `/readyz`, `/v1/secret`).
+        config.py                            # Environment settings and validation.
+        iam.py                               # Nebius SDK auth initialization (token or SA key).
+        cache.py                             # Thread-safe in-memory TTL cache.
+        mysterybox_client.py                 # Secret-id resolution and payload read logic.
+    tests/
+      test_app.py                            # Webhook HTTP contract tests.
+      test_iam.py                            # SDK provider auth path tests.
+      test_config.py                         # Env parsing/validation tests.
+      test_mysterybox_client.py              # Payload parsing behavior tests.
+  charts/
+    ct.yaml                                  # Chart-testing configuration.
+    mysterybox-webhook/
+      Chart.yaml                             # Chart metadata/version.
+      values.yaml                            # Default deployment values.
+      values.schema.json                     # Values schema validation.
+      README.md                              # Install and configuration guide.
+      templates/
+        _helpers.tpl                         # Shared template helpers.
+        serviceaccount.yaml                  # ServiceAccount resource.
+        service.yaml                         # ClusterIP Service for webhook endpoint.
+        deployment.yaml                      # Webhook Deployment (gunicorn/env/probes/security).
+        certificate.yaml                     # Optional cert-manager Issuer/Certificate.
+        servicemonitor.yaml                  # Optional Prometheus ServiceMonitor.
+        pdb.yaml                             # Optional PodDisruptionBudget.
+        networkpolicy.yaml                   # Optional ingress NetworkPolicy.
+        hpa.yaml                             # Optional HorizontalPodAutoscaler.
+        NOTES.txt                            # Post-install notes.
+    jwt-minter/
+      Chart.yaml                             # Optional chart metadata/version.
+      values.yaml                            # Optional chart defaults.
+      values.schema.json                     # Optional chart schema validation.
+      README.md                              # Optional chart usage and scope.
+      templates/
+        _helpers.tpl                         # Shared template helpers.
+        serviceaccount.yaml                  # ServiceAccount for CronJob.
+        role.yaml                            # Role for Secret writes.
+        rolebinding.yaml                     # RoleBinding for ServiceAccount.
+        cronjob.yaml                         # Optional CronJob scaffold.
+        NOTES.txt                            # Post-install notes.
+    tests/
+      all_tests.py                           # Chart render snapshot test runner.
+      snapshots/
+        jwt-minter-enabled.yaml              # Snapshot: jwt-minter enabled render.
+        mysterybox-webhook-default.yaml      # Snapshot: mysterybox-webhook default render.
+        mysterybox-webhook-hpa.yaml          # Snapshot: webhook with HPA enabled.
+        mysterybox-webhook-servicemonitor.yaml # Snapshot: webhook with ServiceMonitor enabled.
+        mysterybox-webhook-tls-certmanager.yaml # Snapshot: webhook with TLS cert-manager mode.
 ```
