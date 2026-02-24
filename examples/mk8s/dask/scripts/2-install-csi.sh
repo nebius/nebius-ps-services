@@ -2,8 +2,10 @@
 set -euo pipefail
 
 echo "===> Reading terraform outputs..."
-export MOUNT_TAG=$(terraform -chdir=terraform output -raw mount_tag)
-export NB_CLUSTER_ID=$(terraform -chdir=terraform output -raw nb_cluster_id)
+MOUNT_TAG="$(terraform -chdir=terraform output -raw mount_tag)"
+export MOUNT_TAG
+NB_CLUSTER_ID="$(terraform -chdir=terraform output -raw nb_cluster_id)"
+export NB_CLUSTER_ID
 
 echo "===> Getting kubeconfig..."
 nebius mk8s cluster get-credentials \
@@ -14,7 +16,7 @@ helm pull oci://cr.eu-north1.nebius.cloud/mk8s/helm/csi-mounted-fs-path --versio
 
 echo "===> Installing CSI chart..."
 helm upgrade csi-mounted-fs-path ./csi-mounted-fs-path-0.1.3.tgz --install \
-  --set dataDir=/mnt/$MOUNT_TAG/csi-mounted-fs-path-data/
+  --set "dataDir=/mnt/${MOUNT_TAG}/csi-mounted-fs-path-data/"
 
 rm csi-mounted-fs-path-0.1.3.tgz
 

@@ -1,122 +1,111 @@
-name: nebius-cxcli-release
+name: nebius-cxcli-release-publish
 
 on:
-  workflow_run:
-    workflows: ["nebius-cxcli-ci"]
-    types: [completed]
+  push:
+    tags:
+      - "nebius-cxcli-v*"
 
 permissions:
   contents: write
 
 concurrency:
-  group: nebius-cxcli-release
+  group: nebius-cxcli-release-${{ github.ref }}
   cancel-in-progress: false
+
+env:
+  APP_DIR: services/nebius-cxcli
+  TAG_PREFIX: nebius-cxcli
+  MAIN_BRANCH: main
+  ASSET_GLOB: "dist/*.whl"
 
 jobs:
   release:
-    if: >
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: services/nebius-cxcli
+        working-directory: ${{ env.APP_DIR }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Resolve release version and tag
+      - name: Resolve release version from tag
         id: version
+        env:
+          REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          VERSION="$(python - <<'PY'
-          import pathlib
-          import re
+          if [[ ! "${REF_NAME}" =~ ^${TAG_PREFIX}-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "::error::Tag '${REF_NAME}' must match ${TAG_PREFIX}-vMAJOR.MINOR.PATCH"
+            exit 1
+          fi
+          echo "tag=${REF_NAME}" >> "$GITHUB_OUTPUT"
+          echo "version=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
 
-          changelog = pathlib.Path("CHANGELOG.md")
-          for line in changelog.read_text(encoding="utf-8").splitlines():
-              match = re.match(r"^##\s+\[?([0-9]+\.[0-9]+\.[0-9]+)\]?(?:\s+-.*)?$", line.strip())
-              if match:
-                  print(match.group(1))
-                  break
-          else:
-              raise SystemExit("No release version heading found in CHANGELOG.md")
-          PY
-          )"
-          TAG="nebius-cxcli-v${VERSION}"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+      - name: Ensure tag commit belongs to main history
+        run: |
+          set -euo pipefail
+          git fetch origin "${MAIN_BRANCH}" --depth=1
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" "origin/${MAIN_BRANCH}"; then
+            echo "::error::Tag commit ${GITHUB_SHA} is not in origin/${MAIN_BRANCH} history"
+            exit 1
+          fi
 
-      - name: Check tag and release state
+      - name: Check release existence
         id: state
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          TAG="${{ steps.version.outputs.tag }}"
-
-          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
-            echo "tag_exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag_exists=false" >> "$GITHUB_OUTPUT"
-          fi
-
-          if gh release view "${TAG}" >/dev/null 2>&1; then
+          if gh release view "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
             echo "release_exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "release_exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Install build tooling
+      - name: Set up Python
+        if: steps.state.outputs.release_exists == 'false'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        if: steps.state.outputs.release_exists == 'false'
         run: |
           python -m pip install --upgrade pip
-          pip install build
+          pip install -e ".[dev]"
 
-      - name: Create and push tag
-        if: steps.state.outputs.tag_exists == 'false'
-        run: |
-          set -euo pipefail
-          TAG="${{ steps.version.outputs.tag }}"
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "${TAG}" -m "Release ${TAG}" "${GITHUB_SHA}"
-          git push origin "refs/tags/${TAG}"
+      - name: Lint
+        if: steps.state.outputs.release_exists == 'false'
+        run: python -m ruff check src tests
 
-      - name: Checkout release tag
+      - name: Test
+        if: steps.state.outputs.release_exists == 'false'
+        run: python -m pytest -q
+
+      - name: Build artifact
         if: steps.state.outputs.release_exists == 'false'
         run: |
           set -euo pipefail
-          TAG="${{ steps.version.outputs.tag }}"
-          git fetch --force --tags origin
-          git checkout --detach "${TAG}"
-
-      - name: Build wheel
-        if: steps.state.outputs.release_exists == 'false'
-        run: |
-          set -euo pipefail
-          rm -rf dist
+          rm -rf build dist
           python -m build --wheel
 
-      - name: Resolve and verify wheel
+      - name: Resolve and verify artifact
         if: steps.state.outputs.release_exists == 'false'
-        id: wheel
+        id: asset
         run: |
           set -euo pipefail
-          WHEEL="$(ls dist/*.whl | head -n 1)"
-          if [[ -z "${WHEEL}" ]]; then
-            echo "No wheel found in dist/"
+          shopt -s nullglob
+          assets=( ${ASSET_GLOB} )
+          shopt -u nullglob
+          if [[ "${#assets[@]}" -eq 0 ]]; then
+            echo "::error::No release asset found with glob ${ASSET_GLOB}"
             exit 1
           fi
+          asset="${assets[0]}"
 
-          WHEEL_VERSION="$(python - "$WHEEL" <<'PY'
+          wheel_version="$(python - "${asset}" <<'PY'
           import sys
           import zipfile
           from email import message_from_bytes
@@ -131,34 +120,38 @@ jobs:
           PY
           )"
 
-          if [[ "${WHEEL_VERSION}" != "${{ steps.version.outputs.version }}" ]]; then
-            echo "Wheel version (${WHEEL_VERSION}) does not match release version (${{ steps.version.outputs.version }})"
+          if [[ "${wheel_version}" != "${{ steps.version.outputs.version }}" ]]; then
+            echo "::error::Wheel version (${wheel_version}) does not match tag version (${{ steps.version.outputs.version }})"
             exit 1
           fi
 
-          echo "path=${WHEEL}" >> "$GITHUB_OUTPUT"
+          echo "path=${asset}" >> "$GITHUB_OUTPUT"
 
-      - name: Generate release notes
+      - name: Generate release notes from changelog
         if: steps.state.outputs.release_exists == 'false'
         id: notes
         run: |
           set -euo pipefail
-          VERSION="${{ steps.version.outputs.version }}"
-          python - "${VERSION}" <<'PY'
+          python - "${{ steps.version.outputs.tag }}" "${{ steps.version.outputs.version }}" <<'PY'
           import pathlib
           import re
           import sys
 
-          version = sys.argv[1]
-          changelog = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8").splitlines()
-          heading = re.compile(rf"^##\s+\[?{re.escape(version)}\]?(?:\s+-.*)?$")
+          tag = sys.argv[1]
+          version = sys.argv[2]
+
+          lines = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8").splitlines()
+          patterns = [
+              re.compile(rf"^##\s+\[?{re.escape(tag)}\]?(?:\s+-.*)?$"),
+              re.compile(rf"^##\s+\[?{re.escape(version)}\]?(?:\s+-.*)?$"),
+          ]
           any_heading = re.compile(r"^##\s+")
 
           capture = False
           notes = []
-          for line in changelog:
+          for line in lines:
               stripped = line.strip()
-              if not capture and heading.match(stripped):
+              if not capture and any(p.match(stripped) for p in patterns):
                   capture = True
                   continue
               if capture and any_heading.match(stripped):
@@ -166,25 +159,69 @@ jobs:
               if capture:
                   notes.append(line)
 
-          notes_text = "\n".join(notes).strip()
-          if not notes_text:
-              notes_text = f"Release nebius-cxcli-v{version}"
-
+          notes_text = "\n".join(notes).strip() or f"Release {tag}"
           pathlib.Path("release-notes.md").write_text(notes_text + "\n", encoding="utf-8")
           PY
           echo "path=release-notes.md" >> "$GITHUB_OUTPUT"
 
-      - name: Create GitHub release and upload wheel
+      - name: Create GitHub release
         if: steps.state.outputs.release_exists == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh release create "${{ steps.version.outputs.tag }}" "${{ steps.wheel.outputs.path }}" \
+          gh release create "${{ steps.version.outputs.tag }}" "${{ steps.asset.outputs.path }}" \
             --title "${{ steps.version.outputs.tag }}" \
             --notes-file "${{ steps.notes.outputs.path }}"
+
+      - name: Write release manifest
+        if: steps.state.outputs.release_exists == 'false'
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg actor "${GITHUB_ACTOR}" \
+            --arg event "${GITHUB_EVENT_NAME}" \
+            --arg ref "${GITHUB_REF}" \
+            --arg tag "${{ steps.version.outputs.tag }}" \
+            --arg version "${{ steps.version.outputs.version }}" \
+            --arg sha "${GITHUB_SHA}" \
+            --arg asset "${{ steps.asset.outputs.path }}" \
+            --arg run_id "${GITHUB_RUN_ID}" \
+            --arg run_attempt "${GITHUB_RUN_ATTEMPT}" \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            '{
+              actor: $actor,
+              repository: $repository,
+              event: $event,
+              ref: $ref,
+              tag: $tag,
+              version: $version,
+              sha: $sha,
+              asset: $asset,
+              run_id: $run_id,
+              run_attempt: $run_attempt,
+              timestamp_utc: now | todate
+            }' > release-manifest.json
+
+      - name: Upload release manifest artifact
+        if: steps.state.outputs.release_exists == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nebius-cxcli-release-manifest-${{ github.run_id }}
+          path: ${{ env.APP_DIR }}/release-manifest.json
 
       - name: Release already exists
         if: steps.state.outputs.release_exists == 'true'
         run: |
           echo "Release ${{ steps.version.outputs.tag }} already exists. Skipping."
+
+      - name: Publish run summary
+        run: |
+          {
+            echo "### nebius-cxcli release publish"
+            echo ""
+            echo "- Tag: \`${{ steps.version.outputs.tag }}\`"
+            echo "- Version: \`${{ steps.version.outputs.version }}\`"
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Release exists: \`${{ steps.state.outputs.release_exists }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

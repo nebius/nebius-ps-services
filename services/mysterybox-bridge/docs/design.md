@@ -56,7 +56,7 @@ Request-level protection between ESO and bridge is optional and supported with:
 ## 3.1 Standalone Workflow (No nebius-cxcli)
 
 1. Install ESO in cluster.
-2. Build/push image (`quay.io/nebius/mysterybox-bridge:<tag>`).
+2. Publish bridge image via release tag workflow (`quay.io/nebius/mysterybox-bridge:<tag>`).
 3. Deploy Helm chart `charts/mysterybox-webhook`.
 4. Create bridge auth secret(s) in cluster namespace.
 5. Create `ClusterSecretStore` using webhook provider.
@@ -73,6 +73,20 @@ Request-level protection between ESO and bridge is optional and supported with:
 3. `nebius-cxcli flux bootstrap` seeds runtime Kubernetes auth secrets.
 4. Flux reconciles manifests; ESO starts sync.
 
+## 3.3 Release and Image Publish Workflow
+
+Use `services/mysterybox-bridge/publish-image.sh` with two modes:
+
+1. `--prep X.Y.Z` on a working branch:
+   - rolls `CHANGELOG.md` `Unreleased` entries into
+     `mysterybox-bridge-vX.Y.Z`
+   - commits and pushes changelog updates for PR review
+2. merge the PR to `main`
+3. `--publish X.Y.Z` on clean synced `main`:
+   - creates and pushes tag `mysterybox-bridge-vX.Y.Z`
+   - tag push triggers `.github/workflows/mysterybox-bridge-image.yml`
+   - workflow builds and pushes release image tags
+
 ## 4. Security Boundaries
 
 - Secret values are **not** stored in Git.
@@ -84,8 +98,10 @@ Request-level protection between ESO and bridge is optional and supported with:
 
 ```text
 services/mysterybox-bridge/
+  CHANGELOG.md
   README.md
   .gitignore
+  publish-image.sh
   docs/
     design.md
   webhook/
@@ -138,8 +154,10 @@ services/mysterybox-bridge/
 
 ## 5.1 Top-level Files
 
+- `CHANGELOG.md`: release history with `Unreleased` staging section.
 - `README.md`: quick-start and usage modes (standalone and via `nebius-cxcli`).
 - `.gitignore`: local/dev/build/cache exclusions for this project.
+- `publish-image.sh`: release helper with two modes (`--prep`, `--publish`).
 - `docs/design.md`: architecture and workflow contract.
 
 ## 5.2 `webhook/` Files
@@ -343,18 +361,18 @@ If the target secret is not created, inspect:
 
 - PR chart CI workflow:
   - `.github/workflows/mysterybox-bridge-charts-ci.yml`
-  - runs `ct lint` and golden manifest tests
+  - runs `ct lint` and chart render snapshot tests
 
 - Local validation:
 
 ```bash
 helm lint services/mysterybox-bridge/charts/mysterybox-webhook
 helm lint services/mysterybox-bridge/charts/jwt-minter
-python3 services/mysterybox-bridge/charts/tests/golden_test.py
+python3 services/mysterybox-bridge/charts/tests/all_tests.py
 ```
 
-- Update golden snapshots after intentional chart rendering changes:
+- Update snapshots after intentional chart rendering changes:
 
 ```bash
-python3 services/mysterybox-bridge/charts/tests/golden_test.py --update
+python3 services/mysterybox-bridge/charts/tests/all_tests.py --update
 ```

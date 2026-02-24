@@ -1,0 +1,229 @@
+name: __PROJECT_NAME__-release-publish
+
+on:
+  push:
+    tags:
+      - "__PROJECT_TAG_PREFIX__-v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: __PROJECT_NAME__-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  APP_DIR: __APP_DIR__
+  TAG_PREFIX: __PROJECT_TAG_PREFIX__
+  MAIN_BRANCH: __MAIN_BRANCH__
+  ASSET_GLOB: "__ASSET_GLOB__"
+
+jobs:
+  release:
+    name: __PROJECT_NAME__-release
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ env.APP_DIR }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release version from tag
+        id: version
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${REF_NAME}" =~ ^${TAG_PREFIX}-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "::error::Tag '${REF_NAME}' must match ${TAG_PREFIX}-vMAJOR.MINOR.PATCH"
+            exit 1
+          fi
+          echo "tag=${REF_NAME}" >> "$GITHUB_OUTPUT"
+          echo "version=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure tag commit belongs to main history
+        run: |
+          set -euo pipefail
+          git fetch origin "${MAIN_BRANCH}" --depth=1
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" "origin/${MAIN_BRANCH}"; then
+            echo "::error::Tag commit ${GITHUB_SHA} is not in origin/${MAIN_BRANCH} history"
+            exit 1
+          fi
+
+      - name: Check release existence
+        id: state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+            echo "release_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "release_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        if: steps.state.outputs.release_exists == 'false'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "__PYTHON_VERSION__"
+
+      - name: Install dependencies
+        if: steps.state.outputs.release_exists == 'false'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Lint
+        if: steps.state.outputs.release_exists == 'false'
+        run: python -m ruff check src tests
+
+      - name: Test
+        if: steps.state.outputs.release_exists == 'false'
+        run: python -m pytest -q
+
+      - name: Build artifact
+        if: steps.state.outputs.release_exists == 'false'
+        run: |
+          set -euo pipefail
+          rm -rf dist
+          python -m build --wheel
+
+      - name: Resolve and verify artifact
+        if: steps.state.outputs.release_exists == 'false'
+        id: asset
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          assets=( ${ASSET_GLOB} )
+          shopt -u nullglob
+          if [[ "${#assets[@]}" -eq 0 ]]; then
+            echo "::error::No release asset found with glob ${ASSET_GLOB}"
+            exit 1
+          fi
+          asset="${assets[0]}"
+
+          # Wheel version validation; adapt if you publish non-wheel artifacts.
+          wheel_version="$(python - "${asset}" <<'PY'
+          import sys
+          import zipfile
+          from email import message_from_bytes
+
+          wheel = sys.argv[1]
+          with zipfile.ZipFile(wheel) as zf:
+              metadata_names = [n for n in zf.namelist() if n.endswith("METADATA")]
+              if not metadata_names:
+                  raise SystemExit("No METADATA found in wheel")
+              metadata = message_from_bytes(zf.read(metadata_names[0]))
+              print(metadata.get("Version", ""))
+          PY
+          )"
+
+          if [[ "${wheel_version}" != "${{ steps.version.outputs.version }}" ]]; then
+            echo "::error::Wheel version (${wheel_version}) does not match tag version (${{ steps.version.outputs.version }})"
+            exit 1
+          fi
+
+          echo "path=${asset}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release notes from changelog
+        if: steps.state.outputs.release_exists == 'false'
+        id: notes
+        run: |
+          set -euo pipefail
+          python - "${{ steps.version.outputs.tag }}" "${{ steps.version.outputs.version }}" <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          tag = sys.argv[1]
+          version = sys.argv[2]
+
+          lines = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8").splitlines()
+          patterns = [
+              re.compile(rf"^##\s+\[?{re.escape(tag)}\]?(?:\s+-.*)?$"),
+              re.compile(rf"^##\s+\[?{re.escape(version)}\]?(?:\s+-.*)?$"),
+          ]
+          any_heading = re.compile(r"^##\s+")
+
+          capture = False
+          notes = []
+          for line in lines:
+              stripped = line.strip()
+              if not capture and any(p.match(stripped) for p in patterns):
+                  capture = True
+                  continue
+              if capture and any_heading.match(stripped):
+                  break
+              if capture:
+                  notes.append(line)
+
+          notes_text = "\n".join(notes).strip() or f"Release {tag}"
+          pathlib.Path("release-notes.md").write_text(notes_text + "\n", encoding="utf-8")
+          PY
+          echo "path=release-notes.md" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        if: steps.state.outputs.release_exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "${{ steps.version.outputs.tag }}" "${{ steps.asset.outputs.path }}" \
+            --title "${{ steps.version.outputs.tag }}" \
+            --notes-file "${{ steps.notes.outputs.path }}"
+
+      - name: Write release manifest
+        if: steps.state.outputs.release_exists == 'false'
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg actor "${GITHUB_ACTOR}" \
+            --arg event "${GITHUB_EVENT_NAME}" \
+            --arg ref "${GITHUB_REF}" \
+            --arg tag "${{ steps.version.outputs.tag }}" \
+            --arg version "${{ steps.version.outputs.version }}" \
+            --arg sha "${GITHUB_SHA}" \
+            --arg asset "${{ steps.asset.outputs.path }}" \
+            --arg run_id "${GITHUB_RUN_ID}" \
+            --arg run_attempt "${GITHUB_RUN_ATTEMPT}" \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            '{
+              actor: $actor,
+              repository: $repository,
+              event: $event,
+              ref: $ref,
+              tag: $tag,
+              version: $version,
+              sha: $sha,
+              asset: $asset,
+              run_id: $run_id,
+              run_attempt: $run_attempt,
+              timestamp_utc: now | todate
+            }' > release-manifest.json
+
+      - name: Upload release manifest artifact
+        if: steps.state.outputs.release_exists == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: __PROJECT_NAME__-release-manifest-${{ github.run_id }}
+          path: ${{ env.APP_DIR }}/release-manifest.json
+
+      - name: Release already exists
+        if: steps.state.outputs.release_exists == 'true'
+        run: |
+          echo "Release ${{ steps.version.outputs.tag }} already exists. Skipping."
+
+      - name: Publish run summary
+        run: |
+          {
+            echo "### __PROJECT_NAME__ release publish"
+            echo ""
+            echo "- Tag: \`${{ steps.version.outputs.tag }}\`"
+            echo "- Version: \`${{ steps.version.outputs.version }}\`"
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Release exists: \`${{ steps.state.outputs.release_exists }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

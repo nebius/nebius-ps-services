@@ -90,23 +90,23 @@ class MysteryBoxClient:
     @staticmethod
     def _payload_to_text(payload) -> str:
         oneof = getattr(payload, "payload", None)
-        if oneof is not None:
-            value = getattr(oneof, "value", None)
-            if isinstance(value, bytes):
-                return base64.b64encode(value).decode("ascii")
-            if value is None:
-                return ""
-            return str(value)
+        if oneof is None:
+            raise MysteryBoxClientError("MysteryBox payload entry has no active payload field")
 
-        string_value = getattr(payload, "string_value", None)
-        if string_value is not None:
-            return str(string_value)
+        field = getattr(oneof, "field", None)
+        value = getattr(oneof, "value", None)
 
-        binary_value = getattr(payload, "binary_value", None)
-        if isinstance(binary_value, (bytes, bytearray)):
-            return base64.b64encode(bytes(binary_value)).decode("ascii")
+        if field == "string_value":
+            if not isinstance(value, str):
+                raise MysteryBoxClientError("MysteryBox string payload has invalid type")
+            return value
 
-        raise MysteryBoxClientError("MysteryBox payload entry has no supported value")
+        if field == "binary_value":
+            if not isinstance(value, (bytes, bytearray)):
+                raise MysteryBoxClientError("MysteryBox binary payload has invalid type")
+            return base64.b64encode(bytes(value)).decode("ascii")
+
+        raise MysteryBoxClientError(f"MysteryBox payload field '{field}' is not supported")
 
     def get_value(self, *, secret_reference: str, key: str, version: str | None) -> str:
         if not key:

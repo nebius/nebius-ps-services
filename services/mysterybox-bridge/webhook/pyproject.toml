@@ -43,7 +43,6 @@ local_scheme = "no-local-version"
 write_to = "src/mysterybox_bridge/_version.py"
 tag_regex = "^mysterybox-bridge-v(?P<version>\\d+\\.\\d+\\.\\d+)$"
 git_describe_command = "git describe --dirty --tags --long --match mysterybox-bridge-v*"
-fallback_version = "0.1.0"
 search_parent_directories = true
 
 [tool.pytest.ini_options]

@@ -16,13 +16,13 @@ source ~/venvs/skypilot-env/bin/activate
 # If prompted, edit ./.env with real TENANT_ID/PROJECT_ID/REGION_ID/JUMP_HOST_IP and re-run
 ```
 
-2) Verify
+1) Verify
 
 ```sh
 sky check nebius
 ```
 
-3) Launch and connect
+1) Launch and connect
 
 ```sh
 sky launch -c mycluster vmtask.yaml
@@ -97,15 +97,15 @@ This example demonstrates how to use a project-scoped SkyPilot configuration (`.
   - Place your key at `~/.ssh/id_ed25519` (or set the path you use in `.sky.yaml`).
   - Add the jump host to `~/.ssh/known_hosts` (required because `StrictHostKeyChecking=yes`). If you have logged in at least once directly to the jump host from your laptop, it is likely already added.
 
-2) Set your environment variables in `./.env` for region/project and jump host IP.
+1) Set your environment variables in `./.env` for region/project and jump host IP.
 
-3) Launch a cluster
+2) Launch a cluster
 
 - From this project directory, run your normal SkyPilot workflows (examples):
   - `sky launch -c cluster7 vmtask.yaml`
   - Reuse clusters with `-c <name>`
 
-4) Connect via SSH
+1) Connect via SSH
 
   `ssh <cluster-name>`
 

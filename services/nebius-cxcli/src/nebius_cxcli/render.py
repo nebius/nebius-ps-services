@@ -614,14 +614,15 @@ def _mysterybox_bridge_deployment_doc(
                                 "-ec",
                                 (
                                     "exec gunicorn --workers=${BRIDGE_GUNICORN_WORKERS:-2} "
-                                    "--bind 0.0.0.0:${LISTEN_PORT:-8080} app:create_app()"
+                                    "--bind 0.0.0.0:${LISTEN_PORT:-8080} "
+                                    "--factory mysterybox_bridge.app:create_app"
                                 ),
                             ],
                             "envFrom": env_from,
                             "env": env,
                             "ports": [{"containerPort": service_port, "name": "http"}],
                             "readinessProbe": {
-                                "httpGet": {"path": "/healthz", "port": "http"},
+                                "httpGet": {"path": "/readyz", "port": "http"},
                                 "initialDelaySeconds": 10,
                                 "periodSeconds": 15,
                             },

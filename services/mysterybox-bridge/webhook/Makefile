@@ -1,7 +1,10 @@
 VENV ?= .venv
 PYTHON ?= $(VENV)/bin/python
+.DEFAULT_GOAL := all
 
-.PHONY: install fmt lint test build check
+.PHONY: all install fmt lint test build check
+
+all: check build
 
 install:
 	python3 -m venv $(VENV)

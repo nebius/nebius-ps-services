@@ -11,7 +11,8 @@ if ! command -v envsubst >/dev/null 2>&1; then
   if [[ "$OSTYPE" == "darwin"* ]]; then
     if command -v brew >/dev/null 2>&1; then
       brew install gettext
-      export PATH="$(brew --prefix gettext)/bin:$PATH"
+      gettext_prefix="$(brew --prefix gettext)"
+      export PATH="${gettext_prefix}/bin:$PATH"
     else
       echo "Homebrew not found. Please install Homebrew and rerun this script." >&2
       exit 1
@@ -23,6 +24,7 @@ if ! command -v envsubst >/dev/null 2>&1; then
     exit 1
   fi
 fi
+# shellcheck source=/dev/null
 source .env
 # Check required env vars
 : "${REGION_ID:?REGION_ID must be set in your environment (.env).}"

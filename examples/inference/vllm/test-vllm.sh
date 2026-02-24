@@ -14,6 +14,7 @@ IFS=$'\n\t'
 if [ -f ./.env ]; then
   set +u
   set -a
+  # shellcheck source=/dev/null
   . ./.env
   set +a
   set -u

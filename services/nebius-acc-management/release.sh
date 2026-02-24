@@ -216,7 +216,7 @@ publish_release() {
       printf '  %s\n' "${wheels[@]}"
     fi
     wheel="${wheels[0]}"
-    expected="${tag#${TAG_PREFIX}-v}"
+    expected="${tag#"${TAG_PREFIX}"-v}"
     wheel_version="$(python - "$wheel" <<'PY'
 import sys
 import zipfile

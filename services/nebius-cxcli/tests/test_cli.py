@@ -1078,8 +1078,15 @@ def test_seed_external_secrets_mysterybox_auth_secret_creates_bridge_auth_secret
         if doc.get("kind") == "Secret"
         and doc.get("metadata", {}).get("name") == "mysterybox-bridge-webhook-auth"
     )
+    mysterybox_auth_doc = next(
+        doc
+        for doc in applied_docs
+        if doc.get("kind") == "Secret"
+        and doc.get("metadata", {}).get("name") == "nebius-mysterybox-auth"
+    )
     assert bridge_auth_doc["metadata"]["labels"]["external-secrets.io/type"] == "webhook"
     assert bridge_auth_doc["stringData"]["token"] == "token-123"
+    assert mysterybox_auth_doc["stringData"]["NEBIUS_API_ENDPOINT"] == "api.nebius.cloud:443"
 
 
 def test_create_triggers_auto_auth_bootstrap_by_default(tmp_path: Path, monkeypatch) -> None:

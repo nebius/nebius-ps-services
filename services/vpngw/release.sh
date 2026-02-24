@@ -354,7 +354,7 @@ publish_release() {
     fi
     WHEEL_PATH="${wheels[0]}"
 
-    EXPECTED_VERSION="${tag#${TAG_PREFIX}-v}"
+    EXPECTED_VERSION="${tag#"${TAG_PREFIX}"-v}"
     WHEEL_VERSION="$(python - "$WHEEL_PATH" <<'PY'
 import sys
 import zipfile

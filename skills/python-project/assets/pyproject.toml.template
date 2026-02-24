@@ -57,7 +57,6 @@ version_scheme = "python-simplified-semver"
 local_scheme = "no-local-version"
 write_to = "src/{{package_name}}/_version.py"
 tag_regex = "^{{project_slug}}-v(?P<version>\\d+\\.\\d+\\.\\d+)$"
-fallback_version = "0.0.0"
 search_parent_directories = true
 
 [tool.ruff]

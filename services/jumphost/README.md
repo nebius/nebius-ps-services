@@ -10,15 +10,13 @@ This project provides a hardened cloud-init configuration to create a minimal SS
 
 The allowlist of client IPs for SSH is driven by `/etc/bastion_allowed_cidrs` (one CIDR per line). You should add your current public IPv4 as a `/32` before provisioning to avoid lockout.
 
-
 ## Files in this repo
 
-- `cloud-init.sh` — cloud-init user-data to paste into Nebius during VM creation. It contains:
+- `cloud-init.yaml` — cloud-init user-data to paste into Nebius during VM creation. It contains:
   - SSH hardening under `/etc/ssh/sshd_config.d/50-bastion.conf`
   - UFW rules derived from `/etc/bastion_allowed_cidrs`
   - Security services (fail2ban, auditd, unattended-upgrades)
   - A setup script `/usr/local/bin/setup-bastion.sh` executed once at boot
-
 
 ## Prerequisites
 
@@ -26,16 +24,15 @@ The allowlist of client IPs for SSH is driven by `/etc/bastion_allowed_cidrs` (o
 - Your SSH keypair on your local machine (public key at `~/.ssh/id_ed25519.pub` or `~/.ssh/id_rsa.pub`)
 - Your current public IPv4 address to allow (find it with: `curl -4 -s https://ifconfig.me`)
 
-
 ## Prepare the cloud-init
 
-1) Replace the placeholder example under `users.ssh_authorized_keys` in `cloud-init.sh` with YOUR public SSH key (do not paste the private key). To print your public key:
+1) Replace the placeholder example under `users.ssh_authorized_keys` in `cloud-init.yaml` with YOUR public SSH key (do not paste the private key). To print your public key:
 
 ```bash
 cat ~/.ssh/id_ed25519.pub
 ```
 
-2) Pre-fill your client IP allowlist so UFW will permit SSH from your location. In `cloud-init.sh`, locate the `write_files:` entry for `/etc/bastion_allowed_cidrs` and add one CIDR per line, for example:
+1) Pre-fill your client IP allowlist so UFW will permit SSH from your location. In `cloud-init.yaml`, locate the `write_files:` entry for `/etc/bastion_allowed_cidrs` and add one CIDR per line, for example:
 
 ```
 203.0.113.45/32
@@ -48,14 +45,12 @@ Tip to get your current IPv4/32 quickly:
 echo "$(curl -4 -s https://ifconfig.me)/32"
 ```
 
-
 ## Create the VM on Nebius (console)
 
 - In Nebius Console, start creating a new VM instance with a public IP.
 - Find the section to provide user data (cloud-init). Choose the option to paste the script.
-- Paste the entire contents of `cloud-init.sh`.
+- Paste the entire contents of `cloud-init.yaml`.
 - Complete the VM creation.
-
 
 ## First connection (from your laptop)
 
@@ -64,9 +59,9 @@ ssh -i ~/.ssh/id_ed25519 nebius-user@<VM_PUBLIC_IP>
 ```
 
 If you get a timeout:
+
 - Verify Nebius security group/firewall allows port 22 from your IP
 - Ensure your IP/CIDR is present in `/etc/bastion_allowed_cidrs` (it’s seeded from cloud-init)
-
 
 ## Using the VM as an SSH Proxy (Jump Host)
 
@@ -108,12 +103,11 @@ sudo chmod 700 /home/alice/.ssh
 sudo chmod 600 /home/alice/.ssh/authorized_keys
 ```
 
-2) Optionally grant sudo:
+1) Optionally grant sudo:
 
 ```bash
 sudo usermod -aG sudo alice
 ```
-
 
 ## Admin: allow new external IPs for SSH (idempotent)
 
@@ -125,18 +119,17 @@ The setup script is idempotent and safe to run multiple times. To allow a new cl
 echo "203.0.113.200/32" | sudo tee -a /etc/bastion_allowed_cidrs
 ```
 
-2) Apply the change by re-running the setup script (no reboot required):
+1) Apply the change by re-running the setup script (no reboot required):
 
 ```bash
 sudo bash /usr/local/bin/setup-bastion.sh
 ```
 
-3) Verify UFW rules include your new source:
+1) Verify UFW rules include your new source:
 
 ```bash
 sudo ufw status verbose
 ```
-
 
 ## Logs and troubleshooting
 
@@ -172,7 +165,6 @@ sudo ufw status verbose
 sudo ss -lntp | grep :22
 ```
 
-
 ## Security notes
 
 - SSH password auth is disabled; only keys are allowed by default.
@@ -180,7 +172,6 @@ sudo ss -lntp | grep :22
 - UFW defaults to deny inbound.
 - fail2ban reduces brute force attempts.
 - Unattended-upgrades applies security updates; a systemd timer logs when a reboot is needed.
-
 
 ## License
 

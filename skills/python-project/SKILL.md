@@ -28,6 +28,7 @@ Scaffold production-grade Python repositories with conservative defaults inspire
 - `pytest` for tests.
 - `Typer` + `Rich` for CLI UX.
 - `Pydantic` for config/schema validation.
+- `Makefile` with `.DEFAULT_GOAL := all` and aggregate `all` target (for example `all: check build`).
 - Optional packaged systemd assets in `src/<package>/systemd/`.
 
 ## Workflow
@@ -69,6 +70,8 @@ Add these when selected:
 - `ui`: `src/<package>/ui.py` and auth/network boundary notes.
 - `iac`: `infra/terraform/` (or point to `$terraform` skill for full scaffolding).
 - `automation`: `Makefile`, `.github/workflows/ci.yml`, `.pre-commit-config.yaml`.
+  - `Makefile` must set `.DEFAULT_GOAL := all`.
+  - `Makefile` must include an `all` target that aggregates primary checks/build.
 - `ai-ml`: `src/<package>/ml/` split for train/eval/infer pipelines.
 
 ## Non-Negotiable Guardrails
@@ -89,6 +92,18 @@ Default to `setuptools-scm` with SemVer tags:
 - Tag format: `<project>-vMAJOR.MINOR.PATCH`
 - Generated runtime version file: `src/<package>/_version.py`
 - Do not manually edit the version in `pyproject.toml` when SCM versioning is enabled.
+
+For containerized/Helm-delivered apps, keep version layers related but independent:
+
+- App version (source of functional behavior):
+  - SemVer from tags.
+- Image version (source of deployed artifact):
+  - publish immutable tags (`sha-<shortsha>`, and release tags like `X.Y.Z` + `X.Y.Z-g<shortsha>`).
+  - prefer production deploys pinned by digest.
+- Helm chart versioning:
+  - `Chart.yaml.version` tracks chart packaging changes.
+  - `Chart.yaml.appVersion` tracks the default app/image SemVer.
+  - do not force chart `version` to equal app SemVer.
 
 ## Templates and References
 
