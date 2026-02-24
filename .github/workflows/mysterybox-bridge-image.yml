@@ -240,7 +240,7 @@ jobs:
             }' > publish-manifest.json
 
       - name: Upload publish manifest artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: mysterybox-bridge-publish-manifest-${{ github.run_id }}
           path: publish-manifest.json

@@ -205,7 +205,7 @@ jobs:
 
       - name: Upload release manifest artifact
         if: steps.state.outputs.release_exists == 'false'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: nebius-cxcli-release-manifest-${{ github.run_id }}
           path: ${{ env.APP_DIR }}/release-manifest.json
