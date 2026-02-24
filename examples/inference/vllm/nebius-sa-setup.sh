@@ -14,7 +14,10 @@ if [ ! -f .env ]; then
   fi
 fi
 
-set -a; . ./.env; set +a
+set -a
+# shellcheck source=/dev/null
+. ./.env
+set +a
 echo "Loaded .env environment variables."
 
 INVALID=0

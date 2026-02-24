@@ -307,6 +307,32 @@ To upgrade from a newer wheel:
 pipx install --force ./nebius_cxcli-x.y.z-py3-none-any.whl
 ```
 
+## Release Workflow
+
+`nebius-cxcli` uses tag-driven release publishing.
+
+1. Prepare the release from your working branch:
+
+```bash
+./publish-release.sh --prep X.Y.Z
+```
+
+1. Open and merge the PR to `main` (do not edit `CHANGELOG.md` directly on `main`).
+2. On clean, synced `main`, publish the release tag:
+
+```bash
+./publish-release.sh --publish X.Y.Z
+```
+
+`--publish` creates and pushes `nebius-cxcli-vX.Y.Z`.
+
+1. Tag push triggers `.github/workflows/nebius-cxcli-release.yml`, which:
+   - validates tag format and main-branch ancestry
+   - runs lint/tests
+   - builds wheel artifact(s)
+   - verifies artifact version matches tag version
+   - creates the GitHub release and uploads the wheel
+
 ## Happy Path Commands
 
 ```bash
@@ -485,6 +511,7 @@ nebius-cxcli email "$CFG"
 ## Development
 
 ```bash
+make install
 make all
 ```
 

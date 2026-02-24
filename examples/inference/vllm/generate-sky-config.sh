@@ -26,7 +26,10 @@ if ! command -v envsubst >/dev/null 2>&1; then
 fi
 # Load env from .env safely if present
 if [ -f .env ]; then
-  set -a; . ./.env; set +a
+  set -a
+  # shellcheck source=/dev/null
+  . ./.env
+  set +a
 fi
 # Check required env vars
 : "${REGION_ID:?REGION_ID must be set in your environment (.env).}"

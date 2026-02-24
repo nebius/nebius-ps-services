@@ -201,20 +201,18 @@ status_report() {
     tun2_status="MISSING"
   fi
 
-  local iface1_range iface2_range peer1_ip peer2_ip peer1_asn peer2_asn
+  local iface1_range iface2_range peer1_ip peer2_ip peer1_asn
   iface1_range=""
   iface2_range=""
   peer1_ip=""
   peer2_ip=""
   peer1_asn=""
-  peer2_asn=""
   if [[ "$router_exists" == "true" ]]; then
     iface1_range="$(gcloud compute routers describe "$CLOUD_ROUTER_NAME" --region "$REGION" --project "$PROJECT_ID" --format='value(interfaces.name,interfaces.ipRange)' 2>/dev/null | awk -v n="$IFACE1_NAME" '$1==n {print $2; exit}')"
     iface2_range="$(gcloud compute routers describe "$CLOUD_ROUTER_NAME" --region "$REGION" --project "$PROJECT_ID" --format='value(interfaces.name,interfaces.ipRange)' 2>/dev/null | awk -v n="$IFACE2_NAME" '$1==n {print $2; exit}')"
     peer1_ip="$(gcloud compute routers describe "$CLOUD_ROUTER_NAME" --region "$REGION" --project "$PROJECT_ID" --format='value(bgpPeers.name,bgpPeers.peerIpAddress)' 2>/dev/null | awk -v n="$PEER1_NAME" '$1==n {print $2; exit}')"
     peer2_ip="$(gcloud compute routers describe "$CLOUD_ROUTER_NAME" --region "$REGION" --project "$PROJECT_ID" --format='value(bgpPeers.name,bgpPeers.peerIpAddress)' 2>/dev/null | awk -v n="$PEER2_NAME" '$1==n {print $2; exit}')"
     peer1_asn="$(gcloud compute routers describe "$CLOUD_ROUTER_NAME" --region "$REGION" --project "$PROJECT_ID" --format='value(bgpPeers.name,bgpPeers.peerAsn)' 2>/dev/null | awk -v n="$PEER1_NAME" '$1==n {print $2; exit}')"
-    peer2_asn="$(gcloud compute routers describe "$CLOUD_ROUTER_NAME" --region "$REGION" --project "$PROJECT_ID" --format='value(bgpPeers.name,bgpPeers.peerAsn)' 2>/dev/null | awk -v n="$PEER2_NAME" '$1==n {print $2; exit}')"
   fi
 
   local tun1_cidr tun2_cidr tun1_gcp_ip tun2_gcp_ip tun1_nebius_ip tun2_nebius_ip

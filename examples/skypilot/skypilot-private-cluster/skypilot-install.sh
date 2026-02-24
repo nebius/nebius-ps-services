@@ -17,6 +17,7 @@ else
 fi
 
 # Activate the virtual environment
+# shellcheck disable=SC1091
 source "$VENV_DIR/bin/activate"
 
 

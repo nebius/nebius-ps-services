@@ -7,7 +7,7 @@ VENV_PIP := $(VENV)/bin/pip
 
 .PHONY: all install fmt lint test build check
 
-all: install fmt lint test build
+all: check build
 
 install:
 	$(PYTHON) -m venv $(VENV)
@@ -24,6 +24,7 @@ test:
 	$(VENV_PYTHON) -m pytest
 
 build:
+	rm -rf build dist
 	$(VENV_PYTHON) -m build --wheel
 
 check: lint test

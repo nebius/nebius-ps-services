@@ -8,6 +8,8 @@ This folder contains multiple ready-to-use Codex skills for developers.
 - `helmchart`
 - `linter`
 - `python-project`
+- `publish-image`
+- `publish-release`
 - `release-generator`
 - `shell-scripting`
 - `terraform`

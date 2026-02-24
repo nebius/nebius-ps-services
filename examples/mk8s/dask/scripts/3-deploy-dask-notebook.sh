@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# shellcheck source=/dev/null
 source ./environment.sh
 
 echo "===> Installing Dask operator..."
@@ -12,8 +13,10 @@ echo "===> Applying RBAC for notebook..."
 kubectl apply -f yamls/mda-notebook-rbac.yaml
 
 echo "===> Rendering notebook pod template..."
-export REGISTRY_ID=$(terraform -chdir=terraform output -raw registry_id)
-export REGISTRY_PATH=$(echo "$REGISTRY_ID" | cut -d- -f2)
+REGISTRY_ID="$(terraform -chdir=terraform output -raw registry_id)"
+export REGISTRY_ID
+REGISTRY_PATH="$(echo "$REGISTRY_ID" | cut -d- -f2)"
+export REGISTRY_PATH
 envsubst < yamls/pod.yaml.tpl | kubectl apply -f -
 
 echo "===> Waiting for notebook pod..."

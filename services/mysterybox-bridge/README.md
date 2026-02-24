@@ -176,13 +176,80 @@ It also seeds required runtime Kubernetes Secrets used by bridge auth.
 - Default image in `nebius-cxcli` schema/template:
   `quay.io/nebius/mysterybox-bridge:latest`
 
+## Versioning Policy
+
+`mysterybox-bridge` uses related but independent version layers:
+
+- **Application version** (Python package):
+  - SemVer from Git tags via `setuptools-scm`.
+  - Tag format: `mysterybox-bridge-vMAJOR.MINOR.PATCH`.
+- **Container image version** (runtime artifact):
+  - Always publishes immutable `sha-<shortsha>` tags.
+  - On `main`, also publishes `latest`.
+  - On release tags, publishes:
+    - `<MAJOR.MINOR.PATCH>`
+    - `<MAJOR.MINOR.PATCH>-g<shortsha>`
+  - On manual `workflow_dispatch` with `release_version=X.Y.Z`, publishes:
+    - `<MAJOR.MINOR.PATCH>-g<shortsha>`
+- **Helm chart version** (deployment packaging):
+  - `Chart.yaml.version` is chart SemVer and changes when chart packaging changes.
+  - `Chart.yaml.appVersion` tracks the default app/image SemVer.
+
+Recommended production deployment strategy:
+
+- Pin images by digest (`image.digest`) instead of mutable tags.
+- Treat chart version and app version as separate release lifecycles.
+
 ## Image CI Publish
 
 - Workflow: `.github/workflows/mysterybox-bridge-image.yml`
-- Trigger: push to `main` with changes under `services/mysterybox-bridge/webhook/**`
+- Trigger:
+  - push to `main` with changes under `services/mysterybox-bridge/webhook/**`
+  - push of `mysterybox-bridge-v*` tags
+  - manual `workflow_dispatch` (for rebuilds such as base-image CVE refresh)
+- Important:
+  - pushing `mysterybox-bridge-vX.Y.Z` triggers image publish immediately
+  - a later `main` push is not required for tag-triggered release images
+- Manual `workflow_dispatch` tagging behavior:
+  - always publishes `sha-<shortsha>`
+  - optionally publishes `latest` (only when `source_ref=main`)
+  - optionally publishes `<X.Y.Z>-g<shortsha>` when `release_version=X.Y.Z`
+    in the GitHub Actions "Run workflow" form
+  - plain `<X.Y.Z>` is reserved for `mysterybox-bridge-vX.Y.Z` tag pushes
 - Registry target: `quay.io/nebius/mysterybox-bridge`
 - Required GitHub secret: `QUAY_MYSTERYBOX` (recommended format: `username:token`)
 - Optional GitHub variable: `QUAY_MYSTERYBOX_USERNAME` (used when secret contains token only)
+
+## Release Helper Script
+
+Use `publish-image.sh` to standardize changelog prep and release tagging.
+
+```bash
+cd services/mysterybox-bridge
+
+# Update CHANGELOG.md for release and commit it (pushes current branch by default)
+./publish-image.sh --prep 0.1.0
+
+# Create and push release tag (main-only by default)
+./publish-image.sh --publish 0.1.0
+```
+
+Notes:
+
+- `release_version` is a manual input only for `workflow_dispatch`
+  (GitHub Actions -> `mysterybox-bridge-image` -> `Run workflow`).
+- `--publish` defaults to clean, up-to-date `main` for safety.
+- `--allow-non-main` exists as an explicit override when you intentionally
+  want to release from a non-main branch.
+- `--prep` is for working branches before PR merge.
+- `--publish` pushes the release tag immediately, which triggers
+  image publish from the tagged commit.
+- Recommended governance:
+  1. run `--prep` on a branch
+  2. merge PR to `main`
+  3. run `--publish` on clean synced `main`
+- Tag format is `mysterybox-bridge-vMAJOR.MINOR.PATCH`.
+- Changelog is tracked in `CHANGELOG.md` with `## [Unreleased]` at the top.
 
 ## Chart CI (PR)
 
@@ -218,6 +285,25 @@ python3 services/mysterybox-bridge/charts/tests/all_tests.py --update
 `services/mysterybox-bridge/charts/tests/snapshots/`. Use it only when chart output
 changes are intentional, then review and commit the updated snapshots.
 
+### Common CI failures (and fixes)
+
+- `ct lint` fails with `chart version not ok. Needs a version bump!`:
+  - You changed chart files but did not bump chart packaging version.
+  - Fix: bump `services/mysterybox-bridge/charts/mysterybox-webhook/Chart.yaml` `version`
+    (for example `0.2.0` -> `0.2.1`) and commit.
+- `render-snapshot-tests` fails with `mismatch: .../snapshots/...yaml`:
+  - Rendered chart output changed (often after version/template/value changes) but
+    snapshots were not refreshed.
+  - Fix:
+
+```bash
+python3 services/mysterybox-bridge/charts/tests/all_tests.py --update
+python3 services/mysterybox-bridge/charts/tests/all_tests.py
+```
+
+  - Then review and commit updated files under
+    `services/mysterybox-bridge/charts/tests/snapshots/`.
+
 ## Webhook Local Dev
 
 ```bash
@@ -233,7 +319,9 @@ python -m pytest -q
 
 ```text
 services/mysterybox-bridge/
+  CHANGELOG.md                               # Keep-a-Changelog release history.
   README.md                                  # Top-level overview and standalone workflow.
+  publish-image.sh                           # Changelog prep and release-tag helper.
   docs/
     design.md                                # Detailed architecture and design decisions.
   webhook/

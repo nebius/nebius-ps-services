@@ -48,6 +48,7 @@ After running it, Terraform and the subsequent scripts will have all required co
 ---
 
 ## 2. `scripts/1-build-and-push.sh`
+
 Builds the custom Docker image and pushes it to Nebius Container Registry defined by Terraform outputs.
 
 ```bash
@@ -64,6 +65,7 @@ Actions:
 ---
 
 ## 3. `scripts/2-install-csi.sh`
+
 Installs the CSI driver, creates a persistent volume, and copies the project directory into the pod.
 
 ```bash
@@ -82,6 +84,7 @@ Actions:
 ---
 
 ## 4. `scripts/3-deploy-dask-notebook.sh`
+
 Deploys the Dask Operator and launches the notebook pod.
 
 ```bash
@@ -95,17 +98,20 @@ Actions:
 - Renders `yamls/pod.yaml.tpl` using `envsubst`
 - Deploys notebook pod `mda-notebook`
 - Provides instructions for port-forwarding:
+
   ```
   kubectl port-forward pod/mda-notebook 8889:8889
   ```
+
 - Jupyter Lab becomes available at:
-  **http://localhost:8889/lab/tree/project/run_from_pod.ipynb**
+  **<http://localhost:8889/lab/tree/project/run_from_pod.ipynb>**
 
 Inside Jupyter, start the Dask cluster from the notebook.
 
 ---
 
 ## 5. `scripts/4-dask-status.sh`
+
 Waits for the Dask scheduler pod to appear and prints port-forward instructions.
 
 ```bash
@@ -117,11 +123,13 @@ Actions:
 - Lists running pods
 - Waits for the scheduler pod (`mk8s-dask-cluster-scheduler*`)
 - When detected, prints:
+
   ```
   kubectl port-forward <scheduler-pod> 8787:8787
   ```
+
 - Dask dashboard becomes available at:
-  **http://localhost:8787**
+  **<http://localhost:8787>**
 
 ---
 

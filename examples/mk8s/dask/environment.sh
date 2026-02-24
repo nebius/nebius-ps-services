@@ -8,7 +8,8 @@
 
 # IAM token
 unset NEBIUS_IAM_TOKEN
-export NEBIUS_IAM_TOKEN=$(nebius iam get-access-token)
+NEBIUS_IAM_TOKEN="$(nebius iam get-access-token)"
+export NEBIUS_IAM_TOKEN
 
 # VPC subnet
 NEBIUS_VPC_SUBNET_ID=$(nebius vpc subnet list \

@@ -82,6 +82,19 @@ helm upgrade --install mysterybox-webhook ./charts/mysterybox-webhook \
 - `networkPolicy.enabled`
 - `hpa.*`
 
+## Versioning and Lifecycle
+
+- `Chart.yaml.version`: chart packaging version (independent from app code).
+- `Chart.yaml.appVersion`: app version the chart targets by default.
+- `values.yaml` default `image.tag` should normally match `appVersion`.
+- Prefer production deploys pinned by `image.digest` for immutability.
+
+Practical rule:
+
+- Bump chart `version` when chart templates/defaults/schema/docs change.
+- Keep `appVersion` in sync with the default app/image SemVer.
+- Rebuild and redeploy image digests for base-image/security updates even when app code is unchanged.
+
 ## Example ClusterSecretStore
 
 ```yaml

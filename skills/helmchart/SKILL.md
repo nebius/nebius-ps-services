@@ -29,10 +29,13 @@ Harden Helm charts for production and verify they render safely and consistently
      - `apiVersion: v2`
      - `type: application`
      - SemVer `version` and `appVersion`
+     - Keep `version` (chart packaging) independent from app SemVer
+     - Keep `appVersion` aligned with the default app/image SemVer
      - `kubeVersion` when API assumptions exist
      - `maintainers`, `sources`, `home`, `keywords`
    - In values:
      - Prefer immutable images (`image.tag` pinned; support `image.digest`)
+     - Prefer digest-pinned deploys in production (`repo@sha256:...`)
      - Add `imagePullSecrets` and optional `global.imagePullSecrets`
      - Keep secrets external (`existingSecret`/`secretRef` patterns)
      - Add `podLabels`, `podAnnotations`, resource knobs, scheduling knobs
@@ -76,6 +79,9 @@ Harden Helm charts for production and verify they render safely and consistently
      - `--api-versions monitoring.coreos.com/v1/ServiceMonitor`
    - If repository uses chart-testing (`ct`), run `ct lint`.
    - If repository uses golden manifests, run snapshot verification and update only when changes are intentional.
+   - If chart CI workflows are added, prefix workflow/job check names with the
+     project or chart name (for example `mysterybox-bridge-render-snapshot-tests`)
+     to avoid ambiguous status checks in monorepos.
 
 6. Document results and usage
    - Update chart README with:
@@ -120,6 +126,7 @@ When using this skill, provide:
 - Default optional integrations to disabled.
 - Prefer additive, backward-compatible changes unless user explicitly requests breaking refactors.
 - Do not assume CRDs exist; gate and fail clearly if required features are enabled.
+- Do not force chart `version` to match app `appVersion`; bump each on its own lifecycle.
 
 ## References
 
