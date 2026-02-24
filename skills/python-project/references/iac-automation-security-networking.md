@@ -11,7 +11,10 @@ Load this reference when infrastructure and production operations are in scope.
 
 ## Automation Baseline
 
-- Add `Makefile` targets for `fmt`, `lint`, `test`, `build`, `check`.
+- Set `.DEFAULT_GOAL := all` in `Makefile`.
+- Add `Makefile` targets for `all`, `fmt`, `lint`, `test`, `build`, `check`.
+- When shipping containers, publish immutable build tags (`sha-*` and release+sha tags).
+- For Helm-delivered services, keep chart `version` independent from app SemVer.
 - Add `.pre-commit-config.yaml` with at least Ruff and whitespace/end-of-file hooks.
 - Add CI pipeline for:
   - Lint
@@ -43,4 +46,5 @@ Load this reference when infrastructure and production operations are in scope.
 - Add health checks and startup self-tests.
 - Emit structured logs with correlation IDs.
 - Export metrics for latency/error-rate/retry counts.
+- Prefer production deployments pinned by container digest.
 - Document runbooks for common failure modes and rollback steps.

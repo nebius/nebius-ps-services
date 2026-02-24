@@ -74,6 +74,8 @@ python -m build --wheel
 
 At minimum:
 
+- `.DEFAULT_GOAL := all`
+- `all`: aggregate target, typically `check + build`
 - `fmt`: `ruff format`
 - `lint`: `ruff check`
 - `test`: `pytest`

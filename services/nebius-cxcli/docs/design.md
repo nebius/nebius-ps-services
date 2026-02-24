@@ -481,6 +481,9 @@ Workflow model (CI mode):
   - development builds: `NEBIUS_CXCLI_REF=main`.
 - Generated Terraform source for
   `platform-infra/stacks/customer-platform` follows the same ref policy.
+- CLI release publication is tag-driven by
+  `.github/workflows/nebius-cxcli-release.yml` on
+  `nebius-cxcli-vMAJOR.MINOR.PATCH`.
 - For Flux bootstrap, CI:
   1. installs Flux CLI and Nebius CLI.
   2. creates a Nebius service-account profile.

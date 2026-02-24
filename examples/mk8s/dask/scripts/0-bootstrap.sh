@@ -2,6 +2,7 @@
 set -euo pipefail
 
 echo "===> Loading environment from ./environment.sh"
+# shellcheck source=/dev/null
 source ./environment.sh
 
 echo "Exported variables:"
@@ -44,9 +45,10 @@ fi
 echo "Service account ID: $NB_SA_ID"
 export NB_SA_ID
 
-export NB_ADMINS_GROUP_ID=$(nebius iam group get-by-name \
+NB_ADMINS_GROUP_ID=$(nebius iam group get-by-name \
   --name admins --parent-id "$NEBIUS_TENANT_ID" --format json \
   | jq -r '.metadata.id')
+export NB_ADMINS_GROUP_ID
 
 nebius iam group-membership create \
   --parent-id "$NB_ADMINS_GROUP_ID" \
@@ -62,10 +64,11 @@ openssl rsa -in "$NB_AUTHKEY_PRIVATE_PATH" \
   -outform PEM -pubout -out "$NB_AUTHKEY_PUBLIC_PATH"
 
 echo "===> Uploading public key to Nebius..."
-export NB_AUTHKEY_PUBLIC_ID=$(nebius iam auth-public-key create \
+NB_AUTHKEY_PUBLIC_ID=$(nebius iam auth-public-key create \
   --account-service-account-id "$NB_SA_ID" \
   --data "$(cat "$NB_AUTHKEY_PUBLIC_PATH")" \
   --format json | jq -r '.metadata.id')
+export NB_AUTHKEY_PUBLIC_ID
 
 echo "Public key ID: $NB_AUTHKEY_PUBLIC_ID"
 

@@ -2,6 +2,7 @@
 set -euo pipefail
 
 echo "===> Loading environment from ./environment.sh"
+# shellcheck source=/dev/null
 source ./environment.sh
 
 echo "Exported variables:"
@@ -32,15 +33,17 @@ openssl rsa -in "$NB_AUTHKEY_PRIVATE_PATH" \
   -outform PEM -pubout -out "$NB_AUTHKEY_PUBLIC_PATH"
 
 echo "===> Uploading public key to Nebius..."
-export NB_AUTHKEY_PUBLIC_ID=$(nebius iam auth-public-key create \
+NB_AUTHKEY_PUBLIC_ID=$(nebius iam auth-public-key create \
   --account-service-account-id "$NB_SA_ID" \
   --data "$(cat "$NB_AUTHKEY_PUBLIC_PATH")" \
   --format json | jq -r '.metadata.id')
+export NB_AUTHKEY_PUBLIC_ID
 
 echo "Public key ID: $NB_AUTHKEY_PUBLIC_ID"
 
 echo "===> Deleting images"
-export REGISTRY_ID=$(terraform -chdir=terraform output -raw registry_id)
+REGISTRY_ID="$(terraform -chdir=terraform output -raw registry_id)"
+export REGISTRY_ID
 nebius registry image list "{\"parent_id\":\"$REGISTRY_ID\"}" \
   --format json | jq -r '.items[].id' | while read -r id; do
     nebius registry image delete "{\"id\":\"$id\"}"

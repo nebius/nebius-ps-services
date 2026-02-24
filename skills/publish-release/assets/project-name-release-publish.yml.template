@@ -1,22 +1,22 @@
-name: nebius-cxcli-release-publish
+name: __PROJECT_NAME__-release-publish
 
 on:
   push:
     tags:
-      - "nebius-cxcli-v*"
+      - "__PROJECT_TAG_PREFIX__-v*"
 
 permissions:
   contents: write
 
 concurrency:
-  group: nebius-cxcli-release-${{ github.ref }}
+  group: __PROJECT_NAME__-release-${{ github.ref }}
   cancel-in-progress: false
 
 env:
-  APP_DIR: services/nebius-cxcli
-  TAG_PREFIX: nebius-cxcli
-  MAIN_BRANCH: main
-  ASSET_GLOB: "dist/*.whl"
+  APP_DIR: __APP_DIR__
+  TAG_PREFIX: __PROJECT_TAG_PREFIX__
+  MAIN_BRANCH: __MAIN_BRANCH__
+  ASSET_GLOB: "__ASSET_GLOB__"
 
 jobs:
   release:
@@ -68,7 +68,7 @@ jobs:
         if: steps.state.outputs.release_exists == 'false'
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "__PYTHON_VERSION__"
 
       - name: Install dependencies
         if: steps.state.outputs.release_exists == 'false'
@@ -88,7 +88,7 @@ jobs:
         if: steps.state.outputs.release_exists == 'false'
         run: |
           set -euo pipefail
-          rm -rf build dist
+          rm -rf dist
           python -m build --wheel
 
       - name: Resolve and verify artifact
@@ -105,6 +105,7 @@ jobs:
           fi
           asset="${assets[0]}"
 
+          # Wheel version validation; adapt if you publish non-wheel artifacts.
           wheel_version="$(python - "${asset}" <<'PY'
           import sys
           import zipfile
@@ -207,7 +208,7 @@ jobs:
         if: steps.state.outputs.release_exists == 'false'
         uses: actions/upload-artifact@v4
         with:
-          name: nebius-cxcli-release-manifest-${{ github.run_id }}
+          name: __PROJECT_NAME__-release-manifest-${{ github.run_id }}
           path: ${{ env.APP_DIR }}/release-manifest.json
 
       - name: Release already exists
@@ -218,7 +219,7 @@ jobs:
       - name: Publish run summary
         run: |
           {
-            echo "### nebius-cxcli release publish"
+            echo "### __PROJECT_NAME__ release publish"
             echo ""
             echo "- Tag: \`${{ steps.version.outputs.tag }}\`"
             echo "- Version: \`${{ steps.version.outputs.version }}\`"

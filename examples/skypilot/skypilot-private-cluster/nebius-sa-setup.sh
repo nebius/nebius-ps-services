@@ -14,7 +14,10 @@ if [ ! -f .env ]; then
   fi
 fi
 
-set -a; . ./.env; set +a
+set -a
+# shellcheck source=/dev/null
+. ./.env
+set +a
 echo "Loaded .env environment variables."
 
 INVALID=0
@@ -36,7 +39,7 @@ if command -v direnv >/dev/null 2>&1; then
   # Install zsh hook if missing
   if [ -n "${SHELL:-}" ] && [ "$(basename "$SHELL")" = "zsh" ]; then
     if [ -f "$HOME/.zshrc" ] && ! grep -qs 'direnv hook zsh' "$HOME/.zshrc"; then
-      echo 'eval "$(direnv hook zsh)"' >> "$HOME/.zshrc"
+      echo "eval \"\$(direnv hook zsh)\"" >> "$HOME/.zshrc"
       echo "Added direnv zsh hook to ~/.zshrc (restart your shell to activate)."
     fi
   fi
@@ -51,7 +54,7 @@ else
     brew install direnv || echo "Warning: failed to install direnv via Homebrew. Install manually if desired."
     if command -v direnv >/dev/null 2>&1; then
       if [ -f "$HOME/.zshrc" ] && ! grep -qs 'direnv hook zsh' "$HOME/.zshrc"; then
-        echo 'eval "$(direnv hook zsh)"' >> "$HOME/.zshrc"
+        echo "eval \"\$(direnv hook zsh)\"" >> "$HOME/.zshrc"
         echo "Added direnv zsh hook to ~/.zshrc (restart your shell to activate)."
       fi
       if [ -f "$SCRIPT_DIR/.envrc" ]; then
@@ -117,7 +120,6 @@ echo "   Service account credentials saved to $CREDENTIALS_FILE (JSON)."
 : "${REGION_ID:?REGION_ID must be set in your environment (.env).}"
 
 echo "Step 3: Configuring Nebius Object Storage access for region: ${REGION_ID} (global ~/.aws)"
-PROJECT_DIR="$SCRIPT_DIR"
 GLOBAL_AWS_DIR="$HOME/.aws"
 mkdir -p "$GLOBAL_AWS_DIR"
 unset AWS_CONFIG_FILE AWS_SHARED_CREDENTIALS_FILE || true
