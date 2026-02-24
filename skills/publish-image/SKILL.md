@@ -63,6 +63,8 @@ Generate exactly these artifacts in the target project:
 - Tag format must be `<project_tag_prefix>-vMAJOR.MINOR.PATCH`.
 - Release images from tag pushes, not mutable branch state.
 - Prefer immutable image tags (`sha-*`, `X.Y.Z-g<sha>`) and digest pinning in production.
+- Workflow/job check names should include `project_name` to avoid ambiguous
+  checks across projects.
 
 ## Resources
 

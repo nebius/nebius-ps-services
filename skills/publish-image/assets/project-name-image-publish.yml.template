@@ -39,7 +39,7 @@ env:
 
 jobs:
   test:
-    name: lint-and-test
+    name: __PROJECT_NAME__-lint-and-test
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -68,7 +68,7 @@ jobs:
         run: python -m pytest -q tests
 
   build-and-push:
-    name: build-and-push
+    name: __PROJECT_NAME__-build-and-push
     runs-on: ubuntu-latest
     needs: [test]
     environment:

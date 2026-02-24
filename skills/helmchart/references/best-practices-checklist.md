@@ -63,3 +63,5 @@ Use this checklist while reviewing or generating charts.
 - `helm template` smoke renders for default and key toggles.
 - Optional `ct lint` for changed charts in PRs.
 - Optional golden snapshot tests for deterministic rendered manifests.
+- Prefix CI workflow job/check names with the project or chart name to keep
+  status checks unambiguous in monorepos.

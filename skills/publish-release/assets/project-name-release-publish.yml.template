@@ -20,6 +20,7 @@ env:
 
 jobs:
   release:
+    name: __PROJECT_NAME__-release
     runs-on: ubuntu-latest
     defaults:
       run:

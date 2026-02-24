@@ -57,6 +57,8 @@ Generate exactly these artifacts in the target project:
 - Release workflow must build from tag commit, not floating branch refs.
 - Verify built artifact version equals release tag version.
 - Verify tag commit belongs to `main` history unless explicit exception is requested.
+- Workflow/job check names should include `project_name` to avoid ambiguous
+  checks across projects.
 
 ## Resources
 

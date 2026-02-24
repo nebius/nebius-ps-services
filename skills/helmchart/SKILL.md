@@ -79,6 +79,9 @@ Harden Helm charts for production and verify they render safely and consistently
      - `--api-versions monitoring.coreos.com/v1/ServiceMonitor`
    - If repository uses chart-testing (`ct`), run `ct lint`.
    - If repository uses golden manifests, run snapshot verification and update only when changes are intentional.
+   - If chart CI workflows are added, prefix workflow/job check names with the
+     project or chart name (for example `mysterybox-bridge-render-snapshot-tests`)
+     to avoid ambiguous status checks in monorepos.
 
 6. Document results and usage
    - Update chart README with:

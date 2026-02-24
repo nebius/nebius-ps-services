@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   ct-lint:
-    name: chart-testing-lint
+    name: mysterybox-bridge-chart-testing-lint
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -36,7 +36,7 @@ jobs:
           ct lint --config services/mysterybox-bridge/charts/ct.yaml --target-branch "${{ github.base_ref }}"
 
   render-snapshots:
-    name: render-snapshot-tests
+    name: mysterybox-bridge-render-snapshot-tests
     runs-on: ubuntu-latest
     needs: [ct-lint]
     steps:

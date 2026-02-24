@@ -285,6 +285,25 @@ python3 services/mysterybox-bridge/charts/tests/all_tests.py --update
 `services/mysterybox-bridge/charts/tests/snapshots/`. Use it only when chart output
 changes are intentional, then review and commit the updated snapshots.
 
+### Common CI failures (and fixes)
+
+- `ct lint` fails with `chart version not ok. Needs a version bump!`:
+  - You changed chart files but did not bump chart packaging version.
+  - Fix: bump `services/mysterybox-bridge/charts/mysterybox-webhook/Chart.yaml` `version`
+    (for example `0.2.0` -> `0.2.1`) and commit.
+- `render-snapshot-tests` fails with `mismatch: .../snapshots/...yaml`:
+  - Rendered chart output changed (often after version/template/value changes) but
+    snapshots were not refreshed.
+  - Fix:
+
+```bash
+python3 services/mysterybox-bridge/charts/tests/all_tests.py --update
+python3 services/mysterybox-bridge/charts/tests/all_tests.py
+```
+
+  - Then review and commit updated files under
+    `services/mysterybox-bridge/charts/tests/snapshots/`.
+
 ## Webhook Local Dev
 
 ```bash
