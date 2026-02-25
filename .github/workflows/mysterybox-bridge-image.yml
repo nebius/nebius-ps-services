@@ -7,7 +7,6 @@ on:
       - "mysterybox-bridge-v*"
     paths:
       - "services/mysterybox-bridge/webhook/**"
-      - ".github/workflows/mysterybox-bridge-image.yml"
   workflow_dispatch:
     inputs:
       source_ref:

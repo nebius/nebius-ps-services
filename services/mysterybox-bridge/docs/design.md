@@ -361,6 +361,7 @@ If the target secret is not created, inspect:
 
 - PR chart CI workflow:
   - `.github/workflows/mysterybox-bridge-charts-ci.yml`
+    (`mysterybox-bridge-chart-lint-and-tests`)
   - runs `ct lint` and chart render snapshot tests
 
 - Local validation:

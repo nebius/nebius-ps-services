@@ -370,9 +370,24 @@ nebius-cxcli create /path/to/customer-repo/deployments-root \
   --subnet-id subnet-abc123 \
   --bootstrap-ci
 
-# Alternative: prompt interactively for missing values.
+# Alternative: catalog-driven non-interactive create.
+# Choose infra/apps by id (repeat option or comma-separated list).
+nebius-cxcli create /path/to/customer-repo/deployments-root \
+  --client-name client-a \
+  --tenant-id tenant-123 \
+  --env prod \
+  --cluster-name client-a-prod \
+  --project-id project-456 \
+  --subnet-id subnet-abc123 \
+  --infra managed-postgresql,sfs,wireguard-jumphost \
+  --app envoy-gateway,cert-manager,n8n \
+  --no-interactive
+
+# Interactive wizard mode.
+# create defaults to wizard mode and prompts for:
+# client identity + infra/apps catalog checkbox selection.
 # subnet_id is auto-filled as `subnet-REPLACE-ME` and should be edited later.
-nebius-cxcli create /path/to/customer-repo/deployments-root --interactive
+nebius-cxcli create /path/to/customer-repo/deployments-root
 
 # Alternative: run from anywhere with an absolute path.
 nebius-cxcli create /path/to/customer-repo/another-deployments-root \
@@ -386,8 +401,15 @@ nebius-cxcli create /path/to/customer-repo/another-deployments-root \
   --email ops@example.com
 
 # Alternative: use a custom deployments folder path directly.
+# In non-interactive automation/CI, set --no-interactive.
 nebius-cxcli create /path/to/yet-another-deployments-root \
-  --interactive
+  --no-interactive \
+  --client-name client-a \
+  --tenant-id tenant-123 \
+  --env prod \
+  --cluster-name client-a-prod \
+  --project-id project-456 \
+  --subnet-id subnet-abc123
 ```
 
 For CI mode, use `--bootstrap-ci`, then edit `config.yaml`, commit, and open a
@@ -432,23 +454,9 @@ nebius-cxcli create /path/to/customer-repo/deployments-root \
   --subnet-id subnet-abc123 \
   --bootstrap-ci
 
-# Optional: reuse identity fields from a specific existing config while
-# forcing template refresh.
-# You can omit TARGET_PATH when --config-file clearly points to:
-# <deployments-root>/instances/.../config.yaml
-# Use --force when that target config.yaml already exists and you want to
-# rewrite it from the current starter template.
-nebius-cxcli create \
-  --force \
-  --keep-client-info \
-  --config-file /path/to/customer-repo/deployments-root/instances/client-a--tenant-123/prod/client-a-prod/config.yaml
-
-# Note: --keep-client-info keeps interactive identity fields only
-# (client/env/cluster + tenant/project/region + email).
-# It does not keep subnet_id; pass --subnet-id if you want to keep/set it.
 # Note: --deploy and --bootstrap-ci are mutually exclusive.
 
-# Validate config schema and path alignment.
+# Validate config schema, path alignment, and catalog contracts.
 nebius-cxcli validate "$CFG"
 
 # Validate with deployment-readiness checks (reject starter placeholders).
@@ -490,11 +498,67 @@ nebius-cxcli discover /path/to/customer-repo/another-deployments-root
 # Optional: include all configs under deployments dir (not only changed files).
 nebius-cxcli discover /path/to/customer-repo/deployments-root --all
 
-# List schema fields for guidance (required vs optional).
-nebius-cxcli list infra.mk8s
-nebius-cxcli list infra.mk8s --all
-nebius-cxcli list infra.mk8s --required
-nebius-cxcli list infra.mk8s --optional
+# List component catalogs used by create wizard/flags.
+nebius-cxcli list-catalog
+nebius-cxcli list-catalog --infra
+nebius-cxcli list-catalog --apps
+nebius-cxcli list-catalog --defaults
+
+# Equivalent subcommand form:
+nebius-cxcli catalog list
+nebius-cxcli catalog list --infra
+nebius-cxcli catalog list --apps
+nebius-cxcli catalog list --defaults
+
+# Catalog registry file resolution order:
+# 1) --catalog-file
+# 2) $NEBIUS_CXCLI_CATALOG_FILE
+# 3) <TARGET_PATH>/catalogs/catalog.yaml (if present)
+# 4) ~/.config/nebius-cxcli/catalog.yaml
+
+# Add custom catalog entries without changing CLI code.
+# Wizard mode (default): prompts for missing required fields.
+nebius-cxcli catalog add
+
+# Automation/CI mode: pass all required flags explicitly.
+nebius-cxcli catalog add --no-interactive \
+  --scope apps \
+  --id argo-cd \
+  --description "Argo CD Helm release" \
+  --chart-repo "https://argoproj.github.io/argo-helm" \
+  --chart-name "argo-cd"
+
+# Infra example (Terraform module metadata):
+nebius-cxcli catalog add \
+  --scope infra \
+  --id managed-redis \
+  --description "Managed Redis module" \
+  --module-source \
+  "git::https://github.com/example/iac.git//modules/managed-redis" \
+  --version "1.0.0"
+# Optional flags:
+# --default         include in default create selections
+# --non-selectable  make always enabled in wizard
+
+# Custom infra entries selected in create are rendered automatically into:
+# - generated/infra/main.tf as additional Terraform module blocks.
+# Optional per-module overrides can be set in config.yaml:
+# catalog.infra.values.<infra-id>.module_name / inputs / depends_on_platform / version
+
+# App example (Helm chart metadata):
+nebius-cxcli catalog add \
+  --scope apps \
+  --id argo-cd \
+  --description "Argo CD Helm release" \
+  --chart-repo "https://argoproj.github.io/argo-helm" \
+  --chart-name "argo-cd" \
+  --version "7.6.7"
+
+# Custom app entries selected in create are rendered automatically into:
+# - generated/flux/sources/helm-repositories.yaml
+# - generated/flux/apps/{platform|workloads}/<release>-helmrelease.yaml
+# Optional per-app overrides can be set in config.yaml:
+# catalog.apps.values.<app-id>.namespace / release_name / interval / values / create_namespace
 
 # Generate local inventory artifacts, then upload to Object Storage.
 # Writes local files under: <cluster>/generated/inventory/

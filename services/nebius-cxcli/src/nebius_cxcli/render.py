@@ -10,6 +10,7 @@ from typing import Any
 
 import yaml
 
+from .catalog import all_catalog_ids
 from .paths import InstancePaths
 from .schema import ConfigV1, HelmComponentConfig
 from .templates import (
@@ -30,6 +31,20 @@ DEFAULT_APP_VALUES: dict[str, dict[str, Any]] = {
     "observability": {"enable_nebius_o11y_agent": True, "enable_grafana": True},
     "external_secrets": {},
     "n8n": {},
+}
+BUILTIN_INFRA_CATALOG_IDS = frozenset(all_catalog_ids("infra"))
+BUILTIN_APP_CATALOG_IDS = frozenset(all_catalog_ids("apps"))
+SUPPORTED_CATALOG_INFRA_ENGINE_TYPES = {
+    "terraform_module",
+    "terraform",
+    "tf_module",
+    "module",
+}
+SUPPORTED_CATALOG_APP_ENGINE_TYPES = {
+    "helm_release",
+    "helmrelease",
+    "helm",
+    "helm_chart",
 }
 
 
@@ -105,7 +120,11 @@ def _terraform_backend_block(config: ConfigV1, paths: InstancePaths) -> str:
     )
 
 
-def _terraform_main_block(tfvars_payload: dict[str, Any]) -> str:
+def _terraform_main_block(
+    tfvars_payload: dict[str, Any],
+    *,
+    custom_infra_module_blocks: list[str] | None = None,
+) -> str:
     module_source = os.environ.get(
         "NEBIUS_CXCLI_PLATFORM_INFRA_SOURCE", DEFAULT_PLATFORM_INFRA_SOURCE
     )
@@ -122,7 +141,103 @@ def _terraform_main_block(tfvars_payload: dict[str, Any]) -> str:
         lines.append(f"  {key} = local.rendered_inputs.{key}")
 
     lines.extend(["}", ""])
+    for block in custom_infra_module_blocks or []:
+        lines.extend([block, ""])
     return "\n".join(lines)
+
+
+def _custom_catalog_infra_specs(config: ConfigV1) -> list[dict[str, Any]]:
+    specs: list[dict[str, Any]] = []
+    for infra_id in sorted(config.catalog.infra.selected):
+        if infra_id in BUILTIN_INFRA_CATALOG_IDS:
+            continue
+
+        metadata_raw = config.catalog.infra.values.get(infra_id, {})
+        if not isinstance(metadata_raw, dict):
+            raise ValueError(
+                f"catalog.infra.values.{infra_id} must be a mapping when catalog.infra.selected contains '{infra_id}'"
+            )
+        metadata = dict(metadata_raw)
+
+        engine_type = str(metadata.get("engine_type", "terraform_module")).strip().lower()
+        if not engine_type:
+            engine_type = "terraform_module"
+        if engine_type == "builtin":
+            continue
+        if engine_type not in SUPPORTED_CATALOG_INFRA_ENGINE_TYPES:
+            raise ValueError(
+                f"Unsupported catalog infra engine_type '{engine_type}' for '{infra_id}'. "
+                "Supported values: terraform_module."
+            )
+
+        source = str(metadata.get("source", "")).strip() or str(
+            metadata.get("module_source", "")
+        ).strip()
+        if not source:
+            raise ValueError(
+                "Missing module source for custom infra catalog entry "
+                f"'{infra_id}'. Set catalog.infra.values.{infra_id}.source "
+                "(or module_source)."
+            )
+
+        module_name = str(metadata.get("module_name", f"catalog-{infra_id}")).strip()
+        if not module_name:
+            module_name = f"catalog-{infra_id}"
+        if (
+            '"' in module_name
+            or "\n" in module_name
+            or "\r" in module_name
+            or "\\" in module_name
+        ):
+            raise ValueError(
+                f"catalog.infra.values.{infra_id}.module_name contains unsupported characters"
+            )
+
+        version_raw = metadata.get("version")
+        version = str(version_raw).strip() if version_raw is not None else None
+        if version == "":
+            version = None
+
+        inputs_raw = metadata.get("inputs", {})
+        if inputs_raw is None:
+            inputs_raw = {}
+        if not isinstance(inputs_raw, dict):
+            raise ValueError(
+                f"catalog.infra.values.{infra_id}.inputs must be a mapping when provided"
+            )
+        depends_on_platform = bool(metadata.get("depends_on_platform", True))
+        specs.append(
+            {
+                "id": infra_id,
+                "engine_type": engine_type,
+                "source": source,
+                "module_name": module_name,
+                "version": version,
+                "inputs": dict(inputs_raw),
+                "depends_on_platform": depends_on_platform,
+            }
+        )
+
+    return specs
+
+
+def _render_catalog_custom_infra_module_blocks(config: ConfigV1) -> list[str]:
+    blocks: list[str] = []
+    for spec in _custom_catalog_infra_specs(config):
+        inputs_json = json.dumps(spec["inputs"], sort_keys=True)
+        lines = [
+            f'module "{spec["module_name"]}" {{',
+            f'  source = {json.dumps(str(spec["source"]))}',
+        ]
+        if spec["version"] is not None:
+            lines.append(f'  version = {json.dumps(str(spec["version"]))}')
+        if bool(spec["depends_on_platform"]):
+            lines.append("  depends_on = [module.customer_platform]")
+        lines.append(f"  inputs = jsondecode({json.dumps(inputs_json)})")
+        lines.append("}")
+        blocks.append("\n".join(lines))
+
+    return blocks
 
 
 def _cluster_overrides_payload(config: ConfigV1) -> dict[str, Any] | None:
@@ -509,6 +624,36 @@ def _join_posix_path(base: str, suffix: str | None) -> str:
     return f"{base.rstrip('/')}/{suffix.lstrip('/')}"
 
 
+def _parse_catalog_helm_source(*, source: str, app_id: str) -> tuple[str, str]:
+    normalized = source.strip()
+    if "/" not in normalized:
+        raise ValueError(
+            f"catalog.apps.values.{app_id}.source must be '<chart-repo>/<chart-name>'"
+        )
+
+    repo_url, chart_name = normalized.rsplit("/", maxsplit=1)
+    repo_url = repo_url.rstrip("/")
+    chart_name = chart_name.strip()
+    if not repo_url or not chart_name:
+        raise ValueError(
+            f"catalog.apps.values.{app_id}.source must be '<chart-repo>/<chart-name>'"
+        )
+    return repo_url, chart_name
+
+
+def _catalog_app_scope(*, app_id: str, metadata: dict[str, Any]) -> str:
+    explicit_scope = str(metadata.get("scope", "")).strip().lower()
+    if explicit_scope in {"platform", "workloads"}:
+        return explicit_scope
+
+    schema_path = str(metadata.get("schema_path", "")).strip()
+    if schema_path.startswith("apps.platform."):
+        return "platform"
+    if schema_path.startswith("apps.workloads."):
+        return "workloads"
+    return "workloads"
+
+
 def _helm_release_doc(
     *,
     release_name: str,
@@ -536,6 +681,175 @@ def _helm_release_doc(
             "values": values,
         },
     }
+
+
+def _catalog_helm_release_doc(
+    *,
+    release_name: str,
+    namespace: str,
+    repo_name: str,
+    chart_name: str,
+    chart_version: str | None,
+    interval: str,
+    values: dict[str, Any],
+) -> dict[str, Any]:
+    chart_spec: dict[str, Any] = {
+        "chart": chart_name,
+        "sourceRef": {
+            "kind": "HelmRepository",
+            "name": repo_name,
+            "namespace": "flux-system",
+        },
+    }
+    if chart_version:
+        chart_spec["version"] = chart_version
+
+    return {
+        "apiVersion": "helm.toolkit.fluxcd.io/v2",
+        "kind": "HelmRelease",
+        "metadata": {"name": release_name, "namespace": namespace},
+        "spec": {
+            "interval": interval,
+            "chart": {"spec": chart_spec},
+            "values": values,
+        },
+    }
+
+
+def _custom_catalog_app_specs(config: ConfigV1) -> list[dict[str, Any]]:
+    specs: list[dict[str, Any]] = []
+    for app_id in sorted(config.catalog.apps.selected):
+        if app_id in BUILTIN_APP_CATALOG_IDS:
+            continue
+
+        metadata_raw = config.catalog.apps.values.get(app_id, {})
+        if not isinstance(metadata_raw, dict):
+            raise ValueError(
+                f"catalog.apps.values.{app_id} must be a mapping when catalog.apps.selected contains '{app_id}'"
+            )
+        metadata = dict(metadata_raw)
+
+        engine_type = str(metadata.get("engine_type", "helm_release")).strip().lower()
+        if not engine_type:
+            engine_type = "helm_release"
+        if engine_type == "builtin":
+            continue
+        if engine_type not in SUPPORTED_CATALOG_APP_ENGINE_TYPES:
+            raise ValueError(
+                f"Unsupported catalog apps engine_type '{engine_type}' for '{app_id}'. "
+                "Supported values: helm_release."
+            )
+
+        source = str(metadata.get("source", "")).strip()
+        if source:
+            repo_url, chart_name = _parse_catalog_helm_source(source=source, app_id=app_id)
+        else:
+            repo_url = str(metadata.get("chart_repo", "")).strip().rstrip("/")
+            chart_name = str(metadata.get("chart_name", "")).strip()
+            if not repo_url or not chart_name:
+                raise ValueError(
+                    "Missing chart source for custom app catalog entry "
+                    f"'{app_id}'. Set catalog.apps.values.{app_id}.source to "
+                    "'<chart-repo>/<chart-name>' or set chart_repo/chart_name."
+                )
+
+        scope = _catalog_app_scope(app_id=app_id, metadata=metadata)
+        release_name = str(metadata.get("release_name", app_id)).strip() or app_id
+        namespace = str(metadata.get("namespace", app_id)).strip() or app_id
+        interval = str(metadata.get("interval", "5m")).strip() or "5m"
+        create_namespace = bool(metadata.get("create_namespace", True))
+        repo_name = (
+            str(metadata.get("repo_name", f"catalog-{app_id}")).strip() or f"catalog-{app_id}"
+        )
+        version_raw = metadata.get("version")
+        chart_version = str(version_raw).strip() if version_raw is not None else None
+        if chart_version == "":
+            chart_version = None
+
+        values_raw = metadata.get("values", {})
+        if values_raw is None:
+            values_raw = {}
+        if not isinstance(values_raw, dict):
+            raise ValueError(
+                f"catalog.apps.values.{app_id}.values must be a mapping when provided"
+            )
+        values = dict(values_raw)
+        specs.append(
+            {
+                "id": app_id,
+                "engine_type": engine_type,
+                "repo_url": repo_url,
+                "chart_name": chart_name,
+                "scope": scope,
+                "release_name": release_name,
+                "namespace": namespace,
+                "interval": interval,
+                "create_namespace": create_namespace,
+                "repo_name": repo_name,
+                "chart_version": chart_version,
+                "values": values,
+            }
+        )
+
+    return specs
+
+
+def _render_catalog_custom_apps(
+    *,
+    config: ConfigV1,
+    paths: InstancePaths,
+    files: list[Path],
+    resources: list[str],
+    repositories: list[dict[str, Any]],
+    seen_repo_names: set[str],
+    namespace_files_written: set[str],
+) -> None:
+    for spec in _custom_catalog_app_specs(config):
+        scope = str(spec["scope"])
+        namespace = str(spec["namespace"])
+        repo_name = str(spec["repo_name"])
+        release_name = str(spec["release_name"])
+        chart_name = str(spec["chart_name"])
+        repo_url = str(spec["repo_url"])
+        interval = str(spec["interval"])
+        chart_version = spec["chart_version"]
+        values = dict(spec["values"])
+        create_namespace = bool(spec["create_namespace"])
+
+        if repo_name not in seen_repo_names:
+            repositories.append(_helm_repository_doc(repo_name, repo_url))
+            seen_repo_names.add(repo_name)
+
+        if create_namespace and namespace not in namespace_files_written:
+            namespace_relative = Path(f"apps/{scope}/namespace-{_file_slug(namespace)}.yaml")
+            namespace_absolute = paths.flux_dir / namespace_relative
+            _write_text(
+                namespace_absolute,
+                yaml.safe_dump(_namespace_doc(namespace), sort_keys=False),
+            )
+            files.append(namespace_absolute)
+            resources.append(f"./{namespace_relative.as_posix()}")
+            namespace_files_written.add(namespace)
+
+        release_relative = Path(f"apps/{scope}/{_file_slug(release_name)}-helmrelease.yaml")
+        release_absolute = paths.flux_dir / release_relative
+        _write_text(
+            release_absolute,
+            yaml.safe_dump(
+                _catalog_helm_release_doc(
+                    release_name=release_name,
+                    namespace=namespace,
+                    repo_name=repo_name,
+                    chart_name=chart_name,
+                    chart_version=chart_version,
+                    interval=interval,
+                    values=values,
+                ),
+                sort_keys=False,
+            ),
+        )
+        files.append(release_absolute)
+        resources.append(f"./{release_relative.as_posix()}")
 
 
 def _helm_release_doc_with_chart_ref(
@@ -788,6 +1102,16 @@ def _render_flux(config: ConfigV1, paths: InstancePaths) -> list[Path]:
         _write_text(absolute_file, yaml.safe_dump(release_doc, sort_keys=False))
         files.append(absolute_file)
         resources.append(f"./{relative_file.as_posix()}")
+
+    _render_catalog_custom_apps(
+        config=config,
+        paths=paths,
+        files=files,
+        resources=resources,
+        repositories=repositories,
+        seen_repo_names=seen_repo_names,
+        namespace_files_written=namespace_files_written,
+    )
 
     if config.infra.mk8s.egress_gateway.enabled:
         egress_files: list[tuple[Path, dict[str, Any]]] = [
@@ -1152,7 +1476,7 @@ def _render_flux(config: ConfigV1, paths: InstancePaths) -> list[Path]:
     _ensure_parent(repos_path)
     if repositories:
         repo_yaml = (
-            "---\n".join(yaml.safe_dump(doc, sort_keys=False).strip() for doc in repositories)
+            "\n---\n".join(yaml.safe_dump(doc, sort_keys=False).strip() for doc in repositories)
             + "\n"
         )
     else:
@@ -1185,9 +1509,16 @@ def render_instance(config: ConfigV1, paths: InstancePaths) -> RenderResult:
     written.append(terraform_tf_path)
 
     tfvars_payload = _terraform_tfvars(config)
+    custom_infra_module_blocks = _render_catalog_custom_infra_module_blocks(config)
 
     main_tf_path = paths.infra_dir / "main.tf"
-    _write_text(main_tf_path, _terraform_main_block(tfvars_payload))
+    _write_text(
+        main_tf_path,
+        _terraform_main_block(
+            tfvars_payload,
+            custom_infra_module_blocks=custom_infra_module_blocks,
+        ),
+    )
     written.append(main_tf_path)
 
     tfvars_path = paths.infra_dir / "terraform.auto.tfvars.json"
@@ -1197,3 +1528,9 @@ def render_instance(config: ConfigV1, paths: InstancePaths) -> RenderResult:
     written.extend(_render_flux(config, paths))
 
     return RenderResult(files_written=sorted(written))
+
+
+def validate_catalog_contracts(config: ConfigV1) -> None:
+    """Validate dynamic catalog contracts used by renderers."""
+    _custom_catalog_infra_specs(config)
+    _custom_catalog_app_specs(config)

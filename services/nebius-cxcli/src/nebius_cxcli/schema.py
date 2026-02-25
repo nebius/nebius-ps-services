@@ -1039,9 +1039,38 @@ class AppsConfig(StrictModel):
         return self
 
 
+class CatalogScopeSelectionConfig(StrictModel):
+    selected: list[str] = Field(default_factory=list)
+    values: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+    @field_validator("selected")
+    @classmethod
+    def validate_selected_ids(cls, value: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        pattern = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
+        for item in value:
+            normalized = item.strip().lower()
+            if not normalized:
+                raise ValueError("catalog selected ids cannot be empty")
+            if not pattern.fullmatch(normalized):
+                raise ValueError(
+                    "catalog selected ids must use lowercase letters, digits, and hyphens"
+                )
+            cleaned.append(normalized)
+        if len(cleaned) != len(set(cleaned)):
+            raise ValueError("catalog selected ids must be unique")
+        return cleaned
+
+
+class CatalogConfig(StrictModel):
+    infra: CatalogScopeSelectionConfig = Field(default_factory=CatalogScopeSelectionConfig)
+    apps: CatalogScopeSelectionConfig = Field(default_factory=CatalogScopeSelectionConfig)
+
+
 class ConfigV1(StrictModel):
     version: Literal["v1"]
     client_info: ClientInfoConfig
+    catalog: CatalogConfig = Field(default_factory=CatalogConfig)
     infra: InfraConfig
     apps: AppsConfig
 

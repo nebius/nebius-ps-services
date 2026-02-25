@@ -254,6 +254,7 @@ Notes:
 ## Chart CI (PR)
 
 - Workflow: `.github/workflows/mysterybox-bridge-charts-ci.yml`
+  (`mysterybox-bridge-chart-lint-and-tests`)
 - Trigger: PRs that touch `services/mysterybox-bridge/charts/**`
 - Checks:
   - `ct lint` (chart-testing)
@@ -301,8 +302,8 @@ python3 services/mysterybox-bridge/charts/tests/all_tests.py --update
 python3 services/mysterybox-bridge/charts/tests/all_tests.py
 ```
 
-  - Then review and commit updated files under
-    `services/mysterybox-bridge/charts/tests/snapshots/`.
+Then review and commit updated files under
+`services/mysterybox-bridge/charts/tests/snapshots/`.
 
 ## Webhook Local Dev
 

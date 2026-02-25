@@ -11,6 +11,9 @@ on:
       - "services/nebius-cxcli/**"
       - ".github/workflows/nebius-cxcli-ci.yml"
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
