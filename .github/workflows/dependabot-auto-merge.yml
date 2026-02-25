@@ -37,8 +37,7 @@ jobs:
           esac
           echo "update_type=$update_type" >> "$GITHUB_OUTPUT"
 
-      - name: Auto-approve patch/minor update
-        if: steps.eligibility.outputs.eligible == 'true'
+      - name: Auto-approve Dependabot update
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh pr review --approve "${{ github.event.pull_request.html_url }}"
