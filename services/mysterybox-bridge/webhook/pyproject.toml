@@ -15,7 +15,7 @@ classifiers = [
 ]
 dependencies = [
   "Flask>=3.0,<4.0",
-  "gunicorn>=22.0,<24.0",
+  "gunicorn>=22.0,<26.0",
   "prometheus-client>=0.20,<1.0",
   "nebius>=0.3,<0.4",
 ]
