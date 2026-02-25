@@ -18,41 +18,7 @@ updates:
           - patch
 
   - package-ecosystem: docker
-    directory: "/services/mysterybox-bridge/webhook"
-    schedule:
-      interval: daily
-    target-branch: "main"
-    open-pull-requests-limit: 5
-    labels:
-      - dependencies
-      - docker
-    groups:
-      docker-non-major:
-        patterns:
-          - "*"
-        update-types:
-          - minor
-          - patch
-
-  - package-ecosystem: docker
-    directory: "/helm-charts/rayclusterapp"
-    schedule:
-      interval: daily
-    target-branch: "main"
-    open-pull-requests-limit: 5
-    labels:
-      - dependencies
-      - docker
-    groups:
-      docker-non-major:
-        patterns:
-          - "*"
-        update-types:
-          - minor
-          - patch
-
-  - package-ecosystem: docker
-    directory: "/examples/mk8s/dask/docker"
+    directory: "/"
     schedule:
       interval: daily
     target-branch: "main"
@@ -69,58 +35,7 @@ updates:
           - patch
 
   - package-ecosystem: pip
-    directory: "/services/nebius-cxcli"
-    schedule:
-      interval: daily
-    target-branch: "main"
-    open-pull-requests-limit: 10
-    labels:
-      - dependencies
-      - python
-    groups:
-      pip-non-major:
-        patterns:
-          - "*"
-        update-types:
-          - minor
-          - patch
-
-  - package-ecosystem: pip
-    directory: "/services/mysterybox-bridge/webhook"
-    schedule:
-      interval: daily
-    target-branch: "main"
-    open-pull-requests-limit: 10
-    labels:
-      - dependencies
-      - python
-    groups:
-      pip-non-major:
-        patterns:
-          - "*"
-        update-types:
-          - minor
-          - patch
-
-  - package-ecosystem: pip
-    directory: "/services/nebius-acc-management"
-    schedule:
-      interval: daily
-    target-branch: "main"
-    open-pull-requests-limit: 10
-    labels:
-      - dependencies
-      - python
-    groups:
-      pip-non-major:
-        patterns:
-          - "*"
-        update-types:
-          - minor
-          - patch
-
-  - package-ecosystem: pip
-    directory: "/services/vpngw"
+    directory: "/"
     schedule:
       interval: daily
     target-branch: "main"
