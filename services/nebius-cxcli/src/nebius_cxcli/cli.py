@@ -8,16 +8,23 @@ import os
 import secrets
 import shutil
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, cast
 
 import typer
 import yaml
 from rich.console import Console
 
 from . import __version__
+from .catalog import CatalogEntry, CatalogScope
+from .catalog_store import (
+    resolve_catalog_file_path,
+    resolved_catalog_entries,
+    upsert_catalog_entry,
+)
 from .config_loader import load_config
 from .config_template import starter_config_yaml
 from .discover_ops import discover_configs
@@ -32,9 +39,8 @@ from .iam_bootstrap import bootstrap_ci_service_account
 from .inventory_ops import upload_inventory, write_inventory
 from .notify_ops import send_inventory_email
 from .paths import InstancePaths, resolve_instance_paths, validate_path_alignment
-from .render import render_instance
+from .render import render_instance, validate_catalog_contracts
 from .schema import ConfigV1, Environment
-from .schema_catalog import list_schema_fields
 from .templates import customer_workflow_yaml, default_cli_ref
 from .terraform_ops import terraform_apply, terraform_plan
 
@@ -57,11 +63,13 @@ terraform_app = typer.Typer(help="Run Terraform operations in generated/infra")
 flux_app = typer.Typer(help="Bootstrap or reconcile Flux")
 inventory_app = typer.Typer(help="Inventory output commands")
 auth_app = typer.Typer(help="Authentication and IAM helper commands")
+catalog_app = typer.Typer(help="Catalog registry commands")
 
 app.add_typer(terraform_app, name="terraform")
 app.add_typer(flux_app, name="flux")
 app.add_typer(inventory_app, name="inventory")
 app.add_typer(auth_app, name="auth")
+app.add_typer(catalog_app, name="catalog")
 
 
 def _version_callback(value: bool) -> bool:
@@ -204,6 +212,183 @@ def _subnet_or_prompt(value: str | None, *, interactive: bool) -> str:
     if interactive:
         return INTERACTIVE_SUBNET_PLACEHOLDER
     raise RuntimeError("Missing required option: --subnet-id")
+
+
+def _scope_or_prompt(value: str | None, *, interactive: bool) -> str:
+    if value:
+        return value.strip().lower()
+    if not interactive:
+        raise RuntimeError("Missing required option: --scope")
+
+    if _is_tty_session():
+        try:
+            import questionary
+
+            selected = questionary.select(
+                "Catalog scope",
+                choices=[
+                    questionary.Choice(title="infra", value="infra"),
+                    questionary.Choice(title="apps", value="apps"),
+                ],
+                instruction="Select where this entry belongs.",
+            ).ask()
+            if selected:
+                return str(selected).strip().lower()
+        except Exception:
+            pass
+
+    return typer.prompt("Catalog scope (infra|apps)", default="infra").strip().lower()
+
+
+def _is_tty_session() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _split_multi_value_tokens(raw_values: list[str] | None) -> list[str]:
+    if not raw_values:
+        return []
+    tokens: list[str] = []
+    for raw in raw_values:
+        for part in raw.split(","):
+            token = part.strip()
+            if token:
+                tokens.append(token)
+    return tokens
+
+
+def _resolve_catalog_ids_from_tokens(
+    *,
+    scope: CatalogScope,
+    tokens: list[str],
+    entries: tuple[CatalogEntry, ...],
+    defaults: set[str],
+) -> set[str]:
+    selectable_entries = [entry for entry in entries if entry.selectable]
+    lookup = {entry.id: entry for entry in entries}
+    selected: set[str] = set()
+    normalized = [token.lower() for token in tokens]
+
+    if len(normalized) == 1:
+        keyword = normalized[0]
+        if keyword in {"default", "defaults"}:
+            return defaults
+        if keyword == "all":
+            return {entry.id for entry in entries}
+        if keyword == "none":
+            return set()
+
+    for token in normalized:
+        if token.isdigit():
+            index = int(token)
+            if index < 1 or index > len(selectable_entries):
+                raise RuntimeError(
+                    f"Invalid {scope} catalog index '{token}'. Use values between 1 and {len(selectable_entries)}."
+                )
+            selected.add(selectable_entries[index - 1].id)
+            continue
+
+        entry = lookup.get(token)
+        if entry is None:
+            available = ", ".join(entry.id for entry in selectable_entries)
+            raise RuntimeError(
+                f"Unknown {scope} catalog id '{token}'. Available ids: {available}"
+            )
+        if not entry.selectable:
+            selected.add(entry.id)
+            continue
+        selected.add(entry.id)
+
+    return selected
+
+
+def _prompt_catalog_with_checkboxes(
+    *,
+    scope: CatalogScope,
+    entries: tuple[CatalogEntry, ...],
+    defaults: set[str],
+) -> list[str]:
+    selectable_entries = [entry for entry in entries if entry.selectable]
+    default_selectable = [entry.id for entry in selectable_entries if entry.id in defaults]
+
+    if _is_tty_session():
+        try:
+            import questionary
+
+            selected = questionary.checkbox(
+                f"Select {scope} components",
+                choices=[
+                    questionary.Choice(
+                        title=f"{entry.id}  ({entry.description})",
+                        value=entry.id,
+                        checked=entry.id in default_selectable,
+                    )
+                    for entry in selectable_entries
+                ],
+                instruction="Use arrows and space to toggle; press Enter to confirm.",
+            ).ask()
+            if selected is None:
+                return default_selectable
+            return [str(item).strip().lower() for item in selected if str(item).strip()]
+        except Exception:
+            # Fallback to text-mode prompt when questionary isn't available.
+            pass
+
+    console.print(f"\n{scope.upper()} catalog:")
+    for index, entry in enumerate(selectable_entries, start=1):
+        marker = "[x]" if entry.id in default_selectable else "[ ]"
+        console.print(f"  {marker} [{index}] {entry.id:<20} {entry.description}")
+    default_prompt = ",".join(default_selectable)
+    raw = typer.prompt(
+        f"Select {scope} components (comma-separated ids or indexes)",
+        default=default_prompt,
+    ).strip()
+    return _split_multi_value_tokens([raw])
+
+
+def _resolve_catalog_ids(
+    *,
+    scope: CatalogScope,
+    raw_values: list[str] | None,
+    interactive: bool,
+    entries: tuple[CatalogEntry, ...],
+    seed_defaults: set[str] | None = None,
+) -> set[str]:
+    required_ids = {entry.id for entry in entries if not entry.selectable}
+    defaults = (
+        set(seed_defaults)
+        if seed_defaults is not None
+        else {entry.id for entry in entries if entry.default_enabled}
+    )
+    defaults |= required_ids
+    tokens = _split_multi_value_tokens(raw_values)
+    if not tokens and interactive:
+        tokens = _prompt_catalog_with_checkboxes(scope=scope, entries=entries, defaults=defaults)
+    if not tokens:
+        return defaults
+    resolved = _resolve_catalog_ids_from_tokens(
+        scope=scope,
+        tokens=tokens,
+        entries=entries,
+        defaults=defaults,
+    )
+    return resolved | required_ids
+
+
+def _normalize_catalog_dependencies(
+    *,
+    selected_infra: set[str],
+    selected_apps: set[str],
+) -> tuple[set[str], set[str]]:
+    infra_ids = set(selected_infra)
+    app_ids = set(selected_apps)
+
+    if "n8n" in app_ids and "envoy-gateway" not in app_ids:
+        app_ids.add("envoy-gateway")
+        console.print(
+            "[yellow]Adjusted apps catalog:[/yellow] enabling 'envoy-gateway' because 'n8n' depends on it."
+        )
+
+    return infra_ids, app_ids
 
 
 def _validate_strict_config(config: ConfigV1) -> None:
@@ -542,63 +727,6 @@ def _render_and_local_deploy(config: ConfigV1, paths: InstancePaths) -> int:
     return len(result.files_written)
 
 
-def _resolve_keep_client_config_path(*, deployments_root: Path, config_file: Path | None) -> Path:
-    if config_file is None:
-        raise RuntimeError("--config-file is required when --keep-client-info is set")
-
-    candidate = config_file
-    if not candidate.is_absolute():
-        candidate = deployments_root / candidate
-    candidate = candidate.resolve()
-
-    if not candidate.exists():
-        raise RuntimeError(f"--config-file does not exist: {candidate}")
-    if not candidate.is_file():
-        raise RuntimeError(f"--config-file must point to a file: {candidate}")
-    if candidate.name != "config.yaml":
-        raise RuntimeError(f"--config-file must point to a config.yaml file: {candidate}")
-
-    try:
-        candidate.relative_to(deployments_root.resolve())
-    except ValueError as exc:
-        raise RuntimeError(
-            f"--config-file must be inside deployments root '{deployments_root}': {candidate}"
-        ) from exc
-
-    return candidate
-
-
-def _infer_deployments_root_from_config_file(config_file: Path | None) -> Path:
-    if config_file is None:
-        raise RuntimeError("--config-file is required when TARGET_PATH is omitted")
-
-    candidate = config_file if config_file.is_absolute() else (Path.cwd() / config_file)
-    candidate = candidate.resolve()
-
-    if not candidate.exists():
-        raise RuntimeError(f"--config-file does not exist: {candidate}")
-    if not candidate.is_file():
-        raise RuntimeError(f"--config-file must point to a file: {candidate}")
-    if candidate.name != "config.yaml":
-        raise RuntimeError(f"--config-file must point to a config.yaml file: {candidate}")
-
-    for parent in candidate.parents:
-        instances_dir = parent / "instances"
-        if not instances_dir.is_dir():
-            continue
-        try:
-            rel = candidate.relative_to(parent)
-        except ValueError:
-            continue
-        if rel.parts and rel.parts[0] == "instances":
-            return parent
-
-    raise RuntimeError(
-        "Could not infer deployments root from --config-file. "
-        "Expected path like <deployments-root>/instances/.../config.yaml."
-    )
-
-
 def _resolve_project_id_for_auth_bootstrap(
     *, project_id: str | None, instance_config: Path | None
 ) -> str:
@@ -792,6 +920,10 @@ def _scaffold_instance(
     region_id: str,
     subnet_id: str,
     email: str | None,
+    selected_infra: set[str],
+    selected_apps: set[str],
+    infra_entries: tuple[CatalogEntry, ...],
+    app_entries: tuple[CatalogEntry, ...],
     force: bool,
     bootstrap_ci: bool,
 ) -> BootstrapResult:
@@ -823,6 +955,10 @@ def _scaffold_instance(
                 region_id=region_id,
                 subnet_id=subnet_id,
                 email=email,
+                selected_infra=selected_infra,
+                selected_apps=selected_apps,
+                infra_entries=infra_entries,
+                app_entries=app_entries,
             ),
             encoding="utf-8",
         )
@@ -851,14 +987,11 @@ def _scaffold_instance(
 @app.command("create")
 def create_command(
     target_path: Annotated[
-        Path | None,
+        Path,
         typer.Argument(
-            help=(
-                "Deployments root folder path in the customer private repository. "
-                "Optional only when using --keep-client-info with --config-file."
-            )
+            help="Deployments root folder path in the customer private repository."
         ),
-    ] = None,
+    ],
     client_name: Annotated[
         str | None,
         typer.Option("--client-name", help="Client slug (lowercase letters/digits/hyphens)"),
@@ -893,10 +1026,47 @@ def create_command(
             help="Optional notifications email for inventory updates",
         ),
     ] = None,
-    interactive: Annotated[
+    infra_catalog: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--infra",
+            help=(
+                "Infra catalog id(s) to enable (repeat option or pass comma-separated ids; "
+                "supports ids or numeric indexes in interactive mode)"
+            ),
+        ),
+    ] = None,
+    apps_catalog: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--app",
+            help=(
+                "Apps catalog id(s) to enable (repeat option or pass comma-separated ids; "
+                "supports ids or numeric indexes in interactive mode)"
+            ),
+        ),
+    ] = None,
+    no_interactive: Annotated[
         bool,
-        typer.Option("--interactive", help="Prompt for missing instance values"),
+        typer.Option(
+            "--no-interactive",
+            help=(
+                "Disable wizard mode for automation/CI. "
+                "When omitted, create always runs in wizard mode."
+            ),
+        ),
     ] = False,
+    catalog_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--catalog-file",
+            help=(
+                "Catalog registry YAML path. Defaults to: $NEBIUS_CXCLI_CATALOG_FILE; "
+                "or <TARGET_PATH>/catalogs/catalog.yaml if present; "
+                "or ~/.config/nebius-cxcli/catalog.yaml."
+            ),
+        ),
+    ] = None,
     force: Annotated[
         bool,
         typer.Option(
@@ -907,29 +1077,6 @@ def create_command(
             ),
         ),
     ] = False,
-    keep_client_info: Annotated[
-        bool,
-        typer.Option(
-            "--keep-client-info",
-            help=(
-                "When an instance config already exists, prefill missing create values from it "
-                "(client_info identity, nebius IDs, region, email). "
-                "This intentionally does not keep subnet_id; pass --subnet-id to keep/set it. "
-                "Requires --config-file. Use --force to overwrite an existing target config.yaml."
-            ),
-        ),
-    ] = False,
-    config_file: Annotated[
-        Path | None,
-        typer.Option(
-            "--config-file",
-            help=(
-                "Existing instance config.yaml path to use with --keep-client-info "
-                "(absolute path; or relative to deployments root when TARGET_PATH is set; "
-                "or relative to current directory when TARGET_PATH is omitted)"
-            ),
-        ),
-    ] = None,
     auto_auth_bootstrap: Annotated[
         bool,
         typer.Option(
@@ -1005,16 +1152,7 @@ def create_command(
 ) -> None:
     """Create one instance under deployments root (scaffold-only by default)."""
     try:
-        if target_path is None:
-            if keep_client_info and config_file is not None:
-                base_path = _infer_deployments_root_from_config_file(config_file)
-            else:
-                raise RuntimeError(
-                    "Missing TARGET_PATH. Provide deployments root path, or use "
-                    "--keep-client-info with --config-file to infer it."
-                )
-        else:
-            base_path = target_path.resolve()
+        base_path = target_path.resolve()
         _validate_deployments_root_target(base_path)
 
         if deploy and bootstrap_ci:
@@ -1023,54 +1161,58 @@ def create_command(
                 "Use --bootstrap-ci for CI automation, or --deploy for local one-shot deployment."
             )
 
-        if config_file is not None and not keep_client_info:
-            raise RuntimeError("--config-file can only be used together with --keep-client-info")
+        resolved_catalog_file = resolve_catalog_file_path(
+            explicit=catalog_file,
+            deployments_root=base_path,
+        )
+        infra_entries = resolved_catalog_entries(scope="infra", catalog_file=resolved_catalog_file)
+        app_entries = resolved_catalog_entries(scope="apps", catalog_file=resolved_catalog_file)
 
-        if keep_client_info:
-            selected_config = _resolve_keep_client_config_path(
-                deployments_root=base_path,
-                config_file=config_file,
-            )
-            existing = load_config(selected_config)
-            client_name = client_name or existing.client_info.client_name
-            tenant_id = tenant_id or existing.client_info.nebius.tenant_id
-            env = env or existing.client_info.env
-            cluster_name = cluster_name or existing.client_info.cluster_name
-            project_id = project_id or existing.client_info.nebius.project_id
-            region_id = region_id or existing.client_info.nebius.region_id
-            if email is None:
-                email = existing.client_info.notifications.email
-            if subnet_id is None:
-                subnet_id = INTERACTIVE_SUBNET_PLACEHOLDER
-
+        interactive_mode = not no_interactive
         resolved_client_name = _value_or_prompt(
             client_name,
             option_name="--client-name",
             prompt_text="Client name",
-            interactive=interactive,
+            interactive=interactive_mode,
         )
         resolved_tenant_id = _value_or_prompt(
             tenant_id,
             option_name="--tenant-id",
             prompt_text="Tenant ID",
-            interactive=interactive,
+            interactive=interactive_mode,
         )
-        resolved_env = _parse_env_or_prompt(env, interactive=interactive)
+        resolved_env = _parse_env_or_prompt(env, interactive=interactive_mode)
         resolved_cluster_name = _value_or_prompt(
             cluster_name,
             option_name="--cluster-name",
             prompt_text="Cluster name",
-            interactive=interactive,
+            interactive=interactive_mode,
         )
         resolved_project_id = _value_or_prompt(
             project_id,
             option_name="--project-id",
             prompt_text="Project ID",
-            interactive=interactive,
+            interactive=interactive_mode,
         )
-        resolved_region_id = _region_or_prompt(region_id, interactive=interactive)
-        resolved_subnet_id = _subnet_or_prompt(subnet_id, interactive=interactive)
-        resolved_email = _optional_email_or_prompt(email, interactive=interactive)
+        resolved_region_id = _region_or_prompt(region_id, interactive=interactive_mode)
+        resolved_subnet_id = _subnet_or_prompt(subnet_id, interactive=interactive_mode)
+        resolved_email = _optional_email_or_prompt(email, interactive=interactive_mode)
+        selected_infra, selected_apps = _normalize_catalog_dependencies(
+            selected_infra=_resolve_catalog_ids(
+                scope="infra",
+                raw_values=infra_catalog,
+                interactive=interactive_mode,
+                entries=infra_entries,
+                seed_defaults=None,
+            ),
+            selected_apps=_resolve_catalog_ids(
+                scope="apps",
+                raw_values=apps_catalog,
+                interactive=interactive_mode,
+                entries=app_entries,
+                seed_defaults=None,
+            ),
+        )
 
         result = _scaffold_instance(
             base_path=base_path,
@@ -1082,6 +1224,10 @@ def create_command(
             region_id=resolved_region_id,
             subnet_id=resolved_subnet_id,
             email=resolved_email,
+            selected_infra=selected_infra,
+            selected_apps=selected_apps,
+            infra_entries=infra_entries,
+            app_entries=app_entries,
             force=force,
             bootstrap_ci=bootstrap_ci,
         )
@@ -1117,6 +1263,15 @@ def create_command(
             console.print(f"Created: {result.config_path}")
         else:
             console.print(f"Config exists, keeping current file: {result.config_path}")
+        console.print(
+            "Enabled infra catalog: "
+            + (", ".join(sorted(selected_infra)) if selected_infra else "(none)")
+        )
+        console.print(
+            "Enabled apps catalog: "
+            + (", ".join(sorted(selected_apps)) if selected_apps else "(none)")
+        )
+        console.print(f"Catalog registry: {resolved_catalog_file}")
         console.print(f"Ensured generated skeleton: {result.config_path.parent / 'generated'}")
         if deploy:
             validate_config, paths = _load_context(result.config_path)
@@ -1147,6 +1302,7 @@ def validate_command(
     """Validate config.yaml schema and path alignment."""
     try:
         config, _ = _load_context(config_path)
+        validate_catalog_contracts(config)
         if strict:
             _validate_strict_config(config)
             console.print(f"[green]Valid (strict):[/green] {config_path}")
@@ -1463,120 +1619,346 @@ def discover_command(
         _exit_with_error(exc)
 
 
-@app.command("list")
-def list_command(
-    schema_path: Annotated[
-        str,
-        typer.Argument(
-            help="Schema path to inspect, for example infra.mk8s (or use 'config' for root)"
+def _list_catalog_impl(
+    *,
+    infra_only: bool,
+    apps_only: bool,
+    defaults_only: bool,
+    catalog_file: Path | None,
+) -> None:
+    resolved_catalog_file = resolve_catalog_file_path(explicit=catalog_file)
+    scopes: list[CatalogScope] = []
+    if infra_only:
+        scopes.append("infra")
+    if apps_only:
+        scopes.append("apps")
+    if not scopes:
+        scopes = ["infra", "apps"]
+
+    headers = ("SCOPE", "ID", "STATUS", "ENGINE", "SCHEMA_PATH", "DESCRIPTION")
+    rows: list[tuple[str, str, str, str, str, str]] = []
+
+    for scope in scopes:
+        for entry in resolved_catalog_entries(scope=scope, catalog_file=resolved_catalog_file):
+            if defaults_only and not entry.default_enabled:
+                continue
+            if not entry.selectable:
+                status = "required"
+            elif entry.default_enabled:
+                status = "default"
+            else:
+                status = "optional"
+            rows.append(
+                (
+                    scope,
+                    entry.id,
+                    status,
+                    entry.engine_type,
+                    entry.schema_path,
+                    entry.description,
+                )
+            )
+
+    if not rows:
+        console.print("No catalog entries match the current filter.")
+        return
+
+    widths = [max(len(header), *(len(row[idx]) for row in rows)) for idx, header in enumerate(headers)]
+    separator = "  "
+
+    def _format(values: tuple[str, ...]) -> str:
+        return separator.join(value.ljust(widths[idx]) for idx, value in enumerate(values))
+
+    print(_format(headers))
+    print(_format(tuple("-" * width for width in widths)))
+    for row in rows:
+        print(_format(row))
+    console.print(f"Catalog registry: {resolved_catalog_file}")
+
+
+@catalog_app.command("list")
+def catalog_list_command(
+    infra_only: Annotated[
+        bool,
+        typer.Option("--infra", help="Show infra catalog entries"),
+    ] = False,
+    apps_only: Annotated[
+        bool,
+        typer.Option("--apps", help="Show apps catalog entries"),
+    ] = False,
+    defaults_only: Annotated[
+        bool,
+        typer.Option("--defaults", help="Show only default-enabled entries"),
+    ] = False,
+    catalog_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--catalog-file",
+            help="Catalog registry YAML path (defaults to env/local/global resolution).",
         ),
-    ] = "config",
-    required_only: Annotated[
+    ] = None,
+) -> None:
+    """List selectable infra/apps catalog entries used by `create` wizard."""
+    try:
+        _list_catalog_impl(
+            infra_only=infra_only,
+            apps_only=apps_only,
+            defaults_only=defaults_only,
+            catalog_file=catalog_file,
+        )
+    except Exception as exc:  # pragma: no cover - CLI surface
+        _exit_with_error(exc)
+
+
+@app.command("list-catalog")
+def list_catalog_command(
+    infra_only: Annotated[
         bool,
-        typer.Option("--required", help="Show only required fields"),
+        typer.Option("--infra", help="Show infra catalog entries"),
     ] = False,
-    optional_only: Annotated[
+    apps_only: Annotated[
         bool,
-        typer.Option("--optional", help="Show only optional fields"),
+        typer.Option("--apps", help="Show apps catalog entries"),
     ] = False,
-    all_fields: Annotated[
+    defaults_only: Annotated[
         bool,
-        typer.Option("--all", help="Show all fields"),
+        typer.Option("--defaults", help="Show only default-enabled entries"),
+    ] = False,
+    catalog_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--catalog-file",
+            help="Catalog registry YAML path (defaults to env/local/global resolution).",
+        ),
+    ] = None,
+) -> None:
+    """List infra/apps catalog entries used by `create` wizard."""
+    try:
+        _list_catalog_impl(
+            infra_only=infra_only,
+            apps_only=apps_only,
+            defaults_only=defaults_only,
+            catalog_file=catalog_file,
+        )
+    except Exception as exc:  # pragma: no cover - CLI surface
+        _exit_with_error(exc)
+
+
+@catalog_app.command("add")
+def catalog_add_command(
+    scope: Annotated[
+        str | None,
+        typer.Option(
+            "--scope",
+            help="Catalog scope: infra or apps (prompted in wizard mode when omitted)",
+        ),
+    ] = None,
+    entry_id: Annotated[
+        str | None,
+        typer.Option(
+            "--id",
+            help="Catalog id (lowercase letters/digits/hyphens; prompted in wizard mode)",
+        ),
+    ] = None,
+    description: Annotated[
+        str | None,
+        typer.Option(
+            "--description",
+            help="Short operator-facing description (prompted in wizard mode)",
+        ),
+    ] = None,
+    name: Annotated[
+        str | None,
+        typer.Option("--name", help="Display name (optional)"),
+    ] = None,
+    schema_path: Annotated[
+        str | None,
+        typer.Option("--schema-path", help="Schema path label for this entry (optional)"),
+    ] = None,
+    enabled_path: Annotated[
+        str | None,
+        typer.Option(
+            "--enabled-path",
+            help=(
+                "Optional config bool path to toggle existing core fields "
+                "(for example infra.managed_postgresql.enabled)"
+            ),
+        ),
+    ] = None,
+    engine_type: Annotated[
+        str | None,
+        typer.Option(
+            "--engine-type",
+            help="Engine type metadata (terraform_module for infra, helm_release for apps)",
+        ),
+    ] = None,
+    source: Annotated[
+        str | None,
+        typer.Option(
+            "--source",
+            help=(
+                "Generic source metadata. For infra use Terraform module source. "
+                "For apps use chart source (repo/name)."
+            ),
+        ),
+    ] = None,
+    module_source: Annotated[
+        str | None,
+        typer.Option(
+            "--module-source",
+            help="Infra helper: Terraform module source (same as --source for infra)",
+        ),
+    ] = None,
+    chart_repo: Annotated[
+        str | None,
+        typer.Option("--chart-repo", help="Apps helper: Helm chart repository URL"),
+    ] = None,
+    chart_name: Annotated[
+        str | None,
+        typer.Option("--chart-name", help="Apps helper: Helm chart name"),
+    ] = None,
+    version: Annotated[
+        str | None,
+        typer.Option("--version", help="Version metadata (module/chart version)"),
+    ] = None,
+    default_enabled: Annotated[
+        bool,
+        typer.Option(
+            "--default",
+            help="Include entry in default create wizard selection",
+        ),
+    ] = False,
+    non_selectable: Annotated[
+        bool,
+        typer.Option(
+            "--non-selectable",
+            help="Make entry always enabled (not user-toggleable in wizard)",
+        ),
+    ] = False,
+    catalog_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--catalog-file",
+            help="Catalog registry YAML path (defaults to env/local/global resolution).",
+        ),
+    ] = None,
+    no_interactive: Annotated[
+        bool,
+        typer.Option(
+            "--no-interactive",
+            help=(
+                "Disable wizard mode for automation/CI. "
+                "When set, required options must be passed explicitly."
+            ),
+        ),
     ] = False,
 ) -> None:
-    """List schema fields and whether each field is required or optional."""
+    """Add or update a catalog entry (wizard mode by default)."""
     try:
-        selected_filters = sum(int(flag) for flag in (required_only, optional_only, all_fields))
-        if selected_filters > 1:
-            raise ValueError("Use only one of --required, --optional, or --all")
+        interactive_mode = not no_interactive
 
-        entries = list_schema_fields(schema_path)
-        child_map: dict[str, list] = {}
-        for entry in entries:
-            parent = entry.path.rsplit(".", maxsplit=1)[0] if "." in entry.path else ""
-            child_map.setdefault(parent, []).append(entry)
+        normalized_scope = _scope_or_prompt(scope, interactive=interactive_mode)
+        if normalized_scope not in {"infra", "apps"}:
+            raise RuntimeError("--scope must be one of: infra, apps")
 
-        def _has_children(path: str) -> bool:
-            return path in child_map
-
-        def _has_required_descendant(path: str) -> bool:
-            prefix = f"{path}."
-            return any(
-                candidate.required and candidate.path.startswith(prefix) for candidate in entries
-            )
-
-        if required_only:
-            entries = [
-                entry
-                for entry in entries
-                if entry.required
-                and (
-                    not _has_children(entry.path)
-                    or (_has_children(entry.path) and not _has_required_descendant(entry.path))
-                )
-            ]
-        elif optional_only:
-            entries = [
-                entry for entry in entries if not entry.required and not _has_children(entry.path)
-            ]
-
-        if not entries:
-            console.print("No fields match the current filter.")
-            return
-
-        headers = ("FIELD", "STATUS", "TYPE", "DEFAULT")
-        rows: list[tuple[str, str, str, str]] = []
-        for entry in entries:
-            status = "required" if entry.required else "optional"
-            default = "-" if entry.default_value is None else entry.default_value
-            rows.append((entry.path, status, entry.type_name, default))
-
-        # Keep FIELD intact; shrink TYPE/DEFAULT first when terminal width is limited.
-        max_allowed = [10_000, 8, 30, 24]
-        min_allowed = [24, 8, 12, 8]
-        separator = "  "
-        widths = []
-        for col in range(len(headers)):
-            content_width = max(len(headers[col]), *(len(row[col]) for row in rows))
-            widths.append(min(max(content_width, min_allowed[col]), max_allowed[col]))
-
-        terminal_width = shutil.get_terminal_size(fallback=(120, 20)).columns
-        total_width = sum(widths) + (len(widths) - 1) * len(separator)
-        while total_width > terminal_width:
-            reduced = False
-            for col in (2, 3):
-                if widths[col] > min_allowed[col] and total_width > terminal_width:
-                    widths[col] -= 1
-                    total_width -= 1
-                    reduced = True
-            if not reduced:
-                break
-
-        def _clip(value: str, width: int) -> str:
-            if len(value) <= width:
-                return value
-            if width <= 3:
-                return "." * width
-            return value[: width - 3] + "..."
-
-        def _format_row(values: tuple[str, str, str, str]) -> str:
-            rendered: list[str] = []
-            for idx, value in enumerate(values):
-                if idx == 0:
-                    # Do not truncate FIELD column.
-                    rendered.append(value.ljust(widths[idx]))
-                    continue
-                rendered.append(_clip(value, widths[idx]).ljust(widths[idx]))
-            return separator.join(rendered)
-
-        print(_format_row(headers))
-        print(
-            _format_row(
-                tuple("-" * widths[idx] for idx in range(len(headers)))  # type: ignore[arg-type]
-            )
+        resolved_entry_id = _value_or_prompt(
+            entry_id,
+            option_name="--id",
+            prompt_text="Catalog id",
+            interactive=interactive_mode,
         )
-        for row in rows:
-            print(_format_row(row))
+        normalized_id = resolved_entry_id.strip().lower()
+        if not normalized_id:
+            raise RuntimeError("--id cannot be empty")
+
+        resolved_description = _value_or_prompt(
+            description,
+            option_name="--description",
+            prompt_text="Description",
+            interactive=interactive_mode,
+        )
+        resolved_name = name.strip() if name and name.strip() else None
+
+        normalized_engine = (
+            engine_type.strip()
+            if engine_type and engine_type.strip()
+            else ("terraform_module" if normalized_scope == "infra" else "helm_release")
+        )
+
+        resolved_source = source.strip() if source and source.strip() else None
+        if normalized_scope == "infra" and module_source:
+            resolved_source = module_source.strip()
+
+        if normalized_scope == "infra" and not resolved_source and interactive_mode:
+            resolved_source = _value_or_prompt(
+                module_source,
+                option_name="--module-source",
+                prompt_text="Terraform module source",
+                interactive=True,
+            )
+
+        if normalized_scope == "apps":
+            repo_value = chart_repo.strip().rstrip("/") if chart_repo and chart_repo.strip() else None
+            chart_value = chart_name.strip() if chart_name and chart_name.strip() else None
+            if not resolved_source:
+                if interactive_mode:
+                    repo_value = repo_value or _value_or_prompt(
+                        None,
+                        option_name="--chart-repo",
+                        prompt_text="Helm chart repository URL",
+                        interactive=True,
+                    )
+                    chart_value = chart_value or _value_or_prompt(
+                        None,
+                        option_name="--chart-name",
+                        prompt_text="Helm chart name",
+                        interactive=True,
+                    )
+                if repo_value or chart_value:
+                    if not repo_value or not chart_value:
+                        raise RuntimeError("--chart-repo and --chart-name must be provided together")
+                    resolved_source = f"{repo_value.strip().rstrip('/')}/{chart_value.strip()}"
+
+        if not resolved_source:
+            raise RuntimeError(
+                "A source is required. Use --module-source for infra, --chart-repo/--chart-name for apps, or --source."
+            )
+
+        resolved_version = version.strip() if version and version.strip() else None
+        resolved_schema_path = (
+            schema_path.strip() if schema_path and schema_path.strip() else None
+        )
+        resolved_enabled_path = (
+            enabled_path.strip() if enabled_path and enabled_path.strip() else None
+        )
+
+        resolved_catalog_file = resolve_catalog_file_path(explicit=catalog_file)
+        entry = CatalogEntry(
+            id=normalized_id,
+            scope=cast(CatalogScope, normalized_scope),
+            schema_path=(
+                resolved_schema_path
+                if resolved_schema_path
+                else f"catalog.{normalized_scope}.{normalized_id}"
+            ),
+            description=resolved_description.strip(),
+            name=resolved_name,
+            default_enabled=default_enabled,
+            selectable=not non_selectable,
+            enabled_path=(
+                tuple(part for part in resolved_enabled_path.split(".") if part)
+                if resolved_enabled_path
+                else None
+            ),
+            engine_type=normalized_engine,
+            source=resolved_source,
+            version=resolved_version,
+            origin="custom",
+        )
+        upsert_catalog_entry(catalog_file=resolved_catalog_file, entry=entry)
+        console.print(
+            f"Upserted catalog entry '{entry.id}' ({normalized_scope}, engine={entry.engine_type}) in {resolved_catalog_file}"
+        )
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 

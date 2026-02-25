@@ -4,7 +4,128 @@ from __future__ import annotations
 
 from textwrap import dedent
 
+import yaml
+
+from .catalog import CatalogEntry, CatalogScope, catalog_entries, default_catalog_ids
+
 SCHEMA_VERSION = "v1"
+
+
+def _set_nested_value(payload: dict[str, object], path: tuple[str, ...], value: object) -> None:
+    current: dict[str, object] = payload
+    for segment in path[:-1]:
+        child = current.get(segment)
+        if not isinstance(child, dict):
+            child = {}
+            current[segment] = child
+        current = child
+    current[path[-1]] = value
+
+
+def _apply_catalog_selection(
+    payload: dict[str, object],
+    *,
+    selected_infra: set[str] | None,
+    selected_apps: set[str] | None,
+    infra_entries: tuple[CatalogEntry, ...] | None = None,
+    app_entries: tuple[CatalogEntry, ...] | None = None,
+) -> None:
+    resolved_infra_entries = infra_entries if infra_entries is not None else catalog_entries("infra")
+    resolved_app_entries = app_entries if app_entries is not None else catalog_entries("apps")
+
+    scope_selections: tuple[tuple[CatalogScope, set[str]], ...] = (
+        (
+            "infra",
+            selected_infra if selected_infra is not None else set(default_catalog_ids("infra")),
+        ),
+        (
+            "apps",
+            selected_apps if selected_apps is not None else set(default_catalog_ids("apps")),
+        ),
+    )
+    entries_by_scope: dict[CatalogScope, tuple[CatalogEntry, ...]] = {
+        "infra": resolved_infra_entries,
+        "apps": resolved_app_entries,
+    }
+    lookup_by_scope: dict[CatalogScope, dict[str, CatalogEntry]] = {
+        scope: {entry.id: entry for entry in entries}
+        for scope, entries in entries_by_scope.items()
+    }
+
+    for scope, selected in scope_selections:
+        for entry in entries_by_scope[scope]:
+            if entry.enabled_path is None:
+                continue
+            enabled = entry.id in selected
+            _set_nested_value(payload, entry.enabled_path, enabled)
+
+    # Keep dependent toggles coherent with their parent components.
+    infra = payload.get("infra", {})
+    if isinstance(infra, dict):
+        sfs = infra.get("sfs", {})
+        if isinstance(sfs, dict) and not sfs.get("enabled", False):
+            csi = sfs.get("csi", {})
+            if isinstance(csi, dict):
+                csi["enabled"] = False
+
+        mysterybox = infra.get("mysterybox", {})
+        if isinstance(mysterybox, dict) and not mysterybox.get("enabled", False):
+            mysterybox["secrets"] = []
+
+    apps = payload.get("apps", {})
+    if isinstance(apps, dict):
+        platform = apps.get("platform", {})
+        if isinstance(platform, dict):
+            external_secrets = platform.get("external_secrets", {})
+            if isinstance(external_secrets, dict) and not external_secrets.get("enabled", False):
+                mysterybox = external_secrets.get("mysterybox", {})
+                if isinstance(mysterybox, dict):
+                    mysterybox["enabled"] = False
+
+    catalog_payload: dict[str, dict[str, object]] = {}
+    for scope, selected in scope_selections:
+        scope_values: dict[str, dict[str, object]] = {}
+        for selected_id in sorted(selected):
+            item: dict[str, object] = {}
+            entry = lookup_by_scope[scope].get(selected_id)
+            if entry is not None:
+                item["engine_type"] = entry.engine_type
+                item["schema_path"] = entry.schema_path
+                if entry.source:
+                    item["source"] = entry.source
+                if entry.version:
+                    item["version"] = entry.version
+                if entry.name:
+                    item["name"] = entry.name
+
+                if scope == "infra" and entry.engine_type.lower() in {
+                    "terraform_module",
+                    "terraform",
+                    "tf_module",
+                    "module",
+                }:
+                    item.setdefault("inputs", {})
+                    item.setdefault("depends_on_platform", True)
+
+                if scope == "apps" and entry.engine_type.lower() in {
+                    "helm_release",
+                    "helmrelease",
+                    "helm",
+                    "helm_chart",
+                }:
+                    item.setdefault("release_name", selected_id)
+                    item.setdefault("namespace", selected_id)
+                    item.setdefault("create_namespace", True)
+                    item.setdefault("values", {})
+
+            scope_values[selected_id] = item
+
+        catalog_payload[scope] = {
+            "selected": sorted(selected),
+            "values": scope_values,
+        }
+
+    payload["catalog"] = catalog_payload
 
 
 def starter_config_yaml(
@@ -17,6 +138,10 @@ def starter_config_yaml(
     region_id: str,
     subnet_id: str,
     email: str | None,
+    selected_infra: set[str] | None = None,
+    selected_apps: set[str] | None = None,
+    infra_entries: tuple[CatalogEntry, ...] | None = None,
+    app_entries: tuple[CatalogEntry, ...] | None = None,
 ) -> str:
     """Render a starter instance config.yaml with sensible defaults."""
     email_value = f'"{email}"' if email else "null"
@@ -24,9 +149,8 @@ def starter_config_yaml(
     state_bucket = f"tfstate-{tenant_id}"
     route_host = f"n8n.{cluster_name}.example.internal"
 
-    return (
-        dedent(
-            f"""
+    rendered = dedent(
+        f"""
         version: {SCHEMA_VERSION}
 
         client_info:
@@ -417,6 +541,15 @@ def starter_config_yaml(
                   # cert-manager issuer reference used for route certificate.
                   issuer_ref: internal-ca
         """
-        ).strip()
-        + "\n"
+    ).strip()
+    payload = yaml.safe_load(rendered)
+    if not isinstance(payload, dict):
+        raise ValueError("starter config template must render to a YAML mapping")
+    _apply_catalog_selection(
+        payload,
+        selected_infra=selected_infra,
+        selected_apps=selected_apps,
+        infra_entries=infra_entries,
+        app_entries=app_entries,
     )
+    return yaml.safe_dump(payload, sort_keys=False)

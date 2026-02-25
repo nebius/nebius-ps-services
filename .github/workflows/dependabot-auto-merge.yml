@@ -1,0 +1,57 @@
+name: dependabot-auto-merge
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    if: github.actor == 'dependabot[bot]' && github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Evaluate update type
+        id: eligibility
+        run: |
+          update_type="${{ steps.metadata.outputs.update-type }}"
+          case "$update_type" in
+            version-update:semver-patch|version-update:semver-minor)
+              echo "eligible=true" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "eligible=false" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+          echo "update_type=$update_type" >> "$GITHUB_OUTPUT"
+
+      - name: Auto-approve patch/minor update
+        if: steps.eligibility.outputs.eligible == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr review --approve "${{ github.event.pull_request.html_url }}"
+
+      - name: Enable auto-merge
+        if: steps.eligibility.outputs.eligible == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr merge --auto "${{ github.event.pull_request.html_url }}"
+
+      - name: Skip auto-merge for non patch/minor updates
+        if: steps.eligibility.outputs.eligible != 'true'
+        run: |
+          echo "Skipping auto-merge for Dependabot update."
+          echo "Dependency names: ${{ steps.metadata.outputs.dependency-names }}"
+          echo "Update type: ${{ steps.metadata.outputs.update-type }}"

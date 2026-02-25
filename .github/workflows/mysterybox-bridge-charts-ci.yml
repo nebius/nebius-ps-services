@@ -1,4 +1,4 @@
-name: mysterybox-bridge-charts-ci
+name: mysterybox-bridge-chart-lint-and-tests
 
 on:
   pull_request:
@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: mysterybox-bridge-charts-ci-${{ github.ref }}
+  group: mysterybox-bridge-chart-lint-and-tests-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

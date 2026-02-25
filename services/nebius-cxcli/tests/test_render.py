@@ -5,6 +5,7 @@ from pathlib import Path
 
 import yaml
 
+from nebius_cxcli.catalog import CatalogEntry, catalog_entries
 from nebius_cxcli.config_loader import load_config
 from nebius_cxcli.config_template import starter_config_yaml
 from nebius_cxcli.paths import resolve_instance_paths, validate_path_alignment
@@ -86,6 +87,251 @@ def test_render_creates_expected_outputs(tmp_path: Path) -> None:
     assert "mysterybox_secrets" not in tfvars
 
     assert len(result.files_written) >= 6
+
+
+def test_render_writes_custom_catalog_app_flux_manifests(tmp_path: Path) -> None:
+    cluster_dir = (
+        tmp_path
+        / "catalog-root"
+        / "instances"
+        / "client-a--tenant-123"
+        / "prod"
+        / "client-a-prod"
+    )
+    cluster_dir.mkdir(parents=True, exist_ok=True)
+
+    app_entries = catalog_entries("apps") + (
+        CatalogEntry(
+            id="argo-cd",
+            scope="apps",
+            schema_path="catalog.apps.argo-cd",
+            description="Argo CD Helm release",
+            engine_type="helm_release",
+            source="https://argoproj.github.io/argo-helm/argo-cd",
+            version="7.6.7",
+            origin="custom",
+        ),
+    )
+    source = starter_config_yaml(
+        client_name="client-a",
+        tenant_id="tenant-123",
+        env="prod",
+        cluster_name="client-a-prod",
+        project_id="project-456",
+        region_id="eu-north1",
+        subnet_id="subnet-abc123",
+        email="ops@example.com",
+        selected_apps={"argo-cd"},
+        app_entries=app_entries,
+    )
+    config_path = cluster_dir / "config.yaml"
+    config_path.write_text(source, encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_instance_paths(config_path)
+    validate_path_alignment(config, paths)
+    render_instance(config, paths)
+
+    release_path = paths.flux_dir / "apps/workloads/argo-cd-helmrelease.yaml"
+    namespace_path = paths.flux_dir / "apps/workloads/namespace-argo-cd.yaml"
+    repos_path = paths.flux_dir / "sources/helm-repositories.yaml"
+    assert release_path.exists()
+    assert namespace_path.exists()
+    assert repos_path.exists()
+
+    release_doc = yaml.safe_load(release_path.read_text(encoding="utf-8"))
+    repo_docs = list(yaml.safe_load_all(repos_path.read_text(encoding="utf-8")))
+    repo_doc = next(doc for doc in repo_docs if doc["metadata"]["name"] == "catalog-argo-cd")
+    assert repo_doc["spec"]["url"] == "https://argoproj.github.io/argo-helm"
+    assert release_doc["metadata"]["name"] == "argo-cd"
+    assert release_doc["metadata"]["namespace"] == "argo-cd"
+    assert release_doc["spec"]["chart"]["spec"]["chart"] == "argo-cd"
+    assert release_doc["spec"]["chart"]["spec"]["version"] == "7.6.7"
+
+
+def test_render_custom_catalog_app_allows_value_overrides(tmp_path: Path) -> None:
+    cluster_dir = (
+        tmp_path
+        / "catalog-root-override"
+        / "instances"
+        / "client-a--tenant-123"
+        / "prod"
+        / "client-a-prod"
+    )
+    cluster_dir.mkdir(parents=True, exist_ok=True)
+
+    app_entries = catalog_entries("apps") + (
+        CatalogEntry(
+            id="argo-cd",
+            scope="apps",
+            schema_path="catalog.apps.argo-cd",
+            description="Argo CD Helm release",
+            engine_type="helm_release",
+            source="https://argoproj.github.io/argo-helm/argo-cd",
+            version="7.6.7",
+            origin="custom",
+        ),
+    )
+    source = starter_config_yaml(
+        client_name="client-a",
+        tenant_id="tenant-123",
+        env="prod",
+        cluster_name="client-a-prod",
+        project_id="project-456",
+        region_id="eu-north1",
+        subnet_id="subnet-abc123",
+        email="ops@example.com",
+        selected_apps={"argo-cd"},
+        app_entries=app_entries,
+    )
+    payload = yaml.safe_load(source)
+    payload["catalog"]["apps"]["values"]["argo-cd"].update(
+        {
+            "namespace": "argocd",
+            "release_name": "argocd-control-plane",
+            "repo_name": "argocd",
+            "interval": "10m",
+            "values": {
+                "server": {
+                    "service": {
+                        "type": "ClusterIP",
+                    }
+                }
+            },
+        }
+    )
+    config_path = cluster_dir / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_instance_paths(config_path)
+    validate_path_alignment(config, paths)
+    render_instance(config, paths)
+
+    release_path = paths.flux_dir / "apps/workloads/argocd-control-plane-helmrelease.yaml"
+    assert release_path.exists()
+    release_doc = yaml.safe_load(release_path.read_text(encoding="utf-8"))
+    assert release_doc["metadata"]["name"] == "argocd-control-plane"
+    assert release_doc["metadata"]["namespace"] == "argocd"
+    assert release_doc["spec"]["interval"] == "10m"
+    assert release_doc["spec"]["values"]["server"]["service"]["type"] == "ClusterIP"
+
+
+def test_render_writes_custom_catalog_infra_module_block(tmp_path: Path) -> None:
+    cluster_dir = (
+        tmp_path
+        / "catalog-infra-root"
+        / "instances"
+        / "client-a--tenant-123"
+        / "prod"
+        / "client-a-prod"
+    )
+    cluster_dir.mkdir(parents=True, exist_ok=True)
+
+    infra_entries = catalog_entries("infra") + (
+        CatalogEntry(
+            id="managed-redis",
+            scope="infra",
+            schema_path="catalog.infra.managed-redis",
+            description="Managed Redis module",
+            engine_type="terraform_module",
+            source="git::https://github.com/example/iac.git//modules/managed-redis",
+            version="1.0.0",
+            origin="custom",
+        ),
+    )
+    source = starter_config_yaml(
+        client_name="client-a",
+        tenant_id="tenant-123",
+        env="prod",
+        cluster_name="client-a-prod",
+        project_id="project-456",
+        region_id="eu-north1",
+        subnet_id="subnet-abc123",
+        email="ops@example.com",
+        selected_infra={"managed-redis"},
+        infra_entries=infra_entries,
+    )
+    config_path = cluster_dir / "config.yaml"
+    config_path.write_text(source, encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_instance_paths(config_path)
+    validate_path_alignment(config, paths)
+    render_instance(config, paths)
+
+    main_text = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
+    assert 'module "catalog-managed-redis"' in main_text
+    assert 'source = "git::https://github.com/example/iac.git//modules/managed-redis"' in main_text
+    assert 'version = "1.0.0"' in main_text
+    assert "depends_on = [module.customer_platform]" in main_text
+    assert 'inputs = jsondecode("{}")' in main_text
+
+
+def test_render_custom_catalog_infra_module_allows_overrides(tmp_path: Path) -> None:
+    cluster_dir = (
+        tmp_path
+        / "catalog-infra-override-root"
+        / "instances"
+        / "client-a--tenant-123"
+        / "prod"
+        / "client-a-prod"
+    )
+    cluster_dir.mkdir(parents=True, exist_ok=True)
+
+    infra_entries = catalog_entries("infra") + (
+        CatalogEntry(
+            id="managed-redis",
+            scope="infra",
+            schema_path="catalog.infra.managed-redis",
+            description="Managed Redis module",
+            engine_type="terraform_module",
+            source="git::https://github.com/example/iac.git//modules/managed-redis",
+            version="1.0.0",
+            origin="custom",
+        ),
+    )
+    source = starter_config_yaml(
+        client_name="client-a",
+        tenant_id="tenant-123",
+        env="prod",
+        cluster_name="client-a-prod",
+        project_id="project-456",
+        region_id="eu-north1",
+        subnet_id="subnet-abc123",
+        email="ops@example.com",
+        selected_infra={"managed-redis"},
+        infra_entries=infra_entries,
+    )
+    payload = yaml.safe_load(source)
+    payload["catalog"]["infra"]["values"]["managed-redis"].update(
+        {
+            "module_name": "redis-control",
+            "depends_on_platform": False,
+            "inputs": {
+                "name": "client-a-redis",
+                "size_gib": 20,
+                "ha": True,
+            },
+        }
+    )
+    config_path = cluster_dir / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_instance_paths(config_path)
+    validate_path_alignment(config, paths)
+    render_instance(config, paths)
+
+    main_text = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
+    assert 'module "redis-control"' in main_text
+    module_block = main_text.split('module "redis-control" {', maxsplit=1)[1].split(
+        "\n}\n", maxsplit=1
+    )[0]
+    assert "depends_on = [module.customer_platform]" not in module_block
+    assert "client-a-redis" in module_block
+    assert "size_gib" in module_block
+    assert "inputs = jsondecode(" in module_block
 
 
 def test_render_writes_optional_mk8s_override_tfvars(tmp_path: Path) -> None:

@@ -45,6 +45,7 @@ def test_create_from_nested_path_writes_workflow_at_git_root(tmp_path: Path) -> 
         [
             "create",
             str(target_path),
+            "--no-interactive",
             "--client-name",
             "client-a",
             "--tenant-id",
@@ -123,37 +124,349 @@ def test_discover_accepts_target_path_and_outputs_repo_relative_paths(tmp_path: 
     }
 
 
-def test_list_schema_for_mk8s_contains_required_and_optional_fields() -> None:
-    result = runner.invoke(app, ["list", "infra.mk8s"])
+def test_list_catalog_top_level_infra_contains_required_and_optional_entries() -> None:
+    result = runner.invoke(app, ["list-catalog", "--infra"])
     assert result.exit_code == 0, result.output
-    assert "FIELD" in result.output
+    assert "SCOPE" in result.output
     assert "STATUS" in result.output
-    assert "infra.mk8s.subnet_id" in result.output
+    assert "mk8s" in result.output
     assert "required" in result.output
-    assert "infra.mk8s.enabled" in result.output
-    assert "optional" in result.output
+    assert "managed-postgresql" in result.output
+    assert "default" in result.output
 
 
-def test_list_schema_required_filter_only_shows_required_fields() -> None:
-    result = runner.invoke(app, ["list", "infra.mk8s", "--required"])
+def test_list_catalog_infra_contains_required_and_optional_entries() -> None:
+    result = runner.invoke(app, ["catalog", "list", "--infra"])
     assert result.exit_code == 0, result.output
-    assert "infra.mk8s.subnet_id" in result.output
-    assert "infra.mk8s.cpu_nodes.platform" in result.output
-    assert "infra.mk8s.enabled" not in result.output
+    assert "SCOPE" in result.output
+    assert "infra" in result.output
+    assert "mk8s" in result.output
+    assert "required" in result.output
+    assert "managed-postgresql" in result.output
+    assert "default" in result.output
 
 
-def test_list_schema_all_filter_shows_required_and_optional_fields() -> None:
-    result = runner.invoke(app, ["list", "infra.mk8s", "--all"])
+def test_list_catalog_apps_filter_shows_only_apps_entries() -> None:
+    result = runner.invoke(app, ["catalog", "list", "--apps"])
     assert result.exit_code == 0, result.output
-    assert "infra.mk8s.subnet_id" in result.output
-    assert "infra.mk8s.enabled" in result.output
+    assert "apps" in result.output
+    assert "n8n" in result.output
+    assert "infra" not in result.output
+    assert "managed-postgresql" not in result.output
 
 
-def test_list_schema_accepts_hyphenated_jumphost_path() -> None:
-    result = runner.invoke(app, ["list", "infra.wireguard-jumphost", "--all"])
+def test_list_catalog_defaults_only_excludes_optional_entries() -> None:
+    result = runner.invoke(app, ["list-catalog", "--defaults"])
     assert result.exit_code == 0, result.output
-    assert "infra.wireguard-jumphost.enabled" in result.output
-    assert "infra.wireguard-jumphost.tunnel_cidr" in result.output
+    assert "default" in result.output
+    assert "optional" not in result.output
+
+
+def test_catalog_add_and_list_custom_app_entry(tmp_path: Path) -> None:
+    catalog_file = tmp_path / "catalogs" / "catalog.yaml"
+    add_result = runner.invoke(
+        app,
+        [
+            "catalog",
+            "add",
+            "--scope",
+            "apps",
+            "--id",
+            "argo-cd",
+            "--description",
+            "Argo CD Helm release",
+            "--chart-repo",
+            "https://argoproj.github.io/argo-helm",
+            "--chart-name",
+            "argo-cd",
+            "--version",
+            "7.6.7",
+            "--catalog-file",
+            str(catalog_file),
+        ],
+    )
+    assert add_result.exit_code == 0, add_result.output
+
+    list_result = runner.invoke(
+        app,
+        [
+            "catalog",
+            "list",
+            "--apps",
+            "--catalog-file",
+            str(catalog_file),
+        ],
+    )
+    assert list_result.exit_code == 0, list_result.output
+    assert "argo-cd" in list_result.output
+    assert "helm_release" in list_result.output
+
+
+def test_catalog_add_interactive_wizard_creates_custom_app_entry(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr("nebius_cxcli.cli._is_tty_session", lambda: False)
+    catalog_file = tmp_path / "catalogs" / "catalog.yaml"
+    add_result = runner.invoke(
+        app,
+        [
+            "catalog",
+            "add",
+            "--catalog-file",
+            str(catalog_file),
+        ],
+        input=(
+            "apps\n"
+            "argo-rollouts\n"
+            "Argo Rollouts Helm release\n"
+            "https://argoproj.github.io/argo-helm\n"
+            "argo-rollouts\n"
+        ),
+    )
+    assert add_result.exit_code == 0, add_result.output
+
+    list_result = runner.invoke(
+        app,
+        [
+            "catalog",
+            "list",
+            "--apps",
+            "--catalog-file",
+            str(catalog_file),
+        ],
+    )
+    assert list_result.exit_code == 0, list_result.output
+    assert "argo-rollouts" in list_result.output
+    assert "helm_release" in list_result.output
+
+
+def test_catalog_add_no_interactive_requires_required_flags(tmp_path: Path) -> None:
+    catalog_file = tmp_path / "catalogs" / "catalog.yaml"
+    result = runner.invoke(
+        app,
+        [
+            "catalog",
+            "add",
+            "--no-interactive",
+            "--scope",
+            "apps",
+            "--id",
+            "argo-cd",
+            "--catalog-file",
+            str(catalog_file),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "Missing required option: --description" in result.output
+
+
+def test_create_with_custom_catalog_entry_stores_selection_in_config(tmp_path: Path) -> None:
+    repo_root = tmp_path / "customer-repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    _git_init(repo_root)
+    deployments_root = repo_root / "nebius-deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    catalog_file = deployments_root / "catalogs" / "catalog.yaml"
+
+    add_result = runner.invoke(
+        app,
+        [
+            "catalog",
+            "add",
+            "--scope",
+            "apps",
+            "--id",
+            "argo-cd",
+            "--description",
+            "Argo CD Helm release",
+            "--chart-repo",
+            "https://argoproj.github.io/argo-helm",
+            "--chart-name",
+            "argo-cd",
+            "--version",
+            "7.6.7",
+            "--catalog-file",
+            str(catalog_file),
+        ],
+    )
+    assert add_result.exit_code == 0, add_result.output
+
+    create_result = runner.invoke(
+        app,
+        [
+            "create",
+            str(deployments_root),
+            "--no-interactive",
+            "--client-name",
+            "client-ext",
+            "--tenant-id",
+            "tenant-ext",
+            "--env",
+            "prod",
+            "--cluster-name",
+            "client-ext-prod",
+            "--project-id",
+            "project-ext",
+            "--subnet-id",
+            "subnet-ext",
+            "--app",
+            "argo-cd",
+            "--catalog-file",
+            str(catalog_file),
+        ],
+    )
+    assert create_result.exit_code == 0, create_result.output
+
+    config_path = (
+        deployments_root
+        / "instances"
+        / "client-ext--tenant-ext"
+        / "prod"
+        / "client-ext-prod"
+        / "config.yaml"
+    )
+    config = load_config(config_path)
+    assert "argo-cd" in config.catalog.apps.selected
+    assert config.catalog.apps.values["argo-cd"]["engine_type"] == "helm_release"
+    assert (
+        config.catalog.apps.values["argo-cd"]["source"]
+        == "https://argoproj.github.io/argo-helm/argo-cd"
+    )
+    assert config.catalog.apps.values["argo-cd"]["version"] == "7.6.7"
+
+
+def test_create_with_custom_infra_catalog_entry_stores_selection_in_config(tmp_path: Path) -> None:
+    repo_root = tmp_path / "customer-repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    _git_init(repo_root)
+    deployments_root = repo_root / "nebius-deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    catalog_file = deployments_root / "catalogs" / "catalog.yaml"
+
+    add_result = runner.invoke(
+        app,
+        [
+            "catalog",
+            "add",
+            "--scope",
+            "infra",
+            "--id",
+            "managed-redis",
+            "--description",
+            "Managed Redis module",
+            "--module-source",
+            "git::https://github.com/example/iac.git//modules/managed-redis",
+            "--version",
+            "1.0.0",
+            "--catalog-file",
+            str(catalog_file),
+        ],
+    )
+    assert add_result.exit_code == 0, add_result.output
+
+    create_result = runner.invoke(
+        app,
+        [
+            "create",
+            str(deployments_root),
+            "--no-interactive",
+            "--client-name",
+            "client-infra-ext",
+            "--tenant-id",
+            "tenant-infra-ext",
+            "--env",
+            "prod",
+            "--cluster-name",
+            "client-infra-ext-prod",
+            "--project-id",
+            "project-infra-ext",
+            "--subnet-id",
+            "subnet-infra-ext",
+            "--infra",
+            "managed-redis",
+            "--catalog-file",
+            str(catalog_file),
+        ],
+    )
+    assert create_result.exit_code == 0, create_result.output
+
+    config_path = (
+        deployments_root
+        / "instances"
+        / "client-infra-ext--tenant-infra-ext"
+        / "prod"
+        / "client-infra-ext-prod"
+        / "config.yaml"
+    )
+    config = load_config(config_path)
+    assert "managed-redis" in config.catalog.infra.selected
+    assert config.catalog.infra.values["managed-redis"]["engine_type"] == "terraform_module"
+    assert (
+        config.catalog.infra.values["managed-redis"]["source"]
+        == "git::https://github.com/example/iac.git//modules/managed-redis"
+    )
+    assert config.catalog.infra.values["managed-redis"]["version"] == "1.0.0"
+    assert config.catalog.infra.values["managed-redis"]["inputs"] == {}
+    assert config.catalog.infra.values["managed-redis"]["depends_on_platform"] is True
+
+
+def test_create_catalog_flags_control_enabled_components(tmp_path: Path) -> None:
+    repo_root = tmp_path / "customer-repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    _git_init(repo_root)
+    deployments_root = repo_root / "nebius-deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    result = runner.invoke(
+        app,
+        [
+            "create",
+            str(deployments_root),
+            "--no-interactive",
+            "--client-name",
+            "client-cat",
+            "--tenant-id",
+            "tenant-cat",
+            "--env",
+            "prod",
+            "--cluster-name",
+            "client-cat-prod",
+            "--project-id",
+            "project-cat",
+            "--subnet-id",
+            "subnet-cat",
+            "--infra",
+            "managed-postgresql,sfs",
+            "--app",
+            "n8n,external-secrets",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Enabled infra catalog:" in result.output
+    assert "Enabled apps catalog:" in result.output
+
+    config_path = (
+        deployments_root
+        / "instances"
+        / "client-cat--tenant-cat"
+        / "prod"
+        / "client-cat-prod"
+        / "config.yaml"
+    )
+    config = load_config(config_path)
+
+    assert config.infra.managed_postgresql.enabled is True
+    assert config.infra.sfs.enabled is True
+    assert config.infra.wireguard_jumphost.enabled is False
+    assert config.infra.ssh_jumphost.enabled is False
+    assert config.infra.mysterybox.enabled is False
+
+    assert config.apps.workloads.n8n.enabled is True
+    assert config.apps.platform.external_secrets.enabled is True
+    assert config.apps.platform.envoy_gateway.enabled is True
+    assert config.apps.platform.cert_manager.enabled is False
+    assert config.apps.platform.external_dns.enabled is False
+    assert config.apps.platform.observability.enabled is False
 
 
 def test_create_accepts_custom_deployments_root_path(tmp_path: Path) -> None:
@@ -169,6 +482,7 @@ def test_create_accepts_custom_deployments_root_path(tmp_path: Path) -> None:
         [
             "create",
             str(custom_root),
+            "--no-interactive",
             "--client-name",
             "client-c",
             "--tenant-id",
@@ -214,6 +528,7 @@ def test_create_builds_hierarchy_and_valid_starter_config(tmp_path: Path) -> Non
         [
             "create",
             str(deployments_root),
+            "--no-interactive",
             "--client-name",
             "client-a",
             "--tenant-id",
@@ -274,6 +589,7 @@ def test_create_is_idempotent_when_config_exists(tmp_path: Path) -> None:
         [
             "create",
             str(deployments_root),
+            "--no-interactive",
             "--client-name",
             "client-z",
             "--tenant-id",
@@ -301,6 +617,7 @@ def test_create_is_idempotent_when_config_exists(tmp_path: Path) -> None:
         [
             "create",
             str(deployments_root),
+            "--no-interactive",
             "--client-name",
             "client-z",
             "--tenant-id",
@@ -336,266 +653,6 @@ def test_create_is_idempotent_when_config_exists(tmp_path: Path) -> None:
     assert (repo_root / ".github" / "workflows" / "nebius-deployments.yml").exists()
 
 
-def test_create_force_keep_client_info_reuses_interactive_identity_fields(tmp_path: Path) -> None:
-    repo_root = tmp_path / "customer-repo"
-    repo_root.mkdir(parents=True, exist_ok=True)
-    _git_init(repo_root)
-    deployments_root = repo_root / "nebius-deployments"
-    deployments_root.mkdir(parents=True, exist_ok=True)
-
-    first = runner.invoke(
-        app,
-        [
-            "create",
-            str(deployments_root),
-            "--client-name",
-            "client-k",
-            "--tenant-id",
-            "tenant-777",
-            "--env",
-            "dev",
-            "--cluster-name",
-            "client-k-dev",
-            "--project-id",
-            "project-777",
-            "--region-id",
-            "us-central1",
-            "--subnet-id",
-            "subnet-xyz777",
-            "--email",
-            "ops@example.com",
-        ],
-    )
-    assert first.exit_code == 0, first.output
-
-    second = runner.invoke(
-        app,
-        [
-            "create",
-            str(deployments_root),
-            "--force",
-            "--keep-client-info",
-            "--config-file",
-            "instances/client-k--tenant-777/dev/client-k-dev/config.yaml",
-        ],
-    )
-    assert second.exit_code == 0, second.output
-
-    config_path = (
-        deployments_root
-        / "instances"
-        / "client-k--tenant-777"
-        / "dev"
-        / "client-k-dev"
-        / "config.yaml"
-    )
-    cfg = load_config(config_path)
-    assert cfg.client_info.client_name == "client-k"
-    assert cfg.client_info.env.value == "dev"
-    assert cfg.client_info.cluster_name == "client-k-dev"
-    assert cfg.client_info.nebius.tenant_id == "tenant-777"
-    assert cfg.client_info.nebius.project_id == "project-777"
-    assert cfg.client_info.nebius.region_id == "us-central1"
-    assert cfg.infra.mk8s.subnet_id == "subnet-REPLACE-ME"
-    assert cfg.client_info.notifications.email == "ops@example.com"
-
-
-def test_create_keep_client_info_requires_config_file(tmp_path: Path) -> None:
-    repo_root = tmp_path / "customer-repo"
-    repo_root.mkdir(parents=True, exist_ok=True)
-    _git_init(repo_root)
-    deployments_root = repo_root / "nebius-deployments"
-    deployments_root.mkdir(parents=True, exist_ok=True)
-
-    missing = runner.invoke(
-        app,
-        [
-            "create",
-            str(deployments_root),
-            "--force",
-            "--keep-client-info",
-        ],
-    )
-    assert missing.exit_code == 1
-    assert "--config-file is required when --keep-client-info is set" in missing.output
-
-
-def test_create_rejects_config_file_without_keep_client_info(tmp_path: Path) -> None:
-    repo_root = tmp_path / "customer-repo"
-    repo_root.mkdir(parents=True, exist_ok=True)
-    _git_init(repo_root)
-    deployments_root = repo_root / "nebius-deployments"
-    deployments_root.mkdir(parents=True, exist_ok=True)
-
-    result = runner.invoke(
-        app,
-        [
-            "create",
-            str(deployments_root),
-            "--client-name",
-            "client-a",
-            "--tenant-id",
-            "tenant-a",
-            "--env",
-            "dev",
-            "--cluster-name",
-            "cluster-a",
-            "--project-id",
-            "project-a",
-            "--subnet-id",
-            "subnet-a",
-            "--config-file",
-            "instances/client-a--tenant-a/dev/cluster-a/config.yaml",
-        ],
-    )
-    assert result.exit_code == 1
-    assert "--config-file can only be used together with --keep-client-info" in result.output
-
-
-def test_create_keep_client_info_uses_specific_config_file_when_multiple_exist(
-    tmp_path: Path,
-) -> None:
-    repo_root = tmp_path / "customer-repo"
-    repo_root.mkdir(parents=True, exist_ok=True)
-    _git_init(repo_root)
-    deployments_root = repo_root / "nebius-deployments"
-    deployments_root.mkdir(parents=True, exist_ok=True)
-
-    first = runner.invoke(
-        app,
-        [
-            "create",
-            str(deployments_root),
-            "--client-name",
-            "client-a",
-            "--tenant-id",
-            "tenant-a",
-            "--env",
-            "dev",
-            "--cluster-name",
-            "cluster-a",
-            "--project-id",
-            "project-a",
-            "--region-id",
-            "eu-north1",
-            "--subnet-id",
-            "subnet-a",
-            "--email",
-            "a@example.com",
-        ],
-    )
-    assert first.exit_code == 0, first.output
-
-    second = runner.invoke(
-        app,
-        [
-            "create",
-            str(deployments_root),
-            "--client-name",
-            "client-b",
-            "--tenant-id",
-            "tenant-b",
-            "--env",
-            "stage",
-            "--cluster-name",
-            "cluster-b",
-            "--project-id",
-            "project-b",
-            "--region-id",
-            "us-central1",
-            "--subnet-id",
-            "subnet-b",
-            "--email",
-            "b@example.com",
-        ],
-    )
-    assert second.exit_code == 0, second.output
-
-    reused = runner.invoke(
-        app,
-        [
-            "create",
-            str(deployments_root),
-            "--force",
-            "--keep-client-info",
-            "--config-file",
-            "instances/client-b--tenant-b/stage/cluster-b/config.yaml",
-        ],
-    )
-    assert reused.exit_code == 0, reused.output
-
-    config_path = (
-        deployments_root
-        / "instances"
-        / "client-b--tenant-b"
-        / "stage"
-        / "cluster-b"
-        / "config.yaml"
-    )
-    cfg = load_config(config_path)
-    assert cfg.client_info.client_name == "client-b"
-    assert cfg.client_info.env.value == "stage"
-    assert cfg.client_info.cluster_name == "cluster-b"
-    assert cfg.client_info.nebius.tenant_id == "tenant-b"
-    assert cfg.client_info.nebius.project_id == "project-b"
-    assert cfg.client_info.nebius.region_id == "us-central1"
-    assert cfg.infra.mk8s.subnet_id == "subnet-REPLACE-ME"
-    assert cfg.client_info.notifications.email == "b@example.com"
-
-
-def test_create_keep_client_info_can_infer_target_path_from_config_file(tmp_path: Path) -> None:
-    repo_root = tmp_path / "customer-repo"
-    repo_root.mkdir(parents=True, exist_ok=True)
-    _git_init(repo_root)
-    deployments_root = repo_root / "my-folder-name"
-    deployments_root.mkdir(parents=True, exist_ok=True)
-
-    first = runner.invoke(
-        app,
-        [
-            "create",
-            str(deployments_root),
-            "--client-name",
-            "client-c",
-            "--tenant-id",
-            "tenant-c",
-            "--env",
-            "dev",
-            "--cluster-name",
-            "cluster-c",
-            "--project-id",
-            "project-c",
-            "--region-id",
-            "eu-north1",
-            "--subnet-id",
-            "subnet-c",
-            "--email",
-            "c@example.com",
-        ],
-    )
-    assert first.exit_code == 0, first.output
-
-    config_path = (
-        deployments_root / "instances" / "client-c--tenant-c" / "dev" / "cluster-c" / "config.yaml"
-    )
-    assert config_path.exists()
-
-    reused = runner.invoke(
-        app,
-        [
-            "create",
-            "--force",
-            "--keep-client-info",
-            "--config-file",
-            str(config_path),
-        ],
-    )
-    assert reused.exit_code == 0, reused.output
-    assert "Deployments root:" in reused.output
-    normalized_output = "".join(reused.output.splitlines())
-    assert str(deployments_root.name) in normalized_output
-
-
 def test_create_interactive_creates_instance(tmp_path: Path) -> None:
     repo_root = tmp_path / "customer-repo"
     repo_root.mkdir(parents=True, exist_ok=True)
@@ -608,7 +665,6 @@ def test_create_interactive_creates_instance(tmp_path: Path) -> None:
         [
             "create",
             str(deployments_root),
-            "--interactive",
         ],
         input="\n".join(
             [
@@ -619,6 +675,8 @@ def test_create_interactive_creates_instance(tmp_path: Path) -> None:
                 "project-888",
                 "",
                 "ops@example.com",
+                "",
+                "",
                 "",
             ]
         ),
@@ -651,6 +709,7 @@ def test_validate_strict_rejects_starter_placeholders(tmp_path: Path) -> None:
         [
             "create",
             str(deployments_root),
+            "--no-interactive",
             "--client-name",
             "client-s",
             "--tenant-id",
@@ -701,6 +760,7 @@ def test_validate_strict_accepts_config_after_placeholder_updates(tmp_path: Path
         [
             "create",
             str(deployments_root),
+            "--no-interactive",
             "--client-name",
             "client-t",
             "--tenant-id",
@@ -748,6 +808,92 @@ def test_validate_strict_accepts_config_after_placeholder_updates(tmp_path: Path
     assert "Valid (strict):" in strict_result.output
 
 
+def test_validate_rejects_custom_apps_catalog_missing_source(tmp_path: Path) -> None:
+    cluster_dir = (
+        tmp_path
+        / "deployments"
+        / "instances"
+        / "client-a--tenant-123"
+        / "prod"
+        / "client-a-prod"
+    )
+    cluster_dir.mkdir(parents=True, exist_ok=True)
+    config_path = cluster_dir / "config.yaml"
+
+    payload = yaml.safe_load(
+        starter_config_yaml(
+            client_name="client-a",
+            tenant_id="tenant-123",
+            env="prod",
+            cluster_name="client-a-prod",
+            project_id="project-456",
+            region_id="eu-north1",
+            subnet_id="subnet-abc123",
+            email="ops@example.com",
+        )
+    )
+    payload["catalog"]["apps"]["selected"] = ["custom-app"]
+    payload["catalog"]["apps"]["values"]["custom-app"] = {
+        "engine_type": "helm_release",
+        "namespace": "custom-app",
+        "release_name": "custom-app",
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "validate",
+            str(config_path),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "Missing chart source for custom app catalog entry 'custom-app'" in result.output
+
+
+def test_validate_rejects_custom_infra_catalog_non_mapping_inputs(tmp_path: Path) -> None:
+    cluster_dir = (
+        tmp_path
+        / "deployments"
+        / "instances"
+        / "client-a--tenant-123"
+        / "prod"
+        / "client-a-prod"
+    )
+    cluster_dir.mkdir(parents=True, exist_ok=True)
+    config_path = cluster_dir / "config.yaml"
+
+    payload = yaml.safe_load(
+        starter_config_yaml(
+            client_name="client-a",
+            tenant_id="tenant-123",
+            env="prod",
+            cluster_name="client-a-prod",
+            project_id="project-456",
+            region_id="eu-north1",
+            subnet_id="subnet-abc123",
+            email="ops@example.com",
+        )
+    )
+    payload["catalog"]["infra"]["selected"] = ["custom-infra"]
+    payload["catalog"]["infra"]["values"]["custom-infra"] = {
+        "engine_type": "terraform_module",
+        "source": "git::https://github.com/example/iac.git//modules/custom-infra",
+        "inputs": "not-a-mapping",
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "validate",
+            str(config_path),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "catalog.infra.values.custom-infra.inputs must be a mapping" in result.output
+
+
 def test_create_requires_existing_deployments_root(tmp_path: Path) -> None:
     repo_root = tmp_path / "customer-repo"
     repo_root.mkdir(parents=True, exist_ok=True)
@@ -759,6 +905,7 @@ def test_create_requires_existing_deployments_root(tmp_path: Path) -> None:
         [
             "create",
             str(missing_root),
+            "--no-interactive",
             "--client-name",
             "client-a",
             "--tenant-id",
@@ -803,6 +950,7 @@ def test_create_requires_git_repository(tmp_path: Path) -> None:
         [
             "create",
             str(non_repo_root),
+            "--no-interactive",
             "--client-name",
             "client-a",
             "--tenant-id",
@@ -829,6 +977,7 @@ def test_create_bootstrap_ci_requires_git_repository(tmp_path: Path) -> None:
         [
             "create",
             str(non_repo_root),
+            "--no-interactive",
             "--client-name",
             "client-a",
             "--tenant-id",
@@ -861,24 +1010,6 @@ def test_discover_requires_git_repository(tmp_path: Path) -> None:
     )
     assert result.exit_code == 1
     assert "Target path must be inside a git repository" in result.output
-
-
-def test_list_schema_invalid_path_fails() -> None:
-    result = runner.invoke(app, ["list", "infra.nope"])
-    assert result.exit_code == 1
-    assert "Unknown schema path segment 'nope'" in result.output
-
-
-def test_list_schema_rejects_conflicting_filters() -> None:
-    result = runner.invoke(app, ["list", "infra.mk8s", "--required", "--optional"])
-    assert result.exit_code == 1
-    assert "Use only one of --required, --optional, or --all" in result.output
-
-
-def test_list_schema_rejects_all_with_other_filters() -> None:
-    result = runner.invoke(app, ["list", "infra.mk8s", "--all", "--required"])
-    assert result.exit_code == 1
-    assert "Use only one of --required, --optional, or --all" in result.output
 
 
 def test_auth_bootstrap_no_github_sync_does_not_print_secret_values(monkeypatch) -> None:
@@ -1111,6 +1242,7 @@ def test_create_triggers_auto_auth_bootstrap_by_default(tmp_path: Path, monkeypa
         [
             "create",
             str(deployments_root),
+            "--no-interactive",
             "--client-name",
             "client-z",
             "--tenant-id",
@@ -1147,6 +1279,7 @@ def test_create_bootstrap_ci_fails_without_github_token_context(
         [
             "create",
             str(deployments_root),
+            "--no-interactive",
             "--client-name",
             "client-a",
             "--tenant-id",
@@ -1184,6 +1317,7 @@ def test_create_default_mode_does_not_call_auto_auth_bootstrap(tmp_path: Path, m
         [
             "create",
             str(deployments_root),
+            "--no-interactive",
             "--client-name",
             "client-z",
             "--tenant-id",
@@ -1215,6 +1349,7 @@ def test_create_rejects_deploy_and_bootstrap_ci_together(tmp_path: Path) -> None
         [
             "create",
             str(deployments_root),
+            "--no-interactive",
             "--client-name",
             "client-z",
             "--tenant-id",
@@ -1244,6 +1379,7 @@ def test_create_deploy_rejects_starter_placeholders(tmp_path: Path) -> None:
         [
             "create",
             str(deployments_root),
+            "--no-interactive",
             "--client-name",
             "client-z",
             "--tenant-id",
@@ -1272,6 +1408,7 @@ def test_create_deploy_runs_pipeline_for_existing_ready_config(tmp_path: Path, m
         [
             "create",
             str(deployments_root),
+            "--no-interactive",
             "--client-name",
             "client-z",
             "--tenant-id",
@@ -1326,6 +1463,7 @@ def test_create_deploy_runs_pipeline_for_existing_ready_config(tmp_path: Path, m
         [
             "create",
             str(deployments_root),
+            "--no-interactive",
             "--client-name",
             "client-z",
             "--tenant-id",
@@ -1354,6 +1492,7 @@ def test_render_deploy_rejects_starter_placeholders(tmp_path: Path) -> None:
         [
             "create",
             str(deployments_root),
+            "--no-interactive",
             "--client-name",
             "client-r",
             "--tenant-id",
@@ -1399,6 +1538,7 @@ def test_render_deploy_runs_pipeline_for_ready_config(tmp_path: Path, monkeypatc
         [
             "create",
             str(deployments_root),
+            "--no-interactive",
             "--client-name",
             "client-r",
             "--tenant-id",

@@ -147,7 +147,8 @@ Rules:
   starter placeholders such as `subnet-REPLACE-ME`, default SSH key placeholder,
   and default `example.internal` hostname for enabled n8n).
 - Validation has two layers by design:
-  - `validate`: contract correctness (schema + path alignment).
+  - `validate`: contract correctness
+    (schema + path alignment + catalog contract checks).
   - `validate --strict`: operational readiness checks before render/apply.
 - Starter output from `create` is expected to be contract-valid first, and may
   include placeholders that must be replaced before strict validation passes.
@@ -261,23 +262,19 @@ Rules:
   - `schema.py` for strict versioned models.
   - `config_loader.py` for file loading and validation errors.
   - `config_template.py` for canonical starter config generation.
-  - `schema_catalog.py` for schema introspection used by
-    `nebius-cxcli list <schema_path>`.
+  - `catalog.py` for built-in infra/apps catalog definitions.
+  - `catalog_store.py` for external catalog registry merge and persistence.
 
-Schema introspection command:
+Catalog inspection commands:
 
-- `nebius-cxcli list infra.mk8s`
-- `nebius-cxcli list infra.mk8s --all`
-- `nebius-cxcli list infra.mk8s --required`
-- `nebius-cxcli list infra.mk8s --optional`
+- `nebius-cxcli list-catalog`
+- `nebius-cxcli list-catalog --infra`
+- `nebius-cxcli list-catalog --apps`
+- `nebius-cxcli list-catalog --defaults`
+- `nebius-cxcli catalog list` (equivalent subcommand form)
 
-This command is read-only and prints field path, required/optional status,
-type, and default value.
-For filtered views:
-
-- `--required` prints required leaf fields, and required object-level fields
-  only when requirement is modeled at the object level.
-- `--optional` prints optional leaf fields.
+This command is read-only and prints scope, id, status, engine type,
+schema path label, and description.
 
 Template customization boundary:
 
@@ -314,15 +311,32 @@ Operator precondition:
 
 Input styles:
 
-1. Non-interactive flags (`--client-name`, `--tenant-id`, `--env`,
-   `--cluster-name`, `--project-id`, `--subnet-id`).
-2. Interactive prompt mode (`--interactive`) for missing values.
+1. Wizard mode (default): prompts for identity fields and shows TUI-style
+   catalog selectors (checkbox UX when terminal supports `questionary`).
+2. Non-interactive mode (`--no-interactive`): requires explicit flags
+   (`--client-name`, `--tenant-id`, `--env`, `--cluster-name`,
+   `--project-id`, `--subnet-id`) and supports `--infra` / `--app` selection.
 
 `--subnet-id` maps to MK8s control plane subnet and is required because
 `control_plane.subnet_id` is required by `nebius_mk8s_v1_cluster`.
 In interactive mode, when `--subnet-id` is not provided, `create` writes a
 placeholder (`subnet-REPLACE-ME`) so operators can fill the real subnet in
 `config.yaml` before render/apply.
+
+Catalog discovery and management:
+
+- `nebius-cxcli catalog list [--infra|--apps|--defaults]`
+- `nebius-cxcli catalog add` (wizard mode by default)
+- `nebius-cxcli catalog add --no-interactive --scope <infra|apps> ...`
+  - `--default`: include entry in default wizard selection.
+  - `--non-selectable`: make entry always enabled in wizard.
+
+Catalog registry file resolution order:
+
+1. `--catalog-file`
+2. `$NEBIUS_CXCLI_CATALOG_FILE`
+3. `<TARGET_PATH>/catalogs/catalog.yaml` (when present)
+4. `~/.config/nebius-cxcli/catalog.yaml`
 
 Instance scaffolding builds:
 
@@ -332,17 +346,6 @@ Instance scaffolding builds:
 
 The command is idempotent for directories/workflow and can be re-run safely.
 `--deploy` and `--bootstrap-ci` are intentionally mutually exclusive.
-
-Force-refresh helper:
-
-- `create --force --keep-client-info --config-file <path/to/config.yaml>` reuses
-  missing values from an existing
-  instance `config.yaml` (`client_info` identity values, nebius IDs, region,
-  notifications email) while rewriting the config from the current starter
-  template. It intentionally does not keep `subnet_id`; pass `--subnet-id`
-  explicitly when needed.
-- `--config-file` must point to one explicit `instances/.../config.yaml`.
-  If `TARGET_PATH` is omitted, `create` infers deployments root from that path.
 
 ## 6. Generated Artifacts
 
@@ -359,6 +362,9 @@ Everything below is generated from `config.yaml`.
   - Version-pinned module source for platform-infra stack.
   - One `module "customer_platform"` block.
   - Reads `terraform.auto.tfvars.json` and maps all rendered keys into module inputs.
+  - Custom infra catalog entries selected in `config.catalog.infra.selected`
+    are rendered as additional Terraform `module` blocks from
+    `config.catalog.infra.values.<id>` metadata (`source`/`version`/`inputs`).
 - `terraform.auto.tfvars.json`
   - Rendered machine inputs mapped from the schema.
   - Includes identity/platform keys (`tenant_id`, `parent_id`, `region`) and
@@ -370,6 +376,9 @@ Everything below is generated from `config.yaml`.
 - `sources/helm-repositories.yaml`.
 - `apps/platform/*-helmrelease.yaml`.
 - `apps/workloads/*-helmrelease.yaml`.
+- Custom catalog apps selected in `config.catalog.apps.selected` are also
+  rendered as Flux Helm releases from `config.catalog.apps.values.<id>` metadata
+  (chart source/version + namespace/release/value overrides).
 - Optional `apps/workloads/n8n-httproute.yaml`.
 - Optional ESO/MysteryBox sync artifacts when enabled:
   - `apps/platform/external-secrets-helmrelease.yaml`
@@ -450,7 +459,7 @@ tfstate/<client_name>--<tenant_id>/<env>/<cluster_name>/platform.tfstate
 - `<deployments-root>/instances/` under the path passed to `create`.
 - `.github/workflows/nebius-deployments.yml` at the detected git repo root.
 - Optional first instance hierarchy and starter `config.yaml` when create
-  options are provided (flags or `--interactive`).
+  options are provided (wizard prompts or explicit flags with `--no-interactive`).
 
 If `create` is executed from a nested subdirectory, the generated
 workflow uses the repo-relative deployments path so CI discovery still works
@@ -520,19 +529,36 @@ Use `nebius-cxcli auth bootstrap` for explicit rotation/resync flows.
 
 ### 11.1 Infra components
 
-Add a new component by:
+Default path (no CLI code changes):
 
-1. Adding module support in platform-infra library.
-2. Extending schema in `nebius-cxcli`.
-3. Extending Terraform renderer mapping.
+1. Register the component in catalog registry:
+   `nebius-cxcli catalog add --scope infra --id <id> --description ...`
+   `--module-source ...`
+2. Use `create` wizard or `--infra <id>` to select it per customer.
+3. Selection is persisted in `config.catalog.infra.selected`.
+
+When code changes are required:
+
+1. If the component needs first-class rendered fields under `infra.*`,
+   extend schema and render mapping.
+2. If selection-only metadata is sufficient, catalog entry alone is enough.
 
 ### 11.2 In-cluster apps
 
-Add a new app by:
+Default path (no CLI code changes):
 
-1. Adding chart/template defaults in mk8s-apps library.
-2. Extending schema and render mapping.
-3. Adding HelmRepository/HelmRelease generation and optional Gateway API resources.
+1. Register the chart in catalog registry:
+   `nebius-cxcli catalog add --scope apps --id <id> --description ...`
+   `--chart-repo ... --chart-name ...`
+2. Use `create` wizard or `--app <id>` to select it per customer.
+3. Selection is persisted in `config.catalog.apps.selected`.
+
+When code changes are required:
+
+1. If the app needs dedicated typed values under `apps.*` and generated
+   manifests, extend schema/render mapping.
+2. If metadata-only registration is enough for selection/visibility,
+   catalog entry alone is enough.
 
 ## 12. Vendor-aligned implementation notes
 
@@ -553,8 +579,8 @@ Add a new app by:
     (for example `template.resources.platform`,
     `template.gpu_settings.drivers_preset`,
     `template.filesystems.attach_mode`, `template.filesystems.mount_tag`).
-- `nebius-cxcli list <schema_path>` is the operator-facing source of truth for
-  current required vs optional fields (`--required` / `--optional` filters).
+- `nebius-cxcli list-catalog` / `nebius-cxcli catalog list` is the
+  operator-facing source of truth for selectable infra/apps components.
 - Flux bootstrap/reconcile behavior follows Flux CLI docs for GitHub bootstrap
   and kustomization reconciliation.
 - WireGuard jump host implementation follows Nebius WireGuard tutorial flow and
