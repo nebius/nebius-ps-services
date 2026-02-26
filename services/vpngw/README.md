@@ -4,24 +4,116 @@ Site-to-site IPsec/BGP VPN gateway for Nebius AI Cloud. Supports GCP HA VPN, AWS
 
 ## Table of Contents
 
+- [Quick Start Guide](#quick-start-guide)
 - [Security Notice](#security-notice)
 - [Features](#features)
-- [Installation](#installation)
-- [Quick Start](#quick-start)
+- [Installation (Detailed)](#installation-detailed)
 - [Architecture](#architecture)
 - [Configuration](#configuration)
 - [Commands](#commands)
 - [Routing Modes](#routing-modes)
 - [BGP Configuration](#bgp-configuration)
-- [Static Routing](#static-routing)
+- [Static Routing Configuration](#static-routing-configuration)
 - [Peer Integration](#peer-integration)
 - [VM Management](#vm-management)
-- [Monitoring](#monitoring)
+- [System Monitoring](#system-monitoring)
 - [Security](#security)
 - [Troubleshooting](#troubleshooting)
 - [Development](#development)
 - [Release & Versioning](#release--versioning)
 - [Project Structure](#project-structure)
+
+## Quick Start Guide
+
+Use this sequence for first-time deployment. It is optimized for end users and keeps advanced topics in later sections.
+
+### Prerequisites
+
+- Nebius AI Cloud account and project
+- A VPC where the VPN gateway subnet can be created
+- Python 3.10-3.12 and `pipx`
+
+### 1. Install the CLI from a release wheel
+
+Download the latest wheel from [Releases](https://github.com/nebius/nebius-ps-services/releases) and install with `pipx`.
+
+Example for `v0.4.9`:
+
+```bash
+wget https://github.com/nebius/nebius-ps-services/releases/download/nebius-vpngw-v0.4.9/nebius_vpngw-0.4.9-py3-none-any.whl
+pipx install ./nebius_vpngw-0.4.9-py3-none-any.whl
+```
+
+Verify:
+
+```bash
+nebius-vpngw --version
+nebius-vpngw --help
+```
+
+### 2. Create a starter config
+
+```bash
+nebius-vpngw create-config my-vpn.config.yaml
+```
+
+This generates a full schema-aligned YAML template (including defaults, BGP/static examples, and HA roles).
+
+### 3. Prepare Nebius network and reserve public IPs
+
+Before peer tunnel setup, prepare the Nebius side and reserve public IPs for the gateway.
+
+Workflow:
+
+1. Fill minimal fields in `my-vpn.config.yaml`: `tenant_id`, `project_id`, `region_id`, `gateway_group` (leave `connections` for later).
+   `project_id` must be set to a real value (or resolved via `${PROJECT_ID}` env var) before `prep-network`.
+2. Run network preparation: `nebius-vpngw prep-network --local-config-file my-vpn.config.yaml`
+
+3. Share the allocated Nebius public IP(s) with the peer network team.
+4. The peer team creates their VPN gateway and points tunnels to those Nebius public IPs.
+5. After you receive peer tunnel details, complete the config and apply.
+
+### 4. Complete peer gateway/tunnel details in YAML
+
+After peer-side creation, fill `connections` and `tunnels` (peer public IPs, PSKs, inner `/30` CIDRs, BGP ASN for BGP mode).
+
+Generated template notes:
+
+- `inner_cidr` must be APIPA `/30` (`169.254.0.0/16`)
+- For multi-tunnel HA, use explicit roles (`ha_role: "active"` / `ha_role: "passive"`)
+- Keep secrets as `${VAR}` placeholders and export env vars before `apply`
+
+### 5. Apply the configuration
+
+```bash
+nebius-vpngw apply --local-config-file my-vpn.config.yaml
+```
+
+### 6. Configure local routes
+
+```bash
+nebius-vpngw add-routes-local --local-config-file my-vpn.config.yaml
+nebius-vpngw list-routes-local --local-config-file my-vpn.config.yaml
+```
+
+### 7. Validate status and connectivity
+
+```bash
+nebius-vpngw status --local-config-file my-vpn.config.yaml
+```
+
+Optional data-plane check: from a VM in one of `gateway.local_prefixes`, test reachability to a remote private IP over the VPN.
+
+### 8. Optional: manual failover/failback (BGP active/passive)
+
+```bash
+nebius-vpngw failover --tunnel-failover tunnel-2 --local-config-file my-vpn.config.yaml
+nebius-vpngw failback --tunnel-failback tunnel-1 --local-config-file my-vpn.config.yaml
+```
+
+This is useful for planned maintenance, peer changes, or operational testing.
+
+For advanced setup, continue with [Configuration](#configuration), [Commands](#commands), and [Routing Modes](#routing-modes).
 
 ## Security Notice
 
@@ -40,7 +132,7 @@ Site-to-site IPsec/BGP VPN gateway for Nebius AI Cloud. Supports GCP HA VPN, AWS
 - **Validation:** Strict Pydantic schema catches typos and invalid values
 - **HA options:** Single VM (multi-tunnel) or gateway group (VM-level HA, not supported on the current Nebius VM)
 
-## Installation
+## Installation (Detailed)
 
 ### End users (pipx + GitHub release wheel)
 
@@ -105,210 +197,6 @@ pip install -e ".[dev]"
 
 - Confirm the CLI is reachable: `nebius-vpngw --help`. Developer extras include linting, tests, PyInstaller, and build tooling.
 
-## Quick Start
-
-### Prerequisites
-
-- Nebius AI Cloud account
-- Nebius AI Cloud project with VPC network
-- Python 3.10–3.12 runtime (install the CLI with pipx or via editable install as above)
-
-### Nebius-Side Networking Prerequisites (Fixed Public IP, GCP Example)
-
-If you need a stable public IP to give your peer (e.g., GCP External VPN Gateway), reserve it first:
-
-- Optional: use a dedicated Nebius project for clean networking.
-- Ensure your target VPC has a /24 available for the gateway subnet (the deployer auto-creates `vpngw-subnet` if missing).
-- If you prefer to create it manually, create a subnet named `vpngw-subnet` (e.g., `10.48.0.0/24`) inside the target VPC.
-- Reserve a public IP allocation in `vpngw-subnet` (name can be anything).
-- Put that reserved IP into `gateway_group.external_ips` so the gateway reuses it and you can share it with GCP.
-- Recommended shortcut: after you fill the top of the YAML (tenant/project/region + gateway_group), run
-  `nebius-vpngw prep-network --local-config-file <file>` to create `vpngw-subnet`, reserve public IPs,
-  print them, and write them into `gateway_group.external_ips`.
-
-**Note:** If you pre-create an allocation but leave `external_ips` empty, the deployer will create its own allocation unless your allocation name matches the default pattern (`<gateway_group.name>-<index>-eth0-ip`).
-
-### Firewall Requirements
-
-The VPN gateway automatically configures UFW on the VPN gateway with the following rules:
-
-**Peer Gateway Firewall Requirements:**
-
-- **IPsec/IKE:** Allow UDP 500 and UDP 4500 plus ESP (IP protocol 50) between the peer gateway public IP(s) and Nebius gateway public IP(s)
-- **Dynamic routing (BGP only):** Allow TCP 179 only over the tunnel interface between inner tunnel IPs (APIPA `169.254.x.x/30`); do not expose TCP/179 on the public interface
-- **Static routing:** No BGP/TCP 179 required; IPsec/IKE + workload rules are sufficient
-- **ICMP (optional):** Allow ICMP between inner tunnel IPs if you plan to use ping-based tunnel health checks
-- **Workload/application traffic:** Allow required application ports between the private subnets on both sides
-- **Managed cloud VPNs (dynamic):** GCP HA VPN/Cloud Router automatically allows IKE/IPsec and BGP on the managed gateway when using dynamic routing; typically only workload firewall rules are required in your VPC
-
-**Note:** UFW is the default and recommended firewall. The system automatically enables and configures it during VM deployment.
-
-### Required Information from Peer Gateway
-
-Before configuring your VPN gateway, collect the following information from your peer gateway (e.g., GCP Cloud Router, AWS VPN, Azure VPN Gateway):
-
-**Routing mode:** `bgp` or `static`
-
-**For BGP mode:**
-
-- Remote ASN number (e.g., `65014`)
-- BGP timers (optional, defaults shown):
-  - `hold_time_seconds: 6`
-  - `keepalive_seconds: 2`
-- Number of tunnels (e.g., `2` for HA VPN)
-
-**Routing note:** If multiple Nebius gateways connect to the same routing domain (e.g., a single Cloud Router/VPC), ensure each Nebius gateway advertises **distinct** `gateway.local_prefixes`. Overlapping prefixes will conflict and only one path will be selected.
-
-**For static mode:**
-
-- Remote prefixes/subnets (e.g., `10.10.0.0/16`, `10.20.0.0/16`)
-- Number of tunnels (e.g., `2` for HA VPN)
-
-**For each tunnel (all modes):**
-
-- Remote public IP address
-- Pre-shared key (PSK)
-- Inner tunnel CIDR (e.g., `169.254.5.152/30`)
-- Inner local IP (e.g., `169.254.5.154`)
-- Inner remote IP (e.g., `169.254.5.153`)
-
-> **Note:** Inner /30s are required for XFRM interface addressing even in static mode; GCP Cloud Router and AWS VPN provide all this information in their console/CLI output after creating the VPN gateway and tunnels.
-
-### First Deployment
-
-**1. Create configuration from template:**
-
-```bash
-nebius-vpngw create-config my-vpn.config.yaml
-```
-
-**2. (Optional but recommended) Reserve Nebius public IPs before creating the peer:**
-
-- Fill `tenant_id`, `project_id`, `region_id`, and `gateway_group` in the YAML.
-- Run:
-
-  ```bash
-  nebius-vpngw prep-network --local-config-file my-vpn.config.yaml
-  ```
-
-**3. Edit configuration:**
-
-```yaml
-version: 1
-
-tenant_id: ${TENANT_ID}
-project_id: ${PROJECT_ID}
-region_id: ${REGION_ID}
-
-gateway_group:
-  name: "nebius-vpn-gw"
-  instance_count: 1
-  external_ips: []
-  vm_spec:
-    platform: "cpu-d3"
-    preset: "4vcpu-16gb"
-    disk_boot_image: "ubuntu24.04-driverless"
-    disk_gb: 50
-    disk_type: "network_ssd"
-    disk_block_bytes: 4096
-    num_nics: 1
-    ssh_public_key_path: "~/.ssh/id_ed25519.pub"
-
-gateway:
-  local_asn: 64512
-  local_prefixes:
-    - "10.0.0.0/16"
-  ipsec_mode: xfrm-interface  # Default: modern XFRM (recommended)
-
-defaults:
-  vpn_type: ipsec
-  ike_version: 2
-  allow_ikev1: false
-  auth:
-    method: psk
-  crypto:
-    ike_proposals:
-      - "aes256gcm16-prfsha256-modp2048"
-    ike_lifetime_seconds: 28800
-    esp_proposals:
-      - "aes256gcm16-modp2048"
-    esp_lifetime_seconds: 3600
-    dh_groups:
-      - 14
-  dpd:
-    interval_seconds: 5
-    timeout_seconds: 15
-  ha_mode: active-passive
-  routing:
-    mode: bgp
-    bgp:
-      hold_time_seconds: 6
-      keepalive_seconds: 2
-      graceful_restart: false
-      max_prefixes: 1000
-      bfd:
-        enabled: false
-        transmit_interval_ms: 300
-        receive_interval_ms: 300
-        detect_multiplier: 3
-
-connections:
-  - name: gcp-ha-vpn
-    vendor: gcp
-    routing_mode: bgp
-    bgp:
-      enabled: true
-      remote_asn: 65001
-      advertise_local_prefixes: true
-    tunnels:
-      - name: tunnel-1
-        gateway_instance_index: 0
-        ha_role: "active"
-        psk: ${GCP_TUNNEL_1_PSK}
-        remote_public_ip: "203.0.113.1"
-        inner_cidr: "169.254.10.0/30"
-        inner_local_ip: "169.254.10.1"
-        inner_remote_ip: "169.254.10.2"
-      - name: tunnel-2
-        gateway_instance_index: 0
-        ha_role: "passive"
-        psk: ${GCP_TUNNEL_2_PSK}
-        remote_public_ip: "203.0.113.2"
-        inner_cidr: "169.254.10.4/30"
-        inner_local_ip: "169.254.10.5"
-        inner_remote_ip: "169.254.10.6"
-```
-
-**4. Set environment variables (only if you used `${VAR}` placeholders):**
-
-Either set values directly in the YAML **or** use environment variables; do not mix both for the same field.
-
-```bash
-export TENANT_ID="my-tenant-id"
-export PROJECT_ID="my-project-id"
-export REGION_ID="eu-north1"
-export GCP_TUNNEL_1_PSK="your-pre-shared-key-1"
-export GCP_TUNNEL_2_PSK="your-pre-shared-key-2"
-```
-
-**5. Validate configuration:**
-
-```bash
-nebius-vpngw validate-config my-vpn.config.yaml
-```
-
-**6. Deploy:**
-
-```bash
-nebius-vpngw apply --local-config-file my-vpn.config.yaml
-```
-
-**7. Check status:**
-
-```bash
-nebius-vpngw status --local-config-file my-vpn.config.yaml
-```
-
 ## Architecture
 
 **Components:**
@@ -334,94 +222,152 @@ For detailed architecture, see [design document](doc/design.md).
 
 ### File Structure
 
+This is the template structure generated by:
+
+```bash
+nebius-vpngw create-config my-vpn.config.yaml
+```
+
 ```yaml
+# Nebius VPN Gateway config (schema v1)
+# Notes:
+# - Override order: tunnel > connection > defaults
+# - gateway.local_prefixes is the source of truth
+# - Use ${VAR} for secrets; keep *.config.yaml out of git
+# - Set values directly in YAML OR via ${VAR} envs (do not mix for the same field)
+
 version: 1
 
-tenant_id: ${TENANT_ID}
-project_id: ${PROJECT_ID}
-region_id: ${REGION_ID}
+# Project context (required)
+tenant_id: "${TENANT_ID}"
+project_id: "${PROJECT_ID}"
+region_id: "${REGION_ID}"  # e.g., eu-north1
 
 gateway_group:
   name: "nebius-vpn-gw"
-  instance_count: 2
-  external_ips: []  # Auto-allocate
+  instance_count: 1
+  external_ips: []  # []=auto
+  # Example (list per VM, inner list per NIC):
+  # external_ips:
+  #   - ["203.0.113.10"]  # VM0 NIC0
+  #   - ["203.0.113.20"]  # VM1 NIC0
+
   vm_spec:
-    platform: "cpu-d3"
+    platform: "cpu-d3"          # cpu-e2|cpu-d3
     preset: "4vcpu-16gb"
     disk_boot_image: "ubuntu24.04-driverless"
-    disk_gb: 50
+    disk_gb: 100
     disk_type: "network_ssd"
     disk_block_bytes: 4096
     num_nics: 1
     ssh_public_key_path: "~/.ssh/id_ed25519.pub"
+    ssh_private_key_path: "~/.ssh/id_ed25519"
+    # network_id: "vpcnetwork-abc123def456"
 
 gateway:
-  local_asn: 64512
+  local_asn: 65010
   local_prefixes:
     - "10.0.0.0/16"
-    - "10.1.0.0/16"
-  ipsec_mode: xfrm-interface
+  ipsec_mode: "xfrm-interface"
+  quotas:
+    max_connections: 16
+    max_tunnels: 32
+    max_total_bandwidth_mbps: null
 
 defaults:
-  vpn_type: ipsec
+  vpn_type: "ipsec"
   ike_version: 2
   allow_ikev1: false
   auth:
-    method: psk
+    method: "psk"
+
   crypto:
     ike_proposals:
       - "aes256gcm16-prfsha256-modp2048"
+      - "aes256-sha256-modp2048"
     ike_lifetime_seconds: 28800
     esp_proposals:
       - "aes256gcm16-modp2048"
+      - "aes256-sha256-modp2048"
     esp_lifetime_seconds: 3600
     dh_groups:
       - 14
+      - 19
+      - 20
+
   dpd:
     interval_seconds: 5
-    timeout_seconds: 15
-  ha_mode: active-passive
+    timeout_seconds: 15  # timeout > interval
+
+  health_monitoring:
+    enabled: true
+    check_interval_seconds: 10
+    max_failures_before_restart: 2
+    proactive_refresh_enabled: false
+    proactive_refresh_hours: 8
+    ping_enabled: false
+
+  ha_mode: "active-passive"  # one active tunnel per connection per VM
+
   routing:
-    mode: bgp
+    mode: "bgp"  # bgp|static
     bgp:
+      router_id: null
       hold_time_seconds: 6
       keepalive_seconds: 2
       graceful_restart: false
       max_prefixes: 1000
       bfd:
-        enabled: false
+        enabled: false  # enable only if peer supports BFD
         transmit_interval_ms: 300
         receive_interval_ms: 300
         detect_multiplier: 3
 
 connections:
-  - name: peer-vpn
-    vendor: generic
-    routing_mode: bgp
-    # Optional in BGP mode: used for filtering received BGP routes
-    # remote_prefixes:
-    #   - "192.168.0.0/16"
+  - name: "gcp-ha-vpn"
+    vendor: "gcp"
+    routing_mode: "bgp"
+    # remote_prefixes: ["10.0.0.0/8"]  # optional allowlist for BGP
     bgp:
       enabled: true
-      remote_asn: 65001
+      remote_asn: 64514
       advertise_local_prefixes: true
     tunnels:
-      - name: tunnel-1
+      - name: "gcp-ha-tunnel-1"
         gateway_instance_index: 0
         local_public_ip_index: 0
-        psk: ${TUNNEL_1_PSK}
+        ha_role: "active"  # exactly one active per connection per VM
         remote_public_ip: "203.0.113.1"
+        psk: "${GCP_TUNNEL_1_PSK}"
         inner_cidr: "169.254.10.0/30"
         inner_local_ip: "169.254.10.1"
         inner_remote_ip: "169.254.10.2"
-      - name: tunnel-2
-        gateway_instance_index: 1
+      - name: "gcp-ha-tunnel-2"
+        gateway_instance_index: 0
         local_public_ip_index: 0
-        psk: ${TUNNEL_2_PSK}
+        ha_role: "passive"
         remote_public_ip: "203.0.113.2"
-        inner_cidr: "169.254.10.4/30"
-        inner_local_ip: "169.254.10.5"
-        inner_remote_ip: "169.254.10.6"
+        psk: "${GCP_TUNNEL_2_PSK}"
+        inner_cidr: "169.254.11.0/30"
+        inner_local_ip: "169.254.11.1"
+        inner_remote_ip: "169.254.11.2"
+
+  # Static routing example (remote_prefixes required when routing_mode=static)
+  # - name: "onprem-static"
+  #   vendor: "cisco"
+  #   routing_mode: "static"
+  #   remote_prefixes:
+  #     - "192.168.0.0/16"
+  #   bgp:
+  #     enabled: false
+  #   tunnels:
+  #     - name: "onprem-tunnel-1"
+  #       gateway_instance_index: 0
+  #       remote_public_ip: "203.0.113.5"
+  #       psk: "${ONPREM_PSK}"
+  #       inner_cidr: "169.254.30.0/30"
+  #       inner_local_ip: "169.254.30.1"
+  #       inner_remote_ip: "169.254.30.2"
 ```
 
 ### Remote Prefixes: Static vs BGP Mode
