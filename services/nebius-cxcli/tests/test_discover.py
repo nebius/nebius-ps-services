@@ -49,6 +49,33 @@ def test_discover_include_all(tmp_path: Path, monkeypatch) -> None:
     }
 
 
+def test_discover_without_git_falls_back_to_scan_all(tmp_path: Path, monkeypatch) -> None:
+    config_path = (
+        tmp_path
+        / "deployments"
+        / "instances"
+        / "client-a--tenant-123"
+        / "prod"
+        / "client-a-prod"
+        / "config.yaml"
+    )
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text("version: v1\n", encoding="utf-8")
+
+    monkeypatch.chdir(tmp_path)
+    payload = discover_configs(
+        deployments_dir="deployments",
+        include_all=False,
+        repo_root=None,
+    )
+
+    assert payload == {
+        "include": [
+            {"config": "deployments/instances/client-a--tenant-123/prod/client-a-prod/config.yaml"}
+        ]
+    }
+
+
 def test_discover_changed_files_works_on_initial_commit(tmp_path: Path, monkeypatch) -> None:
     repo_root = tmp_path / "repo"
     config_path = (

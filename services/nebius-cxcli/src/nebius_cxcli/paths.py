@@ -5,8 +5,7 @@ from __future__ import annotations
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-
-from .schema import ConfigV1
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -112,7 +111,7 @@ def resolve_instance_paths(
     )
 
 
-def validate_path_alignment(config: ConfigV1, paths: InstancePaths) -> None:
+def validate_path_alignment(config: Any, paths: InstancePaths) -> None:
     """Ensure canonical config values and path hierarchy are synchronized."""
     errors: list[str] = []
     if config.client_info.client_name != paths.path_client_name:
@@ -125,9 +124,10 @@ def validate_path_alignment(config: ConfigV1, paths: InstancePaths) -> None:
             "tenant_id mismatch: "
             f"config='{config.client_info.nebius.tenant_id}', path='{paths.path_tenant_id}'"
         )
-    if config.client_info.env.value != paths.path_env:
+    config_env = str(getattr(config.client_info.env, "value", config.client_info.env))
+    if config_env != paths.path_env:
         errors.append(
-            f"env mismatch: config='{config.client_info.env.value}', path='{paths.path_env}'"
+            f"env mismatch: config='{config_env}', path='{paths.path_env}'"
         )
     if config.client_info.cluster_name != paths.path_cluster_name:
         errors.append(

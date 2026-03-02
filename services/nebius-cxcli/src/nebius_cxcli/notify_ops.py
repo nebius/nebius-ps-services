@@ -5,12 +5,12 @@ from __future__ import annotations
 import os
 import smtplib
 from email.message import EmailMessage
+from typing import Any
 
 from .paths import InstancePaths
-from .schema import ConfigV1
 
 
-def send_inventory_email(config: ConfigV1, paths: InstancePaths) -> bool:
+def send_inventory_email(config: Any, paths: InstancePaths) -> bool:
     """Send inventory notification email when client_info.notifications.email is set."""
     recipient = config.client_info.notifications.email
     if not recipient:

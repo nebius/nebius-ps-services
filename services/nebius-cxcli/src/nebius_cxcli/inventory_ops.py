@@ -6,11 +6,11 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import boto3
 
 from .paths import InstancePaths
-from .schema import ConfigV1
 
 
 @dataclass(frozen=True)
@@ -23,7 +23,7 @@ class InventoryArtifacts:
     markdown: Path
 
 
-def _build_payload(config: ConfigV1, paths: InstancePaths) -> dict[str, dict]:
+def _build_payload(config: Any, paths: InstancePaths) -> dict[str, dict]:
     now = datetime.now(UTC).isoformat()
     return {
         "infra": {
@@ -77,7 +77,7 @@ def _build_payload(config: ConfigV1, paths: InstancePaths) -> dict[str, dict]:
     }
 
 
-def write_inventory(config: ConfigV1, paths: InstancePaths) -> InventoryArtifacts:
+def write_inventory(config: Any, paths: InstancePaths) -> InventoryArtifacts:
     """Write non-sensitive inventory artifacts to disk."""
     payload = _build_payload(config, paths)
     paths.inventory_dir.mkdir(parents=True, exist_ok=True)
@@ -141,7 +141,7 @@ def write_inventory(config: ConfigV1, paths: InstancePaths) -> InventoryArtifact
     )
 
 
-def upload_inventory(config: ConfigV1, paths: InstancePaths) -> list[str]:
+def upload_inventory(config: Any, paths: InstancePaths) -> list[str]:
     """Upload inventory artifacts to Nebius Object Storage."""
     artifacts = write_inventory(config, paths)
 

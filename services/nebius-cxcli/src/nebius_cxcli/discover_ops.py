@@ -40,7 +40,22 @@ def _head_files(*, cwd: Path) -> list[str]:
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
-def _changed_files(*, cwd: Path) -> list[str]:
+def _is_git_repository(*, cwd: Path) -> bool:
+    result = subprocess.run(
+        ["git", "rev-parse", "--is-inside-work-tree"],
+        cwd=cwd,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    return result.returncode == 0 and result.stdout.strip() == "true"
+
+
+def _changed_files(*, cwd: Path) -> list[str] | None:
+    if not _is_git_repository(cwd=cwd):
+        return None
+
     event_name = os.environ.get("GITHUB_EVENT_NAME", "")
     if event_name == "pull_request":
         base_ref = os.environ.get("GITHUB_BASE_REF")
@@ -77,6 +92,13 @@ def _to_repo_relative(path: Path, *, repo_root: Path) -> str:
         return _normalize(str(path))
 
 
+def _scan_all_configs(*, deployment_path: Path, repo_root: Path) -> set[str]:
+    candidates: set[str] = set()
+    for config_file in deployment_path.glob("instances/*/*/*/config.yaml"):
+        candidates.add(_to_repo_relative(config_file, repo_root=repo_root))
+    return candidates
+
+
 def discover_configs(
     *,
     deployments_dir: str,
@@ -84,24 +106,38 @@ def discover_configs(
     repo_root: Path | None = None,
 ) -> dict[str, list[dict[str, str]]]:
     """Build discover payload for config.yaml files in this run."""
-    root = (repo_root or Path.cwd()).resolve()
-    deployment_root = _normalize(deployments_dir)
     deployment_path = Path(deployments_dir)
+    if repo_root is not None:
+        root = repo_root.resolve()
+    elif deployment_path.is_absolute():
+        root = deployment_path.resolve().parent
+    else:
+        root = Path.cwd().resolve()
+
     if not deployment_path.is_absolute():
         deployment_path = root / deployment_path
+    deployment_path = deployment_path.resolve()
+    try:
+        deployment_root = _normalize(str(deployment_path.relative_to(root)))
+    except ValueError:
+        deployment_root = _normalize(str(deployment_path))
+
     candidates: set[str] = set()
 
     if include_all:
-        for config_file in deployment_path.glob("instances/*/*/*/config.yaml"):
-            candidates.add(_to_repo_relative(config_file, repo_root=root))
+        candidates.update(_scan_all_configs(deployment_path=deployment_path, repo_root=root))
     else:
-        for changed in _changed_files(cwd=root):
-            normalized = _normalize(changed)
-            if not normalized.endswith("config.yaml"):
-                continue
-            marker = f"/{deployment_root}/"
-            if marker in f"/{normalized}/":
-                candidates.add(normalized)
+        changed_files = _changed_files(cwd=root)
+        if changed_files is None:
+            candidates.update(_scan_all_configs(deployment_path=deployment_path, repo_root=root))
+        else:
+            for changed in changed_files:
+                normalized = _normalize(changed)
+                if not normalized.endswith("config.yaml"):
+                    continue
+                marker = f"/{deployment_root}/"
+                if marker in f"/{normalized}/":
+                    candidates.add(normalized)
 
     include = [{"config": path} for path in sorted(candidates)]
     return {"include": include}
