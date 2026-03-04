@@ -1,390 +1,71 @@
 version: v1
-# NOTE: This is a sanitized example. Replace all placeholder IDs/names for your environment.
 
 client_info:
-  # These identity values must match the instance folder path:
-  # instances/<client_name>--<tenant_id>/<env>/<cluster_name>/config.yaml
   client_name: example-client
-  env: dev
-  cluster_name: example-cluster
   nebius:
     tenant_id: tenant-REDACTED
     project_id: project-REDACTED
-    # Region IDs reference: https://docs.nebius.com/overview/regions
     region_id: us-central1
   notifications:
     inventory_markdown: true
-    # Optional recipient for inventory email notifications.
-    email: "ops@example.com"
+    email: ops@example.com
 
 infra:
-  # Shared SSH identity used by MK8s nodes and jump-host modules.
   ssh_user_name: ubuntu
-  # Required inline SSH public key for node/jump-host access.
-  # Replace this value; strict validation rejects placeholders.
-  ssh_public_key: "ssh-ed25519 AAAA-REPLACE-WITH-YOUR-KEY"
-
-  mysterybox:
-    # Keep platform and app secrets in Nebius MysteryBox.
-    # Reference: https://docs.nebius.com/mysterybox/overview
-    enabled: false
-    secrets:
-      # Platform-scope example: object-storage credentials for automation.
-      - id: platform-object-storage
-        scope: platform
-        name: "example-cluster-platform-object-storage"
-        description: "Platform automation credentials."
-        version_description: "Initial platform credentials"
-        labels:
-          managed-by: nebius-cxcli
-        set_primary: true
-        entries:
-          - key: AWS_ACCESS_KEY_ID
-            # CLI reads this env var during terraform plan/apply.
-            value_from_env: NEBIUS_S3_ACCESS_KEY_ID
-          - key: AWS_SECRET_ACCESS_KEY
-            value_from_env: NEBIUS_S3_SECRET_ACCESS_KEY
-        # Optional: sync this secret into Kubernetes via ESO webhook bridge.
-        k8s_sync:
+  ssh_public_key: ssh-ed25519 AAAA-REPLACE-WITH-YOUR-KEY
+  components:
+    - id: mk8s
+      enabled: true
+      source: ../../platform-infra/modules/mk8s
+      inputs:
+        subnet_id: vpcsubnet-REPLACE-ME
+        cpu_nodes:
+          count: 2
+          platform: cpu-d3
+          preset: 4vcpu-16gb
+          preemptible: false
+          public_ips: false
+        gpu_nodes:
           enabled: false
-          namespace: default
-          target_secret_name: null
-          refresh_interval: null
-          creation_policy: Owner
-          deletion_policy: Retain
-      # Apps-scope example: application runtime credentials.
-      - id: n8n-runtime
-        scope: apps
-        name: "example-cluster-n8n-runtime"
-        description: "n8n runtime secrets."
-        version_description: "Initial n8n runtime credentials"
-        labels:
-          app: n8n
-        set_primary: true
-        entries:
-          - key: N8N_ENCRYPTION_KEY
-            value_from_env: N8N_ENCRYPTION_KEY
-        # Sync app runtime keys into an in-cluster Secret via ESO.
-        k8s_sync:
-          enabled: true
-          namespace: n8n
-          target_secret_name: n8n-secrets
-          refresh_interval: 1h
-          creation_policy: Owner
-          deletion_policy: Retain
-
-  mk8s:
-    enabled: true
-    # Required VPC subnet for MK8s control plane.
-    subnet_id: subnet-REPLACE-ME
-    cpu_nodes:
-      count: 2
-      # Platform and preset must be a valid Nebius Compute combination.
-      # Reference: https://docs.nebius.com/compute/virtual-machines/types
-      platform: cpu-d3
-      preset: 4vcpu-16gb
-      preemptible: false
-      public_ips: false
-    gpu_nodes:
-      enabled: false
-      # Total GPU nodes = node_groups * nodes_per_group.
-      node_groups: 0
-      nodes_per_group: 0
-      # Set platform/preset only when enabled=true.
-      # Reference: https://docs.nebius.com/compute/virtual-machines/types
-      platform: ""
-      preset: ""
-      preemptible: false
-      public_ips: false
-      # True = use driverfull image for GPU nodes.
-      driverfull_image: true
-      mig:
-        # MIG applies only to MIG-capable GPU platforms.
-        # strategy values: single | mixed | none (NVIDIA docs).
-        # parted_config must match allowed configs for selected platform.
-        # References:
-        # https://docs.nvidia.com/datacenter/cloud-native/kubernetes/latest/index.html#testing-with-different-strategies
-        # https://docs.nvidia.com/datacenter/tesla/mig-user-guide/
-        enabled: false
-        strategy: ""
-        parted_config: ""
-    # Set explicit fabric only when needed for distributed training.
-    # Fabric compatibility reference: https://docs.nebius.com/compute/clusters/gpu#fabrics
-    infiniband_fabric: ""
-    api_endpoint:
-      # false = private control-plane endpoint.
-      public: false
-    egress_gateway:
-      # Enables Flux-managed Cilium egress-gateway manifests
-      # (cilium-config toggle + Cilium policy + controlled restart patches).
-      # Cloud-side prerequisites (for example egress nodegroup/subnet) remain
-      # a Terraform stack responsibility.
-      # Keep false unless you explicitly need controlled outbound egress IPs.
-      enabled: false
-
-  managed_postgresql:
-    enabled: true
-    name: "example-cluster-pg"
-    # Module-defined sizing profile (example: small, medium, large).
-    tier: medium
-    storage_gib: 100
-    # PostgreSQL major version.
-    postgresql_version: 16
-    # Set true only when a public endpoint is required.
-    public_access: false
-
-  sfs:
-    enabled: true
-    name: "example-cluster-sfs"
-    size_gib: 500
-    block_size_kib: 4
-    type: NETWORK_SSD
-    csi:
-      # Enables Flux-managed CSI chart + PVC manifests.
+        api_endpoint:
+          public: false
+    - id: object-storage
       enabled: true
-      # Namespace where the CSI driver Helm release is installed.
-      namespace: kube-system
-      # Set true to create the CSI namespace manifest via Flux.
-      create_namespace: true
-      # dynamic: StorageClass-provisioned PVCs.
-      # static: pre-bound PV+PVC manifests (useful for explicit shared paths across namespaces).
-      mode: dynamic
-      chart_url: oci://cr.eu-north1.nebius.cloud/mk8s/helm/csi-mounted-fs-path
-      chart_version: 0.1.3
-      # Must match the mount point used by node cloud-init in platform-infra.
-      data_dir: /mnt/data/csi-mounted-fs-path-data/
-      static:
-        # Base mounted filesystem path used for static PV path mapping.
-        shared_path: /mnt/data/shared
-        # CSI driver name from the chart defaults.
-        driver_name: mounted-fs-path.csi.nebius.ai
-        reclaim_policy: Retain
-      # Define one or more PVCs. Each PVC can target a different namespace.
-      # In dynamic mode, PVCs use chart StorageClass (`csi-mounted-fs-path-sc`).
-      # In static mode, each PVC gets a pre-bound PV; static_sub_path is optional.
-      pvcs:
-        - namespace: n8n
-          # Set true to create the PVC namespace manifest via Flux.
-          create_namespace: true
-          name: csi-pvc
-          size: 1Gi
-          access_modes:
-            - ReadWriteMany
-          # Optional for mode=static. If null, renderer derives a stable PV name.
-          static_pv_name: null
-          # Optional for mode=static. If null, uses static.shared_path directly.
-          static_sub_path: null
-
-  object_storage:
-    state_bucket:
-      # Set to true when you want Terraform to create/manage
-      # the tf-state bucket in Nebius Object Storage.
-      # Keep false only when the backend bucket is pre-provisioned externally.
-      manage: false
-      # Terraform remote state location.
-      name: "tfstate-tenant-REDACTED"
-      prefix: tfstate
-      use_lockfile: true
-      # Enables backend-side state object encryption in Terraform S3 backend.
-      encryption: true
-      # Desired bucket policy defaults for state durability and auditability.
-      # These are validated in config; apply/verify at bucket provisioning time.
-      versioning_policy: ENABLED
-      object_audit_logging: ALL
-      # Prevent accidental destroy of Terraform state bucket resource.
-      protect_from_destroy: true
-    inventory_bucket:
-      # Managed by Terraform in the platform stack.
-      manage: true
-      # Inventory JSON/markdown upload location.
-      name: "inventory-tenant-REDACTED"
-      prefix: inventory
-      # Inventory defaults (can be hardened per policy requirements).
-      versioning_policy: DISABLED
-      object_audit_logging: NONE
-      protect_from_destroy: false
-
-  wireguard-jumphost:
-      # Recommended private access path to cluster nodes/API.
-      # Reference: https://docs.nebius.com/compute/virtual-machines/wireguard
-      enabled: true
-      name: "example-cluster-wg"
-      # Platform/preset follow Nebius VM catalog:
-      # https://docs.nebius.com/compute/virtual-machines/types
-      platform: cpu-d3
-      preset: 4vcpu-16gb
-      # WireGuard server interface CIDR.
-      # Keep this a private RFC1918 range that does not overlap
-      # with customer LAN/VPC ranges used by peers.
-      # WireGuard conceptual reference:
-      # https://www.wireguard.com/#conceptual-overview
-      tunnel_cidr: 10.8.0.1/24
-      # UDP listen port for WireGuard.
-      listen_port: 51820
-      # NAT mode (masquerade) is recommended for point-to-site VPN simplicity.
-      nat_mode: true
-      # Optional static endpoint (IP or DNS) written into generated client configs.
-      # When null, server auto-detects its public IP during bootstrap.
-      endpoint_host: null
-      # Optional client profiles to automate peer creation and client config generation.
-      # Generated files are stored on the VM under /var/lib/wireguard/clients/<name>/.
-      # Server/client peer entries are generated with per-client PSK by default.
-      clients: []
-      # Example:
-      # clients:
-      #   - name: laptop-ops
-      #     address: 10.8.0.2/32
-      #     allowed_ips:
-      #       - 10.8.0.0/24
-      #       - 10.0.0.0/8
-      #     dns:
-      #       - 1.1.1.1
-      #     persistent_keepalive: 25
-      #     write_ssh_config: true
-      # Create and attach a dedicated static public IP allocation.
-      # If you set public_ip_allocation_id, set create_public_ip_allocation to false.
-      create_public_ip_allocation: true
-      public_ip_allocation_id: null
-      public_ip_allocation_name: null
-      # Boot disk defaults are aligned with the WireGuard Nebius tutorial.
-      boot_disk_size_gib: 60
-      boot_disk_block_size_bytes: 4096
-      boot_disk_type: NETWORK_SSD
-      source_image_family: ubuntu22.04-driverless
-
-  ssh-jumphost:
-    # Optional SSH-only jump host (regular VM with public IP + hardened SSH).
-    # Recommended for break-glass access; WireGuard remains the preferred
-    # day-to-day remote access model.
-    # Supports ProxyJump-style workflows (AllowTcpForwarding is enabled).
-    enabled: false
-    name: "example-cluster-ssh-jh"
-    platform: cpu-d3
-    preset: 4vcpu-16gb
-    # Create and attach a dedicated static public IP allocation.
-    # If you set public_ip_allocation_id, set create_public_ip_allocation to false.
-    create_public_ip_allocation: true
-    public_ip_allocation_id: null
-    public_ip_allocation_name: null
-    # Required when enabled=true. Restrict to trusted operator source CIDRs.
-    # The module uses strict mode: if enabled and this list is empty,
-    # cloud-init fails rather than opening SSH to the internet.
-    # Tip: detect your current public IP with `curl -fsS https://api.ipify.org`
-    # and add it as /32.
-    # Example:
-    # allowed_cidrs:
-    #   - 203.0.113.10/32
-    allowed_cidrs: []
-    boot_disk_size_gib: 60
-    boot_disk_block_size_bytes: 4096
-    boot_disk_type: NETWORK_SSD
-    source_image_family: ubuntu22.04-driverless
+      source: ../../platform-infra/modules/object-storage
+      inputs:
+        state_bucket:
+          manage: true
+          name: tfstate-tenant-REDACTED
+          prefix: tfstate
+          use_lockfile: true
+        inventory_bucket:
+          manage: true
+          name: inventory-tenant-REDACTED
+          prefix: inventory
+    - id: wireguard-jumphost
+      enabled: false
+      source: ../../platform-infra/modules/wireguard-jumphost
+      inputs:
+        subnet_id: vpcsubnet-REPLACE-ME
+        platform: cpu-d3
+        preset: 4vcpu-16gb
 
 apps:
-  # App chart values below are merged into HelmRelease spec.values.
-  platform:
-    envoy_gateway:
+  charts:
+    - id: gateway-helm
+      group: platform
       enabled: true
+      repo: oci://docker.io/envoyproxy/gateway-helm
+      version: 1.7.0
       namespace: envoy-gateway-system
-      chart:
-        repo: https://envoyproxy.github.io/gateway-helm
-        name: gateway-helm
-        version: 1.4.2
-      values:
-        service:
-          type: LoadBalancer
-          annotations:
-            nebius.com/load-balancer-type: internal
-
-    cert_manager:
-      enabled: true
-      namespace: cert-manager
-      chart:
-        repo: https://charts.jetstack.io
-        name: cert-manager
-        version: v1.16.0
+      release-name: envoy-gateway
       values: {}
-
-    external_dns:
+    - id: n8n
+      group: workloads
       enabled: true
-      namespace: external-dns
-      chart:
-        repo: https://kubernetes-sigs.github.io/external-dns/
-        name: external-dns
-        version: 1.15.0
-      values:
-        provider: nebius
-
-    observability:
-      enabled: true
-      namespace: nebius-o11y
-      chart:
-        repo: https://helm-charts.nebius.com/observability
-        name: nebius-observability
-        version: 0.1.0
-      values:
-        # Sends workload metrics/logs through Nebius Observability Agent.
-        enable_nebius_o11y_agent: true
-        # Deploys Grafana solution by Nebius for dashboard access.
-        enable_grafana: true
-
-    external_secrets:
-      # External Secrets Operator (ESO) deployed by Flux.
-      # ESO reads MysteryBox secrets through an in-cluster webhook bridge
-      # and writes native Kubernetes Secret objects.
-      enabled: true
-      namespace: external-secrets
-      create_namespace: true
-      chart:
-        repo: https://charts.external-secrets.io
-        name: external-secrets
-        version: 2.0.1
-      values: {}
-      mysterybox:
-        enabled: false
-        # ClusterSecretStore name generated by renderer.
-        secret_store_name: nebius-mysterybox
-        # Kubernetes Secret seeded at flux bootstrap time from CI/local env:
-        # NEBIUS_SA_ID, NEBIUS_AUTH_PUBLIC_KEY_ID, NEBIUS_AUTH_PRIVATE_KEY_PEM, NEBIUS_PROJECT_ID.
-        auth_secret_name: nebius-mysterybox-auth
-        # null => use external_secrets.namespace.
-        auth_secret_namespace: null
-        refresh_interval_default: 1h
-        bridge:
-          enabled: true
-          service_name: mysterybox-bridge
-          service_port: 8080
-          # Bridge image must include Python + nebius SDK + Flask/Gunicorn.
-          # Public registry default (override with your pinned image tag as needed).
-          image: quay.io/nebius/mysterybox-bridge:latest
-          auth:
-            # Restrict ESO -> bridge calls with a header token secret.
-            # Token is auto-seeded at deploy/bootstrap time.
-            enabled: true
-            header_name: X-MBX-Request
-            secret_name: mysterybox-bridge-webhook-auth
-            # null => use external_secrets.namespace.
-            secret_namespace: null
-            secret_key: token
-
-  workloads:
-    n8n:
-      enabled: true
+      repo: https://community-charts.github.io/helm-charts
+      version: 1.16.29
       namespace: n8n
-      chart:
-        repo: https://8gears.github.io/n8n-helm-chart/
-        name: n8n
-        version: 1.0.6
+      release-name: n8n
       values:
         replicaCount: 2
-        # Pre-created Kubernetes Secret with n8n credentials.
-        # Recommended: source those credentials from MysteryBox,
-        # then sync them to this in-cluster Secret.
-        existingSecret: n8n-secrets
-      route:
-        # Replace example/internal hostname for your DNS zone.
-        hostname: "n8n.example-cluster.example.internal"
-        tls:
-          enabled: true
-          # cert-manager issuer reference used for route certificate.
-          issuer_ref: internal-ca

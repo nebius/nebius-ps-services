@@ -2,550 +2,220 @@
 
 from __future__ import annotations
 
-from textwrap import dedent
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import yaml
 
-from .catalog import CatalogEntry, CatalogScope, catalog_entries, default_catalog_ids
+if TYPE_CHECKING:
+    from .components import ComponentEntry
 
-SCHEMA_VERSION = "v1"
-
-
-def _set_nested_value(payload: dict[str, object], path: tuple[str, ...], value: object) -> None:
-    current: dict[str, object] = payload
-    for segment in path[:-1]:
-        child = current.get(segment)
-        if not isinstance(child, dict):
-            child = {}
-            current[segment] = child
-        current = child
-    current[path[-1]] = value
+CONFIG_VERSION = "v1"
+DEFAULT_SSH_USER_NAME = "ubuntu"
+DEFAULT_SSH_PUBLIC_KEY = "ssh-ed25519 AAAA-REPLACE-WITH-YOUR-KEY"
 
 
-def _apply_catalog_selection(
+@dataclass(frozen=True)
+class _SelectionEntry:
+    id: str
+    default_enabled: bool
+
+
+def _coerce_selection_entries(
+    *,
+    entries: tuple[ComponentEntry, ...] | None,
+) -> tuple[_SelectionEntry, ...]:
+    if entries is None:
+        return ()
+    coerced: list[_SelectionEntry] = []
+    for entry in entries:
+        coerced.append(
+            _SelectionEntry(
+                id=entry.id,
+                default_enabled=bool(entry.default_enabled),
+            )
+        )
+    return tuple(coerced)
+
+
+def _chart_source_parts(source: str | None) -> tuple[str, str]:
+    raw = str(source or "").strip().rstrip("/")
+    if "/" not in raw:
+        return "", raw
+    repo, chart = raw.rsplit("/", maxsplit=1)
+    return repo, chart
+
+
+def _normalize_app_group(group: str | None) -> str:
+    raw = str(group or "").strip().lower()
+    token = "".join(ch if ch.isalnum() or ch == "-" else "-" for ch in raw)
+    token = "-".join(part for part in token.split("-") if part)
+    return token or "workloads"
+
+
+def _canonical_chart_repo(*, chart_repo: str, chart_name: str) -> str:
+    repo = chart_repo.strip().rstrip("/")
+    if not repo:
+        return repo
+    if repo.startswith("oci://"):
+        tail = repo.rsplit("/", maxsplit=1)[-1].strip().lower()
+        if tail != chart_name.strip().lower():
+            return f"{repo}/{chart_name.strip()}"
+    return repo
+
+
+def _apply_component_selection(
     payload: dict[str, object],
     *,
     selected_infra: set[str] | None,
     selected_apps: set[str] | None,
-    infra_entries: tuple[CatalogEntry, ...] | None = None,
-    app_entries: tuple[CatalogEntry, ...] | None = None,
+    infra_entries: tuple[ComponentEntry, ...] | None = None,
+    app_entries: tuple[ComponentEntry, ...] | None = None,
 ) -> None:
-    resolved_infra_entries = infra_entries if infra_entries is not None else catalog_entries("infra")
-    resolved_app_entries = app_entries if app_entries is not None else catalog_entries("apps")
+    resolved_infra_entries = _coerce_selection_entries(entries=infra_entries)
+    resolved_app_entries = _coerce_selection_entries(entries=app_entries)
 
-    scope_selections: tuple[tuple[CatalogScope, set[str]], ...] = (
-        (
-            "infra",
-            selected_infra if selected_infra is not None else set(default_catalog_ids("infra")),
-        ),
-        (
-            "apps",
-            selected_apps if selected_apps is not None else set(default_catalog_ids("apps")),
-        ),
+    resolved_selected_infra = (
+        set(selected_infra)
+        if selected_infra is not None
+        else {entry.id for entry in resolved_infra_entries if entry.default_enabled}
     )
-    entries_by_scope: dict[CatalogScope, tuple[CatalogEntry, ...]] = {
-        "infra": resolved_infra_entries,
-        "apps": resolved_app_entries,
+    resolved_selected_apps = (
+        set(selected_apps)
+        if selected_apps is not None
+        else {entry.id for entry in resolved_app_entries if entry.default_enabled}
+    )
+
+    infra_node = payload.get("infra")
+    if isinstance(infra_node, dict):
+        components = infra_node.get("components")
+        if isinstance(components, list):
+            for item in components:
+                if not isinstance(item, dict):
+                    continue
+                component_id = str(item.get("id", "")).strip().lower()
+                if not component_id:
+                    continue
+                item["enabled"] = component_id in resolved_selected_infra
+
+    apps_node = payload.get("apps")
+    if isinstance(apps_node, dict):
+        charts = apps_node.get("charts")
+        if isinstance(charts, list):
+            for item in charts:
+                if not isinstance(item, dict):
+                    continue
+                chart_id = str(item.get("id", "")).strip().lower()
+                if not chart_id:
+                    continue
+                item["enabled"] = chart_id in resolved_selected_apps
+
+
+def _starter_payload(
+    *,
+    client_name: str,
+    tenant_id: str,
+    project_id: str,
+    region_id: str,
+    email: str | None,
+    infra_entries: tuple[ComponentEntry, ...] | None,
+    app_entries: tuple[ComponentEntry, ...] | None,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "version": CONFIG_VERSION,
+        "client_info": {
+            "client_name": client_name,
+            "nebius": {
+                "tenant_id": tenant_id,
+                "project_id": project_id,
+                "region_id": region_id,
+            },
+            "notifications": {
+                "inventory_markdown": True,
+                "email": email,
+            },
+        },
+        "infra": {
+            "ssh_user_name": DEFAULT_SSH_USER_NAME,
+            "ssh_public_key": DEFAULT_SSH_PUBLIC_KEY,
+            "components": [],
+        },
+        "apps": {"charts": []},
     }
-    lookup_by_scope: dict[CatalogScope, dict[str, CatalogEntry]] = {
-        scope: {entry.id: entry for entry in entries}
-        for scope, entries in entries_by_scope.items()
-    }
 
-    for scope, selected in scope_selections:
-        for entry in entries_by_scope[scope]:
-            if entry.enabled_path is None:
-                continue
-            enabled = entry.id in selected
-            _set_nested_value(payload, entry.enabled_path, enabled)
-
-    # Keep dependent toggles coherent with their parent components.
-    infra = payload.get("infra", {})
-    if isinstance(infra, dict):
-        sfs = infra.get("sfs", {})
-        if isinstance(sfs, dict) and not sfs.get("enabled", False):
-            csi = sfs.get("csi", {})
-            if isinstance(csi, dict):
-                csi["enabled"] = False
-
-        mysterybox = infra.get("mysterybox", {})
-        if isinstance(mysterybox, dict) and not mysterybox.get("enabled", False):
-            mysterybox["secrets"] = []
-
-    apps = payload.get("apps", {})
-    if isinstance(apps, dict):
-        platform = apps.get("platform", {})
-        if isinstance(platform, dict):
-            external_secrets = platform.get("external_secrets", {})
-            if isinstance(external_secrets, dict) and not external_secrets.get("enabled", False):
-                mysterybox = external_secrets.get("mysterybox", {})
-                if isinstance(mysterybox, dict):
-                    mysterybox["enabled"] = False
-
-    catalog_payload: dict[str, dict[str, object]] = {}
-    for scope, selected in scope_selections:
-        scope_values: dict[str, dict[str, object]] = {}
-        for selected_id in sorted(selected):
-            item: dict[str, object] = {}
-            entry = lookup_by_scope[scope].get(selected_id)
-            if entry is not None:
-                item["engine_type"] = entry.engine_type
-                item["schema_path"] = entry.schema_path
-                if entry.source:
-                    item["source"] = entry.source
-                if entry.version:
-                    item["version"] = entry.version
-                if entry.name:
-                    item["name"] = entry.name
-
-                if scope == "infra" and entry.engine_type.lower() in {
-                    "terraform_module",
-                    "terraform",
-                    "tf_module",
-                    "module",
-                }:
-                    item.setdefault("inputs", {})
-                    item.setdefault("depends_on_platform", True)
-
-                if scope == "apps" and entry.engine_type.lower() in {
-                    "helm_release",
-                    "helmrelease",
-                    "helm",
-                    "helm_chart",
-                }:
-                    item.setdefault("release_name", selected_id)
-                    item.setdefault("namespace", selected_id)
-                    item.setdefault("create_namespace", True)
-                    item.setdefault("values", {})
-
-            scope_values[selected_id] = item
-
-        catalog_payload[scope] = {
-            "selected": sorted(selected),
-            "values": scope_values,
+    infra_node = payload["infra"]
+    if not isinstance(infra_node, dict):
+        raise ValueError("infra payload must be a mapping")
+    components_node = infra_node.get("components")
+    if not isinstance(components_node, list):
+        components_node = []
+        infra_node["components"] = components_node
+    for entry in infra_entries or ():
+        component_row: dict[str, object] = {
+            "id": entry.id,
+            "enabled": bool(entry.default_enabled),
+            "inputs": {},
         }
+        if entry.source:
+            component_row["source"] = str(entry.source)
+        if entry.version:
+            component_row["version"] = str(entry.version)
+        components_node.append(component_row)
 
-    payload["catalog"] = catalog_payload
+    apps_node = payload["apps"]
+    if not isinstance(apps_node, dict):
+        raise ValueError("apps payload must be a mapping")
+    charts_node = apps_node.get("charts")
+    if not isinstance(charts_node, list):
+        charts_node = []
+        apps_node["charts"] = charts_node
+    for entry in app_entries or ():
+        chart_repo = str(entry.chart_repo or "").strip()
+        chart_name = str(entry.chart_name or "").strip()
+        if not chart_name:
+            chart_repo, chart_name = _chart_source_parts(entry.source)
+        namespace = str(entry.default_namespace or "").strip() or entry.id
+        release_name = str(entry.default_release_name or "").strip() or entry.id
+        chart_repo = _canonical_chart_repo(chart_repo=chart_repo, chart_name=chart_name)
+        charts_node.append(
+            {
+                "id": entry.id,
+                "group": _normalize_app_group(entry.group),
+                "enabled": bool(entry.default_enabled),
+                "repo": chart_repo,
+                "version": str(entry.version or ""),
+                "namespace": namespace,
+                "release-name": release_name,
+                "values": {},
+            }
+        )
+
+    return payload
 
 
 def starter_config_yaml(
     *,
     client_name: str,
     tenant_id: str,
-    env: str,
-    cluster_name: str,
     project_id: str,
     region_id: str,
-    subnet_id: str,
     email: str | None,
     selected_infra: set[str] | None = None,
     selected_apps: set[str] | None = None,
-    infra_entries: tuple[CatalogEntry, ...] | None = None,
-    app_entries: tuple[CatalogEntry, ...] | None = None,
+    infra_entries: tuple[ComponentEntry, ...] | None = None,
+    app_entries: tuple[ComponentEntry, ...] | None = None,
 ) -> str:
-    """Render a starter instance config.yaml with sensible defaults."""
-    email_value = f'"{email}"' if email else "null"
-    inventory_bucket = f"inventory-{tenant_id}"
-    state_bucket = f"tfstate-{tenant_id}"
-    route_host = f"n8n.{cluster_name}.example.internal"
-
-    rendered = dedent(
-        f"""
-        version: {SCHEMA_VERSION}
-
-        client_info:
-          # These identity values must match the instance folder path:
-          # instances/<client_name>--<tenant_id>/<env>/<cluster_name>/config.yaml
-          client_name: {client_name}
-          env: {env}
-          cluster_name: {cluster_name}
-          nebius:
-            tenant_id: {tenant_id}
-            project_id: {project_id}
-            # Region IDs reference: https://docs.nebius.com/overview/regions
-            region_id: {region_id}
-          notifications:
-            inventory_markdown: true
-            # Optional recipient for inventory email notifications.
-            email: {email_value}
-
-        infra:
-          # Shared SSH identity used by MK8s nodes and jump-host modules.
-          ssh_user_name: ubuntu
-          # Required inline SSH public key for node/jump-host access.
-          # Replace this value; strict validation rejects placeholders.
-          ssh_public_key: "ssh-ed25519 AAAA-REPLACE-WITH-YOUR-KEY"
-
-          mysterybox:
-            # Keep platform and app secrets in Nebius MysteryBox.
-            # Reference: https://docs.nebius.com/mysterybox/overview
-            enabled: false
-            secrets:
-              # Platform-scope example: object-storage credentials for automation.
-              - id: platform-object-storage
-                scope: platform
-                name: "{cluster_name}-platform-object-storage"
-                description: "Platform automation credentials."
-                version_description: "Initial platform credentials"
-                labels:
-                  managed-by: nebius-cxcli
-                set_primary: true
-                entries:
-                  - key: AWS_ACCESS_KEY_ID
-                    # CLI reads this env var during terraform plan/apply.
-                    value_from_env: NEBIUS_S3_ACCESS_KEY_ID
-                  - key: AWS_SECRET_ACCESS_KEY
-                    value_from_env: NEBIUS_S3_SECRET_ACCESS_KEY
-                # Optional: sync this secret into Kubernetes via ESO webhook bridge.
-                k8s_sync:
-                  enabled: false
-                  namespace: default
-                  target_secret_name: null
-                  refresh_interval: null
-                  creation_policy: Owner
-                  deletion_policy: Retain
-              # Apps-scope example: application runtime credentials.
-              - id: n8n-runtime
-                scope: apps
-                name: "{cluster_name}-n8n-runtime"
-                description: "n8n runtime secrets."
-                version_description: "Initial n8n runtime credentials"
-                labels:
-                  app: n8n
-                set_primary: true
-                entries:
-                  - key: N8N_ENCRYPTION_KEY
-                    value_from_env: N8N_ENCRYPTION_KEY
-                # Sync app runtime keys into an in-cluster Secret via ESO.
-                k8s_sync:
-                  enabled: true
-                  namespace: n8n
-                  target_secret_name: n8n-secrets
-                  refresh_interval: 1h
-                  creation_policy: Owner
-                  deletion_policy: Retain
-
-          mk8s:
-            enabled: true
-            # Required VPC subnet for MK8s control plane.
-            subnet_id: {subnet_id}
-            cpu_nodes:
-              count: 2
-              # Platform and preset must be a valid Nebius Compute combination.
-              # Reference: https://docs.nebius.com/compute/virtual-machines/types
-              platform: cpu-d3
-              preset: 4vcpu-16gb
-              preemptible: false
-              public_ips: false
-            gpu_nodes:
-              enabled: false
-              # Total GPU nodes = node_groups * nodes_per_group.
-              node_groups: 0
-              nodes_per_group: 0
-              # Set platform/preset only when enabled=true.
-              # Reference: https://docs.nebius.com/compute/virtual-machines/types
-              platform: ""
-              preset: ""
-              preemptible: false
-              public_ips: false
-              # True = use driverfull image for GPU nodes.
-              driverfull_image: true
-              mig:
-                # MIG applies only to MIG-capable GPU platforms.
-                # strategy values: single | mixed | none (NVIDIA docs).
-                # parted_config must match allowed configs for selected platform.
-                # References:
-                # https://docs.nvidia.com/datacenter/cloud-native/kubernetes/latest/index.html#testing-with-different-strategies
-                # https://docs.nvidia.com/datacenter/tesla/mig-user-guide/
-                enabled: false
-                strategy: ""
-                parted_config: ""
-            # Set explicit fabric only when needed for distributed training.
-            # Fabric compatibility reference: https://docs.nebius.com/compute/clusters/gpu#fabrics
-            infiniband_fabric: ""
-            api_endpoint:
-              # false = private control-plane endpoint.
-              public: false
-            egress_gateway:
-              # Enables Flux-managed Cilium egress-gateway manifests
-              # (cilium-config toggle + Cilium policy + controlled restart patches).
-              # Cloud-side prerequisites (for example egress nodegroup/subnet) remain
-              # a Terraform stack responsibility.
-              # Keep false unless you explicitly need controlled outbound egress IPs.
-              enabled: false
-
-          managed_postgresql:
-            enabled: true
-            name: "{cluster_name}-pg"
-            # Module-defined sizing profile (example: small, medium, large).
-            tier: medium
-            storage_gib: 100
-            # PostgreSQL major version.
-            postgresql_version: 16
-            # Set true only when a public endpoint is required.
-            public_access: false
-
-          sfs:
-            enabled: true
-            name: "{cluster_name}-sfs"
-            size_gib: 500
-            block_size_kib: 4
-            type: NETWORK_SSD
-            csi:
-              # Enables Flux-managed CSI chart + PVC manifests.
-              enabled: true
-              # Namespace where the CSI driver Helm release is installed.
-              namespace: kube-system
-              # Set true to create the CSI namespace manifest via Flux.
-              create_namespace: true
-              # dynamic: StorageClass-provisioned PVCs.
-              # static: pre-bound PV+PVC manifests (useful for explicit shared paths across namespaces).
-              mode: dynamic
-              chart_url: oci://cr.eu-north1.nebius.cloud/mk8s/helm/csi-mounted-fs-path
-              chart_version: 0.1.3
-              # Must match the mount point used by node cloud-init in platform-infra.
-              data_dir: /mnt/data/csi-mounted-fs-path-data/
-              static:
-                # Base mounted filesystem path used for static PV path mapping.
-                shared_path: /mnt/data/shared
-                # CSI driver name from the chart defaults.
-                driver_name: mounted-fs-path.csi.nebius.ai
-                reclaim_policy: Retain
-              # Define one or more PVCs. Each PVC can target a different namespace.
-              # In dynamic mode, PVCs use chart StorageClass (`csi-mounted-fs-path-sc`).
-              # In static mode, each PVC gets a pre-bound PV; static_sub_path is optional.
-              pvcs:
-                - namespace: n8n
-                  # Set true to create the PVC namespace manifest via Flux.
-                  create_namespace: true
-                  name: csi-pvc
-                  size: 1Gi
-                  access_modes:
-                    - ReadWriteMany
-                  # Optional for mode=static. If null, renderer derives a stable PV name.
-                  static_pv_name: null
-                  # Optional for mode=static. If null, uses static.shared_path directly.
-                  static_sub_path: null
-
-          object_storage:
-            state_bucket:
-              # Set to true when you want Terraform to create/manage
-              # the tf-state bucket in Nebius Object Storage.
-              # Keep false only when the backend bucket is pre-provisioned externally.
-              manage: false
-              # Terraform remote state location.
-              name: "{state_bucket}"
-              prefix: tfstate
-              use_lockfile: true
-              # Enables backend-side state object encryption in Terraform S3 backend.
-              encryption: true
-              # Desired bucket policy defaults for state durability and auditability.
-              # These are validated in config; apply/verify at bucket provisioning time.
-              versioning_policy: ENABLED
-              object_audit_logging: ALL
-              # Prevent accidental destroy of Terraform state bucket resource.
-              protect_from_destroy: true
-            inventory_bucket:
-              # Managed by Terraform in the platform stack.
-              manage: true
-              # Inventory JSON/markdown upload location.
-              name: "{inventory_bucket}"
-              prefix: inventory
-              # Inventory defaults (can be hardened per policy requirements).
-              versioning_policy: DISABLED
-              object_audit_logging: NONE
-              protect_from_destroy: false
-
-          wireguard-jumphost:
-              # Recommended private access path to cluster nodes/API.
-              # Reference: https://docs.nebius.com/compute/virtual-machines/wireguard
-              enabled: true
-              name: "{cluster_name}-wg"
-              # Platform/preset follow Nebius VM catalog:
-              # https://docs.nebius.com/compute/virtual-machines/types
-              platform: cpu-d3
-              preset: 4vcpu-16gb
-              # WireGuard server interface CIDR.
-              # Keep this a private RFC1918 range that does not overlap
-              # with customer LAN/VPC ranges used by peers.
-              # WireGuard conceptual reference:
-              # https://www.wireguard.com/#conceptual-overview
-              tunnel_cidr: 10.8.0.1/24
-              # UDP listen port for WireGuard.
-              listen_port: 51820
-              # NAT mode (masquerade) is recommended for point-to-site VPN simplicity.
-              nat_mode: true
-              # Optional static endpoint (IP or DNS) written into generated client configs.
-              # When null, server auto-detects its public IP during bootstrap.
-              endpoint_host: null
-              # Optional client profiles to automate peer creation and client config generation.
-              # Generated files are stored on the VM under /var/lib/wireguard/clients/<name>/.
-              # Server/client peer entries are generated with per-client PSK by default.
-              clients: []
-              # Example:
-              # clients:
-              #   - name: laptop-ops
-              #     address: 10.8.0.2/32
-              #     allowed_ips:
-              #       - 10.8.0.0/24
-              #       - 10.0.0.0/8
-              #     dns:
-              #       - 1.1.1.1
-              #     persistent_keepalive: 25
-              #     write_ssh_config: true
-              # Create and attach a dedicated static public IP allocation.
-              # If you set public_ip_allocation_id, set create_public_ip_allocation to false.
-              create_public_ip_allocation: true
-              public_ip_allocation_id: null
-              public_ip_allocation_name: null
-              # Boot disk defaults are aligned with the WireGuard Nebius tutorial.
-              boot_disk_size_gib: 60
-              boot_disk_block_size_bytes: 4096
-              boot_disk_type: NETWORK_SSD
-              source_image_family: ubuntu22.04-driverless
-
-          ssh-jumphost:
-            # Optional SSH-only jump host (regular VM with public IP + hardened SSH).
-            # Recommended for break-glass access; WireGuard remains the preferred
-            # day-to-day remote access model.
-            # Supports ProxyJump-style workflows (AllowTcpForwarding is enabled).
-            enabled: false
-            name: "{cluster_name}-ssh-jh"
-            platform: cpu-d3
-            preset: 4vcpu-16gb
-            # Create and attach a dedicated static public IP allocation.
-            # If you set public_ip_allocation_id, set create_public_ip_allocation to false.
-            create_public_ip_allocation: true
-            public_ip_allocation_id: null
-            public_ip_allocation_name: null
-            # Required when enabled=true. Restrict to trusted operator source CIDRs.
-            # The module uses strict mode: if enabled and this list is empty,
-            # cloud-init fails rather than opening SSH to the internet.
-            # Tip: detect your current public IP with `curl -fsS https://api.ipify.org`
-            # and add it as /32.
-            # Example:
-            # allowed_cidrs:
-            #   - 203.0.113.10/32
-            allowed_cidrs: []
-            boot_disk_size_gib: 60
-            boot_disk_block_size_bytes: 4096
-            boot_disk_type: NETWORK_SSD
-            source_image_family: ubuntu22.04-driverless
-
-        apps:
-          # App chart values below are merged into HelmRelease spec.values.
-          platform:
-            envoy_gateway:
-              enabled: true
-              namespace: envoy-gateway-system
-              chart:
-                repo: https://envoyproxy.github.io/gateway-helm
-                name: gateway-helm
-                version: 1.4.2
-              values:
-                service:
-                  type: LoadBalancer
-                  annotations:
-                    nebius.com/load-balancer-type: internal
-
-            cert_manager:
-              enabled: true
-              namespace: cert-manager
-              chart:
-                repo: https://charts.jetstack.io
-                name: cert-manager
-                version: v1.16.0
-              values: {{}}
-
-            external_dns:
-              enabled: true
-              namespace: external-dns
-              chart:
-                repo: https://kubernetes-sigs.github.io/external-dns/
-                name: external-dns
-                version: 1.15.0
-              values:
-                provider: nebius
-
-            observability:
-              enabled: true
-              namespace: nebius-o11y
-              chart:
-                repo: https://helm-charts.nebius.com/observability
-                name: nebius-observability
-                version: 0.1.0
-              values:
-                # Sends workload metrics/logs through Nebius Observability Agent.
-                enable_nebius_o11y_agent: true
-                # Deploys Grafana solution by Nebius for dashboard access.
-                enable_grafana: true
-
-            external_secrets:
-              # External Secrets Operator (ESO) deployed by Flux.
-              # ESO reads MysteryBox secrets through an in-cluster webhook bridge
-              # and writes native Kubernetes Secret objects.
-              enabled: true
-              namespace: external-secrets
-              create_namespace: true
-              chart:
-                repo: https://charts.external-secrets.io
-                name: external-secrets
-                version: 2.0.1
-              values: {{}}
-              mysterybox:
-                enabled: false
-                # ClusterSecretStore name generated by renderer.
-                secret_store_name: nebius-mysterybox
-                # Kubernetes Secret seeded at flux bootstrap time from CI/local env:
-                # NEBIUS_SA_ID, NEBIUS_AUTH_PUBLIC_KEY_ID, NEBIUS_AUTH_PRIVATE_KEY_PEM, NEBIUS_PROJECT_ID.
-                auth_secret_name: nebius-mysterybox-auth
-                # null => use external_secrets.namespace.
-                auth_secret_namespace: null
-                refresh_interval_default: 1h
-                bridge:
-                  enabled: true
-                  service_name: mysterybox-bridge
-                  service_port: 8080
-                  # Bridge image must include Python + nebius SDK + Flask/Gunicorn.
-                  # Public registry default (override with your pinned image tag as needed).
-                  image: quay.io/nebius/mysterybox-bridge:latest
-                  auth:
-                    # Restrict ESO -> bridge calls with a header token secret.
-                    # Token is auto-seeded at deploy/bootstrap time.
-                    enabled: true
-                    header_name: X-MBX-Request
-                    secret_name: mysterybox-bridge-webhook-auth
-                    # null => use external_secrets.namespace.
-                    secret_namespace: null
-                    secret_key: token
-
-          workloads:
-            n8n:
-              enabled: true
-              namespace: n8n
-              chart:
-                repo: https://8gears.github.io/n8n-helm-chart/
-                name: n8n
-                version: 1.0.6
-              values:
-                replicaCount: 2
-                # Pre-created Kubernetes Secret with n8n credentials.
-                # Recommended: source those credentials from MysteryBox,
-                # then sync them to this in-cluster Secret.
-                existingSecret: n8n-secrets
-              route:
-                # Replace example/internal hostname for your DNS zone.
-                hostname: "{route_host}"
-                tls:
-                  enabled: true
-                  # cert-manager issuer reference used for route certificate.
-                  issuer_ref: internal-ca
-        """
-    ).strip()
-    payload = yaml.safe_load(rendered)
-    if not isinstance(payload, dict):
-        raise ValueError("starter config template must render to a YAML mapping")
-    _apply_catalog_selection(
+    """Render a starter instance config.yaml with source-driven component defaults."""
+    payload = _starter_payload(
+        client_name=client_name,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        region_id=region_id,
+        email=email,
+        infra_entries=infra_entries,
+        app_entries=app_entries,
+    )
+    _apply_component_selection(
         payload,
         selected_infra=selected_infra,
         selected_apps=selected_apps,

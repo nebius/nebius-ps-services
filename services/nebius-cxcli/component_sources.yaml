@@ -1,0 +1,80 @@
+infra:
+  tf_modules:
+    - module: mk8s
+      source: ../../platform-infra/modules/mk8s
+      description: Managed Kubernetes baseline cluster module
+      group: Compute
+      enable: true
+    - module: managed-postgresql
+      source: ../../platform-infra/modules/managed-postgresql
+      description: Managed PostgreSQL database module
+      group: Storage
+      enable: false
+    - module: sfs
+      source: ../../platform-infra/modules/sfs
+      description: Shared filesystem and CSI integration module
+      group: Storage
+      enable: false
+    - module: object-storage
+      source: ../../platform-infra/modules/object-storage
+      description: Object storage buckets module
+      group: Storage
+      enable: true
+    - module: mysterybox
+      source: ../../platform-infra/modules/mysterybox
+      description: MysteryBox secrets module
+      group: Security
+      enable: false
+    - module: wireguard-jumphost
+      source: ../../platform-infra/modules/wireguard-jumphost
+      description: WireGuard jump host module
+      group: Network
+      enable: false
+    - module: ssh-jumphost
+      source: ../../platform-infra/modules/ssh-jumphost
+      description: SSH-only hardened jump host module
+      group: Security
+      enable: false
+
+apps:
+  helm_charts:
+    - name: gateway-helm
+      repo: oci://docker.io/envoyproxy
+      version: 1.7.0
+      namespace: envoy-gateway-system
+      releasename: envoy-gateway
+      description: Envoy Gateway control plane
+      group: Platform
+      enable: false
+    - name: cert-manager
+      repo: oci://quay.io/jetstack/charts
+      version: v1.19.2
+      namespace: cert-manager
+      releasename: cert-manager
+      description: cert-manager for certificate automation
+      group: Platform
+      enable: false
+    - name: external-dns
+      repo: https://kubernetes-sigs.github.io/external-dns
+      version: 1.20.0
+      namespace: external-dns
+      releasename: external-dns
+      description: ExternalDNS controller
+      group: Platform
+      enable: false
+    - name: external-secrets
+      repo: https://charts.external-secrets.io
+      version: 2.0.1
+      namespace: external-secrets
+      releasename: external-secrets
+      description: External Secrets Operator
+      group: Platform
+      enable: false
+    - name: n8n
+      repo: oci://8gears.container-registry.com/library/n8n
+      version: 2.0.1
+      namespace: n8n
+      releasename: n8n
+      description: n8n is an extendable workflow automation tool
+      group: Workloads
+      enable: false

@@ -2,18 +2,30 @@ variable "parent_id" {
   description = "Nebius project ID where MK8s resources are created."
   type        = string
   nullable    = false
+  validation {
+    condition     = length(trimspace(var.parent_id)) > 0
+    error_message = "parent_id cannot be empty."
+  }
 }
 
 variable "cluster_name" {
   description = "MK8s cluster name."
   type        = string
   nullable    = false
+  validation {
+    condition     = length(trimspace(var.cluster_name)) > 0
+    error_message = "cluster_name cannot be empty."
+  }
 }
 
 variable "subnet_id" {
   description = "VPC subnet ID for MK8s control plane and default node interfaces."
   type        = string
   nullable    = false
+  validation {
+    condition     = length(trimspace(var.subnet_id)) > 0
+    error_message = "subnet_id cannot be empty."
+  }
 }
 
 variable "k8s_version" {
@@ -21,6 +33,13 @@ variable "k8s_version" {
   type        = string
   default     = null
   nullable    = true
+  validation {
+    condition = (
+      var.k8s_version == null ||
+      length(trimspace(var.k8s_version)) > 0
+    )
+    error_message = "k8s_version cannot be an empty string when provided."
+  }
 }
 
 variable "etcd_cluster_size" {
@@ -28,6 +47,16 @@ variable "etcd_cluster_size" {
   type        = number
   default     = null
   nullable    = true
+  validation {
+    condition = (
+      var.etcd_cluster_size == null ||
+      (
+        floor(var.etcd_cluster_size) == var.etcd_cluster_size &&
+        var.etcd_cluster_size >= 1
+      )
+    )
+    error_message = "etcd_cluster_size must be an integer >= 1 when provided."
+  }
 }
 
 variable "mk8s_cluster_public_endpoint" {
@@ -37,35 +66,31 @@ variable "mk8s_cluster_public_endpoint" {
   nullable    = false
 }
 
-variable "ssh_user_name" {
-  description = "SSH username for node cloud-init usage."
-  type        = string
-  default     = "ubuntu"
-  nullable    = false
-}
-
-variable "ssh_public_key" {
-  description = "Inline SSH public key."
-  type        = string
-  nullable    = false
-}
-
 variable "cpu_nodes_count" {
   description = "Fixed node count for CPU node group."
   type        = number
   default     = 2
   nullable    = false
+  validation {
+    condition = (
+      floor(var.cpu_nodes_count) == var.cpu_nodes_count &&
+      var.cpu_nodes_count >= 0
+    )
+    error_message = "cpu_nodes_count must be an integer >= 0."
+  }
 }
 
 variable "cpu_nodes_platform" {
-  description = "CPU node group platform."
+  description = "Default CPU node group resources.platform. Required when CPU node group creation is enabled unless override template.resources sets it."
   type        = string
+  default     = ""
   nullable    = false
 }
 
 variable "cpu_nodes_preset" {
-  description = "CPU node group preset."
+  description = "Default CPU node group resources.preset. Required when CPU node group creation is enabled unless override template.resources sets it."
   type        = string
+  default     = ""
   nullable    = false
 }
 
@@ -95,6 +120,13 @@ variable "gpu_node_groups" {
   type        = number
   default     = 0
   nullable    = false
+  validation {
+    condition = (
+      floor(var.gpu_node_groups) == var.gpu_node_groups &&
+      var.gpu_node_groups >= 0
+    )
+    error_message = "gpu_node_groups must be an integer >= 0."
+  }
 }
 
 variable "gpu_nodes_count_per_group" {
@@ -102,17 +134,24 @@ variable "gpu_nodes_count_per_group" {
   type        = number
   default     = 0
   nullable    = false
+  validation {
+    condition = (
+      floor(var.gpu_nodes_count_per_group) == var.gpu_nodes_count_per_group &&
+      var.gpu_nodes_count_per_group >= 0
+    )
+    error_message = "gpu_nodes_count_per_group must be an integer >= 0."
+  }
 }
 
 variable "gpu_nodes_platform" {
-  description = "GPU node group platform."
+  description = "Default GPU node group resources.platform. Required when gpu_enabled=true unless override template.resources sets it."
   type        = string
   default     = ""
   nullable    = false
 }
 
 variable "gpu_nodes_preset" {
-  description = "GPU node group preset."
+  description = "Default GPU node group resources.preset. Required when gpu_enabled=true unless override template.resources sets it."
   type        = string
   default     = ""
   nullable    = false
@@ -132,11 +171,45 @@ variable "gpu_nodes_public_ips" {
   nullable    = false
 }
 
-variable "gpu_driverfull_image" {
-  description = "Enable GPU driverfull image preset wiring."
-  type        = bool
-  default     = true
+variable "gpu_drivers_preset" {
+  description = "Explicit drivers_preset for GPU node groups. If null, gpu_driver_preset_map lookup and gpu_default_drivers_preset are used."
+  type        = string
+  default     = null
+  nullable    = true
+  validation {
+    condition = (
+      var.gpu_drivers_preset == null ||
+      length(trimspace(var.gpu_drivers_preset)) > 0
+    )
+    error_message = "gpu_drivers_preset cannot be empty when provided."
+  }
+}
+
+variable "gpu_default_drivers_preset" {
+  description = "Fallback drivers_preset used when gpu_drivers_preset is null and gpu_nodes_platform is not found in gpu_driver_preset_map."
+  type        = string
+  default     = "cuda13.0"
   nullable    = false
+  validation {
+    condition     = length(trimspace(var.gpu_default_drivers_preset)) > 0
+    error_message = "gpu_default_drivers_preset cannot be empty."
+  }
+}
+
+variable "gpu_driver_preset_map" {
+  description = "Fallback mapping from gpu_nodes_platform to drivers_preset when gpu_drivers_preset is null."
+  type        = map(string)
+  default = {
+    "gpu-b200-sxm"   = "cuda12.8"
+    "gpu-b200-sxm-a" = "cuda12.8"
+  }
+  nullable = false
+  validation {
+    condition = alltrue([
+      for preset in values(var.gpu_driver_preset_map) : length(trimspace(preset)) > 0
+    ])
+    error_message = "gpu_driver_preset_map values must be non-empty strings."
+  }
 }
 
 variable "infiniband_fabric" {

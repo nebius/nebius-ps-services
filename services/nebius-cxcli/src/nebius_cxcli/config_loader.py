@@ -1,4 +1,4 @@
-"""Config loading and strict schema validation helpers."""
+"""Config loading helpers (runtime source-driven mode)."""
 
 from __future__ import annotations
 
@@ -6,31 +6,27 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import ValidationError
 
-from .schema import ConfigV1
-from .schema import validate_config as validate_config_dict
-
-
-def _format_validation_error(exc: ValidationError) -> str:
-    details = []
-    for err in exc.errors():
-        location = " -> ".join(str(item) for item in err["loc"])
-        details.append(f"  - {location}: {err['msg']}")
-    return "\n".join(details)
+from .config_model import is_dynamic_payload, to_runtime_payload
+from .runtime_config import AttrDict, to_plain_data, wrap_runtime_config
+from .runtime_validation import validate_dynamic_payload_structure, validate_runtime_payload
 
 
-def validate_config(payload: dict[str, Any]) -> ConfigV1:
-    """Validate a parsed mapping against schema."""
-    try:
-        return validate_config_dict(payload)
-    except ValidationError as exc:
-        joined = _format_validation_error(exc)
-        raise ValueError(f"Configuration validation failed:\n{joined}") from exc
+def validate_config(payload: dict[str, Any]) -> AttrDict:
+    """Validate payload with runtime rules and wrap for attribute access."""
+    if not is_dynamic_payload(payload):
+        raise ValueError(
+            "config.yaml must use dynamic model with 'infra.components[]' and "
+            "'apps.charts[]'"
+        )
+    validate_dynamic_payload_structure(payload)
+    validate_runtime_payload(payload)
+    normalized = to_runtime_payload(payload)
+    return wrap_runtime_config(normalized)
 
 
-def load_config(path: Path) -> ConfigV1:
-    """Load and validate one config.yaml file."""
+def load_config(path: Path) -> AttrDict:
+    """Load one config.yaml file and return runtime-wrapped config."""
     if not path.exists():
         raise ValueError(f"Config file not found: {path}")
     with path.open("r", encoding="utf-8") as handle:
@@ -42,4 +38,4 @@ def load_config(path: Path) -> ConfigV1:
 
 def dump_yaml(data: dict[str, Any]) -> str:
     """Serialize data to deterministic YAML output."""
-    return yaml.safe_dump(data, sort_keys=False)
+    return yaml.safe_dump(to_plain_data(data), sort_keys=False)

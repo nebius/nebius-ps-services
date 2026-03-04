@@ -88,6 +88,10 @@ module "object_storage" {
 }
 ```
 
+## Examples
+
+- `examples/minimal`: single protected bucket suitable for Terraform state.
+
 ## Inputs summary
 
 - Required:
@@ -108,6 +112,6 @@ module "object_storage" {
 
 ```bash
 terraform fmt -recursive
-terraform init -backend=false
-terraform validate
+terraform -chdir=examples/minimal init -backend=false
+terraform -chdir=examples/minimal validate
 ```

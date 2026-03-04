@@ -1,6 +1,6 @@
 ---
 name: terraform
-description: Generate and harden Terraform repositories for reusable modules and multi-environment infrastructure deployments. Use when users ask to scaffold, standardize, or improve Terraform project structure, state/backends, environment layout, module interfaces, security controls, validation, CI checks, or Terraform best practices.
+description: Generate and harden Terraform repositories for reusable modules and multi-environment infrastructure deployments. Use when users ask to scaffold, standardize, or improve Terraform project structure, state/backends, environment layout, module interfaces, validation/test strategy, security controls, CI checks, or Terraform best practices.
 ---
 
 # Terraform
@@ -17,48 +17,80 @@ Generate production-grade Terraform scaffolding and enforce module and environme
 - Verify behavior against official Terraform documentation before asserting feature support.
 - Do not conflate features across Terraform versions.
 - State Terraform/backend/provider version constraints explicitly when behavior depends on version/capability.
+- Default to fail-fast behavior and one canonical path; do not add backward-compatibility shims unless the user explicitly asks.
+- For provider fields and status outputs, confirm support from `terraform providers schema -json` before implementing.
 
 ## Workflow
 
 1. Collect missing essentials only; ask concise follow-ups for only what is missing:
    - Project/module name and short purpose.
-   - Target Terraform version (default: `>= 1.10.0`).
+   - Target Terraform version (default: `>= 1.10.0, < 2.0.0`).
    - Providers and version constraints.
    - Remote state choice:
      - HCP Terraform (`cloud` block) or backend (`s3`, `azurerm`, `gcs`, etc).
      - State naming scheme (`org`, `project`, `env`, `region`) and environments (default: `dev`, `stage`, `prod`).
    - Secret handling policy:
      - Allowed in state for credentials/passwords (default: no), or must be omitted from state/plan where possible.
-2. Generate the repository layout where the repo root is a reusable module and `envs/<env>/` are environment root modules that call it.
-3. Provide output in this exact order:
+2. Choose one structure profile and keep it consistent:
+   - module-library profile (`modules/*` with `examples/`)
+   - environment-roots profile (`envs/*` roots that call shared modules)
+3. Implement using the standards below.
+4. Provide output in this exact order:
    - Directory tree.
    - Full contents of each created file (one file at a time).
    - Short "How to use" with exact commands (`init`, `plan`, `apply`) and safe environment/var-file handling.
    - Notes on security, state, locking, upgrades, and CI hooks.
 
-## Default Layout
+## Layout Profiles
 
-Use this structure unless the user requests changes:
+Use one of these structures unless the user asks otherwise.
+
+### Profile A: Module Library (preferred for reusable modules)
 
 ```text
 .
 ├── README.md
 ├── CHANGELOG.md
-├── LICENSE
 ├── .gitignore
-├── .pre-commit-config.yaml
 ├── Makefile
-├── main.tf
-├── variables.tf
-├── outputs.tf
-├── versions.tf
-├── locals.tf
+├── modules/
+│   ├── <component-a>/
+│   │   ├── main.tf
+│   │   ├── variables.tf
+│   │   ├── outputs.tf
+│   │   ├── versions.tf
+│   │   ├── locals.tf
+│   │   ├── README.md
+│   │   └── examples/
+│   │       ├── minimal/
+│   │       │   ├── main.tf
+│   │       │   └── versions.tf
+│   │       └── advanced/
+│   │           ├── main.tf
+│   │           └── versions.tf
+│   └── <component-b>/
+│       ├── main.tf
+│       ├── variables.tf
+│       ├── outputs.tf
+│       ├── versions.tf
+│       ├── locals.tf
+│       └── README.md
+└── (optional) envs/
+```
+
+### Profile B: Environment Roots
+
+```text
+.
+├── README.md
+├── Makefile
 ├── modules/
 │   └── <component>/
 │       ├── main.tf
 │       ├── variables.tf
 │       ├── outputs.tf
 │       ├── versions.tf
+│       ├── locals.tf
 │       └── README.md
 └── envs/
     ├── dev/
@@ -82,14 +114,22 @@ If using HCP Terraform `cloud` blocks, omit per-env `backend.tf`.
    - Show Git tag source example: `source = "git::<REPO_URL>?ref=vX.Y.Z"`.
    - Show registry example: `source = "<namespace>/<name>/<provider>"` with `version = "~> X.Y"`.
    - Include `CHANGELOG.md` and upgrade expectations.
-   - Pin provider versions with sensible constraints.
-   - Instruct committing `terraform.lock.hcl` after `terraform init`.
+   - Pin provider versions with bounded constraints.
+   - For pre-1.0 providers, use explicit upper bounds (for example `>= 0.5.55, < 0.6.0`).
+   - Lock file policy:
+     - reusable child modules: do not keep `.terraform.lock.hcl` in module directories
+     - root configurations where `init` runs (`envs/*`, `examples/*`, validation roots): keep lock files
 2. Terraform language structure:
    - Include `main.tf`, `variables.tf`, `outputs.tf`, `versions.tf` at root.
    - `versions.tf` defines `required_version` and `required_providers`.
    - In `variables.tf`, include `type`, `description`, `nullable` where relevant, and validation for critical inputs (names, CIDRs, regions).
+   - Use `lifecycle.precondition` for cross-variable invariants and mutually exclusive modes.
+   - Avoid required inputs that are not used by resources.
+   - Normalize optional maps/objects before merge/length operations using `coalesce(try(..., null), {})`.
+   - Preserve caller metadata objects; when layering labels, merge labels instead of replacing full metadata.
    - Use defaults only for non-sensitive, non-env-specific values.
    - In `outputs.tf`, add descriptions and mark sensitive outputs appropriately.
+   - Export integration-critical computed fields when provider schema exposes them (for example endpoints, CA materials).
    - Use `locals.tf` for naming/tag conventions and computed values.
 3. Sensitive data handling:
    - Use placeholders in examples; no real secrets.
@@ -126,12 +166,16 @@ If using HCP Terraform `cloud` blocks, omit per-env `backend.tf`.
    - Do not rely on Terraform workspaces for isolation or secret separation unless explicitly requested; assume single-workspace by default.
 6. Quality gates:
    - Recommend at minimum:
-     - `terraform fmt -check`
-     - `terraform validate`
+     - `terraform fmt -check -recursive`
+     - `terraform validate` (module roots)
+     - `terraform validate` for each `examples/*` root
      - `tflint` (if enabled)
      - `checkov` or `tfsec`
    - Provide minimal pre-commit and CI setup.
-   - Include `Makefile` targets (`fmt`, `validate`, `lint`, `plan`, `apply`) unless user asks not to.
+   - Include `Makefile` targets (`fmt`, `validate`, `test-all`) unless user asks not to.
+   - Make `validate` non-destructive: `terraform init -backend=false -upgrade=false` before validate.
+   - Run `terraform test` only when test files exist and provider mocking/integration setup is available.
+   - Never run `apply`/destroy in tests unless the user explicitly approves integration provisioning.
 
 ## Documentation Requirements
 
@@ -140,6 +184,8 @@ If using HCP Terraform `cloud` blocks, omit per-env `backend.tf`.
 - What the module does and does not do.
 - Usage examples for local path, Git tag, and registry.
 - Inputs/outputs summary and optional `terraform-docs` regeneration note.
+- Fail-fast invariants and notable preconditions.
+- List of runnable examples (`examples/minimal` and any advanced variants).
 - Backend/state expectations and environment workflow.
 
 ## Generation Rules
@@ -152,3 +198,4 @@ If using HCP Terraform `cloud` blocks, omit per-env `backend.tf`.
 - Keep output concise and technically precise.
 - Include minimal Terraform snippets only when they materially clarify implementation.
 - Do not guess provider behavior; if provider support cannot be confirmed from official docs, explicitly state that uncertainty.
+- Default to no legacy compatibility layers when changing module contracts unless the user explicitly asks for compatibility.
