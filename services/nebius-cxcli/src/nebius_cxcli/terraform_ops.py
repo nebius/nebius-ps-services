@@ -38,6 +38,20 @@ def terraform_plan(infra_dir: Path, *, extra_env: dict[str, str] | None = None) 
     )
 
 
+def terraform_init_backendless(infra_dir: Path, *, extra_env: dict[str, str] | None = None) -> None:
+    """Run backendless terraform init to resolve providers and generate lock file."""
+    _require_terraform()
+    if not infra_dir.exists():
+        raise RuntimeError(f"Rendered infra directory does not exist: {infra_dir}")
+
+    _run(
+        ["terraform", "init", "-input=false", "-backend=false", "-upgrade=false"],
+        cwd=infra_dir,
+        timeout=300,
+        extra_env=extra_env,
+    )
+
+
 def terraform_apply(infra_dir: Path, *, extra_env: dict[str, str] | None = None) -> None:
     """Run terraform init + apply in the rendered infra directory."""
     _require_terraform()

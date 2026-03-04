@@ -61,8 +61,20 @@ module "mysterybox" {
 }
 ```
 
+## Examples
+
+- `examples/minimal`: one secret definition and runtime payload injection sample.
+
 ## Outputs
 
 - `secret_ids`
 - `secret_names`
 - `secret_version_ids`
+
+## Validation commands
+
+```bash
+terraform fmt -recursive
+terraform -chdir=examples/minimal init -backend=false
+terraform -chdir=examples/minimal validate
+```

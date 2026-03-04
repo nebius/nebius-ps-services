@@ -1,0 +1,340 @@
+"""Flux rendering orchestration (generic Helm release model)."""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from .paths import InstancePaths
+from .runtime_config import to_plain_data
+
+
+def _ensure_parent(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _write_text(path: Path, content: str) -> None:
+    _ensure_parent(path)
+    path.write_text(content, encoding="utf-8")
+
+
+def _helm_repository_doc(name: str, url: str, *, repo_type: str = "default") -> dict[str, Any]:
+    spec: dict[str, Any] = {"interval": "30m", "url": url}
+    if repo_type == "oci":
+        spec["type"] = "oci"
+    return {
+        "apiVersion": "source.toolkit.fluxcd.io/v1",
+        "kind": "HelmRepository",
+        "metadata": {"name": name, "namespace": "flux-system"},
+        "spec": spec,
+    }
+
+
+def _git_repository_doc(name: str, url: str, ref: str) -> dict[str, Any]:
+    return {
+        "apiVersion": "source.toolkit.fluxcd.io/v1",
+        "kind": "GitRepository",
+        "metadata": {"name": name, "namespace": "flux-system"},
+        "spec": {"interval": "5m", "url": url, "ref": {"branch": ref}},
+    }
+
+
+def _github_tree_ref(repo: str) -> tuple[str, str, str] | None:
+    token = repo.strip().rstrip("/")
+    if not token:
+        return None
+    match = re.match(r"^https://github\.com/([^/]+)/([^/]+)/tree/([^/]+)/(.+)$", token)
+    if not match:
+        return None
+    owner = match.group(1).strip()
+    repository = match.group(2).strip()
+    branch = match.group(3).strip()
+    chart_path = match.group(4).strip()
+    if not owner or not repository or not branch or not chart_path:
+        return None
+    return f"https://github.com/{owner}/{repository}.git", branch, chart_path
+
+
+def _is_oci_repo(token: str) -> bool:
+    return token.strip().lower().startswith("oci://")
+
+
+def _oci_repo_url(chart_repo: str, chart_name: str) -> str:
+    repo = chart_repo.strip().rstrip("/")
+    if not repo:
+        return repo
+    chart = chart_name.strip().strip("/")
+    if not chart:
+        return repo
+    repo_tail = repo.rsplit("/", maxsplit=1)[-1].strip().lower()
+    if repo_tail != chart.lower():
+        return repo
+    parent = repo.rsplit("/", maxsplit=1)[0].rstrip("/")
+    return parent or repo
+
+
+def _resolve_flux_chart_source(*, chart_name: str, chart_repo: str) -> dict[str, str]:
+    if chart_repo:
+        github_tree = _github_tree_ref(chart_repo)
+        if github_tree is None:
+            if _is_oci_repo(chart_repo):
+                return {
+                    "kind": "helm_repository",
+                    "chart_ref": chart_name,
+                    "repo_url": _oci_repo_url(chart_repo, chart_name),
+                    "repo_type": "oci",
+                }
+            return {
+                "kind": "helm_repository",
+                "chart_ref": chart_name,
+                "repo_url": chart_repo,
+                "repo_type": "default",
+            }
+        git_url, git_ref, chart_path = github_tree
+        return {
+            "kind": "git_repository",
+            "chart_ref": chart_path,
+            "repo_url": git_url,
+            "repo_ref": git_ref,
+        }
+
+    github_tree = _github_tree_ref(chart_name)
+    if github_tree is not None:
+        git_url, git_ref, chart_path = github_tree
+        return {
+            "kind": "git_repository",
+            "chart_ref": chart_path,
+            "repo_url": git_url,
+            "repo_ref": git_ref,
+        }
+
+    raise ValueError(
+        "chart.repo is required for Helm repository charts, "
+        "or use a GitHub tree URL as chart.repo/chart.name for standalone chart sources"
+    )
+
+
+def _file_slug(value: str) -> str:
+    return "".join(ch if ch.isalnum() or ch in "-." else "-" for ch in value)
+
+
+def _configured_app_release_specs(config: Any) -> list[dict[str, Any]]:
+    payload = to_plain_data(config)
+    if not isinstance(payload, dict):
+        return []
+
+    specs: list[dict[str, Any]] = []
+    apps_node = payload.get("apps")
+    if isinstance(apps_node, dict):
+        dynamic_charts = apps_node.get("charts")
+        if isinstance(dynamic_charts, list):
+            for raw_chart in dynamic_charts:
+                if not isinstance(raw_chart, dict):
+                    continue
+                entry_id = str(raw_chart.get("id", "")).strip().lower()
+                if not entry_id or not bool(raw_chart.get("enabled", False)):
+                    continue
+
+                values_node = raw_chart.get("values", {})
+                if values_node is None:
+                    values_node = {}
+                if not isinstance(values_node, dict):
+                    raise ValueError(
+                        f"apps.charts[{entry_id}].values must be a mapping for enabled chart '{entry_id}'"
+                    )
+
+                chart_repo = str(raw_chart.get("repo", "")).strip()
+                chart_name = entry_id
+                chart_version = str(raw_chart.get("version", "")).strip()
+                if not chart_repo:
+                    raise ValueError(
+                        f"apps.charts[{entry_id}].repo is required for enabled chart '{entry_id}'"
+                    )
+                source = _resolve_flux_chart_source(chart_name=chart_name, chart_repo=chart_repo)
+                source_kind = source["kind"]
+                chart_ref = source["chart_ref"]
+                source_url = source["repo_url"]
+                source_ref = source.get("repo_ref", "")
+                source_repo_type = source.get("repo_type", "default")
+                if source_kind == "helm_repository" and not chart_version:
+                    raise ValueError(
+                        f"apps.charts[{entry_id}].version is required for enabled chart '{entry_id}'"
+                    )
+
+                namespace = str(raw_chart.get("namespace", "")).strip()
+                if not namespace:
+                    raise ValueError(
+                        f"apps.charts[{entry_id}].namespace is required for enabled chart '{entry_id}'"
+                    )
+                release_name = str(
+                    raw_chart.get("release-name", raw_chart.get("release_name", entry_id))
+                ).strip() or entry_id
+                repo_name_default = f"helm-{_file_slug(entry_id)}"
+                repo_name = repo_name_default
+                interval = "5m"
+                scope = str(raw_chart.get("group", "")).strip().lower() or "workloads"
+                chart_values = values_node
+
+                specs.append(
+                    {
+                        "scope": scope,
+                        "entry_id": entry_id,
+                        "release_name": release_name,
+                        "namespace": namespace,
+                        "source_name": repo_name,
+                        "source_kind": source_kind,
+                        "source_url": source_url,
+                        "source_ref": source_ref,
+                        "source_repo_type": source_repo_type,
+                        "chart_ref": chart_ref,
+                        "chart_version": chart_version if source_kind == "helm_repository" else "",
+                        "interval": interval,
+                        "values": chart_values,
+                    }
+                )
+    return specs
+
+
+def _helm_release_doc(
+    *,
+    release_name: str,
+    namespace: str,
+    source_name: str,
+    source_kind: str,
+    chart_ref: str,
+    chart_version: str | None,
+    interval: str,
+    values: dict[str, Any],
+) -> dict[str, Any]:
+    chart_spec: dict[str, Any] = {
+        "chart": chart_ref,
+        "sourceRef": {
+            "kind": source_kind,
+            "name": source_name,
+            "namespace": "flux-system",
+        },
+    }
+    if chart_version:
+        chart_spec["version"] = chart_version
+    return {
+        "apiVersion": "helm.toolkit.fluxcd.io/v2",
+        "kind": "HelmRelease",
+        "metadata": {"name": release_name, "namespace": namespace},
+        "spec": {
+            "interval": interval,
+            "chart": {"spec": chart_spec},
+            "install": {"createNamespace": True},
+            "values": values,
+        },
+    }
+
+
+@dataclass
+class _FluxRenderState:
+    paths: InstancePaths
+    files: list[Path] = field(default_factory=list)
+    resources: list[str] = field(default_factory=lambda: ["./helm-repositories.yaml"])
+    repositories: list[dict[str, Any]] = field(default_factory=list)
+    seen_repo_names: set[str] = field(default_factory=set)
+
+    def add_repository_doc(self, *, repo_name: str, doc: dict[str, Any]) -> None:
+        if repo_name in self.seen_repo_names:
+            return
+        self.repositories.append(doc)
+        self.seen_repo_names.add(repo_name)
+
+    def write_doc(self, relative_file: Path, doc: dict[str, Any]) -> None:
+        absolute_file = self.paths.flux_dir / relative_file
+        _write_text(absolute_file, yaml.safe_dump(doc, sort_keys=False))
+        self.files.append(absolute_file)
+        self.resources.append(f"./{relative_file.as_posix()}")
+
+
+def _render_flux_app_helm_releases(
+    state: _FluxRenderState, *, release_specs: list[dict[str, Any]]
+) -> None:
+    for release in release_specs:
+        scope = release["scope"]
+        release_name = release["release_name"]
+        namespace = release["namespace"]
+        source_name = release["source_name"]
+        source_kind = release["source_kind"]
+        source_url = release["source_url"]
+        source_ref = release.get("source_ref", "")
+        source_repo_type = release.get("source_repo_type", "default")
+        if source_kind == "helm_repository":
+            state.add_repository_doc(
+                repo_name=source_name,
+                doc=_helm_repository_doc(source_name, source_url, repo_type=source_repo_type),
+            )
+            flux_source_kind = "HelmRepository"
+        else:
+            state.add_repository_doc(
+                repo_name=source_name,
+                doc=_git_repository_doc(source_name, source_url, source_ref or "main"),
+            )
+            flux_source_kind = "GitRepository"
+        release_file_name = (
+            f"helmrelease-{_file_slug(scope)}-{_file_slug(release_name)}.yaml"
+        )
+        state.write_doc(
+            Path(release_file_name),
+            _helm_release_doc(
+                release_name=release_name,
+                namespace=namespace,
+                source_name=source_name,
+                source_kind=flux_source_kind,
+                chart_ref=release["chart_ref"],
+                chart_version=release["chart_version"],
+                interval=release["interval"],
+                values=release["values"],
+            ),
+        )
+
+
+def render_flux(config: Any, paths: InstancePaths) -> list[Path]:
+    legacy_dirs = [
+        path
+        for path in (paths.flux_dir / "apps", paths.flux_dir / "sources")
+        if path.exists() and path.is_dir()
+    ]
+    if legacy_dirs:
+        locations = ", ".join(str(path) for path in legacy_dirs)
+        raise ValueError(
+            "Unsupported legacy Flux layout detected. "
+            "Use only flat files under generated/flux and remove: "
+            f"{locations}"
+        )
+
+    state = _FluxRenderState(paths=paths)
+    _render_flux_app_helm_releases(state, release_specs=_configured_app_release_specs(config))
+
+    repos_path = paths.flux_dir / "helm-repositories.yaml"
+    _ensure_parent(repos_path)
+    if state.repositories:
+        repo_yaml = (
+            "\n---\n".join(yaml.safe_dump(doc, sort_keys=False).strip() for doc in state.repositories)
+            + "\n"
+        )
+    else:
+        repo_yaml = "# No Helm repositories are enabled for this instance\n"
+    repos_path.write_text(repo_yaml, encoding="utf-8")
+    state.files.append(repos_path)
+
+    kustomization_doc = {
+        "apiVersion": "kustomize.config.k8s.io/v1beta1",
+        "kind": "Kustomization",
+        "resources": state.resources,
+    }
+    kustomization_path = paths.flux_dir / "kustomization.yaml"
+    _write_text(kustomization_path, yaml.safe_dump(kustomization_doc, sort_keys=False))
+    state.files.append(kustomization_path)
+
+    return state.files
+
+
+__all__ = ["render_flux"]

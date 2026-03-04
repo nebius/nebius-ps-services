@@ -3,7 +3,7 @@ name = "nebius-cxcli"
 dynamic = ["version"]
 description = "Nebius customer platform orchestration CLI"
 readme = "README.md"
-authors = [{ name = "Nebius Professional Services" }]
+authors = [{ name = "Reza B." }]
 requires-python = ">=3.12,<3.15"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
@@ -16,7 +16,6 @@ dependencies = [
   "boto3>=1.35.0,<2.0.0",
   "nebius>=0.3.18,<1.0.0",
   "PyNaCl>=1.5.0,<2.0.0",
-  "pydantic>=2.10.0,<3.0.0",
   "questionary>=2.1.0,<3.0.0",
   "PyYAML>=6.0.2,<7.0.0",
   "rich>=13.9.0,<15.0.0",
@@ -41,6 +40,9 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["nebius_cxcli*"]
+
+[tool.setuptools.data-files]
+nebius_cxcli = ["component_sources.yaml"]
 
 [tool.setuptools_scm]
 version_scheme = "python-simplified-semver"

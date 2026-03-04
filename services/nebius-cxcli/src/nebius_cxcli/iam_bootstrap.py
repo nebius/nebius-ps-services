@@ -22,6 +22,18 @@ class CIBootstrapResult:
     s3_secret_access_key: str
 
 
+@dataclass(frozen=True)
+class CIIdentityEnsureResult:
+    """Idempotent identity state for CI automation."""
+
+    project_id: str
+    service_account_name: str
+    service_account_id: str
+    service_account_created: bool
+    roles_created: list[str]
+    roles_already_present: list[str]
+
+
 def _is_not_found_error(exc: Exception) -> bool:
     message = str(exc).lower()
     return "not found" in message or "statuscode.not_found" in message
@@ -320,22 +332,72 @@ def bootstrap_ci_service_account(
 ) -> CIBootstrapResult:
     """Ensure SA + role grants and create auth/access keys for CI usage."""
 
+    identity = ensure_ci_service_account_identity(
+        project_id=project_id,
+        service_account_name=service_account_name,
+        service_account_description=service_account_description,
+        role_ids=role_ids,
+        profile=profile,
+        endpoint=endpoint,
+        config_file=config_file,
+    )
+
+    sdk = _init_sdk(profile=profile, endpoint=endpoint, config_file=config_file)
+
+    from nebius.api.nebius.iam.v1 import AuthPublicKeyServiceClient
+    from nebius.api.nebius.iam.v2 import AccessKeyServiceClient
+
+    auth_keys = AuthPublicKeyServiceClient(sdk)
+    access_keys = AccessKeyServiceClient(sdk)
+
+    auth_public_key_id, auth_private_key_pem = _create_auth_public_key(
+        auth_keys=auth_keys,
+        project_id=identity.project_id,
+        service_account_id=identity.service_account_id,
+        description=auth_key_description,
+    )
+
+    s3_access_key_id, s3_secret_access_key = _create_object_storage_access_key(
+        access_keys=access_keys,
+        project_id=identity.project_id,
+        service_account_id=identity.service_account_id,
+        description=access_key_description,
+    )
+
+    return CIBootstrapResult(
+        project_id=identity.project_id,
+        service_account_name=identity.service_account_name,
+        service_account_id=identity.service_account_id,
+        service_account_created=identity.service_account_created,
+        roles_created=identity.roles_created,
+        roles_already_present=identity.roles_already_present,
+        auth_public_key_id=auth_public_key_id,
+        auth_private_key_pem=auth_private_key_pem,
+        s3_access_key_id=s3_access_key_id,
+        s3_secret_access_key=s3_secret_access_key,
+    )
+
+
+def ensure_ci_service_account_identity(
+    *,
+    project_id: str,
+    service_account_name: str,
+    service_account_description: str,
+    role_ids: list[str],
+    profile: str | None,
+    endpoint: str | None,
+    config_file: Path | None,
+) -> CIIdentityEnsureResult:
+    """Ensure service-account identity + role grants without creating new keys."""
     if not role_ids:
         raise ValueError("role_ids must not be empty")
 
     sdk = _init_sdk(profile=profile, endpoint=endpoint, config_file=config_file)
 
-    from nebius.api.nebius.iam.v1 import (
-        AccessPermitServiceClient,
-        AuthPublicKeyServiceClient,
-        ServiceAccountServiceClient,
-    )
-    from nebius.api.nebius.iam.v2 import AccessKeyServiceClient
+    from nebius.api.nebius.iam.v1 import AccessPermitServiceClient, ServiceAccountServiceClient
 
     service_accounts = ServiceAccountServiceClient(sdk)
     access_permits = AccessPermitServiceClient(sdk)
-    auth_keys = AuthPublicKeyServiceClient(sdk)
-    access_keys = AccessKeyServiceClient(sdk)
 
     service_account_id, service_account_created = _ensure_service_account(
         service_accounts=service_accounts,
@@ -351,29 +413,11 @@ def bootstrap_ci_service_account(
         role_ids=role_ids,
     )
 
-    auth_public_key_id, auth_private_key_pem = _create_auth_public_key(
-        auth_keys=auth_keys,
-        project_id=project_id,
-        service_account_id=service_account_id,
-        description=auth_key_description,
-    )
-
-    s3_access_key_id, s3_secret_access_key = _create_object_storage_access_key(
-        access_keys=access_keys,
-        project_id=project_id,
-        service_account_id=service_account_id,
-        description=access_key_description,
-    )
-
-    return CIBootstrapResult(
+    return CIIdentityEnsureResult(
         project_id=project_id,
         service_account_name=service_account_name,
         service_account_id=service_account_id,
         service_account_created=service_account_created,
         roles_created=roles_created,
         roles_already_present=roles_already_present,
-        auth_public_key_id=auth_public_key_id,
-        auth_private_key_pem=auth_private_key_pem,
-        s3_access_key_id=s3_access_key_id,
-        s3_secret_access_key=s3_secret_access_key,
     )
