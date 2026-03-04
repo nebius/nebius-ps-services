@@ -1,846 +1,240 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
+import pytest
 import yaml
 
-from nebius_cxcli.catalog import CatalogEntry, catalog_entries
+from nebius_cxcli.components import component_entries, reset_component_entry_cache
 from nebius_cxcli.config_loader import load_config
+from nebius_cxcli.config_model import to_dynamic_payload
 from nebius_cxcli.config_template import starter_config_yaml
 from nebius_cxcli.paths import resolve_instance_paths, validate_path_alignment
 from nebius_cxcli.render import render_instance
 
 
-def test_render_creates_expected_outputs(tmp_path: Path) -> None:
-    cluster_dir = (
-        tmp_path
-        / "nebius-deployments"
+def _instance_config_path(base: Path) -> Path:
+    return (
+        base
+        / "deployments"
         / "instances"
         / "client-a--tenant-123"
-        / "prod"
-        / "client-a-prod"
+        / "project-456"
+        / "config.yaml"
     )
-    cluster_dir.mkdir(parents=True, exist_ok=True)
 
-    source = starter_config_yaml(
-        client_name="client-a",
-        tenant_id="tenant-123",
-        env="prod",
-        cluster_name="client-a-prod",
-        project_id="project-456",
-        region_id="eu-north1",
-        subnet_id="subnet-abc123",
-        email="ops@example.com",
+
+def _starter_payload(*, selected_infra: set[str], selected_apps: set[str]) -> dict:
+    payload = yaml.safe_load(
+        starter_config_yaml(
+            client_name="client-a",
+            tenant_id="tenant-123",
+            project_id="project-456",
+            region_id="eu-north1",
+            email="ops@example.com",
+            selected_infra=selected_infra,
+            selected_apps=selected_apps,
+            infra_entries=component_entries("infra"),
+            app_entries=component_entries("apps"),
+        )
     )
-    config_path = cluster_dir / "config.yaml"
-    config_path.write_text(source, encoding="utf-8")
+    assert isinstance(payload, dict)
+    payload["infra"]["ssh_public_key"] = (
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB8Yq7Rr0x2GdQ8gJ5Q40gF4yHahx7s6vH8kKf+demo"
+    )
+    return payload
+
+
+def _infra_component_row(payload: dict, component_id: str) -> dict:
+    components = payload.get("infra", {}).get("components", [])
+    if not isinstance(components, list):
+        raise KeyError(component_id)
+    for item in components:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("id", "")).strip().lower() == component_id:
+            return item
+    raise KeyError(component_id)
+
+
+def test_render_creates_source_only_module_and_flux_outputs(tmp_path: Path) -> None:
+    reset_component_entry_cache()
+    config_path = _instance_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps={"n8n"})
+    mk8s = _infra_component_row(payload, "mk8s")
+    mk8s_inputs = mk8s.setdefault("inputs", {})
+    if isinstance(mk8s_inputs, dict):
+        mk8s_inputs["subnet_id"] = "subnet-abc123"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     config = load_config(config_path)
     paths = resolve_instance_paths(config_path)
     validate_path_alignment(config, paths)
 
     result = render_instance(config, paths)
+    assert len(result.files_written) >= 5
 
-    assert (paths.infra_dir / "terraform.tf").exists()
-    assert (paths.infra_dir / "main.tf").exists()
-    assert (paths.infra_dir / "terraform.auto.tfvars.json").exists()
-    assert (paths.flux_dir / "kustomization.yaml").exists()
-    assert (paths.flux_dir / "apps/platform/csi-mounted-fs-path-helmrelease.yaml").exists()
-    assert (paths.flux_dir / "apps/platform/namespace-kube-system.yaml").exists()
-    assert (paths.flux_dir / "apps/workloads/namespace-n8n.yaml").exists()
-    assert (paths.flux_dir / "apps/workloads/pvc-n8n-csi-pvc.yaml").exists()
-    backend_text = (paths.infra_dir / "terraform.tf").read_text(encoding="utf-8")
-    assert "encrypt = true" in backend_text
-    assert 'account_id_env       = "NEBIUS_SA_ID"' in backend_text
-    assert 'public_key_id_env    = "NEBIUS_AUTH_PUBLIC_KEY_ID"' in backend_text
-    assert 'private_key_file_env = "NEBIUS_AUTH_PRIVATE_KEY_FILE"' in backend_text
-    main_text = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
-    assert 'module "customer_platform"' in main_text
-    assert "wireguard_enabled = local.rendered_inputs.wireguard_enabled" in main_text
+    versions_tf = (paths.infra_dir / "versions.tf").read_text(encoding="utf-8")
+    providers_tf = (paths.infra_dir / "providers.tf").read_text(encoding="utf-8")
+    variables_tf = (paths.infra_dir / "variables.tf").read_text(encoding="utf-8")
+    main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
+    tfvars = (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
 
-    tfvars = json.loads(
-        (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
+    assert "required_providers" in versions_tf
+    assert 'provider "nebius"' in providers_tf
+    assert 'module "mk8s" {' in main_tf
+    assert 'module "custom-' not in main_tf
+    assert (
+        'source = "git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mk8s?ref=main"'
+        in main_tf
     )
-    assert tfvars["state_bucket_versioning_policy"] == "ENABLED"
-    assert tfvars["state_bucket_object_audit_logging"] == "ALL"
-    assert tfvars["state_bucket_manage"] is False
-    assert tfvars["state_bucket_protect_from_destroy"] is True
-    assert tfvars["inventory_bucket_manage"] is True
-    assert tfvars["inventory_bucket_versioning_policy"] == "DISABLED"
-    assert tfvars["inventory_bucket_object_audit_logging"] == "NONE"
-    assert tfvars["inventory_bucket_protect_from_destroy"] is False
-    assert tfvars["managed_postgresql_postgresql_version"] == 16
-    assert tfvars["managed_postgresql_public_access"] is False
-    assert tfvars["sfs_type"] == "NETWORK_SSD"
-    assert tfvars["wireguard_enabled"] is True
-    assert tfvars["wireguard_name"] == "client-a-prod-wg"
-    assert tfvars["wireguard_tunnel_cidr"] == "10.8.0.1/24"
-    assert tfvars["wireguard_listen_port"] == 51820
-    assert tfvars["wireguard_nat_mode"] is True
-    assert tfvars["wireguard_endpoint_host"] is None
-    assert tfvars["wireguard_clients"] == []
-    assert tfvars["ssh_user_name"] == "ubuntu"
-    assert tfvars["ssh_public_key"].startswith("ssh-ed25519 ")
-    assert tfvars["ssh_jumphost_enabled"] is False
-    assert tfvars["mysterybox_enabled"] is False
-    assert "mysterybox_secrets" not in tfvars
+    assert "subnet_id = var.mk8s_subnet_id" in main_tf
+    assert "inputs = jsondecode(" not in main_tf
+    assert 'variable "mk8s_subnet_id" {' in variables_tf
+    assert '"mk8s_subnet_id": "subnet-abc123"' in tfvars
 
-    assert len(result.files_written) >= 6
+    n8n_release = paths.flux_dir / "helmrelease-workloads-n8n.yaml"
+    assert n8n_release.exists()
 
 
-def test_render_writes_custom_catalog_app_flux_manifests(tmp_path: Path) -> None:
-    cluster_dir = (
-        tmp_path
-        / "catalog-root"
-        / "instances"
-        / "client-a--tenant-123"
-        / "prod"
-        / "client-a-prod"
-    )
-    cluster_dir.mkdir(parents=True, exist_ok=True)
+def test_render_emits_dynamic_provider_resource_blocks(tmp_path: Path) -> None:
+    reset_component_entry_cache()
+    config_path = _instance_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
 
-    app_entries = catalog_entries("apps") + (
-        CatalogEntry(
-            id="argo-cd",
-            scope="apps",
-            schema_path="catalog.apps.argo-cd",
-            description="Argo CD Helm release",
-            engine_type="helm_release",
-            source="https://argoproj.github.io/argo-helm/argo-cd",
-            version="7.6.7",
-            origin="custom",
-        ),
-    )
-    source = starter_config_yaml(
-        client_name="client-a",
-        tenant_id="tenant-123",
-        env="prod",
-        cluster_name="client-a-prod",
-        project_id="project-456",
-        region_id="eu-north1",
-        subnet_id="subnet-abc123",
-        email="ops@example.com",
-        selected_apps={"argo-cd"},
-        app_entries=app_entries,
-    )
-    config_path = cluster_dir / "config.yaml"
-    config_path.write_text(source, encoding="utf-8")
-
-    config = load_config(config_path)
-    paths = resolve_instance_paths(config_path)
-    validate_path_alignment(config, paths)
-    render_instance(config, paths)
-
-    release_path = paths.flux_dir / "apps/workloads/argo-cd-helmrelease.yaml"
-    namespace_path = paths.flux_dir / "apps/workloads/namespace-argo-cd.yaml"
-    repos_path = paths.flux_dir / "sources/helm-repositories.yaml"
-    assert release_path.exists()
-    assert namespace_path.exists()
-    assert repos_path.exists()
-
-    release_doc = yaml.safe_load(release_path.read_text(encoding="utf-8"))
-    repo_docs = list(yaml.safe_load_all(repos_path.read_text(encoding="utf-8")))
-    repo_doc = next(doc for doc in repo_docs if doc["metadata"]["name"] == "catalog-argo-cd")
-    assert repo_doc["spec"]["url"] == "https://argoproj.github.io/argo-helm"
-    assert release_doc["metadata"]["name"] == "argo-cd"
-    assert release_doc["metadata"]["namespace"] == "argo-cd"
-    assert release_doc["spec"]["chart"]["spec"]["chart"] == "argo-cd"
-    assert release_doc["spec"]["chart"]["spec"]["version"] == "7.6.7"
-
-
-def test_render_custom_catalog_app_allows_value_overrides(tmp_path: Path) -> None:
-    cluster_dir = (
-        tmp_path
-        / "catalog-root-override"
-        / "instances"
-        / "client-a--tenant-123"
-        / "prod"
-        / "client-a-prod"
-    )
-    cluster_dir.mkdir(parents=True, exist_ok=True)
-
-    app_entries = catalog_entries("apps") + (
-        CatalogEntry(
-            id="argo-cd",
-            scope="apps",
-            schema_path="catalog.apps.argo-cd",
-            description="Argo CD Helm release",
-            engine_type="helm_release",
-            source="https://argoproj.github.io/argo-helm/argo-cd",
-            version="7.6.7",
-            origin="custom",
-        ),
-    )
-    source = starter_config_yaml(
-        client_name="client-a",
-        tenant_id="tenant-123",
-        env="prod",
-        cluster_name="client-a-prod",
-        project_id="project-456",
-        region_id="eu-north1",
-        subnet_id="subnet-abc123",
-        email="ops@example.com",
-        selected_apps={"argo-cd"},
-        app_entries=app_entries,
-    )
-    payload = yaml.safe_load(source)
-    payload["catalog"]["apps"]["values"]["argo-cd"].update(
+    runtime_payload = _starter_payload(selected_infra=set(), selected_apps=set())
+    dynamic_payload = to_dynamic_payload(runtime_payload)
+    dynamic_payload["infra"]["components"] = [
         {
-            "namespace": "argocd",
-            "release_name": "argocd-control-plane",
-            "repo_name": "argocd",
-            "interval": "10m",
-            "values": {
-                "server": {
-                    "service": {
-                        "type": "ClusterIP",
-                    }
-                }
-            },
-        }
-    )
-    config_path = cluster_dir / "config.yaml"
-    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-
-    config = load_config(config_path)
-    paths = resolve_instance_paths(config_path)
-    validate_path_alignment(config, paths)
-    render_instance(config, paths)
-
-    release_path = paths.flux_dir / "apps/workloads/argocd-control-plane-helmrelease.yaml"
-    assert release_path.exists()
-    release_doc = yaml.safe_load(release_path.read_text(encoding="utf-8"))
-    assert release_doc["metadata"]["name"] == "argocd-control-plane"
-    assert release_doc["metadata"]["namespace"] == "argocd"
-    assert release_doc["spec"]["interval"] == "10m"
-    assert release_doc["spec"]["values"]["server"]["service"]["type"] == "ClusterIP"
-
-
-def test_render_writes_custom_catalog_infra_module_block(tmp_path: Path) -> None:
-    cluster_dir = (
-        tmp_path
-        / "catalog-infra-root"
-        / "instances"
-        / "client-a--tenant-123"
-        / "prod"
-        / "client-a-prod"
-    )
-    cluster_dir.mkdir(parents=True, exist_ok=True)
-
-    infra_entries = catalog_entries("infra") + (
-        CatalogEntry(
-            id="managed-redis",
-            scope="infra",
-            schema_path="catalog.infra.managed-redis",
-            description="Managed Redis module",
-            engine_type="terraform_module",
-            source="git::https://github.com/example/iac.git//modules/managed-redis",
-            version="1.0.0",
-            origin="custom",
-        ),
-    )
-    source = starter_config_yaml(
-        client_name="client-a",
-        tenant_id="tenant-123",
-        env="prod",
-        cluster_name="client-a-prod",
-        project_id="project-456",
-        region_id="eu-north1",
-        subnet_id="subnet-abc123",
-        email="ops@example.com",
-        selected_infra={"managed-redis"},
-        infra_entries=infra_entries,
-    )
-    config_path = cluster_dir / "config.yaml"
-    config_path.write_text(source, encoding="utf-8")
-
-    config = load_config(config_path)
-    paths = resolve_instance_paths(config_path)
-    validate_path_alignment(config, paths)
-    render_instance(config, paths)
-
-    main_text = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
-    assert 'module "catalog-managed-redis"' in main_text
-    assert 'source = "git::https://github.com/example/iac.git//modules/managed-redis"' in main_text
-    assert 'version = "1.0.0"' in main_text
-    assert "depends_on = [module.customer_platform]" in main_text
-    assert 'inputs = jsondecode("{}")' in main_text
-
-
-def test_render_custom_catalog_infra_module_allows_overrides(tmp_path: Path) -> None:
-    cluster_dir = (
-        tmp_path
-        / "catalog-infra-override-root"
-        / "instances"
-        / "client-a--tenant-123"
-        / "prod"
-        / "client-a-prod"
-    )
-    cluster_dir.mkdir(parents=True, exist_ok=True)
-
-    infra_entries = catalog_entries("infra") + (
-        CatalogEntry(
-            id="managed-redis",
-            scope="infra",
-            schema_path="catalog.infra.managed-redis",
-            description="Managed Redis module",
-            engine_type="terraform_module",
-            source="git::https://github.com/example/iac.git//modules/managed-redis",
-            version="1.0.0",
-            origin="custom",
-        ),
-    )
-    source = starter_config_yaml(
-        client_name="client-a",
-        tenant_id="tenant-123",
-        env="prod",
-        cluster_name="client-a-prod",
-        project_id="project-456",
-        region_id="eu-north1",
-        subnet_id="subnet-abc123",
-        email="ops@example.com",
-        selected_infra={"managed-redis"},
-        infra_entries=infra_entries,
-    )
-    payload = yaml.safe_load(source)
-    payload["catalog"]["infra"]["values"]["managed-redis"].update(
-        {
-            "module_name": "redis-control",
-            "depends_on_platform": False,
+            "id": "runtime-network",
+            "enabled": True,
             "inputs": {
-                "name": "client-a-redis",
-                "size_gib": 20,
-                "ha": True,
-            },
-        }
-    )
-    config_path = cluster_dir / "config.yaml"
-    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-
-    config = load_config(config_path)
-    paths = resolve_instance_paths(config_path)
-    validate_path_alignment(config, paths)
-    render_instance(config, paths)
-
-    main_text = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
-    assert 'module "redis-control"' in main_text
-    module_block = main_text.split('module "redis-control" {', maxsplit=1)[1].split(
-        "\n}\n", maxsplit=1
-    )[0]
-    assert "depends_on = [module.customer_platform]" not in module_block
-    assert "client-a-redis" in module_block
-    assert "size_gib" in module_block
-    assert "inputs = jsondecode(" in module_block
-
-
-def test_render_writes_optional_mk8s_override_tfvars(tmp_path: Path) -> None:
-    cluster_dir = (
-        tmp_path
-        / "my-deployments"
-        / "instances"
-        / "client-a--tenant-123"
-        / "prod"
-        / "client-a-prod"
-    )
-    cluster_dir.mkdir(parents=True, exist_ok=True)
-
-    source = starter_config_yaml(
-        client_name="client-a",
-        tenant_id="tenant-123",
-        env="prod",
-        cluster_name="client-a-prod",
-        project_id="project-456",
-        region_id="eu-north1",
-        subnet_id="subnet-abc123",
-        email="ops@example.com",
-    )
-    payload = yaml.safe_load(source)
-    payload["infra"]["mk8s"]["cluster_overrides"] = {
-        "control_plane": {
-            "subnet_id": "subnet-abc123",
-            "version": "1.31",
-            "etcd_cluster_size": 3,
-            "endpoints": {"public_endpoint": True},
-        },
-        "kube_network": {"service_cidrs": ["10.96.0.0/16"]},
-    }
-    payload["infra"]["mk8s"]["gpu_node_group_overrides"] = {
-        "autoscaling": {"min_node_count": 0, "max_node_count": 10},
-        "template": {
-            "gpu_settings": {"drivers_preset": "cuda12.8"},
-            "preemptible": True,
-        },
-    }
-    config_path = cluster_dir / "config.yaml"
-    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-
-    config = load_config(config_path)
-    paths = resolve_instance_paths(config_path)
-    validate_path_alignment(config, paths)
-
-    render_instance(config, paths)
-    tfvars = json.loads(
-        (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
-    )
-
-    assert tfvars["k8s_version"] == "1.31"
-    assert tfvars["etcd_cluster_size"] == 3
-    assert tfvars["subnet_id"] == "subnet-abc123"
-    assert tfvars["mk8s_cluster_public_endpoint"] is True
-    assert tfvars["mk8s_cluster_overrides"]["kube_network"]["service_cidrs"] == ["10.96.0.0/16"]
-    assert tfvars["mk8s_gpu_node_group_overrides"]["template"]["preemptible"] == {}
-
-
-def test_render_writes_mysterybox_tfvars_without_payload_values(tmp_path: Path) -> None:
-    cluster_dir = (
-        tmp_path
-        / "my-deployments"
-        / "instances"
-        / "client-a--tenant-123"
-        / "prod"
-        / "client-a-prod"
-    )
-    cluster_dir.mkdir(parents=True, exist_ok=True)
-
-    source = starter_config_yaml(
-        client_name="client-a",
-        tenant_id="tenant-123",
-        env="prod",
-        cluster_name="client-a-prod",
-        project_id="project-456",
-        region_id="eu-north1",
-        subnet_id="subnet-abc123",
-        email="ops@example.com",
-    )
-    payload = yaml.safe_load(source)
-    payload["infra"]["mysterybox"]["enabled"] = True
-    payload["infra"]["mysterybox"]["secrets"] = [
-        {
-            "id": "n8n-runtime",
-            "scope": "apps",
-            "name": "n8n-runtime",
-            "labels": {"app": "n8n"},
-            "set_primary": True,
-            "entries": [
-                {"key": "N8N_ENCRYPTION_KEY", "value_from_env": "N8N_ENCRYPTION_KEY"},
-                {"key": "N8N_BASIC_AUTH_PASSWORD", "value_from_env": "N8N_BASIC_AUTH_PASSWORD"},
-            ],
-        }
-    ]
-    config_path = cluster_dir / "config.yaml"
-    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-
-    config = load_config(config_path)
-    paths = resolve_instance_paths(config_path)
-    validate_path_alignment(config, paths)
-    render_instance(config, paths)
-
-    tfvars = json.loads(
-        (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
-    )
-    assert tfvars["mysterybox_enabled"] is True
-    assert "mysterybox_secrets" not in tfvars
-    assert "mysterybox_secret_values" not in tfvars
-
-
-def test_render_writes_external_secrets_mysterybox_flux_artifacts(tmp_path: Path) -> None:
-    cluster_dir = (
-        tmp_path
-        / "my-deployments"
-        / "instances"
-        / "client-a--tenant-123"
-        / "prod"
-        / "client-a-prod"
-    )
-    cluster_dir.mkdir(parents=True, exist_ok=True)
-
-    source = starter_config_yaml(
-        client_name="client-a",
-        tenant_id="tenant-123",
-        env="prod",
-        cluster_name="client-a-prod",
-        project_id="project-456",
-        region_id="eu-north1",
-        subnet_id="subnet-abc123",
-        email="ops@example.com",
-    )
-    payload = yaml.safe_load(source)
-    payload["infra"]["mysterybox"]["enabled"] = True
-    payload["infra"]["mysterybox"]["secrets"] = [
-        {
-            "id": "n8n-runtime",
-            "scope": "apps",
-            "name": "client-a-prod-n8n-runtime",
-            "entries": [
-                {"key": "N8N_ENCRYPTION_KEY", "value_from_env": "N8N_ENCRYPTION_KEY"},
-            ],
-            "k8s_sync": {
-                "enabled": True,
-                "namespace": "n8n",
-                "target_secret_name": "n8n-secrets",
-                "refresh_interval": "30m",
+                "resource_type": "nebius_vpc_v1_network",
+                "resource_name": "runtime_network",
+                "depends_on_platform": False,
+                "parent_id": "project-456",
+                "name": "runtime-network",
             },
         }
     ]
-    payload["apps"]["platform"]["external_secrets"]["enabled"] = True
-    payload["apps"]["platform"]["external_secrets"]["mysterybox"]["enabled"] = True
 
-    config_path = cluster_dir / "config.yaml"
-    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    config_path.write_text(yaml.safe_dump(dynamic_payload, sort_keys=False), encoding="utf-8")
 
     config = load_config(config_path)
     paths = resolve_instance_paths(config_path)
     validate_path_alignment(config, paths)
+
     render_instance(config, paths)
 
-    assert (paths.flux_dir / "apps/platform/external-secrets-helmrelease.yaml").exists()
-    assert (paths.flux_dir / "apps/platform/mysterybox-clustersecretstore.yaml").exists()
-    assert (paths.flux_dir / "apps/platform/mysterybox-bridge-deployment.yaml").exists()
-    assert (paths.flux_dir / "apps/platform/mysterybox-bridge-service.yaml").exists()
-    assert (paths.flux_dir / "apps/workloads/externalsecret-n8n-n8n-runtime.yaml").exists()
-
-    external_secret_doc = yaml.safe_load(
-        (paths.flux_dir / "apps/workloads/externalsecret-n8n-n8n-runtime.yaml").read_text(
-            encoding="utf-8"
-        )
-    )
-    store_doc = yaml.safe_load(
-        (paths.flux_dir / "apps/platform/mysterybox-clustersecretstore.yaml").read_text(
-            encoding="utf-8"
-        )
-    )
-    bridge_deploy_doc = yaml.safe_load(
-        (paths.flux_dir / "apps/platform/mysterybox-bridge-deployment.yaml").read_text(
-            encoding="utf-8"
-        )
-    )
-
-    assert external_secret_doc["spec"]["secretStoreRef"]["name"] == "nebius-mysterybox"
-    assert external_secret_doc["spec"]["target"]["name"] == "n8n-secrets"
-    assert external_secret_doc["spec"]["data"][0]["remoteRef"]["key"] == "client-a-prod-n8n-runtime"
-    assert external_secret_doc["spec"]["data"][0]["remoteRef"]["property"] == "N8N_ENCRYPTION_KEY"
-    assert store_doc["spec"]["provider"]["webhook"]["headers"]["X-MBX-Request"] == (
-        "{{ .bridgeAuth.token }}"
-    )
-    assert store_doc["spec"]["provider"]["webhook"]["secrets"][0]["secretRef"]["name"] == (
-        "mysterybox-bridge-webhook-auth"
-    )
-    assert bridge_deploy_doc["spec"]["template"]["spec"]["containers"][0]["command"][0] == "/bin/sh"
-    assert (
-        "--factory mysterybox_bridge.app:create_app"
-        in bridge_deploy_doc["spec"]["template"]["spec"]["containers"][0]["command"][2]
-    )
-    assert (
-        bridge_deploy_doc["spec"]["template"]["spec"]["containers"][0]["readinessProbe"][
-            "httpGet"
-        ]["path"]
-        == "/readyz"
-    )
-    assert (
-        bridge_deploy_doc["spec"]["template"]["spec"]["containers"][0]["env"][1]["name"]
-        == "MYSTERYBOX_WEBHOOK_AUTH_HEADER"
-    )
+    main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
+    assert 'resource "nebius_vpc_v1_network" "runtime_network"' in main_tf
+    assert 'name = "runtime-network"' in main_tf
+    assert 'parent_id = "project-456"' in main_tf
 
 
-def test_render_sets_wireguard_toggle_false_when_disabled(tmp_path: Path) -> None:
-    cluster_dir = (
-        tmp_path
-        / "my-deployments"
-        / "instances"
-        / "client-a--tenant-123"
-        / "prod"
-        / "client-a-prod"
-    )
-    cluster_dir.mkdir(parents=True, exist_ok=True)
+def test_render_dynamic_chart_shape_writes_flux_manifests(tmp_path: Path) -> None:
+    reset_component_entry_cache()
+    config_path = _instance_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
 
-    source = starter_config_yaml(
-        client_name="client-a",
-        tenant_id="tenant-123",
-        env="prod",
-        cluster_name="client-a-prod",
-        project_id="project-456",
-        region_id="eu-north1",
-        subnet_id="subnet-abc123",
-        email="ops@example.com",
-    )
-    payload = yaml.safe_load(source)
-    payload["infra"]["wireguard-jumphost"]["enabled"] = False
-    config_path = cluster_dir / "config.yaml"
-    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-
-    config = load_config(config_path)
-    paths = resolve_instance_paths(config_path)
-    validate_path_alignment(config, paths)
-    render_instance(config, paths)
-
-    main_text = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
-    assert 'module "wireguard_jump_host"' not in main_text
-    assert "wireguard_enabled = local.rendered_inputs.wireguard_enabled" in main_text
-    tfvars = json.loads(
-        (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
-    )
-    assert tfvars["wireguard_enabled"] is False
-
-
-def test_render_writes_ssh_jumphost_tfvars_when_enabled(tmp_path: Path) -> None:
-    cluster_dir = (
-        tmp_path
-        / "my-deployments"
-        / "instances"
-        / "client-a--tenant-123"
-        / "prod"
-        / "client-a-prod"
-    )
-    cluster_dir.mkdir(parents=True, exist_ok=True)
-
-    source = starter_config_yaml(
-        client_name="client-a",
-        tenant_id="tenant-123",
-        env="prod",
-        cluster_name="client-a-prod",
-        project_id="project-456",
-        region_id="eu-north1",
-        subnet_id="subnet-abc123",
-        email="ops@example.com",
-    )
-    payload = yaml.safe_load(source)
-    payload["infra"]["ssh-jumphost"]["enabled"] = True
-    payload["infra"]["ssh-jumphost"]["name"] = "client-a-ssh-jh"
-    payload["infra"]["ssh-jumphost"]["allowed_cidrs"] = ["203.0.113.10/32"]
-
-    config_path = cluster_dir / "config.yaml"
-    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-
-    config = load_config(config_path)
-    paths = resolve_instance_paths(config_path)
-    validate_path_alignment(config, paths)
-    render_instance(config, paths)
-
-    tfvars = json.loads(
-        (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
-    )
-    assert tfvars["ssh_jumphost_enabled"] is True
-    assert tfvars["ssh_jumphost_name"] == "client-a-ssh-jh"
-    assert tfvars["ssh_jumphost_allowed_cidrs"] == ["203.0.113.10/32"]
-
-
-def test_render_skips_csi_files_when_disabled(tmp_path: Path) -> None:
-    cluster_dir = (
-        tmp_path / "my-deployments" / "instances" / "client-a--tenant-123" / "dev" / "client-a-dev"
-    )
-    cluster_dir.mkdir(parents=True, exist_ok=True)
-
-    source = starter_config_yaml(
-        client_name="client-a",
-        tenant_id="tenant-123",
-        env="dev",
-        cluster_name="client-a-dev",
-        project_id="project-456",
-        region_id="eu-north1",
-        subnet_id="subnet-abc123",
-        email="ops@example.com",
-    )
-    payload = yaml.safe_load(source)
-    payload["infra"]["sfs"]["csi"]["enabled"] = False
-    config_path = cluster_dir / "config.yaml"
-    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-
-    config = load_config(config_path)
-    paths = resolve_instance_paths(config_path)
-    validate_path_alignment(config, paths)
-    render_instance(config, paths)
-
-    assert not (paths.flux_dir / "apps/platform/csi-mounted-fs-path-helmrelease.yaml").exists()
-    assert not any((paths.flux_dir / "apps/workloads").glob("pvc-*.yaml"))
-
-
-def test_render_supports_multiple_csi_pvcs(tmp_path: Path) -> None:
-    cluster_dir = (
-        tmp_path
-        / "my-deployments"
-        / "instances"
-        / "client-a--tenant-123"
-        / "prod"
-        / "client-a-prod"
-    )
-    cluster_dir.mkdir(parents=True, exist_ok=True)
-
-    source = starter_config_yaml(
-        client_name="client-a",
-        tenant_id="tenant-123",
-        env="prod",
-        cluster_name="client-a-prod",
-        project_id="project-456",
-        region_id="eu-north1",
-        subnet_id="subnet-abc123",
-        email="ops@example.com",
-    )
-    payload = yaml.safe_load(source)
-    payload["infra"]["sfs"]["csi"]["pvcs"] = [
+    runtime_payload = _starter_payload(selected_infra=set(), selected_apps=set())
+    dynamic_payload = to_dynamic_payload(runtime_payload)
+    dynamic_payload["apps"]["charts"] = [
         {
-            "namespace": "n8n",
-            "create_namespace": True,
-            "name": "csi-pvc",
-            "size": "1Gi",
-            "access_modes": ["ReadWriteMany"],
-        },
-        {
-            "namespace": "ml-team",
-            "create_namespace": True,
-            "name": "shared-data",
-            "size": "10Gi",
-            "access_modes": ["ReadWriteMany"],
-        },
+            "id": "runtime-app",
+            "group": "workloads",
+            "enabled": True,
+            "repo": "https://example.invalid/charts",
+            "version": "1.0.0",
+            "namespace": "runtime-app",
+            "release-name": "runtime-app",
+            "values": {"replicaCount": 1},
+        }
     ]
-    config_path = cluster_dir / "config.yaml"
-    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config_path.write_text(yaml.safe_dump(dynamic_payload, sort_keys=False), encoding="utf-8")
 
     config = load_config(config_path)
     paths = resolve_instance_paths(config_path)
     validate_path_alignment(config, paths)
+
     render_instance(config, paths)
 
-    assert (paths.flux_dir / "apps/workloads/pvc-n8n-csi-pvc.yaml").exists()
-    assert (paths.flux_dir / "apps/workloads/pvc-ml-team-shared-data.yaml").exists()
-    assert (paths.flux_dir / "apps/workloads/namespace-ml-team.yaml").exists()
+    repo_sources = paths.flux_dir / "helm-repositories.yaml"
+    release = paths.flux_dir / "helmrelease-workloads-runtime-app.yaml"
+    assert repo_sources.exists()
+    assert release.exists()
+
+    release_doc = yaml.safe_load(release.read_text(encoding="utf-8"))
+    assert release_doc["metadata"]["name"] == "runtime-app"
+    assert release_doc["spec"]["chart"]["spec"]["chart"] == "runtime-app"
 
 
-def test_render_static_csi_mode_generates_pv_and_bound_pvc(tmp_path: Path) -> None:
-    cluster_dir = (
-        tmp_path / "static-root" / "instances" / "client-a--tenant-123" / "prod" / "client-a-prod"
-    )
-    cluster_dir.mkdir(parents=True, exist_ok=True)
+def test_render_dynamic_oci_chart_writes_flux_oci_repository(tmp_path: Path) -> None:
+    reset_component_entry_cache()
+    config_path = _instance_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
 
-    source = starter_config_yaml(
-        client_name="client-a",
-        tenant_id="tenant-123",
-        env="prod",
-        cluster_name="client-a-prod",
-        project_id="project-456",
-        region_id="eu-north1",
-        subnet_id="subnet-abc123",
-        email="ops@example.com",
-    )
-    payload = yaml.safe_load(source)
-    payload["infra"]["sfs"]["csi"]["mode"] = "static"
-    payload["infra"]["sfs"]["csi"]["static"]["shared_path"] = "/mnt/data/shared"
-    payload["infra"]["sfs"]["csi"]["pvcs"] = [
+    runtime_payload = _starter_payload(selected_infra=set(), selected_apps=set())
+    dynamic_payload = to_dynamic_payload(runtime_payload)
+    dynamic_payload["apps"]["charts"] = [
         {
-            "namespace": "n8n",
-            "create_namespace": True,
-            "name": "csi-pvc",
-            "size": "1Gi",
-            "access_modes": ["ReadWriteMany"],
-            "static_pv_name": "sfs-pv-n8n",
-            "static_sub_path": "team-shared",
-        },
-        {
-            "namespace": "ml-team",
-            "create_namespace": True,
-            "name": "ml-pvc",
-            "size": "5Gi",
-            "access_modes": ["ReadWriteMany"],
-            "static_pv_name": "sfs-pv-ml-team",
-            "static_sub_path": "team-shared",
-        },
+            "id": "gateway-helm",
+            "group": "platform",
+            "enabled": True,
+            "repo": "oci://docker.io/envoyproxy/gateway-helm",
+            "version": "1.4.2",
+            "namespace": "envoy-gateway-system",
+            "release-name": "envoy-gateway",
+            "values": {},
+        }
     ]
-    config_path = cluster_dir / "config.yaml"
-    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
-    config = load_config(config_path)
-    paths = resolve_instance_paths(config_path)
-    validate_path_alignment(config, paths)
-    render_instance(config, paths)
-
-    pv_file = paths.flux_dir / "apps/workloads/pv-sfs-pv-n8n.yaml"
-    pvc_file = paths.flux_dir / "apps/workloads/pvc-n8n-csi-pvc.yaml"
-    assert pv_file.exists()
-    assert pvc_file.exists()
-    pv_doc = yaml.safe_load(pv_file.read_text(encoding="utf-8"))
-    pvc_doc = yaml.safe_load(pvc_file.read_text(encoding="utf-8"))
-    assert pv_doc["spec"]["csi"]["driver"] == "mounted-fs-path.csi.nebius.ai"
-    assert pv_doc["spec"]["csi"]["volumeAttributes"]["path"] == "/mnt/data/shared/team-shared"
-    assert pvc_doc["spec"]["volumeName"] == "sfs-pv-n8n"
-
-
-def test_render_writes_mig_tfvars_when_enabled(tmp_path: Path) -> None:
-    cluster_dir = (
-        tmp_path / "custom-root" / "instances" / "client-a--tenant-123" / "prod" / "client-a-prod"
-    )
-    cluster_dir.mkdir(parents=True, exist_ok=True)
-
-    source = starter_config_yaml(
-        client_name="client-a",
-        tenant_id="tenant-123",
-        env="prod",
-        cluster_name="client-a-prod",
-        project_id="project-456",
-        region_id="eu-north1",
-        subnet_id="subnet-abc123",
-        email="ops@example.com",
-    )
-    payload = yaml.safe_load(source)
-    payload["infra"]["mk8s"]["gpu_nodes"]["enabled"] = True
-    payload["infra"]["mk8s"]["gpu_nodes"]["node_groups"] = 1
-    payload["infra"]["mk8s"]["gpu_nodes"]["nodes_per_group"] = 1
-    payload["infra"]["mk8s"]["gpu_nodes"]["platform"] = "gpu-h200-sxm"
-    payload["infra"]["mk8s"]["gpu_nodes"]["preset"] = "8gpu-128vcpu-1600gb"
-    payload["infra"]["mk8s"]["gpu_nodes"]["mig"]["enabled"] = True
-    payload["infra"]["mk8s"]["gpu_nodes"]["mig"]["strategy"] = "single"
-    payload["infra"]["mk8s"]["gpu_nodes"]["mig"]["parted_config"] = "all-disabled"
-    config_path = cluster_dir / "config.yaml"
-    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    config_path.write_text(yaml.safe_dump(dynamic_payload, sort_keys=False), encoding="utf-8")
 
     config = load_config(config_path)
     paths = resolve_instance_paths(config_path)
     validate_path_alignment(config, paths)
 
     render_instance(config, paths)
-    tfvars = json.loads(
-        (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
-    )
 
-    assert tfvars["mig_strategy"] == "single"
-    assert tfvars["mig_parted_config"] == "all-disabled"
-    assert "gpu_mig_strategy" not in tfvars
-    assert "gpu_mig_parted_config" not in tfvars
+    repo_sources = paths.flux_dir / "helm-repositories.yaml"
+    release = paths.flux_dir / "helmrelease-platform-envoy-gateway.yaml"
+    assert repo_sources.exists()
+    assert release.exists()
+
+    repo_docs = [
+        doc
+        for doc in yaml.safe_load_all(repo_sources.read_text(encoding="utf-8"))
+        if isinstance(doc, dict)
+    ]
+    helm_repo_doc = next(doc for doc in repo_docs if doc.get("kind") == "HelmRepository")
+    assert helm_repo_doc["spec"]["type"] == "oci"
+    assert helm_repo_doc["spec"]["url"] == "oci://docker.io/envoyproxy"
+
+    release_doc = yaml.safe_load(release.read_text(encoding="utf-8"))
+    chart_spec = release_doc["spec"]["chart"]["spec"]
+    assert chart_spec["sourceRef"]["kind"] == "HelmRepository"
+    assert chart_spec["chart"] == "gateway-helm"
+    assert chart_spec["version"] == "1.4.2"
 
 
-def test_render_writes_egress_gateway_flux_manifests_without_tfvars_toggle(
-    tmp_path: Path,
-) -> None:
-    cluster_dir = (
-        tmp_path / "egress-root" / "instances" / "client-a--tenant-123" / "prod" / "client-a-prod"
-    )
-    cluster_dir.mkdir(parents=True, exist_ok=True)
+def test_render_rejects_legacy_nested_flux_layout(tmp_path: Path) -> None:
+    reset_component_entry_cache()
+    config_path = _instance_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
 
-    source = starter_config_yaml(
-        client_name="client-a",
-        tenant_id="tenant-123",
-        env="prod",
-        cluster_name="client-a-prod",
-        project_id="project-456",
-        region_id="eu-north1",
-        subnet_id="subnet-abc123",
-        email="ops@example.com",
-    )
-    payload = yaml.safe_load(source)
-    payload["infra"]["mk8s"]["egress_gateway"]["enabled"] = True
-    config_path = cluster_dir / "config.yaml"
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps={"n8n"})
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     config = load_config(config_path)
     paths = resolve_instance_paths(config_path)
     validate_path_alignment(config, paths)
 
-    render_instance(config, paths)
-    assert (paths.flux_dir / "apps/platform/cilium-config-egress-gateway.yaml").exists()
-    assert (paths.flux_dir / "apps/platform/cilium-daemonset-restart-egress-gateway.yaml").exists()
-    assert (paths.flux_dir / "apps/platform/cilium-operator-restart-egress-gateway.yaml").exists()
-    assert (paths.flux_dir / "apps/platform/cilium-egress-nodes-network-policy.yaml").exists()
+    # Simulate stale legacy layout from previous versions.
+    (paths.flux_dir / "apps").mkdir(parents=True, exist_ok=True)
 
-    tfvars = json.loads(
-        (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
-    )
-    assert "enable_egress_gateway" not in tfvars
+    with pytest.raises(ValueError, match="Unsupported legacy Flux layout detected"):
+        render_instance(config, paths)

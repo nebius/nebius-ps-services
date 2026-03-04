@@ -23,15 +23,6 @@ def default_cli_ref() -> str:
     return "main"
 
 
-def default_platform_infra_source() -> str:
-    """Return the default git source for platform-infra stack."""
-    ref = default_cli_ref()
-    return f"git::{NEBIUS_PS_SERVICES_REPO}//platform-infra/stacks/customer-platform?ref={ref}"
-
-
-DEFAULT_PLATFORM_INFRA_SOURCE = default_platform_infra_source()
-
-
 def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_ref: str) -> str:
     """Render the customer GitHub Actions workflow scaffold."""
     return (
@@ -119,8 +110,6 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
 
               - name: Terraform plan
                 env:
-                  AWS_ACCESS_KEY_ID: ${{{{ secrets.NEBIUS_S3_ACCESS_KEY_ID }}}}
-                  AWS_SECRET_ACCESS_KEY: ${{{{ secrets.NEBIUS_S3_SECRET_ACCESS_KEY }}}}
                   NEBIUS_SA_ID: ${{{{ secrets.NEBIUS_SA_ID }}}}
                   NEBIUS_AUTH_PUBLIC_KEY_ID: ${{{{ secrets.NEBIUS_AUTH_PUBLIC_KEY_ID }}}}
                 run: |
@@ -170,8 +159,6 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
 
               - name: Terraform apply
                 env:
-                  AWS_ACCESS_KEY_ID: ${{{{ secrets.NEBIUS_S3_ACCESS_KEY_ID }}}}
-                  AWS_SECRET_ACCESS_KEY: ${{{{ secrets.NEBIUS_S3_SECRET_ACCESS_KEY }}}}
                   NEBIUS_SA_ID: ${{{{ secrets.NEBIUS_SA_ID }}}}
                   NEBIUS_AUTH_PUBLIC_KEY_ID: ${{{{ secrets.NEBIUS_AUTH_PUBLIC_KEY_ID }}}}
                 run: |

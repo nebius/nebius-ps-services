@@ -21,18 +21,23 @@ High-level customer workflow:
 4. On merge, CI runs Terraform `apply` and GitOps bootstrap/reconcile.
 
 During `render`, the CLI generates a Terraform root under the customer repo
-(`generated/infra`) and points it to this library's stack:
+(`generated/infra`) and points module sources to this library:
 
 ```hcl
-module "customer_platform" {
-  source = "git::https://github.com/nebius/nebius-ps-services.git//platform-infra/stacks/customer-platform?ref=vX.Y.Z"
+module "mk8s" {
+  source = "git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mk8s?ref=vX.Y.Z"
+  # inputs mapped from config.yaml -> terraform.auto.tfvars.json
+}
+
+module "sfs" {
+  source = "git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/sfs?ref=vX.Y.Z"
   # inputs mapped from config.yaml -> terraform.auto.tfvars.json
 }
 ```
 
 Terraform execution still happens in the customer repo. Modules are fetched
 remotely from this public repo during `terraform init`.
-For secrets, `customer-platform` can provision MysteryBox secrets while taking
+For secrets, generated Terraform can provision MysteryBox secrets while taking
 payload values at runtime (for example CI environment variables), so cleartext
 values are not committed to repo files.
 
@@ -40,23 +45,7 @@ values are not committed to repo files.
 
 You can consume this library from any Terraform project.
 
-### Option A: Consume the opinionated stack
-
-```hcl
-module "customer_platform" {
-  source = "git::https://github.com/nebius/nebius-ps-services.git//platform-infra/stacks/customer-platform?ref=vX.Y.Z"
-
-  tenant_id      = var.tenant_id
-  parent_id      = var.project_id
-  region         = var.region
-  cluster_name   = var.cluster_name
-  subnet_id      = var.subnet_id
-  ssh_public_key = var.ssh_public_key
-  # ...other stack inputs
-}
-```
-
-### Option B: Consume modules individually
+### Consume modules individually
 
 ```hcl
 module "mk8s" {
@@ -72,20 +61,50 @@ module "sfs" {
 
 Use pinned refs (`?ref=vX.Y.Z`) for reproducibility.
 
+## Local Development
+
+Run repository-wide quality checks from `platform-infra/`:
+
+```bash
+make fmt
+make validate
+make test-all
+```
+
+Lock-file policy:
+
+- Module directories do not keep `.terraform.lock.hcl`.
+- Lock files are expected in root configurations (for example consumer repos or
+  module `examples/` roots) where `terraform init` is executed.
+
 ## Repository Structure
 
 ```text
 platform-infra/
+  Makefile
   modules/
     mk8s/
+      examples/
+        minimal/
+        gpu/
     managed-postgresql/
+      examples/
+        minimal/
     sfs/
+      examples/
+        minimal/
     object-storage/
+      examples/
+        minimal/
     mysterybox/
+      examples/
+        minimal/
     wireguard-jumphost/
+      examples/
+        minimal/
     ssh-jumphost/
-  stacks/
-    customer-platform/
+      examples/
+        minimal/
 ```
 
 ### `modules/`
@@ -101,11 +120,3 @@ Reusable building blocks for individual infrastructure concerns:
   payload support.
 - `wireguard-jumphost`: VM-based WireGuard jump host.
 - `ssh-jumphost`: VM-based SSH jump host with hardened cloud-init.
-
-### `stacks/`
-
-Opinionated compositions that wire multiple modules into a deployable platform
-shape.
-
-- `customer-platform`: the default stack consumed by Terraform roots generated
-  by `nebius-cxcli`.

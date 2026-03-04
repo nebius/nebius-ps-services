@@ -5,8 +5,7 @@ from __future__ import annotations
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-
-from .schema import ConfigV1
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -14,15 +13,14 @@ class InstancePaths:
     config_path: Path
     repo_root: Path
     deployments_dir: Path
-    cluster_dir: Path
+    project_dir: Path
     generated_dir: Path
     infra_dir: Path
     flux_dir: Path
     inventory_dir: Path
     path_client_name: str
     path_tenant_id: str
-    path_env: str
-    path_cluster_name: str
+    path_project_id: str
 
     @property
     def instance_slug(self) -> str:
@@ -56,14 +54,14 @@ def _locate_deployments_dir(config_path: Path, repo_root: Path, hint: str | None
         raise ValueError(f"Deployments dir does not exist: {hinted}")
 
     # Infer deployments root from canonical config path shape:
-    # <deployments-root>/instances/<client>--<tenant>/<env>/<cluster>/config.yaml
+    # <deployments-root>/instances/<client>--<tenant>/<project>/config.yaml
     parents = config_path.parents
-    if len(parents) >= 5 and parents[3].name == "instances":
-        return parents[4].resolve()
+    if len(parents) >= 4 and parents[2].name == "instances":
+        return parents[3].resolve()
 
     raise ValueError(
         "Unable to infer deployments root from config path. "
-        "Expected <deployments-root>/instances/<client>--<tenant>/<env>/<cluster>/config.yaml"
+        "Expected <deployments-root>/instances/<client>--<tenant>/<project>/config.yaml"
     )
 
 
@@ -83,9 +81,9 @@ def resolve_instance_paths(
         raise ValueError(f"{resolved} is not inside {deployments_dir}") from exc
 
     parts = relative.parts
-    if len(parts) != 5 or parts[0] != "instances":
+    if len(parts) != 4 or parts[0] != "instances":
         raise ValueError(
-            "Config path must match instances/<client>--<tenant>/<env>/<cluster>/config.yaml"
+            "Config path must match instances/<client>--<tenant>/<project>/config.yaml"
         )
 
     client_tenant = parts[1]
@@ -93,26 +91,25 @@ def resolve_instance_paths(
         raise ValueError("Expected client and tenant in path segment '<client>--<tenant>'")
 
     client_name, tenant_id = client_tenant.split("--", maxsplit=1)
-    cluster_dir = resolved.parent
-    generated_dir = cluster_dir / "generated"
+    project_dir = resolved.parent
+    generated_dir = project_dir / "generated"
 
     return InstancePaths(
         config_path=resolved,
         repo_root=repo_root,
         deployments_dir=deployments_dir,
-        cluster_dir=cluster_dir,
+        project_dir=project_dir,
         generated_dir=generated_dir,
         infra_dir=generated_dir / "infra",
         flux_dir=generated_dir / "flux",
         inventory_dir=generated_dir / "inventory",
         path_client_name=client_name,
         path_tenant_id=tenant_id,
-        path_env=parts[2],
-        path_cluster_name=parts[3],
+        path_project_id=parts[2],
     )
 
 
-def validate_path_alignment(config: ConfigV1, paths: InstancePaths) -> None:
+def validate_path_alignment(config: Any, paths: InstancePaths) -> None:
     """Ensure canonical config values and path hierarchy are synchronized."""
     errors: list[str] = []
     if config.client_info.client_name != paths.path_client_name:
@@ -125,14 +122,13 @@ def validate_path_alignment(config: ConfigV1, paths: InstancePaths) -> None:
             "tenant_id mismatch: "
             f"config='{config.client_info.nebius.tenant_id}', path='{paths.path_tenant_id}'"
         )
-    if config.client_info.env.value != paths.path_env:
+    config_project_id = str(
+        getattr(config.client_info.nebius, "project_id", None) or ""
+    ).strip()
+    if config_project_id != paths.path_project_id:
         errors.append(
-            f"env mismatch: config='{config.client_info.env.value}', path='{paths.path_env}'"
-        )
-    if config.client_info.cluster_name != paths.path_cluster_name:
-        errors.append(
-            "cluster_name mismatch: "
-            f"config='{config.client_info.cluster_name}', path='{paths.path_cluster_name}'"
+            "project_id mismatch: "
+            f"config='{config_project_id}', path='{paths.path_project_id}'"
         )
     if errors:
         raise ValueError("Path alignment failed:\n  - " + "\n  - ".join(errors))
