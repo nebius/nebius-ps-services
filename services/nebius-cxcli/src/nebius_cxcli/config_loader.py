@@ -17,7 +17,7 @@ def validate_config(payload: dict[str, Any]) -> AttrDict:
     if not is_dynamic_payload(payload):
         raise ValueError(
             "config.yaml must use dynamic model with 'infra.components[]' and "
-            "'apps.releases[]'"
+            "'apps.charts[]'"
         )
     validate_dynamic_payload_structure(payload)
     validate_runtime_payload(payload)

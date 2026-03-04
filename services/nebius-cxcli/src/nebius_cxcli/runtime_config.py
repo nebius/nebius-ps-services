@@ -6,14 +6,6 @@ from collections.abc import Mapping
 from typing import Any
 
 
-class EnvString(str):
-    """String wrapper exposing `.value` for call sites expecting enum-like env objects."""
-
-    @property
-    def value(self) -> str:
-        return str(self)
-
-
 class AttrDict(dict[str, Any]):
     """Mapping with attribute access and hyphen/underscore key normalization."""
 
@@ -42,8 +34,6 @@ def _wrap_runtime(value: Any, *, path: tuple[str, ...] = ()) -> Any:
         return wrapped
     if isinstance(value, list):
         return [_wrap_runtime(item, path=path) for item in value]
-    if path == ("client_info", "env") and isinstance(value, str):
-        return EnvString(value)
     return value
 
 
@@ -57,13 +47,11 @@ def wrap_runtime_config(payload: Mapping[str, Any]) -> AttrDict:
 
 
 def to_plain_data(value: Any) -> Any:
-    """Convert runtime wrappers (AttrDict/EnvString) to plain Python data."""
+    """Convert runtime wrappers (AttrDict) to plain Python data."""
     if isinstance(value, AttrDict):
         return {key: to_plain_data(item) for key, item in value.items()}
     if isinstance(value, list):
         return [to_plain_data(item) for item in value]
-    if isinstance(value, EnvString):
-        return str(value)
     if hasattr(value, "model_dump"):
         return value.model_dump(exclude_none=True)
     return value

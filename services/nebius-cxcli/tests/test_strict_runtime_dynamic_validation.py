@@ -21,11 +21,8 @@ def _starter_payload(*, selected_infra: set[str], selected_apps: set[str]) -> di
         starter_config_yaml(
             client_name="client-a",
             tenant_id="tenant-123",
-            env="prod",
-            cluster_name="cluster-a",
             project_id="project-456",
             region_id="us-central1",
-            subnet_id="subnet-abc123",
             email="ops@example.com",
             selected_infra=selected_infra,
             selected_apps=selected_apps,
@@ -87,7 +84,7 @@ def test_strict_validation_checks_dynamic_custom_component_source(
             "inputs": {},
         }
     ]
-    payload["apps"]["releases"] = []
+    payload["apps"]["charts"] = []
 
     config_path = tmp_path / "config.yaml"
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")

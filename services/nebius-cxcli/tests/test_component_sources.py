@@ -131,7 +131,7 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(monkeypatch, t
                     "helm_charts": [
                         {
                             "name": "gateway-helm",
-                            "repo": "https://envoyproxy.github.io/gateway-helm",
+                            "repo": "oci://docker.io/envoyproxy/gateway-helm",
                             "version": "1.4.2",
                             "namespace": "envoy-gateway-system",
                             "releasename": "envoy-gateway",
@@ -158,7 +158,7 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(monkeypatch, t
     assert loaded.tf_modules[0].enable is True
 
     assert loaded.helm_charts[0].name == "gateway-helm"
-    assert loaded.helm_charts[0].repo == "https://envoyproxy.github.io/gateway-helm"
+    assert loaded.helm_charts[0].repo == "oci://docker.io/envoyproxy/gateway-helm"
     assert loaded.helm_charts[0].namespace == "envoy-gateway-system"
     assert loaded.helm_charts[0].release_name == "envoy-gateway"
     assert loaded.helm_charts[0].group == "Platform"

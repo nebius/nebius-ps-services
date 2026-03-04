@@ -10,11 +10,8 @@ def test_starter_template_is_runtime_valid() -> None:
     yaml_text = starter_config_yaml(
         client_name="client-a",
         tenant_id="tenant-123",
-        env="prod",
-        cluster_name="client-a-prod",
         project_id="project-456",
         region_id="eu-north1",
-        subnet_id="subnet-abc123",
         email="ops@example.com",
     )
 
@@ -23,4 +20,4 @@ def test_starter_template_is_runtime_valid() -> None:
     config = validate_config(payload)
     assert config.version == "v1"
     assert config.client_info.client_name == "client-a"
-    assert config.client_info.cluster_name == "client-a-prod"
+    assert config.client_info.nebius.project_id == "project-456"

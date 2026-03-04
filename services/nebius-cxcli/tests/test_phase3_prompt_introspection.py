@@ -44,27 +44,22 @@ def test_hydrate_app_values_merges_chart_defaults(monkeypatch) -> None:
     )
     payload = {
         "apps": {
-            "releases": [
+            "charts": [
                 {
                     "id": "demo-app",
                     "enabled": True,
-                    "section": "workloads",
-                    "values": {
-                        "namespace": "demo-app",
-                        "release_name": "demo-app",
-                        "chart": {
-                            "repo": "https://example.invalid/charts",
-                            "name": "demo-app",
-                            "version": "1.0.0",
-                        },
-                        "values": {"foo": {"enabled": False}},
-                    },
+                    "group": "workloads",
+                    "repo": "https://example.invalid/charts",
+                    "version": "1.0.0",
+                    "namespace": "demo-app",
+                    "release-name": "demo-app",
+                    "values": {"foo": {"enabled": False}},
                 },
             ]
         }
     }
 
     _hydrate_app_component_values_from_chart_defaults(payload=payload, entry=entry)
-    values = payload["apps"]["releases"][0]["values"]["values"]
+    values = payload["apps"]["charts"][0]["values"]
     assert values["foo"]["enabled"] is False
     assert values["replicaCount"] == 2

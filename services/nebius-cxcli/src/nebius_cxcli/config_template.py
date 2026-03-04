@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -47,10 +46,22 @@ def _chart_source_parts(source: str | None) -> tuple[str, str]:
     return repo, chart
 
 
-def _normalize_app_section(group: str | None) -> str:
+def _normalize_app_group(group: str | None) -> str:
     raw = str(group or "").strip().lower()
-    token = re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
+    token = "".join(ch if ch.isalnum() or ch == "-" else "-" for ch in raw)
+    token = "-".join(part for part in token.split("-") if part)
     return token or "workloads"
+
+
+def _canonical_chart_repo(*, chart_repo: str, chart_name: str) -> str:
+    repo = chart_repo.strip().rstrip("/")
+    if not repo:
+        return repo
+    if repo.startswith("oci://"):
+        tail = repo.rsplit("/", maxsplit=1)[-1].strip().lower()
+        if tail != chart_name.strip().lower():
+            return f"{repo}/{chart_name.strip()}"
+    return repo
 
 
 def _apply_component_selection(
@@ -89,23 +100,21 @@ def _apply_component_selection(
 
     apps_node = payload.get("apps")
     if isinstance(apps_node, dict):
-        releases = apps_node.get("releases")
-        if isinstance(releases, list):
-            for item in releases:
+        charts = apps_node.get("charts")
+        if isinstance(charts, list):
+            for item in charts:
                 if not isinstance(item, dict):
                     continue
-                release_id = str(item.get("id", "")).strip().lower()
-                if not release_id:
+                chart_id = str(item.get("id", "")).strip().lower()
+                if not chart_id:
                     continue
-                item["enabled"] = release_id in resolved_selected_apps
+                item["enabled"] = chart_id in resolved_selected_apps
 
 
 def _starter_payload(
     *,
     client_name: str,
     tenant_id: str,
-    env: str,
-    cluster_name: str,
     project_id: str,
     region_id: str,
     email: str | None,
@@ -116,8 +125,6 @@ def _starter_payload(
         "version": CONFIG_VERSION,
         "client_info": {
             "client_name": client_name,
-            "env": env,
-            "cluster_name": cluster_name,
             "nebius": {
                 "tenant_id": tenant_id,
                 "project_id": project_id,
@@ -133,7 +140,7 @@ def _starter_payload(
             "ssh_public_key": DEFAULT_SSH_PUBLIC_KEY,
             "components": [],
         },
-        "apps": {"releases": []},
+        "apps": {"charts": []},
     }
 
     infra_node = payload["infra"]
@@ -158,10 +165,10 @@ def _starter_payload(
     apps_node = payload["apps"]
     if not isinstance(apps_node, dict):
         raise ValueError("apps payload must be a mapping")
-    releases_node = apps_node.get("releases")
-    if not isinstance(releases_node, list):
-        releases_node = []
-        apps_node["releases"] = releases_node
+    charts_node = apps_node.get("charts")
+    if not isinstance(charts_node, list):
+        charts_node = []
+        apps_node["charts"] = charts_node
     for entry in app_entries or ():
         chart_repo = str(entry.chart_repo or "").strip()
         chart_name = str(entry.chart_name or "").strip()
@@ -169,21 +176,17 @@ def _starter_payload(
             chart_repo, chart_name = _chart_source_parts(entry.source)
         namespace = str(entry.default_namespace or "").strip() or entry.id
         release_name = str(entry.default_release_name or "").strip() or entry.id
-        releases_node.append(
+        chart_repo = _canonical_chart_repo(chart_repo=chart_repo, chart_name=chart_name)
+        charts_node.append(
             {
                 "id": entry.id,
-                "section": _normalize_app_section(entry.group),
+                "group": _normalize_app_group(entry.group),
                 "enabled": bool(entry.default_enabled),
-                "values": {
-                    "namespace": namespace,
-                    "release_name": release_name,
-                    "chart": {
-                        "repo": chart_repo,
-                        "name": chart_name,
-                        "version": str(entry.version or ""),
-                    },
-                    "values": {},
-                },
+                "repo": chart_repo,
+                "version": str(entry.version or ""),
+                "namespace": namespace,
+                "release-name": release_name,
+                "values": {},
             }
         )
 
@@ -194,11 +197,8 @@ def starter_config_yaml(
     *,
     client_name: str,
     tenant_id: str,
-    env: str,
-    cluster_name: str,
     project_id: str,
     region_id: str,
-    subnet_id: str,  # kept for API stability; source-only template does not preseed subnet.
     email: str | None,
     selected_infra: set[str] | None = None,
     selected_apps: set[str] | None = None,
@@ -206,12 +206,9 @@ def starter_config_yaml(
     app_entries: tuple[ComponentEntry, ...] | None = None,
 ) -> str:
     """Render a starter instance config.yaml with source-driven component defaults."""
-    _ = subnet_id
     payload = _starter_payload(
         client_name=client_name,
         tenant_id=tenant_id,
-        env=env,
-        cluster_name=cluster_name,
         project_id=project_id,
         region_id=region_id,
         email=email,

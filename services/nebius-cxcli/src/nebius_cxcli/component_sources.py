@@ -165,7 +165,7 @@ def _parse_sources_payload(payload: Any) -> ComponentSources:
         repo = repo_raw or None
         version = _as_text(raw.get("version")) or None
         namespace = _as_text(raw.get("namespace")) or None
-        release_name = _as_text(raw.get("releasename")) or None
+        release_name = _as_text(raw.get("release-name") or raw.get("releasename")) or None
         enable = bool(raw.get("enable", False))
         description = _as_text(raw.get("description")) or None
         group = _as_text(raw.get("group")) or None

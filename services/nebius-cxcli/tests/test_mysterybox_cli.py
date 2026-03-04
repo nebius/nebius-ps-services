@@ -18,11 +18,8 @@ def _build_config(tmp_path: Path):
         starter_config_yaml(
             client_name="client-a",
             tenant_id="tenant-123",
-            env="prod",
-            cluster_name="client-a-prod",
             project_id="project-456",
             region_id="eu-north1",
-            subnet_id="subnet-abc123",
             email="ops@example.com",
             infra_entries=infra_entries,
             app_entries=app_entries,
@@ -39,7 +36,10 @@ def test_terraform_runtime_env_builds_mysterybox_tf_var(tmp_path: Path, monkeypa
 
     runtime_env = _terraform_runtime_env(cfg)
 
-    assert runtime_env == {}
+    assert runtime_env == {
+        "TF_VAR_nebius_provider_module_name": "nebius-cxcli-client-a-project-456",
+        "TF_VAR_nebius_provider_parent_id": "project-456",
+    }
 
 
 def test_terraform_runtime_env_fails_when_mysterybox_env_missing(
@@ -49,4 +49,7 @@ def test_terraform_runtime_env_fails_when_mysterybox_env_missing(
     monkeypatch.delenv("N8N_ENCRYPTION_KEY", raising=False)
     monkeypatch.delenv("N8N_BASIC_AUTH_PASSWORD", raising=False)
 
-    assert _terraform_runtime_env(cfg) == {}
+    assert _terraform_runtime_env(cfg) == {
+        "TF_VAR_nebius_provider_module_name": "nebius-cxcli-client-a-project-456",
+        "TF_VAR_nebius_provider_parent_id": "project-456",
+    }

@@ -39,16 +39,16 @@ infra:
 apps:
   helm_charts:
     - name: gateway-helm
-      repo: https://envoyproxy.github.io/gateway-helm
-      version: 1.4.2
+      repo: oci://docker.io/envoyproxy
+      version: 1.7.0
       namespace: envoy-gateway-system
       releasename: envoy-gateway
       description: Envoy Gateway control plane
       group: Platform
       enable: false
     - name: cert-manager
-      repo: https://charts.jetstack.io
-      version: v1.16.0
+      repo: oci://quay.io/jetstack/charts
+      version: v1.19.2
       namespace: cert-manager
       releasename: cert-manager
       description: cert-manager for certificate automation
@@ -56,7 +56,7 @@ apps:
       enable: false
     - name: external-dns
       repo: https://kubernetes-sigs.github.io/external-dns
-      version: 1.15.0
+      version: 1.20.0
       namespace: external-dns
       releasename: external-dns
       description: ExternalDNS controller
@@ -70,19 +70,11 @@ apps:
       description: External Secrets Operator
       group: Platform
       enable: false
-    - name: nebius-observability
-      repo: https://helm-charts.nebius.com/observability
-      version: 0.1.0
-      namespace: nebius-o11y
-      releasename: observability
-      description: Nebius observability stack
-      group: Platform
-      enable: false
     - name: n8n
-      repo: https://community-charts.github.io/helm-charts
-      version: 1.16.29
+      repo: oci://8gears.container-registry.com/library/n8n
+      version: 2.0.1
       namespace: n8n
       releasename: n8n
-      description: n8n workload and HTTPRoute
+      description: n8n is an extendable workflow automation tool
       group: Workloads
       enable: false

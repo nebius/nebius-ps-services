@@ -2,8 +2,6 @@ version: v1
 
 client_info:
   client_name: example-client
-  env: dev
-  cluster_name: example-cluster
   nebius:
     tenant_id: tenant-REDACTED
     project_id: project-REDACTED
@@ -53,59 +51,21 @@ infra:
         preset: 4vcpu-16gb
 
 apps:
-  releases:
-    - id: envoy-gateway
-      section: platform
+  charts:
+    - id: gateway-helm
+      group: platform
       enabled: true
-      values:
-        namespace: envoy-gateway-system
-        release_name: envoy-gateway
-        chart:
-          repo: https://envoyproxy.github.io/gateway-helm
-          name: gateway-helm
-          version: 1.4.2
-        values: {}
+      repo: oci://docker.io/envoyproxy/gateway-helm
+      version: 1.7.0
+      namespace: envoy-gateway-system
+      release-name: envoy-gateway
+      values: {}
     - id: n8n
-      section: workloads
+      group: workloads
       enabled: true
+      repo: https://community-charts.github.io/helm-charts
+      version: 1.16.29
+      namespace: n8n
+      release-name: n8n
       values:
-        namespace: n8n
-        release_name: n8n
-        chart:
-          repo: https://community-charts.github.io/helm-charts
-          name: n8n
-          version: 1.16.29
-        values:
-          replicaCount: 2
-
-component_sources:
-  infra:
-    tf_modules:
-      - module: mk8s
-        source: ../../platform-infra/modules/mk8s
-        group: Compute
-        enable: true
-      - module: object-storage
-        source: ../../platform-infra/modules/object-storage
-        group: Storage
-        enable: true
-      - module: wireguard-jumphost
-        source: ../../platform-infra/modules/wireguard-jumphost
-        group: Network
-        enable: false
-  apps:
-    helm_charts:
-      - name: gateway-helm
-        repo: https://envoyproxy.github.io/gateway-helm
-        version: 1.4.2
-        namespace: envoy-gateway-system
-        releasename: envoy-gateway
-        group: Platform
-        enable: true
-      - name: n8n
-        repo: https://community-charts.github.io/helm-charts
-        version: 1.16.29
-        namespace: n8n
-        releasename: n8n
-        group: Workloads
-        enable: true
+        replicaCount: 2

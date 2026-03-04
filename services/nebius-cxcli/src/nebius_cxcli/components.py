@@ -63,6 +63,20 @@ def _normalize_app_section(group: str | None) -> str:
     return token or "workloads"
 
 
+def _compose_chart_source(*, repo: str | None, chart_name: str) -> str:
+    normalized_repo = str(repo or "").strip().rstrip("/")
+    normalized_chart = chart_name.strip().strip("/")
+    if not normalized_repo:
+        return normalized_chart
+    if normalized_repo.startswith("oci://") and normalized_chart:
+        repo_tail = normalized_repo.rsplit("/", maxsplit=1)[-1].strip().lower()
+        if repo_tail == normalized_chart.lower():
+            return normalized_repo
+    if not normalized_chart:
+        return normalized_repo
+    return f"{normalized_repo}/{normalized_chart}"
+
+
 @lru_cache(maxsize=1)
 def _infra_component_entries() -> tuple[ComponentEntry, ...]:
     entries: list[ComponentEntry] = []
@@ -110,7 +124,7 @@ def _entry_from_helm_chart(
     config_key = _normalize_config_key(component_id)
     normalized_group = (group or "").strip()
     normalized_section = _normalize_app_section(normalized_group)
-    source = f"{repo.rstrip('/')}/{chart_name}" if repo else chart_name
+    source = _compose_chart_source(repo=repo, chart_name=chart_name)
     return ComponentEntry(
         id=component_id,
         scope="apps",
@@ -143,7 +157,7 @@ def _app_component_entries() -> tuple[ComponentEntry, ...]:
     # Primary source: explicit chart entries in component_sources.yaml.
     for chart in sources.helm_charts:
         release_name = chart.release_name or chart.name
-        component_id = _normalize_entry_id(release_name)
+        component_id = _normalize_entry_id(chart.name)
         if not component_id or component_id in entry_ids:
             continue
         if not COMPONENT_ID_PATTERN.fullmatch(component_id):

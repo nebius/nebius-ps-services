@@ -19,10 +19,10 @@ def is_dynamic_payload(payload: Mapping[str, Any]) -> bool:
     apps = payload.get("apps")
     if not isinstance(infra, Mapping) or not isinstance(apps, Mapping):
         return False
-    return isinstance(infra.get("components"), list) or isinstance(apps.get("releases"), list)
+    return isinstance(infra.get("components"), list) or isinstance(apps.get("charts"), list)
 
 
-def _normalize_section(value: Any, *, default: str = "workloads") -> str:
+def _normalize_group(value: Any, *, default: str = "workloads") -> str:
     raw = str(value or "").strip().lower()
     if not raw:
         return default
@@ -36,7 +36,7 @@ def to_dynamic_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     if not is_dynamic_payload(payload):
         raise ValueError(
             "config payload must use dynamic model with 'infra.components[]' and "
-            "'apps.releases[]'"
+            "'apps.charts[]'"
         )
     return _deep_copy(dict(payload))
 
@@ -46,7 +46,7 @@ def to_runtime_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     if not is_dynamic_payload(payload):
         raise ValueError(
             "config payload must use dynamic model with 'infra.components[]' and "
-            "'apps.releases[]'"
+            "'apps.charts[]'"
         )
 
     dynamic_payload = _deep_copy(dict(payload))
@@ -56,8 +56,6 @@ def to_runtime_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         "infra": {},
         "apps": {},
     }
-    if isinstance(dynamic_payload.get("component_sources"), Mapping):
-        runtime["component_sources"] = _deep_copy(dynamic_payload.get("component_sources", {}))
 
     infra_source = dynamic_payload.get("infra", {})
     if isinstance(infra_source, Mapping):
@@ -89,26 +87,33 @@ def to_runtime_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(apps_source, Mapping):
         runtime_apps = runtime["apps"]
         if isinstance(runtime_apps, dict):
-            raw_releases = apps_source.get("releases")
-            if isinstance(raw_releases, list):
-                runtime_apps["releases"] = _deep_copy(raw_releases)
-            for item in apps_source.get("releases", []):  # type: ignore[union-attr]
+            raw_charts = apps_source.get("charts")
+            if isinstance(raw_charts, list):
+                runtime_apps["charts"] = _deep_copy(raw_charts)
+            for item in apps_source.get("charts", []):  # type: ignore[union-attr]
                 if not isinstance(item, Mapping):
                     continue
-                release_id = str(item.get("id", "")).strip().lower()
-                if not release_id:
+                chart_id = str(item.get("id", "")).strip().lower()
+                if not chart_id:
                     continue
-                section = _normalize_section(item.get("section"))
+                group = _normalize_group(item.get("group"))
                 enabled = bool(item.get("enabled", False))
                 values = item.get("values", {})
                 if not isinstance(values, Mapping):
                     values = {}
-                section_node = runtime_apps.get(section)
-                if not isinstance(section_node, dict):
-                    section_node = {}
-                    runtime_apps[section] = section_node
-                section_node[release_id.replace("-", "_")] = {
+                group_node = runtime_apps.get(group)
+                if not isinstance(group_node, dict):
+                    group_node = {}
+                    runtime_apps[group] = group_node
+                group_node[chart_id.replace("-", "_")] = {
                     "enabled": enabled,
+                    "repo": str(item.get("repo", "")).strip(),
+                    "version": str(item.get("version", "")).strip(),
+                    "namespace": str(item.get("namespace", "")).strip(),
+                    "release_name": str(
+                        item.get("release-name", item.get("release_name", chart_id))
+                    ).strip()
+                    or chart_id,
                     **_deep_copy(dict(values)),
                 }
     return runtime

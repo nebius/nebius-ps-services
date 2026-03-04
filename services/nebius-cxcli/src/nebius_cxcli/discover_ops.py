@@ -94,7 +94,7 @@ def _to_repo_relative(path: Path, *, repo_root: Path) -> str:
 
 def _scan_all_configs(*, deployment_path: Path, repo_root: Path) -> set[str]:
     candidates: set[str] = set()
-    for config_file in deployment_path.glob("instances/*/*/*/config.yaml"):
+    for config_file in deployment_path.glob("instances/*/*/config.yaml"):
         candidates.add(_to_repo_relative(config_file, repo_root=repo_root))
     return candidates
 

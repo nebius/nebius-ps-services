@@ -22,6 +22,10 @@ runner = CliRunner()
 @pytest.fixture(autouse=True)
 def _reset_component_state(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("NEBIUS_CXCLI_COMPONENT_SOURCES_FILE", raising=False)
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._validate_tenant_project_ids_or_prompt",
+        lambda **kwargs: (kwargs["tenant_id"], kwargs["project_id"]),
+    )
     set_component_sources_file_override(None)
     reset_component_sources_cache()
     reset_component_entry_cache()
@@ -34,11 +38,8 @@ def _starter_runtime_payload() -> dict:
         starter_config_yaml(
             client_name="client-a",
             tenant_id="tenant-123",
-            env="prod",
-            cluster_name="cluster-a",
             project_id="project-456",
             region_id="us-central1",
-            subnet_id="subnet-abc123",
             email="ops@example.com",
             infra_entries=infra_entries,
             app_entries=app_entries,
@@ -48,18 +49,18 @@ def _starter_runtime_payload() -> dict:
     return payload
 
 
-def test_to_dynamic_payload_generates_components_and_releases() -> None:
+def test_to_dynamic_payload_generates_components_and_charts() -> None:
     dynamic = to_dynamic_payload(_starter_runtime_payload())
 
     assert is_dynamic_payload(dynamic)
     assert isinstance(dynamic["infra"]["components"], list)
-    assert isinstance(dynamic["apps"]["releases"], list)
+    assert isinstance(dynamic["apps"]["charts"], list)
 
     component_ids = {str(item.get("id")) for item in dynamic["infra"]["components"]}
-    release_ids = {str(item.get("id")) for item in dynamic["apps"]["releases"]}
+    chart_ids = {str(item.get("id")) for item in dynamic["apps"]["charts"]}
     assert "mk8s" in component_ids
     assert "object-storage" in component_ids
-    assert "n8n" in release_ids
+    assert "n8n" in chart_ids
 
 
 def test_to_runtime_payload_round_trip_keeps_enabled_flags() -> None:
@@ -72,24 +73,20 @@ def test_to_runtime_payload_round_trip_keeps_enabled_flags() -> None:
     assert back["apps"]["workloads"]["n8n"]["enabled"] is False
 
 
-def test_load_config_accepts_dynamic_payload_with_extra_release(tmp_path: Path) -> None:
+def test_load_config_accepts_dynamic_payload_with_extra_chart(tmp_path: Path) -> None:
     dynamic = to_dynamic_payload(_starter_runtime_payload())
-    releases = dynamic["apps"]["releases"]
-    assert isinstance(releases, list)
-    releases.append(
+    charts = dynamic["apps"]["charts"]
+    assert isinstance(charts, list)
+    charts.append(
         {
             "id": "runtime-app",
-            "section": "workloads",
+            "group": "workloads",
             "enabled": True,
-            "values": {
-                "namespace": "runtime-app",
-                "chart": {
-                    "repo": "https://example.invalid/charts",
-                    "name": "runtime-app",
-                    "version": "1.0.0",
-                },
-                "values": {},
-            },
+            "repo": "https://example.invalid/charts",
+            "version": "1.0.0",
+            "namespace": "runtime-app",
+            "release-name": "runtime-app",
+            "values": {},
         }
     )
 
@@ -98,7 +95,7 @@ def test_load_config_accepts_dynamic_payload_with_extra_release(tmp_path: Path) 
 
     loaded = load_config(config_path)
     assert loaded.apps.workloads.runtime_app.enabled is True
-    assert loaded.apps.workloads.runtime_app.chart.name == "runtime-app"
+    assert loaded.apps.workloads.runtime_app.repo == "https://example.invalid/charts"
 
 
 def test_create_writes_runtime_shape_with_selected_components(tmp_path: Path) -> None:
@@ -115,14 +112,9 @@ def test_create_writes_runtime_shape_with_selected_components(tmp_path: Path) ->
             "client-a",
             "--tenant-id",
             "tenant-123",
-            "--env",
-            "prod",
-            "--cluster-name",
-            "cluster-a",
             "--project-id",
             "project-456",
-            "--subnet-id",
-            "subnet-abc123",
+            "--no-validate-sources",
             "--infra",
             "mk8s",
             "--app",
@@ -131,9 +123,7 @@ def test_create_writes_runtime_shape_with_selected_components(tmp_path: Path) ->
     )
     assert result.exit_code == 0, result.output
 
-    config_path = (
-        deployments_root / "instances" / "client-a--tenant-123" / "prod" / "cluster-a" / "config.yaml"
-    )
+    config_path = deployments_root / "instances" / "client-a--tenant-123" / "project-456" / "config.yaml"
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
     assert isinstance(payload, dict)
@@ -145,9 +135,9 @@ def test_create_writes_runtime_shape_with_selected_components(tmp_path: Path) ->
     }
     app_enabled = {
         str(item.get("id")): bool(item.get("enabled", False))
-        for item in payload["apps"]["releases"]
+        for item in payload["apps"]["charts"]
         if isinstance(item, dict)
     }
     assert infra_enabled["mk8s"] is True
-    assert infra_enabled["object-storage"] is False
+    assert "object-storage" not in infra_enabled
     assert app_enabled["n8n"] is True

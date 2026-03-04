@@ -22,6 +22,15 @@ class HelmChartReference:
     chart_version: str
 
 
+def _is_oci_ref(token: str) -> bool:
+    return token.strip().lower().startswith("oci://")
+
+
+def _is_http_repo(token: str) -> bool:
+    normalized = token.strip().lower()
+    return normalized.startswith("http://") or normalized.startswith("https://")
+
+
 def _github_tree_ref(repo: str) -> tuple[str, str, str] | None:
     # Example: https://github.com/org/repo/tree/main/charts/n8n
     token = repo.strip().rstrip("/")
@@ -43,7 +52,7 @@ def _github_tree_ref(repo: str) -> tuple[str, str, str] | None:
 
 def _repo_has_index(repo: str) -> bool:
     candidate = repo.strip().rstrip("/")
-    if not candidate:
+    if not candidate or not _is_http_repo(candidate):
         return False
     index_url = f"{candidate}/index.yaml"
     try:
@@ -92,8 +101,19 @@ def _resolve_show_ref(reference: HelmChartReference) -> tuple[str, str, str, Pat
     chart_repo = reference.chart_repo.strip().rstrip("/")
     chart_version = reference.chart_version.strip()
 
-    if chart_repo and _repo_has_index(chart_repo):
-        return chart_name, chart_repo, chart_version, None
+    if _is_oci_ref(chart_repo) or _is_oci_ref(chart_name):
+        oci_repo = chart_repo
+        oci_name = chart_name
+        if _is_oci_ref(oci_name):
+            return oci_name.rstrip("/"), "", chart_version, None
+        if not oci_repo:
+            raise RuntimeError("OCI chart reference is incomplete: chart repo is required")
+        if not oci_name:
+            return oci_repo, "", chart_version, None
+        repo_tail = oci_repo.rsplit("/", maxsplit=1)[-1].strip().lower()
+        if repo_tail == oci_name.lower():
+            return oci_repo, "", chart_version, None
+        return f"{oci_repo}/{oci_name}", "", chart_version, None
 
     github_tree = _github_tree_ref(chart_repo)
     if github_tree is not None:
@@ -104,6 +124,14 @@ def _resolve_show_ref(reference: HelmChartReference) -> tuple[str, str, str, Pat
             shutil.rmtree(checkout.parent, ignore_errors=True)
             raise RuntimeError(f"Chart path not found in git source: {chart_path}")
         return str(local_path), "", "", checkout.parent
+
+    if chart_repo and _is_http_repo(chart_repo):
+        if _repo_has_index(chart_repo):
+            return chart_name, chart_repo, chart_version, None
+        raise RuntimeError(
+            f"HTTP chart repository '{chart_repo}' is missing '/index.yaml'. "
+            "Use a Helm repo base URL that serves index.yaml, or switch to an OCI reference (oci://...)."
+        )
 
     if chart_repo and chart_name:
         return f"{chart_repo}/{chart_name}", "", chart_version, None
@@ -147,7 +175,7 @@ class HelmClient:
 
     def search_repo(self, *, chart_name: str, chart_repo: str) -> list[dict[str, Any]]:
         repo = chart_repo.strip().rstrip("/")
-        if not repo or not _repo_has_index(repo):
+        if not repo or _is_oci_ref(repo) or not _repo_has_index(repo):
             return []
 
         alias = f"cxcli-{abs(hash(repo))}"

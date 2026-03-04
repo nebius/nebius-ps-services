@@ -1,17 +1,3 @@
-locals {
-  protected_buckets = {
-    for key, bucket in var.buckets :
-    key => bucket
-    if bucket.protect_from_destroy
-  }
-
-  unprotected_buckets = {
-    for key, bucket in var.buckets :
-    key => bucket
-    if !bucket.protect_from_destroy
-  }
-}
-
 resource "nebius_storage_v1_bucket" "protected" {
   for_each = local.protected_buckets
 

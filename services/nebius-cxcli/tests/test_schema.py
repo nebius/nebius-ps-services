@@ -15,11 +15,8 @@ def _dynamic_payload() -> dict:
         starter_config_yaml(
             client_name="client-a",
             tenant_id="tenant-123",
-            env="prod",
-            cluster_name="client-a-prod",
             project_id="project-456",
             region_id="eu-north1",
-            subnet_id="subnet-abc123",
             email="ops@example.com",
             infra_entries=component_entries("infra"),
             app_entries=component_entries("apps"),
@@ -38,7 +35,7 @@ def test_schema_valid_dynamic_file(tmp_path: Path) -> None:
     assert loaded.version == "v1"
     assert loaded.client_info.client_name == "client-a"
     assert isinstance(loaded.infra.components, list)
-    assert isinstance(loaded.apps.releases, list)
+    assert isinstance(loaded.apps.charts, list)
 
 
 def test_schema_rejects_static_shape(tmp_path: Path) -> None:
@@ -75,18 +72,18 @@ def test_schema_rejects_duplicate_infra_component_ids(tmp_path: Path) -> None:
     assert "is duplicated" in str(exc_info.value)
 
 
-def test_schema_rejects_invalid_release_section_token(tmp_path: Path) -> None:
+def test_schema_rejects_invalid_chart_group_token(tmp_path: Path) -> None:
     payload = _dynamic_payload()
-    releases = payload["apps"]["releases"]
-    assert isinstance(releases, list)
-    releases[0]["section"] = "bad section"
+    charts = payload["apps"]["charts"]
+    assert isinstance(charts, list)
+    charts[0]["group"] = "bad group"
 
     config_path = tmp_path / "config.yaml"
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     with pytest.raises(ValueError) as exc_info:
         load_config(config_path)
-    assert "section must use lowercase letters, digits, and hyphens" in str(exc_info.value)
+    assert "group must use lowercase letters, digits, and hyphens" in str(exc_info.value)
 
 
 def test_schema_rejects_unknown_root_key(tmp_path: Path) -> None:
@@ -99,3 +96,18 @@ def test_schema_rejects_unknown_root_key(tmp_path: Path) -> None:
     with pytest.raises(ValueError) as exc_info:
         load_config(config_path)
     assert "unknown field(s) at root" in str(exc_info.value)
+
+
+def test_schema_rejects_legacy_client_info_fields(tmp_path: Path) -> None:
+    payload = _dynamic_payload()
+    client_info = payload.get("client_info")
+    assert isinstance(client_info, dict)
+    client_info["env"] = "dev"
+    client_info["cluster_name"] = "cluster-a"
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc_info:
+        load_config(config_path)
+    assert "client_info has unsupported field(s)" in str(exc_info.value)

@@ -17,6 +17,8 @@ SUPPORTED_PROVIDER_OPTION_SOURCES = frozenset(
         "compute_platforms",
         "compute_platform_presets",
         "project_subnets",
+        "project_networks",
+        "tenant_projects",
         "mk8s_control_plane_versions",
     }
 )
@@ -29,6 +31,13 @@ _OPTION_PLUGIN_ENV = "NEBIUS_CXCLI_PROVIDER_OPTION_PLUGINS"
 class OptionChoice:
     value: str
     label: str
+
+
+@dataclass(frozen=True)
+class TenantProjectValidationResult:
+    valid: bool
+    message: str = ""
+    retryable: bool = True
 
 
 def _normalize_plugin_choices(items: Iterable[object] | None) -> list[OptionChoice]:
@@ -81,25 +90,61 @@ def _load_option_plugins(specs: str) -> tuple[ProviderOptionPlugin, ...]:
 
 
 def _payload_value(payload: dict[str, Any], dotted_path: str) -> object | None:
+    def _token_parts(token: str) -> list[str | int] | None:
+        if "[" not in token:
+            return [token]
+        base = token.split("[", maxsplit=1)[0]
+        suffix = token[len(base) :]
+        parts: list[str | int] = []
+        if base:
+            parts.append(base)
+        while suffix:
+            if not suffix.startswith("["):
+                return None
+            end = suffix.find("]")
+            if end <= 1:
+                return None
+            index_raw = suffix[1:end]
+            try:
+                parts.append(int(index_raw))
+            except ValueError:
+                return None
+            suffix = suffix[end + 1 :]
+        return parts
+
     current: object = payload
     for segment in dotted_path.split("."):
-        if not isinstance(current, dict):
+        token = segment.strip()
+        if not token:
             return None
-        candidates = [segment]
-        underscore = segment.replace("-", "_")
-        if underscore not in candidates:
-            candidates.append(underscore)
-        hyphen = segment.replace("_", "-")
-        if hyphen not in candidates:
-            candidates.append(hyphen)
-        matched = False
-        for candidate in candidates:
-            if candidate in current:
-                current = current[candidate]
-                matched = True
-                break
-        if not matched:
+        token_parts = _token_parts(token)
+        if token_parts is None:
             return None
+        for part in token_parts:
+            if isinstance(part, int):
+                if not isinstance(current, list):
+                    return None
+                if part < 0 or part >= len(current):
+                    return None
+                current = current[part]
+                continue
+            if not isinstance(current, dict):
+                return None
+            candidates = [part]
+            underscore = part.replace("-", "_")
+            if underscore not in candidates:
+                candidates.append(underscore)
+            hyphen = part.replace("_", "-")
+            if hyphen not in candidates:
+                candidates.append(hyphen)
+            matched = False
+            for candidate in candidates:
+                if candidate in current:
+                    current = current[candidate]
+                    matched = True
+                    break
+            if not matched:
+                return None
     return current
 
 
@@ -133,6 +178,8 @@ class ProviderOptionLookup:
                 "compute_platforms": self._resolve_compute_platforms,
                 "compute_platform_presets": self._resolve_compute_platform_presets,
                 "project_subnets": self._resolve_project_subnets,
+                "project_networks": self._resolve_project_networks,
+                "tenant_projects": self._resolve_tenant_projects,
                 "mk8s_control_plane_versions": self._resolve_mk8s_control_plane_versions,
             }.get(provider)
             if provider in SUPPORTED_PROVIDER_OPTION_SOURCES and resolver is not None:
@@ -158,9 +205,120 @@ class ProviderOptionLookup:
         except Exception:
             return []
 
+    def validate_tenant_project_scope(
+        self,
+        *,
+        tenant_id: str,
+        project_id: str,
+    ) -> TenantProjectValidationResult:
+        normalized_tenant_id = _as_str(tenant_id)
+        if not normalized_tenant_id:
+            return TenantProjectValidationResult(valid=False, message="Tenant ID is required.")
+        normalized_project_id = _as_str(project_id)
+        if not normalized_project_id:
+            return TenantProjectValidationResult(valid=False, message="Project ID is required.")
+
+        sdk = self._sdk_or_none()
+        if sdk is None:
+            return TenantProjectValidationResult(
+                valid=False,
+                message=(
+                    "Unable to initialize Nebius SDK. "
+                    "Run `nebius iam get-access-token --format text` and verify Nebius CLI auth/profile."
+                ),
+                retryable=False,
+            )
+
+        try:
+            from nebius.api.nebius.iam.v1 import (
+                GetProjectRequest,
+                GetTenantRequest,
+                ProjectServiceClient,
+                TenantServiceClient,
+            )
+        except Exception:
+            return TenantProjectValidationResult(
+                valid=False,
+                message="Nebius IAM SDK bindings are unavailable in this environment.",
+                retryable=False,
+            )
+
+        try:
+            tenant = TenantServiceClient(sdk).get(GetTenantRequest(id=normalized_tenant_id)).wait()
+            resolved_tenant_id = _as_str(getattr(getattr(tenant, "metadata", None), "id", None))
+            if resolved_tenant_id and resolved_tenant_id != normalized_tenant_id:
+                return TenantProjectValidationResult(
+                    valid=False,
+                    message=(
+                        f"Resolved tenant id '{resolved_tenant_id}' does not match "
+                        f"input '{normalized_tenant_id}'."
+                    ),
+                )
+        except Exception as exc:
+            return TenantProjectValidationResult(
+                valid=False,
+                message=(
+                    f"Tenant '{normalized_tenant_id}' does not exist or is not accessible "
+                    f"with current credentials: {exc}"
+                ),
+            )
+
+        try:
+            project = ProjectServiceClient(sdk).get(GetProjectRequest(id=normalized_project_id)).wait()
+        except Exception as exc:
+            return TenantProjectValidationResult(
+                valid=False,
+                message=(
+                    f"Project '{normalized_project_id}' does not exist or is not accessible "
+                    f"with current credentials: {exc}"
+                ),
+            )
+
+        resolved_project_id = _as_str(getattr(getattr(project, "metadata", None), "id", None))
+        if resolved_project_id and resolved_project_id != normalized_project_id:
+            return TenantProjectValidationResult(
+                valid=False,
+                message=(
+                    f"Resolved project id '{resolved_project_id}' does not match "
+                    f"input '{normalized_project_id}'."
+                ),
+            )
+
+        project_parent_id = _as_str(getattr(getattr(project, "metadata", None), "parent_id", None))
+        if project_parent_id and project_parent_id != normalized_tenant_id:
+            return TenantProjectValidationResult(
+                valid=False,
+                message=(
+                    f"Project '{normalized_project_id}' belongs to tenant '{project_parent_id}', "
+                    f"not '{normalized_tenant_id}'."
+                ),
+            )
+
+        return TenantProjectValidationResult(valid=True)
+
     def _resolve_project_id(self, payload: dict[str, Any], args: dict[str, Any]) -> str | None:
+        explicit_project = _as_str(args.get("project_id"))
+        if explicit_project:
+            return explicit_project
+
         project_path = _as_str(args.get("project_id_path")) or "client_info.nebius.project_id"
-        return _as_str(_payload_value(payload, project_path))
+        resolved_project = _as_str(_payload_value(payload, project_path))
+        if resolved_project:
+            return resolved_project
+
+        fallback_project_path = _as_str(args.get("fallback_project_id_path"))
+        if fallback_project_path:
+            fallback_project = _as_str(_payload_value(payload, fallback_project_path))
+            if fallback_project:
+                return fallback_project
+        return None
+
+    def _resolve_tenant_id(self, payload: dict[str, Any], args: dict[str, Any]) -> str | None:
+        explicit_tenant = _as_str(args.get("tenant_id"))
+        if explicit_tenant:
+            return explicit_tenant
+        tenant_path = _as_str(args.get("tenant_id_path")) or "client_info.nebius.tenant_id"
+        return _as_str(_payload_value(payload, tenant_path))
 
     def _resolve_k8s_version(self, payload: dict[str, Any], args: dict[str, Any]) -> str | None:
         version_path = (
@@ -377,6 +535,94 @@ class ProviderOptionLookup:
             cidr_suffix = f" ({', '.join(str(cidr) for cidr in cidrs)})" if cidrs else ""
             label = f"{subnet_id}  ({name}){cidr_suffix}" if name else f"{subnet_id}{cidr_suffix}"
             options.append(OptionChoice(value=subnet_id, label=label))
+
+        options.sort(key=lambda item: item.value)
+        resolved = tuple(options)
+        self._cache[cache_key] = resolved
+        return resolved
+
+    def _resolve_project_networks(
+        self,
+        *,
+        args: dict[str, Any],
+        payload: dict[str, Any],
+        field_path: str,
+    ) -> tuple[OptionChoice, ...]:
+        project_id = self._resolve_project_id(payload, args)
+        if not project_id:
+            return ()
+        cache_key = ("project_networks", project_id)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        sdk = self._sdk_or_none()
+        if sdk is None:
+            return ()
+        from nebius.api.nebius.vpc.v1 import ListNetworksRequest, NetworkServiceClient
+
+        client = NetworkServiceClient(sdk)
+        items = self._paged_list(
+            request_factory=lambda page_token: ListNetworksRequest(
+                parent_id=project_id,
+                page_size=1000,
+                page_token=page_token,
+            ),
+            request_call=client.list,
+        )
+
+        options: list[OptionChoice] = []
+        for item in items:
+            metadata = getattr(item, "metadata", None)
+            network_id = _as_str(getattr(metadata, "id", None))
+            if not network_id:
+                continue
+            name = _as_str(getattr(metadata, "name", None))
+            label = f"{network_id}  ({name})" if name else network_id
+            options.append(OptionChoice(value=network_id, label=label))
+
+        options.sort(key=lambda item: item.value)
+        resolved = tuple(options)
+        self._cache[cache_key] = resolved
+        return resolved
+
+    def _resolve_tenant_projects(
+        self,
+        *,
+        args: dict[str, Any],
+        payload: dict[str, Any],
+        field_path: str,
+    ) -> tuple[OptionChoice, ...]:
+        tenant_id = self._resolve_tenant_id(payload, args)
+        if not tenant_id:
+            return ()
+        cache_key = ("tenant_projects", tenant_id)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        sdk = self._sdk_or_none()
+        if sdk is None:
+            return ()
+        from nebius.api.nebius.iam.v1 import ListProjectsRequest, ProjectServiceClient
+
+        client = ProjectServiceClient(sdk)
+        items = self._paged_list(
+            request_factory=lambda page_token: ListProjectsRequest(
+                parent_id=tenant_id,
+                page_size=1000,
+                page_token=page_token,
+            ),
+            request_call=client.list,
+        )
+
+        options: list[OptionChoice] = []
+        for item in items:
+            metadata = getattr(item, "metadata", None)
+            project_id = _as_str(getattr(metadata, "id", None))
+            if not project_id:
+                continue
+            name = _as_str(getattr(metadata, "name", None))
+            label = f"{project_id}  ({name})" if name else project_id
+            options.append(OptionChoice(value=project_id, label=label))
 
         options.sort(key=lambda item: item.value)
         resolved = tuple(options)

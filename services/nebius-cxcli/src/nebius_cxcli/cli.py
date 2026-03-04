@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import atexit
+import copy
 import json
 import os
 import re
@@ -10,8 +11,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.error
+import urllib.request
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Annotated, Any
@@ -19,10 +23,12 @@ from typing import Annotated, Any
 import typer
 import yaml
 from rich.console import Console
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
 
 from . import __version__
 from .component_sources import (
-    get_component_sources_file_override,
+    load_component_sources,
+    resolve_component_sources_file,
     set_component_sources_file_override,
 )
 from .components import (
@@ -30,11 +36,10 @@ from .components import (
     ComponentEntry,
     ComponentScope,
     component_entries,
-    reset_component_entry_cache,
     resolve_component_dependencies,
 )
 from .config_loader import load_config
-from .config_template import starter_config_yaml
+from .config_template import DEFAULT_SSH_PUBLIC_KEY, starter_config_yaml
 from .discover_ops import discover_configs
 from .flux_ops import ensure_flux
 from .github_secrets import (
@@ -58,6 +63,7 @@ from .provider_components import (
 from .provider_options import (
     OptionChoice,
     ProviderOptionLookup,
+    TenantProjectValidationResult,
 )
 from .render import render_instance
 from .runtime_config import read_path, to_plain_data
@@ -65,14 +71,14 @@ from .runtime_introspection import (
     helm_chart_default_values,
     merge_chart_defaults_with_overrides,
     module_required_variables,
+    module_variable_names,
+    module_variables,
 )
 from .templates import customer_workflow_yaml, default_cli_ref
-from .terraform_ops import terraform_apply, terraform_plan
+from .terraform_ops import terraform_apply, terraform_init_backendless, terraform_plan
 
 console = Console()
-INTERACTIVE_SUBNET_PLACEHOLDER = "subnet-REPLACE-ME"
 DEFAULT_REGION_ID = "eu-north1"
-SUPPORTED_ENVS: tuple[str, ...] = ("dev", "stage", "prod")
 SUPPORTED_REGION_IDS: tuple[str, ...] = (
     "eu-north1",
     "eu-west1",
@@ -89,10 +95,12 @@ NEBIUS_CI_SECRET_KEYS = [
     "NEBIUS_S3_SECRET_ACCESS_KEY",
 ]
 FLUX_SECRET_KEY = "FLUX_GITHUB_TOKEN"
-WIZARD_EXIT_TOKEN = ":q"
+WIZARD_EXIT_TOKEN = "q"
 PayloadPath = tuple[str | int, ...]
 _TEMP_PRIVATE_KEY_FILES: list[Path] = []
-_TEMP_COMPONENT_SOURCES_FILES: list[Path] = []
+_RUNTIME_TF_SERVICE_ACCOUNT_NAME = "nebius-cxcli-tf-sa"
+_RUNTIME_AUTH_CACHE_ENV = "NEBIUS_CXCLI_RUNTIME_AUTH_DIR"
+_RUNTIME_AUTH_CACHE_FILE = "runtime-auth.json"
 app = typer.Typer(
     add_completion=False,
     help="Provider-driven Nebius automation CLI (single config.yaml workflow).",
@@ -128,18 +136,6 @@ def _cleanup_temp_private_key_files() -> None:
 atexit.register(_cleanup_temp_private_key_files)
 
 
-def _cleanup_temp_component_sources_files() -> None:
-    for sources_path in _TEMP_COMPONENT_SOURCES_FILES:
-        try:
-            sources_path.unlink()
-        except FileNotFoundError:
-            continue
-        except Exception:
-            continue
-
-
-atexit.register(_cleanup_temp_component_sources_files)
-
 
 @app.callback()
 def main_callback(
@@ -155,7 +151,7 @@ def main_callback(
                 "Path to component_sources.yaml. "
                 "Used by create starter flow "
                 "(fallback order: cwd ./component_sources.yaml -> env -> user/global -> repo/bundled). "
-                "Config-based commands read embedded component_sources from config.yaml."
+                "Used for source-backed validation and create flows."
             ),
         ),
     ] = None,
@@ -167,69 +163,7 @@ def main_callback(
         _exit_with_error(RuntimeError(str(exc)))
 
 
-def _apply_embedded_component_sources_override(
-    config_path: Path,
-    *,
-    required: bool = False,
-) -> None:
-    """Use per-config component_sources snapshot for config-scoped commands."""
-    if get_component_sources_file_override() is not None:
-        set_component_sources_file_override(None)
-        reset_component_entry_cache()
-
-    try:
-        with config_path.open("r", encoding="utf-8") as handle:
-            payload = yaml.safe_load(handle) or {}
-    except FileNotFoundError as exc:
-        if required:
-            raise RuntimeError(f"Config file not found: {config_path}") from exc
-        return
-    except Exception as exc:
-        if required:
-            raise RuntimeError(f"Unable to read config file: {config_path}") from exc
-        return
-    if not isinstance(payload, dict):
-        if required:
-            raise RuntimeError("Config payload must be a mapping.")
-        return
-
-    embedded = payload.get("component_sources")
-    if not isinstance(embedded, Mapping):
-        if required:
-            raise RuntimeError(
-                "config.yaml must include 'component_sources' for source resolution. "
-                "Re-run `nebius-cxcli create --force ...` to refresh a self-contained config."
-            )
-        return
-    infra = embedded.get("infra", {})
-    apps = embedded.get("apps", {})
-    if not isinstance(infra, Mapping) and not isinstance(apps, Mapping):
-        if required:
-            raise RuntimeError(
-                "config.yaml component_sources must define 'infra' or 'apps' mappings."
-            )
-        return
-
-    snapshot_payload: dict[str, Any] = {
-        "infra": dict(infra) if isinstance(infra, Mapping) else {},
-        "apps": dict(apps) if isinstance(apps, Mapping) else {},
-    }
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        suffix=".yaml",
-        prefix="nebius-cxcli-component-sources-",
-        delete=False,
-        encoding="utf-8",
-    ) as handle:
-        yaml.safe_dump(snapshot_payload, handle, sort_keys=False)
-        snapshot_path = Path(handle.name)
-    _TEMP_COMPONENT_SOURCES_FILES.append(snapshot_path)
-    set_component_sources_file_override(snapshot_path)
-    reset_component_entry_cache()
-
-
 def _load_context(config_path: Path) -> tuple:
-    _apply_embedded_component_sources_override(config_path, required=True)
     config = load_config(config_path)
     paths = resolve_instance_paths(config_path)
     validate_path_alignment(config, paths)
@@ -299,21 +233,6 @@ def _validate_deployments_root_target(path: Path) -> None:
         raise RuntimeError(f"Deployments root must be a directory: {path}")
 
 
-def _parse_env_or_prompt(value: str | None, *, interactive: bool) -> str:
-    if value is not None:
-        normalized = value.strip().lower()
-        if normalized in SUPPORTED_ENVS:
-            return normalized
-        raise RuntimeError("Invalid --env. Expected one of: dev, stage, prod")
-    if not interactive:
-        raise RuntimeError("Missing required option: --env")
-    while True:
-        raw = typer.prompt("Environment (dev|stage|prod)", default="prod").strip().lower()
-        if raw in SUPPORTED_ENVS:
-            return raw
-        console.print("[red]Invalid environment[/red]. Expected one of: dev, stage, prod")
-
-
 def _value_or_prompt(
     value: str | None, *, option_name: str, prompt_text: str, interactive: bool
 ) -> str:
@@ -333,6 +252,78 @@ def _optional_email_or_prompt(value: str | None, *, interactive: bool) -> str | 
         return None
     prompted = typer.prompt("Notifications email (optional)", default="").strip()
     return prompted or None
+
+
+def _non_empty_text(value: object | None) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _infer_default_ssh_public_key() -> str | None:
+    ssh_dir = Path.home() / ".ssh"
+    if not ssh_dir.exists() or not ssh_dir.is_dir():
+        return None
+
+    preferred_files = (
+        "id_ed25519.pub",
+        "id_ecdsa.pub",
+        "id_rsa.pub",
+        "id_dsa.pub",
+    )
+    candidate_paths: list[Path] = [ssh_dir / name for name in preferred_files]
+    candidate_paths.extend(sorted(path for path in ssh_dir.glob("*.pub") if path.is_file()))
+
+    seen: set[Path] = set()
+    for path in candidate_paths:
+        resolved = path.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        try:
+            value = path.read_text(encoding="utf-8").strip()
+        except Exception:
+            continue
+        if value:
+            return value
+    return None
+
+
+def _validate_tenant_project_ids_or_prompt(
+    *,
+    tenant_id: str,
+    project_id: str,
+    interactive: bool,
+    provider_lookup: ProviderOptionLookup,
+) -> tuple[str, str]:
+    current_tenant_id = tenant_id.strip()
+    current_project_id = project_id.strip()
+    while True:
+        result: TenantProjectValidationResult = provider_lookup.validate_tenant_project_scope(
+            tenant_id=current_tenant_id,
+            project_id=current_project_id,
+        )
+        if result.valid:
+            return current_tenant_id, current_project_id
+
+        if not interactive:
+            raise RuntimeError(
+                "Nebius scope validation failed for tenant/project selection: "
+                f"{result.message}"
+            )
+
+        if not result.retryable:
+            raise RuntimeError(
+                "Nebius scope validation failed: "
+                f"{result.message}"
+            )
+
+        console.print(
+            "[yellow]Nebius scope validation warning[/yellow]: "
+            f"{result.message}"
+        )
+        current_tenant_id = typer.prompt("Tenant ID", default=current_tenant_id).strip()
+        current_project_id = typer.prompt("Project ID", default=current_project_id).strip()
 
 
 def _region_or_prompt(value: str | None, *, interactive: bool) -> str:
@@ -370,14 +361,6 @@ def _region_or_prompt(value: str | None, *, interactive: bool) -> str:
                 f"Expected one of: {available}"
             )
     return DEFAULT_REGION_ID
-
-
-def _subnet_or_prompt(value: str | None, *, interactive: bool) -> str:
-    if value:
-        return value
-    _ = interactive
-    # Keep create source-driven; subnet becomes a component-level module input.
-    return INTERACTIVE_SUBNET_PLACEHOLDER
 
 
 def _is_tty_session() -> bool:
@@ -451,40 +434,36 @@ def _apply_app_release_overrides(
     apps_node = payload.get("apps")
     if not isinstance(apps_node, dict):
         raise RuntimeError("Generated payload is missing apps mapping.")
-    releases = apps_node.get("releases")
-    if not isinstance(releases, list):
-        raise RuntimeError("Generated payload is missing apps.releases list.")
+    charts = apps_node.get("charts")
+    if not isinstance(charts, list):
+        raise RuntimeError("Generated payload is missing apps.charts list.")
 
     by_id: dict[str, dict[str, Any]] = {}
-    for item in releases:
+    for item in charts:
         if not isinstance(item, dict):
             continue
-        release_id = str(item.get("id", "")).strip().lower()
-        if release_id:
-            by_id[release_id] = item
+        chart_id = str(item.get("id", "")).strip().lower()
+        if chart_id:
+            by_id[chart_id] = item
 
     target_ids = set(namespace_overrides) | set(release_name_overrides)
-    for release_id in sorted(target_ids):
-        if release_id not in selected_apps:
+    for chart_id in sorted(target_ids):
+        if chart_id not in selected_apps:
             raise RuntimeError(
-                f"Override target apps component '{release_id}' is not enabled. "
+                f"Override target apps component '{chart_id}' is not enabled. "
                 "Enable it with --app first."
             )
-        row = by_id.get(release_id)
+        row = by_id.get(chart_id)
         if row is None:
             raise RuntimeError(
-                f"Override target apps component '{release_id}' was not found in apps.releases."
+                f"Override target apps component '{chart_id}' was not found in apps.charts."
             )
-        values = row.get("values")
-        if not isinstance(values, dict):
-            values = {}
-            row["values"] = values
-        namespace = namespace_overrides.get(release_id)
+        namespace = namespace_overrides.get(chart_id)
         if namespace is not None:
-            values["namespace"] = namespace
-        release_name = release_name_overrides.get(release_id)
+            row["namespace"] = namespace
+        release_name = release_name_overrides.get(chart_id)
         if release_name is not None:
-            values["release_name"] = release_name
+            row["release-name"] = release_name
 
 
 def _resolve_component_ids_from_tokens(
@@ -611,7 +590,7 @@ def _prompt_component_with_checkboxes(
                 qmark="",
             ).ask()
             if selected is None:
-                return default_selectable
+                raise typer.Abort()
             return [str(item).strip().lower() for item in selected if str(item).strip()]
 
     console.print(f"\n{scope.upper()} components:")
@@ -664,7 +643,7 @@ def _wizard_continue_phase(prompt_label: str, *, default: bool = True) -> bool:
         raw = typer.prompt(
             f"{prompt_label} (y/n, {WIZARD_EXIT_TOKEN}=stop wizard)",
             default=default_raw,
-            show_default=False,
+            show_default=True,
         ).strip().lower()
         if raw == WIZARD_EXIT_TOKEN:
             return False
@@ -672,7 +651,7 @@ def _wizard_continue_phase(prompt_label: str, *, default: bool = True) -> bool:
             return True
         if raw in {"n", "no"}:
             return False
-        console.print("[red]Invalid selection[/red]. Enter y, n, or :q.")
+        console.print(f"[red]Invalid selection[/red]. Enter y, n, or {WIZARD_EXIT_TOKEN}.")
 
 
 def _resolve_payload_path(payload: dict[str, Any], config_path: str) -> PayloadPath | None:
@@ -817,47 +796,116 @@ def _dynamic_infra_component_path(payload: dict[str, Any], component_id: str) ->
     return None
 
 
-def _dynamic_app_release_path(payload: dict[str, Any], release_id: str) -> PayloadPath | None:
+def _dynamic_app_chart_path(payload: dict[str, Any], chart_id: str) -> PayloadPath | None:
     apps_node = payload.get("apps")
     if not isinstance(apps_node, Mapping):
         return None
-    releases = apps_node.get("releases")
-    if not isinstance(releases, list):
+    charts = apps_node.get("charts")
+    if not isinstance(charts, list):
         return None
-    target = release_id.strip().lower()
-    for index, item in enumerate(releases):
+    target = chart_id.strip().lower()
+    for index, item in enumerate(charts):
         if not isinstance(item, Mapping):
             continue
         current_id = str(item.get("id", "")).strip().lower()
         if current_id == target:
-            return ("apps", "releases", index)
+            return ("apps", "charts", index)
     return None
 
 
 def _dynamic_component_path(payload: dict[str, Any], entry: ComponentEntry) -> PayloadPath | None:
     if entry.scope == "infra":
         return _dynamic_infra_component_path(payload, entry.id)
-    return _dynamic_app_release_path(payload, entry.id)
+    return _dynamic_app_chart_path(payload, entry.id)
 
 
-def _infer_infra_provider_field_spec(full_path_label: str) -> dict[str, Any] | None:
+def _co_located_input_path(full_path_label: str, input_name: str) -> str | None:
+    marker = ".inputs."
+    if marker not in full_path_label:
+        return None
+    prefix = full_path_label.split(marker, maxsplit=1)[0]
+    if not prefix:
+        return None
+    return f"{prefix}{marker}{input_name}"
+
+
+def _co_located_project_args(full_path_label: str) -> dict[str, Any]:
+    sibling_parent_id = _co_located_input_path(full_path_label, "parent_id")
+    if not sibling_parent_id:
+        return {}
+    if sibling_parent_id == full_path_label:
+        return {}
+    return {
+        "project_id_path": sibling_parent_id,
+        "fallback_project_id_path": "client_info.nebius.project_id",
+    }
+
+
+def _infer_infra_provider_field_spec(
+    *,
+    entry: ComponentEntry,
+    full_path_label: str,
+) -> dict[str, Any] | None:
     """Infer provider option sources from infra field path conventions."""
     if not full_path_label.startswith("infra."):
         return None
 
-    if full_path_label.endswith(".subnet_id"):
-        return {"sources": [{"source": "provider", "provider": "project_subnets"}]}
+    leaf = full_path_label.rsplit(".", maxsplit=1)[-1].strip().lower()
+    normalized_leaf = leaf.replace("-", "_")
+    co_located_project_args = _co_located_project_args(full_path_label)
 
-    if full_path_label.endswith(".platform"):
-        prefix = "gpu-" if ".gpu_" in full_path_label or ".gpu-" in full_path_label else "cpu-"
-        provider = "compute_platforms"
+    if normalized_leaf in {"parent_id", "project_id"} or normalized_leaf.endswith(
+        ("_parent_id", "_project_id")
+    ):
+        return {"sources": [{"source": "provider", "provider": "tenant_projects"}]}
+
+    if normalized_leaf == "network_id" or normalized_leaf.endswith("_network_id"):
+        source: dict[str, Any] = {"source": "provider", "provider": "project_networks"}
+        if co_located_project_args:
+            source["args"] = co_located_project_args
+        return {"sources": [source]}
+
+    if normalized_leaf == "subnet_id" or normalized_leaf.endswith("_subnet_id"):
+        source = {"source": "provider", "provider": "project_subnets"}
+        if co_located_project_args:
+            source["args"] = co_located_project_args
+        return {"sources": [source]}
+
+    if normalized_leaf in {"k8s_version", "kubernetes_version", "control_plane_version"}:
+        return {
+            "sources": [
+                {
+                    "source": "provider",
+                    "provider": "mk8s_control_plane_versions",
+                }
+            ]
+        }
+
+    if leaf in {"platform"} or leaf.endswith(("_platform", "-platform")):
+        is_gpu_path = (
+            leaf.startswith("gpu")
+            or "_gpu_" in leaf
+            or "-gpu-" in leaf
+            or ".gpu_" in full_path_label
+            or ".gpu-" in full_path_label
+        )
+        prefix = "gpu-" if is_gpu_path else "cpu-"
+        provider = "mk8s_compatible_platforms" if entry.id == "mk8s" else "compute_platforms"
         source: dict[str, Any] = {"source": "provider", "provider": provider}
         if prefix:
             source["args"] = {"platform_prefix": prefix}
         return {"sources": [source]}
 
-    if full_path_label.endswith(".preset"):
-        platform_path = f"{full_path_label[:-len('.preset')]}.platform"
+    if leaf in {"preset"} or leaf.endswith(("_preset", "-preset")):
+        platform_path = ""
+        if full_path_label.endswith(".preset"):
+            platform_path = f"{full_path_label[:-len('.preset')]}.platform"
+        elif full_path_label.endswith("_preset"):
+            platform_path = f"{full_path_label[:-len('_preset')]}_platform"
+        elif full_path_label.endswith("-preset"):
+            platform_path = f"{full_path_label[:-len('-preset')]}-platform"
+        if not platform_path:
+            return None
         return {
             "sources": [
                 {
@@ -889,7 +937,7 @@ def _resolve_wizard_field_spec(
                 return relative_spec
 
     if entry.scope == "infra":
-        return _infer_infra_provider_field_spec(full_path_label)
+        return _infer_infra_provider_field_spec(entry=entry, full_path_label=full_path_label)
     return None
 
 
@@ -900,6 +948,27 @@ def _resolve_dynamic_field_choices(
     full_path_label: str,
     provider_lookup: ProviderOptionLookup | None,
 ) -> list[OptionChoice]:
+    leaf = full_path_label.rsplit(".", maxsplit=1)[-1].strip().lower().replace("-", "_")
+    if leaf in {"parent_id", "project_id"} and full_path_label.startswith("infra.components["):
+        preferred_project_id = _non_empty_text(
+            _read_payload_field(payload, "client_info.nebius.project_id")
+        )
+        current_value = _non_empty_text(_read_payload_field(payload, full_path_label))
+        choices: list[OptionChoice] = []
+        seen_values: set[str] = set()
+        for value in (preferred_project_id, current_value):
+            if not value or value in seen_values:
+                continue
+            label = (
+                f"{value}  (from client_info.nebius.project_id)"
+                if value == preferred_project_id
+                else value
+            )
+            choices.append(OptionChoice(value=value, label=label))
+            seen_values.add(value)
+        if choices:
+            return choices
+
     spec = _resolve_wizard_field_spec(entry=entry, full_path_label=full_path_label)
     if spec is None:
         return []
@@ -1058,6 +1127,74 @@ def _required_leaf_names_for_entry(entry: ComponentEntry) -> set[str]:
     return set()
 
 
+def _module_variable_specs_for_entry(entry: ComponentEntry) -> dict[str, Any]:
+    if entry.scope != "infra" or entry.origin != "custom":
+        return {}
+    source = str(entry.source or "").strip()
+    if not source:
+        return {}
+    return {_normalize_leaf_name(item.name): item for item in module_variables(source)}
+
+
+def _short_type_hint(type_hint: str | None) -> str | None:
+    if not type_hint:
+        return None
+    normalized = type_hint.strip().lower()
+    if not normalized:
+        return None
+    aliases = {
+        "string": "string",
+        "number": "number",
+        "bool": "bool",
+        "boolean": "bool",
+    }
+    if normalized in aliases:
+        return aliases[normalized]
+    for token in ("list(", "set(", "map(", "object(", "tuple("):
+        if normalized.startswith(token):
+            return normalized
+    return normalized
+
+
+def _coerce_raw_value_from_type_hint(raw: str, type_hint: str | None) -> object:
+    hint = _short_type_hint(type_hint)
+    if hint == "bool":
+        lowered = raw.strip().lower()
+        if lowered in {"true", "t", "1", "yes", "y"}:
+            return True
+        if lowered in {"false", "f", "0", "no", "n"}:
+            return False
+        raise ValueError("Expected boolean value (true/false).")
+    if hint == "number":
+        token = raw.strip()
+        if not token:
+            return token
+        try:
+            if "." in token:
+                return float(token)
+            return int(token)
+        except ValueError as exc:
+            raise ValueError("Expected numeric value.") from exc
+    return raw
+
+
+def _prompt_label_with_type(
+    path_label: str,
+    *,
+    type_hint: str | None,
+    required: bool,
+) -> str:
+    tags: list[str] = []
+    short_type = _short_type_hint(type_hint)
+    if short_type:
+        tags.append(short_type)
+    if required:
+        tags.append("required")
+    if not tags:
+        return path_label
+    return f"{path_label} [{', '.join(tags)}]"
+
+
 def _prompt_path_sort_key(path: PayloadPath, *, required_leaf_names: set[str]) -> tuple[int, str]:
     leaf = path[-1] if path else ""
     leaf_name = _normalize_leaf_name(str(leaf)) if isinstance(leaf, str) else ""
@@ -1075,16 +1212,12 @@ def _hydrate_app_component_values_from_chart_defaults(
     component_path = _dynamic_component_path(payload, entry)
     if component_path is None:
         return
-    values_path = component_path + ("values",)
-    values_node = _get_payload_value(payload, values_path)
-    if not isinstance(values_node, Mapping):
+    component_node = _get_payload_value(payload, component_path)
+    if not isinstance(component_node, Mapping):
         return
-    chart_node = values_node.get("chart")
-    if not isinstance(chart_node, Mapping):
-        return
-    chart_name = str(chart_node.get("name", "")).strip()
-    chart_repo = str(chart_node.get("repo", "")).strip()
-    chart_version = str(chart_node.get("version", "")).strip()
+    chart_name = str(component_node.get("id", "")).strip() or entry.id
+    chart_repo = str(component_node.get("repo", "")).strip()
+    chart_version = str(component_node.get("version", "")).strip()
     if not chart_name:
         return
 
@@ -1096,7 +1229,7 @@ def _hydrate_app_component_values_from_chart_defaults(
     if not defaults:
         return
 
-    chart_values_path = values_path + ("values",)
+    chart_values_path = component_path + ("values",)
     current_values = _get_payload_value(payload, chart_values_path)
     if not isinstance(current_values, dict):
         current_values = {}
@@ -1117,6 +1250,17 @@ def _chart_source_parts(entry: ComponentEntry) -> tuple[str | None, str | None]:
     return repo, chart_name
 
 
+def _canonical_app_chart_repo(*, chart_repo: str, chart_name: str) -> str:
+    repo = chart_repo.strip().rstrip("/")
+    if not repo:
+        return repo
+    if repo.startswith("oci://"):
+        repo_tail = repo.rsplit("/", maxsplit=1)[-1].strip().lower()
+        if repo_tail != chart_name.strip().lower():
+            return f"{repo}/{chart_name.strip()}"
+    return repo
+
+
 def _seed_component_prompt_fields(
     *,
     payload: dict[str, Any],
@@ -1133,28 +1277,24 @@ def _seed_component_prompt_fields(
 
     if entry.scope == "apps":
         # Ensure chart-backed entries discovered at runtime have editable scaffolding.
-        values_node = component_node.get("values")
-        if not isinstance(values_node, dict):
-            values_node = {}
-            component_node["values"] = values_node
-        values_node.setdefault("namespace", str(entry.default_namespace or "").strip() or entry.id)
-        values_node.setdefault(
-            "release_name",
+        component_node.setdefault("namespace", str(entry.default_namespace or "").strip() or entry.id)
+        component_node.setdefault(
+            "release-name",
             str(entry.default_release_name or "").strip() or entry.id,
         )
-        chart_node = values_node.get("chart")
-        if not isinstance(chart_node, dict):
-            chart_node = {}
-            values_node["chart"] = chart_node
         chart_repo, chart_name = _chart_source_parts(entry)
+        if chart_repo and chart_name and chart_repo.startswith("oci://"):
+            repo_tail = chart_repo.rsplit("/", maxsplit=1)[-1].strip().lower()
+            if repo_tail != chart_name.lower():
+                chart_repo = f"{chart_repo}/{chart_name}"
         if chart_repo:
-            chart_node.setdefault("repo", chart_repo)
-        if chart_name:
-            chart_node.setdefault("name", chart_name)
-        chart_node.setdefault("version", str(entry.version or ""))
-        chart_values = values_node.get("values")
+            component_node.setdefault("repo", chart_repo)
+        elif entry.chart_repo:
+            component_node.setdefault("repo", str(entry.chart_repo).strip())
+        component_node.setdefault("version", str(entry.version or ""))
+        chart_values = component_node.get("values")
         if not isinstance(chart_values, dict):
-            values_node["values"] = {}
+            component_node["values"] = {}
         return
 
     if entry.scope != "infra":
@@ -1194,10 +1334,20 @@ def _prompt_choice_override(
     path_label: str,
     current: object,
     choices: list[OptionChoice],
+    type_hint: str | None = None,
+    required: bool = False,
 ) -> tuple[object, bool]:
-    prompt_suffix = f"{path_label} (enter {WIZARD_EXIT_TOKEN} to stop wizard)"
+    rendered_label = _prompt_label_with_type(
+        path_label,
+        type_hint=type_hint,
+        required=required,
+    )
+    prompt_suffix = f"{rendered_label} (enter {WIZARD_EXIT_TOKEN} to stop wizard)"
     default_value = str(current).strip() if current is not None else ""
     option_values = [choice.value for choice in choices]
+    prompt_default = default_value if default_value in option_values else (
+        option_values[0] if option_values else ""
+    )
     if _is_tty_session():
         try:
             import questionary
@@ -1207,32 +1357,35 @@ def _prompt_choice_override(
             ]
             rendered_choices.append(questionary.Choice(title="<manual input>", value="__manual__"))
             selected = questionary.select(
-                path_label,
+                rendered_label,
                 choices=rendered_choices,
                 instruction="Select one option (or choose manual input).",
-                default=default_value if default_value in option_values else None,
+                default=prompt_default or None,
                 qmark="",
             ).ask()
             if selected is None:
-                if default_value:
-                    return default_value, False
-                return current, False
+                return current, True
             if selected != "__manual__":
                 return str(selected).strip(), False
+        except (KeyboardInterrupt, EOFError, typer.Abort):
+            return current, True
         except Exception:
             pass
 
     console.print(f"[cyan]{path_label} options:[/cyan]")
     for index, choice in enumerate(choices, start=1):
-        marker = "*" if choice.value == default_value else " "
+        marker = "*" if choice.value == prompt_default else " "
         console.print(f"  {marker} [{index}] {choice.label}")
 
     while True:
-        raw = typer.prompt(f"{prompt_suffix} (index or value)", default=default_value).strip()
+        try:
+            raw = typer.prompt(f"{prompt_suffix} (index or value)", default=prompt_default).strip()
+        except (KeyboardInterrupt, EOFError, typer.Abort):
+            return current, True
         if raw == WIZARD_EXIT_TOKEN:
             return current, True
         if not raw:
-            return current, False
+            return (prompt_default or current), False
         if raw.isdigit():
             index = int(raw)
             if 1 <= index <= len(choices):
@@ -1249,16 +1402,32 @@ def _prompt_scalar_override(
     current: object,
     *,
     choices: list[OptionChoice] | None = None,
+    type_hint: str | None = None,
+    required: bool = False,
 ) -> tuple[object, bool]:
     if choices:
-        return _prompt_choice_override(path_label=path_label, current=current, choices=choices)
-    prompt_suffix = f"{path_label} (enter {WIZARD_EXIT_TOKEN} to stop wizard)"
+        return _prompt_choice_override(
+            path_label=path_label,
+            current=current,
+            choices=choices,
+            type_hint=type_hint,
+            required=required,
+        )
+    rendered_label = _prompt_label_with_type(
+        path_label,
+        type_hint=type_hint,
+        required=required,
+    )
+    prompt_suffix = f"{rendered_label} (enter {WIZARD_EXIT_TOKEN} to stop wizard)"
     while True:
         if isinstance(current, bool):
-            raw = typer.prompt(
-                f"{prompt_suffix} [true/false]",
-                default="true" if current else "false",
-            ).strip().lower()
+            try:
+                raw = typer.prompt(
+                    f"{prompt_suffix} [true/false]",
+                    default="true" if current else "false",
+                ).strip().lower()
+            except (KeyboardInterrupt, EOFError, typer.Abort):
+                return current, True
             if raw == WIZARD_EXIT_TOKEN:
                 return current, True
             if raw in {"true", "t", "1", "yes", "y"}:
@@ -1269,7 +1438,10 @@ def _prompt_scalar_override(
             continue
 
         if isinstance(current, int):
-            raw = typer.prompt(prompt_suffix, default=str(current)).strip()
+            try:
+                raw = typer.prompt(prompt_suffix, default=str(current)).strip()
+            except (KeyboardInterrupt, EOFError, typer.Abort):
+                return current, True
             if raw == WIZARD_EXIT_TOKEN:
                 return current, True
             try:
@@ -1279,7 +1451,10 @@ def _prompt_scalar_override(
                 continue
 
         if isinstance(current, float):
-            raw = typer.prompt(prompt_suffix, default=str(current)).strip()
+            try:
+                raw = typer.prompt(prompt_suffix, default=str(current)).strip()
+            except (KeyboardInterrupt, EOFError, typer.Abort):
+                return current, True
             if raw == WIZARD_EXIT_TOKEN:
                 return current, True
             try:
@@ -1289,17 +1464,33 @@ def _prompt_scalar_override(
                 continue
 
         if current is None:
-            raw = typer.prompt(f"{prompt_suffix} (blank keeps null)", default="").strip()
+            try:
+                raw = typer.prompt(f"{prompt_suffix} (blank keeps null)", default="").strip()
+            except (KeyboardInterrupt, EOFError, typer.Abort):
+                return current, True
             if raw == WIZARD_EXIT_TOKEN:
                 return current, True
             if not raw:
                 return None, False
-            return raw, False
+            try:
+                coerced = _coerce_raw_value_from_type_hint(raw, type_hint)
+            except ValueError as exc:
+                console.print(f"[red]Invalid value[/red]. {exc}")
+                continue
+            return coerced, False
 
-        raw = typer.prompt(prompt_suffix, default=str(current)).strip()
+        try:
+            raw = typer.prompt(prompt_suffix, default=str(current)).strip()
+        except (KeyboardInterrupt, EOFError, typer.Abort):
+            return current, True
         if raw == WIZARD_EXIT_TOKEN:
             return current, True
-        return raw, False
+        try:
+            coerced = _coerce_raw_value_from_type_hint(raw, type_hint)
+        except ValueError as exc:
+            console.print(f"[red]Invalid value[/red]. {exc}")
+            continue
+        return coerced, False
 
 
 def _run_component_field_wizard(
@@ -1364,6 +1555,8 @@ def _run_component_field_wizard(
 
         prompt_paths: list[PayloadPath] = []
         seen_prompt_labels: set[str] = set()
+        field_type_hints: dict[str, str | None] = {}
+        required_prompt_labels: set[str] = set()
         for path in declared_prompt_paths:
             label = _format_payload_path(path)
             if label in seen_prompt_labels:
@@ -1371,6 +1564,7 @@ def _run_component_field_wizard(
             seen_prompt_labels.add(label)
             prompt_paths.append(path)
 
+        module_dependency_expander: Any = None
         component_path = _dynamic_component_path(payload, entry)
         if component_path is not None:
             if entry.scope == "infra" and entry.origin == "custom":
@@ -1382,17 +1576,144 @@ def _run_component_field_wizard(
                     else None
                 )
                 if module_inputs_path is not None and isinstance(module_inputs, dict):
-                    for relative_path in _collect_scalar_leaf_paths(module_inputs):
-                        full_path = module_inputs_path + relative_path
+                    module_specs_by_leaf = _module_variable_specs_for_entry(entry)
+                    default_project_scope_id = _non_empty_text(
+                        _read_payload_field(payload, "client_info.nebius.project_id")
+                    )
+                    default_shared_ssh_public_key = _non_empty_text(
+                        _read_payload_field(payload, "infra.ssh_public_key")
+                    )
+
+                    def _seed_input_value(
+                        leaf_name: str,
+                        *,
+                        required_only: bool,
+                        module_inputs: dict[str, Any] = module_inputs,
+                        default_project_scope_id: str = default_project_scope_id,
+                        default_shared_ssh_public_key: str = default_shared_ssh_public_key,
+                        module_specs_by_leaf: dict[str, Any] = module_specs_by_leaf,
+                    ) -> None:
+                        current_value = _resolve_mapping_segment(module_inputs, leaf_name)
+                        if current_value is not None:
+                            return
+                        if leaf_name in {"parent_id", "project_id"} and default_project_scope_id:
+                            module_inputs[leaf_name] = default_project_scope_id
+                            return
+                        if leaf_name == "ssh_public_key" and default_shared_ssh_public_key:
+                            module_inputs[leaf_name] = default_shared_ssh_public_key
+                            return
+                        spec = module_specs_by_leaf.get(leaf_name)
+                        if spec is not None and spec.has_default:
+                            module_inputs[leaf_name] = copy.deepcopy(spec.default)
+                            return
+                        if required_only:
+                            module_inputs[leaf_name] = ""
+
+                    for leaf_name in sorted(required_leaf_names):
+                        _seed_input_value(leaf_name, required_only=True)
+
+                    def _enabled_prefixes(
+                        module_specs_by_leaf: dict[str, Any] = module_specs_by_leaf,
+                        module_inputs: dict[str, Any] = module_inputs,
+                    ) -> set[str]:
+                        resolved: set[str] = set()
+                        for leaf_name, spec in module_specs_by_leaf.items():
+                            if _short_type_hint(spec.type_hint) != "bool":
+                                continue
+                            if not leaf_name.endswith("_enabled"):
+                                continue
+                            prefix = leaf_name[: -len("_enabled")]
+                            if not prefix:
+                                continue
+                            current_value = _resolve_mapping_segment(module_inputs, leaf_name)
+                            if isinstance(current_value, bool) and current_value:
+                                resolved.add(prefix)
+                        return resolved
+
+                    def _append_field_prompt(
+                        leaf_name: str,
+                        spec: Any,
+                        *,
+                        required: bool,
+                        module_inputs: dict[str, Any] = module_inputs,
+                        module_inputs_path: PayloadPath = module_inputs_path,
+                        seen_prompt_labels: set[str] = seen_prompt_labels,
+                        prompt_paths: list[PayloadPath] = prompt_paths,
+                        field_type_hints: dict[str, str | None] = field_type_hints,
+                        required_prompt_labels: set[str] = required_prompt_labels,
+                    ) -> None:
+                        key = leaf_name
+                        if key not in module_inputs:
+                            alt_key = leaf_name.replace("_", "-")
+                            if alt_key in module_inputs:
+                                key = alt_key
+                            else:
+                                key = leaf_name.replace("-", "_")
+                        full_path = module_inputs_path + (key,)
+                        if full_path in prompt_paths:
+                            return
                         label = _format_payload_path(full_path)
-                        if label in seen_prompt_labels:
-                            continue
                         seen_prompt_labels.add(label)
                         prompt_paths.append(full_path)
+                        field_type_hints[label] = spec.type_hint
+                        if required:
+                            required_prompt_labels.add(label)
+
+                    for leaf_name, spec in sorted(
+                        module_specs_by_leaf.items(),
+                        key=lambda item: (0 if item[1].required else 1, item[0]),
+                    ):
+                        current_value = _resolve_mapping_segment(module_inputs, leaf_name)
+                        has_current = not (
+                            current_value is None
+                            or (isinstance(current_value, str) and not current_value.strip())
+                        )
+                        include_optional_by_dependency = any(
+                            leaf_name.startswith(f"{prefix}_")
+                            and leaf_name != f"{prefix}_enabled"
+                            for prefix in _enabled_prefixes()
+                        )
+                        is_toggle = (
+                            _short_type_hint(spec.type_hint) == "bool"
+                            and leaf_name.endswith("_enabled")
+                        )
+                        should_prompt = (
+                            spec.required
+                            or has_current
+                            or include_optional_by_dependency
+                            or is_toggle
+                        )
+                        if not should_prompt:
+                            continue
+                        _seed_input_value(leaf_name, required_only=spec.required)
+                        _append_field_prompt(leaf_name, spec, required=spec.required)
+
+                    def _expand_dependency_fields_for_enabled_prefixes(
+                        module_specs_by_leaf: dict[str, Any] = module_specs_by_leaf,
+                    ) -> None:
+                        prefixes = _enabled_prefixes()
+                        if not prefixes:
+                            return
+                        for leaf_name, spec in sorted(
+                            module_specs_by_leaf.items(),
+                            key=lambda item: item[0],
+                        ):
+                            if spec.required:
+                                continue
+                            if not any(
+                                leaf_name.startswith(f"{prefix}_")
+                                and leaf_name != f"{prefix}_enabled"
+                                for prefix in prefixes
+                            ):
+                                continue
+                            _seed_input_value(leaf_name, required_only=False)
+                            _append_field_prompt(leaf_name, spec, required=False)
+
+                    module_dependency_expander = _expand_dependency_fields_for_enabled_prefixes
             elif entry.scope == "apps" and entry.origin == "helm":
                 # App wizard prompts are Helm values-driven.
-                for key in ("namespace", "release_name"):
-                    full_path = component_path + ("values", key)
+                for key in ("namespace", "release-name"):
+                    full_path = component_path + (key,)
                     label = _format_payload_path(full_path)
                     if label in seen_prompt_labels:
                         continue
@@ -1401,7 +1722,7 @@ def _run_component_field_wizard(
                         continue
                     seen_prompt_labels.add(label)
                     prompt_paths.append(full_path)
-                values_path = component_path + ("values", "values")
+                values_path = component_path + ("values",)
                 values_node = (
                     _get_payload_value(payload, values_path) if values_path is not None else None
                 )
@@ -1423,62 +1744,75 @@ def _run_component_field_wizard(
                     seen_prompt_labels.add(label)
                     prompt_paths.append(full_path)
 
-        prompt_paths = sorted(
-            prompt_paths,
+        prompt_paths.sort(
             key=lambda path: _prompt_path_sort_key(path, required_leaf_names=required_leaf_names),
         )
 
-        for full_path in prompt_paths:
-            current = _get_payload_value(payload, full_path)
-            full_path_label = _format_payload_path(full_path)
-            field_choices = _resolve_dynamic_field_choices(
-                payload=payload,
-                entry=entry,
-                full_path_label=full_path_label,
-                provider_lookup=provider_lookup,
-            )
-            allowed_provider_values, providers = provider_allowed_cache.get(
-                full_path_label,
-                (set(), ()),
-            )
-            if not providers:
-                allowed_provider_values, providers = _provider_allowed_values_for_field(
+        prompt_index = 0
+        while True:
+            while prompt_index < len(prompt_paths):
+                full_path = prompt_paths[prompt_index]
+                prompt_index += 1
+                current = _get_payload_value(payload, full_path)
+                full_path_label = _format_payload_path(full_path)
+                field_choices = _resolve_dynamic_field_choices(
                     payload=payload,
                     entry=entry,
                     full_path_label=full_path_label,
                     provider_lookup=provider_lookup,
                 )
-                provider_allowed_cache[full_path_label] = (allowed_provider_values, providers)
-            if not field_choices and providers and full_path_label not in warned_provider_fallbacks:
-                provider_names = ", ".join(providers)
-                console.print(
-                    "[yellow]Dynamic provider options unavailable[/yellow] for "
-                    f"'{full_path_label}' via [{provider_names}]. Falling back to manual input."
+                allowed_provider_values, providers = provider_allowed_cache.get(
+                    full_path_label,
+                    (set(), ()),
                 )
-                warned_provider_fallbacks.add(full_path_label)
-            updated, should_stop = _prompt_scalar_override(
-                full_path_label,
-                current,
-                choices=field_choices,
-            )
-            if should_stop:
-                return yaml.safe_dump(payload, sort_keys=False), False
-            while allowed_provider_values:
-                updated_value = str(updated).strip()
-                if updated_value in allowed_provider_values:
-                    break
-                console.print(
-                    "[red]Invalid value[/red] for "
-                    f"'{full_path_label}'. Value must exist in live provider options."
-                )
+                if not providers:
+                    allowed_provider_values, providers = _provider_allowed_values_for_field(
+                        payload=payload,
+                        entry=entry,
+                        full_path_label=full_path_label,
+                        provider_lookup=provider_lookup,
+                    )
+                    provider_allowed_cache[full_path_label] = (allowed_provider_values, providers)
+                if not field_choices and providers and full_path_label not in warned_provider_fallbacks:
+                    provider_names = ", ".join(providers)
+                    console.print(
+                        "[yellow]Dynamic provider options unavailable[/yellow] for "
+                        f"'{full_path_label}' via [{provider_names}]. Falling back to manual input."
+                    )
+                    warned_provider_fallbacks.add(full_path_label)
                 updated, should_stop = _prompt_scalar_override(
                     full_path_label,
-                    updated,
+                    current,
                     choices=field_choices,
+                    type_hint=field_type_hints.get(full_path_label),
+                    required=full_path_label in required_prompt_labels,
                 )
                 if should_stop:
                     return yaml.safe_dump(payload, sort_keys=False), False
-            _set_payload_value(payload, full_path, updated)
+                while allowed_provider_values:
+                    updated_value = str(updated).strip()
+                    if updated_value in allowed_provider_values:
+                        break
+                    console.print(
+                        "[red]Invalid value[/red] for "
+                        f"'{full_path_label}'. Value must exist in live provider options."
+                    )
+                    updated, should_stop = _prompt_scalar_override(
+                        full_path_label,
+                        updated,
+                        choices=field_choices,
+                        type_hint=field_type_hints.get(full_path_label),
+                        required=full_path_label in required_prompt_labels,
+                    )
+                    if should_stop:
+                        return yaml.safe_dump(payload, sort_keys=False), False
+                _set_payload_value(payload, full_path, updated)
+            if module_dependency_expander is None:
+                break
+            before_expand = len(prompt_paths)
+            module_dependency_expander()
+            if len(prompt_paths) == before_expand:
+                break
 
     return yaml.safe_dump(payload, sort_keys=False), True
 
@@ -1501,14 +1835,11 @@ def _app_component_chart_ref_from_payload(
     component_path = _dynamic_component_path(payload, entry)
     if component_path is None:
         return None
-    values_node = _get_payload_value(payload, component_path + ("values",))
-    if not isinstance(values_node, Mapping):
-        return None
-    chart_node = values_node.get("chart")
+    chart_node = _get_payload_value(payload, component_path)
     if not isinstance(chart_node, Mapping):
         return None
     repo = str(chart_node.get("repo", "")).strip()
-    name = str(chart_node.get("name", "")).strip()
+    name = str(chart_node.get("id", "")).strip() or entry.id
     if not name:
         return None
     version = str(chart_node.get("version", "")).strip()
@@ -1519,13 +1850,10 @@ def _app_component_chart_name_from_payload(payload: dict[str, Any], entry: Compo
     component_path = _dynamic_component_path(payload, entry)
     if component_path is None:
         return None
-    values_node = _get_payload_value(payload, component_path + ("values",))
-    if not isinstance(values_node, Mapping):
-        return None
-    chart_node = values_node.get("chart")
+    chart_node = _get_payload_value(payload, component_path)
     if not isinstance(chart_node, Mapping):
         return None
-    name = str(chart_node.get("name", "")).strip().lower()
+    name = str(chart_node.get("id", "")).strip().lower() or entry.id
     return name or None
 
 
@@ -1535,6 +1863,25 @@ def _source_chart_name(entry: ComponentEntry) -> str | None:
         return None
     token = source.rsplit("/", maxsplit=1)[-1].strip().lower()
     return token or None
+
+
+def _chart_source_display(*, chart_name_or_ref: str, chart_repo: str) -> str:
+    chart_ref = chart_name_or_ref.strip().rstrip("/")
+    repo = chart_repo.strip().rstrip("/")
+    if chart_ref.startswith("oci://"):
+        return chart_ref
+    if repo.startswith("oci://"):
+        if not chart_ref:
+            return repo
+        repo_tail = repo.rsplit("/", maxsplit=1)[-1].strip().lower()
+        if repo_tail == chart_ref.lower():
+            return repo
+        return f"{repo}/{chart_ref}"
+    if repo:
+        if chart_ref:
+            return f"{repo}/{chart_ref}"
+        return repo
+    return chart_ref
 
 
 def _helm_chart_metadata(
@@ -1551,11 +1898,6 @@ def _helm_chart_metadata(
 
     try:
         client = HelmClient()
-        # For index-based repositories, search repo first to give clearer miss signals.
-        search_rows = client.search_repo(chart_name=chart_name_or_ref, chart_repo=chart_repo)
-        if chart_repo and search_rows == []:
-            # Continue to show_chart; source may be standalone chart URL/path.
-            pass
         chart_payload = client.show_chart(
             reference=HelmChartReference(
                 chart_name=chart_name_or_ref,
@@ -1612,7 +1954,8 @@ def _app_component_match_names(
     *,
     payload: dict[str, Any],
     entry: ComponentEntry,
-    cache: _ChartMetaCache,
+    include_live_chart_name: bool = False,
+    cache: _ChartMetaCache | None = None,
 ) -> set[str]:
     names: set[str] = {entry.id.strip().lower()}
     names.update(
@@ -1630,7 +1973,7 @@ def _app_component_match_names(
         names.add(source_name)
 
     chart_ref = _app_component_chart_ref_from_payload(payload, entry)
-    if chart_ref is not None:
+    if include_live_chart_name and cache is not None and chart_ref is not None:
         chart_name, _deps, _error = _helm_chart_metadata(
             chart_name_or_ref=chart_ref[0],
             chart_repo=chart_ref[1],
@@ -1678,8 +2021,23 @@ def _resolve_apps_chart_dependencies(
 
     chart_name_index: dict[str, set[str]] = {}
     for entry in app_entries:
-        for match_name in _app_component_match_names(payload=payload, entry=entry, cache=cache):
+        for match_name in _app_component_match_names(payload=payload, entry=entry):
             chart_name_index.setdefault(match_name, set()).add(entry.id)
+    live_index_enriched = False
+
+    def _enrich_chart_name_index_from_live_metadata() -> None:
+        nonlocal live_index_enriched
+        if live_index_enriched:
+            return
+        for app_entry in app_entries:
+            for match_name in _app_component_match_names(
+                payload=payload,
+                entry=app_entry,
+                include_live_chart_name=True,
+                cache=cache,
+            ):
+                chart_name_index.setdefault(match_name, set()).add(app_entry.id)
+        live_index_enriched = True
 
     queue: deque[str] = deque(sorted(selected))
     enqueued: set[str] = set(queue)
@@ -1704,14 +2062,21 @@ def _resolve_apps_chart_dependencies(
         )
         if error:
             if collect_warnings:
+                source_display = _chart_source_display(
+                    chart_name_or_ref=chart_ref[0],
+                    chart_repo=chart_ref[1],
+                )
                 warnings.append(
                     "chart dependency lookup skipped for "
-                    f"apps:{source_app_id} ({chart_ref[1].rstrip('/')}/{chart_ref[0]}): {error}"
+                    f"apps:{source_app_id} ({source_display}): {error}"
                 )
             continue
 
         for dependency_name in sorted(dependency_names):
             matched_ids = chart_name_index.get(dependency_name, set())
+            if not matched_ids and not live_index_enriched:
+                _enrich_chart_name_index_from_live_metadata()
+                matched_ids = chart_name_index.get(dependency_name, set())
             if not matched_ids:
                 continue
             dependency_id = _resolve_dependency_component_id(
@@ -1801,7 +2166,7 @@ def _enabled_component_ids(config: Any, *, scope: ComponentScope) -> set[str]:
         return set()
     if scope == "infra":
         return {str(row["id"]) for row in _dynamic_enabled_infra_component_rows(payload)}
-    return {str(row["id"]) for row in _dynamic_enabled_app_release_rows(payload)}
+    return {str(row["id"]) for row in _dynamic_enabled_app_chart_rows(payload)}
 
 
 def _validate_component_dependencies(config: Any) -> list[str]:
@@ -1811,7 +2176,7 @@ def _validate_component_dependencies(config: Any) -> list[str]:
         return ["Runtime config payload must be a mapping"]
 
     selected_infra = {str(row["id"]) for row in _dynamic_enabled_infra_component_rows(payload)}
-    selected_apps = {str(row["id"]) for row in _dynamic_enabled_app_release_rows(payload)}
+    selected_apps = {str(row["id"]) for row in _dynamic_enabled_app_chart_rows(payload)}
     selected_by_scope: dict[ComponentScope, set[str]] = {
         "infra": selected_infra,
         "apps": selected_apps,
@@ -1832,17 +2197,17 @@ def _validate_component_dependencies(config: Any) -> list[str]:
     if selected_apps:
         runtime_app_entries = list(component_entries("apps"))
         known_app_ids = {entry.id for entry in runtime_app_entries}
-        for release_row in _dynamic_enabled_app_release_rows(payload):
-            release_id = str(release_row["id"])
-            if release_id in known_app_ids:
+        for chart_row in _dynamic_enabled_app_chart_rows(payload):
+            chart_id = str(chart_row["id"])
+            if chart_id in known_app_ids:
                 continue
-            section = str(release_row.get("section", "")).strip().lower() or "workloads"
+            group = str(chart_row.get("group", "")).strip().lower() or "workloads"
             runtime_app_entries.append(
                 ComponentEntry(
-                    id=release_id,
+                    id=chart_id,
                     scope="apps",
-                    config_path=f"apps.releases.{release_id}",
-                    description=f"Runtime chart release '{release_id}'",
+                    config_path=f"apps.{group}.{chart_id}",
+                    description=f"Runtime chart '{chart_id}'",
                     default_enabled=False,
                     selectable=True,
                     enabled_path=None,
@@ -1850,9 +2215,9 @@ def _validate_component_dependencies(config: Any) -> list[str]:
                     source=None,
                     version=None,
                     depends_on=(),
-                    dependency_match_names=(release_id,),
+                    dependency_match_names=(chart_id,),
                     origin="helm",
-                    group=section,
+                    group=group,
                 )
             )
         chart_cache: _ChartMetaCache = {}
@@ -1934,30 +2299,17 @@ def _validate_enabled_chart_sources(config: Any) -> list[str]:
         return ["Runtime config payload must be a mapping"]
 
     checks: list[tuple[str, str, str, str]] = []
-    for release_row in _dynamic_enabled_app_release_rows(payload):
-        release_id = str(release_row["id"])
-        values = release_row.get("values", {})
-        if not isinstance(values, Mapping):
-            values = {}
-        chart_node = values.get("chart")
-        if not isinstance(chart_node, Mapping):
-            issues.append(
-                f"chart validation failed for apps:{release_id}: missing chart mapping at "
-                f"'apps.releases[{release_id}].values.chart'"
-            )
-            continue
-        chart_name = str(chart_node.get("name", "")).strip()
-        chart_repo = str(chart_node.get("repo", "")).strip()
-        chart_version = str(chart_node.get("version", "")).strip()
-        if not chart_name:
-            issues.append(
-                f"chart validation failed for apps:{release_id}: chart.name is required"
-            )
+    for chart_row in _dynamic_enabled_app_chart_rows(payload):
+        chart_id = str(chart_row["id"])
+        chart_repo = str(chart_row.get("repo", "")).strip()
+        chart_version = str(chart_row.get("version", "")).strip()
+        if not chart_repo:
+            issues.append(f"chart validation failed for apps:{chart_id}: repo is required")
             continue
         checks.append(
             (
-                f"apps:{release_id}",
-                chart_name,
+                f"apps:{chart_id}",
+                chart_id,
                 chart_repo,
                 chart_version,
             )
@@ -1972,15 +2324,295 @@ def _validate_enabled_chart_sources(config: Any) -> list[str]:
             cache=cache,
         )
         if error:
-            source_display = (
-                f"{chart_repo.rstrip('/')}/{chart_name_or_ref}"
-                if chart_repo
-                else chart_name_or_ref
+            source_display = _chart_source_display(
+                chart_name_or_ref=chart_name_or_ref,
+                chart_repo=chart_repo,
             )
             issues.append(
                 f"chart validation failed for {component_id} ({source_display}): {error}"
             )
     return issues
+
+
+_SEMVER_TAG_PATTERN = re.compile(r"^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
+
+
+def _is_http_chart_repo(repo: str) -> bool:
+    normalized = repo.strip().lower()
+    return normalized.startswith("http://") or normalized.startswith("https://")
+
+
+def _is_oci_chart_repo(repo: str) -> bool:
+    return repo.strip().lower().startswith("oci://")
+
+
+def _resolve_local_module_source_path(module_source: str) -> Path | None:
+    source = module_source.strip()
+    if not source:
+        return None
+    if source.startswith(("git::", "http://", "https://", "oci://")):
+        return None
+    candidate = Path(source).expanduser()
+    if candidate.is_absolute():
+        return candidate if candidate.exists() and candidate.is_dir() else None
+
+    roots = (
+        Path.cwd(),
+        Path(__file__).resolve().parents[1],
+        Path(__file__).resolve().parents[2],
+        Path(__file__).resolve().parents[3],
+    )
+    for root in roots:
+        resolved = (root / source).resolve()
+        if resolved.exists() and resolved.is_dir():
+            return resolved
+    return None
+
+
+def _normalize_component_token(value: str) -> str:
+    token = value.strip().lower().replace("_", "-")
+    token = re.sub(r"[^a-z0-9-]+", "-", token)
+    token = re.sub(r"-{2,}", "-", token).strip("-")
+    return token
+
+
+def _normalized_version_token(value: str) -> str:
+    token = value.strip().lower()
+    if token.startswith("v") and len(token) > 1 and token[1].isdigit():
+        return token[1:]
+    return token
+
+
+def _versions_match(expected: str, resolved: str) -> bool:
+    return _normalized_version_token(expected) == _normalized_version_token(resolved)
+
+
+def _fetch_helm_repo_index(repo: str) -> tuple[dict[str, Any] | None, str | None]:
+    normalized_repo = repo.strip().rstrip("/")
+    index_url = f"{normalized_repo}/index.yaml"
+    try:
+        with urllib.request.urlopen(index_url, timeout=12) as response:
+            raw = response.read().decode("utf-8")
+    except (urllib.error.URLError, TimeoutError) as exc:
+        return None, f"failed to fetch {index_url}: {exc}"
+    except Exception as exc:
+        return None, f"failed to fetch {index_url}: {exc}"
+
+    try:
+        payload = yaml.safe_load(raw) or {}
+    except Exception as exc:
+        return None, f"failed to parse {index_url}: {exc}"
+    if not isinstance(payload, dict):
+        return None, f"invalid {index_url}: payload is not a mapping"
+    entries = payload.get("entries")
+    if not isinstance(entries, Mapping):
+        return None, f"invalid {index_url}: missing 'entries' mapping"
+    return payload, None
+
+
+def _validate_component_sources_registry(
+    *,
+    progress_callback: Callable[[str, int, int], None] | None = None,
+) -> tuple[Path, list[str], list[str]]:
+    source_path = resolve_component_sources_file()
+    sources = load_component_sources()
+    issues: list[str] = []
+    warnings: list[str] = []
+    total_items = len(sources.tf_modules) + len(sources.helm_charts)
+    processed_items = 0
+
+    def _advance(label: str) -> None:
+        nonlocal processed_items
+        processed_items += 1
+        if progress_callback is not None:
+            progress_callback(label, processed_items, total_items)
+
+    if progress_callback is not None:
+        progress_callback("init", 0, total_items)
+
+    for module in sources.tf_modules:
+        module_id = module.module.strip().lower()
+        module_source = module.source.strip()
+        _advance(f"infra:{module_id or '?'}")
+        if not module_id:
+            issues.append("infra.tf_modules[] entry has empty module id")
+            continue
+        if not COMPONENT_ID_PATTERN.fullmatch(module_id):
+            issues.append(
+                f"infra.tf_modules[{module_id}] module name must use lowercase letters, digits, and hyphens"
+            )
+            continue
+        if not module_source:
+            issues.append(f"infra.tf_modules[{module_id}] is missing source")
+            continue
+        local_module_path = _resolve_local_module_source_path(module_source)
+        if module_source.startswith(("git::", "http://", "https://", "oci://")):
+            warnings.append(
+                f"infra.tf_modules[{module_id}] uses remote source '{module_source}'; "
+                "local module structure checks were skipped."
+            )
+            continue
+        if local_module_path is None:
+            issues.append(
+                f"infra.tf_modules[{module_id}] source does not resolve to an existing directory: {module_source}"
+            )
+            continue
+        tf_files = sorted(local_module_path.glob("*.tf"))
+        if not tf_files:
+            issues.append(
+                f"infra.tf_modules[{module_id}] source directory has no Terraform files (*.tf): {local_module_path}"
+            )
+            continue
+        if not (local_module_path / "main.tf").exists():
+            warnings.append(
+                f"infra.tf_modules[{module_id}] is missing main.tf in {local_module_path}"
+            )
+        if not (local_module_path / "variables.tf").exists():
+            warnings.append(
+                f"infra.tf_modules[{module_id}] is missing variables.tf in {local_module_path}"
+            )
+        expected_from_folder = _normalize_component_token(local_module_path.name)
+        if expected_from_folder and expected_from_folder != module_id:
+            warnings.append(
+                f"infra.tf_modules[{module_id}] folder name '{local_module_path.name}' "
+                f"normalizes to '{expected_from_folder}', which differs from module id '{module_id}'."
+            )
+        discovered_variables = module_variable_names(str(local_module_path))
+        if not discovered_variables:
+            warnings.append(
+                f"infra.tf_modules[{module_id}] has no discoverable Terraform variables; "
+                "wizard field discovery may be limited."
+            )
+
+    helm_client: HelmClient | None = None
+    helm_unavailable_reason = ""
+    try:
+        helm_client = HelmClient()
+    except Exception as exc:
+        helm_unavailable_reason = str(exc).strip() or "helm unavailable"
+        warnings.append(
+            "Helm chart reachability checks were skipped because helm is not available: "
+            f"{helm_unavailable_reason}"
+        )
+
+    for chart in sources.helm_charts:
+        chart_name = chart.name.strip()
+        repo = str(chart.repo or "").strip()
+        version = str(chart.version or "").strip()
+        chart_label = f"apps.helm_charts[{chart_name}]"
+        _advance(f"apps:{chart_name or '?'}")
+
+        if not chart_name:
+            issues.append("apps.helm_charts[] entry has empty name")
+            continue
+        if not repo:
+            issues.append(f"{chart_label} is missing repo")
+            continue
+        if not version:
+            issues.append(f"{chart_label} is missing version")
+            continue
+
+        if _is_oci_chart_repo(repo):
+            repo_ref = _canonical_app_chart_repo(chart_repo=repo, chart_name=chart_name)
+            repo_tail = repo_ref.rsplit("/", maxsplit=1)[-1].strip().lower()
+            if repo_tail != chart_name.lower():
+                issues.append(
+                    f"{chart_label} OCI ref basename must match chart name "
+                    f"('{chart_name}'): {repo_ref}"
+                )
+            if not _SEMVER_TAG_PATTERN.fullmatch(version):
+                issues.append(
+                    f"{chart_label} OCI version must be a semantic version tag (got '{version}')"
+                )
+            if helm_client is not None:
+                try:
+                    chart_meta = helm_client.show_chart(
+                        reference=HelmChartReference(
+                            chart_name=chart_name,
+                            chart_repo=repo,
+                            chart_version=version,
+                        )
+                    )
+                except Exception as exc:
+                    warnings.append(f"{chart_label} OCI lookup warning: {exc}")
+                    continue
+                resolved_name = str(chart_meta.get("name", "")).strip().lower()
+                if resolved_name and resolved_name != chart_name.lower():
+                    issues.append(
+                        f"{chart_label} resolved chart name '{resolved_name}' does not match '{chart_name}'"
+                    )
+                resolved_version = str(chart_meta.get("version", "")).strip()
+                if resolved_version and not _versions_match(version, resolved_version):
+                    issues.append(
+                        f"{chart_label} resolved chart version '{resolved_version}' "
+                        f"does not match configured version '{version}'"
+                    )
+            continue
+
+        if _is_http_chart_repo(repo):
+            index_payload, index_error = _fetch_helm_repo_index(repo)
+            if index_error:
+                warnings.append(f"{chart_label} {index_error}")
+            elif isinstance(index_payload, Mapping):
+                entries = index_payload.get("entries", {})
+                chart_entries = entries.get(chart_name) if isinstance(entries, Mapping) else None
+                if not isinstance(chart_entries, list):
+                    issues.append(
+                        f"{chart_label} was not found in repo index.yaml entries at {repo}"
+                    )
+                else:
+                    available_versions = [
+                        str(item.get("version", "")).strip()
+                        for item in chart_entries
+                        if isinstance(item, Mapping)
+                    ]
+                    if available_versions and not any(
+                        _versions_match(version, candidate) for candidate in available_versions
+                    ):
+                        preview = ", ".join(sorted(available_versions)[:8])
+                        issues.append(
+                            f"{chart_label} version '{version}' was not found in index.yaml. "
+                            f"Available versions include: {preview}"
+                        )
+            if helm_client is not None:
+                search_rows = helm_client.search_repo(chart_name=chart_name, chart_repo=repo)
+                if not search_rows:
+                    warnings.append(
+                        f"{chart_label} was not found by 'helm search repo' in {repo}. "
+                        "Confirm the chart name and repository index."
+                    )
+                try:
+                    chart_meta = helm_client.show_chart(
+                        reference=HelmChartReference(
+                            chart_name=chart_name,
+                            chart_repo=repo,
+                            chart_version=version,
+                        )
+                    )
+                except Exception as exc:
+                    warnings.append(f"{chart_label} HTTP repo lookup warning: {exc}")
+                else:
+                    resolved_name = str(chart_meta.get("name", "")).strip().lower()
+                    if resolved_name and resolved_name != chart_name.lower():
+                        issues.append(
+                            f"{chart_label} resolved chart name '{resolved_name}' does not match '{chart_name}'"
+                        )
+                    resolved_version = str(chart_meta.get("version", "")).strip()
+                    if resolved_version and not _versions_match(version, resolved_version):
+                        issues.append(
+                            f"{chart_label} resolved chart version '{resolved_version}' "
+                            f"does not match configured version '{version}'"
+                        )
+            continue
+
+        issues.append(
+            f"{chart_label} repo must start with 'https://' (Helm index repo) "
+            f"or 'oci://' (direct OCI chart), got '{repo}'"
+        )
+
+    if progress_callback is not None:
+        progress_callback("done", total_items, total_items)
+    return source_path, issues, warnings
 
 
 def _resolve_mapping_segment(node: Mapping[str, Any], segment: str) -> Any:
@@ -2027,19 +2659,29 @@ def _dynamic_provider_field_checks(
     seen: set[tuple[str, str, str]] = set()
     entry_by_id = {entry.id: entry for entry in infra_entries}
     for row in _dynamic_enabled_infra_component_rows(payload):
-        if row.get("mode") != "provider":
+        mode = str(row.get("mode", "")).strip().lower()
+        if mode not in {"provider", "custom"}:
             continue
         component_id = str(row["id"])
+        source = str(row.get("source", "")).strip() or None
         entry = entry_by_id.get(component_id)
         if entry is None:
+            entry_origin = "provider" if mode == "provider" else "custom"
+            entry_label = (
+                "Runtime provider component"
+                if entry_origin == "provider"
+                else "Runtime source-backed component"
+            )
             entry = ComponentEntry(
                 id=component_id,
                 scope="infra",
                 config_path=f"infra.components.{component_id}",
-                description=f"Runtime provider component '{component_id}'",
-                origin="provider",
-                source=None,
+                description=f"{entry_label} '{component_id}'",
+                origin=entry_origin,
+                source=source,
             )
+        elif mode == "custom" and source and str(entry.source or "").strip() != source:
+            entry = replace(entry, origin="custom", source=source)
         component_path = _dynamic_infra_component_path(payload, component_id)
         if component_path is None:
             continue
@@ -2180,26 +2822,33 @@ def _dynamic_enabled_infra_component_rows(payload: dict[str, Any]) -> list[dict[
     return rows
 
 
-def _dynamic_enabled_app_release_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
+def _dynamic_enabled_app_chart_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
     apps_node = payload.get("apps")
     if not isinstance(apps_node, Mapping):
         return []
-    releases = apps_node.get("releases")
-    if not isinstance(releases, list):
+    charts = apps_node.get("charts")
+    if not isinstance(charts, list):
         return []
     rows: list[dict[str, Any]] = []
-    for item in releases:
+    for item in charts:
         if not isinstance(item, Mapping):
             continue
         if not bool(item.get("enabled", False)):
             continue
-        release_id = str(item.get("id", "")).strip().lower()
-        if not release_id:
+        chart_id = str(item.get("id", "")).strip().lower()
+        if not chart_id:
             continue
         rows.append(
             {
-                "id": release_id,
-                "section": str(item.get("section", "")).strip().lower() or "workloads",
+                "id": chart_id,
+                "group": str(item.get("group", "")).strip().lower() or "workloads",
+                "repo": str(item.get("repo", "")).strip(),
+                "version": str(item.get("version", "")).strip(),
+                "namespace": str(item.get("namespace", "")).strip(),
+                "release-name": str(
+                    item.get("release-name", item.get("release_name", chart_id))
+                ).strip()
+                or chart_id,
                 "values": dict(item.get("values", {})) if isinstance(item.get("values"), Mapping) else {},
             }
         )
@@ -2353,24 +3002,82 @@ def _ensure_private_key_file_env() -> None:
     _TEMP_PRIVATE_KEY_FILES.append(key_path)
 
 
+def _runtime_auth_cache_dir(project_id: str) -> Path:
+    root_override = os.environ.get(_RUNTIME_AUTH_CACHE_ENV, "").strip()
+    if root_override:
+        root = Path(root_override).expanduser().resolve()
+    else:
+        root = (Path.home() / ".config" / "nebius-cxcli" / "runtime-auth").resolve()
+    token = re.sub(r"[^A-Za-z0-9._-]", "-", project_id.strip()).strip("-")
+    if not token:
+        token = "project"
+    return root / token
+
+
+def _runtime_auth_cache_write(
+    *,
+    project_id: str,
+    service_account_id: str,
+    auth_public_key_id: str,
+    private_key_pem: str,
+) -> None:
+    cache_dir = _runtime_auth_cache_dir(project_id)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_dir.chmod(0o700)
+
+    private_key_file = cache_dir / "auth-private.pem"
+    private_key_file.write_text(private_key_pem.rstrip() + "\n", encoding="utf-8")
+    private_key_file.chmod(0o600)
+
+    payload = {
+        "project_id": project_id,
+        "service_account_id": service_account_id,
+        "auth_public_key_id": auth_public_key_id,
+        "private_key_file": private_key_file.name,
+    }
+    metadata_file = cache_dir / _RUNTIME_AUTH_CACHE_FILE
+    metadata_file.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    metadata_file.chmod(0o600)
+
+
+def _runtime_auth_cache_load(project_id: str) -> bool:
+    cache_dir = _runtime_auth_cache_dir(project_id)
+    metadata_file = cache_dir / _RUNTIME_AUTH_CACHE_FILE
+    if not metadata_file.exists():
+        return False
+    try:
+        payload = json.loads(metadata_file.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    if not isinstance(payload, dict):
+        return False
+
+    service_account_id = str(payload.get("service_account_id") or "").strip()
+    auth_public_key_id = str(payload.get("auth_public_key_id") or "").strip()
+    private_key_file_token = str(payload.get("private_key_file") or "").strip()
+    if not service_account_id or not auth_public_key_id or not private_key_file_token:
+        return False
+
+    private_key_file = (cache_dir / private_key_file_token).resolve()
+    if not private_key_file.exists() or not private_key_file.is_file():
+        return False
+
+    os.environ["NEBIUS_SA_ID"] = service_account_id
+    os.environ["NEBIUS_AUTH_PUBLIC_KEY_ID"] = auth_public_key_id
+    os.environ["NEBIUS_AUTH_PRIVATE_KEY_FILE"] = str(private_key_file)
+    return True
+
+
 def _runtime_auth_missing_envs(
     *,
     need_terraform: bool,
     need_eso_mysterybox: bool,
 ) -> list[str]:
-    # Reuse NEBIUS_S3_* as source of truth when AWS_* are not set.
-    if not os.environ.get("AWS_ACCESS_KEY_ID") and os.environ.get("NEBIUS_S3_ACCESS_KEY_ID"):
-        os.environ["AWS_ACCESS_KEY_ID"] = os.environ["NEBIUS_S3_ACCESS_KEY_ID"]
-    if not os.environ.get("AWS_SECRET_ACCESS_KEY") and os.environ.get(
-        "NEBIUS_S3_SECRET_ACCESS_KEY"
-    ):
-        os.environ["AWS_SECRET_ACCESS_KEY"] = os.environ["NEBIUS_S3_SECRET_ACCESS_KEY"]
-
     required: list[str] = []
-    if need_terraform or need_eso_mysterybox:
+    credentials_file = os.environ.get("NEBIUS_AUTH_CREDENTIALS_FILE", "").strip()
+    has_credentials_file = bool(credentials_file)
+    if (need_terraform and not has_credentials_file) or need_eso_mysterybox:
         required.extend(["NEBIUS_SA_ID", "NEBIUS_AUTH_PUBLIC_KEY_ID"])
-    if need_terraform:
-        required.extend(["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"])
     if need_eso_mysterybox:
         required.append("NEBIUS_AUTH_PRIVATE_KEY_PEM")
 
@@ -2378,7 +3085,7 @@ def _runtime_auth_missing_envs(
     has_private_key_file = bool(os.environ.get("NEBIUS_AUTH_PRIVATE_KEY_FILE"))
     has_private_key_pem = bool(os.environ.get("NEBIUS_AUTH_PRIVATE_KEY_PEM"))
     if (
-        (need_terraform or need_eso_mysterybox)
+        ((need_terraform and not has_credentials_file) or need_eso_mysterybox)
         and not (has_private_key_file or has_private_key_pem)
         and "NEBIUS_AUTH_PRIVATE_KEY_PEM" not in missing
     ):
@@ -2397,22 +3104,30 @@ def _ensure_runtime_auth_material(
         need_terraform=need_terraform,
         need_eso_mysterybox=need_eso_mysterybox,
     )
+    project_id = str(config.client_info.nebius.project_id).strip()
+    if missing:
+        _runtime_auth_cache_load(project_id)
+        missing = _runtime_auth_missing_envs(
+            need_terraform=need_terraform,
+            need_eso_mysterybox=need_eso_mysterybox,
+        )
     if missing:
         if not auto_bootstrap:
             raise RuntimeError(
                 "Missing runtime auth environment values:\n  - "
                 + "\n  - ".join(sorted(missing))
-                + "\nSet these variables explicitly, or rerun with --auto-auth-bootstrap."
+                + "\nSet these variables explicitly (or provide NEBIUS_AUTH_CREDENTIALS_FILE), "
+                "or rerun with --auto-auth-bootstrap."
             )
         result = bootstrap_ci_service_account(
-            project_id=config.client_info.nebius.project_id,
-            service_account_name="nebius-cxcli-runtime",
+            project_id=project_id,
+            service_account_name=_RUNTIME_TF_SERVICE_ACCOUNT_NAME,
             service_account_description=(
-                "Service account used by nebius-cxcli local runtime automation"
+                "Service account used by nebius-cxcli Terraform runtime automation"
             ),
             role_ids=["roles/editor"],
-            auth_key_description="nebius-cxcli local runtime authorized key",
-            access_key_description="nebius-cxcli local runtime Object Storage access key",
+            auth_key_description="nebius-cxcli Terraform runtime authorized key",
+            access_key_description="nebius-cxcli Terraform runtime Object Storage access key",
             profile=None,
             endpoint=None,
             config_file=None,
@@ -2424,18 +3139,61 @@ def _ensure_runtime_auth_material(
         os.environ["NEBIUS_S3_SECRET_ACCESS_KEY"] = result.s3_secret_access_key
         os.environ["AWS_ACCESS_KEY_ID"] = result.s3_access_key_id
         os.environ["AWS_SECRET_ACCESS_KEY"] = result.s3_secret_access_key
+        _runtime_auth_cache_write(
+            project_id=project_id,
+            service_account_id=result.service_account_id,
+            auth_public_key_id=result.auth_public_key_id,
+            private_key_pem=result.auth_private_key_pem,
+        )
         console.print(
             "[green]Auto-bootstrapped runtime auth[/green] "
             "(service account + Object Storage key + auth key) for this command run."
         )
 
-    if need_terraform or need_eso_mysterybox:
+    if (need_terraform and not os.environ.get("NEBIUS_AUTH_CREDENTIALS_FILE")) or need_eso_mysterybox:
         _ensure_private_key_file_env()
 
 
 def _terraform_runtime_env(config: Any) -> dict[str, str]:
-    _ = config
-    return {}
+    runtime_env: dict[str, str] = {}
+
+    project_id = str(config.client_info.nebius.project_id).strip()
+    client_name = str(config.client_info.client_name).strip()
+    module_name = "-".join(token for token in ("nebius-cxcli", client_name, project_id) if token)
+    module_name = re.sub(r"[^A-Za-z0-9._/-]", "-", module_name)
+    module_name = re.sub(r"-+", "-", module_name).strip("-") or "nebius-cxcli"
+    runtime_env["TF_VAR_nebius_provider_module_name"] = module_name
+    runtime_env["TF_VAR_nebius_provider_parent_id"] = project_id
+
+    credentials_file = os.environ.get("NEBIUS_AUTH_CREDENTIALS_FILE", "").strip()
+    if credentials_file:
+        runtime_env["TF_VAR_nebius_service_account_credentials_file"] = credentials_file
+        return runtime_env
+
+    service_account_id = os.environ.get("NEBIUS_SA_ID", "").strip()
+    auth_public_key_id = os.environ.get("NEBIUS_AUTH_PUBLIC_KEY_ID", "").strip()
+    private_key_file = os.environ.get("NEBIUS_AUTH_PRIVATE_KEY_FILE", "").strip()
+    if service_account_id:
+        runtime_env["TF_VAR_nebius_service_account_id"] = service_account_id
+    if auth_public_key_id:
+        runtime_env["TF_VAR_nebius_auth_public_key_id"] = auth_public_key_id
+    if private_key_file:
+        runtime_env["TF_VAR_nebius_auth_private_key_file"] = private_key_file
+    return runtime_env
+
+
+def _try_generate_terraform_lock_file(config: Any, paths: InstancePaths) -> bool:
+    if not shutil.which("terraform"):
+        return False
+    try:
+        terraform_init_backendless(paths.infra_dir, extra_env=_terraform_runtime_env(config))
+    except Exception as exc:
+        console.print(
+            "[yellow]WARNING:[/yellow] "
+            f"Unable to generate Terraform lock file at {paths.infra_dir / '.terraform.lock.hcl'}: {exc}"
+        )
+        return False
+    return (paths.infra_dir / ".terraform.lock.hcl").exists()
 
 
 def _apply_rendered_flux(paths: InstancePaths) -> None:
@@ -2634,6 +3392,64 @@ class BootstrapResult:
     wrote_config: bool
 
 
+@dataclass(frozen=True)
+class DeploymentsGitignoreResult:
+    path: Path | None
+    wrote: bool
+
+
+_DEPLOYMENTS_GITIGNORE_BEGIN = "# >>> nebius-cxcli managed ignores >>>"
+_DEPLOYMENTS_GITIGNORE_END = "# <<< nebius-cxcli managed ignores <<<"
+_DEPLOYMENTS_GITIGNORE_LINES: tuple[str, ...] = (
+    _DEPLOYMENTS_GITIGNORE_BEGIN,
+    "# Generated by `nebius-cxcli create`.",
+    "# Ignore generated Terraform/Flux/inventory artifacts for all instances.",
+    "instances/*/*/generated/",
+    "# Ignore Terraform working directory and runtime outputs.",
+    "instances/*/*/generated/infra/.terraform/",
+    "instances/*/*/generated/infra/*.tfstate",
+    "instances/*/*/generated/infra/*.tfstate.*",
+    "instances/*/*/generated/infra/.terraform.tfstate.lock.info",
+    "instances/*/*/generated/infra/crash.log",
+    "instances/*/*/generated/infra/*.tfplan",
+    "instances/*/*/generated/infra/plan.out",
+    _DEPLOYMENTS_GITIGNORE_END,
+)
+
+
+def _render_deployments_gitignore_block() -> str:
+    return "\n".join(_DEPLOYMENTS_GITIGNORE_LINES) + "\n"
+
+
+def _ensure_deployments_gitignore(
+    *,
+    deployments_root: Path,
+) -> DeploymentsGitignoreResult:
+    if _try_git_root(deployments_root) is None:
+        return DeploymentsGitignoreResult(path=None, wrote=False)
+
+    gitignore_path = deployments_root / ".gitignore"
+    block = _render_deployments_gitignore_block()
+    existing = gitignore_path.read_text(encoding="utf-8") if gitignore_path.exists() else ""
+
+    if _DEPLOYMENTS_GITIGNORE_BEGIN in existing and _DEPLOYMENTS_GITIGNORE_END in existing:
+        pattern = (
+            re.escape(_DEPLOYMENTS_GITIGNORE_BEGIN)
+            + r".*?"
+            + re.escape(_DEPLOYMENTS_GITIGNORE_END)
+            + r"\n?"
+        )
+        updated = re.sub(pattern, block, existing, count=1, flags=re.S)
+    else:
+        prefix = existing.rstrip("\n")
+        updated = f"{prefix}\n\n{block}" if prefix else block
+
+    if updated != existing:
+        gitignore_path.write_text(updated, encoding="utf-8")
+        return DeploymentsGitignoreResult(path=gitignore_path, wrote=True)
+    return DeploymentsGitignoreResult(path=gitignore_path, wrote=False)
+
+
 def _ensure_customer_scaffold(
     *,
     base_path: Path,
@@ -2649,15 +3465,13 @@ def _instance_config_path(
     deployments_root: Path,
     client_name: str,
     tenant_id: str,
-    env: str,
-    cluster_name: str,
+    project_id: str,
 ) -> Path:
     return (
         deployments_root
         / "instances"
         / f"{client_name}--{tenant_id}"
-        / env
-        / cluster_name
+        / project_id
         / "config.yaml"
     )
 
@@ -2703,16 +3517,16 @@ def _enabled_ids_from_runtime_payload(
 
     apps_node = payload.get("apps")
     if isinstance(apps_node, Mapping):
-        releases = apps_node.get("releases")
-        if isinstance(releases, list):
-            for item in releases:
+        charts = apps_node.get("charts")
+        if isinstance(charts, list):
+            for item in charts:
                 if not isinstance(item, Mapping):
                     continue
                 if not bool(item.get("enabled", False)):
                     continue
-                release_id = str(item.get("id", "")).strip().lower()
-                if release_id in entry_ids:
-                    selected.add(release_id)
+                chart_id = str(item.get("id", "")).strip().lower()
+                if chart_id in entry_ids:
+                    selected.add(chart_id)
 
     return selected
 
@@ -2734,7 +3548,6 @@ def _filter_runtime_payload_for_selected_components(
     infra_components = infra.get("components")
     if not isinstance(infra_components, list):
         infra_components = []
-        infra["components"] = infra_components
     infra_by_id: dict[str, dict[str, Any]] = {}
     for item in infra_components:
         if not isinstance(item, dict):
@@ -2743,19 +3556,21 @@ def _filter_runtime_payload_for_selected_components(
         if not component_id:
             continue
         infra_by_id[component_id] = item
+    selected_infra_components: list[dict[str, Any]] = []
     for entry in infra_entries:
+        if entry.id not in selected_infra:
+            continue
         row = infra_by_id.get(entry.id)
         if row is None:
             row = {
                 "id": entry.id,
-                "enabled": False,
+                "enabled": True,
                 "inputs": {},
             }
             if entry.source:
                 row["source"] = str(entry.source)
             if entry.version:
                 row["version"] = str(entry.version)
-            infra_components.append(row)
             infra_by_id[entry.id] = row
         else:
             if entry.source and not str(row.get("source", "")).strip():
@@ -2764,84 +3579,147 @@ def _filter_runtime_payload_for_selected_components(
                 row["version"] = str(entry.version)
             if not isinstance(row.get("inputs"), Mapping):
                 row["inputs"] = {}
-        row["enabled"] = entry.id in selected_infra
+            row["enabled"] = True
+        selected_infra_components.append(row)
+    infra["components"] = selected_infra_components
 
-    app_releases = apps.get("releases")
-    if not isinstance(app_releases, list):
-        app_releases = []
-        apps["releases"] = app_releases
+    app_charts = apps.get("charts")
+    if not isinstance(app_charts, list):
+        app_charts = []
     apps_by_id: dict[str, dict[str, Any]] = {}
-    for item in app_releases:
+    for item in app_charts:
         if not isinstance(item, dict):
             continue
-        release_id = str(item.get("id", "")).strip().lower()
-        if not release_id:
+        chart_id = str(item.get("id", "")).strip().lower()
+        if not chart_id:
             continue
-        apps_by_id[release_id] = item
+        apps_by_id[chart_id] = item
+    selected_app_charts: list[dict[str, Any]] = []
     for entry in app_entries:
+        if entry.id not in selected_apps:
+            continue
         row = apps_by_id.get(entry.id)
         if row is None:
             chart_repo = str(entry.chart_repo or "").strip() or None
             chart_name = str(entry.chart_name or "").strip() or None
             if not chart_name:
                 chart_repo, chart_name = _chart_source_parts(entry)
+            if not chart_name:
+                chart_name = entry.id
+            chart_repo = _canonical_app_chart_repo(
+                chart_repo=str(chart_repo or ""),
+                chart_name=chart_name,
+            )
             namespace = str(entry.default_namespace or "").strip() or entry.id
             release_name = str(entry.default_release_name or "").strip() or entry.id
             raw_group = str(entry.group or "").strip().lower()
-            section = re.sub(r"[^a-z0-9]+", "-", raw_group).strip("-") or "workloads"
+            group = re.sub(r"[^a-z0-9]+", "-", raw_group).strip("-") or "workloads"
             row = {
                 "id": entry.id,
-                "section": section,
-                "enabled": False,
-                "values": {
-                    "namespace": namespace,
-                    "release_name": release_name,
-                    "chart": {
-                        "repo": str(chart_repo or ""),
-                        "name": str(chart_name or ""),
-                        "version": str(entry.version or ""),
-                    },
-                    "values": {},
-                },
+                "group": group,
+                "enabled": True,
+                "repo": str(chart_repo or ""),
+                "version": str(entry.version or ""),
+                "namespace": namespace,
+                "release-name": release_name,
+                "values": {},
             }
-            app_releases.append(row)
             apps_by_id[entry.id] = row
-        row["enabled"] = entry.id in selected_apps
-
-    selected_infra_sources: list[dict[str, Any]] = []
-    for entry in infra_entries:
-        if entry.id not in selected_infra:
-            continue
-        selected_infra_sources.append(
-            {
-                "module": entry.id,
-                "source": str(entry.source or ""),
-                "version": str(entry.version or ""),
-                "group": str(entry.group or ""),
-                "enable": True,
-            }
-        )
-    selected_app_sources: list[dict[str, Any]] = []
-    for entry in app_entries:
-        if entry.id not in selected_apps:
-            continue
-        selected_app_sources.append(
-            {
-                "name": str(entry.chart_name or entry.id),
-                "repo": str(entry.chart_repo or ""),
-                "version": str(entry.version or ""),
-                "namespace": str(entry.default_namespace or ""),
-                "releasename": str(entry.default_release_name or entry.id),
-                "group": str(entry.group or ""),
-                "enable": True,
-            }
-        )
-    runtime_payload["component_sources"] = {
-        "infra": {"tf_modules": selected_infra_sources},
-        "apps": {"helm_charts": selected_app_sources},
-    }
+        else:
+            if not str(row.get("repo", "")).strip():
+                chart_repo = str(entry.chart_repo or "").strip()
+                chart_name = str(entry.chart_name or entry.id).strip()
+                if chart_repo:
+                    row["repo"] = _canonical_app_chart_repo(
+                        chart_repo=chart_repo,
+                        chart_name=chart_name,
+                    )
+            if not str(row.get("version", "")).strip() and entry.version:
+                row["version"] = str(entry.version)
+            if not str(row.get("namespace", "")).strip():
+                row["namespace"] = str(entry.default_namespace or "").strip() or entry.id
+            if not str(row.get("release-name", row.get("release_name", ""))).strip():
+                row["release-name"] = str(entry.default_release_name or "").strip() or entry.id
+            if "group" not in row or not str(row.get("group", "")).strip():
+                raw_group = str(entry.group or "").strip().lower()
+                row["group"] = re.sub(r"[^a-z0-9]+", "-", raw_group).strip("-") or "workloads"
+            if not isinstance(row.get("values"), Mapping):
+                row["values"] = {}
+            row["enabled"] = True
+        selected_app_charts.append(row)
+    apps["charts"] = selected_app_charts
 
     return runtime_payload
+
+
+def _seed_default_shared_ssh_public_key(
+    *,
+    payload: dict[str, Any],
+    inferred_key: str | None,
+) -> None:
+    if not inferred_key:
+        return
+    infra_node = payload.get("infra")
+    if not isinstance(infra_node, dict):
+        return
+    current_value = _non_empty_text(infra_node.get("ssh_public_key"))
+    if current_value and current_value != DEFAULT_SSH_PUBLIC_KEY:
+        return
+    infra_node["ssh_public_key"] = inferred_key
+
+
+def _seed_infra_project_scope_defaults(
+    *,
+    payload: dict[str, Any],
+    infra_entries: tuple[ComponentEntry, ...],
+) -> None:
+    project_id = _non_empty_text(_read_payload_field(payload, "client_info.nebius.project_id"))
+    if not project_id:
+        return
+    infra_node = payload.get("infra")
+    if not isinstance(infra_node, Mapping):
+        return
+    components = infra_node.get("components")
+    if not isinstance(components, list):
+        return
+
+    entry_by_id = {entry.id: entry for entry in infra_entries}
+    for item in components:
+        if not isinstance(item, dict):
+            continue
+        if not bool(item.get("enabled", False)):
+            continue
+        component_id = _non_empty_text(item.get("id")).lower()
+        if not component_id:
+            continue
+        inputs = item.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        entry = entry_by_id.get(component_id)
+        source = _non_empty_text(item.get("source")) or _non_empty_text(entry.source if entry else None)
+        if not source:
+            continue
+        leaf_names = {_normalize_leaf_name(name) for name in module_variable_names(source)}
+        if not leaf_names:
+            continue
+        shared_ssh_public_key = _non_empty_text(
+            _read_payload_field(payload, "infra.ssh_public_key")
+        )
+
+        if "parent_id" in leaf_names and all(
+            alias not in inputs for alias in ("parent_id", "parent-id")
+        ):
+            inputs["parent_id"] = project_id
+        if "project_id" in leaf_names and all(
+            alias not in inputs for alias in ("project_id", "project-id")
+        ):
+            inputs["project_id"] = project_id
+        if (
+            "ssh_public_key" in leaf_names
+            and shared_ssh_public_key
+            and all(alias not in inputs for alias in ("ssh_public_key", "ssh-public-key"))
+        ):
+            inputs["ssh_public_key"] = shared_ssh_public_key
 
 
 @dataclass(frozen=True)
@@ -2893,11 +3771,8 @@ def _scaffold_instance(
     base_path: Path,
     client_name: str,
     tenant_id: str,
-    env: str,
-    cluster_name: str,
     project_id: str,
     region_id: str,
-    subnet_id: str,
     email: str | None,
     selected_infra: set[str],
     selected_apps: set[str],
@@ -2909,14 +3784,11 @@ def _scaffold_instance(
     deployments_root = _ensure_customer_scaffold(
         base_path=base_path,
     )
-    instance_dir = (
-        deployments_root / "instances" / f"{client_name}--{tenant_id}" / env / cluster_name
-    )
+    instance_dir = deployments_root / "instances" / f"{client_name}--{tenant_id}" / project_id
     config_path = instance_dir / "config.yaml"
 
     (instance_dir / "generated" / "infra").mkdir(parents=True, exist_ok=True)
-    (instance_dir / "generated" / "flux" / "sources").mkdir(parents=True, exist_ok=True)
-    (instance_dir / "generated" / "flux" / "apps").mkdir(parents=True, exist_ok=True)
+    (instance_dir / "generated" / "flux").mkdir(parents=True, exist_ok=True)
     (instance_dir / "generated" / "inventory").mkdir(parents=True, exist_ok=True)
 
     wrote_config = False
@@ -2925,11 +3797,8 @@ def _scaffold_instance(
         rendered_config = starter_config_yaml(
             client_name=client_name,
             tenant_id=tenant_id,
-            env=env,
-            cluster_name=cluster_name,
             project_id=project_id,
             region_id=region_id,
-            subnet_id=subnet_id,
             email=email,
             selected_infra=selected_infra,
             selected_apps=selected_apps,
@@ -2991,12 +3860,6 @@ def create_command(
     tenant_id: Annotated[
         str | None, typer.Option("--tenant-id", help="Nebius tenant identifier")
     ] = None,
-    env: Annotated[
-        str | None, typer.Option("--env", help="Environment: dev | stage | prod")
-    ] = None,
-    cluster_name: Annotated[
-        str | None, typer.Option("--cluster-name", help="Cluster name slug")
-    ] = None,
     project_id: Annotated[
         str | None, typer.Option("--project-id", help="Nebius project identifier")
     ] = None,
@@ -3005,16 +3868,6 @@ def create_command(
         typer.Option(
             "--region-id",
             help="Nebius region identifier, for example eu-north1 (defaults to eu-north1)",
-        ),
-    ] = None,
-    subnet_id: Annotated[
-        str | None,
-        typer.Option(
-            "--subnet-id",
-            help=(
-                "Optional initial seed for MK8s subnet_id. "
-                "Runtime prompts use module inputs from component sources."
-            ),
         ),
     ] = None,
     email: Annotated[
@@ -3065,6 +3918,16 @@ def create_command(
             ),
         ),
     ] = None,
+    validate_sources: Annotated[
+        bool,
+        typer.Option(
+            "--validate-sources/--no-validate-sources",
+            help=(
+                "Validate component_sources.yaml before create runs "
+                "(enabled by default)."
+            ),
+        ),
+    ] = True,
     no_interactive: Annotated[
         bool,
         typer.Option(
@@ -3090,6 +3953,16 @@ def create_command(
     try:
         base_path = target_path.resolve()
         _validate_deployments_root_target(base_path)
+        if validate_sources:
+            with console.status("[cyan]Validating component_sources.yaml...[/cyan]"):
+                source_path, source_issues, source_warnings = _validate_component_sources_registry()
+            for warning in source_warnings:
+                console.print(f"[yellow]Source validation warning:[/yellow] {warning}")
+            if source_issues:
+                raise RuntimeError(
+                    f"Component sources validation failed for {source_path}:\n  - "
+                    + "\n  - ".join(source_issues)
+                )
 
         interactive_mode = not no_interactive
         resolved_client_name = _value_or_prompt(
@@ -3104,35 +3977,33 @@ def create_command(
             prompt_text="Tenant ID",
             interactive=interactive_mode,
         )
-        resolved_env = _parse_env_or_prompt(env, interactive=interactive_mode)
-        resolved_cluster_name = _value_or_prompt(
-            cluster_name,
-            option_name="--cluster-name",
-            prompt_text="Cluster name",
-            interactive=interactive_mode,
-        )
         resolved_project_id = _value_or_prompt(
             project_id,
             option_name="--project-id",
             prompt_text="Project ID",
             interactive=interactive_mode,
         )
+        provider_lookup = ProviderOptionLookup()
+        resolved_tenant_id, resolved_project_id = _validate_tenant_project_ids_or_prompt(
+            tenant_id=resolved_tenant_id,
+            project_id=resolved_project_id,
+            interactive=interactive_mode,
+            provider_lookup=provider_lookup,
+        )
         resolved_region_id = _region_or_prompt(region_id, interactive=interactive_mode)
-        resolved_subnet_id = _subnet_or_prompt(subnet_id, interactive=interactive_mode)
         resolved_email = _optional_email_or_prompt(email, interactive=interactive_mode)
+        inferred_ssh_public_key = _infer_default_ssh_public_key()
 
         deployments_root = _resolve_deployments_root(base_path)
         existing_config_path = _instance_config_path(
             deployments_root=deployments_root,
             client_name=resolved_client_name,
             tenant_id=resolved_tenant_id,
-            env=resolved_env,
-            cluster_name=resolved_cluster_name,
+            project_id=resolved_project_id,
         )
         existing_payload: dict[str, Any] | None = None
         had_existing_config = existing_config_path.exists()
         if had_existing_config:
-            _apply_embedded_component_sources_override(existing_config_path, required=True)
             with existing_config_path.open("r", encoding="utf-8") as handle:
                 loaded_payload = yaml.safe_load(handle) or {}
             if not isinstance(loaded_payload, dict):
@@ -3191,11 +4062,8 @@ def create_command(
             dependency_seed_yaml = starter_config_yaml(
                 client_name=resolved_client_name,
                 tenant_id=resolved_tenant_id,
-                env=resolved_env,
-                cluster_name=resolved_cluster_name,
                 project_id=resolved_project_id,
                 region_id=resolved_region_id,
-                subnet_id=resolved_subnet_id,
                 email=resolved_email,
                 selected_infra=selected_infra_raw,
                 selected_apps=selected_apps_raw,
@@ -3205,26 +4073,48 @@ def create_command(
             parsed_seed_payload = yaml.safe_load(dependency_seed_yaml) or {}
             if isinstance(parsed_seed_payload, dict):
                 dependency_seed_payload = parsed_seed_payload
+        if dependency_seed_payload is not None and existing_payload is not None and not force:
+            dependency_seed_payload = _deep_merge_payload(dependency_seed_payload, existing_payload)
+            dependency_seed_payload = _filter_runtime_payload_for_selected_components(
+                payload=dependency_seed_payload,
+                selected_infra=selected_infra_raw,
+                selected_apps=selected_apps_raw,
+                infra_entries=infra_entries,
+                app_entries=app_entries,
+            )
 
-        selected_infra, selected_apps = _normalize_component_dependencies(
-            selected_infra=selected_infra_raw,
-            selected_apps=selected_apps_raw,
-            infra_entries=infra_entries,
-            app_entries=app_entries,
-            payload_for_app_chart_deps=dependency_seed_payload,
-        )
+        dependency_resolution_started = time.monotonic()
+        if selected_apps_raw:
+            with console.status("[cyan]Resolving app chart dependencies...[/cyan]"):
+                selected_infra, selected_apps = _normalize_component_dependencies(
+                    selected_infra=selected_infra_raw,
+                    selected_apps=selected_apps_raw,
+                    infra_entries=infra_entries,
+                    app_entries=app_entries,
+                    payload_for_app_chart_deps=dependency_seed_payload,
+                )
+        else:
+            selected_infra, selected_apps = _normalize_component_dependencies(
+                selected_infra=selected_infra_raw,
+                selected_apps=selected_apps_raw,
+                infra_entries=infra_entries,
+                app_entries=app_entries,
+                payload_for_app_chart_deps=dependency_seed_payload,
+            )
+        dependency_resolution_elapsed = time.monotonic() - dependency_resolution_started
+        if dependency_resolution_elapsed >= 1:
+            console.print(
+                "[dim]App dependency resolution finished in "
+                f"{dependency_resolution_elapsed:.1f}s[/dim]"
+            )
 
         config_yaml_override: str | None = None
         wizard_completed = True
-        provider_lookup: ProviderOptionLookup | None = None
         starter_yaml = starter_config_yaml(
             client_name=resolved_client_name,
             tenant_id=resolved_tenant_id,
-            env=resolved_env,
-            cluster_name=resolved_cluster_name,
             project_id=resolved_project_id,
             region_id=resolved_region_id,
-            subnet_id=resolved_subnet_id,
             email=resolved_email,
             selected_infra=selected_infra,
             selected_apps=selected_apps,
@@ -3249,10 +4139,17 @@ def create_command(
             namespace_overrides=app_namespace_overrides,
             release_name_overrides=app_releasename_overrides,
         )
+        _seed_default_shared_ssh_public_key(
+            payload=starter_payload,
+            inferred_key=inferred_ssh_public_key,
+        )
+        _seed_infra_project_scope_defaults(
+            payload=starter_payload,
+            infra_entries=infra_entries,
+        )
         config_yaml_override = yaml.safe_dump(starter_payload, sort_keys=False)
 
         if interactive_mode and optional_wizard_mode:
-            provider_lookup = ProviderOptionLookup()
             config_yaml_override, wizard_completed = _run_component_field_wizard(
                 config_yaml=config_yaml_override,
                 selected_infra=selected_infra,
@@ -3266,11 +4163,8 @@ def create_command(
             base_path=base_path,
             client_name=resolved_client_name,
             tenant_id=resolved_tenant_id,
-            env=resolved_env,
-            cluster_name=resolved_cluster_name,
             project_id=resolved_project_id,
             region_id=resolved_region_id,
-            subnet_id=resolved_subnet_id,
             email=resolved_email,
             selected_infra=selected_infra,
             selected_apps=selected_apps,
@@ -3279,8 +4173,16 @@ def create_command(
             force=force,
             config_yaml=config_yaml_override,
         )
+        gitignore_result = _ensure_deployments_gitignore(
+            deployments_root=result.deployments_root,
+        )
 
         console.print(f"Deployments root: {result.deployments_root}")
+        if gitignore_result.path is not None:
+            if gitignore_result.wrote:
+                console.print(f"Ensured deployments .gitignore: {gitignore_result.path}")
+            else:
+                console.print(f"Deployments .gitignore up-to-date: {gitignore_result.path}")
         if result.wrote_config:
             if had_existing_config:
                 console.print(f"Updated: {result.config_path}")
@@ -3311,6 +4213,9 @@ def create_command(
             "[yellow]Security warning:[/yellow] keep this customer repository private "
             "because the deployments root contains sensitive operational metadata."
         )
+    except (KeyboardInterrupt, EOFError, typer.Abort):
+        console.print("[yellow]Cancelled by user[/yellow].")
+        raise typer.Exit(code=130) from None
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 
@@ -3421,6 +4326,93 @@ def validate_command(
             console.print(f"[green]Valid (strict):[/green] {config_path}")
             return
         console.print(f"[green]Valid:[/green] {config_path}")
+    except Exception as exc:  # pragma: no cover - CLI surface
+        _exit_with_error(exc)
+
+
+@app.command("validate-sources")
+def validate_sources_command() -> None:
+    """Validate component_sources.yaml (Terraform module paths and Helm chart refs)."""
+    try:
+        sources = load_component_sources()
+        progress_items: list[tuple[str, str]] = []
+        for module in sources.tf_modules:
+            module_id = module.module.strip().lower() or "?"
+            progress_items.append((f"infra:{module_id}", f"TF module: {module_id}"))
+        for chart in sources.helm_charts:
+            chart_name = chart.name.strip() or "?"
+            progress_items.append((f"apps:{chart_name}", f"Helm chart: {chart_name}"))
+
+        with Progress(
+            TextColumn("[bold cyan]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeElapsedColumn(),
+            console=console,
+            transient=False,
+        ) as progress:
+            total_items = max(len(progress_items), 1)
+            overall_task_id = progress.add_task("Validating component sources", total=total_items)
+            item_task_ids: dict[str, list[int]] = {}
+            for key, title in progress_items:
+                task_id = progress.add_task(f"[dim]{title}[/dim]", total=1)
+                item_task_ids.setdefault(key, []).append(task_id)
+            if not progress_items:
+                progress.update(
+                    overall_task_id,
+                    description="No component sources entries found",
+                    completed=1,
+                    total=1,
+                )
+
+            def _progress_update(label: str, completed: int, total: int) -> None:
+                normalized_total = max(total, 1)
+                normalized_completed = min(max(0, completed), normalized_total)
+                if label == "init":
+                    progress.update(
+                        overall_task_id,
+                        description="Validating component sources",
+                        completed=normalized_completed,
+                        total=normalized_total,
+                    )
+                    return
+                if label == "done":
+                    progress.update(
+                        overall_task_id,
+                        description="Validation completed",
+                        completed=normalized_total,
+                        total=normalized_total,
+                    )
+                    return
+                pending_ids = item_task_ids.get(label, [])
+                if pending_ids:
+                    task_id = pending_ids.pop(0)
+                    scope, _, name = label.partition(":")
+                    prefix = "TF module" if scope == "infra" else "Helm chart"
+                    progress.update(
+                        task_id,
+                        description=f"[green]{prefix}: {name}[/green]",
+                        completed=1,
+                        total=1,
+                    )
+                progress.update(
+                    overall_task_id,
+                    description=f"Validating component sources ({normalized_completed}/{normalized_total})",
+                    completed=normalized_completed,
+                    total=normalized_total,
+                )
+
+            source_path, issues, warnings = _validate_component_sources_registry(
+                progress_callback=_progress_update
+            )
+        for warning in warnings:
+            console.print(f"[yellow]Warning:[/yellow] {warning}")
+        if issues:
+            raise RuntimeError(
+                f"Component sources validation failed for {source_path}:\n  - "
+                + "\n  - ".join(issues)
+            )
+        console.print(f"[green]Component sources valid:[/green] {source_path}")
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 
@@ -3756,7 +4748,10 @@ def render_command(
     try:
         config, paths = _load_context(config_path)
         result = render_instance(config, paths)
+        lock_generated = _try_generate_terraform_lock_file(config, paths)
         console.print(f"Rendered {len(result.files_written)} file(s) under {paths.generated_dir}")
+        if lock_generated:
+            console.print(f"Generated Terraform lock file: {paths.infra_dir / '.terraform.lock.hcl'}")
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 
@@ -3767,13 +4762,12 @@ def deploy_command(
     auto_auth_bootstrap: Annotated[
         bool,
         typer.Option(
-            "--auto-auth-bootstrap",
+            "--auto-auth-bootstrap/--no-auto-auth-bootstrap",
             help=(
-                "Automatically bootstrap runtime auth material when required env vars are missing "
-                "(off by default for safer/idempotent local runs)"
+                "Automatically bootstrap runtime auth material when required values are missing"
             ),
         ),
-    ] = False,
+    ] = True,
 ) -> None:
     """Validate (strict), render, terraform apply, and apply generated Flux manifests."""
     try:
@@ -3795,10 +4789,10 @@ def terraform_plan_command(
     auto_auth_bootstrap: Annotated[
         bool,
         typer.Option(
-            "--auto-auth-bootstrap",
+            "--auto-auth-bootstrap/--no-auto-auth-bootstrap",
             help="Automatically bootstrap runtime auth when env vars are missing",
         ),
-    ] = False,
+    ] = True,
 ) -> None:
     """Run terraform init and terraform plan in generated/infra."""
     try:
@@ -3820,10 +4814,10 @@ def terraform_apply_command(
     auto_auth_bootstrap: Annotated[
         bool,
         typer.Option(
-            "--auto-auth-bootstrap",
+            "--auto-auth-bootstrap/--no-auto-auth-bootstrap",
             help="Automatically bootstrap runtime auth when env vars are missing",
         ),
-    ] = False,
+    ] = True,
 ) -> None:
     """Run terraform init and terraform apply in generated/infra."""
     try:

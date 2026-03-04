@@ -20,6 +20,7 @@ def teardown_function() -> None:
 
 
 def test_components_discovered_from_source_file(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
     sources_file = tmp_path / "component-sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
@@ -82,7 +83,7 @@ def test_components_discovered_from_source_file(monkeypatch, tmp_path: Path) -> 
     assert apps["n8n"].default_release_name == "n8n"
 
 
-def test_app_release_name_becomes_component_id(monkeypatch, tmp_path: Path) -> None:
+def test_app_chart_name_becomes_component_id(monkeypatch, tmp_path: Path) -> None:
     sources_file = tmp_path / "component-sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
@@ -92,7 +93,7 @@ def test_app_release_name_becomes_component_id(monkeypatch, tmp_path: Path) -> N
                     "helm_charts": [
                         {
                             "name": "gateway-helm",
-                            "repo": "https://envoyproxy.github.io/gateway-helm",
+                            "repo": "oci://docker.io/envoyproxy/gateway-helm",
                             "version": "1.4.2",
                             "namespace": "envoy-gateway-system",
                             "releasename": "envoy-gateway",
@@ -111,5 +112,7 @@ def test_app_release_name_becomes_component_id(monkeypatch, tmp_path: Path) -> N
     reset_component_entry_cache()
 
     apps = {entry.id: entry for entry in component_entries("apps")}
-    assert "envoy-gateway" in apps
-    assert apps["envoy-gateway"].chart_name == "gateway-helm"
+    assert "gateway-helm" in apps
+    assert apps["gateway-helm"].chart_name == "gateway-helm"
+    assert apps["gateway-helm"].default_release_name == "envoy-gateway"
+    assert apps["gateway-helm"].source == "oci://docker.io/envoyproxy/gateway-helm"

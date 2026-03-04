@@ -32,6 +32,7 @@ Core principles:
 - Single canonical instance file: `config.yaml`.
 - Source-driven component discovery from `component_sources.yaml`.
 - Runtime introspection for module/chart fields and chart dependencies.
+- Wizard field model: infra inputs come from Terraform module variables, with Nebius API-backed option discovery inferred by field/path patterns.
 - Generic render path for Terraform modules/resources and Flux Helm releases.
 - Optional plugin boundaries for provider-specific runtime option lookups and validation.
 
@@ -44,7 +45,20 @@ Sections:
 - `infra.tf_modules[]`
   - `module`, `source`, `version`, `group`, `enable`
 - `apps.helm_charts[]`
-  - `name`, `repo`, `version`, `namespace`, `releasename`, `group`, `enable`
+  - `name`, `repo`, `version`, `namespace`, `releasename` (or `release-name`), `group`, `enable`
+  - `repo` can be HTTP/S Helm repo base (must expose `index.yaml`) or OCI (`oci://...`)
+
+Source validation requirements (`validate-sources`):
+
+- Terraform module sources (`infra.tf_modules[]`):
+  - `module` token must match runtime component id format (lowercase letters/digits/hyphens).
+  - Local `source` must resolve to an existing directory with at least one `*.tf` file.
+  - Missing `main.tf` or `variables.tf` is warning-level (not hard-fail), because wizard variable discovery relies on module variable definitions.
+  - Remote sources (`git::`, `http(s)://`, `oci://`) are accepted, but local file-structure checks are skipped with warning.
+- Helm chart sources (`apps.helm_charts[]`):
+  - HTTP repo mode: `repo` is a Helm repository base URL; `index.yaml` must be readable; chart name and configured version must be present in index entries.
+  - OCI mode: `repo` is a direct chart URL (`oci://.../<chart-name>`); OCI basename must match chart name; configured version must be semver tag.
+  - For both modes, live Helm metadata checks (when Helm is available) validate `Chart.yaml` name and version against configured source fields.
 
 Resolution precedence:
 
@@ -59,9 +73,33 @@ Resolution precedence:
 Instance self-containment:
 
 - `component_sources.yaml` is starter-only input for `create`.
-- `create` embeds only enabled component sources under `config.yaml.component_sources`.
-- Config-based commands resolve sources from embedded `config.yaml.component_sources`.
+- `create` component selection uses the full resolved `component_sources.yaml` catalog.
+- In `component_sources.yaml`, `enable` controls default selection state only.
+- `create` persists only selected `infra.components[]` and `apps.charts[]` rows in `config.yaml`.
+- `config.yaml` does not embed `component_sources`.
+- Config-based commands resolve sources from the active `component_sources.yaml` resolution path.
+- Canonical instance path is `<deployments-root>/instances/<client-name>--<tenant-id>/<project-id>/config.yaml`.
 - App chart defaults (`namespace`, `releasename`) can be edited in wizard mode or overridden in non-interactive mode with `--app-namespace` and `--app-releasename`.
+
+Wizard field/option model:
+
+- Infra input fields are discovered from module `variables.tf` (required and optional variables for source-backed modules).
+- Required variables are prioritized during prompts and enforced by strict validation.
+- Prompt labels include Terraform type hints (for example `string`, `number`, `bool`) and `required` markers.
+- `create` validates `tenant_id` and `project_id` via Nebius IAM APIs before optional wizard phases.
+- For source-backed modules, `inputs.parent_id`/`inputs.project_id` are pre-seeded from `client_info.nebius.project_id` when those variables are present.
+- Shared `infra.ssh_public_key` is auto-seeded from local `~/.ssh/*.pub` when available, and source-backed module `inputs.ssh_public_key` inherits it.
+- Optional module inputs are prompted when already set, when they are toggle fields, or when dependency-enabled prefixes are active (for example `gpu_enabled=true` enables `gpu_*` prompts).
+- Wizard option sources are inferred by field conventions and resolved live via Nebius APIs when available.
+- Built-in Nebius provider option sources include:
+  - `mk8s_compatible_platforms`
+  - `compute_platforms`
+  - `compute_platform_presets`
+  - `project_subnets`
+  - `project_networks`
+  - `tenant_projects`
+  - `mk8s_control_plane_versions`
+- Wizard stop token is `q`; on exit, remaining fields keep defaults.
 
 ## 4. Config Model
 
@@ -71,15 +109,25 @@ Runtime config root keys:
 - `client_info`
 - `infra`
 - `apps`
-- `component_sources` (embedded snapshot)
+
+Canonical `client_info` keys:
+
+- `client_name`
+- `nebius.tenant_id`
+- `nebius.project_id`
+- `nebius.region_id`
+- `notifications.inventory_markdown`
+- `notifications.email`
+
+Legacy `client_info.env` and `client_info.cluster_name` are not supported.
 
 Canonical model is dynamic:
 
 - `infra.components[]`: `id`, `enabled`, `source`, `version`, `inputs`
-- `apps.releases[]`: `id`, `section`, `enabled`, `values`
+- `apps.charts[]`: `id`, `group`, `enabled`, `repo`, `version`, `namespace`, `release-name`, `values`
 - Static nested component blocks are not accepted.
 
-Commands operate from this dynamic model and keep source metadata self-contained per instance via `component_sources`.
+Commands operate from this dynamic model with source metadata coming from `component_sources.yaml`.
 
 ## 5. Command Workflow
 
@@ -89,10 +137,15 @@ Commands operate from this dynamic model and keep source metadata self-contained
 - Wizard-first for identity and component prompts (unless `--no-interactive`).
 - Uses source-driven infra/app entries.
 - Resolves app dependencies from live Helm chart metadata (`Chart.yaml`) when available.
+- Resolves infra field options from live Nebius APIs where option sources are inferred.
 
 ### `validate <config.yaml>`
 
 - Core runtime/structural checks.
+
+### `validate-sources`
+
+- Validates `component_sources.yaml` (Terraform module paths and Helm source definitions).
 
 ### `validate --strict <config.yaml>`
 
@@ -146,19 +199,32 @@ Plugin default:
 
 Infra render:
 
-- Generic Terraform provider block.
+- Root-module Terraform layout with separated concerns:
+  - `versions.tf`: authoritative Terraform and provider constraints for generated root module.
+  - `providers.tf`: provider configuration (child modules do not define provider blocks).
+  - `variables.tf`: generated variable declarations for module arguments.
+  - `main.tf`: module/resource orchestration only.
+  - `terraform.auto.tfvars.json`: concrete values for generated variables.
 - Generic module blocks from enabled infra module entries.
 - Generic provider resource blocks from dynamic provider components.
+- Source-backed local module paths under `platform-infra/modules/*` are canonicalized to git module sources with `?ref=...` for portability in customer repositories.
 - Deterministic output files:
-  - `generated/infra/terraform.tf`
+  - `generated/infra/versions.tf`
+  - `generated/infra/providers.tf`
+  - `generated/infra/variables.tf`
   - `generated/infra/main.tf`
   - `generated/infra/terraform.auto.tfvars.json`
+  - `generated/infra/.terraform.lock.hcl` (generated by backendless `terraform init` during CLI `render` when Terraform is available)
 
 Flux render:
 
-- Generic Helm source docs (`HelmRepository` or `GitRepository` for standalone chart sources).
+- Generic Helm source docs (`HelmRepository` HTTP/OCI or `GitRepository` for standalone chart sources).
 - Generic HelmRelease docs from enabled app releases.
-- Deterministic output under `generated/flux` + `kustomization.yaml`.
+- Deterministic flat output under `generated/flux`:
+  - `helm-repositories.yaml`
+  - `helmrelease-<group>-<release>.yaml`
+  - `kustomization.yaml`
+- Legacy nested Flux layout (`generated/flux/apps` and `generated/flux/sources`) is not supported.
 
 ## 9. Auth and CI Bootstrap Model
 
@@ -177,6 +243,14 @@ Flux render:
 - Local mode (`--no-github-sync`):
   - identity-only by default,
   - `--create-keys` for explicit key provisioning.
+
+Terraform runtime auth:
+
+- Generated `providers.tf` uses direct Nebius provider service-account fields and `module_name`.
+- Runtime auth material is passed to Terraform via `TF_VAR_*` rather than provider `_env` fields.
+- Runtime auto-bootstrap uses dedicated service account name `nebius-cxcli-tf-sa`.
+- Auto-bootstrapped runtime auth material is cached under `~/.config/nebius-cxcli/runtime-auth/<project-id>/`.
+- Terraform runtime path does not require AWS S3 access key env vars.
 
 ## 10. Vendor Scope
 

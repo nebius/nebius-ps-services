@@ -9,10 +9,11 @@ from typing import Any
 from .components import ComponentScope, component_entries, component_lookup, parse_dependency_ref
 from .runtime_plugin_validation import run_runtime_validation_plugins
 
-_ROOT_KEYS = frozenset({"version", "client_info", "infra", "apps", "component_sources"})
+_ROOT_KEYS = frozenset({"version", "client_info", "infra", "apps"})
 _ID_PATTERN = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 _SECTION_PATTERN = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 _ENV_VAR_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+_CLIENT_NAME_PATTERN = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 
 
 def _get_path(payload: Mapping[str, Any], dotted_path: str, default: Any = None) -> Any:
@@ -38,6 +39,62 @@ def _as_text(value: Any) -> str:
     return str(value).strip()
 
 
+def _validate_client_info(payload: Mapping[str, Any]) -> None:
+    client_info = payload.get("client_info")
+    if not isinstance(client_info, Mapping):
+        raise ValueError("client_info must be a mapping")
+
+    supported_client_info_keys = {"client_name", "nebius", "notifications"}
+    unknown_client_info = sorted(
+        str(key) for key in client_info if str(key) not in supported_client_info_keys
+    )
+    if unknown_client_info:
+        raise ValueError(
+            "client_info has unsupported field(s): " + ", ".join(unknown_client_info)
+        )
+
+    client_name = _as_text(client_info.get("client_name"))
+    if not client_name:
+        raise ValueError("client_info.client_name is required")
+    if not _CLIENT_NAME_PATTERN.fullmatch(client_name):
+        raise ValueError(
+            "client_info.client_name must use lowercase letters, digits, and hyphens"
+        )
+
+    nebius = client_info.get("nebius")
+    if not isinstance(nebius, Mapping):
+        raise ValueError("client_info.nebius must be a mapping")
+    supported_nebius_keys = {"tenant_id", "project_id", "region_id"}
+    unknown_nebius = sorted(str(key) for key in nebius if str(key) not in supported_nebius_keys)
+    if unknown_nebius:
+        raise ValueError(
+            "client_info.nebius has unsupported field(s): " + ", ".join(unknown_nebius)
+        )
+    for field in ("tenant_id", "project_id", "region_id"):
+        value = _as_text(nebius.get(field))
+        if not value:
+            raise ValueError(f"client_info.nebius.{field} is required")
+
+    notifications = client_info.get("notifications")
+    if not isinstance(notifications, Mapping):
+        raise ValueError("client_info.notifications must be a mapping")
+    supported_notification_keys = {"inventory_markdown", "email"}
+    unknown_notification_keys = sorted(
+        str(key) for key in notifications if str(key) not in supported_notification_keys
+    )
+    if unknown_notification_keys:
+        raise ValueError(
+            "client_info.notifications has unsupported field(s): "
+            + ", ".join(unknown_notification_keys)
+        )
+    inventory_markdown = notifications.get("inventory_markdown")
+    if not isinstance(inventory_markdown, bool):
+        raise ValueError("client_info.notifications.inventory_markdown must be true or false")
+    email = notifications.get("email")
+    if email is not None and not isinstance(email, str):
+        raise ValueError("client_info.notifications.email must be a string or null")
+
+
 def _enabled_component_ids(payload: Mapping[str, Any], *, scope: ComponentScope) -> set[str]:
     selected: set[str] = set()
     if scope == "infra":
@@ -60,21 +117,21 @@ def _enabled_component_ids(payload: Mapping[str, Any], *, scope: ComponentScope)
     apps = payload.get("apps")
     if not isinstance(apps, Mapping):
         return selected
-    releases = apps.get("releases")
-    if not isinstance(releases, list):
+    charts = apps.get("charts")
+    if not isinstance(charts, list):
         return selected
-    for item in releases:
+    for item in charts:
         if not isinstance(item, Mapping):
             continue
         if not bool(item.get("enabled", False)):
             continue
-        release_id = _as_text(item.get("id")).lower()
-        if release_id:
-            selected.add(release_id)
+        chart_id = _as_text(item.get("id")).lower()
+        if chart_id:
+            selected.add(chart_id)
     return selected
 
 
-def _expected_app_section(config_path: str) -> str | None:
+def _expected_app_group(config_path: str) -> str | None:
     parts = config_path.split(".")
     if len(parts) < 3:
         return None
@@ -84,21 +141,21 @@ def _expected_app_section(config_path: str) -> str | None:
 
 
 def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
-    """Validate dynamic model sections (`infra.components[]`, `apps.releases[]`)."""
+    """Validate dynamic model sections (`infra.components[]`, `apps.charts[]`)."""
     infra = payload.get("infra")
     apps = payload.get("apps")
     if not isinstance(infra, Mapping) or not isinstance(apps, Mapping):
         return
 
     infra_components = infra.get("components")
-    apps_releases = apps.get("releases")
-    if infra_components is None and apps_releases is None:
+    apps_charts = apps.get("charts")
+    if infra_components is None and apps_charts is None:
         return
 
     if not isinstance(infra_components, list):
         raise ValueError("infra.components must be a list in dynamic config mode")
-    if not isinstance(apps_releases, list):
-        raise ValueError("apps.releases must be a list in dynamic config mode")
+    if not isinstance(apps_charts, list):
+        raise ValueError("apps.charts must be a list in dynamic config mode")
 
     app_lookup = component_lookup("apps")
     seen_infra_ids: set[str] = set()
@@ -141,45 +198,65 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
             )
 
     seen_app_ids: set[str] = set()
-    for index, raw_release in enumerate(apps_releases):
-        if not isinstance(raw_release, Mapping):
-            raise ValueError(f"apps.releases[{index}] must be a mapping")
+    for index, raw_chart in enumerate(apps_charts):
+        if not isinstance(raw_chart, Mapping):
+            raise ValueError(f"apps.charts[{index}] must be a mapping")
         unknown_keys = sorted(
-            str(key) for key in raw_release if str(key) not in {"id", "section", "enabled", "values"}
+            str(key)
+            for key in raw_chart
+            if str(key)
+            not in {
+                "id",
+                "group",
+                "enabled",
+                "repo",
+                "version",
+                "namespace",
+                "release-name",
+                "release_name",
+                "values",
+            }
         )
         if unknown_keys:
             raise ValueError(
-                f"apps.releases[{index}] has unsupported field(s): {', '.join(unknown_keys)}"
+                f"apps.charts[{index}] has unsupported field(s): {', '.join(unknown_keys)}"
             )
 
-        release_id = _as_text(raw_release.get("id")).lower()
-        if not release_id:
-            raise ValueError(f"apps.releases[{index}].id is required")
-        if not _ID_PATTERN.fullmatch(release_id):
+        chart_id = _as_text(raw_chart.get("id")).lower()
+        if not chart_id:
+            raise ValueError(f"apps.charts[{index}].id is required")
+        if not _ID_PATTERN.fullmatch(chart_id):
             raise ValueError(
-                f"apps.releases[{index}].id must use lowercase letters, digits, and hyphens"
+                f"apps.charts[{index}].id must use lowercase letters, digits, and hyphens"
             )
-        if release_id in seen_app_ids:
-            raise ValueError(f"apps.releases[{index}].id '{release_id}' is duplicated")
-        seen_app_ids.add(release_id)
+        if chart_id in seen_app_ids:
+            raise ValueError(f"apps.charts[{index}].id '{chart_id}' is duplicated")
+        seen_app_ids.add(chart_id)
 
-        entry = app_lookup.get(release_id)
+        entry = app_lookup.get(chart_id)
 
-        section = _as_text(raw_release.get("section")).lower()
-        if section and not _SECTION_PATTERN.fullmatch(section):
+        group = _as_text(raw_chart.get("group")).lower()
+        if group and not _SECTION_PATTERN.fullmatch(group):
             raise ValueError(
-                f"apps.releases[{index}].section must use lowercase letters, digits, and hyphens"
+                f"apps.charts[{index}].group must use lowercase letters, digits, and hyphens"
             )
-        expected_section = _expected_app_section(entry.config_path) if entry else None
-        if section and expected_section and section != expected_section:
+        expected_group = _expected_app_group(entry.config_path) if entry else None
+        if group and expected_group and group != expected_group:
             raise ValueError(
-                f"apps.releases[{index}].section must be '{expected_section}' for release '{release_id}'"
+                f"apps.charts[{index}].group must be '{expected_group}' for chart '{chart_id}'"
             )
 
-        if not isinstance(raw_release.get("enabled"), bool):
-            raise ValueError(f"apps.releases[{index}].enabled must be true or false")
-        if not isinstance(raw_release.get("values"), Mapping):
-            raise ValueError(f"apps.releases[{index}].values must be a mapping")
+        if not isinstance(raw_chart.get("enabled"), bool):
+            raise ValueError(f"apps.charts[{index}].enabled must be true or false")
+        for key in ("repo", "version", "namespace"):
+            value = raw_chart.get(key)
+            if value is not None and not isinstance(value, str):
+                raise ValueError(f"apps.charts[{index}].{key} must be a string when set")
+        release_name = raw_chart.get("release-name", raw_chart.get("release_name"))
+        if release_name is not None and not isinstance(release_name, str):
+            raise ValueError(f"apps.charts[{index}].release-name must be a string when set")
+        if not isinstance(raw_chart.get("values"), Mapping):
+            raise ValueError(f"apps.charts[{index}].values must be a mapping")
 
 
 def validate_runtime_payload(payload: Mapping[str, Any]) -> None:
@@ -193,6 +270,8 @@ def validate_runtime_payload(payload: Mapping[str, Any]) -> None:
 
     if _as_text(payload.get("version")) not in {"", "v1"}:
         raise ValueError("version must be 'v1'")
+
+    _validate_client_info(payload)
 
     selected_by_scope: dict[ComponentScope, set[str]] = {
         "infra": _enabled_component_ids(payload, scope="infra"),

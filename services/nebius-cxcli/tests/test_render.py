@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 from nebius_cxcli.components import component_entries, reset_component_entry_cache
@@ -18,8 +19,7 @@ def _instance_config_path(base: Path) -> Path:
         / "deployments"
         / "instances"
         / "client-a--tenant-123"
-        / "prod"
-        / "cluster-a"
+        / "project-456"
         / "config.yaml"
     )
 
@@ -29,11 +29,8 @@ def _starter_payload(*, selected_infra: set[str], selected_apps: set[str]) -> di
         starter_config_yaml(
             client_name="client-a",
             tenant_id="tenant-123",
-            env="prod",
-            cluster_name="cluster-a",
             project_id="project-456",
             region_id="eu-north1",
-            subnet_id="subnet-abc123",
             email="ops@example.com",
             selected_infra=selected_infra,
             selected_apps=selected_apps,
@@ -77,19 +74,28 @@ def test_render_creates_source_only_module_and_flux_outputs(tmp_path: Path) -> N
     validate_path_alignment(config, paths)
 
     result = render_instance(config, paths)
-    assert len(result.files_written) >= 3
+    assert len(result.files_written) >= 5
 
-    terraform_tf = (paths.infra_dir / "terraform.tf").read_text(encoding="utf-8")
+    versions_tf = (paths.infra_dir / "versions.tf").read_text(encoding="utf-8")
+    providers_tf = (paths.infra_dir / "providers.tf").read_text(encoding="utf-8")
+    variables_tf = (paths.infra_dir / "variables.tf").read_text(encoding="utf-8")
     main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
     tfvars = (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
 
-    assert 'provider "nebius"' in terraform_tf
-    assert 'module "custom-mk8s" {' in main_tf
-    assert '../../platform-infra/modules/mk8s' in main_tf
-    assert "subnet-abc123" in main_tf
-    assert tfvars.strip() == "{}"
+    assert "required_providers" in versions_tf
+    assert 'provider "nebius"' in providers_tf
+    assert 'module "mk8s" {' in main_tf
+    assert 'module "custom-' not in main_tf
+    assert (
+        'source = "git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mk8s?ref=main"'
+        in main_tf
+    )
+    assert "subnet_id = var.mk8s_subnet_id" in main_tf
+    assert "inputs = jsondecode(" not in main_tf
+    assert 'variable "mk8s_subnet_id" {' in variables_tf
+    assert '"mk8s_subnet_id": "subnet-abc123"' in tfvars
 
-    n8n_release = paths.flux_dir / "apps" / "workloads" / "n8n-helmrelease.yaml"
+    n8n_release = paths.flux_dir / "helmrelease-workloads-n8n.yaml"
     assert n8n_release.exists()
 
 
@@ -128,27 +134,23 @@ def test_render_emits_dynamic_provider_resource_blocks(tmp_path: Path) -> None:
     assert 'parent_id = "project-456"' in main_tf
 
 
-def test_render_dynamic_release_shape_writes_flux_manifests(tmp_path: Path) -> None:
+def test_render_dynamic_chart_shape_writes_flux_manifests(tmp_path: Path) -> None:
     reset_component_entry_cache()
     config_path = _instance_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
     runtime_payload = _starter_payload(selected_infra=set(), selected_apps=set())
     dynamic_payload = to_dynamic_payload(runtime_payload)
-    dynamic_payload["apps"]["releases"] = [
+    dynamic_payload["apps"]["charts"] = [
         {
             "id": "runtime-app",
-            "section": "workloads",
+            "group": "workloads",
             "enabled": True,
-            "values": {
-                "namespace": "runtime-app",
-                "chart": {
-                    "repo": "https://example.invalid/charts",
-                    "name": "runtime-app",
-                    "version": "1.0.0",
-                },
-                "values": {"replicaCount": 1},
-            },
+            "repo": "https://example.invalid/charts",
+            "version": "1.0.0",
+            "namespace": "runtime-app",
+            "release-name": "runtime-app",
+            "values": {"replicaCount": 1},
         }
     ]
 
@@ -160,11 +162,79 @@ def test_render_dynamic_release_shape_writes_flux_manifests(tmp_path: Path) -> N
 
     render_instance(config, paths)
 
-    repo_sources = paths.flux_dir / "sources" / "helm-repositories.yaml"
-    release = paths.flux_dir / "apps" / "workloads" / "runtime-app-helmrelease.yaml"
+    repo_sources = paths.flux_dir / "helm-repositories.yaml"
+    release = paths.flux_dir / "helmrelease-workloads-runtime-app.yaml"
     assert repo_sources.exists()
     assert release.exists()
 
     release_doc = yaml.safe_load(release.read_text(encoding="utf-8"))
     assert release_doc["metadata"]["name"] == "runtime-app"
     assert release_doc["spec"]["chart"]["spec"]["chart"] == "runtime-app"
+
+
+def test_render_dynamic_oci_chart_writes_flux_oci_repository(tmp_path: Path) -> None:
+    reset_component_entry_cache()
+    config_path = _instance_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    runtime_payload = _starter_payload(selected_infra=set(), selected_apps=set())
+    dynamic_payload = to_dynamic_payload(runtime_payload)
+    dynamic_payload["apps"]["charts"] = [
+        {
+            "id": "gateway-helm",
+            "group": "platform",
+            "enabled": True,
+            "repo": "oci://docker.io/envoyproxy/gateway-helm",
+            "version": "1.4.2",
+            "namespace": "envoy-gateway-system",
+            "release-name": "envoy-gateway",
+            "values": {},
+        }
+    ]
+
+    config_path.write_text(yaml.safe_dump(dynamic_payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_instance_paths(config_path)
+    validate_path_alignment(config, paths)
+
+    render_instance(config, paths)
+
+    repo_sources = paths.flux_dir / "helm-repositories.yaml"
+    release = paths.flux_dir / "helmrelease-platform-envoy-gateway.yaml"
+    assert repo_sources.exists()
+    assert release.exists()
+
+    repo_docs = [
+        doc
+        for doc in yaml.safe_load_all(repo_sources.read_text(encoding="utf-8"))
+        if isinstance(doc, dict)
+    ]
+    helm_repo_doc = next(doc for doc in repo_docs if doc.get("kind") == "HelmRepository")
+    assert helm_repo_doc["spec"]["type"] == "oci"
+    assert helm_repo_doc["spec"]["url"] == "oci://docker.io/envoyproxy"
+
+    release_doc = yaml.safe_load(release.read_text(encoding="utf-8"))
+    chart_spec = release_doc["spec"]["chart"]["spec"]
+    assert chart_spec["sourceRef"]["kind"] == "HelmRepository"
+    assert chart_spec["chart"] == "gateway-helm"
+    assert chart_spec["version"] == "1.4.2"
+
+
+def test_render_rejects_legacy_nested_flux_layout(tmp_path: Path) -> None:
+    reset_component_entry_cache()
+    config_path = _instance_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps={"n8n"})
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_instance_paths(config_path)
+    validate_path_alignment(config, paths)
+
+    # Simulate stale legacy layout from previous versions.
+    (paths.flux_dir / "apps").mkdir(parents=True, exist_ok=True)
+
+    with pytest.raises(ValueError, match="Unsupported legacy Flux layout detected"):
+        render_instance(config, paths)
