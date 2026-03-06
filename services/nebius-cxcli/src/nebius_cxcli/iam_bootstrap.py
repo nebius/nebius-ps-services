@@ -209,7 +209,7 @@ def _group_name_for_service_account(service_account_name: str) -> str:
     candidate = f"{normalized}-{suffix}"
     if len(candidate) <= 63:
         return candidate
-    digest = hashlib.sha1(candidate.encode("utf-8")).hexdigest()[:8]
+    digest = hashlib.sha256(candidate.encode("utf-8")).hexdigest()[:8]
     max_prefix = max(1, 63 - len(suffix) - len(digest) - 2)
     prefix = normalized[:max_prefix].rstrip("-") or "sa"
     return f"{prefix}-{suffix}-{digest}"

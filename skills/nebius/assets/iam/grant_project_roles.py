@@ -48,7 +48,7 @@ def _group_name_for_service_account(service_account_name: str) -> str:
     candidate = f"{normalized}-permits"
     if len(candidate) <= 63:
         return candidate
-    digest = hashlib.sha1(candidate.encode("utf-8")).hexdigest()[:8]
+    digest = hashlib.sha256(candidate.encode("utf-8")).hexdigest()[:8]
     head = normalized[: max(1, 63 - len("-permits-") - len(digest))].rstrip("-") or "sa"
     return f"{head}-permits-{digest}"
 

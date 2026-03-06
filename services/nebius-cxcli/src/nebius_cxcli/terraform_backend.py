@@ -72,7 +72,7 @@ def _build_bucket_name(*, client_name: str, project_id: str) -> str:
     if len(candidate) <= 63 and _BUCKET_NAME_PATTERN.fullmatch(candidate):
         return candidate
 
-    digest = hashlib.sha1(f"{client_name}:{project_id}".encode()).hexdigest()[:10]
+    digest = hashlib.sha256(f"{client_name}:{project_id}".encode()).hexdigest()[:10]
     body_budget = 63 - len(prefix) - len(digest) - 2  # "<prefix>-<body>-<digest>"
     if body_budget < 1:
         body_budget = 1
