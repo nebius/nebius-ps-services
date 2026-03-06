@@ -79,10 +79,15 @@ def test_render_creates_source_only_module_and_flux_outputs(tmp_path: Path) -> N
     versions_tf = (paths.infra_dir / "versions.tf").read_text(encoding="utf-8")
     providers_tf = (paths.infra_dir / "providers.tf").read_text(encoding="utf-8")
     variables_tf = (paths.infra_dir / "variables.tf").read_text(encoding="utf-8")
+    backend_tf = (paths.infra_dir / "backend.tf").read_text(encoding="utf-8")
     main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
     tfvars = (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
 
     assert "required_providers" in versions_tf
+    assert 'backend "s3"' in backend_tf
+    assert "use_lockfile = true" in backend_tf
+    assert "access_key" not in backend_tf
+    assert "secret_key" not in backend_tf
     assert 'provider "nebius"' in providers_tf
     assert 'module "mk8s" {' in main_tf
     assert 'module "custom-' not in main_tf

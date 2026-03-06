@@ -23,13 +23,17 @@ def _run(
     subprocess.run(cmd, cwd=cwd, check=True, timeout=timeout, env=env)
 
 
-def terraform_plan(infra_dir: Path, *, extra_env: dict[str, str] | None = None) -> None:
-    """Run terraform init + plan in the rendered infra directory."""
+def terraform_init(infra_dir: Path, *, extra_env: dict[str, str] | None = None) -> None:
+    """Run terraform init in the rendered infra directory."""
     _require_terraform()
     if not infra_dir.exists():
         raise RuntimeError(f"Rendered infra directory does not exist: {infra_dir}")
-
     _run(["terraform", "init", "-input=false"], cwd=infra_dir, timeout=300, extra_env=extra_env)
+
+
+def terraform_plan(infra_dir: Path, *, extra_env: dict[str, str] | None = None) -> None:
+    """Run terraform init + plan in the rendered infra directory."""
+    terraform_init(infra_dir, extra_env=extra_env)
     _run(
         ["terraform", "plan", "-input=false", "-lock-timeout=5m"],
         cwd=infra_dir,
@@ -38,27 +42,9 @@ def terraform_plan(infra_dir: Path, *, extra_env: dict[str, str] | None = None) 
     )
 
 
-def terraform_init_backendless(infra_dir: Path, *, extra_env: dict[str, str] | None = None) -> None:
-    """Run backendless terraform init to resolve providers and generate lock file."""
-    _require_terraform()
-    if not infra_dir.exists():
-        raise RuntimeError(f"Rendered infra directory does not exist: {infra_dir}")
-
-    _run(
-        ["terraform", "init", "-input=false", "-backend=false", "-upgrade=false"],
-        cwd=infra_dir,
-        timeout=300,
-        extra_env=extra_env,
-    )
-
-
 def terraform_apply(infra_dir: Path, *, extra_env: dict[str, str] | None = None) -> None:
     """Run terraform init + apply in the rendered infra directory."""
-    _require_terraform()
-    if not infra_dir.exists():
-        raise RuntimeError(f"Rendered infra directory does not exist: {infra_dir}")
-
-    _run(["terraform", "init", "-input=false"], cwd=infra_dir, timeout=300, extra_env=extra_env)
+    terraform_init(infra_dir, extra_env=extra_env)
     _run(
         ["terraform", "apply", "-input=false", "-auto-approve", "-lock-timeout=5m"],
         cwd=infra_dir,

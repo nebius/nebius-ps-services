@@ -134,8 +134,10 @@ def test_create_writes_deployments_gitignore_when_target_is_in_git_repo(tmp_path
     gitignore_path = deployments_root / ".gitignore"
     assert gitignore_path.exists()
     content = gitignore_path.read_text(encoding="utf-8")
-    assert "instances/*/*/generated/" in content
+    assert "instances/*/*/generated/" not in content.splitlines()
+    assert "instances/*/*/config.yaml" in content
     assert "instances/*/*/generated/infra/.terraform/" in content
+    assert "instances/*/*/generated/infra/terraform.auto.tfvars.json" in content
 
     second = _create_non_interactive(deployments_root)
     assert second.exit_code == 0, second.output
@@ -152,6 +154,33 @@ def test_create_skips_deployments_gitignore_when_target_not_in_git_repo(tmp_path
     assert result.exit_code == 0, result.output
 
     assert not (deployments_root / ".gitignore").exists()
+
+
+def test_render_recreates_deployments_gitignore_in_git_repo(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    _git_init(repo_root)
+
+    deployments_root = repo_root / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    create_result = _create_non_interactive(deployments_root)
+    assert create_result.exit_code == 0, create_result.output
+
+    gitignore_path = deployments_root / ".gitignore"
+    assert gitignore_path.exists()
+    gitignore_path.unlink()
+    assert not gitignore_path.exists()
+
+    config_path = _instance_config_path(deployments_root)
+    render_result = runner.invoke(app, ["render", str(config_path)])
+    assert render_result.exit_code == 0, render_result.output
+    assert gitignore_path.exists()
+    content = gitignore_path.read_text(encoding="utf-8")
+    assert "instances/*/*/generated/" not in content.splitlines()
+    assert "instances/*/*/config.yaml" in content
+    assert "instances/*/*/generated/infra/.terraform/" in content
+    assert "instances/*/*/generated/infra/terraform.auto.tfvars.json" in content
 
 
 def test_create_force_overwrites_existing_config(tmp_path: Path) -> None:
@@ -184,7 +213,7 @@ def test_create_uses_defaults_when_no_component_flags(tmp_path: Path) -> None:
     infra_enabled = _infra_enabled_map(payload)
     apps_enabled = _apps_enabled_map(payload)
     assert infra_enabled["mk8s"] is True
-    assert infra_enabled["object-storage"] is True
+    assert "object-storage" not in infra_enabled
     assert "n8n" not in apps_enabled
 
 
@@ -482,6 +511,7 @@ def test_bootstrap_ci_no_auth_writes_workflow_in_repo_root(tmp_path: Path) -> No
     content = workflow.read_text(encoding="utf-8")
     assert "NEBIUS_DISCOVER_TARGET: customer/deployments-root" in content
     assert "customer/deployments-root" in content
+    assert "name: ${{ matrix.github_environment }}" in content
 
 
 def test_bootstrap_ci_no_auth_is_idempotent_without_force(tmp_path: Path) -> None:
@@ -530,21 +560,19 @@ def test_bootstrap_ci_rejects_github_flags_when_no_auth(tmp_path: Path) -> None:
     assert "--github-repo and --github-token-env are valid only when --auth-bootstrap" in result.output
 
 
-def test_auth_bootstrap_rejects_github_flags_when_no_github_sync() -> None:
+def test_auth_rejects_github_flags_when_no_bootstrap_ci() -> None:
     result = runner.invoke(
         app,
         [
             "auth",
-            "bootstrap",
             "--project-id",
             "project-456",
-            "--no-github-sync",
             "--github-repo",
             "owner/repo",
         ],
     )
     assert result.exit_code == 1
-    assert "--github-repo and --github-token-env are valid only when --github-sync" in result.output
+    assert "--github-repo and --github-token-env are valid only with --bootstrap-ci" in result.output
 
 
 def test_discover_accepts_non_git_directory(tmp_path: Path) -> None:
@@ -567,6 +595,7 @@ def test_discover_accepts_non_git_directory(tmp_path: Path) -> None:
         "include": [
             {
                 "config": "deployments/instances/client-a--tenant-123/project-456/config.yaml",
+                "github_environment": "client-a-project-456",
             }
         ]
     }
@@ -596,6 +625,7 @@ def test_discover_in_git_repo_outputs_repo_relative_paths(tmp_path: Path) -> Non
         "include": [
             {
                 "config": "deployments/instances/client-a--tenant-123/project-456/config.yaml",
+                "github_environment": "client-a-project-456",
             }
         ]
     }

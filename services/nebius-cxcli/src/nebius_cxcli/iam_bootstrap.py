@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import re
 from dataclasses import dataclass
 from pathlib import Path
+
+from .sdk_auth import init_nebius_sdk
 
 
 @dataclass(frozen=True)
@@ -44,36 +48,28 @@ def _is_already_exists_error(exc: Exception) -> bool:
     return "already exists" in message or "statuscode.already_exists" in message
 
 
+def _normalize_role_id(role_id: str) -> str:
+    """Normalize common IAM role syntaxes to Nebius access-permit role IDs."""
+    token = role_id.strip()
+    if not token:
+        return ""
+    if token.startswith("roles/"):
+        token = token.split("/", 1)[1]
+    return token
+
+
 def _init_sdk(
     *,
     profile: str | None,
     endpoint: str | None,
     config_file: Path | None,
 ):
-    try:
-        from nebius.aio.cli_config import Config
-        from nebius.sdk import SDK
-    except Exception as exc:  # pragma: no cover - import guard
-        raise RuntimeError(
-            'Nebius SDK is required for auth bootstrap. Install dependencies with `pip install -e ".[dev]"`.'
-        ) from exc
-
-    config_kwargs: dict[str, object] = {}
-    if profile:
-        config_kwargs["profile"] = profile
-    if endpoint:
-        config_kwargs["endpoint"] = endpoint
-    if config_file is not None:
-        config_kwargs["config_file"] = config_file
-
-    try:
-        cfg = Config(**config_kwargs)
-        return SDK(config_reader=cfg)
-    except Exception as exc:  # pragma: no cover - runtime integration
-        raise RuntimeError(
-            "Failed to initialize Nebius SDK credentials. "
-            "Set NEBIUS_IAM_TOKEN (short-lived) or configure ~/.nebius/config.yaml with `nebius auth login`."
-        ) from exc
+    return init_nebius_sdk(
+        profile=profile,
+        endpoint=endpoint,
+        config_file=config_file,
+        context="auth bootstrap",
+    )
 
 
 def _account_ref(service_account_id: str):
@@ -147,7 +143,8 @@ def _ensure_service_account(
 def _ensure_project_role_permits(
     *,
     access_permits,
-    service_account_id: str,
+    permit_parent_id: str,
+    principal_label: str,
     project_id: str,
     role_ids: list[str],
 ) -> tuple[list[str], list[str]]:
@@ -162,14 +159,14 @@ def _ensure_project_role_permits(
     page_token: str | None = None
     while True:
         response = access_permits.list(
-            ListAccessPermitRequest(parent_id=service_account_id, page_token=page_token)
+            ListAccessPermitRequest(parent_id=permit_parent_id, page_token=page_token)
         ).wait()
         for item in list(getattr(response, "items", [])):
             spec = getattr(item, "spec", None)
             if spec is None:
                 continue
             if getattr(spec, "resource_id", "") == project_id:
-                role = getattr(spec, "role", "")
+                role = _normalize_role_id(getattr(spec, "role", ""))
                 if role:
                     existing_roles.add(role)
         page_token = getattr(response, "next_page_token", "") or None
@@ -178,14 +175,17 @@ def _ensure_project_role_permits(
 
     created: list[str] = []
     already_present: list[str] = []
-    for role_id in role_ids:
+    for role_id_raw in role_ids:
+        role_id = _normalize_role_id(role_id_raw)
+        if not role_id:
+            continue
         if role_id in existing_roles:
             already_present.append(role_id)
             continue
         try:
             access_permits.create(
                 CreateAccessPermitRequest(
-                    metadata=ResourceMetadata(parent_id=service_account_id),
+                    metadata=ResourceMetadata(parent_id=permit_parent_id),
                     spec=AccessPermitSpec(resource_id=project_id, role=role_id),
                 )
             ).wait()
@@ -195,10 +195,127 @@ def _ensure_project_role_permits(
                 already_present.append(role_id)
                 continue
             raise RuntimeError(
-                f"Failed to grant role '{role_id}' to service account '{service_account_id}': {exc}"
+                f"Failed to grant role '{role_id}' to {principal_label}: {exc}"
             ) from exc
 
     return created, already_present
+
+
+def _group_name_for_service_account(service_account_name: str) -> str:
+    normalized = re.sub(r"[^a-z0-9-]+", "-", service_account_name.lower()).strip("-")
+    if not normalized:
+        normalized = "nebius-cxcli-sa"
+    suffix = "permits"
+    candidate = f"{normalized}-{suffix}"
+    if len(candidate) <= 63:
+        return candidate
+    digest = hashlib.sha256(candidate.encode("utf-8")).hexdigest()[:8]
+    max_prefix = max(1, 63 - len(suffix) - len(digest) - 2)
+    prefix = normalized[:max_prefix].rstrip("-") or "sa"
+    return f"{prefix}-{suffix}-{digest}"
+
+
+def _ensure_group(
+    *,
+    groups,
+    project_id: str,
+    group_name: str,
+) -> tuple[str, bool]:
+    from nebius.api.nebius.common.v1 import ResourceMetadata
+    from nebius.api.nebius.iam.v1 import CreateGroupRequest, GetGroupByNameRequest, GroupSpec
+
+    try:
+        existing = groups.get_by_name(
+            GetGroupByNameRequest(parent_id=project_id, name=group_name)
+        ).wait()
+        existing_id = getattr(getattr(existing, "metadata", None), "id", "")
+        if existing_id:
+            return existing_id, False
+    except Exception as exc:
+        if not _is_not_found_error(exc):
+            raise RuntimeError(f"Failed to fetch IAM group '{group_name}': {exc}") from exc
+
+    try:
+        operation = groups.create(
+            CreateGroupRequest(
+                metadata=ResourceMetadata(parent_id=project_id, name=group_name),
+                spec=GroupSpec(),
+            )
+        ).wait()
+    except Exception as exc:
+        if _is_already_exists_error(exc):
+            existing = groups.get_by_name(
+                GetGroupByNameRequest(parent_id=project_id, name=group_name)
+            ).wait()
+            existing_id = getattr(getattr(existing, "metadata", None), "id", "")
+            if existing_id:
+                return existing_id, False
+        raise RuntimeError(f"Failed to create IAM group '{group_name}': {exc}") from exc
+
+    group_id = getattr(operation, "resource_id", "")
+    if group_id:
+        return group_id, True
+
+    existing = groups.get_by_name(GetGroupByNameRequest(parent_id=project_id, name=group_name)).wait()
+    existing_id = getattr(getattr(existing, "metadata", None), "id", "")
+    if existing_id:
+        return existing_id, True
+    raise RuntimeError(f"IAM group '{group_name}' was created but its ID could not be resolved")
+
+
+def _group_member_ids(
+    *,
+    group_memberships,
+    group_id: str,
+) -> set[str]:
+    from nebius.api.nebius.iam.v1 import ListGroupMembershipsRequest
+
+    members: set[str] = set()
+    page_token: str | None = None
+    while True:
+        response = group_memberships.list_members(
+            ListGroupMembershipsRequest(parent_id=group_id, page_token=page_token)
+        ).wait()
+        for membership in list(getattr(response, "memberships", [])):
+            spec = getattr(membership, "spec", None)
+            if spec is None:
+                continue
+            member_id = getattr(spec, "member_id", "")
+            if member_id:
+                members.add(member_id)
+        page_token = getattr(response, "next_page_token", "") or None
+        if not page_token:
+            break
+    return members
+
+
+def _ensure_group_membership(
+    *,
+    group_memberships,
+    group_id: str,
+    member_id: str,
+) -> bool:
+    from nebius.api.nebius.common.v1 import ResourceMetadata
+    from nebius.api.nebius.iam.v1 import CreateGroupMembershipRequest, GroupMembershipSpec
+
+    members = _group_member_ids(group_memberships=group_memberships, group_id=group_id)
+    if member_id in members:
+        return False
+
+    try:
+        group_memberships.create(
+            CreateGroupMembershipRequest(
+                metadata=ResourceMetadata(parent_id=group_id),
+                spec=GroupMembershipSpec(member_id=member_id),
+            )
+        ).wait()
+        return True
+    except Exception as exc:
+        if _is_already_exists_error(exc):
+            return False
+        raise RuntimeError(
+            f"Failed to add member '{member_id}' to IAM group '{group_id}': {exc}"
+        ) from exc
 
 
 def _generate_rsa_key_pair_pem() -> tuple[str, str]:
@@ -216,15 +333,15 @@ def _generate_rsa_key_pair_pem() -> tuple[str, str]:
         format=serialization.PrivateFormat.PKCS8,
         encryption_algorithm=serialization.NoEncryption(),
     ).decode("utf-8")
-    public_ssh = (
+    public_pem = (
         private_key.public_key()
         .public_bytes(
-            encoding=serialization.Encoding.OpenSSH,
-            format=serialization.PublicFormat.OpenSSH,
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
         )
         .decode("utf-8")
     )
-    return private_pem, public_ssh
+    return private_pem, public_pem
 
 
 def _create_auth_public_key(
@@ -237,7 +354,7 @@ def _create_auth_public_key(
     from nebius.api.nebius.common.v1 import ResourceMetadata
     from nebius.api.nebius.iam.v1 import AuthPublicKeySpec, CreateAuthPublicKeyRequest
 
-    private_pem, public_ssh = _generate_rsa_key_pair_pem()
+    private_pem, public_pem = _generate_rsa_key_pair_pem()
     try:
         operation = auth_keys.create(
             CreateAuthPublicKeyRequest(
@@ -245,7 +362,7 @@ def _create_auth_public_key(
                 spec=AuthPublicKeySpec(
                     account=_account_ref(service_account_id),
                     description=description,
-                    data=public_ssh,
+                    data=public_pem,
                 ),
             )
         ).wait()
@@ -394,9 +511,16 @@ def ensure_ci_service_account_identity(
 
     sdk = _init_sdk(profile=profile, endpoint=endpoint, config_file=config_file)
 
-    from nebius.api.nebius.iam.v1 import AccessPermitServiceClient, ServiceAccountServiceClient
+    from nebius.api.nebius.iam.v1 import (
+        AccessPermitServiceClient,
+        GroupMembershipServiceClient,
+        GroupServiceClient,
+        ServiceAccountServiceClient,
+    )
 
     service_accounts = ServiceAccountServiceClient(sdk)
+    groups = GroupServiceClient(sdk)
+    group_memberships = GroupMembershipServiceClient(sdk)
     access_permits = AccessPermitServiceClient(sdk)
 
     service_account_id, service_account_created = _ensure_service_account(
@@ -406,9 +530,22 @@ def ensure_ci_service_account_identity(
         service_account_description=service_account_description,
     )
 
+    permit_group_name = _group_name_for_service_account(service_account_name)
+    permit_group_id, _ = _ensure_group(
+        groups=groups,
+        project_id=project_id,
+        group_name=permit_group_name,
+    )
+    _ensure_group_membership(
+        group_memberships=group_memberships,
+        group_id=permit_group_id,
+        member_id=service_account_id,
+    )
+
     roles_created, roles_already_present = _ensure_project_role_permits(
         access_permits=access_permits,
-        service_account_id=service_account_id,
+        permit_parent_id=permit_group_id,
+        principal_label=f"IAM group '{permit_group_name}'",
         project_id=project_id,
         role_ids=role_ids,
     )
@@ -421,3 +558,27 @@ def ensure_ci_service_account_identity(
         roles_created=roles_created,
         roles_already_present=roles_already_present,
     )
+
+
+def auth_public_key_exists(
+    *,
+    auth_public_key_id: str,
+    profile: str | None,
+    endpoint: str | None,
+    config_file: Path | None,
+) -> bool:
+    """Return true when IAM auth public key exists and is readable."""
+    sdk = _init_sdk(profile=profile, endpoint=endpoint, config_file=config_file)
+
+    from nebius.api.nebius.iam.v1 import AuthPublicKeyServiceClient, GetAuthPublicKeyRequest
+
+    auth_keys = AuthPublicKeyServiceClient(sdk)
+    try:
+        auth_keys.get(GetAuthPublicKeyRequest(id=auth_public_key_id)).wait()
+        return True
+    except Exception as exc:
+        if _is_not_found_error(exc):
+            return False
+        raise RuntimeError(
+            f"Failed to verify auth public key '{auth_public_key_id}' via Nebius API: {exc}"
+        ) from exc

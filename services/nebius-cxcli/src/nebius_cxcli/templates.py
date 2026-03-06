@@ -72,6 +72,8 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
             if: github.event_name == 'pull_request'
             needs: [ discover ]
             runs-on: ubuntu-latest
+            environment:
+              name: ${{{{ matrix.github_environment }}}}
             strategy:
               fail-fast: false
               matrix: ${{{{ fromJson(needs.discover.outputs.discovery) }}}}
@@ -92,16 +94,20 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                   NEBIUS_SA_ID: ${{{{ secrets.NEBIUS_SA_ID }}}}
                   NEBIUS_AUTH_PUBLIC_KEY_ID: ${{{{ secrets.NEBIUS_AUTH_PUBLIC_KEY_ID }}}}
                   NEBIUS_AUTH_PRIVATE_KEY_PEM: ${{{{ secrets.NEBIUS_AUTH_PRIVATE_KEY_PEM }}}}
+                  NEBIUS_S3_ACCESS_KEY_ID: ${{{{ secrets.NEBIUS_S3_ACCESS_KEY_ID }}}}
+                  NEBIUS_S3_SECRET_ACCESS_KEY: ${{{{ secrets.NEBIUS_S3_SECRET_ACCESS_KEY }}}}
                 run: |
                   set -euo pipefail
-                  if [[ -z "${{NEBIUS_SA_ID:-}}" || -z "${{NEBIUS_AUTH_PUBLIC_KEY_ID:-}}" || -z "${{NEBIUS_AUTH_PRIVATE_KEY_PEM:-}}" ]]; then
-                    echo "Missing required secrets: NEBIUS_SA_ID, NEBIUS_AUTH_PUBLIC_KEY_ID, NEBIUS_AUTH_PRIVATE_KEY_PEM"
+                  if [[ -z "${{NEBIUS_SA_ID:-}}" || -z "${{NEBIUS_AUTH_PUBLIC_KEY_ID:-}}" || -z "${{NEBIUS_AUTH_PRIVATE_KEY_PEM:-}}" || -z "${{NEBIUS_S3_ACCESS_KEY_ID:-}}" || -z "${{NEBIUS_S3_SECRET_ACCESS_KEY:-}}" ]]; then
+                    echo "Missing required secrets: NEBIUS_SA_ID, NEBIUS_AUTH_PUBLIC_KEY_ID, NEBIUS_AUTH_PRIVATE_KEY_PEM, NEBIUS_S3_ACCESS_KEY_ID, NEBIUS_S3_SECRET_ACCESS_KEY"
                     exit 1
                   fi
                   KEY_PATH="${{RUNNER_TEMP}}/nebius-auth-private.pem"
                   printf '%s\\n' "${{NEBIUS_AUTH_PRIVATE_KEY_PEM}}" > "${{KEY_PATH}}"
                   chmod 600 "${{KEY_PATH}}"
                   echo "NEBIUS_AUTH_PRIVATE_KEY_FILE=${{KEY_PATH}}" >> "$GITHUB_ENV"
+                  echo "AWS_ACCESS_KEY_ID=${{NEBIUS_S3_ACCESS_KEY_ID}}" >> "$GITHUB_ENV"
+                  echo "AWS_SECRET_ACCESS_KEY=${{NEBIUS_S3_SECRET_ACCESS_KEY}}" >> "$GITHUB_ENV"
 
               - name: Validate and render
                 run: |
@@ -121,6 +127,8 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
             if: github.event_name == 'push' && github.ref == 'refs/heads/main'
             needs: [ discover ]
             runs-on: ubuntu-latest
+            environment:
+              name: ${{{{ matrix.github_environment }}}}
             strategy:
               fail-fast: false
               matrix: ${{{{ fromJson(needs.discover.outputs.discovery) }}}}
@@ -141,16 +149,20 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                   NEBIUS_SA_ID: ${{{{ secrets.NEBIUS_SA_ID }}}}
                   NEBIUS_AUTH_PUBLIC_KEY_ID: ${{{{ secrets.NEBIUS_AUTH_PUBLIC_KEY_ID }}}}
                   NEBIUS_AUTH_PRIVATE_KEY_PEM: ${{{{ secrets.NEBIUS_AUTH_PRIVATE_KEY_PEM }}}}
+                  NEBIUS_S3_ACCESS_KEY_ID: ${{{{ secrets.NEBIUS_S3_ACCESS_KEY_ID }}}}
+                  NEBIUS_S3_SECRET_ACCESS_KEY: ${{{{ secrets.NEBIUS_S3_SECRET_ACCESS_KEY }}}}
                 run: |
                   set -euo pipefail
-                  if [[ -z "${{NEBIUS_SA_ID:-}}" || -z "${{NEBIUS_AUTH_PUBLIC_KEY_ID:-}}" || -z "${{NEBIUS_AUTH_PRIVATE_KEY_PEM:-}}" ]]; then
-                    echo "Missing required secrets: NEBIUS_SA_ID, NEBIUS_AUTH_PUBLIC_KEY_ID, NEBIUS_AUTH_PRIVATE_KEY_PEM"
+                  if [[ -z "${{NEBIUS_SA_ID:-}}" || -z "${{NEBIUS_AUTH_PUBLIC_KEY_ID:-}}" || -z "${{NEBIUS_AUTH_PRIVATE_KEY_PEM:-}}" || -z "${{NEBIUS_S3_ACCESS_KEY_ID:-}}" || -z "${{NEBIUS_S3_SECRET_ACCESS_KEY:-}}" ]]; then
+                    echo "Missing required secrets: NEBIUS_SA_ID, NEBIUS_AUTH_PUBLIC_KEY_ID, NEBIUS_AUTH_PRIVATE_KEY_PEM, NEBIUS_S3_ACCESS_KEY_ID, NEBIUS_S3_SECRET_ACCESS_KEY"
                     exit 1
                   fi
                   KEY_PATH="${{RUNNER_TEMP}}/nebius-auth-private.pem"
                   printf '%s\\n' "${{NEBIUS_AUTH_PRIVATE_KEY_PEM}}" > "${{KEY_PATH}}"
                   chmod 600 "${{KEY_PATH}}"
                   echo "NEBIUS_AUTH_PRIVATE_KEY_FILE=${{KEY_PATH}}" >> "$GITHUB_ENV"
+                  echo "AWS_ACCESS_KEY_ID=${{NEBIUS_S3_ACCESS_KEY_ID}}" >> "$GITHUB_ENV"
+                  echo "AWS_SECRET_ACCESS_KEY=${{NEBIUS_S3_SECRET_ACCESS_KEY}}" >> "$GITHUB_ENV"
 
               - name: Validate and render
                 run: |
@@ -227,12 +239,9 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
 
               - name: Inventory outputs
                 env:
-                  AWS_ACCESS_KEY_ID: ${{{{ secrets.NEBIUS_S3_ACCESS_KEY_ID }}}}
-                  AWS_SECRET_ACCESS_KEY: ${{{{ secrets.NEBIUS_S3_SECRET_ACCESS_KEY }}}}
                   SMTP_PASSWORD: ${{{{ secrets.SMTP_PASSWORD }}}}
                 run: |
                   nebius-cxcli inventory write "${{{{ matrix.config }}}}"
-                  nebius-cxcli inventory upload "${{{{ matrix.config }}}}"
                   nebius-cxcli email "${{{{ matrix.config }}}}"
         """
         ).strip()

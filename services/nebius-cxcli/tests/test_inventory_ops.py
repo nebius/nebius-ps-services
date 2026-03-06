@@ -3,13 +3,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
 import yaml
 
 from nebius_cxcli.components import component_entries, reset_component_entry_cache
 from nebius_cxcli.config_loader import load_config
 from nebius_cxcli.config_template import starter_config_yaml
-from nebius_cxcli.inventory_ops import upload_inventory, write_inventory
+from nebius_cxcli.inventory_ops import write_inventory
 from nebius_cxcli.paths import resolve_instance_paths, validate_path_alignment
 
 
@@ -102,67 +101,3 @@ def test_write_inventory_handles_dynamic_component_model(tmp_path: Path) -> None
     apps_payload = json.loads(artifacts.apps_json.read_text(encoding="utf-8"))
     assert apps_payload["n8n"]["enabled"] is True
     assert apps_payload["n8n"]["hostname"] == "n8n.example.com"
-
-
-def test_upload_inventory_requires_enabled_object_storage_component(tmp_path: Path) -> None:
-    reset_component_entry_cache()
-    config_path = _instance_config_path(tmp_path)
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-
-    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
-    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-
-    config = load_config(config_path)
-    paths = resolve_instance_paths(config_path)
-    validate_path_alignment(config, paths)
-
-    with pytest.raises(RuntimeError, match="object-storage"):
-        upload_inventory(config, paths)
-
-
-def test_upload_inventory_uses_dynamic_object_storage_inputs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    reset_component_entry_cache()
-    config_path = _instance_config_path(tmp_path)
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-
-    payload = _starter_payload(selected_infra={"mk8s", "object-storage"}, selected_apps=set())
-    object_storage = _infra_component_row(payload, "object-storage")
-    object_storage["enabled"] = True
-    object_storage_inputs = object_storage.setdefault("inputs", {})
-    assert isinstance(object_storage_inputs, dict)
-    object_storage_inputs["inventory_bucket"] = {
-        "name": "inventory-bucket",
-        "prefix": "inventory",
-    }
-
-    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-
-    config = load_config(config_path)
-    paths = resolve_instance_paths(config_path)
-    validate_path_alignment(config, paths)
-
-    class _FakeS3Client:
-        def __init__(self) -> None:
-            self.uploads: list[tuple[str, str, str]] = []
-
-        def upload_file(self, source_path: str, bucket: str, key: str) -> None:
-            self.uploads.append((source_path, bucket, key))
-
-    fake_client = _FakeS3Client()
-
-    def _fake_boto3_client(service_name: str, *, endpoint_url: str, region_name: str):
-        assert service_name == "s3"
-        assert endpoint_url == "https://storage.eu-north1.nebius.cloud"
-        assert region_name == "eu-north1"
-        return fake_client
-
-    monkeypatch.setattr("nebius_cxcli.inventory_ops.boto3.client", _fake_boto3_client)
-
-    uploaded_keys = upload_inventory(config, paths)
-    assert len(uploaded_keys) == 6
-    assert all(
-        key.startswith("inventory/client-a--tenant-123/project-456/") for key in uploaded_keys
-    )
-    assert all(bucket == "inventory-bucket" for _, bucket, _ in fake_client.uploads)

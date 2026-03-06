@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,6 +10,11 @@ from typer.testing import CliRunner
 import nebius_cxcli.cli as cli
 
 runner = CliRunner()
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+
+def _plain_output(text: str) -> str:
+    return _ANSI_ESCAPE_RE.sub("", text)
 
 
 def _fake_paths(tmp_path: Path) -> SimpleNamespace:
@@ -20,28 +26,6 @@ def _fake_paths(tmp_path: Path) -> SimpleNamespace:
     )
 
 
-def _identity_result(*, created: bool = False) -> SimpleNamespace:
-    return SimpleNamespace(
-        service_account_created=created,
-        roles_created=[],
-        roles_already_present=["roles/editor"],
-        service_account_id="sa-123",
-    )
-
-
-def _bootstrap_result(*, created: bool = True, private_key_pem: str = "PRIVATE-KEY") -> SimpleNamespace:
-    return SimpleNamespace(
-        service_account_created=created,
-        roles_created=["roles/editor"],
-        roles_already_present=[],
-        service_account_id="sa-123",
-        auth_public_key_id="auth-key-123",
-        auth_private_key_pem=private_key_pem,
-        s3_access_key_id="s3-key-123",
-        s3_secret_access_key="s3-secret-123",
-    )
-
-
 def test_validate_command_non_strict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cli, "_load_context", lambda _path: (object(), object()))
     monkeypatch.setattr(cli, "_validate_component_dependencies", lambda _cfg: [])
@@ -49,7 +33,7 @@ def test_validate_command_non_strict(tmp_path: Path, monkeypatch: pytest.MonkeyP
     result = runner.invoke(cli.app, ["validate", str(tmp_path / "config.yaml")])
 
     assert result.exit_code == 0, result.output
-    assert "Valid:" in result.output
+    assert "Valid:" in _plain_output(result.output)
 
 
 def test_validate_command_strict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -66,7 +50,7 @@ def test_validate_command_strict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     result = runner.invoke(cli.app, ["validate", "--strict", str(tmp_path / "config.yaml")])
 
     assert result.exit_code == 0, result.output
-    assert "Valid (strict):" in result.output
+    assert "Valid (strict):" in _plain_output(result.output)
     assert strict_called["called"] is True
 
 
@@ -82,12 +66,30 @@ def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.Mon
         return SimpleNamespace(files_written=[tmp_path / "a.tf", tmp_path / "b.yaml"])
 
     monkeypatch.setattr(cli, "render_instance", _fake_render_instance)
+    monkeypatch.setattr(
+        cli,
+        "_try_generate_terraform_lock_file",
+        lambda config, paths: (
+            calls.update(
+                {
+                    "lock_config": config,
+                    "lock_paths": paths,
+                }
+            )
+            or False
+        ),
+    )
 
     result = runner.invoke(cli.app, ["render", str(tmp_path / "config.yaml")])
 
     assert result.exit_code == 0, result.output
-    assert "Rendered 2 file(s)" in result.output
-    assert calls == {"config": "cfg", "paths": fake_paths}
+    assert "Rendered 2 file(s)" in _plain_output(result.output)
+    assert calls == {
+        "config": "cfg",
+        "paths": fake_paths,
+        "lock_config": "cfg",
+        "lock_paths": fake_paths,
+    }
 
 
 def test_deploy_command_passes_auto_auth_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -110,8 +112,9 @@ def test_deploy_command_passes_auto_auth_flag(tmp_path: Path, monkeypatch: pytes
     )
 
     assert result.exit_code == 0, result.output
-    assert "Rendered 4 file(s)" in result.output
-    assert "Local deploy completed." in result.output
+    output = _plain_output(result.output)
+    assert "Rendered 4 file(s)" in output
+    assert "Local deploy completed." in output
     assert captured == {
         "config": "cfg",
         "paths": fake_paths,
@@ -127,21 +130,17 @@ def test_terraform_plan_command_invokes_runtime_auth_and_plan(
 
     monkeypatch.setattr(cli, "_load_context", lambda _path: ("cfg", fake_paths))
 
-    def _fake_ensure_runtime_auth_material(
-        config: object,
-        *,
-        need_terraform: bool,
-        need_eso_mysterybox: bool,
-        auto_bootstrap: bool,
+    def _fake_ensure_terraform_backend_ready(
+        config: object, *, auto_auth_bootstrap: bool
     ) -> None:
-        captured["auth"] = {
+        captured["backend"] = {
             "config": config,
-            "need_terraform": need_terraform,
-            "need_eso_mysterybox": need_eso_mysterybox,
-            "auto_bootstrap": auto_bootstrap,
+            "auto_auth_bootstrap": auto_auth_bootstrap,
         }
 
-    monkeypatch.setattr(cli, "_ensure_runtime_auth_material", _fake_ensure_runtime_auth_material)
+    monkeypatch.setattr(
+        cli, "_ensure_terraform_backend_ready", _fake_ensure_terraform_backend_ready
+    )
     monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _cfg: {"TF_VAR_DEMO": "1"})
 
     def _fake_terraform_plan(infra_dir: Path, *, extra_env: dict[str, str] | None = None) -> None:
@@ -155,11 +154,9 @@ def test_terraform_plan_command_invokes_runtime_auth_and_plan(
     )
 
     assert result.exit_code == 0, result.output
-    assert captured["auth"] == {
+    assert captured["backend"] == {
         "config": "cfg",
-        "need_terraform": True,
-        "need_eso_mysterybox": False,
-        "auto_bootstrap": True,
+        "auto_auth_bootstrap": True,
     }
     assert captured["plan"] == {
         "infra_dir": fake_paths.infra_dir,
@@ -175,21 +172,17 @@ def test_terraform_apply_command_invokes_runtime_auth_and_apply(
 
     monkeypatch.setattr(cli, "_load_context", lambda _path: ("cfg", fake_paths))
 
-    def _fake_ensure_runtime_auth_material(
-        config: object,
-        *,
-        need_terraform: bool,
-        need_eso_mysterybox: bool,
-        auto_bootstrap: bool,
+    def _fake_ensure_terraform_backend_ready(
+        config: object, *, auto_auth_bootstrap: bool
     ) -> None:
-        captured["auth"] = {
+        captured["backend"] = {
             "config": config,
-            "need_terraform": need_terraform,
-            "need_eso_mysterybox": need_eso_mysterybox,
-            "auto_bootstrap": auto_bootstrap,
+            "auto_auth_bootstrap": auto_auth_bootstrap,
         }
 
-    monkeypatch.setattr(cli, "_ensure_runtime_auth_material", _fake_ensure_runtime_auth_material)
+    monkeypatch.setattr(
+        cli, "_ensure_terraform_backend_ready", _fake_ensure_terraform_backend_ready
+    )
     monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _cfg: {"TF_VAR_DEMO": "1"})
 
     def _fake_terraform_apply(infra_dir: Path, *, extra_env: dict[str, str] | None = None) -> None:
@@ -203,11 +196,9 @@ def test_terraform_apply_command_invokes_runtime_auth_and_apply(
     )
 
     assert result.exit_code == 0, result.output
-    assert captured["auth"] == {
+    assert captured["backend"] == {
         "config": "cfg",
-        "need_terraform": True,
-        "need_eso_mysterybox": False,
-        "auto_bootstrap": True,
+        "auto_auth_bootstrap": True,
     }
     assert captured["apply"] == {
         "infra_dir": fake_paths.infra_dir,
@@ -244,7 +235,7 @@ def test_flux_bootstrap_command_invokes_flux_ops(tmp_path: Path, monkeypatch: py
     )
 
     assert result.exit_code == 0, result.output
-    assert "Flux reconciled" in result.output
+    assert "Flux reconciled" in _plain_output(result.output)
     assert captured["auth"] == {
         "config": "cfg",
         "need_terraform": False,
@@ -261,15 +252,11 @@ def test_inventory_commands_invoke_inventory_ops(tmp_path: Path, monkeypatch: py
         "write_inventory",
         lambda _cfg, _paths: SimpleNamespace(markdown=tmp_path / "generated" / "inventory" / "inventory.md"),
     )
-    monkeypatch.setattr(cli, "upload_inventory", lambda _cfg, _paths: ["a", "b", "c"])
 
     write_result = runner.invoke(cli.app, ["inventory", "write", str(tmp_path / "config.yaml")])
-    upload_result = runner.invoke(cli.app, ["inventory", "upload", str(tmp_path / "config.yaml")])
 
     assert write_result.exit_code == 0, write_result.output
-    assert "Inventory written:" in write_result.output
-    assert upload_result.exit_code == 0, upload_result.output
-    assert "Uploaded 3 inventory object(s)" in upload_result.output
+    assert "Inventory written:" in _plain_output(write_result.output)
 
 
 def test_email_command_handles_sent_and_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -279,12 +266,36 @@ def test_email_command_handles_sent_and_noop(tmp_path: Path, monkeypatch: pytest
     monkeypatch.setattr(cli, "send_inventory_email", lambda _cfg, _paths: True)
     sent_result = runner.invoke(cli.app, ["email", str(tmp_path / "config.yaml")])
     assert sent_result.exit_code == 0, sent_result.output
-    assert "Inventory email sent" in sent_result.output
+    assert "Inventory email sent" in _plain_output(sent_result.output)
 
     monkeypatch.setattr(cli, "send_inventory_email", lambda _cfg, _paths: False)
     noop_result = runner.invoke(cli.app, ["email", str(tmp_path / "config.yaml")])
     assert noop_result.exit_code == 0, noop_result.output
-    assert "client_info.notifications.email not configured; nothing sent" in noop_result.output
+    assert "client_info.notifications.email not configured; nothing sent" in _plain_output(
+        noop_result.output
+    )
+
+
+def test_top_level_help_has_single_auth_command_surface() -> None:
+    result = runner.invoke(cli.app, ["--help"])
+    assert result.exit_code == 0, result.output
+    output = _plain_output(result.output)
+    assert "Manage runtime auth profile" in output
+    assert "auth-runtime-profile" not in output
+    assert re.search(r"\bauth\b", output) is not None
+
+
+def test_auth_help_has_no_subcommand_layer() -> None:
+    result = runner.invoke(cli.app, ["auth", "--help"])
+    assert result.exit_code == 0, result.output
+    output = _plain_output(result.output)
+    assert "Usage: " in output
+    assert "auth [OPTIONS]" in output
+    assert "COMMAND [ARGS]" not in output
+    assert "--validate-profile" in output
+    assert "--create" in output
+    assert "--recreate" in output
+    assert "--bootstrap-ci" in output
 
 
 def test_bootstrap_ci_command_with_auth_passes_github_flags(
@@ -293,6 +304,7 @@ def test_bootstrap_ci_command_with_auth_passes_github_flags(
     fake_paths = _fake_paths(tmp_path)
     fake_config = SimpleNamespace(
         client_info=SimpleNamespace(
+            client_name="client-a",
             nebius=SimpleNamespace(project_id="project-123"),
         )
     )
@@ -330,166 +342,162 @@ def test_bootstrap_ci_command_with_auth_passes_github_flags(
     )
 
     assert result.exit_code == 0, result.output
-    assert "CI bootstrap completed." in result.output
+    assert "CI bootstrap completed." in _plain_output(result.output)
     assert captured["project_id"] == "project-123"
+    assert captured["github_environment"] == "client-a-project-123"
     assert captured["github_repo"] == "owner/repo"
     assert captured["github_token_env"] == "MY_GH_TOKEN"
 
 
-def test_auth_bootstrap_no_github_sync_identity_only(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(cli, "ensure_ci_service_account_identity", lambda **_kwargs: _identity_result())
+def test_auth_requires_action_flag() -> None:
+    result = runner.invoke(cli.app, ["auth", "--project-id", "project-123"])
+    assert result.exit_code == 1
+    assert "Select at least one action" in _plain_output(result.output)
+
+
+def test_auth_create_warns_if_profile_exists(monkeypatch: pytest.MonkeyPatch) -> None:
+    material = cli.RuntimeAuthCacheMaterial(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="sa-123",
+        auth_public_key_id="auth-key-123",
+        private_key_file=Path("/tmp/nebius-cxcli/client-a-project-123/auth-private.pem"),
+        private_key_pem="KEY-DATA",
+        s3_access_key_id=None,
+        s3_secret_access_key=None,
+    )
     monkeypatch.setattr(
         cli,
-        "bootstrap_ci_service_account",
-        lambda **_kwargs: pytest.fail("bootstrap_ci_service_account should not be called"),
+        "_create_or_recreate_runtime_auth_profile",
+        lambda **_kwargs: (material, False),
     )
 
     result = runner.invoke(
         cli.app,
-        ["auth", "bootstrap", "--project-id", "project-123", "--no-github-sync"],
+        ["auth", "--project-id", "project-123", "--client-name", "client-a", "--create"],
     )
 
     assert result.exit_code == 0, result.output
-    assert "No key rotation performed." in result.output
-    assert "GitHub sync is disabled." in result.output
+    assert "Runtime auth profile already exists" in _plain_output(result.output)
 
 
-def test_auth_bootstrap_no_github_sync_create_keys_writes_private_key(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    private_key_path = tmp_path / "ci-auth.pem"
-
-    monkeypatch.setattr(
-        cli,
-        "bootstrap_ci_service_account",
-        lambda **_kwargs: _bootstrap_result(private_key_pem="KEY-DATA"),
+def test_auth_recreate_forces_profile_rotation(monkeypatch: pytest.MonkeyPatch) -> None:
+    material = cli.RuntimeAuthCacheMaterial(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="sa-123",
+        auth_public_key_id="auth-key-123",
+        private_key_file=Path("/tmp/nebius-cxcli/client-a-project-123/auth-private.pem"),
+        private_key_pem="KEY-DATA",
+        s3_access_key_id=None,
+        s3_secret_access_key=None,
     )
     monkeypatch.setattr(
         cli,
-        "ensure_ci_service_account_identity",
-        lambda **_kwargs: pytest.fail("ensure_ci_service_account_identity should not be called"),
+        "_create_or_recreate_runtime_auth_profile",
+        lambda **_kwargs: (material, True),
+    )
+
+    result = runner.invoke(
+        cli.app,
+        ["auth", "--project-id", "project-123", "--client-name", "client-a", "--recreate"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Recreated runtime auth profile for project 'project-123'" in _plain_output(result.output)
+
+
+def test_auth_bootstrap_ci_syncs_runtime_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    material = cli.RuntimeAuthCacheMaterial(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="sa-123",
+        auth_public_key_id="auth-key-123",
+        private_key_file=Path("/tmp/nebius-cxcli/client-a-project-123/auth-private.pem"),
+        private_key_pem="KEY-DATA",
+        s3_access_key_id=None,
+        s3_secret_access_key=None,
+    )
+    monkeypatch.setattr(cli, "_runtime_auth_cache_material", lambda **_kwargs: material)
+    monkeypatch.setattr(
+        cli,
+        "_sync_runtime_auth_profile_to_ci_environment",
+        lambda **_kwargs: ("owner/repo", "client-a-project-123", ["A", "B"]),
     )
 
     result = runner.invoke(
         cli.app,
         [
             "auth",
-            "bootstrap",
             "--project-id",
             "project-123",
-            "--no-github-sync",
-            "--create-keys",
-            "--private-key-out",
-            str(private_key_path),
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert "Authorized key created." in result.output
-    assert "Private key file written." in result.output
-    assert private_key_path.read_text(encoding="utf-8") == "KEY-DATA"
-
-
-def test_auth_bootstrap_github_sync_no_flux_token_flag_skips_flux_secret(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict[str, object] = {}
-
-    monkeypatch.setattr(cli, "read_github_token", lambda preferred_env: "gh-token")
-    monkeypatch.setattr(
-        cli,
-        "_resolve_github_repo_slug",
-        lambda *, explicit_repo_slug, repo_root: explicit_repo_slug or "owner/repo",
-    )
-
-    def _fake_presence(*, repo_slug: str, token: str, names: list[str]) -> dict[str, bool]:
-        captured["repo_slug"] = repo_slug
-        captured["token"] = token
-        captured["names"] = list(names)
-        return {name: True for name in names}
-
-    monkeypatch.setattr(cli, "repo_secrets_presence", _fake_presence)
-    monkeypatch.setattr(cli, "ensure_ci_service_account_identity", lambda **_kwargs: _identity_result())
-    monkeypatch.setattr(
-        cli,
-        "bootstrap_ci_service_account",
-        lambda **_kwargs: pytest.fail("bootstrap_ci_service_account should not be called"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "upsert_repo_secrets",
-        lambda **_kwargs: pytest.fail("upsert_repo_secrets should not be called"),
-    )
-
-    result = runner.invoke(
-        cli.app,
-        [
-            "auth",
-            "bootstrap",
-            "--project-id",
-            "project-123",
+            "--client-name",
+            "client-a",
+            "--bootstrap-ci",
             "--github-repo",
             "owner/repo",
-            "--github-token-env",
-            "MY_GH_TOKEN",
-            "--no-github-set-flux-token",
         ],
     )
 
     assert result.exit_code == 0, result.output
-    assert "GitHub Actions secrets already present in owner/repo; no sync changes." in result.output
-    assert cli.FLUX_SECRET_KEY not in captured["names"]
+    output = _plain_output(result.output)
+    assert "Synced GitHub environment secrets to owner/repo/client-a-project-123" in output
+    assert "2" in output
 
 
-def test_auth_bootstrap_github_sync_flux_only_sync_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, object] = {}
-
-    monkeypatch.setattr(cli, "read_github_token", lambda preferred_env: "gh-token")
-    monkeypatch.setattr(
-        cli,
-        "_resolve_github_repo_slug",
-        lambda *, explicit_repo_slug, repo_root: explicit_repo_slug or "owner/repo",
+def test_auth_validate_profile_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    status = cli.RuntimeAuthProfileStatus(
+        project_id="project-123",
+        client_name="client-a",
+        cache_dir=Path("/tmp/nebius-cxcli/client-a-project-123"),
+        metadata_file=Path("/tmp/nebius-cxcli/client-a-project-123/runtime-auth.json"),
+        metadata_exists=True,
+        service_account_id="sa-123",
+        auth_public_key_id="auth-key-123",
+        private_key_file=Path("/tmp/nebius-cxcli/client-a-project-123/auth-private.pem"),
+        private_key_exists=True,
+        cloud_public_key_exists=True,
+        cloud_check_error=None,
+        issues=(),
     )
-
-    def _fake_presence(*, repo_slug: str, token: str, names: list[str]) -> dict[str, bool]:
-        return {
-            name: (name != cli.FLUX_SECRET_KEY)
-            for name in names
-        }
-
-    monkeypatch.setattr(cli, "repo_secrets_presence", _fake_presence)
-    monkeypatch.setattr(cli, "ensure_ci_service_account_identity", lambda **_kwargs: _identity_result())
-    monkeypatch.setattr(
-        cli,
-        "bootstrap_ci_service_account",
-        lambda **_kwargs: pytest.fail("bootstrap_ci_service_account should not be called"),
-    )
-
-    def _fake_upsert_repo_secrets(*, repo_slug: str, token: str, secrets: dict[str, str]) -> list[str]:
-        captured["repo_slug"] = repo_slug
-        captured["token"] = token
-        captured["secrets"] = dict(secrets)
-        return [cli.FLUX_SECRET_KEY]
-
-    monkeypatch.setattr(cli, "upsert_repo_secrets", _fake_upsert_repo_secrets)
+    monkeypatch.setattr(cli, "_runtime_auth_profile_status", lambda **_kwargs: status)
+    monkeypatch.setattr(cli, "_resolve_project_id_for_auth_bootstrap", lambda **_kwargs: "project-123")
 
     result = runner.invoke(
         cli.app,
-        ["auth", "bootstrap", "--project-id", "project-123", "--github-repo", "owner/repo"],
+        ["auth", "--project-id", "project-123", "--client-name", "client-a", "--validate-profile"],
     )
 
     assert result.exit_code == 0, result.output
-    assert "Synced missing FLUX_GITHUB_TOKEN to owner/repo." in result.output
-    assert captured["secrets"] == {cli.FLUX_SECRET_KEY: "gh-token"}
+    output = _plain_output(result.output)
+    assert "Project ID: project-123" in output
+    assert "Profile status: OK" in output
 
 
-def test_auth_bootstrap_json_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(cli, "ensure_ci_service_account_identity", lambda **_kwargs: _identity_result())
+def test_auth_validate_profile_fails_on_invalid_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    status = cli.RuntimeAuthProfileStatus(
+        project_id="project-123",
+        client_name="client-a",
+        cache_dir=Path("/tmp/nebius-cxcli/client-a-project-123"),
+        metadata_file=Path("/tmp/nebius-cxcli/client-a-project-123/runtime-auth.json"),
+        metadata_exists=True,
+        service_account_id="sa-123",
+        auth_public_key_id="auth-key-123",
+        private_key_file=Path("/tmp/nebius-cxcli/client-a-project-123/auth-private.pem"),
+        private_key_exists=False,
+        cloud_public_key_exists=False,
+        cloud_check_error=None,
+        issues=("private key file missing",),
+    )
+    monkeypatch.setattr(cli, "_runtime_auth_profile_status", lambda **_kwargs: status)
+    monkeypatch.setattr(cli, "_resolve_project_id_for_auth_bootstrap", lambda **_kwargs: "project-123")
 
     result = runner.invoke(
         cli.app,
-        ["auth", "bootstrap", "--project-id", "project-123", "--no-github-sync", "--json"],
+        ["auth", "--project-id", "project-123", "--client-name", "client-a", "--validate-profile"],
     )
 
-    assert result.exit_code == 0, result.output
-    assert result.stdout.strip() == '{"status": "ok"}'
+    assert result.exit_code == 1
+    assert "Runtime auth profile validation failed for project(s): project-123" in _plain_output(
+        result.output
+    )

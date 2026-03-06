@@ -19,7 +19,7 @@ infra:
       source: ../../platform-infra/modules/object-storage
       description: Object storage buckets module
       group: Storage
-      enable: true
+      enable: false
     - module: mysterybox
       source: ../../platform-infra/modules/mysterybox
       description: MysteryBox secrets module

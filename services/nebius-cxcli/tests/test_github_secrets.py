@@ -4,6 +4,7 @@ from pathlib import Path
 
 from nebius_cxcli.github_secrets import (
     _repo_slug_from_remote_url,
+    build_github_environment_name,
     detect_github_repo_slug,
     read_github_token,
 )
@@ -50,3 +51,10 @@ def test_read_github_token_falls_back_to_github_token(monkeypatch) -> None:
     monkeypatch.setenv("GITHUB_TOKEN", "token-456")
 
     assert read_github_token(preferred_env="MY_GH_TOKEN") == "token-456"
+
+
+def test_build_github_environment_name_normalizes_tokens() -> None:
+    assert (
+        build_github_environment_name(client_name="Client A", project_id="project-123")
+        == "client-a-project-123"
+    )

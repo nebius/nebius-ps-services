@@ -15,6 +15,7 @@ from .provider_components import provider_resource_name_for_component
 from .runtime_config import to_plain_data
 from .runtime_introspection import module_variables
 from .templates import NEBIUS_PROVIDER_SOURCE, NEBIUS_PROVIDER_VERSION
+from .terraform_backend import backend_settings_from_config, render_backend_tf
 
 DEFAULT_TERRAFORM_REQUIRED_VERSION = ">= 1.10.0"
 MODULE_GIT_URL_ENV = "NEBIUS_CXCLI_MODULE_GIT_URL"
@@ -542,21 +543,21 @@ def _render_provider_variable_blocks() -> tuple[str, ...]:
             _PROVIDER_VAR_SA_ID,
             "string",
             "Nebius service account ID used by Terraform provider auth",
-            None,
+            "",
             True,
         ),
         (
             _PROVIDER_VAR_AUTH_PUBLIC_KEY_ID,
             "string",
             "Nebius authorized key ID used by Terraform provider auth",
-            None,
+            "",
             True,
         ),
         (
             _PROVIDER_VAR_AUTH_PRIVATE_KEY_FILE,
             "string",
             "Path to Nebius authorized private key PEM used by Terraform provider auth",
-            None,
+            "",
             True,
         ),
         (
@@ -646,6 +647,7 @@ def render_terraform_artifacts(config: Any, paths: InstancePaths) -> list[Path]:
     """Render deterministic Terraform root-module artifacts for one validated config."""
     written: list[Path] = []
 
+    backend_settings = backend_settings_from_config(config)
     module_plans = _build_module_plans(config)
     module_blocks = tuple(_render_module_block(plan) for plan in module_plans)
     provider_resource_blocks = _provider_resource_blocks(config)
@@ -653,6 +655,10 @@ def render_terraform_artifacts(config: Any, paths: InstancePaths) -> list[Path]:
         **_provider_static_tfvars(config),
         **_render_tfvars_json(module_plans),
     }
+
+    backend_tf_path = paths.infra_dir / "backend.tf"
+    _write_text(backend_tf_path, render_backend_tf(backend_settings))
+    written.append(backend_tf_path)
 
     versions_tf_path = paths.infra_dir / "versions.tf"
     _write_text(versions_tf_path, _terraform_versions_block())
