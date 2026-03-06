@@ -7,6 +7,7 @@ This folder contains multiple ready-to-use Codex skills for developers.
 - `gitignore`
 - `helmchart`
 - `linter`
+- `nebius`
 - `python-project`
 - `publish-image`
 - `publish-release`

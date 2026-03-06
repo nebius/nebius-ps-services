@@ -13,7 +13,6 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-  "boto3>=1.35.0,<2.0.0",
   "nebius>=0.3.18,<1.0.0",
   "PyNaCl>=1.5.0,<2.0.0",
   "questionary>=2.1.0,<3.0.0",
@@ -65,6 +64,9 @@ ignore = ["B008", "E501"]
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
+filterwarnings = [
+  "ignore:There is no current event loop:DeprecationWarning:nebius\\.aio\\.channel",
+]
 
 [build-system]
 requires = ["setuptools>=69", "setuptools-scm>=8"]

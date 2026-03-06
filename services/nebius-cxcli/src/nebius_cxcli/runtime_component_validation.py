@@ -25,10 +25,6 @@ def validate_component_runtime_rules(
             "infra.ssh_user_name must match Linux username format (for example ubuntu, admin_user)"
         )
 
-    state_bucket_name = as_text(get_path(payload, "infra.object_storage.state_bucket.name"))
-    if state_bucket_name and not id_pattern.fullmatch(state_bucket_name):
-        raise ValueError("state_bucket.name must use lowercase letters, digits, and hyphens")
-
     if bool(get_path(payload, "infra.managed_postgresql.enabled", False)):
         tier = as_text(get_path(payload, "infra.managed_postgresql.tier"))
         if tier and tier not in {"small", "medium", "large"}:

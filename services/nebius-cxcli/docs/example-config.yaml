@@ -29,19 +29,6 @@ infra:
           enabled: false
         api_endpoint:
           public: false
-    - id: object-storage
-      enabled: true
-      source: ../../platform-infra/modules/object-storage
-      inputs:
-        state_bucket:
-          manage: true
-          name: tfstate-tenant-REDACTED
-          prefix: tfstate
-          use_lockfile: true
-        inventory_bucket:
-          manage: true
-          name: inventory-tenant-REDACTED
-          prefix: inventory
     - id: wireguard-jumphost
       enabled: false
       source: ../../platform-infra/modules/wireguard-jumphost

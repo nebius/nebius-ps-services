@@ -43,14 +43,19 @@ from .config_template import DEFAULT_SSH_PUBLIC_KEY, starter_config_yaml
 from .discover_ops import discover_configs
 from .flux_ops import ensure_flux
 from .github_secrets import (
+    build_github_environment_name,
     detect_github_repo_slug,
+    ensure_github_environment,
+    environment_secrets_presence,
     read_github_token,
-    repo_secrets_presence,
-    upsert_repo_secrets,
+    upsert_environment_secrets,
 )
 from .helm_client import HelmChartReference, HelmClient
-from .iam_bootstrap import bootstrap_ci_service_account, ensure_ci_service_account_identity
-from .inventory_ops import upload_inventory, write_inventory
+from .iam_bootstrap import (
+    auth_public_key_exists,
+    bootstrap_ci_service_account,
+)
+from .inventory_ops import write_inventory
 from .notify_ops import send_inventory_email
 from .paths import InstancePaths, resolve_instance_paths, validate_path_alignment
 from .provider_components import (
@@ -75,7 +80,8 @@ from .runtime_introspection import (
     module_variables,
 )
 from .templates import customer_workflow_yaml, default_cli_ref
-from .terraform_ops import terraform_apply, terraform_init_backendless, terraform_plan
+from .terraform_backend import backend_settings_from_config, ensure_state_bucket
+from .terraform_ops import terraform_apply, terraform_init, terraform_plan
 
 console = Console()
 DEFAULT_REGION_ID = "eu-north1"
@@ -101,6 +107,11 @@ _TEMP_PRIVATE_KEY_FILES: list[Path] = []
 _RUNTIME_TF_SERVICE_ACCOUNT_NAME = "nebius-cxcli-tf-sa"
 _RUNTIME_AUTH_CACHE_ENV = "NEBIUS_CXCLI_RUNTIME_AUTH_DIR"
 _RUNTIME_AUTH_CACHE_FILE = "runtime-auth.json"
+_QUIET_NATIVE_LOG_ENV_DEFAULTS: dict[str, str] = {
+    "GRPC_VERBOSITY": "ERROR",
+    "GLOG_minloglevel": "2",
+    "ABSL_LOG_SEVERITY_LEVEL": "2",
+}
 app = typer.Typer(
     add_completion=False,
     help="Provider-driven Nebius automation CLI (single config.yaml workflow).",
@@ -108,12 +119,10 @@ app = typer.Typer(
 terraform_app = typer.Typer(help="Run Terraform operations in generated/infra")
 flux_app = typer.Typer(help="Bootstrap or reconcile Flux")
 inventory_app = typer.Typer(help="Inventory output commands")
-auth_app = typer.Typer(help="Authentication and IAM helper commands")
 
 app.add_typer(terraform_app, name="terraform")
 app.add_typer(flux_app, name="flux")
 app.add_typer(inventory_app, name="inventory")
-app.add_typer(auth_app, name="auth")
 
 
 def _version_callback(value: bool) -> bool:
@@ -173,6 +182,13 @@ def _load_context(config_path: Path) -> tuple:
 def _exit_with_error(exc: Exception) -> None:
     console.print(f"[red]ERROR:[/red] {exc}")
     raise typer.Exit(code=1) from exc
+
+
+def _configure_quiet_native_logs() -> None:
+    """Reduce noisy native gRPC/absl logs while keeping warnings/errors visible."""
+    for env_name, env_value in _QUIET_NATIVE_LOG_ENV_DEFAULTS.items():
+        if not os.environ.get(env_name):
+            os.environ[env_name] = env_value
 
 
 def _resolve_deployments_root(base_path: Path) -> Path:
@@ -3002,26 +3018,38 @@ def _ensure_private_key_file_env() -> None:
     _TEMP_PRIVATE_KEY_FILES.append(key_path)
 
 
-def _runtime_auth_cache_dir(project_id: str) -> Path:
+def _runtime_auth_cache_segment(value: str, *, fallback: str) -> str:
+    token = re.sub(r"[^A-Za-z0-9._-]", "-", value.strip().lower()).strip("-._")
+    if not token:
+        token = fallback
+    return token
+
+
+def _runtime_auth_cache_dir(*, project_id: str, client_name: str) -> Path:
+    root = _runtime_auth_cache_root()
+    client_token = _runtime_auth_cache_segment(client_name, fallback="client")
+    project_token = _runtime_auth_cache_segment(project_id, fallback="project")
+    return root / f"{client_token}-{project_token}"
+
+
+def _runtime_auth_cache_root() -> Path:
     root_override = os.environ.get(_RUNTIME_AUTH_CACHE_ENV, "").strip()
     if root_override:
-        root = Path(root_override).expanduser().resolve()
-    else:
-        root = (Path.home() / ".config" / "nebius-cxcli" / "runtime-auth").resolve()
-    token = re.sub(r"[^A-Za-z0-9._-]", "-", project_id.strip()).strip("-")
-    if not token:
-        token = "project"
-    return root / token
+        return Path(root_override).expanduser().resolve()
+    return (Path.home() / ".config" / "nebius-cxcli").resolve()
 
 
 def _runtime_auth_cache_write(
     *,
     project_id: str,
+    client_name: str,
     service_account_id: str,
     auth_public_key_id: str,
     private_key_pem: str,
+    s3_access_key_id: str | None = None,
+    s3_secret_access_key: str | None = None,
 ) -> None:
-    cache_dir = _runtime_auth_cache_dir(project_id)
+    cache_dir = _runtime_auth_cache_dir(project_id=project_id, client_name=client_name)
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_dir.chmod(0o700)
 
@@ -3030,18 +3058,23 @@ def _runtime_auth_cache_write(
     private_key_file.chmod(0o600)
 
     payload = {
+        "client_name": client_name,
         "project_id": project_id,
         "service_account_id": service_account_id,
         "auth_public_key_id": auth_public_key_id,
         "private_key_file": private_key_file.name,
     }
+    if s3_access_key_id:
+        payload["s3_access_key_id"] = s3_access_key_id
+    if s3_secret_access_key:
+        payload["s3_secret_access_key"] = s3_secret_access_key
     metadata_file = cache_dir / _RUNTIME_AUTH_CACHE_FILE
     metadata_file.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     metadata_file.chmod(0o600)
 
 
-def _runtime_auth_cache_load(project_id: str) -> bool:
-    cache_dir = _runtime_auth_cache_dir(project_id)
+def _runtime_auth_cache_load(*, project_id: str, client_name: str) -> bool:
+    cache_dir = _runtime_auth_cache_dir(project_id=project_id, client_name=client_name)
     metadata_file = cache_dir / _RUNTIME_AUTH_CACHE_FILE
     if not metadata_file.exists():
         return False
@@ -3055,6 +3088,8 @@ def _runtime_auth_cache_load(project_id: str) -> bool:
     service_account_id = str(payload.get("service_account_id") or "").strip()
     auth_public_key_id = str(payload.get("auth_public_key_id") or "").strip()
     private_key_file_token = str(payload.get("private_key_file") or "").strip()
+    s3_access_key_id = str(payload.get("s3_access_key_id") or "").strip()
+    s3_secret_access_key = str(payload.get("s3_secret_access_key") or "").strip()
     if not service_account_id or not auth_public_key_id or not private_key_file_token:
         return False
 
@@ -3065,7 +3100,268 @@ def _runtime_auth_cache_load(project_id: str) -> bool:
     os.environ["NEBIUS_SA_ID"] = service_account_id
     os.environ["NEBIUS_AUTH_PUBLIC_KEY_ID"] = auth_public_key_id
     os.environ["NEBIUS_AUTH_PRIVATE_KEY_FILE"] = str(private_key_file)
+    if s3_access_key_id:
+        os.environ["NEBIUS_S3_ACCESS_KEY_ID"] = s3_access_key_id
+        os.environ["AWS_ACCESS_KEY_ID"] = s3_access_key_id
+    if s3_secret_access_key:
+        os.environ["NEBIUS_S3_SECRET_ACCESS_KEY"] = s3_secret_access_key
+        os.environ["AWS_SECRET_ACCESS_KEY"] = s3_secret_access_key
     return True
+
+
+@dataclass(frozen=True)
+class RuntimeAuthProfileStatus:
+    project_id: str
+    client_name: str
+    cache_dir: Path
+    metadata_file: Path
+    metadata_exists: bool
+    service_account_id: str | None
+    auth_public_key_id: str | None
+    private_key_file: Path | None
+    private_key_exists: bool
+    cloud_public_key_exists: bool | None
+    cloud_check_error: str | None
+    issues: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RuntimeAuthCacheMaterial:
+    project_id: str
+    client_name: str
+    service_account_id: str
+    auth_public_key_id: str
+    private_key_file: Path
+    private_key_pem: str
+    s3_access_key_id: str | None
+    s3_secret_access_key: str | None
+
+
+def _runtime_auth_cache_material(*, project_id: str, client_name: str) -> RuntimeAuthCacheMaterial | None:
+    cache_dir = _runtime_auth_cache_dir(project_id=project_id, client_name=client_name)
+    metadata_file = cache_dir / _RUNTIME_AUTH_CACHE_FILE
+    if not metadata_file.exists():
+        return None
+    try:
+        payload = json.loads(metadata_file.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+
+    service_account_id = _non_empty_text(payload.get("service_account_id"))
+    auth_public_key_id = _non_empty_text(payload.get("auth_public_key_id"))
+    private_key_file_token = _non_empty_text(payload.get("private_key_file"))
+    if not service_account_id or not auth_public_key_id or not private_key_file_token:
+        return None
+
+    private_key_file = (cache_dir / private_key_file_token).resolve()
+    if not private_key_file.exists() or not private_key_file.is_file():
+        return None
+    private_key_pem = private_key_file.read_text(encoding="utf-8").strip()
+    if not private_key_pem:
+        return None
+
+    return RuntimeAuthCacheMaterial(
+        project_id=project_id,
+        client_name=client_name,
+        service_account_id=service_account_id,
+        auth_public_key_id=auth_public_key_id,
+        private_key_file=private_key_file,
+        private_key_pem=private_key_pem,
+        s3_access_key_id=_non_empty_text(payload.get("s3_access_key_id")),
+        s3_secret_access_key=_non_empty_text(payload.get("s3_secret_access_key")),
+    )
+
+
+def _create_or_recreate_runtime_auth_profile(
+    *,
+    project_id: str,
+    client_name: str,
+    recreate: bool,
+    profile: str | None,
+    endpoint: str | None,
+    sdk_config_file: Path | None,
+) -> tuple[RuntimeAuthCacheMaterial, bool]:
+    existing = _runtime_auth_cache_material(project_id=project_id, client_name=client_name)
+    if existing is not None and not recreate:
+        return existing, False
+
+    result = bootstrap_ci_service_account(
+        project_id=project_id,
+        service_account_name=_RUNTIME_TF_SERVICE_ACCOUNT_NAME,
+        service_account_description="Service account used by nebius-cxcli Terraform runtime automation",
+        role_ids=["editor"],
+        auth_key_description="nebius-cxcli Terraform runtime authorized key",
+        access_key_description="nebius-cxcli Terraform runtime Object Storage access key",
+        profile=profile,
+        endpoint=endpoint,
+        config_file=sdk_config_file,
+    )
+    _runtime_auth_cache_write(
+        project_id=project_id,
+        client_name=client_name,
+        service_account_id=result.service_account_id,
+        auth_public_key_id=result.auth_public_key_id,
+        private_key_pem=result.auth_private_key_pem,
+        s3_access_key_id=result.s3_access_key_id,
+        s3_secret_access_key=result.s3_secret_access_key,
+    )
+    material = _runtime_auth_cache_material(project_id=project_id, client_name=client_name)
+    if material is None:
+        raise RuntimeError("Runtime auth profile was created but cache material could not be loaded")
+    return material, True
+
+
+def _runtime_auth_profile_status(
+    *,
+    project_id: str,
+    client_name: str,
+    profile: str | None,
+    endpoint: str | None,
+    sdk_config_file: Path | None,
+) -> RuntimeAuthProfileStatus:
+    cache_dir = _runtime_auth_cache_dir(project_id=project_id, client_name=client_name)
+    metadata_file = cache_dir / _RUNTIME_AUTH_CACHE_FILE
+    metadata_exists = metadata_file.exists()
+
+    service_account_id: str | None = None
+    auth_public_key_id: str | None = None
+    private_key_file: Path | None = None
+    private_key_exists = False
+    cloud_public_key_exists: bool | None = None
+    cloud_check_error: str | None = None
+    issues: list[str] = []
+
+    payload: dict[str, Any] = {}
+    if metadata_exists:
+        try:
+            parsed = json.loads(metadata_file.read_text(encoding="utf-8"))
+            if isinstance(parsed, dict):
+                payload = parsed
+            else:
+                issues.append("runtime-auth metadata payload is not a JSON object")
+        except Exception as exc:
+            issues.append(f"runtime-auth metadata is not valid JSON: {exc}")
+    else:
+        issues.append(f"runtime-auth metadata file not found: {metadata_file}")
+
+    service_account_id = _non_empty_text(payload.get("service_account_id"))
+    auth_public_key_id = _non_empty_text(payload.get("auth_public_key_id"))
+    private_key_file_token = _non_empty_text(payload.get("private_key_file"))
+
+    if not service_account_id:
+        issues.append("missing service_account_id in runtime-auth metadata")
+    if not auth_public_key_id:
+        issues.append("missing auth_public_key_id in runtime-auth metadata")
+
+    if private_key_file_token:
+        private_key_file = (cache_dir / private_key_file_token).resolve()
+        private_key_exists = private_key_file.exists() and private_key_file.is_file()
+        if not private_key_exists:
+            issues.append(f"private key file missing: {private_key_file}")
+    else:
+        issues.append("missing private_key_file in runtime-auth metadata")
+
+    if auth_public_key_id:
+        try:
+            cloud_public_key_exists = auth_public_key_exists(
+                auth_public_key_id=auth_public_key_id,
+                profile=profile,
+                endpoint=endpoint,
+                config_file=sdk_config_file,
+            )
+            if not cloud_public_key_exists:
+                issues.append(
+                    f"auth_public_key_id '{auth_public_key_id}' does not exist (or is not accessible) in Nebius"
+                )
+        except Exception as exc:
+            cloud_check_error = str(exc)
+            issues.append(f"failed Nebius auth public key verification: {exc}")
+
+    return RuntimeAuthProfileStatus(
+        project_id=project_id,
+        client_name=client_name,
+        cache_dir=cache_dir,
+        metadata_file=metadata_file,
+        metadata_exists=metadata_exists,
+        service_account_id=service_account_id,
+        auth_public_key_id=auth_public_key_id,
+        private_key_file=private_key_file,
+        private_key_exists=private_key_exists,
+        cloud_public_key_exists=cloud_public_key_exists,
+        cloud_check_error=cloud_check_error,
+        issues=tuple(issues),
+    )
+
+
+def _discover_runtime_auth_profiles() -> list[tuple[str, str]]:
+    root = _runtime_auth_cache_root()
+    if not root.exists() or not root.is_dir():
+        return []
+
+    profiles: list[tuple[str, str]] = []
+    for child in sorted(root.iterdir()):
+        if not child.is_dir():
+            continue
+        metadata_file = child / _RUNTIME_AUTH_CACHE_FILE
+        if not metadata_file.exists():
+            continue
+        client_name = ""
+        project_id = ""
+        try:
+            payload = json.loads(metadata_file.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                client_name = _non_empty_text(payload.get("client_name")) or ""
+                project_id = _non_empty_text(payload.get("project_id")) or ""
+        except Exception:
+            pass
+        if not client_name or not project_id:
+            folder = child.name.strip()
+            project_marker = "-project-"
+            marker_index = folder.rfind(project_marker)
+            if marker_index > 0:
+                inferred_client = folder[:marker_index]
+                inferred_project = folder[marker_index + 1 :]
+                client_name = client_name or inferred_client
+                project_id = project_id or inferred_project
+        if client_name and project_id:
+            profiles.append((client_name, project_id))
+
+    deduped: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for client_name, project_id in profiles:
+        key = (client_name, project_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(key)
+    return deduped
+
+
+def _resolve_client_name_for_runtime_profile(
+    *,
+    project_id: str,
+    client_name: str | None,
+    instance_config: Path | None,
+) -> str:
+    if client_name or instance_config is not None:
+        return _resolve_client_name_for_auth_bootstrap(
+            client_name=client_name,
+            instance_config=instance_config,
+        )
+    matches = [name for name, pid in _discover_runtime_auth_profiles() if pid == project_id]
+    unique = sorted(set(matches))
+    if len(unique) == 1:
+        return unique[0]
+    if len(unique) > 1:
+        raise RuntimeError(
+            "Multiple runtime auth profiles exist for this project_id. "
+            "Provide --client-name (or --instance-config)."
+        )
+    raise RuntimeError(
+        "Missing required option: --client-name (or provide --instance-config)"
+    )
 
 
 def _runtime_auth_missing_envs(
@@ -3090,6 +3386,17 @@ def _runtime_auth_missing_envs(
         and "NEBIUS_AUTH_PRIVATE_KEY_PEM" not in missing
     ):
         missing.append("NEBIUS_AUTH_PRIVATE_KEY_PEM")
+    if need_terraform:
+        aws_access = os.environ.get("AWS_ACCESS_KEY_ID", "").strip() or os.environ.get(
+            "NEBIUS_S3_ACCESS_KEY_ID", ""
+        ).strip()
+        aws_secret = os.environ.get("AWS_SECRET_ACCESS_KEY", "").strip() or os.environ.get(
+            "NEBIUS_S3_SECRET_ACCESS_KEY", ""
+        ).strip()
+        if not aws_access:
+            missing.append("AWS_ACCESS_KEY_ID")
+        if not aws_secret:
+            missing.append("AWS_SECRET_ACCESS_KEY")
     return missing
 
 
@@ -3100,13 +3407,26 @@ def _ensure_runtime_auth_material(
     need_eso_mysterybox: bool,
     auto_bootstrap: bool = False,
 ) -> None:
+    def _export_material_to_env(material: RuntimeAuthCacheMaterial) -> None:
+        os.environ["NEBIUS_SA_ID"] = material.service_account_id
+        os.environ["NEBIUS_AUTH_PUBLIC_KEY_ID"] = material.auth_public_key_id
+        os.environ["NEBIUS_AUTH_PRIVATE_KEY_PEM"] = material.private_key_pem
+        os.environ["NEBIUS_AUTH_PRIVATE_KEY_FILE"] = str(material.private_key_file)
+        if material.s3_access_key_id:
+            os.environ["NEBIUS_S3_ACCESS_KEY_ID"] = material.s3_access_key_id
+            os.environ["AWS_ACCESS_KEY_ID"] = material.s3_access_key_id
+        if material.s3_secret_access_key:
+            os.environ["NEBIUS_S3_SECRET_ACCESS_KEY"] = material.s3_secret_access_key
+            os.environ["AWS_SECRET_ACCESS_KEY"] = material.s3_secret_access_key
+
     missing = _runtime_auth_missing_envs(
         need_terraform=need_terraform,
         need_eso_mysterybox=need_eso_mysterybox,
     )
     project_id = str(config.client_info.nebius.project_id).strip()
+    client_name = str(config.client_info.client_name).strip()
     if missing:
-        _runtime_auth_cache_load(project_id)
+        _runtime_auth_cache_load(project_id=project_id, client_name=client_name)
         missing = _runtime_auth_missing_envs(
             need_terraform=need_terraform,
             need_eso_mysterybox=need_eso_mysterybox,
@@ -3119,35 +3439,50 @@ def _ensure_runtime_auth_material(
                 + "\nSet these variables explicitly (or provide NEBIUS_AUTH_CREDENTIALS_FILE), "
                 "or rerun with --auto-auth-bootstrap."
             )
-        result = bootstrap_ci_service_account(
+        material, created = _create_or_recreate_runtime_auth_profile(
             project_id=project_id,
-            service_account_name=_RUNTIME_TF_SERVICE_ACCOUNT_NAME,
-            service_account_description=(
-                "Service account used by nebius-cxcli Terraform runtime automation"
-            ),
-            role_ids=["roles/editor"],
-            auth_key_description="nebius-cxcli Terraform runtime authorized key",
-            access_key_description="nebius-cxcli Terraform runtime Object Storage access key",
+            client_name=client_name,
+            recreate=False,
             profile=None,
             endpoint=None,
-            config_file=None,
+            sdk_config_file=None,
         )
-        os.environ["NEBIUS_SA_ID"] = result.service_account_id
-        os.environ["NEBIUS_AUTH_PUBLIC_KEY_ID"] = result.auth_public_key_id
-        os.environ["NEBIUS_AUTH_PRIVATE_KEY_PEM"] = result.auth_private_key_pem
-        os.environ["NEBIUS_S3_ACCESS_KEY_ID"] = result.s3_access_key_id
-        os.environ["NEBIUS_S3_SECRET_ACCESS_KEY"] = result.s3_secret_access_key
-        os.environ["AWS_ACCESS_KEY_ID"] = result.s3_access_key_id
-        os.environ["AWS_SECRET_ACCESS_KEY"] = result.s3_secret_access_key
-        _runtime_auth_cache_write(
-            project_id=project_id,
-            service_account_id=result.service_account_id,
-            auth_public_key_id=result.auth_public_key_id,
-            private_key_pem=result.auth_private_key_pem,
+        _export_material_to_env(material)
+
+        # Handle stale runtime-auth caches created before S3 key fields existed.
+        still_missing = _runtime_auth_missing_envs(
+            need_terraform=need_terraform,
+            need_eso_mysterybox=need_eso_mysterybox,
         )
+        if still_missing:
+            material, _ = _create_or_recreate_runtime_auth_profile(
+                project_id=project_id,
+                client_name=client_name,
+                recreate=True,
+                profile=None,
+                endpoint=None,
+                sdk_config_file=None,
+            )
+            _export_material_to_env(material)
+            still_missing = _runtime_auth_missing_envs(
+                need_terraform=need_terraform,
+                need_eso_mysterybox=need_eso_mysterybox,
+            )
+            if still_missing:
+                raise RuntimeError(
+                    "Runtime auth bootstrap did not provide required values:\n  - "
+                    + "\n  - ".join(sorted(still_missing))
+                    + "\nRun `nebius-cxcli auth --project-id "
+                    + project_id
+                    + " --client-name "
+                    + client_name
+                    + " --recreate` and retry."
+                )
         console.print(
             "[green]Auto-bootstrapped runtime auth[/green] "
             "(service account + Object Storage key + auth key) for this command run."
+            if created
+            else "[green]Loaded runtime auth from cache[/green] for this command run."
         )
 
     if (need_terraform and not os.environ.get("NEBIUS_AUTH_CREDENTIALS_FILE")) or need_eso_mysterybox:
@@ -3182,11 +3517,49 @@ def _terraform_runtime_env(config: Any) -> dict[str, str]:
     return runtime_env
 
 
-def _try_generate_terraform_lock_file(config: Any, paths: InstancePaths) -> bool:
+def _ensure_backend_s3_env_aliases() -> None:
+    access_key = os.environ.get("AWS_ACCESS_KEY_ID", "").strip() or os.environ.get(
+        "NEBIUS_S3_ACCESS_KEY_ID", ""
+    ).strip()
+    secret_key = os.environ.get("AWS_SECRET_ACCESS_KEY", "").strip() or os.environ.get(
+        "NEBIUS_S3_SECRET_ACCESS_KEY", ""
+    ).strip()
+    if access_key:
+        os.environ["AWS_ACCESS_KEY_ID"] = access_key
+        os.environ["NEBIUS_S3_ACCESS_KEY_ID"] = access_key
+    if secret_key:
+        os.environ["AWS_SECRET_ACCESS_KEY"] = secret_key
+        os.environ["NEBIUS_S3_SECRET_ACCESS_KEY"] = secret_key
+
+
+def _ensure_terraform_backend_ready(config: Any, *, auto_auth_bootstrap: bool) -> None:
+    _configure_quiet_native_logs()
+    _ensure_runtime_auth_material(
+        config,
+        need_terraform=True,
+        need_eso_mysterybox=False,
+        auto_bootstrap=auto_auth_bootstrap,
+    )
+    _ensure_backend_s3_env_aliases()
+    settings = backend_settings_from_config(config)
+    created = ensure_state_bucket(settings)
+    if created:
+        console.print(
+            "[green]Created Terraform remote state bucket[/green] "
+            f"{settings.bucket} in project {settings.project_id}."
+        )
+
+
+def _try_generate_terraform_lock_file(
+    config: Any,
+    paths: InstancePaths,
+) -> bool:
     if not shutil.which("terraform"):
         return False
     try:
-        terraform_init_backendless(paths.infra_dir, extra_env=_terraform_runtime_env(config))
+        # Render performs create-if-missing runtime auth bootstrap for lockfile generation.
+        _ensure_terraform_backend_ready(config, auto_auth_bootstrap=True)
+        terraform_init(paths.infra_dir, extra_env=_terraform_runtime_env(config))
     except Exception as exc:
         console.print(
             "[yellow]WARNING:[/yellow] "
@@ -3238,13 +3611,9 @@ def _render_and_local_deploy(
     auto_auth_bootstrap: bool,
 ) -> int:
     """Run strict validation, render, Terraform apply, then apply Flux manifests."""
+    _ensure_deployments_gitignore(deployments_root=paths.deployments_dir)
     _validate_strict_config(config)
-    _ensure_runtime_auth_material(
-        config,
-        need_terraform=True,
-        need_eso_mysterybox=False,
-        auto_bootstrap=auto_auth_bootstrap,
-    )
+    _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
     result = render_instance(config, paths)
     terraform_apply(paths.infra_dir, extra_env=_terraform_runtime_env(config))
     _apply_rendered_flux(paths)
@@ -3260,6 +3629,30 @@ def _resolve_project_id_for_auth_bootstrap(
         raise RuntimeError("Missing required option: --project-id (or provide --instance-config)")
     config = load_config(instance_config.resolve())
     return config.client_info.nebius.project_id
+
+
+def _resolve_client_name_for_auth_bootstrap(
+    *,
+    client_name: str | None,
+    instance_config: Path | None,
+) -> str:
+    if client_name:
+        normalized = client_name.strip()
+        if normalized:
+            return normalized
+    if instance_config is None:
+        raise RuntimeError(
+            "Missing required option: --client-name (or provide --instance-config)"
+        )
+    config = load_config(instance_config.resolve())
+    return str(config.client_info.client_name).strip()
+
+
+def _github_environment_name_for_identity(*, client_name: str, project_id: str) -> str:
+    try:
+        return build_github_environment_name(client_name=client_name, project_id=project_id)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
 
 
 def _ci_github_secrets_payload(
@@ -3297,19 +3690,72 @@ def _resolve_github_repo_slug(
 def _sync_github_ci_secrets(
     *,
     repo_slug: str,
+    github_environment: str,
     github_token: str,
     ci_secrets: dict[str, str],
-    include_flux_token: bool,
 ) -> list[str]:
     payload = dict(ci_secrets)
-    if include_flux_token:
-        payload[FLUX_SECRET_KEY] = github_token
-    return upsert_repo_secrets(repo_slug=repo_slug, token=github_token, secrets=payload)
+    payload[FLUX_SECRET_KEY] = github_token
+    return upsert_environment_secrets(
+        repo_slug=repo_slug,
+        token=github_token,
+        environment_name=github_environment,
+        secrets=payload,
+    )
+
+
+def _sync_runtime_auth_profile_to_ci_environment(
+    *,
+    material: RuntimeAuthCacheMaterial,
+    client_name: str,
+    github_repo: str | None,
+    github_token_env: str,
+    repo_root_hint: Path | None,
+) -> tuple[str, str, list[str]]:
+    github_token = read_github_token(preferred_env=github_token_env)
+    if not github_token:
+        raise RuntimeError(
+            "GitHub sync requires a token. "
+            f"No token found in ${github_token_env}, $GH_TOKEN, or $GITHUB_TOKEN."
+        )
+
+    repo_slug = _resolve_github_repo_slug(
+        explicit_repo_slug=github_repo,
+        repo_root=repo_root_hint,
+    )
+    github_environment = _github_environment_name_for_identity(
+        client_name=client_name,
+        project_id=material.project_id,
+    )
+    ensure_github_environment(
+        repo_slug=repo_slug,
+        token=github_token,
+        environment_name=github_environment,
+    )
+
+    ci_secrets: dict[str, str] = {
+        "NEBIUS_SA_ID": material.service_account_id,
+        "NEBIUS_AUTH_PUBLIC_KEY_ID": material.auth_public_key_id,
+        "NEBIUS_AUTH_PRIVATE_KEY_PEM": material.private_key_pem,
+    }
+    if material.s3_access_key_id:
+        ci_secrets["NEBIUS_S3_ACCESS_KEY_ID"] = material.s3_access_key_id
+    if material.s3_secret_access_key:
+        ci_secrets["NEBIUS_S3_SECRET_ACCESS_KEY"] = material.s3_secret_access_key
+
+    updated = _sync_github_ci_secrets(
+        repo_slug=repo_slug,
+        github_environment=github_environment,
+        github_token=github_token,
+        ci_secrets=ci_secrets,
+    )
+    return repo_slug, github_environment, updated
 
 
 def _auto_bootstrap_ci_auth_and_secrets(
     *,
     project_id: str,
+    github_environment: str,
     repo_root: Path,
     service_account_name: str,
     service_account_description: str,
@@ -3330,10 +3776,16 @@ def _auto_bootstrap_ci_auth_and_secrets(
         )
 
     repo_slug = _resolve_github_repo_slug(explicit_repo_slug=github_repo, repo_root=repo_root)
-
-    presence = repo_secrets_presence(
+    ensure_github_environment(
         repo_slug=repo_slug,
         token=github_token,
+        environment_name=github_environment,
+    )
+
+    presence = environment_secrets_presence(
+        repo_slug=repo_slug,
+        token=github_token,
+        environment_name=github_environment,
         names=[*NEBIUS_CI_SECRET_KEYS, FLUX_SECRET_KEY],
     )
     nebius_ready = all(presence.get(name, False) for name in NEBIUS_CI_SECRET_KEYS)
@@ -3341,18 +3793,21 @@ def _auto_bootstrap_ci_auth_and_secrets(
 
     if nebius_ready and flux_ready:
         console.print(
-            f"CI auth secrets already configured in {repo_slug}; skipping auth bootstrap."
+            "CI auth secrets already configured in "
+            f"{repo_slug} environment '{github_environment}'; skipping auth bootstrap."
         )
         return
 
     if nebius_ready and not flux_ready:
-        updated = upsert_repo_secrets(
+        updated = upsert_environment_secrets(
             repo_slug=repo_slug,
             token=github_token,
+            environment_name=github_environment,
             secrets={FLUX_SECRET_KEY: github_token},
         )
         console.print(
-            f"Configured missing GitHub secret(s) in {repo_slug} ({len(updated)} secret(s))"
+            "Configured missing GitHub environment secret(s) in "
+            f"{repo_slug} environment '{github_environment}' ({len(updated)} secret(s))"
         )
         return
 
@@ -3376,12 +3831,13 @@ def _auto_bootstrap_ci_auth_and_secrets(
     )
     updated = _sync_github_ci_secrets(
         repo_slug=repo_slug,
+        github_environment=github_environment,
         github_token=github_token,
         ci_secrets=ci_secrets,
-        include_flux_token=True,
     )
     console.print(
-        f"Bootstrapped and synced CI auth secrets to {repo_slug} ({len(updated)} secret(s))"
+        "Bootstrapped and synced CI auth secrets to "
+        f"{repo_slug} environment '{github_environment}' ({len(updated)} secret(s))"
     )
 
 
@@ -3403,9 +3859,8 @@ _DEPLOYMENTS_GITIGNORE_END = "# <<< nebius-cxcli managed ignores <<<"
 _DEPLOYMENTS_GITIGNORE_LINES: tuple[str, ...] = (
     _DEPLOYMENTS_GITIGNORE_BEGIN,
     "# Generated by `nebius-cxcli create`.",
-    "# Ignore generated Terraform/Flux/inventory artifacts for all instances.",
-    "instances/*/*/generated/",
-    "# Ignore Terraform working directory and runtime outputs.",
+    "# Keep generated artifacts versioned; ignore sensitive instance config and Terraform runtime files.",
+    "instances/*/*/config.yaml",
     "instances/*/*/generated/infra/.terraform/",
     "instances/*/*/generated/infra/*.tfstate",
     "instances/*/*/generated/infra/*.tfstate.*",
@@ -3413,6 +3868,9 @@ _DEPLOYMENTS_GITIGNORE_LINES: tuple[str, ...] = (
     "instances/*/*/generated/infra/crash.log",
     "instances/*/*/generated/infra/*.tfplan",
     "instances/*/*/generated/infra/plan.out",
+    "instances/*/*/generated/infra/terraform.auto.tfvars.json",
+    "instances/*/*/generated/infra/*.auto.tfvars",
+    "instances/*/*/generated/infra/*.auto.tfvars.json",
     _DEPLOYMENTS_GITIGNORE_END,
 )
 
@@ -4235,7 +4693,7 @@ def bootstrap_ci_command(
         typer.Option(
             "--auth-bootstrap/--no-auth-bootstrap",
             help=(
-                "Bootstrap Nebius CI auth material and sync GitHub Actions secrets "
+                "Full CI bootstrap: ensure Nebius CI service account + keys and sync GitHub environment secrets "
                 "(enabled by default)"
             ),
         ),
@@ -4245,7 +4703,7 @@ def bootstrap_ci_command(
         typer.Option(
             "--github-repo",
             help=(
-                "GitHub repository slug '<owner>/<repo>' for secret sync "
+                "GitHub repository slug '<owner>/<repo>' for environment secret sync "
                 "(optional; falls back to git origin remote; "
                 "valid only when --auth-bootstrap is enabled)"
             ),
@@ -4263,7 +4721,7 @@ def bootstrap_ci_command(
         ),
     ] = "GH_TOKEN",
 ) -> None:
-    """Generate customer CI workflow and optionally bootstrap CI auth/secrets."""
+    """Generate customer CI workflow and optionally perform full CI auth bootstrap."""
     try:
         if not auth_bootstrap and (github_repo is not None or github_token_env != "GH_TOKEN"):
             raise RuntimeError(
@@ -4271,6 +4729,10 @@ def bootstrap_ci_command(
             )
 
         config, paths = _load_context(config_path)
+        github_environment = _github_environment_name_for_identity(
+            client_name=str(config.client_info.client_name),
+            project_id=str(config.client_info.nebius.project_id),
+        )
         workflow = _ensure_ci_workflow_for_deployments_root(
             deployments_root=paths.deployments_dir,
             force=force,
@@ -4279,10 +4741,11 @@ def bootstrap_ci_command(
         if auth_bootstrap:
             _auto_bootstrap_ci_auth_and_secrets(
                 project_id=config.client_info.nebius.project_id,
+                github_environment=github_environment,
                 repo_root=workflow.repo_root,
                 service_account_name="nebius-cxcli-ci",
                 service_account_description="Service account used by nebius-cxcli CI automation",
-                role_ids=["roles/editor"],
+                role_ids=["editor"],
                 auth_key_description="nebius-cxcli CI authorized key",
                 access_key_description="nebius-cxcli CI Object Storage access key",
                 github_repo=github_repo,
@@ -4297,6 +4760,7 @@ def bootstrap_ci_command(
             console.print(f"Created: {workflow.workflow_file}")
         else:
             console.print(f"Workflow exists, keeping current file: {workflow.workflow_file}")
+        console.print(f"GitHub environment: {github_environment}")
         if not auth_bootstrap:
             console.print("Skipped CI auth bootstrap/secrets sync.")
         console.print("CI bootstrap completed.")
@@ -4417,60 +4881,36 @@ def validate_sources_command() -> None:
         _exit_with_error(exc)
 
 
-@auth_app.command("bootstrap")
-def auth_bootstrap_command(
+@app.command("auth")
+def auth_command(
     project_id: Annotated[
         str | None,
         typer.Option(
             "--project-id",
-            help="Nebius project ID for the service account and generated keys",
+            help=(
+                "Project ID used by runtime auth operations "
+                "(or provide --instance-config to resolve it)."
+            ),
         ),
     ] = None,
     instance_config: Annotated[
         Path | None,
         typer.Option(
             "--instance-config",
+            help="Optional config.yaml path used to resolve project_id and client_name",
+        ),
+    ] = None,
+    client_name: Annotated[
+        str | None,
+        typer.Option(
+            "--client-name",
             help=(
-                "Optional path to an existing instance config.yaml; "
-                "used to read client_info.nebius.project_id when --project-id is omitted"
+                "Client name used for runtime auth cache path and --bootstrap-ci environment naming "
+                "(`<client_name>-<project_id>`). Required for --create/--recreate unless "
+                "--instance-config is provided, or when project_id maps to multiple cached profiles."
             ),
         ),
     ] = None,
-    service_account_name: Annotated[
-        str,
-        typer.Option(
-            "--service-account-name",
-            help="Service account name to create/reuse for CI",
-        ),
-    ] = "nebius-cxcli-ci",
-    service_account_description: Annotated[
-        str,
-        typer.Option(
-            "--service-account-description",
-            help="Description applied when creating the service account",
-        ),
-    ] = "Service account used by nebius-cxcli CI automation",
-    role_id: Annotated[
-        list[str] | None,
-        typer.Option(
-            "--role-id",
-            help=("Role to grant on the target project (repeatable). Default: roles/editor"),
-        ),
-    ] = None,
-    auth_key_description: Annotated[
-        str,
-        typer.Option(
-            "--auth-key-description",
-            help="Description for the created authorized key",
-        ),
-    ] = "nebius-cxcli CI authorized key",
-    access_key_description: Annotated[
-        str,
-        typer.Option(
-            "--access-key-description",
-            help="Description for the created S3 access key",
-        ),
-    ] = "nebius-cxcli CI Object Storage access key",
     profile: Annotated[
         str | None,
         typer.Option("--profile", help="Nebius CLI profile name used by Nebius SDK"),
@@ -4486,256 +4926,189 @@ def auth_bootstrap_command(
             help="Optional path to Nebius SDK/CLI config file",
         ),
     ] = None,
-    private_key_out: Annotated[
-        Path | None,
-        typer.Option(
-            "--private-key-out",
-            help="Optional file path to write a newly created authorized private key (chmod 600)",
-        ),
-    ] = None,
-    create_keys: Annotated[
-        bool,
-        typer.Option(
-            "--create-keys/--no-create-keys",
-            help=(
-                "Create fresh Nebius auth/Object Storage keys. "
-                "By default, auth bootstrap is identity-only unless GitHub sync "
-                "needs missing NEBIUS_* secrets."
-            ),
-        ),
-    ] = False,
-    json_output: Annotated[
-        bool,
-        typer.Option(
-            "--json",
-            help="Print machine-readable JSON output (secret values are omitted)",
-        ),
-    ] = False,
-    github_sync: Annotated[
-        bool,
-        typer.Option(
-            "--github-sync/--no-github-sync",
-            help="Automatically sync generated CI secrets to GitHub Actions repository secrets",
-        ),
-    ] = True,
     github_repo: Annotated[
         str | None,
         typer.Option(
             "--github-repo",
-            help=(
-                "GitHub repository slug '<owner>/<repo>' for secret sync "
-                "(optional; used only when --github-sync is enabled)"
-            ),
+            help="GitHub repository slug '<owner>/<repo>' for --bootstrap-ci",
         ),
     ] = None,
     github_token_env: Annotated[
         str,
         typer.Option(
             "--github-token-env",
-            help=(
-                "Environment variable name holding GitHub token for secret sync "
-                "(used only when --github-sync is enabled)"
-            ),
+            help="Env var name holding GitHub token for --bootstrap-ci",
         ),
     ] = "GH_TOKEN",
-    github_set_flux_token: Annotated[
+    validate_profile: Annotated[
         bool,
         typer.Option(
-            "--github-set-flux-token/--no-github-set-flux-token",
-            help="Also set FLUX_GITHUB_TOKEN to the GitHub API token used for sync",
+            "--validate-profile",
+            help="Validate local runtime auth cache and Nebius auth key visibility",
         ),
-    ] = True,
+    ] = False,
+    create: Annotated[
+        bool,
+        typer.Option(
+            "--create",
+            help="Create runtime auth profile when local cache does not exist",
+        ),
+    ] = False,
+    recreate: Annotated[
+        bool,
+        typer.Option(
+            "--recreate",
+            help="Recreate runtime auth profile even when cache already exists",
+        ),
+    ] = False,
+    bootstrap_ci: Annotated[
+        bool,
+        typer.Option(
+            "--bootstrap-ci",
+            help="Sync local runtime auth profile secrets to GitHub environment secrets",
+        ),
+    ] = False,
 ) -> None:
-    """Idempotently ensure CI identity and optionally provision/sync CI secrets."""
+    """Manage runtime auth profile and optional CI environment-secret sync."""
     try:
-        if not github_sync and (github_repo is not None or github_token_env != "GH_TOKEN"):
+        if not bootstrap_ci and (github_repo is not None or github_token_env != "GH_TOKEN"):
             raise RuntimeError(
-                "--github-repo and --github-token-env are valid only when --github-sync is enabled."
+                "--github-repo and --github-token-env are valid only with --bootstrap-ci."
             )
+        if not any((validate_profile, create, recreate, bootstrap_ci)):
+            raise RuntimeError(
+                "Select at least one action: --validate-profile, --create, --recreate, --bootstrap-ci."
+            )
+        if create and recreate:
+            raise RuntimeError("--create and --recreate are mutually exclusive.")
 
-        resolved_project_id = _resolve_project_id_for_auth_bootstrap(
-            project_id=project_id,
-            instance_config=instance_config,
+        only_validate_without_target = (
+            validate_profile
+            and not create
+            and not recreate
+            and not bootstrap_ci
+            and project_id is None
+            and instance_config is None
         )
-        resolved_roles = role_id or ["roles/editor"]
         resolved_sdk_config = sdk_config_file.resolve() if sdk_config_file else None
-
-        synced_secret_names: list[str] = []
-        synced_repo_slug: str | None = None
-        identity_result = None
-        bootstrap_result = None
-        created_keys = False
-        synced_flux_only = False
-        skipped_secret_sync = False
-
-        if github_sync:
-            github_token = read_github_token(preferred_env=github_token_env)
-            if not github_token:
+        material: RuntimeAuthCacheMaterial | None = None
+        profile_targets: list[tuple[str, str]]
+        if only_validate_without_target:
+            profile_targets = _discover_runtime_auth_profiles()
+            if not profile_targets:
                 raise RuntimeError(
-                    "GitHub sync enabled but no token found. "
-                    f"Set ${github_token_env}, $GH_TOKEN, or $GITHUB_TOKEN; "
-                    "or rerun with --no-github-sync."
+                    f"No runtime auth profiles found under {_runtime_auth_cache_root()}"
                 )
-
-            repo_root_hint: Path | None = None
-            if instance_config is not None:
-                repo_root_hint = _require_git_root(instance_config.resolve().parent)
-            elif github_repo is None:
-                repo_root_hint = _require_git_root(Path.cwd())
-
-            synced_repo_slug = _resolve_github_repo_slug(
-                explicit_repo_slug=github_repo,
-                repo_root=repo_root_hint,
+        else:
+            resolved_project_id = _resolve_project_id_for_auth_bootstrap(
+                project_id=project_id,
+                instance_config=instance_config,
             )
-            required_secret_names = list(NEBIUS_CI_SECRET_KEYS)
-            if github_set_flux_token:
-                required_secret_names.append(FLUX_SECRET_KEY)
-            presence = repo_secrets_presence(
-                repo_slug=synced_repo_slug,
-                token=github_token,
-                names=required_secret_names,
+            resolved_client_name = _resolve_client_name_for_runtime_profile(
+                project_id=resolved_project_id,
+                client_name=client_name,
+                instance_config=instance_config,
             )
-            nebius_ready = all(presence.get(name, False) for name in NEBIUS_CI_SECRET_KEYS)
-            flux_ready = True if not github_set_flux_token else bool(
-                presence.get(FLUX_SECRET_KEY, False)
-            )
-            needs_nebius_secret_sync = not nebius_ready
-            needs_flux_secret_sync = github_set_flux_token and not flux_ready
-            force_rotate = bool(create_keys)
+            profile_targets = [(resolved_client_name, resolved_project_id)]
 
-            if needs_nebius_secret_sync or force_rotate:
-                bootstrap_result = bootstrap_ci_service_account(
+            if create or recreate:
+                material, created = _create_or_recreate_runtime_auth_profile(
                     project_id=resolved_project_id,
-                    service_account_name=service_account_name,
-                    service_account_description=service_account_description,
-                    role_ids=resolved_roles,
-                    auth_key_description=auth_key_description,
-                    access_key_description=access_key_description,
+                    client_name=resolved_client_name,
+                    recreate=recreate,
                     profile=profile,
                     endpoint=endpoint,
-                    config_file=resolved_sdk_config,
+                    sdk_config_file=resolved_sdk_config,
                 )
-                created_keys = True
-                ci_secrets = _ci_github_secrets_payload(
-                    service_account_id=bootstrap_result.service_account_id,
-                    auth_public_key_id=bootstrap_result.auth_public_key_id,
-                    auth_private_key_pem=bootstrap_result.auth_private_key_pem,
-                    s3_access_key_id=bootstrap_result.s3_access_key_id,
-                    s3_secret_access_key=bootstrap_result.s3_secret_access_key,
-                )
-                synced_secret_names = _sync_github_ci_secrets(
-                    repo_slug=synced_repo_slug,
-                    github_token=github_token,
-                    ci_secrets=ci_secrets,
-                    include_flux_token=github_set_flux_token,
-                )
-                if private_key_out is not None:
-                    private_key_path = private_key_out.resolve()
-                    private_key_path.parent.mkdir(parents=True, exist_ok=True)
-                    private_key_path.write_text(
-                        bootstrap_result.auth_private_key_pem, encoding="utf-8"
+                if recreate:
+                    console.print(
+                        f"Recreated runtime auth profile for project '{resolved_project_id}'."
                     )
-                    private_key_path.chmod(0o600)
-            elif needs_flux_secret_sync:
-                identity_result = ensure_ci_service_account_identity(
-                    project_id=resolved_project_id,
-                    service_account_name=service_account_name,
-                    service_account_description=service_account_description,
-                    role_ids=resolved_roles,
-                    profile=profile,
-                    endpoint=endpoint,
-                    config_file=resolved_sdk_config,
-                )
-                synced_secret_names = upsert_repo_secrets(
-                    repo_slug=synced_repo_slug,
-                    token=github_token,
-                    secrets={FLUX_SECRET_KEY: github_token},
-                )
-                synced_flux_only = True
-            else:
-                identity_result = ensure_ci_service_account_identity(
-                    project_id=resolved_project_id,
-                    service_account_name=service_account_name,
-                    service_account_description=service_account_description,
-                    role_ids=resolved_roles,
-                    profile=profile,
-                    endpoint=endpoint,
-                    config_file=resolved_sdk_config,
-                )
-                skipped_secret_sync = True
-        else:
-            if create_keys:
-                bootstrap_result = bootstrap_ci_service_account(
-                    project_id=resolved_project_id,
-                    service_account_name=service_account_name,
-                    service_account_description=service_account_description,
-                    role_ids=resolved_roles,
-                    auth_key_description=auth_key_description,
-                    access_key_description=access_key_description,
-                    profile=profile,
-                    endpoint=endpoint,
-                    config_file=resolved_sdk_config,
-                )
-                created_keys = True
-                if private_key_out is not None:
-                    private_key_path = private_key_out.resolve()
-                    private_key_path.parent.mkdir(parents=True, exist_ok=True)
-                    private_key_path.write_text(
-                        bootstrap_result.auth_private_key_pem, encoding="utf-8"
+                else:
+                    if created:
+                        console.print(
+                            f"Created runtime auth profile for project '{resolved_project_id}'."
+                        )
+                    else:
+                        console.print(
+                            f"[yellow]Runtime auth profile already exists[/yellow] for project "
+                            f"'{resolved_project_id}'."
+                        )
+
+            if bootstrap_ci:
+                if material is None:
+                    material = _runtime_auth_cache_material(
+                        project_id=resolved_project_id,
+                        client_name=resolved_client_name,
                     )
-                    private_key_path.chmod(0o600)
-            else:
-                identity_result = ensure_ci_service_account_identity(
-                    project_id=resolved_project_id,
-                    service_account_name=service_account_name,
-                    service_account_description=service_account_description,
-                    role_ids=resolved_roles,
-                    profile=profile,
-                    endpoint=endpoint,
-                    config_file=resolved_sdk_config,
+                if material is None:
+                    raise RuntimeError(
+                        "Runtime auth profile not found in local cache. "
+                        "Run `nebius-cxcli auth --create --project-id <id> --client-name <name>` first."
+                    )
+                repo_root_hint: Path | None = None
+                if instance_config is not None:
+                    repo_root_hint = _require_git_root(instance_config.resolve().parent)
+                elif github_repo is None:
+                    repo_root_hint = _require_git_root(Path.cwd())
+                synced_repo_slug, synced_environment_name, synced_secret_names = (
+                    _sync_runtime_auth_profile_to_ci_environment(
+                        material=material,
+                        client_name=resolved_client_name,
+                        github_repo=github_repo,
+                        github_token_env=github_token_env,
+                        repo_root_hint=repo_root_hint,
+                    )
                 )
-
-        if json_output:
-            # Keep JSON output constant and non-secret-bearing.
-            print(json.dumps({"status": "ok"}, sort_keys=True))
-            return
-
-        console.print("CI auth bootstrap completed.")
-        result_identity = identity_result or bootstrap_result
-        if result_identity and result_identity.service_account_created:
-            console.print("Service account created.")
-        else:
-            console.print("Service account reused.")
-        if result_identity and result_identity.roles_created:
-            console.print("Role grants applied.")
-        if result_identity and result_identity.roles_already_present:
-            console.print("Role grants already present.")
-        if created_keys:
-            console.print("Authorized key created.")
-            console.print("Object Storage access key created.")
-        else:
-            console.print("No key rotation performed.")
-        if private_key_out is not None and created_keys:
-            console.print("Private key file written.")
-        if github_sync and synced_repo_slug is not None:
-            if skipped_secret_sync:
                 console.print(
-                    f"GitHub Actions secrets already present in {synced_repo_slug}; no sync changes."
-                )
-            elif synced_flux_only:
-                console.print(
-                    f"Synced missing FLUX_GITHUB_TOKEN to {synced_repo_slug}."
-                )
-            else:
-                console.print(
-                    f"Synced GitHub Actions secrets to {synced_repo_slug} "
+                    "Synced GitHub environment secrets to "
+                    f"{synced_repo_slug}/{synced_environment_name} "
                     f"({len(synced_secret_names)} secret(s))"
                 )
 
-        if not github_sync:
-            console.print(
-                "GitHub sync is disabled. Re-run with --create-keys when you need fresh key material."
-            )
+        if validate_profile:
+            statuses = [
+                _runtime_auth_profile_status(
+                    project_id=current_project_id,
+                    client_name=current_client_name,
+                    profile=profile,
+                    endpoint=endpoint,
+                    sdk_config_file=resolved_sdk_config,
+                )
+                for current_client_name, current_project_id in profile_targets
+            ]
+            for status in statuses:
+                console.print(f"Project ID: {status.project_id}")
+                console.print(f"  Client name: {status.client_name}")
+                console.print(f"  Cache dir: {status.cache_dir}")
+                console.print(f"  Metadata file: {status.metadata_file}")
+                console.print(f"  Service account ID: {status.service_account_id or '(missing)'}")
+                console.print(f"  Auth public key ID: {status.auth_public_key_id or '(missing)'}")
+                console.print(
+                    f"  Private key file: {status.private_key_file or '(missing)'} "
+                    f"(exists={status.private_key_exists})"
+                )
+                cloud_state = (
+                    "unknown"
+                    if status.cloud_public_key_exists is None
+                    else ("yes" if status.cloud_public_key_exists else "no")
+                )
+                console.print(f"  Nebius auth public key exists: {cloud_state}")
+                if status.cloud_check_error:
+                    console.print(f"  Nebius check error: {status.cloud_check_error}")
+                if status.issues:
+                    for issue in status.issues:
+                        console.print(f"  [red]- {issue}[/red]")
+                else:
+                    console.print("  [green]Profile status: OK[/green]")
+                console.print("")
+
+            failed = [status for status in statuses if status.issues]
+            if failed:
+                raise RuntimeError(
+                    "Runtime auth profile validation failed for project(s): "
+                    + ", ".join(status.project_id for status in failed)
+                )
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 
@@ -4744,12 +5117,20 @@ def auth_bootstrap_command(
 def render_command(
     config_path: Annotated[Path, typer.Argument(help="Path to instance config.yaml")],
 ) -> None:
-    """Render deterministic Terraform and Flux artifacts under generated/."""
+    """Render artifacts under generated/ and try Terraform init for lock-file generation."""
     try:
         config, paths = _load_context(config_path)
+        gitignore_result = _ensure_deployments_gitignore(
+            deployments_root=paths.deployments_dir,
+        )
         result = render_instance(config, paths)
         lock_generated = _try_generate_terraform_lock_file(config, paths)
         console.print(f"Rendered {len(result.files_written)} file(s) under {paths.generated_dir}")
+        if gitignore_result.path is not None:
+            if gitignore_result.wrote:
+                console.print(f"Ensured deployments .gitignore: {gitignore_result.path}")
+            else:
+                console.print(f"Deployments .gitignore up-to-date: {gitignore_result.path}")
         if lock_generated:
             console.print(f"Generated Terraform lock file: {paths.infra_dir / '.terraform.lock.hcl'}")
     except Exception as exc:  # pragma: no cover - CLI surface
@@ -4797,12 +5178,7 @@ def terraform_plan_command(
     """Run terraform init and terraform plan in generated/infra."""
     try:
         config, paths = _load_context(config_path)
-        _ensure_runtime_auth_material(
-            config,
-            need_terraform=True,
-            need_eso_mysterybox=False,
-            auto_bootstrap=auto_auth_bootstrap,
-        )
+        _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
         terraform_plan(paths.infra_dir, extra_env=_terraform_runtime_env(config))
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
@@ -4822,12 +5198,7 @@ def terraform_apply_command(
     """Run terraform init and terraform apply in generated/infra."""
     try:
         config, paths = _load_context(config_path)
-        _ensure_runtime_auth_material(
-            config,
-            need_terraform=True,
-            need_eso_mysterybox=False,
-            auto_bootstrap=auto_auth_bootstrap,
-        )
+        _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
         terraform_apply(paths.infra_dir, extra_env=_terraform_runtime_env(config))
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
@@ -4839,7 +5210,7 @@ def flux_bootstrap_command(
     auto_auth_bootstrap: Annotated[
         bool,
         typer.Option(
-            "--auto-auth-bootstrap",
+            "--auto-auth-bootstrap/--no-auto-auth-bootstrap",
             help="Automatically bootstrap runtime auth when env vars are missing",
         ),
     ] = False,
@@ -4906,19 +5277,6 @@ def inventory_write_command(
         config, paths = _load_context(config_path)
         artifacts = write_inventory(config, paths)
         console.print(f"Inventory written: {artifacts.markdown}")
-    except Exception as exc:  # pragma: no cover - CLI surface
-        _exit_with_error(exc)
-
-
-@inventory_app.command("upload")
-def inventory_upload_command(
-    config_path: Annotated[Path, typer.Argument(help="Path to instance config.yaml")],
-) -> None:
-    """Upload inventory files to Nebius Object Storage."""
-    try:
-        config, paths = _load_context(config_path)
-        keys = upload_inventory(config, paths)
-        console.print(f"Uploaded {len(keys)} inventory object(s)")
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 

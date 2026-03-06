@@ -1,4 +1,4 @@
-"""GitHub Actions secrets helpers."""
+"""GitHub repository and environment secret helpers."""
 
 from __future__ import annotations
 
@@ -73,6 +73,14 @@ def read_github_token(*, preferred_env: str = "GH_TOKEN") -> str | None:
     return None
 
 
+def build_github_environment_name(*, client_name: str, project_id: str) -> str:
+    raw = f"{client_name.strip()}-{project_id.strip()}"
+    normalized = re.sub(r"[^A-Za-z0-9._-]+", "-", raw).strip("-").lower()
+    if not normalized:
+        raise ValueError("Unable to build GitHub environment name from client_name/project_id")
+    return normalized[:255]
+
+
 def _github_request(
     *,
     method: str,
@@ -102,9 +110,7 @@ def _github_request(
         raise RuntimeError(f"GitHub API {method} {path} failed ({exc.code}): {body}") from exc
 
 
-def repo_secret_exists(*, repo_slug: str, token: str, secret_name: str) -> bool:
-    encoded = quote(secret_name, safe="")
-    path = f"/repos/{repo_slug}/actions/secrets/{encoded}"
+def _secret_exists(*, path: str, token: str) -> bool:
     request = Request(url=f"https://api.github.com{path}", method="GET")
     request.add_header("Accept", "application/vnd.github+json")
     request.add_header("Authorization", f"Bearer {token}")
@@ -120,9 +126,56 @@ def repo_secret_exists(*, repo_slug: str, token: str, secret_name: str) -> bool:
         raise RuntimeError(f"GitHub API GET {path} failed ({exc.code}): {body}") from exc
 
 
+def repo_secret_exists(*, repo_slug: str, token: str, secret_name: str) -> bool:
+    encoded = quote(secret_name, safe="")
+    path = f"/repos/{repo_slug}/actions/secrets/{encoded}"
+    return _secret_exists(path=path, token=token)
+
+
 def repo_secrets_presence(*, repo_slug: str, token: str, names: list[str]) -> dict[str, bool]:
     return {
         name: repo_secret_exists(repo_slug=repo_slug, token=token, secret_name=name)
+        for name in names
+    }
+
+
+def ensure_github_environment(*, repo_slug: str, token: str, environment_name: str) -> None:
+    encoded_environment = quote(environment_name, safe="")
+    _github_request(
+        method="PUT",
+        path=f"/repos/{repo_slug}/environments/{encoded_environment}",
+        token=token,
+        payload={"deployment_branch_policy": None},
+    )
+
+
+def environment_secret_exists(
+    *,
+    repo_slug: str,
+    token: str,
+    environment_name: str,
+    secret_name: str,
+) -> bool:
+    encoded_environment = quote(environment_name, safe="")
+    encoded_secret = quote(secret_name, safe="")
+    path = f"/repos/{repo_slug}/environments/{encoded_environment}/secrets/{encoded_secret}"
+    return _secret_exists(path=path, token=token)
+
+
+def environment_secrets_presence(
+    *,
+    repo_slug: str,
+    token: str,
+    environment_name: str,
+    names: list[str],
+) -> dict[str, bool]:
+    return {
+        name: environment_secret_exists(
+            repo_slug=repo_slug,
+            token=token,
+            environment_name=environment_name,
+            secret_name=name,
+        )
         for name in names
     }
 
@@ -178,9 +231,66 @@ def upsert_repo_secrets(*, repo_slug: str, token: str, secrets: dict[str, str]) 
     return updated
 
 
+def upsert_environment_secret(
+    *,
+    repo_slug: str,
+    token: str,
+    environment_name: str,
+    secret_name: str,
+    secret_value: str,
+) -> None:
+    encoded_environment = quote(environment_name, safe="")
+    key_payload = _github_request(
+        method="GET",
+        path=f"/repos/{repo_slug}/environments/{encoded_environment}/secrets/public-key",
+        token=token,
+    )
+    if not key_payload:
+        raise RuntimeError("GitHub environment public key response was empty")
+
+    key_id = str(key_payload.get("key_id") or "")
+    key = str(key_payload.get("key") or "")
+    if not key_id or not key:
+        raise RuntimeError("GitHub environment public key response did not include key_id/key")
+
+    encrypted_value = _encrypt_secret_value(secret_value, key)
+    encoded_name = quote(secret_name, safe="")
+    _github_request(
+        method="PUT",
+        path=f"/repos/{repo_slug}/environments/{encoded_environment}/secrets/{encoded_name}",
+        token=token,
+        payload={"encrypted_value": encrypted_value, "key_id": key_id},
+    )
+
+
+def upsert_environment_secrets(
+    *,
+    repo_slug: str,
+    token: str,
+    environment_name: str,
+    secrets: dict[str, str],
+) -> list[str]:
+    ensure_github_environment(repo_slug=repo_slug, token=token, environment_name=environment_name)
+    updated: list[str] = []
+    for secret_name, secret_value in secrets.items():
+        upsert_environment_secret(
+            repo_slug=repo_slug,
+            token=token,
+            environment_name=environment_name,
+            secret_name=secret_name,
+            secret_value=secret_value,
+        )
+        updated.append(secret_name)
+    return updated
+
+
 __all__ = [
+    "build_github_environment_name",
     "detect_github_repo_slug",
+    "ensure_github_environment",
+    "environment_secrets_presence",
     "read_github_token",
     "repo_secrets_presence",
+    "upsert_environment_secrets",
     "upsert_repo_secrets",
 ]

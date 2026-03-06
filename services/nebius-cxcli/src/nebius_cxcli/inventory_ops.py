@@ -1,4 +1,4 @@
-"""Inventory generation and Object Storage upload support."""
+"""Inventory generation helpers."""
 
 from __future__ import annotations
 
@@ -8,8 +8,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-
-import boto3
 
 from .paths import InstancePaths
 from .runtime_config import to_plain_data
@@ -294,74 +292,3 @@ def write_inventory(config: Any, paths: InstancePaths) -> InventoryArtifacts:
         markdown=markdown_path,
     )
 
-
-def upload_inventory(config: Any, paths: InstancePaths) -> list[str]:
-    """Upload inventory artifacts to Nebius Object Storage."""
-    artifacts = write_inventory(config, paths)
-
-    payload_data = to_plain_data(config)
-    if not isinstance(payload_data, dict):
-        raise RuntimeError("Runtime config payload must be a mapping")
-
-    client_info = _mapping(_lookup(payload_data, "client_info"))
-    nebius = _mapping(_lookup(client_info, "nebius"))
-    region_id = str(_coalesce(_lookup(nebius, "region_id"), "")).strip()
-    project_id = str(_coalesce(_lookup(nebius, "project_id"), paths.path_project_id)).strip()
-    if not region_id:
-        raise RuntimeError("client_info.nebius.region_id is required for inventory upload")
-
-    infra_rows = _infra_component_rows(payload_data)
-    object_storage = infra_rows.get("object-storage")
-    if object_storage is None or not bool(_lookup(object_storage, "enabled")):
-        raise RuntimeError(
-            "infra component 'object-storage' must be enabled for inventory upload"
-        )
-
-    object_storage_inputs = _component_inputs(object_storage)
-    inventory_bucket = _mapping(_lookup(object_storage_inputs, "inventory_bucket"))
-    bucket_name = _coalesce(
-        _lookup(inventory_bucket, "name"),
-        _lookup(object_storage_inputs, "inventory_bucket_name"),
-        _lookup(object_storage_inputs, "bucket_name"),
-    )
-    if not bucket_name:
-        raise RuntimeError(
-            "Object Storage bucket name is missing for inventory upload. "
-            "Set infra.components[id=object-storage].inputs.inventory_bucket.name "
-            "(or inventory_bucket_name)."
-        )
-    key_prefix = str(
-        _coalesce(
-            _lookup(inventory_bucket, "prefix"),
-            _lookup(object_storage_inputs, "inventory_bucket_prefix"),
-            _lookup(object_storage_inputs, "bucket_prefix"),
-            "",
-        )
-    ).strip("/")
-    endpoint_url = f"https://storage.{region_id}.nebius.cloud"
-    object_prefix = "/".join(
-        part for part in [key_prefix, paths.instance_slug, project_id] if part
-    )
-
-    client = boto3.client(
-        "s3",
-        endpoint_url=endpoint_url,
-        region_name=region_id,
-    )
-
-    uploads = {
-        "infra.json": artifacts.infra_json,
-        "mk8s.json": artifacts.mk8s_json,
-        "postgresql.json": artifacts.postgresql_json,
-        "sfs.json": artifacts.sfs_json,
-        "apps.json": artifacts.apps_json,
-        "inventory.md": artifacts.markdown,
-    }
-
-    uploaded_keys: list[str] = []
-    for filename, file_path in uploads.items():
-        object_key = "/".join([object_prefix, filename]) if object_prefix else filename
-        client.upload_file(str(file_path), str(bucket_name), object_key)
-        uploaded_keys.append(object_key)
-
-    return uploaded_keys

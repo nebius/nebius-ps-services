@@ -6,6 +6,10 @@ import os
 import subprocess
 from pathlib import Path
 
+import yaml
+
+from .github_secrets import build_github_environment_name
+
 
 def _run_git_diff(range_expr: str, *, cwd: Path) -> list[str]:
     result = subprocess.run(
@@ -99,6 +103,43 @@ def _scan_all_configs(*, deployment_path: Path, repo_root: Path) -> set[str]:
     return candidates
 
 
+def _infer_client_project_from_path(config_relative: str) -> tuple[str, str] | None:
+    parts = [token for token in _normalize(config_relative).split("/") if token]
+    if len(parts) < 4 or parts[-1] != "config.yaml":
+        return None
+    if parts[-4] != "instances":
+        return None
+    client_tenant = parts[-3]
+    project_id = parts[-2]
+    if not project_id:
+        return None
+    client_name, sep, _tenant_id = client_tenant.partition("--")
+    if not sep or not client_name:
+        return None
+    return client_name, project_id
+
+
+def _environment_name_for_config(*, root: Path, config_relative: str) -> str:
+    client_project = _infer_client_project_from_path(config_relative)
+    if client_project is not None:
+        client_name, project_id = client_project
+        return build_github_environment_name(client_name=client_name, project_id=project_id)
+
+    config_file = (root / config_relative).resolve()
+    payload = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
+    if not isinstance(payload, dict):
+        raise ValueError(f"config payload is not a mapping: {config_relative}")
+    client_info = payload.get("client_info") or {}
+    nebius = client_info.get("nebius") if isinstance(client_info, dict) else {}
+    client_name = str(client_info.get("client_name") if isinstance(client_info, dict) else "").strip()
+    project_id = str(nebius.get("project_id") if isinstance(nebius, dict) else "").strip()
+    if not client_name or not project_id:
+        raise ValueError(
+            f"Cannot infer GitHub environment from {config_relative}: missing client_info.client_name/project_id"
+        )
+    return build_github_environment_name(client_name=client_name, project_id=project_id)
+
+
 def discover_configs(
     *,
     deployments_dir: str,
@@ -139,5 +180,8 @@ def discover_configs(
                 if marker in f"/{normalized}/":
                     candidates.add(normalized)
 
-    include = [{"config": path} for path in sorted(candidates)]
+    include = [
+        {"config": path, "github_environment": _environment_name_for_config(root=root, config_relative=path)}
+        for path in sorted(candidates)
+    ]
     return {"include": include}

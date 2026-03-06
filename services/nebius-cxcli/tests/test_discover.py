@@ -42,7 +42,8 @@ def test_discover_include_all(tmp_path: Path, monkeypatch) -> None:
     assert payload == {
         "include": [
             {
-                "config": "nebius-deployments/instances/client-a--tenant-123/project-456/config.yaml"
+                "config": "nebius-deployments/instances/client-a--tenant-123/project-456/config.yaml",
+                "github_environment": "client-a-project-456",
             }
         ]
     }
@@ -69,7 +70,10 @@ def test_discover_without_git_falls_back_to_scan_all(tmp_path: Path, monkeypatch
 
     assert payload == {
         "include": [
-            {"config": "deployments/instances/client-a--tenant-123/project-456/config.yaml"}
+            {
+                "config": "deployments/instances/client-a--tenant-123/project-456/config.yaml",
+                "github_environment": "client-a-project-456",
+            }
         ]
     }
 
@@ -100,9 +104,8 @@ def test_discover_changed_files_works_on_initial_commit(tmp_path: Path, monkeypa
     assert payload == {
         "include": [
             {
-                "config": (
-                    "deployments/instances/client-a--tenant-123/project-456/config.yaml"
-                )
+                "config": "deployments/instances/client-a--tenant-123/project-456/config.yaml",
+                "github_environment": "client-a-project-456",
             }
         ]
     }

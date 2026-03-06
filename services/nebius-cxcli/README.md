@@ -15,7 +15,7 @@ The current implementation is provider-driven and source-configured for Nebius e
 - [Runtime Metadata](#runtime-metadata)
 - [Recommended Workflow](#recommended-workflow)
 - [Commands](#commands)
-- [Auth Bootstrap Workflow](#auth-bootstrap-workflow)
+- [Auth Workflow](#auth-workflow)
 - [Examples](#examples)
 - [Development](#development)
 - [Security Notes](#security-notes)
@@ -28,7 +28,7 @@ The current implementation is provider-driven and source-configured for Nebius e
 - `create` writes dynamic component state (`infra.components[]`, `apps.charts[]`).
 - `create` keeps only selected components/charts in `config.yaml` (unselected entries are omitted).
 - `create` validates `component_sources.yaml` by default (`--no-validate-sources` to skip).
-- `create` auto-manages a deployments-root `.gitignore` block when target path is inside a git repo (covers generated Flux/Terraform artifacts across all instances).
+- `create` auto-manages a deployments-root `.gitignore` block when target path is inside a git repo (ignores sensitive `config.yaml`, Terraform transient/runtime files, and generated tfvars while keeping other generated artifacts versionable).
 - App dependency resolution from Helm `Chart.yaml` metadata.
 - Interactive wizard supports `q` to stop optional phases/field prompting.
 - `create` validates `tenant_id`/`project_id` against Nebius IAM APIs before continuing.
@@ -37,8 +37,8 @@ The current implementation is provider-driven and source-configured for Nebius e
 - `validate` runtime checks, plus `validate --strict` deployment-readiness checks.
 - Generic `render` path for Terraform + Flux generation.
 - `deploy` runs strict validate + render + terraform apply + Flux apply.
-- `bootstrap-ci` generates CI workflow and can bootstrap/sync CI secrets.
-- `discover` outputs config discovery JSON: changed `config.yaml` files in git mode, full scan outside git.
+- `bootstrap-ci` generates CI workflow and can bootstrap/sync CI environment secrets.
+- `discover` outputs config discovery JSON with `config` and `github_environment`: changed `config.yaml` files in git mode, full scan outside git.
 
 ## Runtime Metadata
 
@@ -108,13 +108,17 @@ Flux render output (canonical):
 
 Terraform render output (canonical):
 
+- `generated/infra/backend.tf`
 - `generated/infra/versions.tf`
 - `generated/infra/providers.tf`
 - `generated/infra/variables.tf`
 - `generated/infra/main.tf`
 - `generated/infra/terraform.auto.tfvars.json`
-- `generated/infra/.terraform.lock.hcl` (generated during `render` when `terraform` is available)
+- `generated/infra/.terraform.lock.hcl` (generated during `render` when `terraform` is available and backend init succeeds)
 - Source-backed local module paths (`platform-infra/modules/*`) are canonicalized to git module sources with `?ref=...` for portability.
+- Terraform remote state is managed separately from app/object-storage components: backend bucket settings are derived from `client_info` (`client_name` + `project_id` + `region_id`), not from `infra.components[id=object-storage].inputs`.
+- Backend locking uses Terraform S3 lockfile mode (`use_lockfile = true`) and Nebius Object Storage endpoint (`https://storage.<region>.nebius.cloud`).
+- Inventory artifacts are local-only outputs under `generated/inventory`; they are not uploaded to Object Storage by the CLI.
 
 Wizard field behavior:
 
@@ -161,7 +165,7 @@ Global options:
 | `bootstrap-ci <config.yaml>` | Generate customer workflow; optional auth/secret bootstrap | Yes |
 | `validate <config.yaml>` | Runtime validation | No |
 | `validate --strict <config.yaml>` | Runtime + strict deployment-readiness checks | No |
-| `render <config.yaml>` | Generate Terraform and Flux artifacts under `generated/` | No |
+| `render <config.yaml>` | Generate Terraform and Flux artifacts under `generated/`; if Terraform is installed, attempt backend init and lock file generation | No |
 | `deploy <config.yaml>` | Strict validate + render + terraform apply + Flux apply | No |
 | `discover <target_path>` | Changed-config detection in git mode, full scan outside git | No |
 | `email <config.yaml>` | Send inventory markdown to `client_info.notifications.email` via SMTP env vars | No |
@@ -169,8 +173,7 @@ Global options:
 | `terraform apply <config.yaml>` | Run Terraform init + apply in `generated/infra` | No |
 | `flux bootstrap <config.yaml>` | Bootstrap Flux if missing; otherwise reconcile | No |
 | `inventory write <config.yaml>` | Write local non-sensitive inventory files | No |
-| `inventory upload <config.yaml>` | Upload inventory artifacts to Nebius Object Storage | No |
-| `auth bootstrap` | Idempotent CI identity/secret bootstrap helper | Optional (only for GitHub sync) |
+| `auth` | Runtime auth profile operations via flags (`--validate-profile`, `--create`, `--recreate`, `--bootstrap-ci`) | Optional (`--bootstrap-ci` may use git origin when `--github-repo` omitted) |
 
 Common command flags:
 
@@ -183,31 +186,43 @@ Common command flags:
 - `discover`: `--all`
 - `terraform plan`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`
 - `terraform apply`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`
-- `flux bootstrap`: `--auto-auth-bootstrap`
-- `auth bootstrap`:
-  `--project-id`, `--instance-config`, `--service-account-name`, `--service-account-description`, `--role-id`, `--auth-key-description`, `--access-key-description`, `--profile`, `--endpoint`, `--sdk-config-file`, `--private-key-out`, `--create-keys/--no-create-keys`, `--json`, `--github-sync/--no-github-sync`, `--github-repo`, `--github-token-env`, `--github-set-flux-token/--no-github-set-flux-token`
+- `flux bootstrap`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`
+- `auth`:
+  `--project-id`, `--instance-config`, `--client-name`, `--profile`, `--endpoint`, `--sdk-config-file`, `--github-repo`, `--github-token-env`, `--validate-profile`, `--create`, `--recreate`, `--bootstrap-ci`
 
-## Auth Bootstrap Workflow
+## Auth Workflow
 
 Terraform runtime auth behavior:
 
 - Generated `providers.tf` uses direct provider fields (`service_account.account_id/public_key_id/private_key_file`) and sets `module_name`.
+- Generated `backend.tf` stores only non-secret backend location/settings; credentials are supplied by environment/runtime profile.
 - Runtime values are passed through Terraform variables (`TF_VAR_*`) instead of provider `_env` indirection.
 - Local runtime auth can be auto-bootstrapped with a dedicated service account name: `nebius-cxcli-tf-sa`.
-- Auto-bootstrapped runtime auth material is cached under `~/.config/nebius-cxcli/runtime-auth/<project-id>/` to avoid creating new key material every run.
-- Terraform runtime no longer requires `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`.
+- Auto-bootstrapped runtime auth material is cached under `~/.config/nebius-cxcli/<client_name>-<project-id>/` to avoid creating new key material every run.
+- The auth key flow is authorized-key based: the CLI generates keypair material, uploads the public key for the service account, and stores private key material locally for Terraform runtime use.
+- Terraform backend init uses AWS-compatible Object Storage keys (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`); the runtime auth profile cache auto-populates these for local runs.
+- `render` performs create-if-missing runtime auth bootstrap automatically before backend-ready lockfile init.
 
-`auth bootstrap` behavior is idempotent-first:
+`auth` behavior:
 
-- Always ensures service account + role grants.
-- Default mode (`--github-sync`, `--no-create-keys`):
-  - Checks required GitHub secrets.
-  - If NEBIUS secrets are missing, it creates fresh keys and syncs them.
-  - If only `FLUX_GITHUB_TOKEN` is missing, it syncs that token only.
-  - If all required secrets exist, it performs no secret changes.
-- `--no-github-sync` keeps it local:
-  - Without `--create-keys`: identity-only (no key rotation).
-  - With `--create-keys`: generates fresh keys; optional `--private-key-out` writes auth private key.
+- `--create`:
+  - Creates runtime auth profile only when local cache is missing.
+  - If cache exists, it warns and does not rotate keys.
+- `--recreate`:
+  - Always rotates runtime auth profile material and refreshes cache + Nebius authorized key.
+- `--validate-profile`:
+  - Validates cached runtime auth profile state:
+    - metadata file exists under `~/.config/nebius-cxcli/<client_name>-<project-id>/runtime-auth.json`
+    - private key file exists locally
+    - configured `auth_public_key_id` is still readable from Nebius IAM
+- `--bootstrap-ci`:
+  - Syncs local runtime auth profile secrets to GitHub environment secrets.
+  - GitHub environment name is `<client_name>-<project_id>`.
+  - Requires existing local runtime auth profile (create first if missing).
+
+`bootstrap-ci <config.yaml>` remains the full CI workflow bootstrap command and can still perform complete CI auth bootstrap/sync for that config.
+
+`deploy <config.yaml>` (default `--auto-auth-bootstrap`) uses the same runtime auth creation core as `auth --create` when auth material is missing.
 
 This keeps repeated runs safe by default while still allowing explicit rotation.
 
@@ -222,7 +237,7 @@ nebius-cxcli create /path/to/deployments-root \
   --client-name client-a \
   --tenant-id tenant-123 \
   --project-id project-123 \
-  --infra mk8s,object-storage \
+  --infra mk8s \
   --app n8n \
   --app-namespace n8n=automation \
   --app-releasename n8n=workflow-core \
@@ -238,14 +253,17 @@ nebius-cxcli deploy /path/to/config.yaml
 # CI workflow bootstrap
 nebius-cxcli bootstrap-ci /path/to/config.yaml
 
-# Auth bootstrap (identity + GitHub secret sync)
-nebius-cxcli auth bootstrap --instance-config /path/to/config.yaml
+# Create local runtime auth profile (no rotation if already present)
+nebius-cxcli auth --project-id project-123 --client-name client-a --create
 
-# Auth bootstrap identity-only (no secret sync, no key rotation)
-nebius-cxcli auth bootstrap --project-id project-123 --no-github-sync
+# Force runtime auth profile rotation
+nebius-cxcli auth --project-id project-123 --client-name client-a --recreate
 
-# Explicit key creation in local/no-github-sync mode
-nebius-cxcli auth bootstrap --project-id project-123 --no-github-sync --create-keys --private-key-out ./ci-auth.pem
+# Validate runtime auth profile
+nebius-cxcli auth --instance-config /path/to/config.yaml --validate-profile
+
+# Sync local auth profile to GitHub environment secrets
+nebius-cxcli auth --instance-config /path/to/config.yaml --bootstrap-ci --github-repo owner/repo
 ```
 
 ## Development
@@ -262,7 +280,7 @@ Useful checks:
 ```bash
 python -m nebius_cxcli --help
 python -m nebius_cxcli create --help
-python -m nebius_cxcli auth bootstrap --help
+python -m nebius_cxcli auth --help
 ```
 
 Runtime plugin env knobs:
@@ -276,5 +294,6 @@ Runtime plugin env knobs:
 
 - Keep deployment repositories private.
 - Never commit credentials or secret values.
-- GitHub sync requires a token with permission to write repo Actions secrets.
-- Key rotation is explicit in local mode (`--create-keys`) and automatic only when sync needs missing NEBIUS secrets.
+- Managed deployments `.gitignore` includes `instances/*/*/config.yaml` by default to reduce accidental config commits.
+- GitHub sync requires a token with permission to write GitHub environment secrets.
+- Key rotation is explicit with `auth --recreate` and automatic in deploy only when runtime auth bootstrap is needed.

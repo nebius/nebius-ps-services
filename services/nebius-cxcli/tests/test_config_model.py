@@ -69,7 +69,7 @@ def test_to_runtime_payload_round_trip_keeps_enabled_flags() -> None:
     back = to_runtime_payload(dynamic)
 
     assert back["infra"]["mk8s"]["enabled"] is True
-    assert back["infra"]["object_storage"]["enabled"] is True
+    assert back["infra"]["object_storage"]["enabled"] is False
     assert back["apps"]["workloads"]["n8n"]["enabled"] is False
 
 
