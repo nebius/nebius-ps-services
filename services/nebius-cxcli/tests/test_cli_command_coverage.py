@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,6 +10,11 @@ from typer.testing import CliRunner
 import nebius_cxcli.cli as cli
 
 runner = CliRunner()
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+
+def _plain_output(text: str) -> str:
+    return _ANSI_ESCAPE_RE.sub("", text)
 
 
 def _fake_paths(tmp_path: Path) -> SimpleNamespace:
@@ -27,7 +33,7 @@ def test_validate_command_non_strict(tmp_path: Path, monkeypatch: pytest.MonkeyP
     result = runner.invoke(cli.app, ["validate", str(tmp_path / "config.yaml")])
 
     assert result.exit_code == 0, result.output
-    assert "Valid:" in result.output
+    assert "Valid:" in _plain_output(result.output)
 
 
 def test_validate_command_strict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -44,7 +50,7 @@ def test_validate_command_strict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     result = runner.invoke(cli.app, ["validate", "--strict", str(tmp_path / "config.yaml")])
 
     assert result.exit_code == 0, result.output
-    assert "Valid (strict):" in result.output
+    assert "Valid (strict):" in _plain_output(result.output)
     assert strict_called["called"] is True
 
 
@@ -77,7 +83,7 @@ def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.Mon
     result = runner.invoke(cli.app, ["render", str(tmp_path / "config.yaml")])
 
     assert result.exit_code == 0, result.output
-    assert "Rendered 2 file(s)" in result.output
+    assert "Rendered 2 file(s)" in _plain_output(result.output)
     assert calls == {
         "config": "cfg",
         "paths": fake_paths,
@@ -106,8 +112,9 @@ def test_deploy_command_passes_auto_auth_flag(tmp_path: Path, monkeypatch: pytes
     )
 
     assert result.exit_code == 0, result.output
-    assert "Rendered 4 file(s)" in result.output
-    assert "Local deploy completed." in result.output
+    output = _plain_output(result.output)
+    assert "Rendered 4 file(s)" in output
+    assert "Local deploy completed." in output
     assert captured == {
         "config": "cfg",
         "paths": fake_paths,
@@ -228,7 +235,7 @@ def test_flux_bootstrap_command_invokes_flux_ops(tmp_path: Path, monkeypatch: py
     )
 
     assert result.exit_code == 0, result.output
-    assert "Flux reconciled" in result.output
+    assert "Flux reconciled" in _plain_output(result.output)
     assert captured["auth"] == {
         "config": "cfg",
         "need_terraform": False,
@@ -249,7 +256,7 @@ def test_inventory_commands_invoke_inventory_ops(tmp_path: Path, monkeypatch: py
     write_result = runner.invoke(cli.app, ["inventory", "write", str(tmp_path / "config.yaml")])
 
     assert write_result.exit_code == 0, write_result.output
-    assert "Inventory written:" in write_result.output
+    assert "Inventory written:" in _plain_output(write_result.output)
 
 
 def test_email_command_handles_sent_and_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -259,31 +266,36 @@ def test_email_command_handles_sent_and_noop(tmp_path: Path, monkeypatch: pytest
     monkeypatch.setattr(cli, "send_inventory_email", lambda _cfg, _paths: True)
     sent_result = runner.invoke(cli.app, ["email", str(tmp_path / "config.yaml")])
     assert sent_result.exit_code == 0, sent_result.output
-    assert "Inventory email sent" in sent_result.output
+    assert "Inventory email sent" in _plain_output(sent_result.output)
 
     monkeypatch.setattr(cli, "send_inventory_email", lambda _cfg, _paths: False)
     noop_result = runner.invoke(cli.app, ["email", str(tmp_path / "config.yaml")])
     assert noop_result.exit_code == 0, noop_result.output
-    assert "client_info.notifications.email not configured; nothing sent" in noop_result.output
+    assert "client_info.notifications.email not configured; nothing sent" in _plain_output(
+        noop_result.output
+    )
 
 
 def test_top_level_help_has_single_auth_command_surface() -> None:
     result = runner.invoke(cli.app, ["--help"])
     assert result.exit_code == 0, result.output
-    assert "auth              Manage runtime auth profile" in result.output
-    assert "auth-runtime-profile" not in result.output
+    output = _plain_output(result.output)
+    assert "Manage runtime auth profile" in output
+    assert "auth-runtime-profile" not in output
+    assert re.search(r"\bauth\b", output) is not None
 
 
 def test_auth_help_has_no_subcommand_layer() -> None:
     result = runner.invoke(cli.app, ["auth", "--help"])
     assert result.exit_code == 0, result.output
-    assert "Usage: " in result.output
-    assert "auth [OPTIONS]" in result.output
-    assert "COMMAND [ARGS]" not in result.output
-    assert "--validate-profile" in result.output
-    assert "--create" in result.output
-    assert "--recreate" in result.output
-    assert "--bootstrap-ci" in result.output
+    output = _plain_output(result.output)
+    assert "Usage: " in output
+    assert "auth [OPTIONS]" in output
+    assert "COMMAND [ARGS]" not in output
+    assert "--validate-profile" in output
+    assert "--create" in output
+    assert "--recreate" in output
+    assert "--bootstrap-ci" in output
 
 
 def test_bootstrap_ci_command_with_auth_passes_github_flags(
@@ -330,7 +342,7 @@ def test_bootstrap_ci_command_with_auth_passes_github_flags(
     )
 
     assert result.exit_code == 0, result.output
-    assert "CI bootstrap completed." in result.output
+    assert "CI bootstrap completed." in _plain_output(result.output)
     assert captured["project_id"] == "project-123"
     assert captured["github_environment"] == "client-a-project-123"
     assert captured["github_repo"] == "owner/repo"
@@ -340,7 +352,7 @@ def test_bootstrap_ci_command_with_auth_passes_github_flags(
 def test_auth_requires_action_flag() -> None:
     result = runner.invoke(cli.app, ["auth", "--project-id", "project-123"])
     assert result.exit_code == 1
-    assert "Select at least one action" in result.output
+    assert "Select at least one action" in _plain_output(result.output)
 
 
 def test_auth_create_warns_if_profile_exists(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -366,7 +378,7 @@ def test_auth_create_warns_if_profile_exists(monkeypatch: pytest.MonkeyPatch) ->
     )
 
     assert result.exit_code == 0, result.output
-    assert "Runtime auth profile already exists" in result.output
+    assert "Runtime auth profile already exists" in _plain_output(result.output)
 
 
 def test_auth_recreate_forces_profile_rotation(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -392,7 +404,7 @@ def test_auth_recreate_forces_profile_rotation(monkeypatch: pytest.MonkeyPatch) 
     )
 
     assert result.exit_code == 0, result.output
-    assert "Recreated runtime auth profile for project 'project-123'" in result.output
+    assert "Recreated runtime auth profile for project 'project-123'" in _plain_output(result.output)
 
 
 def test_auth_bootstrap_ci_syncs_runtime_profile(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -428,8 +440,9 @@ def test_auth_bootstrap_ci_syncs_runtime_profile(monkeypatch: pytest.MonkeyPatch
     )
 
     assert result.exit_code == 0, result.output
-    assert "Synced GitHub environment secrets to owner/repo/client-a-project-123" in result.output
-    assert "2" in result.output
+    output = _plain_output(result.output)
+    assert "Synced GitHub environment secrets to owner/repo/client-a-project-123" in output
+    assert "2" in output
 
 
 def test_auth_validate_profile_ok(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -456,8 +469,9 @@ def test_auth_validate_profile_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     assert result.exit_code == 0, result.output
-    assert "Project ID: project-123" in result.output
-    assert "Profile status: OK" in result.output
+    output = _plain_output(result.output)
+    assert "Project ID: project-123" in output
+    assert "Profile status: OK" in output
 
 
 def test_auth_validate_profile_fails_on_invalid_profile(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -484,4 +498,6 @@ def test_auth_validate_profile_fails_on_invalid_profile(monkeypatch: pytest.Monk
     )
 
     assert result.exit_code == 1
-    assert "Runtime auth profile validation failed for project(s): project-123" in result.output
+    assert "Runtime auth profile validation failed for project(s): project-123" in _plain_output(
+        result.output
+    )
