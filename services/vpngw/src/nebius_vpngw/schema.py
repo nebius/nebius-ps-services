@@ -113,6 +113,25 @@ def validate_ip_address(v: str) -> str:
         raise ValueError(f"Invalid IP address '{v}': {e}") from e
 
 
+def validate_private_ipv4_cidr(v: str, *, min_prefixlen: int = 8, max_prefixlen: int = 28) -> str:
+    """Validate RFC1918 IPv4 CIDR notation and normalize host bits."""
+    try:
+        network = ipaddress.ip_network(v, strict=False)
+    except ValueError as e:
+        raise ValueError(f"Invalid CIDR '{v}': {e}") from e
+
+    if network.version != 4:
+        raise ValueError(f"CIDR '{v}' must be an IPv4 network")
+    if not network.is_private:
+        raise ValueError(f"CIDR '{v}' must be in RFC1918 private IPv4 space")
+    if network.prefixlen < min_prefixlen or network.prefixlen > max_prefixlen:
+        raise ValueError(
+            f"CIDR '{v}' must use a prefix length between /{min_prefixlen} and /{max_prefixlen}"
+        )
+
+    return str(network)
+
+
 def validate_asn(v: int) -> int:
     """Validate BGP ASN is in private range or valid public range."""
     # Private ASN: 64512-65534 (RFC 6996)
@@ -132,7 +151,9 @@ def validate_apipa_cidr(v: str) -> str:
     """Validate CIDR is in APIPA range (169.254.0.0/16) and is /30."""
     try:
         network = ipaddress.ip_network(v, strict=False)
-        apipa_range = ipaddress.ip_network("169.254.0.0/16")
+        if not isinstance(network, ipaddress.IPv4Network):
+            raise ValueError(f"inner_cidr '{v}' must be an IPv4 CIDR")
+        apipa_range = ipaddress.IPv4Network("169.254.0.0/16")
 
         # Check if network is within APIPA range
         if not network.subnet_of(apipa_range):
@@ -710,16 +731,6 @@ class VMSpec(BaseModel):
     ssh_private_key_path: str | None = Field(
         default=None, description="Path to SSH private key file"
     )
-    network_id: str | None = Field(
-        default=None,
-        description=(
-            "Network ID (VPC network) to use for VPN gateway. Optional. "
-            "If not specified, auto-discovers in this order: "
-            "1) default-network, 2) single custom network if only one exists, "
-            "3) errors if multiple custom networks found (specify network_id to resolve)"
-        ),
-    )
-
     @field_validator("num_nics")
     @classmethod
     def validate_num_nics(cls, v: int) -> int:
@@ -736,6 +747,44 @@ class VMSpec(BaseModel):
         if not self.ssh_public_key and not self.ssh_public_key_path:
             raise ValueError("Either ssh_public_key or ssh_public_key_path must be provided")
         return self
+
+
+class GatewaySubnetConfig(BaseModel):
+    """Gateway subnet selection and creation policy."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    name: str = Field(
+        default="vpngw-subnet",
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z0-9]([a-z0-9\-]*[a-z0-9])?$",
+        description="Gateway subnet name (lowercase, alphanumeric, hyphens)",
+    )
+    cidr: str | None = Field(
+        default=None,
+        description=(
+            "Explicit private IPv4 CIDR for the gateway subnet. "
+            "If set and the CIDR is outside the current network pool, the deployer "
+            "will extend the network pool when the network has exactly one private pool."
+        ),
+    )
+    prefix_length: int = Field(
+        default=24,
+        ge=8,
+        le=28,
+        description=(
+            "Prefix length to auto-carve when cidr is omitted. "
+            "The runtime validates this against the target network pool."
+        ),
+    )
+
+    @field_validator("cidr")
+    @classmethod
+    def validate_cidr(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        return validate_private_ipv4_cidr(v)
 
 
 class GatewayGroup(BaseModel):
@@ -756,6 +805,23 @@ class GatewayGroup(BaseModel):
         description=(
             "Pre-allocated external IPs per instance (list per instance; each inner "
             "list maps to NICs)"
+        ),
+    )
+    network_id: str | None = Field(
+        default=None,
+        description=(
+            "Network ID (VPC network) to use for the gateway group. Optional. "
+            "If not specified, auto-discovers in this order: "
+            "1) default-network, 2) single custom network if only one exists, "
+            "3) errors if multiple custom networks found (specify gateway_group.network_id to resolve)"
+        ),
+    )
+    subnet: GatewaySubnetConfig = Field(
+        default_factory=GatewaySubnetConfig,
+        description=(
+            "Dedicated gateway subnet configuration. "
+            "By default, the deployer creates or reuses 'vpngw-subnet' and auto-carves "
+            "the first free /24 from the target network's private pool."
         ),
     )
     vm_spec: VMSpec = Field(..., description="VM specification")

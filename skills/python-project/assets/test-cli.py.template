@@ -1,0 +1,21 @@
+from __future__ import annotations
+
+import json
+
+from typer.testing import CliRunner
+
+from {{package_name}}.cli import app
+
+
+def test_health_default_output() -> None:
+    result = CliRunner().invoke(app, ["health"])
+
+    assert result.exit_code == 0
+    assert "status:" in result.stdout
+
+
+def test_health_json_output() -> None:
+    result = CliRunner().invoke(app, ["health", "--output", "json"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {"status": "ok", "service": "{{project_slug}}"}

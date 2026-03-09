@@ -1,4 +1,4 @@
 interface:
-  display_name: "Nebius IAM"
-  short_description: "Implement Nebius IAM, keys, and state-bucket flows"
-  default_prompt: "Use $nebius to implement Nebius IAM/Object Storage workflows in Python (SDK init, service accounts, project role grants via IAM groups, SA token exchange, authorized keys, S3 access keys, and Terraform-state bucket readiness)."
+  display_name: "Nebius"
+  short_description: "Build Nebius IAM and VPC workflows"
+  default_prompt: "Use $nebius to implement Nebius IAM/Object Storage flows or inspect Nebius VPC pools, subnets, and route tables safely."

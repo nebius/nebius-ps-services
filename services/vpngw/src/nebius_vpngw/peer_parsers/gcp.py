@@ -29,7 +29,8 @@ def parse(text: str) -> dict:
 
     # Extract PSKs (often shown as: shared_secret = "..." or 'IPSec Shared Secret')
     psks = re.findall(
-        r"(?i)(shared\s*secret|ipsec shared secret)\s*[:=]\s*['\"]([^'\"]+)['\"]", text
+        r"(?i)(shared(?:[_\s]*)secret|ipsec shared secret)\s*[:=]\s*['\"]([^'\"]+)['\"]",
+        text,
     )
 
     # Extract inner /30 pairs (169.254.x.x/30 or local/remote IP)

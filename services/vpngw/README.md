@@ -67,6 +67,7 @@ Workflow:
 
 1. Fill minimal fields in `my-vpn.config.yaml`: `tenant_id`, `project_id`, `region_id`, `gateway_group` (leave `connections` for later).
    `project_id` must be set to a real value (or resolved via `${PROJECT_ID}` env var) before `prep-network`.
+   Set `gateway_group.network_id` if you want a custom Nebius VPC instead of the auto-resolved `default-network`.
 2. Run network preparation: `nebius-vpngw prep-network --local-config-file my-vpn.config.yaml`
 
 3. Share the allocated Nebius public IP(s) with the peer network team.
@@ -184,8 +185,8 @@ exec $SHELL
 - Create a virtual environment (Python 3.10–3.12) and activate it:
 
 ```bash
-python3 -m venv ~/venvs/nebius-vpngw
-source ~/venvs/nebius-vpngw/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
 ```
 
 - Install in editable mode with developer tools:
@@ -212,7 +213,7 @@ pip install -e ".[dev]"
 
 **Networking:**
 
-- Dedicated `vpngw-subnet` (/24 CIDR) for gateway isolation
+- Dedicated gateway subnet for gateway isolation (default name: `vpngw-subnet`)
 - One NIC per VM (platform constraint), future-ready for multi-NIC
 - Public IP allocations preserved across VM recreation
 
@@ -251,6 +252,11 @@ gateway_group:
   # external_ips:
   #   - ["203.0.113.10"]  # VM0 NIC0
   #   - ["203.0.113.20"]  # VM1 NIC0
+  # network_id: "vpcnetwork-abc123def456"
+  subnet:
+    name: "vpngw-subnet"
+    cidr: null         # null=auto-carve from parent network private CIDRs; or set e.g. "172.16.30.0/24"
+    prefix_length: 24  # used only when cidr is null; valid /28 through parent network CIDR
 
   vm_spec:
     platform: "cpu-d3"          # cpu-e2|cpu-d3
@@ -262,7 +268,6 @@ gateway_group:
     num_nics: 1
     ssh_public_key_path: "~/.ssh/id_ed25519.pub"
     ssh_private_key_path: "~/.ssh/id_ed25519"
-    # network_id: "vpcnetwork-abc123def456"
 
 gateway:
   local_asn: 65010
@@ -499,6 +504,9 @@ nebius-vpngw create-config <file>
 # Use --force to overwrite existing files
 ```
 
+If the target file already contains the current embedded template, rerunning the
+same command is a no-op and exits successfully.
+
 **Validate config:**
 
 ```bash
@@ -514,7 +522,14 @@ nebius-vpngw validate-config <file>
 nebius-vpngw prep-network --local-config-file <file>
 ```
 
-Ensures `vpngw-subnet` and the route table exist.
+Ensures the dedicated gateway subnet and its route table exist.
+Safe to rerun.
+
+- `gateway_group.network_id` optionally pins deployment to a specific existing Nebius VPC network
+- `gateway_group.subnet.name` defaults to `vpngw-subnet`
+- `gateway_group.subnet.cidr` pins an exact private CIDR, including an extended RFC1918 range outside the default-network CIDR
+- If `gateway_group.subnet.cidr` is omitted, the CLI auto-carves the first free subnet using `gateway_group.subnet.prefix_length`
+- If an explicit CIDR is outside the current network pool, the CLI extends the network pool automatically when the target network has exactly one private pool
 
 - If `gateway_group.external_ips` is empty, it reserves public IPs, prints them, and writes them into the YAML.
 - If `gateway_group.external_ips` is set, it verifies those IPs and creates allocations for them if needed.
@@ -527,6 +542,9 @@ nebius-vpngw create-from-peer-config my-vpn.config.yaml \
   --peer-config-file gcp-peer.txt \
   --peer-config-file aws-peer.xml
 ```
+
+If the generated output already matches the existing file, rerunning the command
+is a no-op and exits successfully.
 
 ### Deployment
 
@@ -542,6 +560,8 @@ nebius-vpngw apply --local-config-file <file> --recreate-gw
 nebius-vpngw apply --local-config-file <file> --project-id <id> --zone <zone>
 ```
 
+Safe to rerun. Matching subnet, route table, VM, and allocation state is reused.
+
 ### Monitoring
 
 **Check status:**
@@ -556,15 +576,17 @@ Shows tunnel status (including active/passive role), carrying-traffic indicator,
 
 ```bash
 # List local routes (Nebius VPC → Remote)
-# Shows route tables for subnets matching gateway.local_prefixes
+# Shows route tables for explicit-pool workload subnets selected by gateway.local_prefixes
 # BGP advertised routes include tunnel role (active/passive)
 nebius-vpngw list-routes-local --local-config-file <file>
 
 # Add local routes (Nebius VPC → Remote)
+# Safe to rerun: only missing routes are added
 # - BGP mode: Queries BGP-learned routes from gateway VMs via FRR
 # - Static mode: Uses remote_prefixes from YAML configuration
 # - Creates VPC route table entries with gateway private IP as next-hop
 # - Filters out local networks automatically
+# - Targets only subnets with explicit private pools; inherited parent-network subnets are skipped for safety
 # - Copies existing routes when creating custom route tables
 nebius-vpngw add-routes-local --local-config-file <file>
 
@@ -1555,6 +1577,13 @@ python -m ruff check src --fix
 - Keep `CHANGELOG.md` updated before tagging; the changelog is the human-friendly record of what changed.
 - If you build without a tag, `setuptools-scm` will fall back to `0.0.0`; create a proper `nebius-vpngw-vX.Y.Z` tag before shipping artifacts.
 
+### Release model
+
+- `publish-release.sh` is the local release helper for this service.
+- `vpngw-ci.yml` is for PR validation and manual CI only; it does not run from `nebius-vpngw-v*` tags.
+- `vpngw-release.yml` is the dedicated release workflow for this service and is triggered only by `nebius-vpngw-v*` tags.
+- The release workflow checks out the tagged commit from `services/vpngw`, runs lint and tests, builds the wheel, verifies the wheel version matches the tag, and publishes the GitHub Release asset.
+
 ### Choosing the next SemVer
 
 Bump **MAJOR** if there’s a breaking change (CLI flags or behavior changes that can break scripts).
@@ -1564,12 +1593,17 @@ Bump **PATCH** for fixes only.
 
 ### How to create a release for this project
 
-1. Prepare on your working branch: `./release.sh --prep nebius-vpngw-vX.Y.Z`
-2. Open a PR and merge it to `main`.
-3. On `main`, publish the release: `./release.sh --publish nebius-vpngw-vX.Y.Z`
+1. On your feature branch (or dedicated release-prep branch), run: `./publish-release.sh --prep X.Y.Z`
+2. Open a PR from that branch and merge it to `main`.
+3. After the PR is merged, switch to `main`, pull the merged commit, and run: `./publish-release.sh --publish X.Y.Z`
+4. GitHub Actions workflow [`vpngw-release.yml`](/Users/rezab/repos/nebius-ps-services/.github/workflows/vpngw-release.yml) runs from that tag and publishes the GitHub Release.
 
-Note: `--publish` requires `main` to be clean and up to date with `origin/main`.
-Note: `--prep` is idempotent. You can run it multiple times for the same tag; it keeps `## [Unreleased]` empty and merges any new Unreleased entries into the target tag section without duplication.
+Notes:
+
+- `publish-release.sh --publish` only creates and pushes the annotated tag. It does not build or publish artifacts locally.
+- `--publish` is intended to run only from a clean local `main` that is up to date with `origin/main`.
+- `--prep` is idempotent. You can run it multiple times for the same tag; it keeps `## [Unreleased]` empty and merges any new Unreleased entries into the target tag section without duplication.
+- The script accepts either `X.Y.Z` or `nebius-vpngw-vX.Y.Z`.
 
 ### Optional: build a single-file binary (PyInstaller)
 
@@ -1585,7 +1619,10 @@ Note: `--prep` is idempotent. You can run it multiple times for the same tag; it
 ├── README.md
 ├── pyproject.toml
 ├── *.config.yaml                         # User configs (git-ignored)
-├── release.sh                            # One-shot release helper (commit/tag/build/publish with gh)
+├── publish-release.sh                    # Release helper (prep changelog commit, then create/push release tag)
+├── .github/workflows/
+│   ├── vpngw-ci.yml                      # PR/manual CI for this service
+│   └── vpngw-release.yml                 # Tag-driven GitHub Release workflow for nebius-vpngw-v*
 ├── doc/
 │   └── design.md                         # Detailed design document
 ├── image/
@@ -1617,7 +1654,6 @@ Note: `--prep` is idempotent. You can run it multiple times for the same tag; it
 │   │   ├── vm_diff.py                    # VM change detection
 │   │   ├── route_manager.py              # VPC route management
 │   │   └── ssh_push.py                   # SSH deployment
-│   └── release.sh                        # One-shot release helper (commit/tag/build/publish GitHub release)
 │   ├── peer_parsers/                     # Vendor config parsers
 │   │   ├── __init__.py
 │   │   ├── gcp.py

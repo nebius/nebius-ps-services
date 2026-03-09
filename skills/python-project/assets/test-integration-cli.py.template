@@ -1,0 +1,15 @@
+from __future__ import annotations
+
+import pytest
+from typer.testing import CliRunner
+
+from {{package_name}}.cli import app
+
+pytestmark = pytest.mark.integration
+
+
+def test_cli_help_smoke() -> None:
+    result = CliRunner().invoke(app, ["--help"])
+
+    assert result.exit_code == 0
+    assert "{{project_slug}}" in result.stdout

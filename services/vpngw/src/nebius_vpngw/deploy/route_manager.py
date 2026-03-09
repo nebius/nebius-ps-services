@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+from pathlib import Path
 
 from rich import print
 
@@ -103,6 +104,469 @@ class RouteManager:
 
         return None
 
+    @staticmethod
+    def _gateway_subnet_name(local_cfg: dict) -> str:
+        gateway_group = local_cfg.get("gateway_group", {}) or {}
+        subnet_cfg = gateway_group.get("subnet", {}) or {}
+        return str(subnet_cfg.get("name") or "vpngw-subnet")
+
+    @staticmethod
+    def _subnet_uses_network_pools(subnet_obj) -> bool:
+        subnet_spec = getattr(subnet_obj, "spec", None)
+        ipv4_private_pools = getattr(subnet_spec, "ipv4_private_pools", None)
+        return bool(getattr(ipv4_private_pools, "use_network_pools", False))
+
+    @staticmethod
+    def _extract_explicit_subnet_cidrs(subnet_obj) -> list[ipaddress.IPv4Network]:
+        subnet_spec = getattr(subnet_obj, "spec", None)
+        ipv4_private_pools = getattr(subnet_spec, "ipv4_private_pools", None)
+        if not ipv4_private_pools or getattr(ipv4_private_pools, "use_network_pools", False):
+            return []
+
+        networks: list[ipaddress.IPv4Network] = []
+        for pool in getattr(ipv4_private_pools, "pools", []) or []:
+            for cidr_obj in getattr(pool, "cidrs", []) or []:
+                cidr = getattr(cidr_obj, "cidr", None)
+                if not cidr:
+                    continue
+                try:
+                    networks.append(ipaddress.ip_network(cidr, strict=False))
+                except Exception:
+                    continue
+        return networks
+
+    @staticmethod
+    def _extract_status_subnet_cidrs(subnet_obj) -> list[ipaddress.IPv4Network]:
+        subnet_status = getattr(subnet_obj, "status", None)
+        cidrs = getattr(subnet_status, "ipv4_private_cidrs", []) or []
+        networks: list[ipaddress.IPv4Network] = []
+        for cidr in cidrs:
+            try:
+                networks.append(ipaddress.ip_network(cidr, strict=False))
+            except Exception:
+                continue
+        return networks
+
+    def _effective_subnet_cidrs(self, subnet_obj) -> list[ipaddress.IPv4Network]:
+        explicit_cidrs = self._extract_explicit_subnet_cidrs(subnet_obj)
+        if explicit_cidrs:
+            return explicit_cidrs
+        return self._extract_status_subnet_cidrs(subnet_obj)
+
+    @staticmethod
+    def _ssh_base_command(local_cfg: dict) -> list[str]:
+        import os
+
+        gateway_group = local_cfg.get("gateway_group", {}) or {}
+        vm_spec = gateway_group.get("vm_spec", {}) or {}
+        ssh_key = vm_spec.get("ssh_private_key_path") or os.environ.get("VPNGW_SSH_KEY")
+
+        cmd = [
+            "ssh",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "ConnectTimeout=10",
+        ]
+        if ssh_key:
+            cmd.extend(["-i", str(Path(str(ssh_key)).expanduser())])
+        return cmd
+
+    @staticmethod
+    def _ssh_target(local_cfg: dict, external_ip: str) -> str:
+        import os
+
+        gateway_group = local_cfg.get("gateway_group", {}) or {}
+        vm_spec = gateway_group.get("vm_spec", {}) or {}
+        username = str(vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER") or "ubuntu")
+        return f"{username}@{external_ip}"
+
+    def _run_ssh(
+        self,
+        local_cfg: dict,
+        external_ip: str,
+        remote_cmd: str,
+        *,
+        timeout: int = 15,
+        stdin_text: str | None = None,
+    ):
+        import subprocess
+
+        return subprocess.run(
+            self._ssh_base_command(local_cfg)
+            + [self._ssh_target(local_cfg, external_ip), remote_cmd],
+            input=stdin_text,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+
+    def _query_bgp_summary(self, external_ip: str, local_cfg: dict) -> dict | None:
+        import json
+
+        result = self._run_ssh(
+            local_cfg,
+            external_ip,
+            "sudo vtysh -c 'show bgp summary json'",
+            timeout=15,
+        )
+        if result.returncode != 0:
+            return None
+        try:
+            return json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return None
+
+    def _query_bgp_advertised_routes(
+        self,
+        external_ip: str,
+        peer_ip: str,
+        local_cfg: dict,
+    ) -> dict | None:
+        import json
+
+        result = self._run_ssh(
+            local_cfg,
+            external_ip,
+            f"sudo vtysh -c 'show bgp ipv4 unicast neighbors {peer_ip} advertised-routes json'",
+            timeout=15,
+        )
+        if result.returncode != 0:
+            return None
+        try:
+            return json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return None
+
+    def _expected_advertised_prefixes(
+        self,
+        plan: ResolvedDeploymentPlan,
+        local_cfg: dict,
+    ) -> dict[str, dict[str, set[str]]]:
+        defaults_mode = (
+            self._normalize_value((local_cfg.get("defaults", {}).get("routing", {}) or {}).get("mode"))
+            or "bgp"
+        )
+        normalized_local_prefixes = {
+            str(network)
+            for prefix in (local_cfg.get("gateway", {}).get("local_prefixes") or [])
+            if (network := self._parse_prefix(prefix)) is not None
+        }
+        expected_by_host: dict[str, dict[str, set[str]]] = {
+            inst_cfg.hostname: {} for inst_cfg in plan.iter_instance_configs()
+        }
+        instances_by_index = {inst_cfg.instance_index: inst_cfg for inst_cfg in plan.iter_instance_configs()}
+
+        for conn in local_cfg.get("connections", []) or []:
+            if self._normalize_value(conn.get("routing_mode") or defaults_mode) != "bgp":
+                continue
+
+            conn_bgp = conn.get("bgp", {}) or {}
+            advertised_prefixes = normalized_local_prefixes if conn_bgp.get(
+                "advertise_local_prefixes", True
+            ) else set()
+
+            for tunnel in conn.get("tunnels", []) or []:
+                if self._normalize_value(tunnel.get("ha_role") or "active") == "disable":
+                    continue
+
+                peer_ip = (
+                    ((tunnel.get("bgp", {}) or {}).get("remote_ip"))
+                    or tunnel.get("inner_remote_ip")
+                    or ""
+                )
+                if not peer_ip:
+                    continue
+
+                instance_index = int(tunnel.get("gateway_instance_index", 0) or 0)
+                inst_cfg = instances_by_index.get(instance_index)
+                if not inst_cfg:
+                    continue
+
+                expected_by_host.setdefault(inst_cfg.hostname, {})[peer_ip] = set(advertised_prefixes)
+
+        return expected_by_host
+
+    @staticmethod
+    def _parse_prefix(prefix: str) -> ipaddress.IPv4Network | None:
+        try:
+            return ipaddress.ip_network(prefix, strict=False)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _bgp_advertisements_need_refresh(
+        expected_by_peer: dict[str, set[str]],
+        observed_peers: set[str],
+        observed_prefixes_by_peer: dict[str, set[str]],
+    ) -> bool:
+        if observed_peers != set(expected_by_peer):
+            return True
+
+        for peer_ip, expected_prefixes in expected_by_peer.items():
+            observed_prefixes = observed_prefixes_by_peer.get(peer_ip)
+            if observed_prefixes is None:
+                continue
+            if observed_prefixes != expected_prefixes:
+                return True
+
+        return False
+
+    def _collect_observed_bgp_advertisements(
+        self,
+        external_ip: str,
+        local_cfg: dict,
+    ) -> tuple[set[str], dict[str, set[str]]] | None:
+        bgp_summary = self._query_bgp_summary(external_ip, local_cfg)
+        if not bgp_summary:
+            return None
+
+        peers = bgp_summary.get("ipv4Unicast", {}).get("peers", {}) or {}
+        observed_peers = set(peers)
+        observed_prefixes_by_peer: dict[str, set[str]] = {}
+
+        for peer_ip, peer_info in peers.items():
+            if peer_info.get("state") != "Established":
+                continue
+
+            adv_data = self._query_bgp_advertised_routes(external_ip, peer_ip, local_cfg)
+            if adv_data is None:
+                continue
+
+            advertised_routes = adv_data.get("advertisedRoutes", {}) or {}
+            observed_prefixes_by_peer[peer_ip] = set(advertised_routes)
+
+        return observed_peers, observed_prefixes_by_peer
+
+    def _reload_runtime_config(self, inst_cfg, local_cfg: dict) -> bool:
+        remote_tmp_path = f"/tmp/nebius-config-{inst_cfg.instance_index}.yaml"
+        upload_result = self._run_ssh(
+            local_cfg,
+            inst_cfg.external_ip,
+            f"cat > {remote_tmp_path}",
+            timeout=20,
+            stdin_text=inst_cfg.config_yaml,
+        )
+        if upload_result.returncode != 0:
+            print(
+                f"[yellow]Failed to upload refreshed config to {inst_cfg.hostname}: "
+                f"{upload_result.stderr.strip() or upload_result.stdout.strip()}[/yellow]"
+            )
+            return False
+
+        reload_cmd = (
+            "sudo mkdir -p /etc/nebius-vpngw"
+            f" && sudo mv {remote_tmp_path} /etc/nebius-vpngw/config-resolved.yaml"
+            " && sudo chown root:root /etc/nebius-vpngw/config-resolved.yaml"
+            " && sudo chmod 0644 /etc/nebius-vpngw/config-resolved.yaml"
+            " && (sudo systemctl is-active --quiet nebius-vpngw-agent"
+            " && sudo systemctl reload nebius-vpngw-agent"
+            " || sudo systemctl start nebius-vpngw-agent)"
+        )
+        reload_result = self._run_ssh(
+            local_cfg,
+            inst_cfg.external_ip,
+            reload_cmd,
+            timeout=30,
+        )
+        if reload_result.returncode != 0:
+            print(
+                f"[yellow]Failed to reload nebius-vpngw-agent on {inst_cfg.hostname}: "
+                f"{reload_result.stderr.strip() or reload_result.stdout.strip()}[/yellow]"
+            )
+            return False
+
+        return True
+
+    def ensure_bgp_advertisements_current(
+        self,
+        plan: ResolvedDeploymentPlan,
+        local_cfg: dict,
+    ) -> None:
+        import time
+
+        expected_by_host = self._expected_advertised_prefixes(plan, local_cfg)
+        if not expected_by_host:
+            return
+
+        print("[bold]Checking live BGP advertisements against current YAML...[/bold]")
+
+        for inst_cfg in plan.iter_instance_configs():
+            if not inst_cfg.external_ip:
+                continue
+
+            expected_by_peer = expected_by_host.get(inst_cfg.hostname, {})
+            print(
+                f"[cyan]  • Inspecting gateway {inst_cfg.hostname} ({inst_cfg.external_ip})...[/cyan]"
+            )
+            print("[dim]    Step 1/3: Querying current BGP advertisements[/dim]")
+            observed_state = self._collect_observed_bgp_advertisements(
+                inst_cfg.external_ip,
+                local_cfg,
+            )
+            if observed_state is None:
+                print(
+                    f"[yellow]    Could not query live BGP advertisements from {inst_cfg.hostname}. "
+                    "Skipping reconciliation for this gateway.[/yellow]"
+                )
+                continue
+
+            observed_peers, observed_prefixes_by_peer = observed_state
+            if not self._bgp_advertisements_need_refresh(
+                expected_by_peer,
+                observed_peers,
+                observed_prefixes_by_peer,
+            ):
+                print(
+                    f"[green]    ✓ Live BGP advertisements on {inst_cfg.hostname} already match the current YAML.[/green]"
+                )
+                continue
+
+            expected_prefixes = sorted(
+                {prefix for prefixes in expected_by_peer.values() for prefix in prefixes}
+            )
+            print(
+                f"[yellow]    Detected stale BGP advertisement state on {inst_cfg.hostname}.[/yellow]"
+            )
+            if expected_prefixes:
+                print(
+                    "[dim]    Expected advertised prefixes from current YAML: "
+                    f"{', '.join(expected_prefixes)}[/dim]"
+                )
+
+            print("[dim]    Step 2/3: Uploading current resolved config and reloading agent[/dim]")
+            if not self._reload_runtime_config(inst_cfg, local_cfg):
+                continue
+
+            print("[dim]    Step 3/3: Re-checking live BGP advertisements[/dim]")
+            time.sleep(3)
+            refreshed_state = self._collect_observed_bgp_advertisements(
+                inst_cfg.external_ip,
+                local_cfg,
+            )
+            if refreshed_state is None:
+                print(
+                    f"[yellow]    Reloaded {inst_cfg.hostname}, but could not verify live BGP advertisements yet.[/yellow]"
+                )
+                continue
+
+            refreshed_peers, refreshed_prefixes_by_peer = refreshed_state
+            if self._bgp_advertisements_need_refresh(
+                expected_by_peer,
+                refreshed_peers,
+                refreshed_prefixes_by_peer,
+            ):
+                print(
+                    f"[yellow]    {inst_cfg.hostname} still advertises prefixes that do not match the current YAML. "
+                    "Run 'nebius-vpngw apply' if this persists.[/yellow]"
+                )
+                continue
+
+            print(
+                f"[green]    ✓ Refreshed live BGP advertisements on {inst_cfg.hostname} to match the current YAML.[/green]"
+            )
+
+    def _resolve_target_network_id(self, channel, local_cfg: dict) -> str | None:
+        from nebius.api.nebius.vpc.v1 import (
+            network_service_pb2,
+            network_service_pb2_grpc,
+            subnet_service_pb2,
+            subnet_service_pb2_grpc,
+        )
+
+        gateway_group = local_cfg.get("gateway_group", {}) or {}
+        explicit_network_id = str(gateway_group.get("network_id") or "").strip()
+        if explicit_network_id:
+            return explicit_network_id
+
+        subnet_name = self._gateway_subnet_name(local_cfg)
+        sstub = subnet_service_pb2_grpc.SubnetServiceStub(channel)
+        try:
+            subnet_obj = sstub.GetByName(
+                subnet_service_pb2.GetSubnetByNameRequest(
+                    parent_id=self.project_id or "",
+                    name=subnet_name,
+                )
+            )
+            subnet_spec = getattr(subnet_obj, "spec", None)
+            subnet_network_id = getattr(subnet_spec, "network_id", None)
+            if subnet_network_id:
+                return subnet_network_id
+        except Exception:
+            pass
+
+        nstub = network_service_pb2_grpc.NetworkServiceStub(channel)
+        try:
+            network_obj = nstub.GetByName(
+                network_service_pb2.GetNetworkByNameRequest(
+                    parent_id=self.project_id or "",
+                    name="default-network",
+                )
+            )
+            network_id = getattr(network_obj, "id", None) or getattr(
+                getattr(network_obj, "metadata", None),
+                "id",
+                None,
+            )
+            if network_id:
+                return network_id
+        except Exception:
+            pass
+
+        try:
+            networks = nstub.List(
+                network_service_pb2.ListNetworksRequest(parent_id=self.project_id or "")
+            ).items
+        except Exception:
+            return None
+
+        if len(networks) == 1:
+            network_obj = networks[0]
+            return getattr(network_obj, "id", None) or getattr(
+                getattr(network_obj, "metadata", None),
+                "id",
+                None,
+            )
+
+        return None
+
+    def _select_local_prefix_subnets(
+        self,
+        subnets,
+        gateway_prefixes: list[ipaddress.IPv4Network],
+        *,
+        target_network_id: str,
+        gateway_subnet_name: str,
+    ) -> tuple[list[object], list[tuple[str, list[str]]]]:
+        selected: list[object] = []
+        inherited_selected: list[tuple[str, list[str]]] = []
+
+        for subnet_obj in subnets:
+            subnet_spec = getattr(subnet_obj, "spec", None)
+            subnet_network_id = getattr(subnet_spec, "network_id", None)
+            if subnet_network_id != target_network_id:
+                continue
+
+            subnet_name = getattr(getattr(subnet_obj, "metadata", None), "name", None) or ""
+            if subnet_name == gateway_subnet_name:
+                continue
+
+            effective_cidrs = self._effective_subnet_cidrs(subnet_obj)
+            if not any(
+                effective_cidr.overlaps(prefix)
+                for effective_cidr in effective_cidrs
+                for prefix in gateway_prefixes
+            ):
+                continue
+
+            selected.append(subnet_obj)
+            if self._subnet_uses_network_pools(subnet_obj):
+                inherited_selected.append(
+                    (subnet_name, [str(effective_cidr) for effective_cidr in effective_cidrs])
+                )
+
+        return selected, inherited_selected
+
     def list_routes(self, plan: ResolvedDeploymentPlan, local_cfg: dict) -> None:
         """List route tables attached to subnets matching gateway.local_prefixes."""
         try:
@@ -133,24 +597,46 @@ class RouteManager:
         sstub = subnet_service_pb2_grpc.SubnetServiceStub(channel)
         rstub = route_service_pb2_grpc.RouteServiceStub(channel)
         console = Console()
+        gateway_subnet_name = self._gateway_subnet_name(local_cfg)
+        target_network_id = self._resolve_target_network_id(channel, local_cfg)
+        if not target_network_id:
+            print(
+                "[yellow]Could not resolve the target network for route listing. "
+                "Set gateway_group.network_id explicitly.[/yellow]"
+            )
+            return
 
         subnets = sstub.List(
             subnet_service_pb2.ListSubnetsRequest(parent_id=self.project_id or "")
         ).items
-        for sn in subnets:
-            # Filter by overlap with gateway.local_prefixes
-            if not any(
-                ipaddress.ip_network(cidr, strict=False).overlaps(pfx)
-                for cidr in sn.status.ipv4_private_cidrs
-                for pfx in gateway_prefixes
-            ):
-                continue
+        selected_subnets, inherited_selected = self._select_local_prefix_subnets(
+            subnets,
+            gateway_prefixes,
+            target_network_id=target_network_id,
+            gateway_subnet_name=gateway_subnet_name,
+        )
+
+        for subnet_name, inherited_cidrs in inherited_selected:
+            print(
+                f"[dim]Subnet {subnet_name} inherits parent network pools "
+                f"(use_network_pools=true); matching via effective CIDRs: "
+                f"{', '.join(inherited_cidrs)}[/dim]"
+            )
+
+        if not selected_subnets:
+            print(
+                "[yellow]No workload subnets matched gateway.local_prefixes "
+                f"in network {target_network_id}.[/yellow]"
+            )
+
+        for sn in selected_subnets:
+            subnet_cidrs = [str(net) for net in self._effective_subnet_cidrs(sn)]
 
             rt_id = sn.status.route_table.id
             rt_default = sn.status.route_table.default
 
             print(
-                f"\n[bold cyan]Subnet: {sn.metadata.name}[/bold cyan] ({', '.join(sn.status.ipv4_private_cidrs)})"
+                f"\n[bold cyan]Subnet: {sn.metadata.name}[/bold cyan] ({', '.join(subnet_cidrs)})"
             )
 
             if not rt_id:
@@ -193,9 +679,6 @@ class RouteManager:
 
         Shows what routes are announced to remote sites, organized by connection and tunnel.
         """
-        import json
-        import subprocess
-
         from rich.table import Table
 
         print(
@@ -221,6 +704,8 @@ class RouteManager:
             print("[dim]No BGP connections configured - routes are static[/dim]")
             return
 
+        self.ensure_bgp_advertisements_current(plan, local_cfg)
+
         # Query each gateway VM
         for inst_cfg in plan.iter_instance_configs():
             hostname = inst_cfg.hostname
@@ -234,26 +719,11 @@ class RouteManager:
 
             # Query BGP summary to get peer list
             try:
-                result = subprocess.run(
-                    [
-                        "ssh",
-                        "-o",
-                        "StrictHostKeyChecking=no",
-                        "-o",
-                        "ConnectTimeout=10",
-                        f"ubuntu@{external_ip}",
-                        "sudo vtysh -c 'show bgp summary json'",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=15,
-                )
-
-                if result.returncode != 0:
-                    print(f"[yellow]Failed to query BGP summary: {result.stderr}[/yellow]")
+                bgp_summary = self._query_bgp_summary(external_ip, local_cfg)
+                if bgp_summary is None:
+                    print(f"[yellow]Failed to query BGP summary from {hostname}[/yellow]")
                     continue
 
-                bgp_summary = json.loads(result.stdout)
                 ipv4_peers = bgp_summary.get("ipv4Unicast", {}).get("peers", {})
 
                 if not ipv4_peers:
@@ -281,92 +751,63 @@ class RouteManager:
                         continue
 
                     # Query advertised routes to this peer
-                    adv_result = subprocess.run(
-                        [
-                            "ssh",
-                            "-o",
-                            "StrictHostKeyChecking=no",
-                            "-o",
-                            "ConnectTimeout=10",
-                            f"ubuntu@{external_ip}",
-                            f"sudo vtysh -c 'show bgp ipv4 unicast neighbors {peer_ip} advertised-routes json'",
-                        ],
-                        capture_output=True,
-                        text=True,
-                        timeout=15,
-                    )
-
-                    if adv_result.returncode != 0:
+                    adv_data = self._query_bgp_advertised_routes(external_ip, peer_ip, local_cfg)
+                    if adv_data is None:
                         print(
                             f"\n[bold]Connection: {conn_name} | Tunnel: {tunnel_name} ({role_label})[/bold]"
                         )
                         print(f"[yellow]  Failed to query advertised routes to {peer_ip}[/yellow]")
                         continue
 
-                    try:
-                        adv_data = json.loads(adv_result.stdout)
-                        advertised_routes = adv_data.get("advertisedRoutes", {})
+                    advertised_routes = adv_data.get("advertisedRoutes", {})
 
-                        if not advertised_routes:
-                            print(
-                                f"\n[bold]Connection: {conn_name} | Tunnel: {tunnel_name} ({role_label})[/bold]"
-                            )
-                            print(
-                                f"[dim]  BGP Peer {peer_ip} (ASN {peer_asn}): No routes advertised[/dim]"
-                            )
-                            continue
-
-                        # Build table for this peer
-                        print(
-                            f"\n[bold]Connection: {conn_name} | Tunnel: {tunnel_name} ({role_label})[/bold]"
-                        )
-
-                        # Get local ASN from adv_data
-                        local_asn = adv_data.get("localAS", "")
-
-                        table = Table(title=f"→ Peer {peer_ip} (ASN {peer_asn})")
-                        table.add_column("Prefix", style="cyan")
-                        table.add_column("Next-Hop", style="blue")
-                        table.add_column("AS Path", style="yellow")
-                        table.add_column("Origin", style="green")
-
-                        for prefix, route_info in sorted(advertised_routes.items()):
-                            next_hop = route_info.get("nextHop", "-")
-                            # Replace 0.0.0.0 with actual XFRM interface IP
-                            if next_hop == "0.0.0.0":
-                                next_hop = inner_local_ip
-
-                            # AS path is empty for locally originated routes
-                            # When sent on wire, FRR automatically prepends local ASN
-                            as_path = route_info.get("path", "")
-                            if not as_path and local_asn:
-                                as_path = str(local_asn)  # Show local ASN for clarity
-                            elif not as_path:
-                                as_path = "local"
-
-                            # For user clarity, show "BGP" for locally originated routes (IGP origin code)
-                            # since these are routes injected via BGP 'network' statement
-                            origin = route_info.get("origin", "?")
-                            if origin == "IGP":
-                                origin = "BGP"
-
-                            table.add_row(prefix, next_hop, as_path, origin)
-
-                        console.print(table)
-
-                    except json.JSONDecodeError:
+                    if not advertised_routes:
                         print(
                             f"\n[bold]Connection: {conn_name} | Tunnel: {tunnel_name} ({role_label})[/bold]"
                         )
                         print(
-                            f"[yellow]  Failed to parse advertised routes JSON for {peer_ip}[/yellow]"
+                            f"[dim]  BGP Peer {peer_ip} (ASN {peer_asn}): No routes advertised[/dim]"
                         )
                         continue
 
-            except subprocess.TimeoutExpired:
-                print(f"[yellow]Timeout querying BGP data from {hostname}[/yellow]")
-            except json.JSONDecodeError:
-                print(f"[yellow]Failed to parse BGP JSON output from {hostname}[/yellow]")
+                    # Build table for this peer
+                    print(
+                        f"\n[bold]Connection: {conn_name} | Tunnel: {tunnel_name} ({role_label})[/bold]"
+                    )
+
+                    # Get local ASN from adv_data
+                    local_asn = adv_data.get("localAS", "")
+
+                    table = Table(title=f"→ Peer {peer_ip} (ASN {peer_asn})")
+                    table.add_column("Prefix", style="cyan")
+                    table.add_column("Next-Hop", style="blue")
+                    table.add_column("AS Path", style="yellow")
+                    table.add_column("Origin", style="green")
+
+                    for prefix, route_info in sorted(advertised_routes.items()):
+                        next_hop = route_info.get("nextHop", "-")
+                        # Replace 0.0.0.0 with actual XFRM interface IP
+                        if next_hop == "0.0.0.0":
+                            next_hop = inner_local_ip
+
+                        # AS path is empty for locally originated routes
+                        # When sent on wire, FRR automatically prepends local ASN
+                        as_path = route_info.get("path", "")
+                        if not as_path and local_asn:
+                            as_path = str(local_asn)  # Show local ASN for clarity
+                        elif not as_path:
+                            as_path = "local"
+
+                        # For user clarity, show "BGP" for locally originated routes (IGP origin code)
+                        # since these are routes injected via BGP 'network' statement
+                        origin = route_info.get("origin", "?")
+                        if origin == "IGP":
+                            origin = "BGP"
+
+                        table.add_row(prefix, next_hop, as_path, origin)
+
+                    console.print(table)
+
             except Exception as e:
                 print(f"[yellow]Error querying BGP data: {e}[/yellow]")
 
@@ -447,15 +888,15 @@ class RouteManager:
             return
 
         # Determine routing mode and collect remote prefixes
-        defaults_mode = (local_cfg.get("defaults", {}).get("routing", {}) or {}).get(
-            "mode"
+        defaults_mode = self._normalize_value(
+            (local_cfg.get("defaults", {}).get("routing", {}) or {}).get("mode")
         ) or "bgp"
 
         # Collect remote prefixes based on routing mode
         remote_prefixes: list[str] = []
 
         for conn in local_cfg.get("connections") or []:
-            mode = conn.get("routing_mode") or defaults_mode
+            mode = self._normalize_value(conn.get("routing_mode") or defaults_mode)
 
             if mode == "bgp":
                 # For BGP mode: query learned routes from FRR
@@ -515,19 +956,40 @@ class RouteManager:
         sstub = subnet_service_pb2_grpc.SubnetServiceStub(channel)
         rtstub = route_table_service_pb2_grpc.RouteTableServiceStub(channel)
         rstub = route_service_pb2_grpc.RouteServiceStub(channel)
+        gateway_subnet_name = self._gateway_subnet_name(local_cfg)
+        target_network_id = self._resolve_target_network_id(channel, local_cfg)
+        if not target_network_id:
+            print(
+                "[yellow]Could not resolve the target network for route updates. "
+                "Set gateway_group.network_id explicitly.[/yellow]"
+            )
+            return
 
         subnets = sstub.List(
             subnet_service_pb2.ListSubnetsRequest(parent_id=self.project_id or "")
         ).items
-        for sn in subnets:
-            # Consider only subnets overlapping gateway.local_prefixes
-            overlaps = any(
-                ipaddress.ip_network(cidr, strict=False).overlaps(pfx)
-                for cidr in sn.status.ipv4_private_cidrs
-                for pfx in gateway_prefixes
+        selected_subnets, inherited_selected = self._select_local_prefix_subnets(
+            subnets,
+            gateway_prefixes,
+            target_network_id=target_network_id,
+            gateway_subnet_name=gateway_subnet_name,
+        )
+
+        for subnet_name, inherited_cidrs in inherited_selected:
+            print(
+                f"[dim]Subnet {subnet_name} inherits parent network pools "
+                f"(use_network_pools=true); matching via effective CIDRs: "
+                f"{', '.join(inherited_cidrs)}[/dim]"
             )
-            if not overlaps:
-                continue
+
+        if not selected_subnets:
+            print(
+                "[yellow]No workload subnets matched gateway.local_prefixes "
+                f"in network {target_network_id}. Nothing to update.[/yellow]"
+            )
+            return
+
+        for sn in selected_subnets:
 
             rt_info = sn.status.route_table
             if not rt_info.default and rt_info.id:
@@ -834,8 +1296,8 @@ class RouteManager:
         console = Console()
 
         # Get routing mode and connections
-        defaults_mode = (local_cfg.get("defaults", {}).get("routing", {}) or {}).get(
-            "mode"
+        defaults_mode = self._normalize_value(
+            (local_cfg.get("defaults", {}).get("routing", {}) or {}).get("mode")
         ) or "bgp"
         connections = local_cfg.get("connections", [])
 
@@ -859,7 +1321,7 @@ class RouteManager:
             # Process each connection for this VM
             for conn in connections:
                 conn_name = conn.get("name", "unnamed")
-                routing_mode = conn.get("routing_mode") or defaults_mode
+                routing_mode = self._normalize_value(conn.get("routing_mode") or defaults_mode)
                 remote_prefixes = conn.get("remote_prefixes", []) or (
                     conn.get("bgp", {}) or {}
                 ).get("remote_prefixes", [])

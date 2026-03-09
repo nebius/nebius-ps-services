@@ -9,7 +9,5 @@ except ImportError:  # Generated file is present only after building/installing
         __version__ = "0.0.0"
 
 __all__ = [
-    "cli",
-    "config_loader",
     "__version__",
 ]

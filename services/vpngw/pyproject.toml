@@ -27,6 +27,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
 	"pytest>=9.0.0,<10.0.0",
+	"pytest-cov>=6.3.0,<7.0.0",
+	"pytest-xdist>=3.8.0,<4.0.0",
 	"ruff>=0.14.0,<1.0.0",
 	"pyinstaller>=6.17.0,<7.0.0",
 	"build>=1.3.0,<2.0.0",
@@ -44,12 +46,16 @@ include = ["nebius_vpngw*"]
 nebius_vpngw = ["systemd/*"]
 
 [tool.setuptools_scm]
+root = "../.."
 version_scheme = "python-simplified-semver"
 local_scheme = "no-local-version"
-write_to = "src/nebius_vpngw/_version.py"
+write_to = "services/vpngw/src/nebius_vpngw/_version.py"
 tag_regex = "^nebius-vpngw-v(?P<version>\\d+\\.\\d+\\.\\d+)$"
 fallback_version = "0.0.0"
-search_parent_directories = true
+search_parent_directories = false
+
+[tool.setuptools_scm.scm.git]
+describe_command = "git describe --dirty --tags --long --abbrev=40 --match nebius-vpngw-v*"
 
 # System dependencies (installed via apt on Ubuntu 24.04):
 # - strongswan >= 5.9.x (for XFRM interface support with if_id parameter)
@@ -92,6 +98,23 @@ ignore = [
 	"SIM212",
 	"UP022",
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"src/nebius_vpngw/_version.py" = ["UP007"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers"
+markers = [
+	"integration: isolated integration tests intended for CI release validation"
+]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["nebius_vpngw"]
+
+[tool.coverage.report]
+skip_empty = true
 
 [build-system]
 requires = ["setuptools>=64", "setuptools-scm>=8"]

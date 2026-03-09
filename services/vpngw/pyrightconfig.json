@@ -1,0 +1,31 @@
+{
+  "include": [
+    "src",
+    "tests"
+  ],
+  "exclude": [
+    "build",
+    "dist",
+    ".venv",
+    ".pytest_cache",
+    ".ruff_cache",
+    "src/nebius_vpngw/_version.py"
+  ],
+  "ignore": [
+    "src/nebius_vpngw/cli.py",
+    "src/nebius_vpngw/deploy/route_manager.py",
+    "src/nebius_vpngw/vpngw_sa.py"
+  ],
+  "executionEnvironments": [
+    {
+      "root": ".",
+      "extraPaths": [
+        "src"
+      ]
+    }
+  ],
+  "pythonVersion": "3.10",
+  "typeCheckingMode": "standard",
+  "reportMissingModuleSource": "warning",
+  "useLibraryCodeForTypes": true
+}

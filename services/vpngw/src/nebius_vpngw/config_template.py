@@ -37,6 +37,11 @@ gateway_group:
   # external_ips:
   #   - ["203.0.113.10"]  # VM0 NIC0
   #   - ["203.0.113.20"]  # VM1 NIC0
+  # network_id: "vpcnetwork-abc123def456"
+  subnet:
+    name: "vpngw-subnet"
+    cidr: null         # null=auto-carve from parent network private CIDRs; or set e.g. "172.16.30.0/24"
+    prefix_length: 24  # used only when cidr is null; valid /28 through parent network CIDR
 
   vm_spec:
     platform: "cpu-d3"          # cpu-e2|cpu-d3
@@ -48,7 +53,6 @@ gateway_group:
     num_nics: 1
     ssh_public_key_path: "~/.ssh/id_ed25519.pub"
     ssh_private_key_path: "~/.ssh/id_ed25519"
-    # network_id: "vpcnetwork-abc123def456"
 
 gateway:
   local_asn: 65010

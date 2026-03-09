@@ -23,6 +23,8 @@ class GatewayGroupSpec:
     region: str
     external_ips: list[list[str]]
     vm_spec: dict
+    network_id: str | None = None
+    subnet: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -130,7 +132,12 @@ def _enum_to_value(obj: t.Any) -> t.Any:
     return obj
 
 
-def load_local_config(path: Path) -> dict:
+def load_local_config(
+    path: Path,
+    *,
+    allow_missing_placeholders: bool = False,
+    validate_schema: bool = True,
+) -> dict:
     with path.open("r", encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
     missing: set[str] = set()
@@ -140,11 +147,9 @@ def load_local_config(path: Path) -> dict:
     try:
         if "NETWORK_ID" in missing:
             gg0 = expanded.get("gateway_group") or {}
-            vm0 = gg0.get("vm_spec") or {}
-            nid = vm0.get("network_id")
+            nid = gg0.get("network_id")
             if isinstance(nid, str) and nid.strip() == "${NETWORK_ID}":
-                vm0.pop("network_id", None)
-                gg0["vm_spec"] = vm0
+                gg0.pop("network_id", None)
                 expanded["gateway_group"] = gg0
                 missing.discard("NETWORK_ID")
         # Treat unresolved placeholders in external_ips as "not provided":
@@ -173,7 +178,7 @@ def load_local_config(path: Path) -> dict:
     except Exception:
         # Ignore and let normal missing handling report variables
         pass
-    if missing:
+    if missing and not allow_missing_placeholders:
         # Surface all missing vars at once to help the user export them.
         raise ValueError(
             "Missing environment variables for placeholders: " + ", ".join(sorted(missing))
@@ -203,25 +208,26 @@ def load_local_config(path: Path) -> dict:
     # SCHEMA VALIDATION: Validate against strict Pydantic schema
     # This catches typos, unknown fields, type errors, and constraint violations
     # ============================================================================
-    try:
-        validated_config = schema.validate_config(expanded)
-        # Convert back to dict for downstream processing
-        # (preserves existing code paths while ensuring schema compliance)
-        expanded = validated_config.model_dump(mode="python", exclude_none=False)
-    except ValidationError as e:
-        # Format Pydantic errors into user-friendly messages
-        errors = []
-        for err in e.errors():
-            loc = " -> ".join(str(x) for x in err["loc"])
-            msg = err["msg"]
-            errors.append(f"  • {loc}: {msg}")
+    if validate_schema:
+        try:
+            validated_config = schema.validate_config(expanded)
+            # Convert back to dict for downstream processing
+            # (preserves existing code paths while ensuring schema compliance)
+            expanded = validated_config.model_dump(mode="python", exclude_none=False)
+        except ValidationError as e:
+            # Format Pydantic errors into user-friendly messages
+            errors = []
+            for err in e.errors():
+                loc = " -> ".join(str(x) for x in err["loc"])
+                msg = err["msg"]
+                errors.append(f"  • {loc}: {msg}")
 
-        raise ValueError(
-            "Configuration validation failed:\n"
-            + "\n".join(errors)
-            + "\n\nPlease fix these errors and try again. "
-            "Run 'nebius-vpngw validate-config <file>' to validate without deploying."
-        ) from e
+            raise ValueError(
+                "Configuration validation failed:\n"
+                + "\n".join(errors)
+                + "\n\nPlease fix these errors and try again. "
+                "Run 'nebius-vpngw validate-config <file>' to validate without deploying."
+            ) from e
 
     return expanded
 
@@ -303,7 +309,7 @@ def _parse_peer_file(path: Path) -> dict:
     text = path.read_text(encoding="utf-8", errors="ignore")
     vendor = _detect_vendor(text)
     if vendor == "gcp":
-        parsed = gcp_parser.parse(text)
+        parsed: dict[str, t.Any] = gcp_parser.parse(text)
     elif vendor == "aws":
         parsed = aws_parser.parse(text)
     elif vendor == "azure":
@@ -312,7 +318,8 @@ def _parse_peer_file(path: Path) -> dict:
         parsed = cisco_parser.parse(text)
     else:
         parsed = {"tunnels": []}
-    parsed.setdefault("vendor", vendor)
+    if "vendor" not in parsed:
+        parsed["vendor"] = vendor
     return parsed
 
 
@@ -562,6 +569,8 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: list[Path]) -> Resolved
     # Prefer gateway_group.region, else top-level region_id, else a sane default
     region = gg.get("region") or (local_cfg.get("region_id") or "eu-north1-a")
     external_ips = gg.get("external_ips", []) or []
+    network_id = str(gg.get("network_id") or "").strip() or None
+    subnet = gg.get("subnet", {}) or {}
     vm_spec = gg.get("vm_spec", {})
 
     # Validate and normalize num_nics configuration
@@ -583,7 +592,9 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: list[Path]) -> Resolved
         instance_count=instance_count,
         region=region,
         external_ips=external_ips,
+        subnet=subnet,
         vm_spec=vm_spec,
+        network_id=network_id,
     )
 
     # Build per-instance configs by filtering tunnels for each instance

@@ -1,4 +1,4 @@
 interface:
   display_name: "Python Project"
-  short_description: "Scaffold production Python repositories"
-  default_prompt: "Use $python-project to scaffold a Python project with best practices for CLI, systemd, APIs/UI, IaC automation, security/networking, and AI/ML workflows."
+  short_description: "Scaffold production Python repositories with reusable test and CI defaults"
+  default_prompt: "Use $python-project to scaffold a Python project with best practices for CLI, systemd, APIs/UI, IaC automation, security/networking, AI/ML workflows, and split unit/integration test scaffolding."
