@@ -163,8 +163,9 @@ def test_apply_prints_add_routes_hint_after_initial_static_creation(tmp_path: Pa
 
     assert result.exit_code == 0
     assert "Apply completed successfully." in result.stdout
+    assert "IMPORTANT: For static routing, run:" in result.stdout
     assert "add-routes-local --local-config-file" in result.stdout
-    assert config_path.name in result.stdout
+    assert "<your-config.yaml>" not in result.stdout
 
 
 def test_prep_network_allows_missing_peer_psk_placeholders(
