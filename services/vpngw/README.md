@@ -105,6 +105,12 @@ nebius-vpngw status --local-config-file my-vpn.config.yaml
 
 Optional data-plane check: from a VM in one of `gateway.local_prefixes`, test reachability to a remote private IP over the VPN.
 
+### Firewall Requirements
+
+Open any ports and protocols required by your application on your network so traffic from the Nebius side can reach the intended services.
+
+For example, if you want to test connectivity with `ping`, create an ingress firewall rule for the `icmp` protocol that allows traffic from the source `local_prefixes` (the Nebius source subnets) to your network.
+
 ### 8. Optional: manual failover/failback (BGP active/passive)
 
 ```bash
