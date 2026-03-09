@@ -14,11 +14,12 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [nebius-vpngw-v0.5.2] - 2026-03-08
+
 - Expanded the pytest-based test suite, split unit/integration coverage, centralized test config in `pyproject.toml`, and added `Makefile` targets plus service-scoped CI.
 - Hardened operational CLI commands: `restart-tunnel` now performs a full IPsec and matching-BGP reset, and `failover`/`failback` were tightened and validated against the active/passive HA flow.
 - Improved route management for Nebius workload subnets that inherit parent network pools, and added live BGP advertisement reconciliation so route commands reflect the current YAML instead of stale FRR state.
 - Switched releases to the monorepo service pattern: `publish-release.sh` now handles prep/tagging, `vpngw-ci.yml` is PR/manual only, and `vpngw-release.yml` is the dedicated tag-driven GitHub Release workflow for `nebius-vpngw-v*`.
-
 ## [nebius-vpngw-v0.5.1] - 2026-02-04
 
 - Fail fast when `--local-config-file` is provided but the config path does not exist.
