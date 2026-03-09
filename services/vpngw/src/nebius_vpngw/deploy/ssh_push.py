@@ -593,6 +593,7 @@ WantedBy=multi-user.target
 
             # FRR check - wait up to 15 seconds for FRR to start
             frr_active = False
+            svc_status = "unknown"
             for attempt in range(3):  # 3 attempts, 5 seconds apart
                 stdin, stdout, stderr = client.exec_command(
                     "sudo systemctl is-active frr", timeout=10

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import importlib.resources as resources
+import ipaddress
 import textwrap
 import time
 import typing as t
+from dataclasses import dataclass
 from pathlib import Path
 
 from ..config_loader import GatewayGroupSpec
@@ -13,6 +15,35 @@ from .vm_diff import VMDiffAnalyzer, VMSpec
 def _read_firewall_setup_script() -> str:
     script_path = Path(__file__).resolve().parents[1] / "systemd" / "setup-vpngw-firewall.sh"
     return script_path.read_text(encoding="utf-8")
+
+
+def _parse_ipv4_network(cidr: str) -> ipaddress.IPv4Network | None:
+    """Parse a CIDR as IPv4 only.
+
+    The gateway subnet flow is IPv4-only. `ipaddress.ip_network()` returns an
+    IPv4/IPv6 union, so we narrow it explicitly for both runtime safety and
+    static type-checkers.
+    """
+    try:
+        network = ipaddress.ip_network(cidr, strict=False)
+    except ValueError:
+        return None
+    if isinstance(network, ipaddress.IPv4Network):
+        return network
+    return None
+
+
+@dataclass
+class VMProvisioningConfig:
+    subnet_id: str | None
+    num_nics: int
+    platform: str
+    preset: str | None
+    boot_image: str
+    disk_gb: int
+    disk_type: str
+    disk_block_bytes: int
+    cloud_init: str
 
 
 class VMManager:
@@ -35,6 +66,7 @@ class VMManager:
         self.tenant_id = tenant_id
         self.region_id = region_id
         self.diff_analyzer = VMDiffAnalyzer()
+        self._private_alloc_ids: dict[str, list[str]] = {}
 
     def check_changes(self, spec: GatewayGroupSpec) -> list[tuple[str, t.Any]]:
         """Check what changes would be applied without making them.
@@ -124,17 +156,18 @@ class VMManager:
                 return None
 
             # Initialize client
+            client_cls = t.cast(t.Any, Client)
             if self.tenant_id and self.project_id and self.region_id:
                 try:
-                    return Client(
+                    return client_cls(
                         tenant_id=self.tenant_id,
                         project_id=self.project_id,
                         region_id=self.region_id,
                     )
                 except TypeError:
-                    return Client()
+                    return client_cls()
             else:
-                return Client()
+                return client_cls()
         except Exception:
             return None
 
@@ -174,6 +207,152 @@ class VMManager:
                     return None
         except Exception:
             pass
+        return None
+
+    @staticmethod
+    def _gateway_subnet_settings(spec: GatewayGroupSpec) -> dict[str, t.Any]:
+        subnet_cfg = spec.subnet or {}
+        prefix_length_value = subnet_cfg.get("prefix_length")
+        return {
+            "name": str(subnet_cfg.get("name") or "vpngw-subnet").strip() or "vpngw-subnet",
+            "cidr": str(subnet_cfg.get("cidr")).strip() if subnet_cfg.get("cidr") else None,
+            "prefix_length": int(prefix_length_value) if prefix_length_value is not None else 24,
+        }
+
+    @staticmethod
+    def _gateway_subnet_name(spec: GatewayGroupSpec) -> str:
+        return str(VMManager._gateway_subnet_settings(spec)["name"])
+
+    @staticmethod
+    def _gateway_route_table_name(subnet_name: str) -> str:
+        return f"{subnet_name}-routing-table"[:63]
+
+    @staticmethod
+    def _extract_explicit_subnet_networks(subnet_obj: t.Any) -> list[ipaddress.IPv4Network]:
+        subnet_spec = getattr(subnet_obj, "spec", None)
+        ipv4_private_pools = getattr(subnet_spec, "ipv4_private_pools", None)
+        if not ipv4_private_pools or getattr(ipv4_private_pools, "use_network_pools", False):
+            return []
+
+        networks: list[ipaddress.IPv4Network] = []
+        for pool in getattr(ipv4_private_pools, "pools", []) or []:
+            for cidr_obj in getattr(pool, "cidrs", []) or []:
+                cidr = getattr(cidr_obj, "cidr", None)
+                if not cidr:
+                    continue
+                network = _parse_ipv4_network(str(cidr))
+                if network is not None:
+                    networks.append(network)
+        return networks
+
+    def _get_network_private_pools(self, client: t.Any, network_obj: t.Any) -> list[tuple[str, t.Any]]:
+        from nebius.api.nebius.vpc.v1 import GetPoolRequest, PoolServiceClient  # type: ignore
+
+        net_spec = getattr(network_obj, "spec", None)
+        pool_refs = getattr(getattr(net_spec, "ipv4_private_pools", None), "pools", []) or []
+        pool_client = PoolServiceClient(client)  # type: ignore
+
+        pools: list[tuple[str, t.Any]] = []
+        for pool_ref in pool_refs:
+            pool_id = getattr(pool_ref, "pool_id", None) or getattr(pool_ref, "id", None)
+            if not pool_id:
+                continue
+            pool_id = str(pool_id)
+            pool_obj = pool_client.get(GetPoolRequest(id=pool_id)).wait()
+            pools.append((pool_id, pool_obj))
+        return pools
+
+    def _ensure_network_pool_contains_cidr(
+        self, client: t.Any, network_obj: t.Any, desired_network: ipaddress.IPv4Network
+    ) -> None:
+        from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
+        from nebius.api.nebius.vpc.v1 import (
+            PoolCidr,
+            PoolServiceClient,
+            PoolSpec,
+            UpdatePoolRequest,
+        )  # type: ignore
+
+        network_pools = self._get_network_private_pools(client, network_obj)
+        for _, pool_obj in network_pools:
+            for pool_cidr_obj in getattr(getattr(pool_obj, "spec", None), "cidrs", []) or []:
+                pool_cidr = getattr(pool_cidr_obj, "cidr", None)
+                if not pool_cidr:
+                    continue
+                pool_network = _parse_ipv4_network(str(pool_cidr))
+                if pool_network is None:
+                    continue
+                if desired_network.subnet_of(pool_network):
+                    return
+
+        if len(network_pools) != 1:
+            raise RuntimeError(
+                f"Gateway subnet CIDR {desired_network} is outside the current network pool(s). "
+                "Automatic pool extension is supported only when the target network has exactly "
+                "one private pool. Extend the network pool manually or specify gateway_group.network_id "
+                "for a network with a single private pool."
+            )
+
+        pool_id, pool_obj = network_pools[0]
+        pool_client = PoolServiceClient(client)  # type: ignore
+        pool_meta = getattr(pool_obj, "metadata", None)
+        pool_spec = getattr(pool_obj, "spec", None)
+        if not pool_meta or not pool_spec:
+            raise RuntimeError(f"Network private pool {pool_id} is missing metadata/spec.")
+
+        updated_cidrs = [
+            PoolCidr(
+                cidr=getattr(pool_cidr, "cidr", ""),
+                max_mask_length=getattr(pool_cidr, "max_mask_length", 0),
+                state=getattr(pool_cidr, "state", None),
+            )
+            for pool_cidr in getattr(pool_spec, "cidrs", []) or []
+        ]
+        updated_cidrs.append(PoolCidr(cidr=str(desired_network)))
+
+        updated_spec = PoolSpec(
+            cidrs=updated_cidrs,
+            version=getattr(pool_spec, "version", None),
+            visibility=getattr(pool_spec, "visibility", None),
+            source_pool_id=getattr(pool_spec, "source_pool_id", ""),
+        )
+
+        pool_name = getattr(pool_meta, "name", None) or pool_id
+        print(f"[VMManager] Extending network private pool '{pool_name}' with {desired_network} ...")
+
+        pool_client.update(
+            UpdatePoolRequest(
+                metadata=ResourceMetadata(
+                    id=getattr(pool_meta, "id", pool_id),
+                    parent_id=getattr(pool_meta, "parent_id", ""),
+                    name=getattr(pool_meta, "name", ""),
+                ),
+                spec=updated_spec,
+            )
+        ).wait()
+
+    @staticmethod
+    def _find_first_free_subnet_cidr(
+        network_pool_cidrs: list[ipaddress.IPv4Network],
+        existing_subnet_cidrs: list[ipaddress.IPv4Network],
+        *,
+        prefix_length: int,
+    ) -> str | None:
+        for pool_network in network_pool_cidrs:
+            if prefix_length < pool_network.prefixlen:
+                continue
+
+            candidates: t.Iterable[ipaddress.IPv4Network]
+            if prefix_length == pool_network.prefixlen:
+                candidates = [pool_network]
+            else:
+                candidates = pool_network.subnets(new_prefix=prefix_length)
+
+            for candidate in candidates:
+                if any(candidate.overlaps(existing) for existing in existing_subnet_cidrs):
+                    continue
+                return str(candidate)
+
         return None
 
     def get_vm_public_ip(self, vm_name: str) -> str | None:
@@ -495,6 +674,1314 @@ class VMManager:
 
         return result
 
+    @staticmethod
+    def _resolve_service_handle(obj: t.Any, name: str) -> t.Any:
+        if obj is None:
+            return None
+        attr = getattr(obj, name, None)
+        if attr is None:
+            return None
+        try:
+            return attr() if callable(attr) else attr
+        except Exception:
+            return attr
+
+    def _build_sdk_client(self, region: str) -> t.Any | None:
+        try:
+            import os
+
+            if self.auth_token and not os.environ.get("NEBIUS_IAM_TOKEN"):
+                os.environ["NEBIUS_IAM_TOKEN"] = self.auth_token
+        except Exception:
+            pass
+
+        try:
+            Client = None  # type: ignore
+            try:
+                from nebius.sdk import SDK as _C  # type: ignore
+
+                Client = _C
+            except Exception:
+                try:
+                    from nebius.sdk import Client as _C  # type: ignore
+
+                    Client = _C
+                except Exception:
+                    try:
+                        from nebius.client import Client as _C  # type: ignore
+
+                        Client = _C
+                    except Exception:
+                        try:
+                            from nebius import pysdk  # type: ignore
+
+                            Client = pysdk.Client  # type: ignore[attr-defined]
+                        except Exception:
+                            try:
+                                from nebius.pysdk import Client as _C  # type: ignore
+
+                                Client = _C
+                            except Exception:
+                                Client = None
+
+            if Client is None:
+                raise ImportError("Nebius SDK not found")
+
+            client_cls = t.cast(t.Any, Client)
+            if self.tenant_id and self.project_id and (self.region_id or region):
+                try:
+                    return client_cls(
+                        tenant_id=self.tenant_id,
+                        project_id=self.project_id,
+                        region_id=self.region_id or region,
+                    )
+                except TypeError:
+                    return client_cls()
+                except Exception:
+                    return client_cls()
+
+            try:
+                from nebius.aio.cli_config import Config  # type: ignore
+
+                try:
+                    return client_cls(config_reader=Config(no_parent_id=True))
+                except TypeError:
+                    return client_cls()
+            except Exception:
+                return client_cls()
+        except Exception as e:
+            print(
+                "[VMManager] Nebius SDK not available; install with 'pip install nebius'. "
+                f"Running in dry scaffold mode: {e}"
+            )
+            return None
+
+    def _resolve_client_apis(self, client: t.Any) -> tuple[t.Any, t.Any, t.Any, t.Any]:
+        compute = self._resolve_service_handle(client, "compute") or self._resolve_service_handle(
+            getattr(client, "cloud", None),
+            "compute",
+        )
+        vpc = (
+            self._resolve_service_handle(client, "vpc")
+            or self._resolve_service_handle(getattr(client, "network", None), "vpc")
+            or self._resolve_service_handle(getattr(client, "cloud", None), "vpc")
+        )
+
+        instance_api = None
+        if compute is not None:
+            for name in ("instance", "instances", "vm", "virtual_machine"):
+                instance_api = getattr(compute, name, None)
+                if instance_api is not None:
+                    break
+
+        disk_api = None
+        if compute is not None:
+            for name in ("disk", "disks", "storage_disk"):
+                disk_api = getattr(compute, name, None)
+                if disk_api is not None:
+                    break
+
+        alloc_api = None
+        alloc_client = None
+        try:
+            from nebius.api.nebius.vpc.v1 import AllocationServiceClient  # type: ignore
+
+            alloc_client = AllocationServiceClient(client)  # type: ignore
+        except Exception:
+            alloc_client = None
+
+        if alloc_client is None and vpc is not None:
+            for name in ("allocation", "allocations", "public_ip", "public_ips"):
+                alloc_api = getattr(vpc, name, None)
+                if alloc_api is not None:
+                    break
+
+        return instance_api, disk_api, alloc_api, alloc_client
+
+    def _discover_existing_instances(self, client: t.Any, spec: GatewayGroupSpec) -> list[t.Any]:
+        existing: list[t.Any] = []
+        for i in range(spec.instance_count):
+            inst_name = f"{spec.name}-{i}"
+            vm_obj = self._get_vm_by_name(client, inst_name)
+            if vm_obj:
+                existing.append(vm_obj)
+        return existing
+
+    def _collect_preserved_allocations(self, existing: list[t.Any]) -> dict[str, list[str]]:
+        preserved_allocations: dict[str, list[str]] = {}
+        if not existing:
+            return preserved_allocations
+
+        print(
+            f"[VMManager] Querying allocations from {len(existing)} existing VMs for preservation..."
+        )
+        for inst in existing:
+            vm_name = getattr(getattr(inst, "metadata", None), "name", None) or getattr(
+                inst,
+                "name",
+                None,
+            )
+            if not vm_name:
+                continue
+            allocs = self.get_vm_allocations(vm_name)
+            if not allocs:
+                continue
+            alloc_ids = [alloc_id for _, alloc_id in sorted(allocs, key=lambda x: x[0])]
+            preserved_allocations[vm_name] = alloc_ids
+            print(f"[VMManager] Preserved allocations for {vm_name}: {alloc_ids}")
+        return preserved_allocations
+
+    def _delete_existing_instances_and_boot_disks(
+        self,
+        client: t.Any,
+        existing: list[t.Any],
+        spec: GatewayGroupSpec,
+    ) -> None:
+        print(
+            f"[VMManager] Recreate requested; deleting {len(existing)} instances and boot disks (preserving subnet and allocations)"
+        )
+        isc = None
+        dsc = None
+        try:
+            from nebius.api.nebius.compute.v1 import (
+                DiskServiceClient,
+                InstanceServiceClient,
+            )  # type: ignore
+
+            isc = InstanceServiceClient(client)
+            dsc = DiskServiceClient(client)
+        except Exception as e:
+            print(f"[VMManager] Cannot get service clients for deletion: {e}")
+
+        if isc is None:
+            print("[VMManager] ERROR: Cannot delete VMs - InstanceServiceClient not available")
+            raise RuntimeError("Cannot proceed with --recreate-gw: VM deletion failed")
+
+        for inst in existing:
+            inst_id = getattr(inst, "id", None)
+            if not inst_id:
+                metadata = getattr(inst, "metadata", None)
+                if metadata:
+                    inst_id = getattr(metadata, "id", None)
+
+            inst_name = getattr(getattr(inst, "metadata", None), "name", None) or getattr(
+                inst,
+                "name",
+                "unknown",
+            )
+            if not inst_id:
+                continue
+
+            try:
+                print(f"[VMManager] Deleting VM {inst_name} (id={inst_id})...")
+                from nebius.api.nebius.compute.v1 import DeleteInstanceRequest  # type: ignore
+
+                delete_req = DeleteInstanceRequest(id=inst_id)
+                op = isc.delete(delete_req)
+                if hasattr(op, "wait"):
+                    op.wait()
+                    print(f"[VMManager] VM {inst_name} deletion initiated")
+                else:
+                    time.sleep(5)
+            except Exception as e:
+                print(f"[VMManager] Failed to delete VM {inst_name}: {e}")
+
+        if existing:
+            print("[VMManager] Waiting for VM deletions to complete...")
+            time.sleep(15)
+
+        if dsc is None:
+            return
+
+        from nebius.api.nebius.common.v1 import GetByNameRequest  # type: ignore
+
+        for i in range(spec.instance_count):
+            inst_name = f"{spec.name}-{i}"
+            boot_disk_name = f"{inst_name}-boot"
+            try:
+                if self.project_id and hasattr(dsc, "get_by_name"):
+                    disk_obj = dsc.get_by_name(
+                        GetByNameRequest(parent_id=self.project_id, name=boot_disk_name)
+                    ).wait()
+                    disk_id = getattr(disk_obj, "id", None) or getattr(
+                        getattr(disk_obj, "metadata", None),
+                        "id",
+                        None,
+                    )
+                    if not disk_id:
+                        continue
+
+                    max_retries = 3
+                    for attempt in range(max_retries):
+                        try:
+                            print(
+                                f"[VMManager] Deleting boot disk {boot_disk_name} (id={disk_id})..."
+                            )
+                            from nebius.api.nebius.compute.v1 import (
+                                DeleteDiskRequest,  # type: ignore
+                            )
+
+                            delete_disk_req = DeleteDiskRequest(id=disk_id)
+                            disk_op = dsc.delete(delete_disk_req)
+                            if hasattr(disk_op, "wait"):
+                                disk_op.wait()
+                                print(
+                                    f"[VMManager] Boot disk {boot_disk_name} deleted successfully"
+                                )
+                            break
+                        except Exception as disk_err:
+                            if "FAILED_PRECONDITION" in str(disk_err) and "read-write attachments" in str(
+                                disk_err
+                            ):
+                                if attempt < max_retries - 1:
+                                    wait_time = 10 * (attempt + 1)
+                                    print(
+                                        f"[VMManager] Disk still attached, waiting {wait_time}s before retry {attempt + 2}/{max_retries}..."
+                                    )
+                                    time.sleep(wait_time)
+                                else:
+                                    print(
+                                        f"[VMManager] Could not delete boot disk {boot_disk_name} after {max_retries} attempts: {disk_err}"
+                                    )
+                            else:
+                                print(
+                                    f"[VMManager] Could not delete boot disk {boot_disk_name}: {disk_err}"
+                                )
+                                break
+            except Exception as e:
+                print(
+                    f"[VMManager] Could not find or delete boot disk {boot_disk_name} (non-fatal): {e}"
+                )
+
+        if existing:
+            print(
+                "[VMManager] Waiting for allocations to fully detach and disk deletions to complete..."
+            )
+            time.sleep(15)
+
+    def _instance_exists(self, client: t.Any, instance_api: t.Any, inst_name: str) -> bool:
+        try:
+            vm_obj = self._get_vm_by_name(client, inst_name)
+            if vm_obj is not None:
+                return True
+            if instance_api is not None and hasattr(instance_api, "get_by_name"):
+                try:
+                    inst = instance_api.get_by_name(name=inst_name, project_id=self.project_id)
+                except TypeError:
+                    inst = instance_api.get_by_name(name=inst_name)
+                return inst is not None
+        except Exception:
+            return False
+        return False
+
+    @staticmethod
+    def _normalize_disk_type(disk_type: t.Any) -> str:
+        try:
+            dt = str(disk_type).upper()
+            if dt in {
+                "NETWORK_SSD",
+                "NETWORK_HDD",
+                "NETWORK_SSD_NON_REPLICATED",
+                "NETWORK_SSD_IO_M3",
+            }:
+                return dt
+            if dt in {"SSD", "NVME"}:
+                return "NETWORK_SSD"
+            if dt == "HDD":
+                return "NETWORK_HDD"
+        except Exception:
+            pass
+        return "NETWORK_SSD"
+
+    def _build_vm_provisioning_config(
+        self,
+        client: t.Any,
+        spec: GatewayGroupSpec,
+        local_prefixes: list[str] | None,
+    ) -> VMProvisioningConfig:
+        num_nics = int(spec.vm_spec.get("num_nics", 1))
+        if num_nics > 1:
+            print(
+                f"[VMManager] WARNING: num_nics={num_nics} but current platform only supports 1 NIC. Using num_nics=1."
+            )
+            num_nics = 1
+
+        subnet_id = self._ensure_vpngw_subnet(client, spec)
+        self._ensure_vpngw_route_table(client, subnet_id)
+
+        ssh_key = spec.vm_spec.get("ssh_public_key")
+        cloud_init = self._build_cloud_init(ssh_key=ssh_key, local_prefixes=local_prefixes)
+
+        return VMProvisioningConfig(
+            subnet_id=subnet_id,
+            num_nics=num_nics,
+            platform=spec.vm_spec.get("platform") or "cpu-d3",
+            preset=spec.vm_spec.get("preset"),
+            boot_image=spec.vm_spec.get("disk_boot_image")
+            or spec.vm_spec.get("image_family")
+            or "ubuntu24.04-driverless",
+            disk_gb=spec.vm_spec.get("disk_gb", 200),
+            disk_type=self._normalize_disk_type(spec.vm_spec.get("disk_type", "network_ssd")),
+            disk_block_bytes=spec.vm_spec.get("disk_block_bytes", 4096),
+            cloud_init=cloud_init,
+        )
+
+    @staticmethod
+    def _resource_id(resource: t.Any) -> str | None:
+        resource_id = getattr(resource, "id", None) or getattr(
+            getattr(resource, "metadata", None),
+            "id",
+            None,
+        )
+        return str(resource_id) if resource_id else None
+
+    @staticmethod
+    def _sync_operation(op: t.Any) -> None:
+        try:
+            if hasattr(op, "sync_wait"):
+                op.sync_wait()
+                return
+            if hasattr(op, "wait"):
+                op.wait()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _resource_state(resource: t.Any) -> str | None:
+        status = getattr(resource, "status", None)
+        state = getattr(status, "status", None) if status else None
+        return str(state) if state else None
+
+    def _get_disk_by_name_from_client(self, disk_client: t.Any, disk_name: str) -> t.Any | None:
+        if not self.project_id or not hasattr(disk_client, "get_by_name"):
+            return None
+        try:
+            from nebius.api.nebius.common.v1 import GetByNameRequest  # type: ignore
+
+            return disk_client.get_by_name(
+                GetByNameRequest(parent_id=self.project_id, name=disk_name)
+            ).wait()
+        except Exception:
+            return None
+
+    def _lookup_boot_disk_id(self, disk_client: t.Any, disk_name: str) -> str | None:
+        disk_obj = self._get_disk_by_name_from_client(disk_client, disk_name)
+        disk_id = self._resource_id(disk_obj)
+        if disk_id:
+            return disk_id
+        if not self.project_id:
+            return None
+        try:
+            from nebius.api.nebius.compute.v1 import ListDisksRequest  # type: ignore
+
+            disks = disk_client.list(ListDisksRequest(parent_id=self.project_id)).wait()
+            for disk in getattr(disks, "items", []) or []:
+                if getattr(getattr(disk, "metadata", None), "name", None) != disk_name:
+                    continue
+                return self._resource_id(disk)
+        except Exception:
+            return None
+        return None
+
+    def _resolve_existing_boot_disk_id(self, disk_client: t.Any, disk_name: str) -> str | None:
+        disk_obj = self._get_disk_by_name_from_client(disk_client, disk_name)
+        disk_id = self._resource_id(disk_obj)
+        if not disk_id:
+            return None
+
+        disk_state = self._resource_state(disk_obj)
+        if disk_state and "DELET" in disk_state.upper():
+            print(
+                f"[VMManager] Disk {disk_name} is in state {disk_state}, waiting for deletion to complete..."
+            )
+            max_wait = 60
+            wait_interval = 5
+            for wait_attempt in range(max_wait // wait_interval):
+                time.sleep(wait_interval)
+                disk_obj = self._get_disk_by_name_from_client(disk_client, disk_name)
+                if disk_obj is None:
+                    print(
+                        f"[VMManager] Disk deletion complete after {(wait_attempt + 1) * wait_interval}s"
+                    )
+                    return None
+                disk_state = self._resource_state(disk_obj)
+                if disk_state and "DELET" in disk_state.upper():
+                    print(f"[VMManager] Still deleting... ({(wait_attempt + 1) * wait_interval}s)")
+                    continue
+                print(f"[VMManager] Disk state changed to {disk_state}")
+                return self._resource_id(disk_obj)
+
+            print("[VMManager] Timeout waiting for disk deletion, will retry creation")
+            return None
+
+        print(f"[VMManager] Found existing disk {disk_name} id={disk_id}")
+        return disk_id
+
+    def _resolve_boot_image_id(
+        self,
+        client: t.Any,
+        spec: GatewayGroupSpec,
+        provisioning: VMProvisioningConfig,
+    ) -> str | None:
+        image_id = spec.vm_spec.get("image_id") or None
+        if image_id or not provisioning.boot_image:
+            return image_id
+
+        try:
+            from nebius.api.nebius.compute.v1 import (  # type: ignore
+                GetImageLatestByFamilyRequest,
+                ImageServiceClient,
+            )
+
+            image_client = ImageServiceClient(client)  # type: ignore
+            routing_code = None
+            try:
+                if self.project_id and self.project_id.startswith("project-"):
+                    routing_code = (self.project_id.split("-")[1] or "")[:3]
+            except Exception:
+                routing_code = None
+
+            parents_to_try = []
+            if routing_code:
+                parents_to_try.append(f"project-{routing_code}public-images")
+            parents_to_try.extend([None, "project-u00public-images"])
+
+            for parent in parents_to_try:
+                try:
+                    request = GetImageLatestByFamilyRequest(
+                        image_family=provisioning.boot_image,
+                        **({"parent_id": parent} if parent else {}),
+                    )
+                    image = image_client.get_latest_by_family(request).wait()
+                    candidate_id = self._resource_id(image)
+                    if not candidate_id:
+                        continue
+                    if routing_code and not candidate_id.startswith(f"computeimage-{routing_code}"):
+                        continue
+                    return candidate_id
+                except Exception:
+                    continue
+        except Exception:
+            return None
+
+        return None
+
+    def _build_boot_disk_create_request(
+        self,
+        disk_name: str,
+        provisioning: VMProvisioningConfig,
+        image_id: str,
+    ) -> t.Any:
+        from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
+        from nebius.api.nebius.compute.v1 import CreateDiskRequest, DiskSpec  # type: ignore
+
+        return CreateDiskRequest(
+            metadata=ResourceMetadata(
+                name=disk_name,
+                parent_id=self.project_id or "",
+            ),
+            spec=DiskSpec(
+                block_size_bytes=provisioning.disk_block_bytes,
+                size_gibibytes=provisioning.disk_gb,
+                type=t.cast(t.Any, provisioning.disk_type),
+                source_image_id=image_id,
+            ),
+        )
+
+    def _submit_boot_disk_create(
+        self,
+        disk_client: t.Any,
+        create_request: t.Any,
+        disk_name: str,
+    ) -> str | None:
+        operation = disk_client.create(create_request).wait()
+        self._sync_operation(operation)
+        resource = getattr(getattr(operation, "result", None), "resource", None)
+        return self._resource_id(resource) or self._lookup_boot_disk_id(disk_client, disk_name)
+
+    def _wait_for_boot_disk_deletion(self, disk_client: t.Any, disk_name: str) -> bool:
+        if not self.project_id or not hasattr(disk_client, "get_by_name"):
+            return False
+
+        max_wait = 60
+        wait_interval = 5
+        for wait_attempt in range(max_wait // wait_interval):
+            time.sleep(wait_interval)
+            if self._get_disk_by_name_from_client(disk_client, disk_name) is not None:
+                print(
+                    f"[VMManager] Disk still exists, waiting... ({(wait_attempt + 1) * wait_interval}s)"
+                )
+                continue
+            print("[VMManager] Disk deletion complete, retrying creation...")
+            return True
+
+        print("[VMManager] Timeout waiting for disk deletion to complete")
+        return False
+
+    def _ensure_boot_disk_legacy(
+        self,
+        disk_api: t.Any,
+        spec: GatewayGroupSpec,
+        disk_name: str,
+        provisioning: VMProvisioningConfig,
+    ) -> str | None:
+        if disk_api is None:
+            return None
+
+        boot_disk_id = None
+        try:
+            if hasattr(disk_api, "get_by_name"):
+                disk_obj = disk_api.get_by_name(name=disk_name)
+                boot_disk_id = self._resource_id(disk_obj)
+        except Exception:
+            boot_disk_id = None
+
+        if boot_disk_id or not hasattr(disk_api, "create"):
+            return boot_disk_id
+
+        disk_request = {
+            "name": disk_name,
+            "size_gibibytes": provisioning.disk_gb,
+            "type": provisioning.disk_type,
+            "source_image_family": provisioning.boot_image,
+            "block_size_bytes": provisioning.disk_block_bytes,
+            **({"project_id": self.project_id} if self.project_id else {}),
+            **({"zone": self.zone or spec.region} if (self.zone or spec.region) else {}),
+        }
+        try:
+            print(f"[VMManager] Creating boot disk {disk_name} ...")
+            try:
+                disk_obj = disk_api.create(**disk_request)  # type: ignore
+            except TypeError:
+                disk_obj = disk_api.create(disk_request)
+            return self._resource_id(disk_obj)
+        except Exception as e:
+            print(f"[VMManager] boot disk create failed: {e}. Attempted: {disk_request}")
+            return None
+
+    def _ensure_boot_disk(
+        self,
+        client: t.Any,
+        disk_api: t.Any,
+        spec: GatewayGroupSpec,
+        inst_name: str,
+        provisioning: VMProvisioningConfig,
+        recreate: bool,
+    ) -> tuple[str, str | None]:
+        boot_disk_name = f"{inst_name}-boot"
+        boot_disk_id = None
+
+        try:
+            from nebius.api.nebius.compute.v1 import DiskServiceClient  # type: ignore
+
+            disk_client = DiskServiceClient(client)  # type: ignore
+            if not recreate:
+                boot_disk_id = self._resolve_existing_boot_disk_id(disk_client, boot_disk_name)
+
+            if not boot_disk_id:
+                print(
+                    f"[VMManager] Creating boot disk {boot_disk_name} (project_id={self.project_id}) ..."
+                )
+                image_id = self._resolve_boot_image_id(client, spec, provisioning)
+                if not image_id:
+                    raise RuntimeError(
+                        f"[VMManager] Unable to resolve image id for family '{provisioning.boot_image}'. "
+                        "Ensure the image family exists or provide vm_spec.image_id."
+                    )
+
+                create_request = self._build_boot_disk_create_request(
+                    boot_disk_name,
+                    provisioning,
+                    image_id,
+                )
+                try:
+                    boot_disk_id = self._submit_boot_disk_create(
+                        disk_client,
+                        create_request,
+                        boot_disk_name,
+                    )
+                except Exception as e:
+                    message = str(e)
+                    print(f"[VMManager] Disk create exception: {message}")
+                    already_exists = "ALREADY_EXISTS" in message or (
+                        f'disk with name "{boot_disk_name}" already exists' in message
+                    )
+                    if already_exists and recreate:
+                        print(
+                            f"[VMManager] Disk {boot_disk_name} still exists (likely deleting), waiting for deletion to complete..."
+                        )
+                        if self._wait_for_boot_disk_deletion(disk_client, boot_disk_name):
+                            try:
+                                boot_disk_id = self._submit_boot_disk_create(
+                                    disk_client,
+                                    create_request,
+                                    boot_disk_name,
+                                )
+                            except Exception as retry_err:
+                                print(f"[VMManager] Disk creation retry failed: {retry_err}")
+                    elif already_exists and not recreate:
+                        print("[VMManager] Disk already exists, refetching ID...")
+                        boot_disk_id = self._lookup_boot_disk_id(disk_client, boot_disk_name)
+                    else:
+                        print(f"[VMManager] boot disk create failed: {e}")
+        except Exception:
+            boot_disk_id = self._ensure_boot_disk_legacy(
+                disk_api,
+                spec,
+                boot_disk_name,
+                provisioning,
+            )
+
+        return boot_disk_name, boot_disk_id
+
+    @staticmethod
+    def _desired_public_ips(
+        spec: GatewayGroupSpec,
+        instance_index: int,
+        num_nics: int,
+    ) -> list[str]:
+        if not spec.external_ips or instance_index >= len(spec.external_ips):
+            return []
+        instance_ips = spec.external_ips[instance_index] or []
+        if not isinstance(instance_ips, list):
+            return []
+        return [ip for ip in instance_ips[:num_nics] if ip]
+
+    def _get_allocation_by_name(self, alloc_client: t.Any, alloc_name: str) -> t.Any | None:
+        if alloc_client is None:
+            return None
+        try:
+            from nebius.api.nebius.vpc.v1 import GetAllocationByNameRequest  # type: ignore
+
+            return alloc_client.get_by_name(
+                GetAllocationByNameRequest(
+                    parent_id=self.project_id or "",
+                    name=alloc_name,
+                )
+            ).wait()
+        except Exception:
+            return None
+
+    def _get_allocation_by_id(self, alloc_client: t.Any, allocation_id: str) -> t.Any | None:
+        if alloc_client is None:
+            return None
+        try:
+            from nebius.api.nebius.vpc.v1 import GetAllocationRequest  # type: ignore
+
+            return alloc_client.get(GetAllocationRequest(id=allocation_id)).wait()
+        except Exception:
+            return None
+
+    def _create_public_allocation_via_client(
+        self,
+        alloc_client: t.Any,
+        alloc_name: str,
+        subnet_id: str,
+        desired_ip: str | None,
+    ) -> t.Any | None:
+        try:
+            from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
+            from nebius.api.nebius.vpc.v1 import (  # type: ignore
+                AllocationSpec,
+                CreateAllocationRequest,
+                IPv4PublicAllocationSpec,
+            )
+
+            request = CreateAllocationRequest(
+                metadata=ResourceMetadata(
+                    name=alloc_name,
+                    parent_id=self.project_id or "",
+                ),
+                spec=AllocationSpec(
+                    ipv4_public=IPv4PublicAllocationSpec(
+                        subnet_id=subnet_id,
+                        cidr="/32" if not desired_ip else desired_ip,
+                    )
+                ),
+            )
+            operation = alloc_client.create(request).wait()
+            self._sync_operation(operation)
+            resource = getattr(getattr(operation, "result", None), "resource", None)
+            return resource if resource is not None else self._get_allocation_by_name(
+                alloc_client,
+                alloc_name,
+            )
+        except Exception as e:
+            print(f"[VMManager] allocation create via client failed: {e}")
+            return self._get_allocation_by_name(alloc_client, alloc_name)
+
+    def _create_public_allocation_via_api(
+        self,
+        alloc_api: t.Any,
+        alloc_name: str,
+        subnet_id: str,
+    ) -> t.Any | None:
+        create_args = {
+            "name": alloc_name,
+            "ipv_4_public_subnet_id": subnet_id,
+            **({"project_id": self.project_id} if self.project_id else {}),
+        }
+        try:
+            return alloc_api.create(**create_args)  # type: ignore
+        except TypeError:
+            return alloc_api.create(create_args)
+
+    def _ensure_public_allocation(
+        self,
+        alloc_api: t.Any,
+        alloc_client: t.Any,
+        inst_name: str,
+        nic_name: str,
+        subnet_id: str | None,
+        desired_ip: str | None,
+        preserved_alloc_id: str | None,
+    ) -> tuple[str, t.Any | None]:
+        alloc_name = f"{inst_name}-{nic_name}-ip"
+        alloc_obj = None
+
+        if desired_ip:
+            try:
+                get_by_addr = getattr(alloc_api, "get_by_address", None)
+                if get_by_addr:
+                    alloc_obj = get_by_addr(address=desired_ip, project_id=self.project_id)
+                    if alloc_obj:
+                        print(f"[VMManager] Found existing allocation with IP {desired_ip}")
+                        alloc_obj = self._migrate_allocation_to_vpngw_subnet(
+                            alloc_client,
+                            alloc_obj,
+                            subnet_id,
+                            desired_ip,
+                        )
+            except Exception:
+                alloc_obj = None
+
+        if alloc_obj is None and not desired_ip and preserved_alloc_id:
+            try:
+                alloc_obj = self._get_allocation_by_id(alloc_client, preserved_alloc_id)
+                if alloc_obj:
+                    preserved_ip = self.get_allocation_ip(preserved_alloc_id)
+                    print(
+                        f"[VMManager] Reusing preserved allocation {preserved_alloc_id} ({preserved_ip}) for {inst_name} {nic_name}"
+                    )
+                    alloc_obj = self._migrate_allocation_to_vpngw_subnet(
+                        alloc_client,
+                        alloc_obj,
+                        subnet_id,
+                        preserved_ip,
+                    )
+            except Exception as e:
+                print(
+                    f"[VMManager] Could not retrieve preserved allocation {preserved_alloc_id}: {e}"
+                )
+                alloc_obj = None
+
+        if alloc_obj is None:
+            alloc_obj = self._get_allocation_by_name(alloc_client, alloc_name)
+            if alloc_obj:
+                print(f"[VMManager] Found existing allocation by name: {alloc_name}")
+                alloc_id = self._resource_id(alloc_obj)
+                by_name_ip = self.get_allocation_ip(alloc_id) if alloc_id else None
+                alloc_obj = self._migrate_allocation_to_vpngw_subnet(
+                    alloc_client,
+                    alloc_obj,
+                    subnet_id,
+                    by_name_ip,
+                )
+
+        if alloc_obj is not None:
+            return alloc_name, alloc_obj
+
+        if not subnet_id:
+            raise RuntimeError(
+                "[VMManager] Cannot create public IP allocation: subnet_id is not set. "
+                "Resolve subnet creation first or provide a valid network_id."
+            )
+
+        if desired_ip:
+            print(
+                f"[VMManager] Creating public IP allocation {alloc_name} for {nic_name} in the gateway subnet requesting IP {desired_ip} ..."
+            )
+        else:
+            print(
+                f"[VMManager] Creating public IP allocation {alloc_name} for {nic_name} in the gateway subnet ..."
+            )
+
+        try:
+            if alloc_client is not None:
+                return alloc_name, self._create_public_allocation_via_client(
+                    alloc_client,
+                    alloc_name,
+                    subnet_id,
+                    desired_ip,
+                )
+            if alloc_api is not None:
+                return alloc_name, self._create_public_allocation_via_api(
+                    alloc_api,
+                    alloc_name,
+                    subnet_id,
+                )
+        except Exception as e:
+            print(f"[VMManager] allocation create failed: {e}")
+
+        return alloc_name, None
+
+    def _create_private_allocation_via_client(
+        self,
+        alloc_client: t.Any,
+        alloc_name: str,
+        subnet_id: str,
+    ) -> t.Any | None:
+        try:
+            from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
+            from nebius.api.nebius.vpc.v1 import (  # type: ignore
+                AllocationSpec,
+                CreateAllocationRequest,
+                IPv4PrivateAllocationSpec,
+            )
+
+            request = CreateAllocationRequest(
+                metadata=ResourceMetadata(
+                    name=alloc_name,
+                    parent_id=self.project_id or "",
+                ),
+                spec=AllocationSpec(
+                    ipv4_private=IPv4PrivateAllocationSpec(subnet_id=subnet_id)
+                ),
+            )
+            operation = alloc_client.create(request).wait()
+            self._sync_operation(operation)
+            resource = getattr(getattr(operation, "result", None), "resource", None)
+            return resource if resource is not None else self._get_allocation_by_name(
+                alloc_client,
+                alloc_name,
+            )
+        except Exception as e:
+            print(f"[VMManager] private allocation create via client failed: {e}")
+            return self._get_allocation_by_name(alloc_client, alloc_name)
+
+    def _ensure_private_allocation(
+        self,
+        alloc_client: t.Any,
+        inst_name: str,
+        nic_name: str,
+        subnet_id: str | None,
+    ) -> tuple[str, t.Any | None]:
+        alloc_name = f"{inst_name}-{nic_name}-private-ip"
+        alloc_obj = self._get_allocation_by_name(alloc_client, alloc_name)
+        if alloc_obj is not None:
+            print(f"[VMManager] Found existing private allocation by name: {alloc_name}")
+            return alloc_name, alloc_obj
+
+        if alloc_client is None:
+            return alloc_name, None
+
+        if not subnet_id:
+            raise RuntimeError(
+                "[VMManager] Cannot create private IP allocation: subnet_id is not set. "
+                "Resolve subnet creation first or provide a valid network_id."
+            )
+
+        print(
+            f"[VMManager] Creating static private IP allocation {alloc_name} for {nic_name} in the gateway subnet ..."
+        )
+        try:
+            return alloc_name, self._create_private_allocation_via_client(
+                alloc_client,
+                alloc_name,
+                subnet_id,
+            )
+        except Exception as e:
+            print(f"[VMManager] private allocation create failed: {e}")
+            return alloc_name, None
+
+    def _ensure_instance_allocations(
+        self,
+        alloc_api: t.Any,
+        alloc_client: t.Any,
+        spec: GatewayGroupSpec,
+        inst_name: str,
+        instance_index: int,
+        provisioning: VMProvisioningConfig,
+        preserved_alloc_ids: list[str],
+        vm_ips: dict[str, str],
+    ) -> list[str]:
+        desired_ips = self._desired_public_ips(spec, instance_index, provisioning.num_nics)
+        alloc_ids: list[str] = []
+        self._private_alloc_ids[inst_name] = []
+
+        if alloc_api is None and alloc_client is None:
+            return alloc_ids
+
+        for nic_index in range(provisioning.num_nics):
+            nic_name = f"eth{nic_index}"
+            desired_ip = desired_ips[nic_index] if nic_index < len(desired_ips) else None
+            preserved_alloc_id = (
+                preserved_alloc_ids[nic_index] if nic_index < len(preserved_alloc_ids) else None
+            )
+            alloc_name, alloc_obj = self._ensure_public_allocation(
+                alloc_api,
+                alloc_client,
+                inst_name,
+                nic_name,
+                provisioning.subnet_id,
+                desired_ip,
+                preserved_alloc_id,
+            )
+            alloc_id = self._resource_id(alloc_obj)
+            if alloc_id:
+                alloc_ids.append(alloc_id)
+                print(f"[VMManager] Public IP allocation {alloc_name} ready: {alloc_id}")
+                if nic_index == 0:
+                    alloc_ip = self.get_allocation_ip(alloc_id)
+                    if alloc_ip:
+                        vm_ips[inst_name] = alloc_ip
+
+            private_alloc_name, private_alloc_obj = self._ensure_private_allocation(
+                alloc_client,
+                inst_name,
+                nic_name,
+                provisioning.subnet_id,
+            )
+            private_alloc_id = self._resource_id(private_alloc_obj)
+            if private_alloc_id:
+                self._private_alloc_ids[inst_name].append(private_alloc_id)
+                print(
+                    f"[VMManager] Private IP allocation {private_alloc_name} ready: {private_alloc_id}"
+                )
+
+        return alloc_ids
+
+    def _resolve_boot_disk_id_before_create(
+        self,
+        client: t.Any,
+        boot_disk_name: str,
+    ) -> str | None:
+        if not self.project_id:
+            return None
+        try:
+            from nebius.api.nebius.common.v1 import GetByNameRequest  # type: ignore
+            from nebius.api.nebius.compute.v1 import DiskServiceClient  # type: ignore
+
+            dsc2 = DiskServiceClient(client)  # type: ignore
+            if not hasattr(dsc2, "get_by_name"):
+                return None
+            disk_obj = dsc2.get_by_name(
+                GetByNameRequest(parent_id=self.project_id, name=boot_disk_name)
+            ).wait()
+            candidate_disk_id = getattr(disk_obj, "id", None) or getattr(
+                getattr(disk_obj, "metadata", None),
+                "id",
+                None,
+            )
+            if not candidate_disk_id:
+                return None
+
+            disk_status = getattr(disk_obj, "status", None)
+            disk_state = getattr(disk_status, "status", None) if disk_status else None
+            if disk_state and "DELET" in str(disk_state).upper():
+                print(
+                    f"[VMManager] Final fallback: disk {boot_disk_name} is deleting (state={disk_state}), waiting up to 120s..."
+                )
+                max_wait = 120
+                wait_interval = 5
+                for wait_attempt in range(max_wait // wait_interval):
+                    time.sleep(wait_interval)
+                    try:
+                        disk_obj = dsc2.get_by_name(
+                            GetByNameRequest(parent_id=self.project_id, name=boot_disk_name)
+                        ).wait()
+                        disk_status = getattr(disk_obj, "status", None)
+                        disk_state = getattr(disk_status, "status", None) if disk_status else None
+                        if disk_state and "DELET" in str(disk_state).upper():
+                            print(
+                                f"[VMManager] Still deleting... ({(wait_attempt + 1) * wait_interval}s / {max_wait}s)"
+                            )
+                            continue
+                        print(
+                            f"[VMManager] Disk state changed to {disk_state}, can now use disk"
+                        )
+                        return candidate_disk_id
+                    except Exception:
+                        print(
+                            f"[VMManager] Disk deletion complete after {(wait_attempt + 1) * wait_interval}s"
+                        )
+                        return None
+                print(
+                    f"[VMManager] Timeout waiting {max_wait}s for disk deletion. Will proceed without boot disk (may create new disk)."
+                )
+                return None
+
+            print(f"[VMManager] Final fallback: resolved disk id={candidate_disk_id}")
+            return candidate_disk_id
+        except Exception as e:
+            print(f"[VMManager] Final fallback disk lookup failed: {e}")
+            return None
+
+    def _create_instance_with_fallback(
+        self,
+        client: t.Any,
+        instance_api: t.Any,
+        inst_name: str,
+        provisioning: VMProvisioningConfig,
+        boot_disk_id: str | None,
+        alloc_ids: list[str],
+        vm_ips: dict[str, str],
+    ) -> bool:
+        inst_req = {
+            "metadata": {
+                "name": inst_name,
+                **({"parent_id": self.project_id} if self.project_id else {}),
+            },
+            "spec": {
+                "resources": {
+                    "platform": provisioning.platform,
+                    **({"preset": provisioning.preset} if provisioning.preset else {}),
+                },
+                **(
+                    {
+                        "boot_disk": {
+                            "attach_mode": "READ_WRITE",
+                            "device_id": "boot",
+                            "existing_disk": {"id": boot_disk_id},
+                        }
+                    }
+                    if boot_disk_id
+                    else {}
+                ),
+                "network_interfaces": [
+                    {
+                        "name": f"eth{nic_idx}",
+                        "ip_address": (
+                            {"allocation_id": self._private_alloc_ids[inst_name][nic_idx]}
+                            if nic_idx < len(self._private_alloc_ids.get(inst_name, []))
+                            else {}
+                        ),
+                        "public_ip_address": (
+                            {"allocation_id": alloc_ids[nic_idx], "static": True}
+                            if nic_idx < len(alloc_ids)
+                            else {}
+                        ),
+                        "subnet_id": provisioning.subnet_id,
+                    }
+                    for nic_idx in range(min(provisioning.num_nics, 1))
+                ],
+                "cloud_init_user_data": provisioning.cloud_init,
+            },
+        }
+
+        created = False
+        try:
+            from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
+            from nebius.api.nebius.compute.v1 import (
+                AttachedDiskSpec,
+                CreateInstanceRequest,
+                ExistingDisk,
+                InstanceServiceClient,
+                InstanceSpec,
+                IPAddress,
+                NetworkInterfaceSpec,
+                PublicIPAddress,
+                ResourcesSpec,
+            )  # type: ignore
+
+            isc = InstanceServiceClient(client)  # type: ignore
+            print(
+                f"[VMManager] Creating instance {inst_name} via InstanceServiceClient (project_id={self.project_id}) ..."
+            )
+            metadata = ResourceMetadata(name=inst_name, parent_id=self.project_id or "")
+            if provisioning.preset:
+                resources = ResourcesSpec(
+                    platform=provisioning.platform,
+                    preset=t.cast(t.Any, provisioning.preset),
+                )
+            else:
+                resources = ResourcesSpec(platform=provisioning.platform)
+            boot_disk_msg = None
+            if boot_disk_id:
+                boot_disk_msg = AttachedDiskSpec(
+                    attach_mode=t.cast(t.Any, "READ_WRITE"),
+                    device_id="boot",
+                    existing_disk=ExistingDisk(id=boot_disk_id),
+                )
+            if not boot_disk_id:
+                print(
+                    "[VMManager] Warning: boot_disk_id missing; proceeding without boot_disk in spec."
+                )
+
+            ni_msgs = []
+            for nic_idx in range(provisioning.num_nics):
+                nic_name = f"eth{nic_idx}"
+                pub = (
+                    PublicIPAddress(allocation_id=alloc_ids[nic_idx], static=True)
+                    if nic_idx < len(alloc_ids)
+                    else None
+                )
+                priv_alloc_id = None
+                priv = None
+                if nic_idx < len(self._private_alloc_ids.get(inst_name, [])):
+                    priv_alloc_id = self._private_alloc_ids[inst_name][nic_idx]
+                    priv = IPAddress(allocation_id=priv_alloc_id)
+                if priv is None:
+                    priv = IPAddress()
+                ni_msgs.append(
+                    NetworkInterfaceSpec(
+                        name=nic_name,
+                        ip_address=priv,
+                        public_ip_address=pub if pub is not None else PublicIPAddress(),
+                        subnet_id=provisioning.subnet_id,
+                    )
+                )
+                print(
+                    f"[VMManager] NIC {nic_name} configured with public={alloc_ids[nic_idx] if nic_idx < len(alloc_ids) else 'auto'}, private={priv_alloc_id or 'auto'}"
+                )
+
+            if len(ni_msgs) > 1:
+                print(
+                    f"[VMManager] WARNING: {len(ni_msgs)} NICs configured but platform only supports 1. Using first NIC only."
+                )
+                ni_msgs = ni_msgs[:1]
+
+            try:
+                print(f"[VMManager] Using boot_disk_id={boot_disk_id}")
+            except Exception:
+                pass
+
+            spec_kwargs = {
+                "resources": resources,
+                "network_interfaces": ni_msgs,
+                "cloud_init_user_data": provisioning.cloud_init,
+            }
+            if boot_disk_msg is not None and boot_disk_id:
+                spec_kwargs["boot_disk"] = boot_disk_msg
+            spec = InstanceSpec(**spec_kwargs)
+            req = CreateInstanceRequest(metadata=metadata, spec=spec)
+            try:
+                op = isc.create(req).wait()
+                try:
+                    op.sync_wait()
+                except Exception:
+                    pass
+                created = True
+                print(f"[VMManager] Instance {inst_name} created successfully via SDK")
+
+                print(f"[VMManager] Waiting for {inst_name} to receive public IP...")
+                max_ip_wait = 60
+                ip_wait_interval = 5
+                for attempt in range(max_ip_wait // ip_wait_interval):
+                    time.sleep(ip_wait_interval)
+                    vm_ip = self.get_vm_public_ip(inst_name)
+                    if vm_ip:
+                        print(f"[VMManager] {inst_name} ready with IP: {vm_ip}")
+                        vm_ips[inst_name] = vm_ip
+                        break
+                    if attempt < (max_ip_wait // ip_wait_interval) - 1:
+                        print(
+                            f"[VMManager] Waiting for IP assignment ({(attempt + 1) * ip_wait_interval}s elapsed)..."
+                        )
+                else:
+                    print(
+                        f"[VMManager] Warning: {inst_name} did not receive public IP within {max_ip_wait}s"
+                    )
+            except Exception as e:
+                print(f"[VMManager] InstanceServiceClient create failed: {e}")
+                import traceback
+
+                traceback.print_exc()
+        except Exception as e:
+            print(f"[VMManager] InstanceServiceClient initialization failed: {e}")
+
+        if created:
+            return True
+
+        if instance_api is not None and hasattr(instance_api, "create"):
+            print(f"[VMManager] Creating instance {inst_name} ...")
+            try:
+                try:
+                    instance_api.create(**inst_req)  # type: ignore[arg-type]
+                except TypeError:
+                    instance_api.create(inst_req)
+                return True
+            except Exception as e:
+                print(f"[VMManager] create failed for {inst_name}: {e}")
+
+        print(f"[VMManager] Would create with payload: {inst_req}")
+        return False
+
+    def _provision_instance(
+        self,
+        client: t.Any,
+        instance_api: t.Any,
+        disk_api: t.Any,
+        alloc_api: t.Any,
+        alloc_client: t.Any,
+        spec: GatewayGroupSpec,
+        instance_index: int,
+        recreate: bool,
+        provisioning: VMProvisioningConfig | None,
+        preserved_allocations: dict[str, list[str]],
+        vm_ips: dict[str, str],
+    ) -> None:
+        inst_name = f"{spec.name}-{instance_index}"
+        vm_exists = self._instance_exists(client, instance_api, inst_name)
+        if vm_exists and not recreate:
+            print(
+                f"[VMManager] VM {inst_name} already exists (recreate=False), skipping creation"
+            )
+            vm_ip = self.get_vm_public_ip(inst_name)
+            if vm_ip:
+                vm_ips[inst_name] = vm_ip
+                print(f"[VMManager] {inst_name} IP: {vm_ip}")
+            return
+        if vm_exists and recreate:
+            print(
+                f"[VMManager] WARNING: VM {inst_name} still exists after deletion (race condition?)"
+            )
+            return
+
+        if provisioning is None:
+            raise RuntimeError(
+                f"[VMManager] Internal error: provisioning config missing for {inst_name}."
+            )
+
+        boot_disk_name, boot_disk_id = self._ensure_boot_disk(
+            client,
+            disk_api,
+            spec,
+            inst_name,
+            provisioning,
+            recreate,
+        )
+        alloc_ids = self._ensure_instance_allocations(
+            alloc_api,
+            alloc_client,
+            spec,
+            inst_name,
+            instance_index,
+            provisioning,
+            preserved_allocations.get(inst_name, []),
+            vm_ips,
+        )
+        if not boot_disk_id:
+            boot_disk_id = self._resolve_boot_disk_id_before_create(client, boot_disk_name)
+        self._create_instance_with_fallback(
+            client,
+            instance_api,
+            inst_name,
+            provisioning,
+            boot_disk_id,
+            alloc_ids,
+            vm_ips,
+        )
+
+    def _log_scaffold_mode_instances(self, spec: GatewayGroupSpec) -> None:
+        for i in range(spec.instance_count):
+            inst_name = f"{spec.name}-{i}"
+            inst_ips = spec.external_ips[i] if i < len(spec.external_ips) else []
+            pub_ip = inst_ips[0] if inst_ips else None
+            print(
+                f"[VMManager] ensure instance {inst_name} pub_ip={pub_ip} platform={spec.vm_spec.get('platform')} subnet={self._gateway_subnet_name(spec)}"
+            )
+
     def ensure_group(
         self,
         spec: GatewayGroupSpec,
@@ -522,1589 +2009,326 @@ class VMManager:
         print(
             f"[VMManager] ensure_group name={spec.name} count={spec.instance_count} region={spec.region} recreate={recreate}"
         )
-
-        # Track created/existing VMs and their IPs
         vm_ips: dict[str, str] = {}
-
         try:
             print(f"[VMManager] Using project_id={self.project_id} zone={self.zone or spec.region}")
         except Exception:
             pass
-        # Try actual SDK integration with defensive guards
-        client = None
-        # If an auth token was provided, expose it to SDKs that read env
-        try:
-            import os
-
-            if self.auth_token and not os.environ.get("NEBIUS_IAM_TOKEN"):
-                os.environ["NEBIUS_IAM_TOKEN"] = self.auth_token
-        except Exception:
-            pass
-        try:
-            # Resolve Nebius SDK primary surface
-            Client = None  # type: ignore
-            try:
-                from nebius.sdk import SDK as _C  # type: ignore
-
-                Client = _C
-            except Exception:
-                # Fall back to older/alternate surfaces
-                try:
-                    from nebius.sdk import Client as _C  # type: ignore
-
-                    Client = _C
-                except Exception:
-                    try:
-                        from nebius.client import Client as _C  # type: ignore
-
-                        Client = _C
-                    except Exception:
-                        try:
-                            from nebius import pysdk  # type: ignore
-
-                            Client = pysdk.Client  # type: ignore[attr-defined]
-                        except Exception:
-                            try:
-                                from nebius.pysdk import Client as _C  # type: ignore
-
-                                Client = _C
-                            except Exception:
-                                pass
-            if Client is None:
-                raise ImportError("Nebius SDK not found")
-
-            # Prefer explicit context if available; support SDK-style constructor too
-            if self.tenant_id and self.project_id and (self.region_id or spec.region):
-                try:
-                    client = Client(
-                        tenant_id=self.tenant_id,
-                        project_id=self.project_id,
-                        region_id=self.region_id or spec.region,
-                    )
-                except TypeError:
-                    # SDK may not accept context args; fall back to default constructor
-                    client = Client()
-                except Exception:
-                    client = Client()
-            else:
-                # Fallback: initialize via CLI config reader but disable parent-id usage
-                try:
-                    from nebius.aio.cli_config import Config  # type: ignore
-
-                    try:
-                        client = Client(config_reader=Config(no_parent_id=True))  # type: ignore[call-arg]
-                    except TypeError:
-                        client = Client()
-                except Exception:
-                    # As last resort, rely on env token/defaults
-                    try:
-                        client = Client()
-                    except Exception:
-                        client = Client()
-        except Exception as e:
-            print(
-                "[VMManager] Nebius SDK not available; install with 'pip install nebius'. "
-                f"Running in dry scaffold mode: {e}"
-            )
+        client = self._build_sdk_client(spec.region)
 
         try:
             if client is not None:
-                # Resolve services defensively: attributes may be properties or callables
-                def _svc(obj: t.Any, name: str) -> t.Any:
-                    if obj is None:
-                        return None
-                    attr = getattr(obj, name, None)
-                    if attr is None:
-                        return None
-                    try:
-                        return attr() if callable(attr) else attr
-                    except Exception:
-                        return attr
-
-                compute = _svc(client, "compute") or _svc(getattr(client, "cloud", None), "compute")
-                vpc = (
-                    _svc(client, "vpc")
-                    or _svc(getattr(client, "network", None), "vpc")
-                    or _svc(getattr(client, "cloud", None), "vpc")
-                )
-
-                # Instance and disk APIs (try common names)
-                instance_api = None
-                if compute is not None:
-                    for name in ("instance", "instances", "vm", "virtual_machine"):
-                        instance_api = getattr(compute, name, None)
-                        if instance_api is not None:
-                            break
-                disk_api = None
-                if compute is not None:
-                    for name in ("disk", "disks", "storage_disk"):
-                        disk_api = getattr(compute, name, None)
-                        if disk_api is not None:
-                            break
-
-                # Allocation/public IP API under VPC
-                # Prefer explicit AllocationServiceClient if available
-                alloc_api = None
-                alloc_client = None
-                try:
-                    from nebius.api.nebius.vpc.v1 import AllocationServiceClient  # type: ignore
-
-                    alloc_client = AllocationServiceClient(client)  # type: ignore
-                except Exception:
-                    alloc_client = None
-                if alloc_client is None and vpc is not None:
-                    for name in (
-                        "allocation",
-                        "allocations",
-                        "public_ip",
-                        "public_ips",
-                    ):
-                        alloc_api = getattr(vpc, name, None)
-                        if alloc_api is not None:
-                            break
-
-                # Discover existing VMs (needed for --recreate-gw)
-                # Use the same method as check_changes() for consistency
-                existing = []
-                for i in range(spec.instance_count):
-                    inst_name = f"{spec.name}-{i}"
-                    vm_obj = self._get_vm_by_name(client, inst_name)
-                    if vm_obj:
-                        existing.append(vm_obj)
+                instance_api, disk_api, alloc_api, alloc_client = self._resolve_client_apis(client)
+                existing = self._discover_existing_instances(client, spec)
 
                 if not existing:
                     print("[VMManager] No existing VMs found")
                 else:
                     print(f"[VMManager] Found {len(existing)} existing VM(s) for recreation")
 
-                # Optionally delete existing VMs (preserves subnet and allocations)
-                # IMPORTANT: Only VMs are deleted. The following are preserved:
-                # - vpngw-subnet (reused via _ensure_vpngw_subnet below)
-                # - Public IP allocations (automatically detached, remain unassigned for 30 days)
-                # This ensures IP stability across VM recreations (critical for VPN gateways)
-
-                # ALLOCATION PRESERVATION STRATEGY (Section 16):
-                # Before deleting VMs, query and save their allocation IDs
-                # After recreation, reuse the same allocations (unless external_ips explicitly provided in YAML)
-                preserved_allocations: dict[
-                    str, list[str]
-                ] = {}  # vm_name -> [allocation_id_eth0, ...]
-
+                preserved_allocations: dict[str, list[str]] = {}
                 if recreate and existing:
-                    print(
-                        f"[VMManager] Querying allocations from {len(existing)} existing VMs for preservation..."
-                    )
-                    for inst in existing:
-                        vm_name = getattr(getattr(inst, "metadata", None), "name", None) or getattr(
-                            inst, "name", None
-                        )
-                        if vm_name:
-                            allocs = self.get_vm_allocations(vm_name)
-                            if allocs:
-                                # Store allocation IDs in NIC order
-                                alloc_ids = [
-                                    alloc_id for _, alloc_id in sorted(allocs, key=lambda x: x[0])
-                                ]
-                                preserved_allocations[vm_name] = alloc_ids
-                                print(
-                                    f"[VMManager] Preserved allocations for {vm_name}: {alloc_ids}"
-                                )
+                    preserved_allocations = self._collect_preserved_allocations(existing)
+                    self._delete_existing_instances_and_boot_disks(client, existing, spec)
 
-                if recreate and existing:
-                    print(
-                        f"[VMManager] Recreate requested; deleting {len(existing)} instances and boot disks (preserving subnet and allocations)"
-                    )
-                    # Get clients for deletion
-                    isc = None
-                    dsc = None
-                    try:
-                        from nebius.api.nebius.compute.v1 import (
-                            DiskServiceClient,
-                            InstanceServiceClient,
-                        )  # type: ignore
-
-                        isc = InstanceServiceClient(client)
-                        dsc = DiskServiceClient(client)
-                    except Exception as e:
-                        print(f"[VMManager] Cannot get service clients for deletion: {e}")
-
-                    if isc:
-                        # Step 1: Delete VMs (allocations will auto-detach)
-                        for inst in existing:
-                            # Try multiple ways to extract VM ID
-                            inst_id = getattr(inst, "id", None)
-                            if not inst_id:
-                                # Try metadata.id (common in SDK responses)
-                                metadata = getattr(inst, "metadata", None)
-                                if metadata:
-                                    inst_id = getattr(metadata, "id", None)
-
-                            inst_name = getattr(
-                                getattr(inst, "metadata", None), "name", None
-                            ) or getattr(inst, "name", "unknown")
-                            if inst_id:
-                                try:
-                                    print(f"[VMManager] Deleting VM {inst_name} (id={inst_id})...")
-                                    from nebius.api.nebius.compute.v1 import (
-                                        DeleteInstanceRequest,
-                                    )  # type: ignore
-
-                                    delete_req = DeleteInstanceRequest(id=inst_id)
-                                    op = isc.delete(delete_req)
-                                    # Wait for deletion to complete before proceeding
-                                    if hasattr(op, "wait"):
-                                        op.wait()
-                                        print(f"[VMManager] VM {inst_name} deletion initiated")
-                                    else:
-                                        # Fallback: brief sleep if no wait() available
-                                        import time
-
-                                        time.sleep(5)
-                                except Exception as e:
-                                    print(f"[VMManager] Failed to delete VM {inst_name}: {e}")
-                    else:
-                        print(
-                            "[VMManager] ERROR: Cannot delete VMs - InstanceServiceClient not available"
-                        )
-                        raise RuntimeError("Cannot proceed with --recreate-gw: VM deletion failed")
-
-                    # Wait for VM deletions to fully propagate before deleting disks
-                    if existing:
-                        import time
-
-                        print("[VMManager] Waiting for VM deletions to complete...")
-                        time.sleep(15)
-
-                    # Step 2: Delete boot disks (with retry since disk detachment can take time)
-                    if dsc:
-                        import time
-
-                        from nebius.api.nebius.common.v1 import GetByNameRequest  # type: ignore
-
-                        for i in range(spec.instance_count):
-                            inst_name = f"{spec.name}-{i}"
-                            boot_disk_name = f"{inst_name}-boot"
-                            try:
-                                if self.project_id and hasattr(dsc, "get_by_name"):
-                                    disk_obj = dsc.get_by_name(
-                                        GetByNameRequest(
-                                            parent_id=self.project_id,
-                                            name=boot_disk_name,
-                                        )
-                                    ).wait()
-                                    disk_id = getattr(disk_obj, "id", None) or getattr(
-                                        getattr(disk_obj, "metadata", None), "id", None
-                                    )
-                                    if disk_id:
-                                        # Retry disk deletion up to 3 times with backoff
-                                        max_retries = 3
-                                        for attempt in range(max_retries):
-                                            try:
-                                                print(
-                                                    f"[VMManager] Deleting boot disk {boot_disk_name} (id={disk_id})..."
-                                                )
-                                                from nebius.api.nebius.compute.v1 import (
-                                                    DeleteDiskRequest,
-                                                )  # type: ignore
-
-                                                delete_disk_req = DeleteDiskRequest(id=disk_id)
-                                                disk_op = dsc.delete(delete_disk_req)
-                                                if hasattr(disk_op, "wait"):
-                                                    disk_op.wait()
-                                                    print(
-                                                        f"[VMManager] Boot disk {boot_disk_name} deleted successfully"
-                                                    )
-                                                break  # Success - exit retry loop
-                                            except Exception as disk_err:
-                                                if "FAILED_PRECONDITION" in str(
-                                                    disk_err
-                                                ) and "read-write attachments" in str(disk_err):
-                                                    if attempt < max_retries - 1:
-                                                        wait_time = 10 * (
-                                                            attempt + 1
-                                                        )  # 10s, 20s, 30s
-                                                        print(
-                                                            f"[VMManager] Disk still attached, waiting {wait_time}s before retry {attempt + 2}/{max_retries}..."
-                                                        )
-                                                        time.sleep(wait_time)
-                                                    else:
-                                                        print(
-                                                            f"[VMManager] Could not delete boot disk {boot_disk_name} after {max_retries} attempts: {disk_err}"
-                                                        )
-                                                else:
-                                                    # Different error - don't retry
-                                                    print(
-                                                        f"[VMManager] Could not delete boot disk {boot_disk_name}: {disk_err}"
-                                                    )
-                                                    break
-                            except Exception as e:
-                                # Non-fatal: disk might not exist or already deleted
-                                print(
-                                    f"[VMManager] Could not find or delete boot disk {boot_disk_name} (non-fatal): {e}"
-                                )
-
-                    # Additional wait to ensure allocations are fully detached and disks fully deleted
-                    if existing:
-                        import time
-
-                        print(
-                            "[VMManager] Waiting for allocations to fully detach and disk deletions to complete..."
-                        )
-                        time.sleep(15)  # Wait for disk deletion to fully propagate
-
-                # Ensure each instance
+                provisioning: VMProvisioningConfig | None = None
                 for i in range(spec.instance_count):
-                    inst_name = f"{spec.name}-{i}"
-                    # Check if exists (skip creation if recreate=False)
-                    vm_exists = False
-                    try:
-                        # Try SDK client first (more reliable)
-                        vm_obj = self._get_vm_by_name(client, inst_name)
-                        if vm_obj is not None:
-                            vm_exists = True
-                        # Fallback to legacy instance_api if SDK check failed
-                        elif instance_api is not None and hasattr(instance_api, "get_by_name"):
-                            try:
-                                inst = instance_api.get_by_name(
-                                    name=inst_name, project_id=self.project_id
-                                )
-                            except TypeError:
-                                inst = instance_api.get_by_name(name=inst_name)
-                            vm_exists = inst is not None
-                    except Exception:
-                        vm_exists = False
-
-                    if vm_exists and not recreate:
-                        print(
-                            f"[VMManager] VM {inst_name} already exists (recreate=False), skipping creation"
-                        )
-                        # Get public IP for reporting
-                        vm_ip = self.get_vm_public_ip(inst_name)
-                        if vm_ip:
-                            vm_ips[inst_name] = vm_ip
-                            print(f"[VMManager] {inst_name} IP: {vm_ip}")
-                        continue
-                    elif vm_exists and recreate:
-                        # This should not happen - VMs should have been deleted above
-                        print(
-                            f"[VMManager] WARNING: VM {inst_name} still exists after deletion (race condition?)"
-                        )
-                        continue
-
-                    # Step 1: Ensure boot disk exists (following CLI pattern)
-                    # Determine/ensure gateway subnet (vpngw-subnet) in desired network
-                    # Note: _ensure_vpngw_subnet only creates if missing, never deletes
-                    # This preserves the subnet and any unassigned allocations during --recreate-gw
-                    subnet_id = self._ensure_vpngw_subnet(client, spec)
-
-                    # Ensure route table exists and is attached to vpngw-subnet
-                    self._ensure_vpngw_route_table(client, subnet_id)
-
-                    nic = {"subnet_id": subnet_id}
-                    # Preset-based CPU/mem; fall back to cores/memory_gb if preset missing
-                    platform = spec.vm_spec.get("platform") or "cpu-d3"
-                    preset = spec.vm_spec.get("preset")
-                    # Boot disk/image fields per template
-                    boot_image = (
-                        spec.vm_spec.get("disk_boot_image")
-                        or spec.vm_spec.get("image_family")
-                        or "ubuntu24.04-driverless"
+                    needs_provisioning = recreate or not self._instance_exists(
+                        client,
+                        instance_api,
+                        f"{spec.name}-{i}",
                     )
-                    disk_gb = spec.vm_spec.get("disk_gb", 200)
-                    disk_type = spec.vm_spec.get("disk_type", "network_ssd")
-                    # Normalize disk type to SDK enum values
-                    try:
-                        dt = str(disk_type).upper()
-                        # Map common aliases
-                        if dt in {
-                            "NETWORK_SSD",
-                            "NETWORK_HDD",
-                            "NETWORK_SSD_NON_REPLICATED",
-                            "NETWORK_SSD_IO_M3",
-                        }:
-                            disk_type = dt
-                        elif dt in {"SSD", "NVME"}:
-                            disk_type = "NETWORK_SSD"
-                        elif dt in {"HDD"}:
-                            disk_type = "NETWORK_HDD"
-                        else:
-                            # Default to NETWORK_SSD if unknown value provided
-                            disk_type = "NETWORK_SSD"
-                    except Exception:
-                        disk_type = "NETWORK_SSD"
-                    disk_block_bytes = spec.vm_spec.get("disk_block_bytes", 4096)
-                    ssh_key = spec.vm_spec.get("ssh_public_key")
-                    cloud_init = self._build_cloud_init(
-                        ssh_key=ssh_key, local_prefixes=local_prefixes
+                    if needs_provisioning and provisioning is None:
+                        provisioning = self._build_vm_provisioning_config(
+                            client,
+                            spec,
+                            local_prefixes,
+                        )
+                    self._provision_instance(
+                        client,
+                        instance_api,
+                        disk_api,
+                        alloc_api,
+                        alloc_client,
+                        spec,
+                        i,
+                        recreate,
+                        provisioning,
+                        preserved_allocations,
+                        vm_ips,
                     )
-                    boot_disk_name = f"{inst_name}-boot"
-                    boot_disk_id = None
-                    # Prefer explicit DiskServiceClient with CreateDiskRequest per schema
-                    try:
-                        from nebius.api.nebius.common.v1 import (
-                            GetByNameRequest,
-                            ResourceMetadata,
-                        )  # type: ignore
-                        from nebius.api.nebius.compute.v1 import (
-                            CreateDiskRequest,
-                            DiskServiceClient,
-                            DiskSpec,
-                            GetImageLatestByFamilyRequest,
-                            ImageServiceClient,
-                        )  # type: ignore
-
-                        dsc = DiskServiceClient(client)  # type: ignore
-                        # Try get_by_name first (skip if recreating to force new disk creation)
-                        boot_disk_id = None
-                        if self.project_id and not recreate:
-                            try:
-                                # Prefer get_by_name if available on client
-                                if hasattr(dsc, "get_by_name"):
-                                    disk_obj = dsc.get_by_name(
-                                        GetByNameRequest(
-                                            parent_id=self.project_id,
-                                            name=boot_disk_name,
-                                        )
-                                    ).wait()
-                                    boot_disk_id = getattr(disk_obj, "id", None) or getattr(
-                                        getattr(disk_obj, "metadata", None), "id", None
-                                    )
-
-                                    # Check if disk is in a usable state
-                                    if boot_disk_id:
-                                        disk_status = getattr(disk_obj, "status", None)
-                                        disk_state = (
-                                            getattr(disk_status, "status", None)
-                                            if disk_status
-                                            else None
-                                        )
-
-                                        # If disk is deleting, wait for it to finish
-                                        if disk_state and "DELET" in str(disk_state).upper():
-                                            print(
-                                                f"[VMManager] Disk {boot_disk_name} is in state {disk_state}, waiting for deletion to complete..."
-                                            )
-                                            import time
-
-                                            max_wait = 60
-                                            wait_interval = 5
-                                            for wait_attempt in range(max_wait // wait_interval):
-                                                time.sleep(wait_interval)
-                                                try:
-                                                    disk_obj = dsc.get_by_name(
-                                                        GetByNameRequest(
-                                                            parent_id=self.project_id,
-                                                            name=boot_disk_name,
-                                                        )
-                                                    ).wait()
-                                                    disk_status = getattr(disk_obj, "status", None)
-                                                    disk_state = (
-                                                        getattr(disk_status, "status", None)
-                                                        if disk_status
-                                                        else None
-                                                    )
-                                                    if (
-                                                        disk_state
-                                                        and "DELET" in str(disk_state).upper()
-                                                    ):
-                                                        print(
-                                                            f"[VMManager] Still deleting... ({(wait_attempt + 1) * wait_interval}s)"
-                                                        )
-                                                        continue
-                                                    else:
-                                                        print(
-                                                            f"[VMManager] Disk state changed to {disk_state}"
-                                                        )
-                                                        break
-                                                except Exception:
-                                                    # Disk no longer exists - deletion complete
-                                                    print(
-                                                        f"[VMManager] Disk deletion complete after {(wait_attempt + 1) * wait_interval}s"
-                                                    )
-                                                    boot_disk_id = None
-                                                    break
-                                            else:
-                                                # Timeout waiting - disk still deleting
-                                                print(
-                                                    "[VMManager] Timeout waiting for disk deletion, will retry creation"
-                                                )
-                                                boot_disk_id = None
-                                        else:
-                                            print(
-                                                f"[VMManager] Found existing disk {boot_disk_name} id={boot_disk_id}"
-                                            )
-                            except Exception:
-                                # Disk doesn't exist yet - will create below
-                                boot_disk_id = None
-                        if not boot_disk_id:
-                            print(
-                                f"[VMManager] Creating boot disk {boot_disk_name} (project_id={self.project_id}) ..."
-                            )
-                            # Resolve image id: prefer explicit config, else latest-by-family using region-matched public catalog
-                            image_id = spec.vm_spec.get("image_id") or None
-                            if not image_id and boot_image:
-                                try:
-                                    imgc = ImageServiceClient(client)  # type: ignore
-                                    # Derive routing code from project_id (e.g., project-e01... -> e01)
-                                    routing_code = None
-                                    try:
-                                        if self.project_id and self.project_id.startswith(
-                                            "project-"
-                                        ):
-                                            routing_code = (self.project_id.split("-")[1] or "")[:3]
-                                    except Exception:
-                                        routing_code = None
-                                    # Prefer region-matched public images catalog
-                                    parents_to_try = []
-                                    if routing_code:
-                                        parents_to_try.append(
-                                            f"project-{routing_code}public-images"
-                                        )
-                                    # Also try no parent and the global u00 catalog as fallbacks
-                                    parents_to_try.extend([None, "project-u00public-images"])
-                                    for parent in parents_to_try:
-                                        try:
-                                            req = GetImageLatestByFamilyRequest(
-                                                image_family=boot_image,
-                                                **({"parent_id": parent} if parent else {}),
-                                            )
-                                            img = imgc.get_latest_by_family(req).wait()
-                                            cand_id = getattr(img, "id", None) or getattr(
-                                                getattr(img, "metadata", None),
-                                                "id",
-                                                None,
-                                            )
-                                            # Ensure routing code compatibility: ImageID must share routing prefix with project
-                                            if cand_id and routing_code:
-                                                if cand_id.startswith(
-                                                    f"computeimage-{routing_code}"
-                                                ):
-                                                    image_id = cand_id
-                                                    break
-                                                else:
-                                                    # keep searching other parents
-                                                    continue
-                                            if cand_id and not routing_code:
-                                                image_id = cand_id
-                                                break
-                                        except Exception:
-                                            continue
-                                    if not image_id:
-                                        image_id = None
-                                except Exception:
-                                    image_id = None
-                            # Build DiskSpec using source_image_id if resolved; otherwise fallback to family
-                            if image_id:
-                                spec_msg = DiskSpec(
-                                    block_size_bytes=disk_block_bytes,
-                                    size_gibibytes=disk_gb,
-                                    type=disk_type,
-                                    source_image_id=image_id,
-                                )
-                            else:
-                                raise RuntimeError(
-                                    f"[VMManager] Unable to resolve image id for family '{boot_image}'. "
-                                    "Ensure the image family exists or provide vm_spec.image_id."
-                                )
-                            req = CreateDiskRequest(
-                                metadata=ResourceMetadata(
-                                    name=boot_disk_name, parent_id=self.project_id or ""
-                                ),
-                                spec=spec_msg,
-                            )
-                            try:
-                                op = dsc.create(req).wait()
-                                try:
-                                    op.sync_wait()
-                                except Exception:
-                                    pass
-                                # Try to extract id from operation result first
-                                try:
-                                    res = getattr(op, "result", None)
-                                    rid = getattr(getattr(res, "resource", None), "id", None)
-                                    if rid:
-                                        boot_disk_id = rid
-                                except Exception:
-                                    pass
-                                # If still missing, refetch by name
-                                if not boot_disk_id:
-                                    try:
-                                        # Prefer list with filter to locate by name
-                                        from nebius.api.nebius.compute.v1 import (
-                                            ListDisksRequest,
-                                        )  # type: ignore
-
-                                        lst = dsc.list(
-                                            ListDisksRequest(parent_id=self.project_id or "")
-                                        ).wait()
-                                        items = getattr(lst, "items", []) or []
-                                        for d in items:
-                                            if (
-                                                getattr(
-                                                    getattr(d, "metadata", None),
-                                                    "name",
-                                                    None,
-                                                )
-                                                == boot_disk_name
-                                            ):
-                                                boot_disk_id = getattr(d, "id", None) or getattr(
-                                                    getattr(d, "metadata", None),
-                                                    "id",
-                                                    None,
-                                                )
-                                                break
-                                    except Exception:
-                                        # As a last resort, attempt get_by_name again
-                                        if self.project_id:
-                                            try:
-                                                disk_obj = dsc.get_by_name(
-                                                    GetByNameRequest(
-                                                        parent_id=self.project_id,
-                                                        name=boot_disk_name,
-                                                    )
-                                                ).wait()
-                                                boot_disk_id = getattr(
-                                                    disk_obj, "id", None
-                                                ) or getattr(
-                                                    getattr(disk_obj, "metadata", None),
-                                                    "id",
-                                                    None,
-                                                )
-                                            except Exception:
-                                                boot_disk_id = None
-                            except Exception as e:
-                                # If disk already exists, it might be in deleting state from recreation
-                                msg = str(e)
-                                print(f"[VMManager] Disk create exception: {msg}")
-                                if (
-                                    "ALREADY_EXISTS" in msg
-                                    or f'disk with name "{boot_disk_name}" already exists' in msg
-                                ):
-                                    # During recreation, old disk might still be deleting
-                                    if recreate:
-                                        print(
-                                            f"[VMManager] Disk {boot_disk_name} still exists (likely deleting), waiting for deletion to complete..."
-                                        )
-                                        import time
-
-                                        max_wait = 60  # Wait up to 60 seconds
-                                        wait_interval = 5
-                                        for wait_attempt in range(max_wait // wait_interval):
-                                            time.sleep(wait_interval)
-                                            try:
-                                                # Check if disk still exists
-                                                if hasattr(dsc, "get_by_name"):
-                                                    disk_obj = dsc.get_by_name(
-                                                        GetByNameRequest(
-                                                            parent_id=self.project_id,
-                                                            name=boot_disk_name,
-                                                        )
-                                                    ).wait()
-                                                    # Disk still exists - keep waiting
-                                                    print(
-                                                        f"[VMManager] Disk still exists, waiting... ({(wait_attempt + 1) * wait_interval}s)"
-                                                    )
-                                                    continue
-                                            except Exception:
-                                                # Disk no longer found - deletion complete, retry creation
-                                                print(
-                                                    "[VMManager] Disk deletion complete, retrying creation..."
-                                                )
-                                                try:
-                                                    op = dsc.create(req).wait()
-                                                    try:
-                                                        op.sync_wait()
-                                                    except Exception:
-                                                        pass
-                                                    # Extract disk ID from operation result
-                                                    try:
-                                                        res = getattr(op, "result", None)
-                                                        rid = getattr(
-                                                            getattr(res, "resource", None),
-                                                            "id",
-                                                            None,
-                                                        )
-                                                        if rid:
-                                                            boot_disk_id = rid
-                                                    except Exception:
-                                                        pass
-                                                    if not boot_disk_id:
-                                                        # Refetch to get ID
-                                                        try:
-                                                            from nebius.api.nebius.compute.v1 import (
-                                                                ListDisksRequest,
-                                                            )  # type: ignore
-
-                                                            lst = dsc.list(
-                                                                ListDisksRequest(
-                                                                    parent_id=self.project_id or ""
-                                                                )
-                                                            ).wait()
-                                                            items = getattr(lst, "items", []) or []
-                                                            for d in items:
-                                                                if (
-                                                                    getattr(
-                                                                        getattr(
-                                                                            d,
-                                                                            "metadata",
-                                                                            None,
-                                                                        ),
-                                                                        "name",
-                                                                        None,
-                                                                    )
-                                                                    == boot_disk_name
-                                                                ):
-                                                                    boot_disk_id = getattr(
-                                                                        d,
-                                                                        "id",
-                                                                        None,
-                                                                    ) or getattr(
-                                                                        getattr(
-                                                                            d,
-                                                                            "metadata",
-                                                                            None,
-                                                                        ),
-                                                                        "id",
-                                                                        None,
-                                                                    )
-                                                                    break
-                                                        except Exception:
-                                                            pass
-                                                except Exception as retry_err:
-                                                    print(
-                                                        f"[VMManager] Disk creation retry failed: {retry_err}"
-                                                    )
-                                                break
-                                        else:
-                                            # Timeout waiting for deletion
-                                            print(
-                                                "[VMManager] Timeout waiting for disk deletion to complete"
-                                            )
-                                    else:
-                                        # Not recreating - just refetch existing disk
-                                        print("[VMManager] Disk already exists, refetching ID...")
-                                        if self.project_id:
-                                            try:
-                                                if hasattr(dsc, "get_by_name"):
-                                                    disk_obj = dsc.get_by_name(
-                                                        GetByNameRequest(
-                                                            parent_id=self.project_id,
-                                                            name=boot_disk_name,
-                                                        )
-                                                    ).wait()
-                                                    boot_disk_id = getattr(
-                                                        disk_obj, "id", None
-                                                    ) or getattr(
-                                                        getattr(disk_obj, "metadata", None),
-                                                        "id",
-                                                        None,
-                                                    )
-                                                    print(
-                                                        f"[VMManager] Refetched existing disk id={boot_disk_id}"
-                                                    )
-                                                else:
-                                                    from nebius.api.nebius.compute.v1 import (
-                                                        ListDisksRequest,
-                                                    )  # type: ignore
-
-                                                    lst = dsc.list(
-                                                        ListDisksRequest(parent_id=self.project_id)
-                                                    ).wait()
-                                                    items = getattr(lst, "items", []) or []
-                                                    for d in items:
-                                                        if (
-                                                            getattr(
-                                                                getattr(d, "metadata", None),
-                                                                "name",
-                                                                None,
-                                                            )
-                                                            == boot_disk_name
-                                                        ):
-                                                            boot_disk_id = getattr(
-                                                                d, "id", None
-                                                            ) or getattr(
-                                                                getattr(d, "metadata", None),
-                                                                "id",
-                                                                None,
-                                                            )
-                                                            print(
-                                                                f"[VMManager] Refetched via list: disk id={boot_disk_id}"
-                                                            )
-                                                            break
-                                            except Exception as refetch_err:
-                                                print(f"[VMManager] Refetch failed: {refetch_err}")
-                                        else:
-                                            print("[VMManager] Cannot refetch: project_id is None")
-                                else:
-                                    print(f"[VMManager] boot disk create failed: {e}")
-                    except Exception:
-                        # Fallback to legacy disk_api surfaces if present
-                        if disk_api is not None:
-                            try:
-                                if hasattr(disk_api, "get_by_name"):
-                                    disk_obj = disk_api.get_by_name(name=boot_disk_name)
-                                    boot_disk_id = getattr(disk_obj, "id", None) or getattr(
-                                        getattr(disk_obj, "metadata", None), "id", None
-                                    )
-                            except Exception:
-                                boot_disk_id = None
-                            if not boot_disk_id and hasattr(disk_api, "create"):
-                                disk_req = {
-                                    "name": boot_disk_name,
-                                    "size_gibibytes": disk_gb,
-                                    "type": disk_type,
-                                    "source_image_family": boot_image,
-                                    "block_size_bytes": disk_block_bytes,
-                                    **({"project_id": self.project_id} if self.project_id else {}),
-                                    **(
-                                        {"zone": self.zone or spec.region}
-                                        if (self.zone or spec.region)
-                                        else {}
-                                    ),
-                                }
-                                try:
-                                    print(f"[VMManager] Creating boot disk {boot_disk_name} ...")
-                                    try:
-                                        disk_obj = disk_api.create(**disk_req)  # type: ignore
-                                    except TypeError:
-                                        disk_obj = disk_api.create(disk_req)
-                                    boot_disk_id = getattr(disk_obj, "id", None) or getattr(
-                                        getattr(disk_obj, "metadata", None), "id", None
-                                    )
-                                except Exception as e:
-                                    print(
-                                        f"[VMManager] boot disk create failed: {e}. Attempted: {disk_req}"
-                                    )
-
-                    # Step 2: Ensure public IP allocations (1 per NIC)
-                    # ALLOCATION STRATEGY:
-                    # - Create num_nics allocations (one per network interface)
-                    # - Allocations are named: {instance}-eth0-ip, {instance}-eth1-ip, etc.
-                    # - Map external_ips per instance: external_ips[instance_index][nic_index]
-                    # - If external_ips not provided or insufficient, auto-create allocations
-                    # - PRESERVATION: When recreating VMs, reuse preserved allocations (same IPs)
-                    # CURRENT PLATFORM LIMITATION: num_nics=1 (enforced by config_loader)
-                    # FUTURE NIC EXPANSION:
-                    #   - When platform supports multi-NIC, increasing num_nics is SAFE (non-destructive)
-                    #   - Process: Create new allocation → Attach new NIC to existing VM
-                    #   - No VM recreation needed, existing NICs/tunnels unaffected
-                    #   - Detected by vm_diff.py as safe expansion (similar to disk expansion)
-                    num_nics = int(spec.vm_spec.get("num_nics", 1))
-                    if num_nics > 1:
-                        print(
-                            f"[VMManager] WARNING: num_nics={num_nics} but current platform only supports 1 NIC. Using num_nics=1."
-                        )
-                        num_nics = 1
-
-                    desired_ips = []
-                    instance_external_ips: list[str] = []
-                    if spec.external_ips and i < len(spec.external_ips):
-                        inst_ips = spec.external_ips[i] or []
-                        if isinstance(inst_ips, list):
-                            instance_external_ips = inst_ips
-                    if instance_external_ips:
-                        # Take first num_nics IPs for this instance
-                        desired_ips = [ip for ip in instance_external_ips[:num_nics] if ip]
-
-                    # Check if we have preserved allocations from VM recreation (Section 16)
-                    preserved_alloc_ids = preserved_allocations.get(inst_name, [])
-
-                    alloc_ids: list[str] = []
-                    if alloc_api is not None or alloc_client is not None:
-                        for nic_index in range(num_nics):
-                            nic_name = f"eth{nic_index}"
-                            desired_ip = (
-                                desired_ips[nic_index] if nic_index < len(desired_ips) else None
-                            )
-                            alloc_obj = None
-
-                            # PRIORITY 1: If external_ips explicitly provided in YAML, use that
-                            # PRIORITY 2: If we have preserved allocation from recreation, reuse it
-                            # PRIORITY 3: Try to find existing allocation by name
-                            # PRIORITY 4: Create new allocation
-
-                            # Define alloc_name upfront (used in multiple priority paths)
-                            alloc_name = f"{inst_name}-{nic_name}-ip"
-
-                            # Priority 1: Match existing allocation by IP if provided in YAML
-                            if desired_ip:
-                                try:
-                                    get_by_addr = getattr(alloc_api, "get_by_address", None)
-                                    if get_by_addr:
-                                        alloc_obj = get_by_addr(
-                                            address=desired_ip,
-                                            project_id=self.project_id,
-                                        )
-                                        if alloc_obj:
-                                            print(
-                                                f"[VMManager] Found existing allocation with IP {desired_ip}"
-                                            )
-                                            # Check if allocation is in a different subnet - if so, migrate it
-                                            alloc_obj = self._migrate_allocation_to_vpngw_subnet(
-                                                alloc_client,
-                                                alloc_obj,
-                                                nic.get("subnet_id"),
-                                                desired_ip,
-                                            )
-                                except Exception:
-                                    alloc_obj = None
-
-                            # Priority 2: Reuse preserved allocation from VM recreation
-                            if (
-                                alloc_obj is None
-                                and not desired_ip
-                                and nic_index < len(preserved_alloc_ids)
-                            ):
-                                preserved_alloc_id = preserved_alloc_ids[nic_index]
-                                try:
-                                    if alloc_client is not None:
-                                        from nebius.api.nebius.vpc.v1 import (
-                                            GetAllocationRequest,
-                                        )  # type: ignore
-
-                                        alloc_obj = alloc_client.get(
-                                            GetAllocationRequest(id=preserved_alloc_id)
-                                        ).wait()
-                                        if alloc_obj:
-                                            # Get IP for display
-                                            preserved_ip = self.get_allocation_ip(
-                                                preserved_alloc_id
-                                            )
-                                            print(
-                                                f"[VMManager] Reusing preserved allocation {preserved_alloc_id} ({preserved_ip}) for {inst_name} {nic_name}"
-                                            )
-                                            # Check if allocation is in wrong subnet - migrate if needed
-                                            alloc_obj = self._migrate_allocation_to_vpngw_subnet(
-                                                alloc_client,
-                                                alloc_obj,
-                                                nic.get("subnet_id"),
-                                                preserved_ip,
-                                            )
-                                except Exception as e:
-                                    print(
-                                        f"[VMManager] Could not retrieve preserved allocation {preserved_alloc_id}: {e}"
-                                    )
-                                    alloc_obj = None
-
-                            # Priority 3: Try by-name before creating to avoid ALREADY_EXISTS
-                            if alloc_obj is None and alloc_client is not None:
-                                try:
-                                    from nebius.api.nebius.vpc.v1 import (
-                                        GetAllocationByNameRequest,
-                                    )  # type: ignore
-
-                                    alloc_name = f"{inst_name}-{nic_name}-ip"
-                                    alloc_obj = alloc_client.get_by_name(
-                                        GetAllocationByNameRequest(
-                                            parent_id=self.project_id or "",
-                                            name=alloc_name,
-                                        )
-                                    ).wait()
-                                    if alloc_obj:
-                                        print(
-                                            f"[VMManager] Found existing allocation by name: {alloc_name}"
-                                        )
-                                        # Check if allocation is in wrong subnet - migrate if needed
-                                        byname_ip = self.get_allocation_ip(
-                                            getattr(
-                                                getattr(alloc_obj, "metadata", None),
-                                                "id",
-                                                None,
-                                            )
-                                            or getattr(alloc_obj, "id", None)
-                                        )
-                                        alloc_obj = self._migrate_allocation_to_vpngw_subnet(
-                                            alloc_client,
-                                            alloc_obj,
-                                            nic.get("subnet_id"),
-                                            byname_ip,
-                                        )
-                                except Exception:
-                                    alloc_obj = None
-
-                            # Priority 4: Create allocation in vpngw-subnet when not found
-                            if alloc_obj is None:
-                                # Ensure subnet_id is present before attempting allocation creation
-                                if not nic.get("subnet_id"):
-                                    raise RuntimeError(
-                                        "[VMManager] Cannot create public IP allocation: subnet_id is not set. "
-                                        "Resolve subnet creation first or provide a valid network_id."
-                                    )
-                                try:
-                                    alloc_name = f"{inst_name}-{nic_name}-ip"
-                                    if desired_ip:
-                                        print(
-                                            f"[VMManager] Creating public IP allocation {alloc_name} for {nic_name} in vpngw-subnet requesting IP {desired_ip} ..."
-                                        )
-                                    else:
-                                        print(
-                                            f"[VMManager] Creating public IP allocation {alloc_name} for {nic_name} in vpngw-subnet ..."
-                                        )
-                                    if alloc_client is not None:
-                                        try:
-                                            from nebius.api.nebius.common.v1 import (
-                                                ResourceMetadata,
-                                            )  # type: ignore
-                                            from nebius.api.nebius.vpc.v1 import (
-                                                AllocationSpec,
-                                                CreateAllocationRequest,
-                                                IPv4PublicAllocationSpec,
-                                            )  # type: ignore
-
-                                            req = CreateAllocationRequest(
-                                                metadata=ResourceMetadata(
-                                                    name=alloc_name,
-                                                    parent_id=self.project_id or "",
-                                                ),
-                                                spec=AllocationSpec(
-                                                    ipv4_public=IPv4PublicAllocationSpec(
-                                                        subnet_id=nic["subnet_id"],
-                                                        cidr="/32"
-                                                        if not desired_ip
-                                                        else desired_ip,
-                                                    )
-                                                ),
-                                            )
-                                            op = alloc_client.create(req).wait()  # Operation
-                                            try:
-                                                op.sync_wait()
-                                            except Exception:
-                                                pass
-                                            # Try to read allocation id from operation result or refetch by name
-                                            alloc_obj = None
-                                            try:
-                                                # Some SDKs expose result.resource.id
-                                                res = getattr(op, "result", None)
-                                                rid = getattr(
-                                                    getattr(res, "resource", None),
-                                                    "id",
-                                                    None,
-                                                )
-                                                if rid:
-                                                    # Construct a minimal object-like dict to carry id
-                                                    alloc_obj = type("Alloc", (), {"id": rid})()
-                                            except Exception:
-                                                alloc_obj = None
-                                            if alloc_obj is None:
-                                                try:
-                                                    from nebius.api.nebius.vpc.v1 import (
-                                                        GetAllocationByNameRequest,
-                                                    )  # type: ignore
-
-                                                    alloc_obj = alloc_client.get_by_name(
-                                                        GetAllocationByNameRequest(
-                                                            parent_id=self.project_id or "",
-                                                            name=alloc_name,
-                                                        )
-                                                    ).wait()
-                                                except Exception:
-                                                    alloc_obj = None
-                                        except Exception as e:
-                                            print(
-                                                f"[VMManager] allocation create via client failed: {e}"
-                                            )
-                                            # If it already exists, refetch by name and proceed
-                                            try:
-                                                from nebius.api.nebius.vpc.v1 import (
-                                                    GetAllocationByNameRequest,
-                                                )  # type: ignore
-
-                                                alloc_obj = alloc_client.get_by_name(
-                                                    GetAllocationByNameRequest(
-                                                        parent_id=self.project_id or "",
-                                                        name=alloc_name,
-                                                    )
-                                                ).wait()
-                                            except Exception:
-                                                pass
-                                    elif alloc_api is not None:
-                                        # Fallback legacy surface; prefer explicit client above.
-                                        create_args = {
-                                            "name": alloc_name,
-                                            "ipv_4_public_subnet_id": nic["subnet_id"],
-                                            **(
-                                                {"project_id": self.project_id}
-                                                if self.project_id
-                                                else {}
-                                            ),
-                                        }
-                                        try:
-                                            alloc_obj = alloc_api.create(**create_args)  # type: ignore
-                                        except TypeError:
-                                            alloc_obj = alloc_api.create(create_args)
-                                except Exception as e:
-                                    print(f"[VMManager] allocation create failed: {e}")
-
-                            # Extract allocation id robustly and get IP address
-                            alloc_id = None
-                            if alloc_obj is not None:
-                                alloc_id = getattr(alloc_obj, "id", None)
-                                if not alloc_id:
-                                    alloc_id = getattr(
-                                        getattr(alloc_obj, "metadata", None), "id", None
-                                    )
-                            if alloc_id:
-                                alloc_ids.append(alloc_id)
-                                print(
-                                    f"[VMManager] Public IP allocation {alloc_name} ready: {alloc_id}"
-                                )
-
-                                # Get the IP address from this allocation for the first NIC (eth0)
-                                if nic_index == 0:
-                                    alloc_ip = self.get_allocation_ip(alloc_id)
-                                    if alloc_ip:
-                                        vm_ips[inst_name] = alloc_ip
-
-                            # Create static private IP allocation for route next hops
-                            # This allocation will be used as the next hop for VPC routes
-                            private_alloc_obj = None
-                            private_alloc_name = f"{inst_name}-{nic_name}-private-ip"
-
-                            # Priority 1: Try by-name to avoid ALREADY_EXISTS
-                            if alloc_client is not None:
-                                try:
-                                    from nebius.api.nebius.vpc.v1 import (
-                                        GetAllocationByNameRequest,
-                                    )  # type: ignore
-
-                                    private_alloc_obj = alloc_client.get_by_name(
-                                        GetAllocationByNameRequest(
-                                            parent_id=self.project_id or "",
-                                            name=private_alloc_name,
-                                        )
-                                    ).wait()
-                                    if private_alloc_obj:
-                                        print(
-                                            f"[VMManager] Found existing private allocation by name: {private_alloc_name}"
-                                        )
-                                except Exception:
-                                    private_alloc_obj = None
-
-                            # Priority 2: Create static private allocation
-                            if private_alloc_obj is None:
-                                if not nic.get("subnet_id"):
-                                    raise RuntimeError(
-                                        "[VMManager] Cannot create private IP allocation: subnet_id is not set. "
-                                        "Resolve subnet creation first or provide a valid network_id."
-                                    )
-                                try:
-                                    print(
-                                        f"[VMManager] Creating static private IP allocation {private_alloc_name} for {nic_name} in vpngw-subnet ..."
-                                    )
-                                    if alloc_client is not None:
-                                        try:
-                                            from nebius.api.nebius.common.v1 import (
-                                                ResourceMetadata,
-                                            )  # type: ignore
-                                            from nebius.api.nebius.vpc.v1 import (
-                                                AllocationSpec,
-                                                CreateAllocationRequest,
-                                                IPv4PrivateAllocationSpec,
-                                            )  # type: ignore
-
-                                            req = CreateAllocationRequest(
-                                                metadata=ResourceMetadata(
-                                                    name=private_alloc_name,
-                                                    parent_id=self.project_id or "",
-                                                ),
-                                                spec=AllocationSpec(
-                                                    ipv4_private=IPv4PrivateAllocationSpec(
-                                                        subnet_id=nic["subnet_id"],
-                                                    )
-                                                ),
-                                            )
-                                            op = alloc_client.create(req).wait()  # Operation
-                                            try:
-                                                op.sync_wait()
-                                            except Exception:
-                                                pass
-                                            # Try to read allocation id from operation result or refetch by name
-                                            private_alloc_obj = None
-                                            try:
-                                                # Some SDKs expose result.resource.id
-                                                res = getattr(op, "result", None)
-                                                rid = getattr(
-                                                    getattr(res, "resource", None),
-                                                    "id",
-                                                    None,
-                                                )
-                                                if rid:
-                                                    # Construct a minimal object-like dict to carry id
-                                                    private_alloc_obj = type(
-                                                        "Alloc", (), {"id": rid}
-                                                    )()
-                                            except Exception:
-                                                private_alloc_obj = None
-                                            if private_alloc_obj is None:
-                                                try:
-                                                    from nebius.api.nebius.vpc.v1 import (
-                                                        GetAllocationByNameRequest,
-                                                    )  # type: ignore
-
-                                                    private_alloc_obj = alloc_client.get_by_name(
-                                                        GetAllocationByNameRequest(
-                                                            parent_id=self.project_id or "",
-                                                            name=private_alloc_name,
-                                                        )
-                                                    ).wait()
-                                                except Exception:
-                                                    private_alloc_obj = None
-                                        except Exception as e:
-                                            print(
-                                                f"[VMManager] private allocation create via client failed: {e}"
-                                            )
-                                            # If it already exists, refetch by name and proceed
-                                            try:
-                                                from nebius.api.nebius.vpc.v1 import (
-                                                    GetAllocationByNameRequest,
-                                                )  # type: ignore
-
-                                                private_alloc_obj = alloc_client.get_by_name(
-                                                    GetAllocationByNameRequest(
-                                                        parent_id=self.project_id or "",
-                                                        name=private_alloc_name,
-                                                    )
-                                                ).wait()
-                                            except Exception:
-                                                pass
-                                except Exception as e:
-                                    print(f"[VMManager] private allocation create failed: {e}")
-
-                            # Extract private allocation id
-                            private_alloc_id = None
-                            if private_alloc_obj is not None:
-                                private_alloc_id = getattr(private_alloc_obj, "id", None)
-                                if not private_alloc_id:
-                                    private_alloc_id = getattr(
-                                        getattr(private_alloc_obj, "metadata", None),
-                                        "id",
-                                        None,
-                                    )
-                            if private_alloc_id:
-                                # Store private allocation ID (we'll need a separate list)
-                                if not hasattr(self, "_private_alloc_ids"):
-                                    self._private_alloc_ids = {}
-                                self._private_alloc_ids[inst_name] = self._private_alloc_ids.get(
-                                    inst_name, []
-                                )
-                                self._private_alloc_ids[inst_name].append(private_alloc_id)
-                                print(
-                                    f"[VMManager] Private IP allocation {private_alloc_name} ready: {private_alloc_id}"
-                                )
-
-                    # Step 3: Create instance with proper metadata/spec per SDK schema
-                    inst_req = {
-                        "metadata": {
-                            "name": inst_name,
-                            **({"parent_id": self.project_id} if self.project_id else {}),
-                        },
-                        "spec": {
-                            # Resources
-                            "resources": {
-                                "platform": platform,
-                                **({"preset": preset} if preset else {}),
-                            },
-                            # Boot disk reference
-                            **(
-                                {
-                                    "boot_disk": {
-                                        "attach_mode": "READ_WRITE",
-                                        "device_id": "boot",
-                                        "existing_disk": {"id": boot_disk_id},
-                                    }
-                                }
-                                if boot_disk_id
-                                else {}
-                            ),
-                            # Network - build num_nics NICs with proper allocation mapping
-                            # Legacy dict format for fallback API compatibility
-                            "network_interfaces": [
-                                {
-                                    "name": f"eth{nic_idx}",
-                                    "ip_address": (
-                                        {
-                                            "allocation_id": self._private_alloc_ids[inst_name][
-                                                nic_idx
-                                            ]
-                                        }
-                                        if hasattr(self, "_private_alloc_ids")
-                                        and inst_name in self._private_alloc_ids
-                                        and nic_idx < len(self._private_alloc_ids[inst_name])
-                                        else {}
-                                    ),
-                                    "public_ip_address": (
-                                        {
-                                            "allocation_id": alloc_ids[nic_idx],
-                                            "static": True,
-                                        }
-                                        if nic_idx < len(alloc_ids)
-                                        else {}
-                                    ),
-                                    "subnet_id": nic["subnet_id"],
-                                }
-                                for nic_idx in range(
-                                    min(num_nics, 1)
-                                )  # Platform limitation: max 1 NIC
-                            ],
-                            # Cloud-init user data
-                            "cloud_init_user_data": cloud_init,
-                        },
-                    }
-                    # If boot_disk_id is still missing, try to resolve by name before creating instance
-                    if not boot_disk_id and self.project_id:
-                        try:
-                            from nebius.api.nebius.common.v1 import GetByNameRequest  # type: ignore
-                            from nebius.api.nebius.compute.v1 import (
-                                DiskServiceClient,  # type: ignore
-                            )
-
-                            dsc2 = DiskServiceClient(client)  # type: ignore
-                            if hasattr(dsc2, "get_by_name"):
-                                disk_obj = dsc2.get_by_name(
-                                    GetByNameRequest(parent_id=self.project_id, name=boot_disk_name)
-                                ).wait()
-                                candidate_disk_id = getattr(disk_obj, "id", None) or getattr(
-                                    getattr(disk_obj, "metadata", None), "id", None
-                                )
-
-                                # Check if disk is deleting - if so, wait for it
-                                if candidate_disk_id:
-                                    disk_status = getattr(disk_obj, "status", None)
-                                    disk_state = (
-                                        getattr(disk_status, "status", None)
-                                        if disk_status
-                                        else None
-                                    )
-
-                                    if disk_state and "DELET" in str(disk_state).upper():
-                                        print(
-                                            f"[VMManager] Final fallback: disk {boot_disk_name} is deleting (state={disk_state}), waiting up to 120s..."
-                                        )
-                                        import time
-
-                                        max_wait = 120  # Wait longer in fallback since we're about to create VM
-                                        wait_interval = 5
-                                        for wait_attempt in range(max_wait // wait_interval):
-                                            time.sleep(wait_interval)
-                                            try:
-                                                disk_obj = dsc2.get_by_name(
-                                                    GetByNameRequest(
-                                                        parent_id=self.project_id,
-                                                        name=boot_disk_name,
-                                                    )
-                                                ).wait()
-                                                disk_status = getattr(disk_obj, "status", None)
-                                                disk_state = (
-                                                    getattr(disk_status, "status", None)
-                                                    if disk_status
-                                                    else None
-                                                )
-                                                if (
-                                                    disk_state
-                                                    and "DELET" in str(disk_state).upper()
-                                                ):
-                                                    print(
-                                                        f"[VMManager] Still deleting... ({(wait_attempt + 1) * wait_interval}s / {max_wait}s)"
-                                                    )
-                                                    continue
-                                                else:
-                                                    print(
-                                                        f"[VMManager] Disk state changed to {disk_state}, can now use disk"
-                                                    )
-                                                    boot_disk_id = candidate_disk_id
-                                                    break
-                                            except Exception:
-                                                # Disk no longer exists - deletion complete, don't use this ID
-                                                print(
-                                                    f"[VMManager] Disk deletion complete after {(wait_attempt + 1) * wait_interval}s"
-                                                )
-                                                boot_disk_id = None
-                                                break
-                                        else:
-                                            # Timeout - disk still deleting, don't use it
-                                            print(
-                                                f"[VMManager] Timeout waiting {max_wait}s for disk deletion. Will proceed without boot disk (may create new disk)."
-                                            )
-                                            boot_disk_id = None
-                                    else:
-                                        # Disk exists and not deleting - safe to use
-                                        boot_disk_id = candidate_disk_id
-                                        print(
-                                            f"[VMManager] Final fallback: resolved disk id={boot_disk_id}"
-                                        )
-                        except Exception as e:
-                            print(f"[VMManager] Final fallback disk lookup failed: {e}")
-
-                        # Prefer explicit InstanceServiceClient if available
-                    created = False
-                    try:
-                        from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
-                        from nebius.api.nebius.compute.v1 import (
-                            AttachedDiskSpec,
-                            CreateInstanceRequest,
-                            ExistingDisk,
-                            InstanceServiceClient,
-                            InstanceSpec,
-                            IPAddress,
-                            NetworkInterfaceSpec,
-                            PublicIPAddress,
-                            ResourcesSpec,
-                        )  # type: ignore
-
-                        isc = InstanceServiceClient(client)  # type: ignore
-                        print(
-                            f"[VMManager] Creating instance {inst_name} via InstanceServiceClient (project_id={self.project_id}) ..."
-                        )
-                        # Build protobuf messages per SDK types
-                        metadata = ResourceMetadata(name=inst_name, parent_id=self.project_id or "")
-                        resources = ResourcesSpec(
-                            platform=platform, **({"preset": preset} if preset else {})
-                        )
-                        # Boot disk message if available
-                        boot_disk_msg = None
-                        if boot_disk_id:
-                            boot_disk_msg = AttachedDiskSpec(
-                                attach_mode="READ_WRITE",
-                                device_id="boot",
-                                existing_disk=ExistingDisk(id=boot_disk_id),
-                            )
-                        # If we still don't have a boot disk id, skip adding boot disk; some images may allow ephemeral boot
-                        # We'll log a warning and proceed to let the API validate.
-                        if not boot_disk_id:
-                            print(
-                                "[VMManager] Warning: boot_disk_id missing; proceeding without boot_disk in spec."
-                            )
-
-                        # Network interfaces - build num_nics NICs with proper allocation mapping
-                        # NIC CREATION STRATEGY:
-                        # - Create num_nics NetworkInterfaceSpecs (eth0, eth1, ..., eth{n-1})
-                        # - Map allocations in order: alloc_ids[0] → eth0, alloc_ids[1] → eth1, etc.
-                        # - Each NIC gets a static private IP allocation for route next hops
-                        # - Each NIC gets a public IP allocation for external connectivity
-                        # CURRENT PLATFORM LIMITATION: num_nics=1 enforced by config validation
-                        # FUTURE: When platform supports multi-NIC, NICs will be created per num_nics config
-                        ni_msgs = []
-                        for nic_idx in range(num_nics):
-                            nic_name = f"eth{nic_idx}"
-
-                            # Public IP allocation for external connectivity
-                            pub = None
-                            if nic_idx < len(alloc_ids):
-                                pub = PublicIPAddress(allocation_id=alloc_ids[nic_idx], static=True)
-
-                            # Private IP allocation for route next hops (static allocation)
-                            priv = None
-                            priv_alloc_id = None
-                            if (
-                                hasattr(self, "_private_alloc_ids")
-                                and inst_name in self._private_alloc_ids
-                            ):
-                                if nic_idx < len(self._private_alloc_ids[inst_name]):
-                                    priv_alloc_id = self._private_alloc_ids[inst_name][nic_idx]
-                                    priv = IPAddress(allocation_id=priv_alloc_id)
-
-                            # If no private allocation, use auto-assigned (for backward compatibility)
-                            if priv is None:
-                                priv = IPAddress()
-
-                            ni_msgs.append(
-                                NetworkInterfaceSpec(
-                                    name=nic_name,
-                                    ip_address=priv,
-                                    public_ip_address=pub if pub is not None else PublicIPAddress(),
-                                    subnet_id=nic["subnet_id"],
-                                )
-                            )
-                            print(
-                                f"[VMManager] NIC {nic_name} configured with public={alloc_ids[nic_idx] if nic_idx < len(alloc_ids) else 'auto'}, private={priv_alloc_id if priv and priv.allocation_id else 'auto'}"
-                            )
-
-                        # Validation: Ensure we don't exceed platform limits
-                        if len(ni_msgs) > 1:
-                            print(
-                                f"[VMManager] WARNING: {len(ni_msgs)} NICs configured but platform only supports 1. Using first NIC only."
-                            )
-                            ni_msgs = ni_msgs[:1]
-
-                        # Log boot disk id for diagnostics
-                        try:
-                            print(f"[VMManager] Using boot_disk_id={boot_disk_id}")
-                        except Exception:
-                            pass
-                        spec_kwargs = {
-                            "resources": resources,
-                            "network_interfaces": ni_msgs,
-                            "cloud_init_user_data": cloud_init,
-                        }
-                        # Only include boot_disk when we have a valid id
-                        if boot_disk_msg is not None and boot_disk_id:
-                            spec_kwargs["boot_disk"] = boot_disk_msg
-                        spec = InstanceSpec(**spec_kwargs)
-                        req = CreateInstanceRequest(metadata=metadata, spec=spec)
-                        try:
-                            op = isc.create(req).wait()
-                            try:
-                                op.sync_wait()
-                            except Exception:
-                                pass
-                            created = True
-                            print(f"[VMManager] Instance {inst_name} created successfully via SDK")
-
-                            # Wait for VM to be fully ready with public IP assigned
-                            print(f"[VMManager] Waiting for {inst_name} to receive public IP...")
-                            import time
-
-                            max_ip_wait = 60  # Wait up to 60 seconds for IP assignment
-                            ip_wait_interval = 5
-                            for attempt in range(max_ip_wait // ip_wait_interval):
-                                time.sleep(ip_wait_interval)
-                                vm_ip = self.get_vm_public_ip(inst_name)
-                                if vm_ip:
-                                    print(f"[VMManager] {inst_name} ready with IP: {vm_ip}")
-                                    vm_ips[inst_name] = vm_ip
-                                    break
-                                if attempt < (max_ip_wait // ip_wait_interval) - 1:
-                                    print(
-                                        f"[VMManager] Waiting for IP assignment ({(attempt + 1) * ip_wait_interval}s elapsed)..."
-                                    )
-                            else:
-                                print(
-                                    f"[VMManager] Warning: {inst_name} did not receive public IP within {max_ip_wait}s"
-                                )
-                        except Exception as e:
-                            print(f"[VMManager] InstanceServiceClient create failed: {e}")
-                            import traceback
-
-                            traceback.print_exc()
-                    except Exception as e:
-                        print(f"[VMManager] InstanceServiceClient initialization failed: {e}")
-                        pass
-                    if not created:
-                        if instance_api is not None and hasattr(instance_api, "create"):
-                            print(f"[VMManager] Creating instance {inst_name} ...")
-                            try:
-                                try:
-                                    instance_api.create(**inst_req)  # type: ignore[arg-type]
-                                except TypeError:
-                                    instance_api.create(inst_req)
-                                created = True
-                            except Exception as e:
-                                print(f"[VMManager] create failed for {inst_name}: {e}")
-                        if not created:
-                            print(f"[VMManager] Would create with payload: {inst_req}")
             else:
-                # Fallback logging only
-                for i in range(spec.instance_count):
-                    inst_name = f"{spec.name}-{i}"
-                    inst_ips = spec.external_ips[i] if i < len(spec.external_ips) else []
-                    pub_ip = inst_ips[0] if inst_ips else None
-                    print(
-                        f"[VMManager] ensure instance {inst_name} pub_ip={pub_ip} platform={spec.vm_spec.get('platform')} subnet=vpngw-subnet"
-                    )
+                self._log_scaffold_mode_instances(spec)
         except Exception as e:
             print(f"[VMManager] ensure_group failed: {e}. Proceeding in scaffold mode.")
 
         return vm_ips
+
+    @staticmethod
+    def _normalize_ip_value(ip_value: str | None) -> str | None:
+        if not ip_value:
+            return None
+        return str(ip_value).strip().split("/")[0]
+
+    def _allocation_ip_from_obj(self, alloc_obj: t.Any) -> str | None:
+        try:
+            spec_obj = getattr(alloc_obj, "spec", None)
+            if spec_obj:
+                ipv4_public = getattr(spec_obj, "ipv4_public", None)
+                if ipv4_public:
+                    address = getattr(ipv4_public, "address", None)
+                    if address:
+                        return self._normalize_ip_value(str(address))
+            status = getattr(alloc_obj, "status", None)
+            details = getattr(status, "details", None) if status else None
+            cidr = getattr(details, "allocated_cidr", None) if details else None
+            if cidr:
+                return self._normalize_ip_value(str(cidr))
+        except Exception:
+            return None
+        return None
+
+    def _list_allocations_by_ip(self, alloc_client: t.Any) -> dict[str, t.Any]:
+        try:
+            from nebius.api.nebius.vpc.v1 import ListAllocationsRequest  # type: ignore
+
+            response = alloc_client.list(ListAllocationsRequest(parent_id=self.project_id or ""))
+            items = []
+            if hasattr(response, "items"):
+                items = response.items
+            elif hasattr(response, "__iter__"):
+                items = list(response)
+
+            mapping: dict[str, t.Any] = {}
+            for allocation in items:
+                ip_value = self._allocation_ip_from_obj(allocation)
+                if ip_value:
+                    mapping[ip_value] = allocation
+            return mapping
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _allocation_state(alloc_obj: t.Any) -> str | None:
+        for path in (
+            ("status", "state"),
+            ("status", "state_name"),
+            ("status", "lifecycle_state"),
+            ("status", "phase"),
+            ("status", "details", "state"),
+            ("status", "details", "lifecycle_state"),
+        ):
+            current = alloc_obj
+            for key in path:
+                current = getattr(current, key, None)
+                if current is None:
+                    break
+            if not current:
+                continue
+            try:
+                if hasattr(current, "value"):
+                    current = current.value
+            except Exception:
+                pass
+            return str(current)
+        return None
+
+    @staticmethod
+    def _allocation_is_attached(alloc_obj: t.Any) -> bool:
+        for path in (
+            ("status", "details", "attachments"),
+            ("status", "attachments"),
+            ("status", "details", "attached_to"),
+            ("status", "details", "instance_id"),
+            ("status", "details", "resource_id"),
+            ("spec", "ipv4_public", "attached_to"),
+            ("spec", "ipv4_public", "instance_id"),
+        ):
+            current = alloc_obj
+            for key in path:
+                current = getattr(current, key, None)
+                if current is None:
+                    break
+            if not current:
+                continue
+            if isinstance(current, list):
+                return len(current) > 0
+            return True
+        return False
+
+    def _wait_for_allocation_release(
+        self,
+        alloc_client: t.Any,
+        desired_ip: str,
+    ) -> dict[str, t.Any]:
+        print(
+            f"[VMManager] Allocation {desired_ip} appears to be releasing. Waiting up to 10s before retry..."
+        )
+        allocations_by_ip: dict[str, t.Any] = {}
+        for _ in range(5):
+            time.sleep(2)
+            allocations_by_ip = self._list_allocations_by_ip(alloc_client)
+            alloc_obj = allocations_by_ip.get(desired_ip)
+            if alloc_obj is None:
+                break
+            state = self._allocation_state(alloc_obj)
+            if not state or not any(token in state.lower() for token in ("delet", "releas", "pending")):
+                break
+        return allocations_by_ip
+
+    @staticmethod
+    def _desired_requested_ip(
+        desired_matrix: list[list[str]],
+        instance_index: int,
+        nic_index: int,
+    ) -> str | None:
+        if instance_index >= len(desired_matrix):
+            return None
+        row = desired_matrix[instance_index]
+        if not isinstance(row, list) or nic_index >= len(row):
+            return None
+        return row[nic_index] if row[nic_index] else None
+
+    def _resolve_prepared_public_allocation(
+        self,
+        alloc_client: t.Any,
+        subnet_id: str,
+        alloc_name: str,
+        desired_ip: str | None,
+        allocations_by_ip: dict[str, t.Any],
+    ) -> tuple[t.Any | None, dict[str, t.Any]]:
+        alloc_obj = None
+
+        if desired_ip and desired_ip in allocations_by_ip:
+            alloc_obj = allocations_by_ip.get(desired_ip)
+            state = self._allocation_state(alloc_obj)
+            if state and any(token in state.lower() for token in ("delet", "releas", "pending")):
+                allocations_by_ip = self._wait_for_allocation_release(alloc_client, desired_ip)
+                alloc_obj = allocations_by_ip.get(desired_ip)
+
+            before_ip = self._allocation_ip_from_obj(alloc_obj)
+            alloc_obj = self._migrate_allocation_to_vpngw_subnet(
+                alloc_client,
+                alloc_obj,
+                subnet_id,
+                desired_ip,
+            )
+            after_ip = self._allocation_ip_from_obj(alloc_obj) if alloc_obj else None
+            if before_ip and after_ip and before_ip != after_ip:
+                print(
+                    f"[VMManager] Note: Requested IP {before_ip} could not be migrated; continuing with allocation in its existing subnet (IP {after_ip})."
+                )
+            if alloc_obj and self._allocation_is_attached(alloc_obj):
+                print(f"[VMManager] Warning: Requested IP {desired_ip} is already attached to a resource.")
+
+        by_name = self._get_allocation_by_name(alloc_client, alloc_name)
+        if by_name is not None:
+            alloc_obj = by_name
+
+        if alloc_obj is None:
+            return None, allocations_by_ip
+
+        alloc_id = self._resource_id(alloc_obj)
+        alloc_ip = self.get_allocation_ip(alloc_id) if alloc_id else None
+        alloc_obj = self._migrate_allocation_to_vpngw_subnet(
+            alloc_client,
+            alloc_obj,
+            subnet_id,
+            alloc_ip,
+        )
+        if desired_ip and alloc_ip and alloc_ip != desired_ip:
+            print(
+                f"[VMManager] Note: Allocation {alloc_name} has IP {alloc_ip} which differs from requested {desired_ip}."
+            )
+
+        return alloc_obj, allocations_by_ip
+
+    def _create_prepared_public_allocation(
+        self,
+        alloc_client: t.Any,
+        subnet_id: str,
+        alloc_name: str,
+        desired_ip: str | None,
+        allocations_by_ip: dict[str, t.Any],
+    ) -> t.Any:
+        from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
+        from nebius.api.nebius.vpc.v1 import (  # type: ignore
+            AllocationSpec,
+            CreateAllocationRequest,
+            IPv4PublicAllocationSpec,
+        )
+
+        request = CreateAllocationRequest(
+            metadata=ResourceMetadata(
+                name=alloc_name,
+                parent_id=self.project_id or "",
+            ),
+            spec=AllocationSpec(
+                ipv4_public=IPv4PublicAllocationSpec(
+                    subnet_id=subnet_id,
+                    cidr=desired_ip if desired_ip else "/32",
+                )
+            ),
+        )
+        try:
+            operation = alloc_client.create(request).wait()
+            self._sync_operation(operation)
+        except Exception as e:
+            error_text = str(e).lower()
+            if "already exists" not in error_text and "duplicate" not in error_text:
+                if desired_ip and ("immutable" in error_text or "subnet" in error_text):
+                    print(
+                        f"[VMManager] Requested IP {desired_ip} could not be allocated in the gateway subnet: {e}"
+                    )
+                else:
+                    raise RuntimeError(
+                        f"Failed to create public IP allocation {alloc_name}: {e}"
+                    ) from e
+
+        alloc_obj = self._get_allocation_by_name(alloc_client, alloc_name)
+        if alloc_obj is not None:
+            return alloc_obj
+        if desired_ip and desired_ip in allocations_by_ip:
+            return allocations_by_ip[desired_ip]
+        raise RuntimeError(f"Failed to fetch allocation {alloc_name} after creation.")
+
+    def _resolve_prepared_public_ip(
+        self,
+        alloc_client: t.Any,
+        alloc_obj: t.Any,
+        alloc_name: str,
+        desired_ip: str | None,
+    ) -> str:
+        alloc_id = self._resource_id(alloc_obj)
+        if not alloc_id:
+            if desired_ip:
+                return desired_ip
+            raise RuntimeError(f"Allocation {alloc_name} returned no id.")
+
+        alloc_ip = self._allocation_ip_from_obj(alloc_obj)
+        if alloc_ip:
+            return alloc_ip
+
+        from nebius.api.nebius.vpc.v1 import GetAllocationRequest  # type: ignore
+
+        for _ in range(3):
+            alloc_ip = self.get_allocation_ip(alloc_id)
+            if alloc_ip:
+                return alloc_ip
+            try:
+                alloc_obj = alloc_client.get(GetAllocationRequest(id=alloc_id)).wait()
+            except Exception:
+                alloc_obj = None
+            alloc_ip = self._allocation_ip_from_obj(alloc_obj) if alloc_obj else None
+            if alloc_ip:
+                return alloc_ip
+            time.sleep(1)
+
+        if desired_ip:
+            return desired_ip
+        raise RuntimeError(
+            f"Allocation {alloc_name} returned no IP address (API may be delayed)."
+        )
 
     def prepare_network(
         self,
@@ -2113,7 +2337,7 @@ class VMManager:
         allocate_ips: bool = True,
         desired_external_ips: list[list[str]] | None = None,
     ) -> list[list[str]]:
-        """Ensure vpngw-subnet exists and optionally reserve public IP allocations.
+        """Ensure the dedicated gateway subnet exists and optionally reserve public IP allocations.
 
         Returns a list of public IPs per instance (list-of-lists, NIC order).
         """
@@ -2123,9 +2347,9 @@ class VMManager:
 
         subnet_id = self._ensure_vpngw_subnet(client, spec)
         if not subnet_id:
-            raise RuntimeError("Failed to resolve or create vpngw-subnet.")
+            raise RuntimeError("Failed to resolve or create the dedicated gateway subnet.")
 
-        # Ensure route table exists for vpngw-subnet (idempotent).
+        # Ensure route table exists for the dedicated gateway subnet (idempotent).
         self._ensure_vpngw_route_table(client, subnet_id)
 
         if not allocate_ips:
@@ -2139,15 +2363,7 @@ class VMManager:
             )
             num_nics = 1
 
-        from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
-        from nebius.api.nebius.vpc.v1 import (  # type: ignore
-            AllocationServiceClient,
-            AllocationSpec,
-            CreateAllocationRequest,
-            GetAllocationByNameRequest,
-            GetAllocationRequest,
-            IPv4PublicAllocationSpec,
-        )
+        from nebius.api.nebius.vpc.v1 import AllocationServiceClient  # type: ignore
 
         alloc_client = AllocationServiceClient(client)
 
@@ -2156,94 +2372,7 @@ class VMManager:
             isinstance(row, list) and any(str(ip or "").strip() for ip in row)
             for row in desired_matrix
         )
-
-        def _normalize_ip(ip_val: str | None) -> str | None:
-            if not ip_val:
-                return None
-            return str(ip_val).strip().split("/")[0]
-
-        def _allocation_ip_from_obj(alloc_obj: t.Any) -> str | None:
-            try:
-                spec_obj = getattr(alloc_obj, "spec", None)
-                if spec_obj:
-                    ipv4_public = getattr(spec_obj, "ipv4_public", None)
-                    if ipv4_public:
-                        addr = getattr(ipv4_public, "address", None)
-                        if addr:
-                            return _normalize_ip(str(addr))
-                status = getattr(alloc_obj, "status", None)
-                details = getattr(status, "details", None) if status else None
-                cidr = getattr(details, "allocated_cidr", None) if details else None
-                if cidr:
-                    return _normalize_ip(str(cidr))
-            except Exception:
-                return None
-            return None
-
-        def _list_allocations_by_ip() -> dict[str, t.Any]:
-            try:
-                from nebius.api.nebius.vpc.v1 import ListAllocationsRequest  # type: ignore
-
-                resp = alloc_client.list(ListAllocationsRequest(parent_id=self.project_id or ""))
-                items = []
-                if hasattr(resp, "items"):
-                    items = resp.items
-                elif hasattr(resp, "__iter__"):
-                    items = list(resp)
-                mapping: dict[str, t.Any] = {}
-                for alloc in items:
-                    ip_val = _allocation_ip_from_obj(alloc)
-                    if ip_val:
-                        mapping[ip_val] = alloc
-                return mapping
-            except Exception:
-                return {}
-
-        def _allocation_state(alloc_obj: t.Any) -> str | None:
-            for path in (
-                ("status", "state"),
-                ("status", "state_name"),
-                ("status", "lifecycle_state"),
-                ("status", "phase"),
-                ("status", "details", "state"),
-                ("status", "details", "lifecycle_state"),
-            ):
-                cur = alloc_obj
-                for key in path:
-                    cur = getattr(cur, key, None)
-                    if cur is None:
-                        break
-                if cur:
-                    try:
-                        if hasattr(cur, "value"):
-                            cur = cur.value
-                    except Exception:
-                        pass
-                    return str(cur)
-            return None
-
-        def _allocation_is_attached(alloc_obj: t.Any) -> bool:
-            for path in (
-                ("status", "details", "attachments"),
-                ("status", "attachments"),
-                ("status", "details", "attached_to"),
-                ("status", "details", "instance_id"),
-                ("status", "details", "resource_id"),
-                ("spec", "ipv4_public", "attached_to"),
-                ("spec", "ipv4_public", "instance_id"),
-            ):
-                cur = alloc_obj
-                for key in path:
-                    cur = getattr(cur, key, None)
-                    if cur is None:
-                        break
-                if cur:
-                    if isinstance(cur, list):
-                        return len(cur) > 0
-                    return True
-            return False
-
-        allocations_by_ip: dict[str, t.Any] = _list_allocations_by_ip() if desired_any else {}
+        allocations_by_ip = self._list_allocations_by_ip(alloc_client) if desired_any else {}
 
         allocated_ips: list[list[str]] = []
 
@@ -2254,534 +2383,378 @@ class VMManager:
             for nic_index in range(num_nics):
                 nic_name = f"eth{nic_index}"
                 alloc_name = f"{inst_name}-{nic_name}-ip"
-                alloc_obj = None
-                desired_ip = None
-                if inst_index < len(desired_matrix):
-                    row = desired_matrix[inst_index]
-                    if isinstance(row, list) and nic_index < len(row):
-                        desired_ip = _normalize_ip(str(row[nic_index])) if row[nic_index] else None
-
-                # If user provided a desired IP, try to find existing allocation by IP first
-                if desired_ip and desired_ip in allocations_by_ip:
-                    alloc_obj = allocations_by_ip.get(desired_ip)
-                    state = _allocation_state(alloc_obj)
-                    if state and any(
-                        token in state.lower() for token in ("delet", "releas", "pending")
-                    ):
-                        print(
-                            f"[VMManager] Allocation {desired_ip} appears to be releasing ({state}). "
-                            "Waiting up to 10s before retry..."
-                        )
-                        for _ in range(5):
-                            time.sleep(2)
-                            allocations_by_ip = _list_allocations_by_ip()
-                            alloc_obj = allocations_by_ip.get(desired_ip)
-                            if not alloc_obj:
-                                break
-                            state = _allocation_state(alloc_obj)
-                            if not state or not any(
-                                token in state.lower() for token in ("delet", "releas", "pending")
-                            ):
-                                break
-                    before_ip = _allocation_ip_from_obj(alloc_obj)
-                    alloc_obj = self._migrate_allocation_to_vpngw_subnet(
-                        alloc_client, alloc_obj, subnet_id, desired_ip
-                    )
-                    after_ip = _allocation_ip_from_obj(alloc_obj) if alloc_obj else None
-                    if before_ip and after_ip and before_ip != after_ip:
-                        print(
-                            f"[VMManager] Note: Requested IP {before_ip} could not be migrated; "
-                            f"continuing with allocation in its existing subnet (IP {after_ip})."
-                        )
-                    if alloc_obj and _allocation_is_attached(alloc_obj):
-                        print(
-                            f"[VMManager] Warning: Requested IP {desired_ip} is already attached to a resource."
-                        )
-
-                # Try by-name (idempotent)
-                try:
-                    alloc_obj = alloc_client.get_by_name(
-                        GetAllocationByNameRequest(
-                            parent_id=self.project_id or "",
-                            name=alloc_name,
-                        )
-                    ).wait()
-                except Exception:
-                    alloc_obj = None
-
-                # If found, ensure it belongs to vpngw-subnet
-                if alloc_obj is not None:
-                    alloc_id = getattr(alloc_obj, "id", None) or getattr(
-                        getattr(alloc_obj, "metadata", None), "id", None
-                    )
-                    alloc_ip = self.get_allocation_ip(str(alloc_id)) if alloc_id else None
-                    alloc_obj = self._migrate_allocation_to_vpngw_subnet(
-                        alloc_client, alloc_obj, subnet_id, alloc_ip
-                    )
-                    if desired_ip and alloc_ip and alloc_ip != desired_ip:
-                        print(
-                            f"[VMManager] Note: Allocation {alloc_name} has IP {alloc_ip} "
-                            f"which differs from requested {desired_ip}."
-                        )
-
-                # Create if missing
-                if alloc_obj is None:
-                    req = CreateAllocationRequest(
-                        metadata=ResourceMetadata(
-                            name=alloc_name,
-                            parent_id=self.project_id or "",
-                        ),
-                        spec=AllocationSpec(
-                            ipv4_public=IPv4PublicAllocationSpec(
-                                subnet_id=subnet_id,
-                                cidr=desired_ip if desired_ip else "/32",
-                            )
-                        ),
-                    )
-                    try:
-                        op = alloc_client.create(req).wait()
-                        try:
-                            op.sync_wait()
-                        except Exception:
-                            pass
-                    except Exception as e:
-                        err_str = str(e).lower()
-                        if "already exists" in err_str or "duplicate" in err_str:
-                            # Best-effort: allocation likely exists; try to refetch by name
-                            pass
-                        elif desired_ip and ("immutable" in err_str or "subnet" in err_str):
-                            print(
-                                f"[VMManager] Requested IP {desired_ip} could not be allocated in vpngw-subnet: {e}"
-                            )
-                        else:
-                            raise RuntimeError(
-                                f"Failed to create public IP allocation {alloc_name}: {e}"
-                            ) from e
-
-                    try:
-                        alloc_obj = alloc_client.get_by_name(
-                            GetAllocationByNameRequest(
-                                parent_id=self.project_id or "",
-                                name=alloc_name,
-                            )
-                        ).wait()
-                    except Exception as e:
-                        if desired_ip and desired_ip in allocations_by_ip:
-                            alloc_obj = allocations_by_ip[desired_ip]
-                        else:
-                            raise RuntimeError(
-                                f"Failed to fetch allocation {alloc_name} after creation: {e}"
-                            ) from e
-
-                alloc_id = getattr(alloc_obj, "id", None) or getattr(
-                    getattr(alloc_obj, "metadata", None), "id", None
+                desired_ip = self._normalize_ip_value(
+                    self._desired_requested_ip(desired_matrix, inst_index, nic_index)
                 )
-                if not alloc_id:
-                    if desired_ip:
-                        inst_ips.append(desired_ip)
-                        continue
-                    raise RuntimeError(f"Allocation {alloc_name} returned no id.")
-
-                alloc_ip = _allocation_ip_from_obj(alloc_obj)
-                if not alloc_ip:
-                    for _ in range(3):
-                        alloc_ip = self.get_allocation_ip(str(alloc_id))
-                        if alloc_ip:
-                            break
-                        try:
-                            alloc_obj = alloc_client.get(GetAllocationRequest(id=alloc_id)).wait()
-                        except Exception:
-                            alloc_obj = None
-                        alloc_ip = _allocation_ip_from_obj(alloc_obj) if alloc_obj else None
-                        if alloc_ip:
-                            break
-                        time.sleep(1)
-                if not alloc_ip:
-                    if desired_ip:
-                        inst_ips.append(desired_ip)
-                        continue
-                    raise RuntimeError(
-                        f"Allocation {alloc_name} returned no IP address (API may be delayed)."
+                alloc_obj, allocations_by_ip = self._resolve_prepared_public_allocation(
+                    alloc_client,
+                    subnet_id,
+                    alloc_name,
+                    desired_ip,
+                    allocations_by_ip,
+                )
+                if alloc_obj is None:
+                    alloc_obj = self._create_prepared_public_allocation(
+                        alloc_client,
+                        subnet_id,
+                        alloc_name,
+                        desired_ip,
+                        allocations_by_ip,
                     )
 
-                inst_ips.append(alloc_ip)
+                inst_ips.append(
+                    self._resolve_prepared_public_ip(
+                        alloc_client,
+                        alloc_obj,
+                        alloc_name,
+                        desired_ip,
+                    )
+                )
 
             allocated_ips.append(inst_ips)
 
         return allocated_ips
 
-    def _ensure_vpngw_subnet(self, client: t.Any, spec: GatewayGroupSpec) -> str | None:
-        """Ensure a single gateway subnet named 'vpngw-subnet' (/24) exists in the chosen network.
+    def _resolve_gateway_network(
+        self,
+        client: t.Any,
+        spec: GatewayGroupSpec,
+    ) -> tuple[t.Any, str, str, t.Any]:
+        from nebius.api.nebius.vpc.v1 import (  # type: ignore
+            GetNetworkByNameRequest,
+            GetNetworkRequest,
+            ListNetworksRequest,
+            NetworkServiceClient,
+            SubnetServiceClient,
+        )
 
-        Resolution:
-        - If vm_spec.network_id is provided, use that VPC network.
-        - Else, find network by name 'default-network'.
-        - Find subnet by name 'vpngw-subnet' in that network; create if missing with CIDR /24.
-        Returns the subnet_id or None if not available.
-        """
-        if client is None:
-            return None
-        try:
-            # Use explicit service clients from the Nebius SDK
-            from nebius.api.nebius.vpc.v1 import (
-                CreateSubnetRequest,
-                GetNetworkByNameRequest,
-                GetNetworkRequest,
-                GetPoolRequest,
-                GetSubnetByNameRequest,
-                IPv4PrivateSubnetPools,
-                ListSubnetsByNetworkRequest,
-                NetworkServiceClient,
-                PoolServiceClient,
-                SubnetCidr,
-                SubnetPool,
-                SubnetServiceClient,
-            )  # type: ignore
-
-            net_client = NetworkServiceClient(client)  # type: ignore
-            # Network resolution priority:
-            # 1. Use network_id from YAML if provided
-            # 2. Check for default-network in project
-            # 3. If only ONE custom network exists, use it
-            # 4. Error if multiple custom networks exist (ambiguous)
-            network_id = spec.vm_spec.get("network_id")
-            network_obj = None
-
-            if network_id:
-                # User explicitly specified network_id
-                try:
-                    network_obj = net_client.get(GetNetworkRequest(id=network_id)).wait()
-                    print(f"[VMManager] Using network from YAML: {network_id}")
-                except Exception as e:
-                    raise RuntimeError(
-                        f"[VMManager] Specified network_id '{network_id}' not found: {e}"
-                    ) from e
-            else:
-                # Auto-discover network
-                print("[VMManager] No network_id in YAML, auto-discovering network...")
-
-                # Try default-network first
-                try:
-                    network_obj = net_client.get_by_name(
-                        GetNetworkByNameRequest(
-                            parent_id=self.project_id or "", name="default-network"
-                        )
-                    ).wait()
-                    print("[VMManager] Found default-network, using it")
-                except Exception:
-                    network_obj = None
-
-                # If no default, list all networks and use single custom network
-                if network_obj is None:
-                    try:
-                        from nebius.api.nebius.vpc.v1 import ListNetworksRequest
-
-                        networks_list = net_client.list(
-                            ListNetworksRequest(parent_id=self.project_id or "")
-                        ).wait()
-                        networks = getattr(networks_list, "items", []) or []
-
-                        if len(networks) == 0:
-                            raise RuntimeError(
-                                "[VMManager] No networks found in project. "
-                                "Please create a network or specify network_id in YAML."
-                            )
-                        elif len(networks) == 1:
-                            network_obj = networks[0]
-                            net_name = getattr(
-                                getattr(network_obj, "metadata", None),
-                                "name",
-                                "unknown",
-                            )
-                            print(f"[VMManager] Found single custom network: {net_name}, using it")
-                        else:
-                            # Multiple networks - ambiguous
-                            net_names = [
-                                getattr(getattr(n, "metadata", None), "name", "unknown")
-                                for n in networks
-                            ]
-                            raise RuntimeError(
-                                f"[VMManager] Multiple networks found in project: {', '.join(net_names)}. "
-                                "Please specify which network to use by setting network_id in your YAML config."
-                            )
-                    except RuntimeError:
-                        raise
-                    except Exception as e:
-                        raise RuntimeError(f"[VMManager] Failed to list networks: {e}") from e
+        net_client = NetworkServiceClient(client)  # type: ignore
+        network_obj = None
+        if spec.network_id:
+            try:
+                network_obj = net_client.get(GetNetworkRequest(id=spec.network_id)).wait()
+                print(f"[VMManager] Using network from YAML: {spec.network_id}")
+            except Exception as e:
+                raise RuntimeError(
+                    f"[VMManager] Specified network_id '{spec.network_id}' not found: {e}"
+                ) from e
+        else:
+            print("[VMManager] No gateway_group.network_id in YAML, auto-discovering network...")
+            try:
+                network_obj = net_client.get_by_name(
+                    GetNetworkByNameRequest(
+                        parent_id=self.project_id or "",
+                        name="default-network",
+                    )
+                ).wait()
+                print("[VMManager] Found default-network, using it")
+            except Exception:
+                network_obj = None
 
             if network_obj is None:
-                raise RuntimeError(
-                    "[VMManager] Could not resolve network. "
-                    "Please specify network_id in your YAML config."
-                )
-
-            subnet_client = SubnetServiceClient(client)  # type: ignore
-            # Derive network_id robustly from object (supports metadata.id)
-            net_id = getattr(network_obj, "id", None) or getattr(
-                getattr(network_obj, "metadata", None), "id", None
-            )
-            net_name = (
-                getattr(getattr(network_obj, "metadata", None), "name", None) or "default-network"
-            )
-            subnet_obj = None
-            subnet_needs_recreation = False
-            try:
-                # First attempt: direct by-name lookup (project-scoped)
-                candidate = subnet_client.get_by_name(
-                    GetSubnetByNameRequest(parent_id=self.project_id or "", name="vpngw-subnet")
-                ).wait()
-                # Validate it belongs to the resolved network
-                if candidate is not None:
-                    c_spec = getattr(candidate, "spec", None)
-                    c_net_id = getattr(c_spec, "network_id", None)
-                    if c_net_id == net_id:
-                        # Check if subnet has correct settings (use_network_pools should be False)
-                        sp = getattr(c_spec, "ipv4_private_pools", None)
-                        use_network_pools = getattr(sp, "use_network_pools", True)
-
-                        if use_network_pools:
-                            print(
-                                "[VMManager] WARNING: Found existing vpngw-subnet with use_network_pools=true"
-                            )
-                            print(
-                                "[VMManager] This subnet will inherit the network's /13 pool instead of using a dedicated /24"
-                            )
-                            print(
-                                "[VMManager] Subnet needs to be deleted and recreated to fix this"
-                            )
-                            subnet_needs_recreation = True
-
-                        subnet_obj = candidate
-                        # Log existing subnet CIDR for debugging
-                        if c_spec and sp:
-                            sp_pools = getattr(sp, "pools", []) or []
-                            for sp_pool in sp_pools:
-                                sp_cidrs = getattr(sp_pool, "cidrs", []) or []
-                                for c in sp_cidrs:
-                                    existing_cidr = getattr(c, "cidr", None)
-                                    existing_max_mask = getattr(c, "max_mask_length", None)
-                                    print(
-                                        f"[VMManager] Found existing vpngw-subnet with CIDR: {existing_cidr} (max_mask_length: {existing_max_mask}, use_network_pools: {use_network_pools})"
-                                    )
-                # If by-name found but network mismatch, search within the target network
-                if subnet_obj is None:
-                    lst = subnet_client.list_by_network(
-                        ListSubnetsByNetworkRequest(network_id=net_id)
+                try:
+                    networks = net_client.list(
+                        ListNetworksRequest(parent_id=self.project_id or "")
                     ).wait()
-                    items = getattr(lst, "items", []) or []
-                    for s in items:
-                        if getattr(getattr(s, "metadata", None), "name", None) == "vpngw-subnet":
-                            subnet_obj = s
-                            # Check use_network_pools setting
-                            s_spec = getattr(s, "spec", None)
-                            sp = getattr(s_spec, "ipv4_private_pools", None)
-                            use_network_pools = getattr(sp, "use_network_pools", True)
-                            if use_network_pools:
-                                subnet_needs_recreation = True
-                            break
-            except Exception:
-                subnet_obj = None
+                    items = getattr(networks, "items", []) or []
+                    if not items:
+                        raise RuntimeError(
+                            "[VMManager] No networks found in project. "
+                            "Please create a network or specify gateway_group.network_id in YAML."
+                        )
+                    if len(items) == 1:
+                        network_obj = items[0]
+                        net_name = getattr(
+                            getattr(network_obj, "metadata", None),
+                            "name",
+                            "unknown",
+                        )
+                        print(f"[VMManager] Found single custom network: {net_name}, using it")
+                    else:
+                        net_names = [
+                            getattr(getattr(network, "metadata", None), "name", "unknown")
+                            for network in items
+                        ]
+                        raise RuntimeError(
+                            f"[VMManager] Multiple networks found in project: {', '.join(net_names)}. "
+                            "Please specify which network to use by setting gateway_group.network_id in your YAML config."
+                        )
+                except RuntimeError:
+                    raise
+                except Exception as e:
+                    raise RuntimeError(f"[VMManager] Failed to list networks: {e}") from e
 
-            # If subnet exists but has wrong settings, warn the user
-            if subnet_obj is not None and subnet_needs_recreation:
-                raise ValueError(
-                    "vpngw-subnet exists but has use_network_pools=true (wrong setting). "
-                    "This causes the subnet to inherit the network's /13 CIDR instead of using a dedicated /24. "
-                    "Please delete the vpngw-subnet manually and run this command again to recreate it correctly. "
-                    "Note: You must first delete any VMs attached to this subnet."
+        if network_obj is None:
+            raise RuntimeError(
+                "[VMManager] Could not resolve network. "
+                "Please specify gateway_group.network_id in your YAML config."
+            )
+
+        network_id = self._resource_id(network_obj)
+        if not network_id:
+            raise RuntimeError("[VMManager] Resolved network is missing an id.")
+
+        network_name = (
+            getattr(getattr(network_obj, "metadata", None), "name", None) or "default-network"
+        )
+        subnet_client = SubnetServiceClient(client)  # type: ignore
+        return network_obj, network_id, network_name, subnet_client
+
+    def _find_gateway_subnet(
+        self,
+        subnet_client: t.Any,
+        network_id: str,
+        subnet_name: str,
+    ) -> t.Any | None:
+        try:
+            from nebius.api.nebius.vpc.v1 import (  # type: ignore
+                GetSubnetByNameRequest,
+                ListSubnetsByNetworkRequest,
+            )
+
+            candidate = subnet_client.get_by_name(
+                GetSubnetByNameRequest(parent_id=self.project_id or "", name=subnet_name)
+            ).wait()
+            if candidate is not None:
+                candidate_network_id = getattr(getattr(candidate, "spec", None), "network_id", None)
+                if candidate_network_id == network_id:
+                    return candidate
+
+            subnets = subnet_client.list_by_network(
+                ListSubnetsByNetworkRequest(network_id=network_id)
+            ).wait()
+            for subnet in getattr(subnets, "items", []) or []:
+                if getattr(getattr(subnet, "metadata", None), "name", None) == subnet_name:
+                    return subnet
+        except Exception:
+            return None
+        return None
+
+    def _validate_existing_gateway_subnet(
+        self,
+        subnet_obj: t.Any,
+        subnet_name: str,
+        desired_network: ipaddress.IPv4Network | None,
+        desired_prefix_length: int,
+    ) -> ipaddress.IPv4Network:
+        subnet_networks = self._extract_explicit_subnet_networks(subnet_obj)
+        subnet_spec = getattr(subnet_obj, "spec", None)
+        subnet_uses_network_pools = bool(
+            getattr(getattr(subnet_spec, "ipv4_private_pools", None), "use_network_pools", False)
+        )
+        if subnet_uses_network_pools:
+            raise ValueError(
+                f"{subnet_name} exists but uses parent network pools (use_network_pools=true). "
+                "Dedicated gateway subnets must use explicit private pools. "
+                "Please delete the subnet manually and rerun the command."
+            )
+        if len(subnet_networks) != 1:
+            raise ValueError(
+                f"{subnet_name} must have exactly one explicit private CIDR. "
+                f"Found {len(subnet_networks)} explicit CIDR(s): "
+                + ", ".join(str(network) for network in subnet_networks)
+            )
+
+        existing_network = subnet_networks[0]
+        if desired_network and existing_network != desired_network:
+            raise ValueError(
+                f"{subnet_name} exists with CIDR {existing_network}, but the config requires "
+                f"{desired_network}. Delete the subnet manually and rerun the command."
+            )
+        if not desired_network and existing_network.prefixlen != desired_prefix_length:
+            raise ValueError(
+                f"{subnet_name} exists with prefix /{existing_network.prefixlen}, but the "
+                f"config requires /{desired_prefix_length}. Delete the subnet manually and rerun the command."
+            )
+        return existing_network
+
+    def _list_existing_subnet_networks(
+        self,
+        subnet_client: t.Any,
+        network_id: str,
+    ) -> list[ipaddress.IPv4Network]:
+        from nebius.api.nebius.vpc.v1 import ListSubnetsByNetworkRequest  # type: ignore
+
+        subnets = subnet_client.list_by_network(
+            ListSubnetsByNetworkRequest(network_id=network_id)
+        ).wait()
+        existing_networks: list[ipaddress.IPv4Network] = []
+        for subnet in getattr(subnets, "items", []) or []:
+            existing_networks.extend(self._extract_explicit_subnet_networks(subnet))
+        return existing_networks
+
+    def _select_gateway_subnet_cidr(
+        self,
+        client: t.Any,
+        network_obj: t.Any,
+        subnet_client: t.Any,
+        network_id: str,
+        desired_network: ipaddress.IPv4Network | None,
+        desired_prefix_length: int,
+        network_name: str,
+    ) -> str:
+        existing_subnet_networks = self._list_existing_subnet_networks(subnet_client, network_id)
+        if desired_network is not None:
+            if any(desired_network.overlaps(existing) for existing in existing_subnet_networks):
+                raise RuntimeError(
+                    f"Requested gateway subnet CIDR {desired_network} overlaps with an existing explicit subnet in the target network."
                 )
+            self._ensure_network_pool_contains_cidr(client, network_obj, desired_network)
+            return str(desired_network)
+
+        network_pool_cidrs: list[ipaddress.IPv4Network] = []
+        for _, pool_obj in self._get_network_private_pools(client, network_obj):
+            for pool_cidr_obj in getattr(getattr(pool_obj, "spec", None), "cidrs", []) or []:
+                pool_cidr = getattr(pool_cidr_obj, "cidr", None)
+                if not pool_cidr:
+                    continue
+                pool_network = _parse_ipv4_network(str(pool_cidr))
+                if pool_network is not None:
+                    network_pool_cidrs.append(pool_network)
+
+        cidr_to_use = self._find_first_free_subnet_cidr(
+            network_pool_cidrs,
+            existing_subnet_networks,
+            prefix_length=desired_prefix_length,
+        )
+        if cidr_to_use:
+            return cidr_to_use
+
+        raise RuntimeError(
+            f"Failed to calculate a free /{desired_prefix_length} gateway subnet in network '{network_name}'. "
+            "Extend the network pool or specify gateway_group.subnet.cidr explicitly."
+        )
+
+    def _create_gateway_subnet(
+        self,
+        client: t.Any,
+        subnet_client: t.Any,
+        subnet_name: str,
+        network_id: str,
+        cidr_to_use: str,
+    ) -> t.Any | None:
+        from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
+        from nebius.api.nebius.vpc.v1 import (  # type: ignore
+            CreateSubnetRequest,
+            IPv4PrivateSubnetPools,
+            ListSubnetsByNetworkRequest,
+            SubnetCidr,
+            SubnetPool,
+            SubnetSpec,
+        )
+
+        print(f"[VMManager] Creating gateway subnet '{subnet_name}' with CIDR {cidr_to_use}")
+
+        ipv4_private_pools = IPv4PrivateSubnetPools()
+        ipv4_private_pools.pools.extend([SubnetPool(cidrs=[SubnetCidr(cidr=cidr_to_use)])])
+        ipv4_private_pools.use_network_pools = False
+
+        request = CreateSubnetRequest(
+            metadata=ResourceMetadata(
+                name=subnet_name,
+                parent_id=self.project_id or "",
+            ),
+            spec=SubnetSpec(
+                network_id=network_id,
+                ipv4_private_pools=ipv4_private_pools,
+            ),
+        )
+        operation = subnet_client.create(request)
+        self._sync_operation(operation)
+
+        time.sleep(5)
+        refreshed = subnet_client.list_by_network(
+            ListSubnetsByNetworkRequest(network_id=network_id)
+        ).wait()
+        for subnet in getattr(refreshed, "items", []) or []:
+            if getattr(getattr(subnet, "metadata", None), "name", None) != subnet_name:
+                continue
+
+            print(f"[VMManager] ✓ Subnet '{subnet_name}' created successfully")
+            subnet_spec = getattr(subnet, "spec", None)
+            private_pools = getattr(subnet_spec, "ipv4_private_pools", None) if subnet_spec else None
+            if private_pools and getattr(private_pools, "use_network_pools", True):
+                raise RuntimeError(
+                    f"[VMManager] CRITICAL: Subnet '{subnet_name}' was created but use_network_pools=true! "
+                    "This means the subnet will inherit the network's private pool instead of using the specified CIDR. "
+                    "This is a bug in the Nebius API - it ignored our explicit use_network_pools=False setting. "
+                    "The subnet has been created incorrectly and must be deleted manually."
+                )
+
+            self._create_vpngw_route_table(client, subnet, network_id)
+            return subnet
+
+        return None
+
+    def _ensure_vpngw_subnet(self, client: t.Any, spec: GatewayGroupSpec) -> str | None:
+        """Ensure the configured dedicated gateway subnet exists in the chosen network."""
+        if client is None:
+            return None
+
+        subnet_settings = self._gateway_subnet_settings(spec)
+        subnet_name = str(subnet_settings["name"])
+        desired_cidr = subnet_settings["cidr"]
+        desired_prefix_length = int(subnet_settings["prefix_length"])
+
+        try:
+            desired_network = _parse_ipv4_network(desired_cidr) if desired_cidr else None
+            if desired_cidr and desired_network is None:
+                raise ValueError(
+                    f"gateway_group.subnet.cidr must be a valid IPv4 CIDR, got {desired_cidr!r}."
+                )
+            network_obj, network_id, network_name, subnet_client = self._resolve_gateway_network(
+                client,
+                spec,
+            )
+            subnet_obj = self._find_gateway_subnet(subnet_client, network_id, subnet_name)
+            if subnet_obj is not None:
+                existing_network = self._validate_existing_gateway_subnet(
+                    subnet_obj,
+                    subnet_name,
+                    desired_network,
+                    desired_prefix_length,
+                )
+                print(f"[VMManager] Found existing gateway subnet '{subnet_name}' ({existing_network})")
 
             if subnet_obj is None:
-                # Attempt to create the subnet in default-network.
-                # If the project has no IP space, the create call will fail and we
-                # will surface a clear error to the user.
                 try:
-                    print("[VMManager] Creating gateway subnet 'vpngw-subnet' ...")
-                    from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
-                    from nebius.api.nebius.vpc.v1 import SubnetSpec  # type: ignore
-
-                    # Derive first-free /24 from the network's private pool CIDR(s)
-                    # 1) Read network's private pool id
-                    try:
-                        # network_obj.spec.ipv4_private_pools.pools[0].id
-                        net_spec = getattr(network_obj, "spec", None)
-                        pools_obj = (
-                            getattr(
-                                getattr(net_spec, "ipv4_private_pools", None),
-                                "pools",
-                                [],
-                            )
-                            or []
-                        )
-                        private_pool_id = None
-                        if pools_obj:
-                            private_pool_id = getattr(pools_obj[0], "id", None)
-                    except Exception:
-                        private_pool_id = None
-                    cidr_to_use = None
-                    if private_pool_id:
-                        try:
-                            pool_client = PoolServiceClient(client)  # type: ignore
-                            pool_obj = pool_client.get(GetPoolRequest(id=private_pool_id)).wait()
-                            # Read pool CIDRs (take the first)
-                            pool_spec = getattr(pool_obj, "spec", None)
-                            pool_cidrs = getattr(pool_spec, "cidrs", []) or []
-                            pool_cidr_str = None
-                            if pool_cidrs:
-                                pool_cidr_str = getattr(pool_cidrs[0], "cidr", None)
-                            import ipaddress as _ip
-
-                            if pool_cidr_str:
-                                pool_net = _ip.ip_network(pool_cidr_str)
-                                print(f"[VMManager] Network pool CIDR: {pool_cidr_str}")
-                                # Collect existing subnets in this network
-                                try:
-                                    existing = []
-                                    lst = subnet_client.list_by_network(
-                                        ListSubnetsByNetworkRequest(network_id=net_id)
-                                    ).wait()
-                                    items = getattr(lst, "items", []) or []
-                                    print(
-                                        f"[VMManager] Found {len(items)} existing subnet(s) in network"
-                                    )
-                                    for s in items:
-                                        s_spec = getattr(s, "spec", None)
-                                        sp = getattr(s_spec, "ipv4_private_pools", None)
-                                        sp_pools = getattr(sp, "pools", []) or []
-                                        for sp_pool in sp_pools:
-                                            sp_cidrs = getattr(sp_pool, "cidrs", []) or []
-                                            for c in sp_cidrs:
-                                                cstr = getattr(c, "cidr", None)
-                                                if cstr:
-                                                    try:
-                                                        existing.append(_ip.ip_network(cstr))
-                                                        print(
-                                                            f"[VMManager]   - Existing subnet: {cstr}"
-                                                        )
-                                                    except Exception:
-                                                        pass
-                                except Exception as list_err:
-                                    print(
-                                        f"[VMManager] Warning: Could not list existing subnets: {list_err}"
-                                    )
-                                    existing = []
-                                # Iterate /24s within pool until first unused
-                                print(
-                                    f"[VMManager] Calculating first free /24 from {pool_cidr_str}..."
-                                )
-                                found_count = 0
-                                for candidate in pool_net.subnets(new_prefix=24):
-                                    overlap = any(candidate.overlaps(e) for e in existing)
-                                    if not overlap:
-                                        cidr_to_use = str(candidate)
-                                        print(f"[VMManager] Selected free /24: {cidr_to_use}")
-                                        break
-                                    found_count += 1
-                                    if found_count <= 3:
-                                        print(
-                                            f"[VMManager]   - Skipping {candidate} (overlaps with existing)"
-                                        )
-                        except Exception as calc_err:
-                            print(f"[VMManager] Warning: Failed to calculate free /24: {calc_err}")
-                            cidr_to_use = None
-
-                    # Validate we have a proper CIDR
-                    if not cidr_to_use or cidr_to_use == "/24":
-                        raise RuntimeError(
-                            f"[VMManager] Failed to calculate a free /24 CIDR in network '{net_name}'. "
-                            "The network pool may be exhausted or misconfigured. "
-                            "Please manually create 'vpngw-subnet' with a /24 CIDR or add more IP space to the network."
-                        )
-
-                    print(f"[VMManager] Creating vpngw-subnet with CIDR {cidr_to_use}")
-
-                    # Build SubnetSpec with ipv4_private_pools assigning the calculated /24
-                    # CRITICAL: Per API docs, use_network_pools defaults to TRUE
-                    # We MUST explicitly set it to False when providing explicit pools
-                    # Otherwise subnet inherits network's /13 pool instead of our /24
-
-                    ipv4_private_pools = IPv4PrivateSubnetPools()
-                    ipv4_private_pools.pools.extend(
-                        [SubnetPool(cidrs=[SubnetCidr(cidr=cidr_to_use)])]
+                    print(f"[VMManager] Creating gateway subnet '{subnet_name}' ...")
+                    cidr_to_use = self._select_gateway_subnet_cidr(
+                        client,
+                        network_obj,
+                        subnet_client,
+                        network_id,
+                        desired_network,
+                        desired_prefix_length,
+                        network_name,
                     )
-                    ipv4_private_pools.use_network_pools = False
-
-                    req = CreateSubnetRequest(
-                        metadata=ResourceMetadata(
-                            name="vpngw-subnet",
-                            parent_id=self.project_id or "",
-                        ),
-                        spec=SubnetSpec(
-                            network_id=net_id,
-                            ipv4_private_pools=ipv4_private_pools,
-                        ),
+                    subnet_obj = self._create_gateway_subnet(
+                        client,
+                        subnet_client,
+                        subnet_name,
+                        network_id,
+                        cidr_to_use,
                     )
-
-                    op = subnet_client.create(req)
-
-                    # Wait for operation to complete
-                    try:
-                        op.sync_wait()
-                    except AttributeError:
-                        # Older SDK version might not have sync_wait
-                        op.wait()
-
-                    # Add delay to allow backend to fully commit the changes
-                    import time
-
-                    time.sleep(5)
-
-                    # Fetch the subnet to verify
-                    subnet_obj = subnet_client.get_by_name(
-                        GetSubnetByNameRequest(parent_id=self.project_id or "", name="vpngw-subnet")
-                    ).wait()
-
-                    if subnet_obj:
-                        print("[VMManager] ✓ Subnet 'vpngw-subnet' created successfully")
-
-                        # Verify use_network_pools is False to prevent /13 inheritance
-                        s_spec = getattr(subnet_obj, "spec", None)
-                        if s_spec:
-                            sp = getattr(s_spec, "ipv4_private_pools", None)
-                            if sp:
-                                use_net_pools_actual = getattr(sp, "use_network_pools", True)
-                                if use_net_pools_actual:
-                                    raise RuntimeError(
-                                        "[VMManager] CRITICAL: Subnet was created but use_network_pools=true! "
-                                        "This means the subnet will inherit the network's /13 pool instead of using the specified /24. "
-                                        "This is a bug in the Nebius API - it ignored our explicit use_network_pools=False setting. "
-                                        "The subnet has been created incorrectly and must be deleted manually."
-                                    )
-
-                    # Create dedicated route table for vpngw-subnet
-                    if subnet_obj is not None:
-                        self._create_vpngw_route_table(client, subnet_obj, net_id)
                 except Exception as e:
                     raise RuntimeError(
-                        f"[VMManager] Failed to create 'vpngw-subnet' in {net_name}: {e}. "
-                        "Please provide a network_id with sufficient IP space or pre-create the subnet."
+                        f"[VMManager] Failed to create '{subnet_name}' in {network_name}: {e}. "
+                        "Please provide gateway_group.network_id with sufficient IP space or pre-create the subnet."
                     ) from e
 
-            # Extract subnet id robustly: some SDKs expose id under metadata.id
-            if subnet_obj is not None:
-                sid = getattr(subnet_obj, "id", None)
-                if not sid:
-                    sid = getattr(getattr(subnet_obj, "metadata", None), "id", None)
-                return sid
-            return None
+            return self._resource_id(subnet_obj)
         except Exception as e:
             print(f"[VMManager] Error in _ensure_vpngw_subnet: {e}")
             return None
 
     def _ensure_vpngw_route_table(self, client: t.Any, subnet_id: str | None) -> None:
-        """Ensure route table exists for vpngw-subnet and is properly configured.
+        """Ensure the gateway subnet has a dedicated route table.
 
         This method is idempotent - it checks if RT exists, creates if missing.
         Called both during subnet creation and when updating existing VMs.
 
         Args:
             client: Nebius SDK client
-            subnet_id: Subnet ID for vpngw-subnet
+            subnet_id: Subnet ID for the dedicated gateway subnet
         """
         if not client or not subnet_id:
             return
@@ -2805,6 +2778,7 @@ class VMManager:
 
             # Check if subnet has route table attached
             subnet_spec = getattr(subnet_obj, "spec", None)
+            subnet_name = getattr(getattr(subnet_obj, "metadata", None), "name", None) or "gateway subnet"
             rt_id = getattr(subnet_spec, "route_table_id", None) if subnet_spec else None
 
             if rt_id:
@@ -2813,7 +2787,7 @@ class VMManager:
                     rt_client = RouteTableServiceClient(client)  # type: ignore
                     rt_obj = rt_client.get(GetRouteTableRequest(id=rt_id)).wait()
                     rt_name = getattr(getattr(rt_obj, "metadata", None), "name", None) or "unknown"
-                    print(f"[VMManager] Route table '{rt_name}' already attached to vpngw-subnet")
+                    print(f"[VMManager] Route table '{rt_name}' already attached to {subnet_name}")
                     return
                 except Exception:
                     # RT ID exists but not found - will recreate
@@ -2830,26 +2804,26 @@ class VMManager:
             self._create_vpngw_route_table(client, subnet_obj, network_id)
 
         except Exception as e:
-            print(f"[VMManager] Error ensuring route table for vpngw-subnet: {e}")
+            print(f"[VMManager] Error ensuring route table for gateway subnet: {e}")
 
     def _migrate_allocation_to_vpngw_subnet(
         self,
         alloc_client: t.Any,
         alloc_obj: t.Any,
         target_subnet_id: str | None,
-        desired_ip: str,
+        desired_ip: str | None,
     ) -> t.Any:
-        """Migrate public IP allocation to vpngw-subnet if it's in a different subnet.
+        """Migrate a public IP allocation to the gateway subnet if it's in a different subnet.
 
         This enables users to:
-        1. Rename old vpngw-subnet (e.g., to vpngw-subnet-old)
-        2. Run 'apply' to create fresh vpngw-subnet
+        1. Rename the old gateway subnet
+        2. Run 'apply' to create a fresh gateway subnet
         3. Automatically move public IP allocations to new subnet
 
         Args:
             alloc_client: AllocationServiceClient
             alloc_obj: Existing allocation object
-            target_subnet_id: Target vpngw-subnet ID
+            target_subnet_id: Target gateway subnet ID
             desired_ip: IP address for logging
 
         Returns:
@@ -2873,7 +2847,7 @@ class VMManager:
 
             # If already in target subnet, no migration needed
             if current_subnet_id == target_subnet_id:
-                print(f"[VMManager] Allocation {desired_ip} already in vpngw-subnet")
+                print(f"[VMManager] Allocation {desired_ip} already in the gateway subnet")
                 return alloc_obj
 
             from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
@@ -2901,7 +2875,7 @@ class VMManager:
                 # Fallback: let API keep the same IP by using /32 request semantics
                 ip_cidr = "/32"
 
-            print(f"[VMManager] Attempting to migrate allocation {ip_cidr} to vpngw-subnet...")
+            print(f"[VMManager] Attempting to migrate allocation {ip_cidr} to the gateway subnet...")
 
             # Get allocation ID and metadata
             if not alloc_id:
@@ -2949,7 +2923,7 @@ class VMManager:
                     from nebius.api.nebius.vpc.v1 import GetAllocationRequest  # type: ignore
 
                     updated_alloc = alloc_client.get(GetAllocationRequest(id=alloc_id)).wait()
-                    print(f"[VMManager] ✓ Migrated allocation {ip_cidr} to vpngw-subnet")
+                    print(f"[VMManager] ✓ Migrated allocation {ip_cidr} to the gateway subnet")
                     return updated_alloc
                 except Exception as e:
                     print(f"[VMManager] Migration completed but could not refetch: {e}")
@@ -2963,10 +2937,10 @@ class VMManager:
                     # Nebius API forbids changing allocation.subnet_id; fail fast with guidance.
                     raise RuntimeError(
                         f"Public IP allocation {alloc_name or alloc_id} is bound to subnet {current_subnet_id} "
-                        f"and cannot be migrated to vpngw-subnet {target_subnet_id}. "
+                        f"and cannot be migrated to gateway subnet {target_subnet_id}. "
                         "Options: (1) deploy the gateway in the original subnet/network so the IP matches, "
                         "or (2) remove the IP from external_ips to allow a new allocation, "
-                        "or (3) release the old allocation and re-request the same IP in vpngw-subnet "
+                        "or (3) release the old allocation and re-request the same IP in the gateway subnet "
                         "(best effort only)."
                     ) from e
                 print(f"[VMManager] Could not migrate allocation {ip_cidr}: {e}")
@@ -2979,11 +2953,11 @@ class VMManager:
             return alloc_obj
 
     def _create_vpngw_route_table(self, client: t.Any, subnet_obj: t.Any, network_id: str) -> None:
-        """Create a dedicated route table for vpngw-subnet with default egress route.
+        """Create a dedicated route table for the gateway subnet with default egress route.
 
         Args:
             client: Nebius SDK client
-            subnet_obj: Subnet object for vpngw-subnet
+            subnet_obj: Subnet object for the dedicated gateway subnet
             network_id: Network ID containing the subnet
         """
         try:
@@ -3000,7 +2974,8 @@ class VMManager:
                 route_pb2,  # type: ignore
             )  # type: ignore
 
-            rt_name = "vpngw-subnet-routing-table"
+            subnet_name = getattr(getattr(subnet_obj, "metadata", None), "name", None) or "vpngw-subnet"
+            rt_name = self._gateway_route_table_name(subnet_name)
             rt_client = RouteTableServiceClient(client)  # type: ignore
             route_client = RouteServiceClient(client)  # type: ignore
             subnet_client = SubnetServiceClient(client)  # type: ignore
@@ -3014,7 +2989,7 @@ class VMManager:
                 print("[VMManager] Cannot create route table: subnet_id not found")
                 return
 
-            print(f"[VMManager] Creating dedicated route table '{rt_name}' for vpngw-subnet...")
+            print(f"[VMManager] Creating dedicated route table '{rt_name}' for {subnet_name}...")
 
             # Create route table (handle ALREADY_EXISTS)
             rt_id = None
@@ -3116,14 +3091,14 @@ class VMManager:
                         ),
                     )
                     subnet_client.update(update_req).wait()
-                    print(f"[VMManager] ✓ Attached route table '{rt_name}' to vpngw-subnet")
+                    print(f"[VMManager] ✓ Attached route table '{rt_name}' to {subnet_name}")
                 else:
                     print("[VMManager] Warning: Could not get subnet metadata/spec for update")
             except Exception as e:
                 print(f"[VMManager] Warning: Could not attach route table to subnet: {e}")
 
         except Exception as e:
-            print(f"[VMManager] Error creating route table for vpngw-subnet: {e}")
+            print(f"[VMManager] Error creating route table for gateway subnet: {e}")
 
     def get_instance_ssh_target(self, instance_index: int) -> str:
         # Placeholder fallback if external IP wasn't available in plan

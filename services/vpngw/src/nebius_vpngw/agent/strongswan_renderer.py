@@ -186,7 +186,7 @@ class StrongSwanRenderer:
         _, _, interface_endpoints = self._collect_tunnel_state(cfg)
         return interface_endpoints
 
-    def render_and_apply(self, cfg: dict[str, Any]) -> None:
+    def render_and_apply(self, cfg: dict[str, Any]) -> list[dict[str, Any]]:
         """Render strongSwan config based on resolved per-VM YAML.
 
         Uses swanctl (VICI) to load per-tunnel connections with if_id_in/out for deterministic

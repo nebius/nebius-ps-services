@@ -150,7 +150,10 @@ def reload_firewall() -> bool:
         return False
 
 
-def update_firewall_from_config(cfg: dict[str, Any], mgmt_cidrs: list[str] = None) -> None:
+def update_firewall_from_config(
+    cfg: dict[str, Any],
+    mgmt_cidrs: list[str] | None = None,
+) -> None:
     """Update firewall configuration from gateway config.
 
     This is the main entry point for firewall management. It:

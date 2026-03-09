@@ -97,7 +97,7 @@ These features are not currently implemented but may be considered for future en
 
 - Ubuntu LTS with strongSwan, FRR, and Python
 - Runs `nebius-vpngw-agent` systemd service
-- Dedicated subnet (`vpngw-subnet`) for isolation
+- Dedicated gateway subnet (default name: `vpngw-subnet`) for isolation
 
 **Agent:**
 
@@ -124,18 +124,18 @@ These features are not currently implemented but may be considered for future en
 
 ### VPC and Subnets
 
-- One VPC network selected via `network_id` (optional; see resolution logic below)
-- Dedicated `vpngw-subnet` (/24 CIDR) created automatically if missing
-- Dedicated route table (`vpngw-subnet-routing-table`) with default egress route
+- One VPC network selected via `gateway_group.network_id` (optional; see resolution logic below)
+- Dedicated gateway subnet created automatically if missing
+- Dedicated route table (`<gateway-subnet-name>-routing-table`) with default egress route
 - Workload subnets remain separate for security isolation
 
 **Network Resolution Logic:**
 
-When `network_id` is not specified in the YAML config, the system auto-discovers the network using this priority order:
+When `gateway_group.network_id` is not specified in the YAML config, the system auto-discovers the network using this priority order:
 
 1. **Default network:** Looks for a network named `default-network` in the project
 2. **Single custom network:** If no default network exists and exactly ONE custom network is found, uses that network
-3. **Multiple networks:** If multiple custom networks exist (rare scenario), the deployment **fails** with an error asking the user to explicitly specify `network_id` in the YAML
+3. **Multiple networks:** If multiple custom networks exist (rare scenario), the deployment **fails** with an error asking the user to explicitly specify `gateway_group.network_id` in the YAML
 
 This intelligent resolution handles the common case (default network or single VPC) while preventing ambiguity when multiple networks exist.
 
@@ -150,7 +150,8 @@ This intelligent resolution handles the common case (default network or single V
 - **IP hygiene:** Controlled CIDR for gateway infrastructure, separate from workloads
 - **Policy separation:** Distinct egress controls without affecting application subnets
 - **Operational safety:** Safer VM recreations with reduced ARP/ND noise
-- **Capacity:** Orchestrator auto-creates `vpngw-subnet` as the first free /24 carved from the target VPC’s private pool. If no /24 is available, deployment fails with guidance to add more IP space. This supports multi-VM gateway groups.
+- **Capacity:** The gateway subnet can be pinned to an explicit private CIDR or auto-carved from the target VPC’s private pool. Auto-carving uses `gateway_group.subnet.prefix_length` (default `/24`). Explicit CIDRs can come from extended RFC1918 ranges after the network pool is updated.
+- **Control-plane safety:** `add-routes-local` and `list-routes-local` target workload subnets whose effective CIDRs overlap `gateway.local_prefixes`. For explicit-pool subnets this comes from `spec.ipv4_private_pools`; for inherited-pool subnets (`use_network_pools=true`) it falls back to the effective CIDRs exposed in subnet status so shared-pool workloads can still receive VPN routes.
 
 ### Public IP Allocations
 
@@ -163,7 +164,7 @@ Configuration shape: `external_ips[instance_index][nic_index]` → IP string (fl
 - Insufficient: Create missing allocations
 - Auto naming: `{instance}-eth{N}-ip`
 
-**Pre-allocation workflow:** `nebius-vpngw prep-network` can create `vpngw-subnet` and reserve public IPs before peer setup. If `gateway_group.external_ips` is empty, it allocates new IPs and writes them into the YAML. If `external_ips` is set, it verifies and allocates those specific IPs when needed. If an IP was just released, it waits briefly (~10s) and retries before failing.
+**Pre-allocation workflow:** `nebius-vpngw prep-network` can create the configured gateway subnet and reserve public IPs before peer setup. It is safe to rerun. If `gateway_group.external_ips` is empty, it allocates new IPs and writes them into the YAML. If `external_ips` is set, it verifies and allocates those specific IPs when needed. If an IP was just released, it waits briefly (~10s) and retries before failing.
 
 **Preservation:** Allocations are kept and reattached during VM recreation. No downtime for IP addresses, only for tunnel establishment.
 
@@ -197,7 +198,7 @@ external_ips:
 
 Single file `*.config.yaml` with four main sections:
 
-1. **gateway_group:** VM infrastructure (instance count, specs, networking, IPs)
+1. **gateway_group:** VM infrastructure (instance count, specs, gateway subnet, IPs)
 2. **gateway:** Routing identity (ASN, local prefixes, quotas)
 3. **defaults:** Global VPN behavior (crypto, DPD, BGP settings)
 4. **connections:** Peer gateways with tunnel definitions
@@ -268,6 +269,7 @@ nebius-vpngw create-config <config-file>
 ```
 
 Creates new configuration file from embedded template with comprehensive comments. Warns if filename doesn't end with `.config.yaml` (security best practice). Use `--force` to overwrite existing files.
+If the target file already contains that exact template, rerunning the command is a no-op and exits successfully.
 
 **Configuration Validation:**
 
@@ -283,7 +285,8 @@ Validates configuration against schema without deployment. Performs full validat
 nebius-vpngw prep-network --local-config-file <file>
 ```
 
-Ensures `vpngw-subnet` and route table exist. If `gateway_group.external_ips` is empty, reserves public IPs, prints them, and writes them into the YAML.
+Ensures the configured gateway subnet and route table exist. If `gateway_group.external_ips` is empty, reserves public IPs, prints them, and writes them into the YAML.
+If `gateway_group.network_id` is set, the command targets that existing Nebius VPC; otherwise it uses the same auto-discovery logic as `apply`. The command is safe to rerun.
 
 **Deployment:**
 
@@ -292,6 +295,7 @@ nebius-vpngw apply --local-config-file <file>
 ```
 
 Deploy or update gateway. Automatically validates schema before deployment. Typical flow: parse args → load YAML → validate schema → ensure network/subnet → ensure VMs + allocations → push config via SSH → reload agent → reconcile routes (static mode).
+The command is safe to rerun and reuses matching infrastructure state.
 
 Flags: `--recreate-gw`, `--project-id`, `--zone`
 
@@ -305,6 +309,7 @@ nebius-vpngw create-from-peer-config <output-config-file> \
 
 Creates a new YAML config by merging vendor peer configs into the embedded template.
 No deployment is performed; review and validate before running `apply`.
+If the generated output already matches the target file, rerunning the command is a no-op and exits successfully.
 
 **Status & Monitoring:**
 
@@ -946,13 +951,15 @@ Creates VPC route table entries for remote networks pointing to gateway VMs.
   - Filters out locally originated routes (next-hop 0.0.0.0)
   - Filters out overlapping local networks (from `gateway.local_prefixes`)
 - **Static mode**: Uses `remote_prefixes` from YAML configuration
-- Finds subnets matching `gateway.local_prefixes`
+- Finds workload subnets whose effective CIDRs match `gateway.local_prefixes`
 - Resolves gateway VM private IP allocation via Compute API
 - Creates/reuses custom route tables for matching subnets
   - If subnet uses default route table: Creates custom RT and copies existing routes
   - Warns user about route table separation
+- Includes inherited parent-network subnets (`use_network_pools=true`) when their effective/status CIDRs overlap `gateway.local_prefixes`
 - Creates route entries: destination = remote prefix, next-hop = gateway private IP
 - Implements idempotency (skips existing routes)
+- Reconciles stale FRR/BGP advertisement state before reporting so `list-routes-local` and `add-routes-local` reflect the current YAML
 
 **2. List local routes (Nebius VPC → Remote):**
 
@@ -960,14 +967,15 @@ Creates VPC route table entries for remote networks pointing to gateway VMs.
 nebius-vpngw list-routes-local --local-config-file <file>
 ```
 
-Lists VPC route table entries for subnets matching `gateway.local_prefixes`.
+Lists VPC route table entries for workload subnets whose effective CIDRs match `gateway.local_prefixes`.
 
 **Implementation Details:**
 
-- Queries VPC API for subnets matching `gateway.local_prefixes`
+- Queries VPC API for workload subnets whose explicit or inherited effective CIDRs match `gateway.local_prefixes`
 - Displays route table ID and routes for each subnet
 - Shows destination CIDR and next-hop (resolves allocation IDs to IP addresses)
 - Uses Rich tables for formatted output
+- Detects stale live BGP advertisements, reloads the current resolved config on the gateway if needed, and then reports the refreshed advertisement state
 
 **3. List remote routes (Remote → Nebius):**
 
@@ -1760,11 +1768,29 @@ python -m build --wheel
 nebius-vpngw apply --local-config-file test.config.yaml
 ```
 
+### Release Workflow
+
+- `publish-release.sh` is the local helper for this service.
+- `vpngw-ci.yml` is reserved for pull requests and manual CI runs.
+- `vpngw-release.yml` is the dedicated tag-driven release workflow for `nebius-vpngw-v*`.
+
+Release sequence:
+
+1. Run `./publish-release.sh --prep X.Y.Z` on your working branch to update `CHANGELOG.md`, commit it, and push the branch.
+2. Merge the release preparation PR into `main`.
+3. Run `./publish-release.sh --publish X.Y.Z` from a clean, synced `main`.
+4. The pushed tag triggers `vpngw-release.yml`, which checks out the tagged commit from `services/vpngw`, runs lint/tests, builds the wheel, verifies the artifact version, and creates the GitHub Release.
+
+The local publish script does not build or upload release artifacts itself. Its job is only to create and push the annotated service tag.
+
 ## Project Structure
 
 ```text
 ├── nebius-vpngw.config.yaml              # User configuration (git-ignored)
-├── release.sh                            # One-shot release helper (commit/tag/build/publish with gh)
+├── publish-release.sh                    # Release helper (prep changelog commit, then create/push tag)
+├── .github/workflows/
+│   ├── vpngw-ci.yml                      # PR/manual CI workflow
+│   └── vpngw-release.yml                 # Tag-driven GitHub Release workflow
 ├── src/nebius_vpngw/
 │   ├── __main__.py                       # Python module entry point
 │   ├── cli.py                            # CLI orchestrator (nebius-vpngw command)
@@ -1901,7 +1927,7 @@ sudo ufw status verbose
 
 ### Subnet CIDR Issues
 
-**Problem:** When creating the `vpngw-subnet`, it may show the network's parent CIDR (e.g., `/13`) instead of the intended `/24` in the console, even though the code calculates and requests the correct CIDR.
+**Problem:** When creating the dedicated gateway subnet, Nebius may show the network's parent CIDR (for example, `/13`) instead of the intended explicit subnet CIDR in the console, even though the code calculates and requests the correct CIDR.
 
 **Root Cause:** The Nebius VPC API field `use_network_pools` defaults to `true`. When `true`, the subnet inherits the network's address pool instead of using the explicitly specified CIDR. The issue was caused by a subtle bug in subnet creation:
 

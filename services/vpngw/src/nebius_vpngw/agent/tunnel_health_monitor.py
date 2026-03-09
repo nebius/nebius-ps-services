@@ -240,8 +240,6 @@ class TunnelHealthMonitor:
             )
 
             if result.returncode == 0 and result.stdout:
-                import json
-
                 data = json.loads(result.stdout)
                 peer_data = data.get(peer_ip, {})
                 return peer_data.get("bgpState") or peer_data.get("state")
@@ -341,27 +339,100 @@ class TunnelHealthMonitor:
 
         try:
             if shutil.which("swanctl"):
-                result = subprocess.run(
-                    ["swanctl", "--terminate", "--ike", tunnel_name],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-                if result.returncode != 0:
-                    print(f"[TunnelMonitor] ⚠ Failed to terminate {tunnel_name}: {result.stderr}")
-                    print("[TunnelMonitor] ⚠ Proceeding with tunnel initiate anyway")
+                def _command_output(result: subprocess.CompletedProcess[str]) -> str:
+                    return (result.stderr or result.stdout or "").strip()
+
+                def _wait_for_established(timeout_seconds: int = 12) -> bool:
+                    deadline = time.monotonic() + timeout_seconds
+                    while time.monotonic() < deadline:
+                        if self.get_ipsec_tunnel_status(tunnel_name) == "ESTABLISHED":
+                            return True
+                        time.sleep(1)
+                    return self.get_ipsec_tunnel_status(tunnel_name) == "ESTABLISHED"
+
+                try:
+                    load_result = subprocess.run(
+                        ["swanctl", "--load-all"],
+                        capture_output=True,
+                        text=True,
+                        timeout=15,
+                    )
+                    if load_result.returncode != 0:
+                        print(
+                            f"[TunnelMonitor] ⚠ Failed to reload swanctl config for {tunnel_name}: "
+                            f"{_command_output(load_result)}"
+                        )
+                except subprocess.TimeoutExpired:
+                    print(
+                        f"[TunnelMonitor] ⚠ Timeout reloading swanctl config for {tunnel_name}; proceeding with restart"
+                    )
+
+                terminate_attempts = [
+                    (
+                        ["swanctl", "--terminate", "--child", tunnel_name, "--timeout", "5"],
+                        "CHILD_SA",
+                    ),
+                    (
+                        ["swanctl", "--terminate", "--ike", tunnel_name, "--timeout", "5"],
+                        "IKE_SA",
+                    ),
+                ]
+
+                terminated = False
+                for terminate_cmd, label in terminate_attempts:
+                    result = subprocess.run(
+                        terminate_cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+                    if result.returncode == 0:
+                        terminated = True
+                        break
+
+                    output = _command_output(result)
+                    if output:
+                        print(
+                            f"[TunnelMonitor] ⚠ Failed to terminate {label} for {tunnel_name}: {output}"
+                        )
+
+                if not terminated:
+                    print(
+                        "[TunnelMonitor] ⚠ Proceeding with tunnel initiate even though termination did not confirm"
+                    )
 
                 time.sleep(2)
 
-                result = subprocess.run(
-                    ["swanctl", "--initiate", "--child", tunnel_name],
-                    capture_output=True,
-                    text=True,
-                    timeout=20,
-                )
-                if result.returncode != 0:
-                    print(f"[TunnelMonitor] ⚠ Failed to initiate {tunnel_name}: {result.stderr}")
-                    return False
+                for attempt in range(1, 4):
+                    result = subprocess.run(
+                        ["swanctl", "--initiate", "--child", tunnel_name, "--timeout", "20"],
+                        capture_output=True,
+                        text=True,
+                        timeout=25,
+                    )
+                    if result.returncode == 0 and _wait_for_established():
+                        print(f"[TunnelMonitor] ✓ Successfully restarted tunnel: {tunnel_name}")
+                        return True
+
+                    if _wait_for_established(timeout_seconds=4):
+                        print(
+                            f"[TunnelMonitor] ✓ Tunnel {tunnel_name} recovered after initiate attempt {attempt}"
+                        )
+                        return True
+
+                    output = _command_output(result)
+                    if output:
+                        print(
+                            f"[TunnelMonitor] ⚠ Failed to initiate {tunnel_name} "
+                            f"(attempt {attempt}/3): {output}"
+                        )
+                    if attempt < 3:
+                        print(
+                            f"[TunnelMonitor] ⚠ Retrying tunnel initiate for {tunnel_name} in 3s"
+                        )
+                        time.sleep(3)
+
+                return False
             else:
                 # Down the tunnel
                 result = subprocess.run(

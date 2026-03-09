@@ -1,8 +1,10 @@
 import os
 import platform
 import re
+import shlex
 import shutil
 import sys
+import textwrap
 import time
 import typing as t
 from pathlib import Path
@@ -30,10 +32,52 @@ app = typer.Typer(
     help="""
 Nebius VM-based VPN Gateway orchestrator
 
-By default, commands look for 'nebius-vpngw.config.yaml' in your current directory.
-Use --local-config-file with any command to specify a different config file.
+Most commands look for 'nebius-vpngw.config.yaml' in your current directory.
+Use --local-config-file for status and mutating commands.
+Use positional file arguments for create-config and validate-config.
 """,
 )
+
+_HELP_COMMAND_ORDER = [
+    "create-config",
+    "prep-network",
+    "validate-config",
+    "apply",
+    "status",
+    "add-routes-local",
+    "list-routes-local",
+    "list-routes-remote",
+    "restart-tunnel",
+    "failover",
+    "failback",
+    "create-from-peer-config",
+    "destroy",
+]
+
+
+def _registered_command_name(command_info: t.Any) -> str:
+    """Resolve the CLI command name Typer will show in help output."""
+    if command_info.name:
+        return command_info.name
+
+    callback = getattr(command_info, "callback", None)
+    if callback is None:
+        return ""
+
+    return callback.__name__.replace("_", "-")
+
+
+def _apply_help_command_order() -> None:
+    """Sort registered commands to keep help output in a stable workflow order."""
+    order_index = {name: idx for idx, name in enumerate(_HELP_COMMAND_ORDER)}
+    indexed_commands = list(enumerate(app.registered_commands))
+    indexed_commands.sort(
+        key=lambda item: (
+            order_index.get(_registered_command_name(item[1]), len(_HELP_COMMAND_ORDER)),
+            item[0],
+        )
+    )
+    app.registered_commands[:] = [command for _, command in indexed_commands]
 
 
 def _version_callback(value: bool) -> bool:
@@ -83,9 +127,273 @@ def _build_ssh_base_cmd(key_path: Path | None) -> list[str]:
             f"UserKnownHostsFile={_ssh_null_device()}",
             "-o",
             "ConnectTimeout=10",
+            "-o",
+            "LogLevel=ERROR",
         ]
     )
     return cmd
+
+
+def _build_remote_tunnel_restart_script() -> str:
+    """Return a self-contained remote Python helper for tunnel restart.
+
+    The restart command must not rely on the version of nebius-vpngw currently
+    installed on the gateway VM. This inline helper is executed over SSH so the
+    local CLI always uses the latest restart logic.
+    """
+    return textwrap.dedent(
+        """
+        from __future__ import annotations
+
+        import argparse
+        import re
+        import shutil
+        import subprocess
+        import sys
+        import time
+        from pathlib import Path
+
+        CONFIG_PATH = Path("/etc/nebius-vpngw/config-resolved.yaml")
+
+
+        def _command_output(result: subprocess.CompletedProcess[str]) -> str:
+            return (result.stderr or result.stdout or "").strip()
+
+
+        def _run(cmd: list[str], *, timeout: int) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+
+
+        def _get_ipsec_tunnel_status(tunnel_name: str) -> str:
+            if shutil.which("swanctl"):
+                try:
+                    result = _run(["swanctl", "--list-sas"], timeout=5)
+                except subprocess.TimeoutExpired:
+                    return "UNKNOWN"
+                if result.returncode == 0 and result.stdout:
+                    for line in result.stdout.splitlines():
+                        if tunnel_name in line and "ESTABLISHED" in line.upper():
+                            return "ESTABLISHED"
+                        if tunnel_name in line and "CONNECTING" in line.upper():
+                            return "CONNECTING"
+                return "DOWN"
+
+            try:
+                result = _run(["ipsec", "status", tunnel_name], timeout=5)
+            except subprocess.TimeoutExpired:
+                return "UNKNOWN"
+
+            if result.returncode != 0:
+                return "DOWN"
+
+            output = result.stdout.lower()
+            if "established" in output:
+                return "ESTABLISHED"
+            if "connecting" in output or "negotiating" in output:
+                return "CONNECTING"
+            return "DOWN"
+
+
+        def _wait_for_established(tunnel_name: str, timeout_seconds: int = 12) -> bool:
+            deadline = time.monotonic() + timeout_seconds
+            while time.monotonic() < deadline:
+                if _get_ipsec_tunnel_status(tunnel_name) == "ESTABLISHED":
+                    return True
+                time.sleep(1)
+            return _get_ipsec_tunnel_status(tunnel_name) == "ESTABLISHED"
+
+
+        def _list_configured_tunnels() -> list[str]:
+            names: list[str] = []
+
+            try:
+                import yaml
+
+                if CONFIG_PATH.exists():
+                    cfg = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8")) or {}
+                    idx = 0
+                    for conn in cfg.get("connections") or []:
+                        for tun in conn.get("tunnels") or []:
+                            if str(tun.get("ha_role", "active")).lower() == "disable":
+                                continue
+                            names.append(str(tun.get("name") or f"tunnel{idx}"))
+                            idx += 1
+            except Exception:
+                pass
+
+            if names:
+                return names
+
+            if shutil.which("swanctl"):
+                try:
+                    result = _run(["swanctl", "--list-sas"], timeout=5)
+                    if result.returncode == 0 and result.stdout:
+                        for line in result.stdout.splitlines():
+                            match = re.match(r"^([^:\\s]+):\\s+#\\d+,", line.strip())
+                            if match:
+                                name = match.group(1)
+                                if name not in names:
+                                    names.append(name)
+                except Exception:
+                    pass
+
+            return names
+
+
+        def _restart_tunnel(tunnel_name: str) -> bool:
+            print(f"[TunnelMonitor] Restarting tunnel: {tunnel_name}")
+
+            try:
+                if shutil.which("swanctl"):
+                    try:
+                        load_result = _run(["swanctl", "--load-all"], timeout=15)
+                        if load_result.returncode != 0:
+                            print(
+                                f"[TunnelMonitor] Warning: failed to reload swanctl config for {tunnel_name}: "
+                                f"{_command_output(load_result)}"
+                            )
+                    except subprocess.TimeoutExpired:
+                        print(
+                            f"[TunnelMonitor] Warning: timeout reloading swanctl config for {tunnel_name}; proceeding"
+                        )
+
+                    terminated = False
+                    terminate_attempts = [
+                        (["swanctl", "--terminate", "--child", tunnel_name, "--timeout", "5"], "CHILD_SA"),
+                        (["swanctl", "--terminate", "--ike", tunnel_name, "--timeout", "5"], "IKE_SA"),
+                    ]
+                    for terminate_cmd, label in terminate_attempts:
+                        try:
+                            result = _run(terminate_cmd, timeout=10)
+                        except subprocess.TimeoutExpired:
+                            print(
+                                f"[TunnelMonitor] Warning: timeout terminating {label} for {tunnel_name}"
+                            )
+                            continue
+
+                        if result.returncode == 0:
+                            terminated = True
+                            break
+
+                        output = _command_output(result)
+                        if output:
+                            print(
+                                f"[TunnelMonitor] Warning: failed to terminate {label} for {tunnel_name}: {output}"
+                            )
+
+                    if not terminated:
+                        print(
+                            "[TunnelMonitor] Warning: proceeding with initiate even though termination did not confirm"
+                        )
+
+                    time.sleep(2)
+
+                    for attempt in range(1, 4):
+                        try:
+                            result = _run(
+                                ["swanctl", "--initiate", "--child", tunnel_name, "--timeout", "20"],
+                                timeout=25,
+                            )
+                        except subprocess.TimeoutExpired:
+                            result = subprocess.CompletedProcess(
+                                args=["swanctl", "--initiate", "--child", tunnel_name, "--timeout", "20"],
+                                returncode=124,
+                                stdout="",
+                                stderr="timeout while initiating child SA",
+                            )
+
+                        if result.returncode == 0 and _wait_for_established(tunnel_name):
+                            print(f"[TunnelMonitor] Successfully restarted tunnel: {tunnel_name}")
+                            return True
+
+                        if _wait_for_established(tunnel_name, timeout_seconds=4):
+                            print(
+                                f"[TunnelMonitor] Tunnel {tunnel_name} recovered after initiate attempt {attempt}"
+                            )
+                            return True
+
+                        output = _command_output(result)
+                        if output:
+                            print(
+                                f"[TunnelMonitor] Warning: failed to initiate {tunnel_name} "
+                                f"(attempt {attempt}/3): {output}"
+                            )
+                        if attempt < 3:
+                            print(
+                                f"[TunnelMonitor] Warning: retrying tunnel initiate for {tunnel_name} in 3s"
+                            )
+                            time.sleep(3)
+
+                    print(f"[TunnelMonitor] Failed to restart tunnel {tunnel_name}")
+                    return False
+
+                try:
+                    result = _run(["ipsec", "down", tunnel_name], timeout=10)
+                    if result.returncode != 0:
+                        print(
+                            f"[TunnelMonitor] Warning: failed to bring down {tunnel_name}: "
+                            f"{_command_output(result)}"
+                        )
+                        print("[TunnelMonitor] Warning: proceeding with tunnel up attempt anyway")
+                except subprocess.TimeoutExpired:
+                    print(f"[TunnelMonitor] Warning: timeout bringing down {tunnel_name}")
+
+                time.sleep(2)
+
+                try:
+                    result = _run(["ipsec", "up", tunnel_name], timeout=20)
+                except subprocess.TimeoutExpired:
+                    print(f"[TunnelMonitor] Failed to bring up {tunnel_name}: timeout")
+                    return False
+
+                if result.returncode != 0:
+                    print(
+                        f"[TunnelMonitor] Failed to bring up {tunnel_name}: {_command_output(result)}"
+                    )
+                    return False
+
+                print(f"[TunnelMonitor] Successfully restarted tunnel: {tunnel_name}")
+                return True
+            except Exception as exc:
+                print(f"[TunnelMonitor] Failed to restart tunnel {tunnel_name}: {exc}")
+                return False
+
+
+        def main() -> int:
+            parser = argparse.ArgumentParser()
+            parser.add_argument("--restart-tunnel", required=True)
+            args = parser.parse_args()
+
+            if args.restart_tunnel.lower() == "all":
+                tunnels = _list_configured_tunnels()
+                if not tunnels:
+                    print("[TunnelMonitor] No configured tunnels found")
+                    return 1
+                success_count = 0
+                for tunnel_name in tunnels:
+                    if _restart_tunnel(tunnel_name):
+                        success_count += 1
+                print(f"[TunnelMonitor] Restarted {success_count}/{len(tunnels)} tunnels")
+                return 0 if success_count == len(tunnels) else 1
+
+            return 0 if _restart_tunnel(args.restart_tunnel) else 1
+
+
+        if __name__ == "__main__":
+            raise SystemExit(main())
+        """
+    ).strip() + "\n"
+
+
+def _normalize_config_value(value: t.Any, fallback: str = "") -> str:
+    """Normalize config scalars that may be plain strings or enum values."""
+    resolved = fallback if value is None else getattr(value, "value", value)
+    return str(resolved or "").strip().lower()
 
 
 def _create_config_from_template(output_path: Path) -> None:
@@ -158,6 +466,22 @@ def _ensure_authentication(
             return None
 
 
+def _should_prompt_add_routes_after_apply(
+    plan: ResolvedDeploymentPlan,
+    changes: list[tuple[str, t.Any]],
+    *,
+    recreate_gw: bool,
+) -> bool:
+    """Return True when apply should remind the user to create local static routes."""
+    if recreate_gw or not plan.should_manage_routes or not changes:
+        return False
+
+    return all(
+        getattr(diff, "differences", None) == ["VM does not exist (will create)"]
+        for _, diff in changes
+    )
+
+
 def _resolve_local_config(
     local_config_file: Path | None,
     *,
@@ -178,7 +502,7 @@ def _resolve_local_config(
 
     if not create_if_missing:
         print(f"[red]Error: Config file not found at {default_path}[/red]")
-        print("[yellow]Run 'nebius-vpngw' first to create a template config.[/yellow]")
+        print("[yellow]Use 'nebius-vpngw create-config <path>' to create a template.[/yellow]")
         raise typer.Exit(code=1)
 
     _create_config_from_template(default_path)
@@ -186,9 +510,15 @@ def _resolve_local_config(
     print()
     print("[bold]Next steps:[/bold]")
     print("  1. Edit the file to set your project context (tenant_id, project_id, region_id)")
-    print("  2. Configure gateway VMs (instance_count, vm_spec, external_ips)")
+    print(
+        "  2. Configure gateway networking and VMs "
+        "(gateway_group.network_id, subnet, vm_spec, external_ips)"
+    )
     print("  3. Define connections and tunnels with peer details")
-    print("  4. Set secrets via environment variables (e.g., export GCP_TUNNEL_1_PSK=...)")
+    print(
+        "  4. Set secrets via environment variables or directly in YAML "
+        "(e.g., export GCP_TUNNEL_1_PSK=...)"
+    )
     print("  5. Validate: [cyan]nebius-vpngw validate-config nebius-vpngw.config.yaml[/cyan]")
     print("  6. Deploy: [cyan]nebius-vpngw apply[/cyan]")
     print()
@@ -200,25 +530,6 @@ def _resolve_local_config(
 
 
 _ENV_PATTERN = re.compile(r"\$\{([A-Za-z0-9_]+)\}")
-
-
-def _expand_env_value(val: str) -> str:
-    def repl(match: re.Match[str]) -> str:
-        name = match.group(1)
-        env_val = os.environ.get(name)
-        return env_val if env_val else match.group(0)
-
-    return _ENV_PATTERN.sub(repl, val)
-
-
-def _expand_env(obj: t.Any) -> t.Any:
-    if isinstance(obj, dict):
-        return {k: _expand_env(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_expand_env(v) for v in obj]
-    if isinstance(obj, str):
-        return _expand_env_value(obj)
-    return obj
 
 
 def _external_ips_assigned(external_ips: t.Any) -> bool:
@@ -252,6 +563,10 @@ def _format_external_ips_block(indent: str, external_ips: list[list[str]]) -> li
         ip_items = ", ".join(f'"{ip}"' for ip in inst_ips)
         lines.append(f"{indent}  - [{ip_items}]")
     return lines
+
+
+def _normalize_file_text(text: str) -> str:
+    return text if text.endswith("\n") else f"{text}\n"
 
 
 def _update_external_ips_in_yaml(path: Path, external_ips: list[list[str]]) -> None:
@@ -412,7 +727,12 @@ def apply(
     zone: str | None = typer.Option(None, help="Nebius zone for gateway VMs"),
     dry_run: bool = typer.Option(False, hidden=True, help="Render actions without applying"),
 ):
-    """Apply desired state to Nebius: create/update gateway VMs and push config."""
+    """Reconcile desired state in Nebius and on the gateway VMs.
+
+    Safe to rerun. Existing VMs, the dedicated gateway subnet, its route table,
+    and matching IP allocations are reused when they already match the config.
+    Use --recreate-gw only when infrastructure changes require VM recreation.
+    """
     local_config_file = _resolve_local_config(
         local_config_file,
         create_if_missing=True,
@@ -541,6 +861,12 @@ def apply(
             "\n[yellow]Proceeding with VM recreation for safe changes (--recreate-gw flag provided)...[/yellow]"
         )
 
+    show_add_routes_hint = _should_prompt_add_routes_after_apply(
+        plan,
+        changes,
+        recreate_gw=recreate_gw,
+    )
+
     # Determine appropriate action message based on whether VMs exist
     has_existing_vms = any(
         diff.change_type.value != "safe" or "does not exist" not in " ".join(diff.differences)
@@ -639,6 +965,15 @@ def apply(
         ssh.push_config_and_reload(target, inst_cfg, local_cfg)
 
     print("[green]Apply completed successfully.[/green]")
+    if show_add_routes_hint:
+        print("")
+        print("[yellow]⚠️  IMPORTANT: For static routing, run:[/yellow]")
+        print(
+            f"[bold]  nebius-vpngw add-routes-local --local-config-file {local_config_file}[/bold]"
+        )
+        print(
+            "[dim]This creates Nebius VPC routes for remote prefixes using the gateway's static private IP allocations.[/dim]"
+        )
 
 
 @app.command(options_metavar="")
@@ -738,6 +1073,9 @@ def create_config(
     Security best practice: Use *.config.yaml extension - these files are git-ignored
     automatically to prevent committing sensitive information (IPs, ASNs, secrets).
 
+    Safe to rerun: if the target file already contains the exact generated
+    template, the command exits successfully without rewriting it.
+
     Examples:
         nebius-vpngw create-config gcp-ha-vpn.config.yaml
         nebius-vpngw create-config aws-vpn.config.yaml
@@ -748,8 +1086,22 @@ def create_config(
 
     console = Console()
 
+    desired_text = _normalize_file_text(DEFAULT_CONFIG_TEMPLATE)
+
     # Check if file exists
     if config_file.exists() and not force:
+        existing_text = _normalize_file_text(config_file.read_text(encoding="utf-8"))
+        if existing_text == desired_text:
+            console.print()
+            console.print(
+                Panel.fit(
+                    f"[bold green]✓ Configuration template already up to date[/bold green]\n\n"
+                    f"File: [cyan]{config_file}[/cyan]",
+                    title="[green]No Changes[/green]",
+                    border_style="green",
+                )
+            )
+            raise typer.Exit(code=0)
         console.print()
         console.print(
             Panel.fit(
@@ -789,7 +1141,7 @@ def create_config(
 
     # Create the config file
     try:
-        _create_config_from_template(config_file)
+        config_file.write_text(desired_text, encoding="utf-8")
 
         console.print()
         console.print(
@@ -798,9 +1150,9 @@ def create_config(
                 f"File: [cyan]{config_file}[/cyan]\n\n"
                 f"[dim]Next steps:[/dim]\n"
                 f"  1. Edit file to set project context (tenant_id, project_id, region_id)\n"
-                f"  2. Configure gateway VMs and networking\n"
+                f"  2. Configure gateway networking and VMs\n"
                 f"  3. Define connections and tunnels with peer details\n"
-                f"  4. Set secrets via environment variables\n"
+                f"  4. Set secrets via environment variables or directly in YAML\n"
                 f"  5. Validate: [cyan]nebius-vpngw validate-config {config_file}[/cyan]\n"
                 f"  6. Deploy: [cyan]nebius-vpngw apply --local-config-file {config_file}[/cyan]",
                 title="[green]Success[/green]",
@@ -815,6 +1167,8 @@ def create_config(
                 "[bold red]Remember: This file is NOT git-ignored. Do not commit secrets![/bold red]"
             )
 
+    except typer.Exit:
+        raise
     except Exception as e:
         console.print()
         console.print(
@@ -834,8 +1188,12 @@ def prep_network(
     ),
     zone: str | None = typer.Option(None, help="Nebius zone for gateway VMs"),
 ):
-    """Prepare gateway subnet and reserve public IPs (before peer setup)."""
-    import yaml
+    """Prepare gateway networking before peer setup.
+
+    Safe to rerun. Ensures the configured gateway subnet, its dedicated route
+    table, and the requested public IP allocations exist without recreating
+    matching resources.
+    """
     from rich.console import Console
     from rich.panel import Panel
 
@@ -848,18 +1206,20 @@ def prep_network(
     )
 
     try:
-        raw_cfg = yaml.safe_load(local_config_file.read_text(encoding="utf-8")) or {}
+        cfg = load_local_config(
+            local_config_file,
+            allow_missing_placeholders=True,
+            validate_schema=False,
+        )
     except Exception as e:
         console.print(
             Panel.fit(
-                f"[bold red]✗ Failed to read YAML[/bold red]\n\n{str(e)}",
+                f"[bold red]✗ Failed to load configuration[/bold red]\n\n{str(e)}",
                 title="[red]Error[/red]",
                 border_style="red",
             )
         )
         raise typer.Exit(code=1) from e
-
-    cfg = _expand_env(raw_cfg)
 
     tenant_id = str(cfg.get("tenant_id") or "").strip() or None
     project_id = str(cfg.get("project_id") or "").strip() or None
@@ -891,6 +1251,8 @@ def prep_network(
 
     vm_spec = gg.get("vm_spec", {}) or {}
     external_ips = gg.get("external_ips", []) or []
+    network_id = str(gg.get("network_id") or "").strip() or None
+    subnet = gg.get("subnet", {}) or {}
 
     has_assigned_ips = _external_ips_assigned(external_ips)
 
@@ -899,7 +1261,9 @@ def prep_network(
         instance_count=instance_count,
         region=gg.get("region") or region_id or "eu-north1-a",
         external_ips=external_ips,
+        subnet=subnet,
         vm_spec=vm_spec,
+        network_id=network_id,
     )
 
     auth_token = _ensure_authentication(required=True, show_progress=True)
@@ -998,6 +1362,10 @@ def create_from_peer_config(
 
     This generates a standalone YAML config file aligned with the schema for
     review and validation before deployment.
+
+    Safe to rerun: if the target file already contains the exact generated
+    output for the same inputs, the command exits successfully without
+    rewriting it.
     """
     import yaml
     from rich.console import Console
@@ -1010,19 +1378,6 @@ def create_from_peer_config(
             Panel.fit(
                 "[bold red]✗ No peer config file provided[/bold red]\n\n"
                 "Use --peer-config-file to specify at least one vendor config.",
-                title="[red]Error[/red]",
-                border_style="red",
-            )
-        )
-        raise typer.Exit(code=1)
-
-    if config_file.exists() and not force:
-        console.print()
-        console.print(
-            Panel.fit(
-                f"[bold red]✗ File already exists[/bold red]\n\n"
-                f"Path: {config_file}\n\n"
-                f"Use --force to overwrite, or choose a different filename.",
                 title="[red]Error[/red]",
                 border_style="red",
             )
@@ -1056,6 +1411,7 @@ def create_from_peer_config(
         merged_cfg = merge_peer_configs_into_local_config(
             base_cfg, peer_config_file, prefer_peer=True
         )
+        desired_text = _normalize_file_text(yaml.safe_dump(merged_cfg, sort_keys=False))
 
         if merged_cfg == base_cfg:
             console.print(
@@ -1063,7 +1419,32 @@ def create_from_peer_config(
                 "Review the file and fill in any missing fields manually.[/yellow]"
             )
 
-        config_file.write_text(yaml.safe_dump(merged_cfg, sort_keys=False), encoding="utf-8")
+        if config_file.exists() and not force:
+            existing_text = _normalize_file_text(config_file.read_text(encoding="utf-8"))
+            if existing_text == desired_text:
+                console.print()
+                console.print(
+                    Panel.fit(
+                        f"[bold green]✓ Peer-generated configuration already up to date[/bold green]\n\n"
+                        f"File: [cyan]{config_file}[/cyan]",
+                        title="[green]No Changes[/green]",
+                        border_style="green",
+                    )
+                )
+                raise typer.Exit(code=0)
+            console.print()
+            console.print(
+                Panel.fit(
+                    f"[bold red]✗ File already exists[/bold red]\n\n"
+                    f"Path: {config_file}\n\n"
+                    f"Use --force to overwrite, or choose a different filename.",
+                    title="[red]Error[/red]",
+                    border_style="red",
+                )
+            )
+            raise typer.Exit(code=1)
+
+        config_file.write_text(desired_text, encoding="utf-8")
 
         console.print()
         console.print(
@@ -1085,6 +1466,8 @@ def create_from_peer_config(
                 "[bold red]Remember: This file is NOT git-ignored. Do not commit secrets![/bold red]"
             )
 
+    except typer.Exit:
+        raise
     except Exception as e:
         console.print()
         console.print(
@@ -2117,7 +2500,11 @@ print(json.dumps(health))
 
     console.print(routing_table)
 
-    # Show vpngw-subnet route table
+    gateway_group_cfg = local_cfg.get("gateway_group", {}) or {}
+    gateway_subnet_cfg = gateway_group_cfg.get("subnet", {}) or {}
+    gateway_subnet_name = gateway_subnet_cfg.get("name") or "vpngw-subnet"
+
+    # Show gateway subnet route table
     console.print("\n[bold]VPN Gateway Subnet Route Table:[/bold]")
     try:
         from nebius.api.nebius.vpc.v1 import (
@@ -2135,9 +2522,9 @@ print(json.dumps(health))
             subnet_client = SubnetServiceClient(client)
 
             try:
-                # Get vpngw-subnet
+                # Get configured gateway subnet
                 subnet_obj = subnet_client.get_by_name(
-                    GetSubnetByNameRequest(parent_id=proj_id, name="vpngw-subnet")
+                    GetSubnetByNameRequest(parent_id=proj_id, name=gateway_subnet_name)
                 ).wait()
 
                 # Get subnet CIDR
@@ -2160,7 +2547,7 @@ print(json.dumps(health))
                 rt_id = getattr(subnet_spec, "route_table_id", None) if subnet_spec else None
 
                 if not rt_id:
-                    console.print(f"[yellow]Subnet: vpngw-subnet ({subnet_cidr})[/yellow]")
+                    console.print(f"[yellow]Subnet: {gateway_subnet_name} ({subnet_cidr})[/yellow]")
                     console.print("[yellow]  No route table attached[/yellow]")
                 else:
                     # Get route table details
@@ -2182,7 +2569,7 @@ print(json.dumps(health))
                     except Exception:
                         pass
 
-                    console.print(f"Subnet: vpngw-subnet ({subnet_cidr})")
+                    console.print(f"Subnet: {gateway_subnet_name} ({subnet_cidr})")
                     console.print(f"  Route Table: {rt_name} (ID: {rt_id}, default={is_default})")
 
                     # Get routes in the table
@@ -2238,7 +2625,9 @@ print(json.dumps(health))
                         console.print("  [dim]No routes in table[/dim]")
 
             except Exception as e:
-                console.print(f"[yellow]Could not fetch vpngw-subnet route table: {e}[/yellow]")
+                console.print(
+                    f"[yellow]Could not fetch gateway subnet '{gateway_subnet_name}' route table: {e}[/yellow]"
+                )
     except Exception as e:
         console.print(f"[yellow]Error displaying route table: {e}[/yellow]")
 
@@ -2250,10 +2639,12 @@ def add_routes_local(
     ),
     project_id: str | None = typer.Option(None, help="Nebius project/folder identifier"),
 ):
-    """Add VPC routes for gateway.local_prefixes pointing to VPN gateway (Nebius → Remote).
+    """Ensure Nebius VPC routes exist for remote prefixes (Nebius → Remote).
 
-    These routes direct traffic from Nebius VPC subnets to remote sites via the VPN gateway.
-    Next-hop is the VPN gateway's private IP.
+    Safe to rerun. The command selects workload subnets by
+    gateway.local_prefixes, adds only missing routes whose next-hop is the
+    gateway private IP, and reconciles stale BGP advertisement state when the
+    live gateway config no longer matches the current YAML.
     """
     local_config_file = _resolve_local_config(
         local_config_file,
@@ -2275,8 +2666,9 @@ def add_routes_local(
 
     routes = RouteManager(project_id=proj_id, auth_token=auth_token)
 
-    print("[bold]Ensuring VPC routes for local prefixes (Nebius → Remote)...[/bold]")
+    print("[bold]Ensuring VPC routes for remote prefixes on local subnets...[/bold]")
     routes.add_routes(plan, local_cfg)
+    routes.ensure_bgp_advertisements_current(plan, local_cfg)
 
     print("[green]Local route management completed.[/green]")
 
@@ -2288,11 +2680,11 @@ def list_routes_local(
     ),
     project_id: str | None = typer.Option(None, help="Nebius project/folder identifier"),
 ):
-    """List VPC routes for gateway.local_prefixes (Nebius → Remote) and BGP advertised routes.
+    """List Nebius-side route state for workload subnets and advertised BGP routes.
 
     Shows:
-    1. Route table entries in Nebius VPC subnets that match local_prefixes
-    2. BGP routes being advertised to peer routers (organized by connection/tunnel)
+    1. Route table entries on workload subnets selected by gateway.local_prefixes
+    2. BGP routes being advertised to peer routers, organized by connection/tunnel
     """
     local_config_file = _resolve_local_config(
         local_config_file,
@@ -2381,7 +2773,11 @@ def destroy(
     zone: str | None = typer.Option(None, help="Nebius zone for gateway VMs"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ):
-    """Delete gateway VMs, boot disks, private IP allocations, and routes (preserves public IPs)."""
+    """Destroy gateway compute resources while preserving public IPs and VPC objects.
+
+    Safe to rerun. Missing VMs, disks, routes, or private allocations are
+    treated as already-cleaned-up state.
+    """
     local_config_file = _resolve_local_config(
         local_config_file,
         create_if_missing=False,
@@ -2782,10 +3178,6 @@ def destroy(
         print("[dim]Preserved resources:[/dim]")
         print("[dim]  • Network resources (VPC, subnets)[/dim]")
         print("[dim]  • Public IP allocations (reusable via external_ips in config)[/dim]")
-        print("")
-        print("[yellow]⚠️  IMPORTANT: After recreating VMs, you must run:[/yellow]")
-        print("[bold]  nebius-vpngw add-routes-local --local-config-file <your-config.yaml>[/bold]")
-        print("[dim]This will create new routes with the new static private IP allocations.[/dim]")
 
     except Exception as e:
         print(f"[red]Error during destroy: {e}[/red]")
@@ -2807,10 +3199,11 @@ def restart_tunnel(
     ),
 ) -> None:
     """
-    Manually restart IPsec tunnel(s) to recover from stale state.
+    Manually perform a full tunnel reset to recover from stale state.
 
-    This command connects to the gateway VMs via SSH and executes the tunnel
-    restart procedure. Useful for immediate recovery from tunnel state desync
+    This command connects to the gateway VMs via SSH, restarts the matching
+    IPsec tunnel, and clears the matching BGP neighbor when the tunnel uses
+    BGP. Useful for immediate recovery from tunnel and control-plane desync
     or after network maintenance.
 
     Examples:
@@ -2835,6 +3228,9 @@ def restart_tunnel(
         print(f"[bold]Loading config from:[/bold] {config_path}")
         local_cfg = load_local_config(config_path)
 
+        gateway = local_cfg.get("gateway") or {}
+        local_asn = gateway.get("local_asn")
+
         # Get gateway instances
         gateway_group = local_cfg.get("gateway_group", {})
         instance_count = gateway_group.get("instance_count", 1)
@@ -2842,11 +3238,12 @@ def restart_tunnel(
         print(f"[bold]Found {instance_count} gateway instance(s)[/bold]")
 
         # Construct restart command
+        remote_restart_script = _build_remote_tunnel_restart_script()
         if tunnel_name.lower() == "all":
-            cmd = "python3 -m nebius_vpngw.agent.tunnel_health_monitor --restart-tunnel all"
+            cmd = "sudo /usr/bin/python3 - --restart-tunnel all"
             action_desc = "all tunnels"
         else:
-            cmd = f"python3 -m nebius_vpngw.agent.tunnel_health_monitor --restart-tunnel {tunnel_name}"
+            cmd = f"sudo /usr/bin/python3 - --restart-tunnel {shlex.quote(tunnel_name)}"
             action_desc = f"tunnel '{tunnel_name}'"
 
         print(f"[bold]Restarting {action_desc}...[/bold]")
@@ -2859,6 +3256,29 @@ def restart_tunnel(
 
         plan: ResolvedDeploymentPlan = merge_with_peer_configs(local_cfg, [])
 
+        defaults_mode = _normalize_config_value(
+            (local_cfg.get("defaults", {}).get("routing", {}) or {}).get("mode")
+        )
+        tunnel_bgp_map: dict[str, dict[str, str]] = {}
+        restart_all = tunnel_name.lower() == "all"
+
+        for conn in local_cfg.get("connections") or []:
+            conn_mode = _normalize_config_value(conn.get("routing_mode"), defaults_mode)
+            for tun in conn.get("tunnels") or []:
+                try:
+                    inst_idx = int(tun.get("gateway_instance_index", 0) or 0)
+                except Exception:
+                    inst_idx = 0
+                hostname = f"{plan.gateway_group.name}-{inst_idx}"
+                current_tunnel_name = str(tun.get("name") or f"tunnel{inst_idx}")
+                if not restart_all and current_tunnel_name != tunnel_name:
+                    continue
+                if conn_mode != "bgp":
+                    continue
+                peer_ip = tun.get("inner_remote_ip") or (tun.get("bgp", {}) or {}).get("remote_ip")
+                if peer_ip:
+                    tunnel_bgp_map.setdefault(hostname, {})[current_tunnel_name] = str(peer_ip)
+
         success_count = 0
 
         for inst in plan.per_instance:
@@ -2869,7 +3289,7 @@ def restart_tunnel(
                 print(f"[yellow]⚠️  No external IP for {hostname}, skipping[/yellow]")
                 continue
 
-            print(f"\\n[dim]Connecting to {hostname} ({external_ip})...[/dim]")
+            print(f"\n[dim]Connecting to {hostname} ({external_ip})...[/dim]")
 
             # Build SSH command
             ssh_cmd = _build_ssh_base_cmd(key_path)
@@ -2882,16 +3302,80 @@ def restart_tunnel(
                     ssh_cmd,
                     capture_output=True,
                     text=True,
+                    input=remote_restart_script,
                     timeout=30,
                 )
 
                 if result.returncode == 0:
-                    print(f"[green]✓ Successfully restarted on {hostname}[/green]")
+                    print(f"[green]✓ IPsec restart completed on {hostname}[/green]")
                     if result.stdout.strip():
                         print(f"[dim]{result.stdout.strip()}[/dim]")
+
+                    bgp_peers = sorted(set(tunnel_bgp_map.get(hostname, {}).values()))
+                    if bgp_peers and local_asn:
+                        print(
+                            f"[dim]Resetting matching BGP neighbor(s) on {hostname}: {', '.join(bgp_peers)}[/dim]"
+                        )
+                        bgp_reset_failed = False
+                        for peer_ip in bgp_peers:
+                            shutdown_cmd = (
+                                f"sudo vtysh -c 'configure terminal' -c 'router bgp {local_asn}' "
+                                f"-c 'neighbor {peer_ip} shutdown'"
+                            )
+                            no_shutdown_cmd = (
+                                f"sudo vtysh -c 'configure terminal' -c 'router bgp {local_asn}' "
+                                f"-c 'no neighbor {peer_ip} shutdown'"
+                            )
+
+                            shutdown_result = subprocess.run(
+                                ssh_cmd[:-1] + [shutdown_cmd],
+                                capture_output=True,
+                                text=True,
+                                timeout=20,
+                            )
+                            if shutdown_result.returncode != 0:
+                                print(f"[red]✗ Failed to administratively shut BGP neighbor {peer_ip}[/red]")
+                                if shutdown_result.stdout.strip():
+                                    print(f"[dim]{shutdown_result.stdout.strip()}[/dim]")
+                                if shutdown_result.stderr.strip():
+                                    print(f"[dim]{shutdown_result.stderr.strip()}[/dim]")
+                                bgp_reset_failed = True
+                                break
+
+                            time.sleep(1)
+
+                            no_shutdown_result = subprocess.run(
+                                ssh_cmd[:-1] + [no_shutdown_cmd],
+                                capture_output=True,
+                                text=True,
+                                timeout=20,
+                            )
+                            if no_shutdown_result.returncode != 0:
+                                print(
+                                    f"[red]✗ Failed to re-enable BGP neighbor {peer_ip} on {hostname}[/red]"
+                                )
+                                if no_shutdown_result.stdout.strip():
+                                    print(f"[dim]{no_shutdown_result.stdout.strip()}[/dim]")
+                                if no_shutdown_result.stderr.strip():
+                                    print(f"[dim]{no_shutdown_result.stderr.strip()}[/dim]")
+                                bgp_reset_failed = True
+                                break
+
+                        if bgp_reset_failed:
+                            continue
+
+                        print(f"[green]✓ Matching BGP neighbor(s) reset on {hostname}[/green]")
+                    elif bgp_peers and not local_asn:
+                        print(
+                            "[yellow]BGP peers were found for this tunnel, but gateway.local_asn is missing. "
+                            "Only the IPsec tunnel was restarted.[/yellow]"
+                        )
+
                     success_count += 1
                 else:
                     print(f"[red]✗ Failed on {hostname}[/red]")
+                    if result.stdout.strip():
+                        print(f"[dim]{result.stdout.strip()}[/dim]")
                     if result.stderr:
                         print(f"[dim]{result.stderr.strip()}[/dim]")
             except subprocess.TimeoutExpired:
@@ -2902,14 +3386,15 @@ def restart_tunnel(
         print()
         if success_count == instance_count:
             print(
-                f"[green]✓ Successfully restarted {action_desc} on all {instance_count} gateway(s)[/green]"
+                f"[green]✓ Successfully reset {action_desc} on all {instance_count} gateway(s)[/green]"
             )
             print(
-                "[dim]Tunnels should re-establish within 10-15 seconds. Run 'nebius-vpngw status' to verify.[/dim]"
+                "[dim]IPsec and matching BGP sessions should re-establish within 10-15 seconds. "
+                "Run 'nebius-vpngw status' to verify.[/dim]"
             )
         elif success_count > 0:
             print(
-                f"[yellow]⚠️  Partial success: restarted on {success_count}/{instance_count} gateway(s)[/yellow]"
+                f"[yellow]⚠️  Partial success: reset on {success_count}/{instance_count} gateway(s)[/yellow]"
             )
             raise typer.Exit(code=1)
         else:
@@ -2961,15 +3446,16 @@ def tunnel_failover(
             print("[red]gateway.local_asn is required for BGP failover.[/red]")
             raise typer.Exit(code=1)
 
-        defaults_mode = (local_cfg.get("defaults", {}).get("routing", {}) or {}).get(
-            "mode"
-        ) or "bgp"
+        defaults_mode = _normalize_config_value(
+            (local_cfg.get("defaults", {}).get("routing", {}) or {}).get("mode"),
+            "bgp",
+        )
 
         enabled_tunnels: list[dict[str, object]] = []
         for conn in local_cfg.get("connections") or []:
-            conn_mode = (conn.get("routing_mode") or defaults_mode) or "bgp"
+            conn_mode = _normalize_config_value(conn.get("routing_mode"), defaults_mode)
             for tun in conn.get("tunnels") or []:
-                ha_role = (tun.get("ha_role") or "active").lower()
+                ha_role = _normalize_config_value(tun.get("ha_role"), "active")
                 if ha_role == "disable":
                     continue
                 enabled_tunnels.append(
@@ -3228,15 +3714,16 @@ def tunnel_failback(
             print("[red]gateway.local_asn is required for BGP failback.[/red]")
             raise typer.Exit(code=1)
 
-        defaults_mode = (local_cfg.get("defaults", {}).get("routing", {}) or {}).get(
-            "mode"
-        ) or "bgp"
+        defaults_mode = _normalize_config_value(
+            (local_cfg.get("defaults", {}).get("routing", {}) or {}).get("mode"),
+            "bgp",
+        )
 
         enabled_tunnels: list[dict[str, object]] = []
         for conn in local_cfg.get("connections") or []:
-            conn_mode = (conn.get("routing_mode") or defaults_mode) or "bgp"
+            conn_mode = _normalize_config_value(conn.get("routing_mode"), defaults_mode)
             for tun in conn.get("tunnels") or []:
-                ha_role = (tun.get("ha_role") or "active").lower()
+                ha_role = _normalize_config_value(tun.get("ha_role"), "active")
                 if ha_role == "disable":
                     continue
                 enabled_tunnels.append(
@@ -3421,6 +3908,9 @@ def tunnel_failback(
 
 
 # init_config command removed; auto-creation occurs on first run without --local-config-file
+
+
+_apply_help_command_order()
 
 
 def main():  # console script entry point
