@@ -24,6 +24,8 @@
       ]
     }
   ],
+  "venvPath": ".",
+  "venv": ".venv",
   "pythonVersion": "3.10",
   "typeCheckingMode": "standard",
   "reportMissingModuleSource": "warning",

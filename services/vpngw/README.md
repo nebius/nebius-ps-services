@@ -546,11 +546,18 @@ Safe to rerun.
 ```bash
 nebius-vpngw create-from-peer-config my-vpn.config.yaml \
   --peer-config-file gcp-peer.txt \
-  --peer-config-file aws-peer.xml
+  --peer-config-file branch-office.csv
 ```
 
 If the generated output already matches the existing file, rerunning the command
 is a no-op and exits successfully.
+
+Supported peer input formats:
+
+- `.txt`: free-form text, exported vendor configs, and config snippets
+- `.csv`: one row per tunnel; rows with the same `connection_name` + `vendor` are grouped
+- `.json`
+- `.yaml` / `.yml`
 
 ### Deployment
 
@@ -954,26 +961,61 @@ nebius-vpngw list-routes-remote --local-config-file <file>
 
 ## Peer Integration
 
-### Supported Vendors
+### Supported Peer Inputs
 
-- **GCP HA VPN:** Cloud Router config exports
-- **AWS Site-to-Site VPN:** Downloadable config files
-- **Azure VPN Gateway:** Exported configurations
-- **Cisco IOS:** IOS config snippets
+- **Text (`.txt`)**: vendor exports, router snippets, and key/value documents
+- **CSV (`.csv`)**: one row per tunnel; rows with the same `connection_name` + `vendor` are grouped
+- **JSON**
+- **YAML (`.yaml` / `.yml`)**
+
+Vendor detection is best-effort and currently recognizes **GCP**, **AWS**, **Azure**, and **Cisco**. If nothing matches, the importer falls back to `vendor: generic`.
 
 ### Import Workflow
 
 ```bash
 nebius-vpngw create-from-peer-config nebius-vpn.config.yaml \
-  --peer-config-file gcp-peer.txt \
-  --peer-config-file aws-peer.xml
+  --peer-config-file gcp-peer.txt
 ```
 
-**Merge behavior:**
+`create-from-peer-config` now builds `connections:` from parsed peer specs instead of reusing the template's fixed sample topology. The generated file is validated against the schema before it is written.
 
-- Peer values overwrite template defaults when present
-- Topology is taken from the generated config and should be reviewed
-- Validate before deployment
+### Keyword Matching
+
+The importer normalizes input keys and matches them against a keyword list. These aliases work across CSV headers, JSON/YAML keys, and `key: value` / `key = value` text.
+
+| Target field | Accepted keywords |
+| --- | --- |
+| `connection.name` | `connection_name`, `vpn_name`, `peer_name`, `gateway_name`, `router_name`, `name` |
+| `connection.vendor` | `vendor`, `provider`, `cloud`, `platform` |
+| `connection.routing_mode` | `routing_mode`, `route_mode`, `routing_protocol`, `mode`, `protocol` |
+| `connection.bgp.remote_asn` | `remote_asn`, `peer_asn`, `bgp_asn`, `neighbor_asn`, `cloud_router_asn`, `vgw_asn`, `asn` |
+| `connection.remote_prefixes` | `remote_prefixes`, `remote_networks`, `destination_prefixes`, `destination_cidrs`, `routes`, `networks`, `subnets` |
+| `tunnel.name` | `tunnel_name`, `vpn_tunnel_name`, `interface_name`, `interface`, `name` |
+| `tunnel.remote_public_ip` | `remote_public_ip`, `peer_public_ip`, `remote_gateway_ip`, `vpn_gateway_ip`, `peer_ip`, `endpoint_ip`, `remote_ip`, `outside_ip` |
+| `tunnel.psk` | `psk`, `pre_shared_key`, `shared_secret`, `shared_key`, `ipsec_shared_secret`, `secret` |
+| `tunnel.inner_cidr` | `inner_cidr`, `inside_cidr`, `tunnel_cidr`, `link_cidr`, `vti_cidr`, `apipa_cidr`, `inside_ip_addresses` |
+| `tunnel.inner_local_ip` | `inner_local_ip`, `local_inside_ip`, `customer_inside_ip`, `customer_gateway_inside_address`, `peer_ip_address`, `apipa_local` |
+| `tunnel.inner_remote_ip` | `inner_remote_ip`, `remote_inside_ip`, `vpn_gateway_inside_address`, `cloud_inside_ip`, `bgp_peer_ip`, `ip_address`, `apipa_remote` |
+| `tunnel.gateway_instance_index` | `gateway_instance_index`, `instance_index`, `vm_index` |
+| `tunnel.local_public_ip_index` | `local_public_ip_index`, `public_ip_index`, `nic_index`, `interface_index` |
+| `tunnel.ha_role` | `ha_role`, `role`, `state`, `active_standby_role` |
+
+### Defaulting Rules
+
+If a field cannot be matched, the importer keeps going and fills schema-safe defaults:
+
+- `vendor`: `generic`
+- `routing_mode`: `static` when remote prefixes exist, `bgp` when a remote ASN exists, otherwise `static` for `cisco/generic` and `bgp` for cloud vendors
+- BGP `remote_asn`: `65014` when BGP is selected but no ASN is found
+- Static `remote_prefixes`: `192.0.2.0/24`
+- Tunnel defaults:
+  - `gateway_instance_index: 0`
+  - `local_public_ip_index: 0`
+  - first tunnel `ha_role: active`, later tunnels `ha_role: passive`
+  - generated APIPA `/30` ranges when inner addresses are missing
+  - generated PSK placeholders such as `${GCP_HA_VPN_TUNNEL_1_PSK}`
+
+Review the generated YAML before deployment, especially placeholder PSKs, remote prefixes, public IPs, and any inferred routing mode.
 
 ### Example: GCP HA VPN
 
@@ -992,7 +1034,7 @@ nebius-vpngw create-from-peer-config gcp-ha-vpn.config.yaml \
   --peer-config-file gcp-peer.txt
 ```
 
-**3. Review and fill in required values (tenant/project/region/PSKs/local prefixes):**
+**3. Generated BGP target shape (review and adjust values before deploy):**
 
 ```yaml
 connections:
@@ -1004,20 +1046,51 @@ connections:
       remote_asn: 65014
       advertise_local_prefixes: true
     tunnels:
-      - name: tunnel-1
+      - name: nebius-204-12-170-147-tunnel-1
         gateway_instance_index: 0
-        remote_public_ip: "203.0.113.1"
-        psk: ${GCP_TUNNEL_1_PSK}
+        local_public_ip_index: 0
+        ha_role: active
+        remote_public_ip: "34.157.15.187"
+        psk: "${GCP_HA_VPN_TUNNEL_1_PSK}"
         inner_cidr: "169.254.10.0/30"
         inner_local_ip: "169.254.10.1"
         inner_remote_ip: "169.254.10.2"
-      - name: tunnel-2
+      - name: nebius-204-12-170-147-tunnel-2
         gateway_instance_index: 0
-        remote_public_ip: "203.0.113.2"
-        psk: ${GCP_TUNNEL_2_PSK}
+        local_public_ip_index: 0
+        ha_role: passive
+        remote_public_ip: "34.157.140.153"
+        psk: "${GCP_HA_VPN_TUNNEL_2_PSK}"
         inner_cidr: "169.254.11.0/30"
         inner_local_ip: "169.254.11.1"
         inner_remote_ip: "169.254.11.2"
+```
+
+### Example: Static Routing Import
+
+If the input contains remote prefixes but no BGP ASN, the generator emits a static connection:
+
+```yaml
+connections:
+  - name: onprem-static
+    vendor: cisco
+    routing_mode: static
+    remote_prefixes:
+      - "192.168.0.0/16"
+    bgp:
+      enabled: false
+      remote_asn: null
+      advertise_local_prefixes: false
+    tunnels:
+      - name: onprem-static-tunnel-1
+        gateway_instance_index: 0
+        local_public_ip_index: 0
+        ha_role: active
+        remote_public_ip: "203.0.113.5"
+        psk: "${ONPREM_STATIC_TUNNEL_1_PSK}"
+        inner_cidr: "169.254.30.0/30"
+        inner_local_ip: "169.254.30.1"
+        inner_remote_ip: "169.254.30.2"
 ```
 
 **4. Validate and deploy:**
@@ -1027,7 +1100,7 @@ nebius-vpngw validate-config gcp-ha-vpn.config.yaml
 nebius-vpngw apply --local-config-file gcp-ha-vpn.config.yaml
 ```
 
-Peer import only fills what it can from the vendor file; PSKs and public IPs may still need to be set manually.
+Peer import only fills what it can from the input. Any placeholder or inferred value should be treated as a review item, not as final deployment intent.
 
 ## VM Management
 
@@ -1660,12 +1733,10 @@ Notes:
 │   │   ├── vm_diff.py                    # VM change detection
 │   │   ├── route_manager.py              # VPC route management
 │   │   └── ssh_push.py                   # SSH deployment
-│   ├── peer_parsers/                     # Vendor config parsers
+│   ├── peer_parsers/                     # Keyword-based peer config importer
 │   │   ├── __init__.py
-│   │   ├── gcp.py
-│   │   ├── aws.py
-│   │   ├── azure.py
-│   │   └── cisco.py
+│   │   ├── common.py
+│   │   └── importer.py
 │   └── systemd/                          # Systemd units/scripts
 │       ├── nebius-vpngw-agent.service          # Agent service unit
 │       ├── nebius-vpngw-health-monitor.service # Tunnel health monitor service unit
@@ -1707,7 +1778,8 @@ Notes:
 
 **Peer Parsers:**
 
-- `gcp.py`, `aws.py`, `azure.py`, `cisco.py`: Vendor-specific config normalization
+- `importer.py`: Keyword-based peer config import for `.txt`, `.csv`, `.json`, `.yaml`, `.yml`
+- `common.py`: Shared key normalization, vendor inference, and importer helpers
 
 ---
 
