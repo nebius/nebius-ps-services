@@ -5,6 +5,7 @@ This folder contains multiple ready-to-use Codex skills for developers.
 ## Included Skills
 
 - `gitignore`
+- `github-workflows`
 - `helmchart`
 - `linter`
 - `nebius`
@@ -14,6 +15,10 @@ This folder contains multiple ready-to-use Codex skills for developers.
 - `release-generator`
 - `shell-scripting`
 - `terraform`
+
+`github-workflows` provides repo-aligned GitHub Actions assets and references
+for PR/merge CI, release publication, container image publishing, and workflow
+hardening.
 
 ## Skills Installer
 

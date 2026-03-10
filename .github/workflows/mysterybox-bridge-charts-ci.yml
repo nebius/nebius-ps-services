@@ -5,12 +5,18 @@ on:
     paths:
       - "services/mysterybox-bridge/charts/**"
       - ".github/workflows/mysterybox-bridge-charts-ci.yml"
+  push:
+    branches: ["main"]
+    paths:
+      - "services/mysterybox-bridge/charts/**"
+      - ".github/workflows/mysterybox-bridge-charts-ci.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: mysterybox-bridge-chart-lint-and-tests-${{ github.ref }}
+  group: mysterybox-bridge-chart-lint-and-tests-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -31,9 +37,19 @@ jobs:
       - name: Set up chart-testing
         uses: helm/chart-testing-action@v2.8.0
 
-      - name: Run ct lint
+      - name: Run ct lint for changed charts
+        if: github.event_name == 'pull_request'
+        env:
+          TARGET_BRANCH: ${{ github.base_ref }}
         run: |
-          ct lint --config services/mysterybox-bridge/charts/ct.yaml --target-branch "${{ github.base_ref }}"
+          set -euo pipefail
+          ct lint --config services/mysterybox-bridge/charts/ct.yaml --target-branch "${TARGET_BRANCH}"
+
+      - name: Run ct lint for all charts
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          ct lint --config services/mysterybox-bridge/charts/ct.yaml --all
 
   render-snapshots:
     name: mysterybox-bridge-render-snapshot-tests
@@ -42,6 +58,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
 
       - name: Set up Helm
         uses: azure/setup-helm@v4
@@ -49,4 +72,6 @@ jobs:
           version: v3.15.4
 
       - name: Verify chart render snapshots
-        run: python3 services/mysterybox-bridge/charts/tests/all_tests.py
+        run: |
+          set -euo pipefail
+          python3 services/mysterybox-bridge/charts/tests/all_tests.py

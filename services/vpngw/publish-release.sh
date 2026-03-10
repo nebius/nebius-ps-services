@@ -120,6 +120,28 @@ ensure_branch_synced() {
   fi
 }
 
+ensure_release_heading_present() {
+  local tag="$1"
+
+  python3 - "${tag}" "${CHANGELOG_FILE}" <<'PY'
+import pathlib
+import re
+import sys
+
+tag, changelog_path = sys.argv[1], sys.argv[2]
+version = tag.rsplit("-v", 1)[-1]
+lines = pathlib.Path(changelog_path).read_text(encoding="utf-8").splitlines()
+patterns = [
+    re.compile(rf"^##\s+\[?{re.escape(tag)}\]?(?:\s+-.*)?$"),
+    re.compile(rf"^##\s+\[?{re.escape(version)}\]?(?:\s+-.*)?$"),
+]
+
+if not any(any(pattern.match(line.strip()) for pattern in patterns) for line in lines):
+    print(f"Missing changelog section for {tag} in {changelog_path}", file=sys.stderr)
+    sys.exit(1)
+PY
+}
+
 update_changelog() {
   local tag="$1"
   local release_date=""
@@ -209,6 +231,7 @@ prep_release() {
   local tag="$1"
   local do_push="$2"
 
+  ensure_clean_worktree
   log_note "Updating ${CHANGELOG_FILE} for ${tag}..."
   update_changelog "${tag}"
 
@@ -241,6 +264,7 @@ ensure_tag_absent() {
 
 create_and_push_tag() {
   local tag="$1"
+  ensure_release_heading_present "${tag}"
   ensure_tag_absent "${tag}"
   git tag -a "${tag}" -m "Release ${tag}"
   git push origin "refs/tags/${tag}"

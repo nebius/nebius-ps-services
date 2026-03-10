@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
 
 TAG_PREFIX="mysterybox-bridge"
+MAIN_BRANCH="main"
 CHANGELOG_FILE="CHANGELOG.md"
 
 S_RESET=""
@@ -31,10 +32,6 @@ log_error() {
   printf '%b\n' "${S_RED}${S_BOLD}ERROR:${S_RESET}${S_RED} ${1}${S_RESET}" >&2
 }
 
-log_warn() {
-  printf '%b\n' "${S_YELLOW}${1}${S_RESET}" >&2
-}
-
 log_note() {
   printf '%b\n' "${S_DIM}${1}${S_RESET}"
 }
@@ -56,7 +53,7 @@ show_usage() {
 
   printf '%b\n' "${S_BOLD}Options:${S_RESET}"
   printf '%b\n' "  ${S_YELLOW}--no-push${S_RESET}          For --prep only: do not push the branch."
-  printf '%b\n' "  ${S_YELLOW}--allow-non-main${S_RESET}   Allow --publish from a non-main branch."
+  printf '%b\n' "  ${S_YELLOW}--allow-non-main${S_RESET}   Allow --publish from a non-${MAIN_BRANCH} branch."
   printf '%b\n' "  ${S_YELLOW}-h, --help${S_RESET}         Show help."
   printf '\n'
 
@@ -66,7 +63,7 @@ show_usage() {
   printf '\n'
   printf '%b\n' "${S_DIM}Notes:${S_RESET}"
   printf '%b\n' "${S_DIM}- Tag push triggers the GitHub image workflow immediately.${S_RESET}"
-  printf '%b\n' "${S_DIM}- Preferred release path: run from clean, up-to-date main.${S_RESET}"
+  printf '%b\n' "${S_DIM}- Preferred release path: run from clean, up-to-date ${MAIN_BRANCH}.${S_RESET}"
 }
 
 require_cmd() {
@@ -124,6 +121,28 @@ ensure_branch_synced() {
     log_note "origin: ${remote_commit}"
     exit 1
   fi
+}
+
+ensure_release_heading_present() {
+  local tag="$1"
+
+  python3 - "${tag}" "${CHANGELOG_FILE}" <<'PY'
+import pathlib
+import re
+import sys
+
+tag, changelog_path = sys.argv[1], sys.argv[2]
+version = tag.rsplit("-v", 1)[-1]
+lines = pathlib.Path(changelog_path).read_text(encoding="utf-8").splitlines()
+patterns = [
+    re.compile(rf"^##\s+\[?{re.escape(tag)}\]?(?:\s+-.*)?$"),
+    re.compile(rf"^##\s+\[?{re.escape(version)}\]?(?:\s+-.*)?$"),
+]
+
+if not any(any(pattern.match(line.strip()) for pattern in patterns) for line in lines):
+    print(f"Missing changelog section for {tag} in {changelog_path}", file=sys.stderr)
+    sys.exit(1)
+PY
 }
 
 update_changelog() {
@@ -216,6 +235,7 @@ prep_release() {
   local tag="$1"
   local do_push="$2"
 
+  ensure_clean_worktree
   log_note "Updating ${CHANGELOG_FILE} for ${tag}..."
   update_changelog "${tag}"
 
@@ -248,6 +268,7 @@ ensure_tag_absent() {
 
 create_and_push_tag() {
   local tag="$1"
+  ensure_release_heading_present "${tag}"
   ensure_tag_absent "${tag}"
   git tag -a "${tag}" -m "Release ${tag}"
   git push origin "refs/tags/${tag}"
@@ -329,12 +350,12 @@ main() {
       ;;
     publish)
       ensure_clean_worktree
-      if [[ "${allow_non_main}" -eq 0 && "${branch}" != "main" ]]; then
-        log_error "--publish must run on main (current: ${branch}). Use --allow-non-main to override."
+      if [[ "${allow_non_main}" -eq 0 && "${branch}" != "${MAIN_BRANCH}" ]]; then
+        log_error "--publish must run on ${MAIN_BRANCH} (current: ${branch}). Use --allow-non-main to override."
         exit 1
       fi
       if [[ "${allow_non_main}" -eq 0 ]]; then
-        ensure_branch_synced "main"
+        ensure_branch_synced "${MAIN_BRANCH}"
       fi
       create_and_push_tag "${tag}"
       ;;

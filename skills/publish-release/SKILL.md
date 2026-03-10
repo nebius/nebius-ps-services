@@ -11,8 +11,9 @@ Create a repeatable application-release setup for GitHub Releases.
 
 - Publishing versioned application artifacts to GitHub Releases.
 - Standardizing release tagging + changelog flow across services.
-- Enforcing a two-step release process:
+- Enforcing a three-step release process:
   - `--prep` on branch
+  - merge the changelog PR to `main`
   - `--publish` on clean synced `main`
 
 ## Output Contract
@@ -53,9 +54,13 @@ Generate exactly these artifacts in the target project:
 ## Guardrails
 
 - Do not edit changelog directly on `main`.
+- `--prep` should start from a clean worktree so the changelog commit is isolated.
 - `--publish` only creates/pushes tag; no content edits.
+- `--publish` must fail if `CHANGELOG.md` does not already contain the target tag heading.
 - Release workflow must build from tag commit, not floating branch refs.
+- Resolve the tagged commit explicitly instead of assuming `GITHUB_SHA` is the release commit.
 - Verify built artifact version equals release tag version.
+- Fail if the release changelog section is missing or empty.
 - Verify tag commit belongs to `main` history unless explicit exception is requested.
 - Workflow/job check names should include `project_name` to avoid ambiguous
   checks across projects.

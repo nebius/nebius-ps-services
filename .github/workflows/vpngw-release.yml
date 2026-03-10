@@ -20,6 +20,7 @@ env:
 
 jobs:
   release:
+    name: nebius-vpngw-release
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -43,12 +44,18 @@ jobs:
           echo "tag=${REF_NAME}" >> "$GITHUB_OUTPUT"
           echo "version=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
 
+      - name: Resolve tagged commit
+        id: revision
+        run: |
+          set -euo pipefail
+          echo "commit=$(git rev-list -n 1 "${{ steps.version.outputs.tag }}")" >> "$GITHUB_OUTPUT"
+
       - name: Ensure tag commit belongs to main history
         run: |
           set -euo pipefail
           git fetch origin "${MAIN_BRANCH}" --depth=1
-          if ! git merge-base --is-ancestor "${GITHUB_SHA}" "origin/${MAIN_BRANCH}"; then
-            echo "::error::Tag commit ${GITHUB_SHA} is not in origin/${MAIN_BRANCH} history"
+          if ! git merge-base --is-ancestor "${{ steps.revision.outputs.commit }}" "origin/${MAIN_BRANCH}"; then
+            echo "::error::Tag commit ${{ steps.revision.outputs.commit }} is not in origin/${MAIN_BRANCH} history"
             exit 1
           fi
 
@@ -73,6 +80,7 @@ jobs:
       - name: Install dependencies
         if: steps.state.outputs.release_exists == 'false'
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
@@ -159,7 +167,13 @@ jobs:
               if capture:
                   notes.append(line)
 
-          notes_text = "\n".join(notes).strip() or f"Release {tag}"
+          if not capture:
+              raise SystemExit(f"Missing changelog section for {tag} in CHANGELOG.md")
+
+          notes_text = "\n".join(notes).strip()
+          if not notes_text:
+              raise SystemExit(f"Changelog section for {tag} is empty")
+
           pathlib.Path("release-notes.md").write_text(notes_text + "\n", encoding="utf-8")
           PY
           echo "path=release-notes.md" >> "$GITHUB_OUTPUT"
@@ -184,7 +198,7 @@ jobs:
             --arg ref "${GITHUB_REF}" \
             --arg tag "${{ steps.version.outputs.tag }}" \
             --arg version "${{ steps.version.outputs.version }}" \
-            --arg sha "${GITHUB_SHA}" \
+            --arg sha "${{ steps.revision.outputs.commit }}" \
             --arg asset "${{ steps.asset.outputs.path }}" \
             --arg run_id "${GITHUB_RUN_ID}" \
             --arg run_attempt "${GITHUB_RUN_ATTEMPT}" \
@@ -222,6 +236,6 @@ jobs:
             echo ""
             echo "- Tag: \`${{ steps.version.outputs.tag }}\`"
             echo "- Version: \`${{ steps.version.outputs.version }}\`"
-            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Commit: \`${{ steps.revision.outputs.commit }}\`"
             echo "- Release exists: \`${{ steps.state.outputs.release_exists }}\`"
           } >> "$GITHUB_STEP_SUMMARY"

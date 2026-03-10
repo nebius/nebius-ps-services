@@ -5,7 +5,7 @@ kind: ServiceAccount
 metadata:
   name: snapshot-mysterybox-webhook
   labels:
-    helm.sh/chart: mysterybox-webhook-0.2.1
+    helm.sh/chart: mysterybox-webhook-0.2.2
     app.kubernetes.io/name: mysterybox-webhook
     app.kubernetes.io/instance: snapshot-mysterybox-webhook
     app.kubernetes.io/version: "0.1.0"
@@ -19,7 +19,7 @@ kind: Service
 metadata:
   name: snapshot-mysterybox-webhook
   labels:
-    helm.sh/chart: mysterybox-webhook-0.2.1
+    helm.sh/chart: mysterybox-webhook-0.2.2
     app.kubernetes.io/name: mysterybox-webhook
     app.kubernetes.io/instance: snapshot-mysterybox-webhook
     app.kubernetes.io/version: "0.1.0"
@@ -41,7 +41,7 @@ kind: Deployment
 metadata:
   name: snapshot-mysterybox-webhook
   labels:
-    helm.sh/chart: mysterybox-webhook-0.2.1
+    helm.sh/chart: mysterybox-webhook-0.2.2
     app.kubernetes.io/name: mysterybox-webhook
     app.kubernetes.io/instance: snapshot-mysterybox-webhook
     app.kubernetes.io/version: "0.1.0"
@@ -147,7 +147,7 @@ kind: ServiceMonitor
 metadata:
   name: snapshot-mysterybox-webhook
   labels:
-    helm.sh/chart: mysterybox-webhook-0.2.1
+    helm.sh/chart: mysterybox-webhook-0.2.2
     app.kubernetes.io/name: mysterybox-webhook
     app.kubernetes.io/instance: snapshot-mysterybox-webhook
     app.kubernetes.io/version: "0.1.0"

@@ -9,7 +9,8 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 python -m ruff check src tests
-python -m pytest -q
+python -m pytest -q -m "not integration" tests/unit
+python -m pytest -q -m integration tests/integration
 ```
 
 Or run:
@@ -17,6 +18,8 @@ Or run:
 ```bash
 make install
 make check
+make test-integration
+make coverage
 ```
 
 ## Run Locally

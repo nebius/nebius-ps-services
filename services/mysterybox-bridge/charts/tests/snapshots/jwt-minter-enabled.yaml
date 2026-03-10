@@ -5,7 +5,7 @@ kind: ServiceAccount
 metadata:
   name: snapshot-jwt-minter
   labels:
-    helm.sh/chart: jwt-minter-0.2.0
+    helm.sh/chart: jwt-minter-0.2.1
     app.kubernetes.io/name: jwt-minter
     app.kubernetes.io/instance: snapshot-jwt-minter
     app.kubernetes.io/version: "0.1.0"
@@ -19,7 +19,7 @@ kind: Role
 metadata:
   name: snapshot-jwt-minter
   labels:
-    helm.sh/chart: jwt-minter-0.2.0
+    helm.sh/chart: jwt-minter-0.2.1
     app.kubernetes.io/name: jwt-minter
     app.kubernetes.io/instance: snapshot-jwt-minter
     app.kubernetes.io/version: "0.1.0"
@@ -36,7 +36,7 @@ kind: RoleBinding
 metadata:
   name: snapshot-jwt-minter
   labels:
-    helm.sh/chart: jwt-minter-0.2.0
+    helm.sh/chart: jwt-minter-0.2.1
     app.kubernetes.io/name: jwt-minter
     app.kubernetes.io/instance: snapshot-jwt-minter
     app.kubernetes.io/version: "0.1.0"
@@ -57,7 +57,7 @@ kind: CronJob
 metadata:
   name: snapshot-jwt-minter
   labels:
-    helm.sh/chart: jwt-minter-0.2.0
+    helm.sh/chart: jwt-minter-0.2.1
     app.kubernetes.io/name: jwt-minter
     app.kubernetes.io/instance: snapshot-jwt-minter
     app.kubernetes.io/version: "0.1.0"
