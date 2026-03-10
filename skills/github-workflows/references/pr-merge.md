@@ -28,6 +28,7 @@ Use merge automation narrowly.
 
 - Bot-only workflows are preferred.
 - `pull_request_target` is acceptable only when the workflow does not check out or execute untrusted PR code.
+- In `pull_request_target` workflows, do not embed dynamic `${{ ... }}` values directly inside shell `run:` blocks; pass them through step-level `env:` first.
 - For Dependabot auto-merge, require both actor scoping and changed-file scoping.
 - Prefer auto-merging GitHub Actions ecosystem PRs only when every changed file is under `.github/workflows/` or automation-only action metadata.
 - GitHub Actions major bumps can be auto-merged when the file scope is limited to workflow automation and the repository accepts bot approvals for branch protection.

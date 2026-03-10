@@ -34,9 +34,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
         run: |
           set -euo pipefail
-          update_type="${{ steps.metadata.outputs.update-type }}"
+          update_type="${UPDATE_TYPE}"
           eligible=false
           reason=""
 
@@ -75,18 +76,24 @@ jobs:
         if: steps.eligibility.outputs.eligible == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh pr review --approve "${{ github.event.pull_request.html_url }}"
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr review --approve "${PR_URL}"
 
       - name: Enable auto-merge
         if: steps.eligibility.outputs.eligible == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh pr merge --auto --squash "${{ github.event.pull_request.html_url }}"
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --squash "${PR_URL}"
 
       - name: Skip auto-merge for non-workflow or non-github-actions updates
         if: steps.eligibility.outputs.eligible != 'true'
+        env:
+          DEPENDENCY_NAMES: ${{ steps.metadata.outputs.dependency-names }}
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+          REASON: ${{ steps.eligibility.outputs.reason }}
         run: |
           echo "Skipping auto-merge for Dependabot update."
-          echo "Dependency names: ${{ steps.metadata.outputs.dependency-names }}"
-          echo "Update type: ${{ steps.metadata.outputs.update-type }}"
-          echo "Reason: ${{ steps.eligibility.outputs.reason }}"
+          echo "Dependency names: ${DEPENDENCY_NAMES}"
+          echo "Update type: ${UPDATE_TYPE}"
+          echo "Reason: ${REASON}"
