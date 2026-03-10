@@ -6,7 +6,7 @@ from pathlib import Path
 import yaml
 from typer.testing import CliRunner
 
-from nebius_vpngw.cli import app
+from nebius_vpngw.cli import DEFAULT_CONFIG_FILENAME, app
 from nebius_vpngw.config_loader import build_config_from_peer_files
 from nebius_vpngw.config_template import DEFAULT_CONFIG_TEMPLATE
 from nebius_vpngw.peer_parsers import parse_peer_source
@@ -150,3 +150,126 @@ def test_create_from_peer_config_generates_bgp_config_from_csv(tmp_path: Path) -
         "nebius-primary",
         "nebius-secondary",
     ]
+
+
+def test_create_from_peer_config_defaults_output_path(tmp_path: Path, monkeypatch) -> None:
+    peer_file = tmp_path / "gcp-peer.yaml"
+    peer_file.write_text(
+        yaml.safe_dump(
+            {
+                "name": "gcp-ha-vpn",
+                "vendor": "gcp",
+                "routing_mode": "bgp",
+                "remote_asn": 65014,
+                "tunnels": [
+                    {
+                        "name": "nebius-primary",
+                        "remote_public_ip": "34.157.15.187",
+                        "psk": "cli-psk-1",
+                        "inner_local_ip": "169.254.10.1",
+                        "inner_remote_ip": "169.254.10.2",
+                    }
+                ],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "create-from-peer-config",
+            "--peer-config-file",
+            str(peer_file),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+
+    output_file = tmp_path / DEFAULT_CONFIG_FILENAME
+    generated = yaml.safe_load(output_file.read_text(encoding="utf-8"))
+    assert len(generated["connections"]) == 1
+    connection = generated["connections"][0]
+    assert connection["name"] == "gcp-ha-vpn"
+    assert connection["vendor"] == "gcp"
+    assert connection["bgp"]["remote_asn"] == 65014
+
+
+def test_create_from_peer_config_accepts_local_config_file_alias(tmp_path: Path) -> None:
+    peer_file = tmp_path / "gcp-peer.yaml"
+    peer_file.write_text(
+        yaml.safe_dump(
+            {
+                "name": "gcp-ha-vpn",
+                "vendor": "gcp",
+                "routing_mode": "bgp",
+                "remote_asn": 65014,
+                "tunnels": [
+                    {
+                        "name": "nebius-primary",
+                        "remote_public_ip": "34.157.15.187",
+                        "psk": "cli-psk-1",
+                        "inner_local_ip": "169.254.10.1",
+                        "inner_remote_ip": "169.254.10.2",
+                    }
+                ],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    output_file = tmp_path / "example.config.yaml"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "create-from-peer-config",
+            "--peer-config-file",
+            str(peer_file),
+            "--local-config-file",
+            str(output_file),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+
+    generated = yaml.safe_load(output_file.read_text(encoding="utf-8"))
+    assert len(generated["connections"]) == 1
+    connection = generated["connections"][0]
+    assert connection["name"] == "gcp-ha-vpn"
+    assert connection["vendor"] == "gcp"
+    assert connection["bgp"]["remote_asn"] == 65014
+
+
+def test_create_from_peer_config_rejects_conflicting_output_paths(tmp_path: Path) -> None:
+    peer_file = tmp_path / "gcp-peer.yaml"
+    peer_file.write_text(
+        yaml.safe_dump(
+            {
+                "name": "gcp-ha-vpn",
+                "vendor": "gcp",
+                "tunnels": [{"remote_public_ip": "34.157.15.187"}],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    positional_output = tmp_path / "positional.config.yaml"
+    option_output = tmp_path / "option.config.yaml"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "create-from-peer-config",
+            str(positional_output),
+            "--peer-config-file",
+            str(peer_file),
+            "--local-config-file",
+            str(option_output),
+        ],
+    )
+
+    assert result.exit_code == 1, result.stdout
+    assert "Conflicting output file arguments" in result.stdout

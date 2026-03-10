@@ -549,6 +549,14 @@ nebius-vpngw create-from-peer-config my-vpn.config.yaml \
   --peer-config-file branch-office.csv
 ```
 
+Or use the output-path flag form:
+
+```bash
+nebius-vpngw create-from-peer-config \
+  --peer-config-file gcp-peer.txt \
+  --local-config-file my-vpn.config.yaml
+```
+
 If the generated output already matches the existing file, rerunning the command
 is a no-op and exits successfully.
 
@@ -977,6 +985,9 @@ nebius-vpngw create-from-peer-config nebius-vpn.config.yaml \
   --peer-config-file gcp-peer.txt
 ```
 
+If you omit both `CONFIG_FILE` and `--local-config-file`, the command writes `./nebius-vpngw.config.yaml`.
+`--local-config-file` is accepted as an output-path alias on this command.
+
 `create-from-peer-config` now builds `connections:` from parsed peer specs instead of reusing the template's fixed sample topology. The generated file is validated against the schema before it is written.
 
 ### Keyword Matching
@@ -1032,6 +1043,14 @@ gcloud compute routers describe my-router \
 ```bash
 nebius-vpngw create-from-peer-config gcp-ha-vpn.config.yaml \
   --peer-config-file gcp-peer.txt
+```
+
+Equivalent flag form:
+
+```bash
+nebius-vpngw create-from-peer-config \
+  --peer-config-file gcp-peer.txt \
+  --local-config-file gcp-ha-vpn.config.yaml
 ```
 
 **3. Generated BGP target shape (review and adjust values before deploy):**
