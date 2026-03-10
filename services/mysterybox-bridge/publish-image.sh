@@ -40,6 +40,24 @@ log_success() {
   printf '%b\n' "${S_GREEN}${1}${S_RESET}"
 }
 
+print_clean_worktree_help() {
+  local context="${1:-general}"
+
+  case "${context}" in
+    prep)
+      printf '%b\n' "${S_DIM}Commit or stash the current changes before running --prep so the changelog commit stays isolated.${S_RESET}" >&2
+      printf '%b\n' "${S_DIM}Typical flow: commit and push your branch changes first, then rerun ./publish-image.sh --prep X.Y.Z.${S_RESET}" >&2
+      ;;
+    publish)
+      printf '%b\n' "${S_DIM}Commit or stash the current changes before running --publish.${S_RESET}" >&2
+      printf '%b\n' "${S_DIM}Typical flow: switch to clean, synced ${MAIN_BRANCH}, then rerun ./publish-image.sh --publish X.Y.Z.${S_RESET}" >&2
+      ;;
+    *)
+      printf '%b\n' "${S_DIM}Commit or stash the current changes, then rerun the command.${S_RESET}" >&2
+      ;;
+  esac
+}
+
 show_usage() {
   printf '%b\n' "${S_BOLD}Usage:${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./publish-image.sh${S_RESET} ${S_DIM}--prep X.Y.Z [--no-push]${S_RESET}"
@@ -53,7 +71,7 @@ show_usage() {
 
   printf '%b\n' "${S_BOLD}Options:${S_RESET}"
   printf '%b\n' "  ${S_YELLOW}--no-push${S_RESET}          For --prep only: do not push the branch."
-  printf '%b\n' "  ${S_YELLOW}--allow-non-main${S_RESET}   Allow --publish from a non-${MAIN_BRANCH} branch."
+  printf '%b\n' "  ${S_YELLOW}--allow-non-main${S_RESET}   Allow --publish outside ${MAIN_BRANCH} if HEAD is already in origin/${MAIN_BRANCH} history."
   printf '%b\n' "  ${S_YELLOW}-h, --help${S_RESET}         Show help."
   printf '\n'
 
@@ -64,6 +82,7 @@ show_usage() {
   printf '%b\n' "${S_DIM}Notes:${S_RESET}"
   printf '%b\n' "${S_DIM}- Tag push triggers the GitHub image workflow immediately.${S_RESET}"
   printf '%b\n' "${S_DIM}- Preferred release path: run from clean, up-to-date ${MAIN_BRANCH}.${S_RESET}"
+  printf '%b\n' "${S_DIM}- The workflow publishes only from tags whose commit is already in origin/${MAIN_BRANCH} history.${S_RESET}"
 }
 
 require_cmd() {
@@ -98,8 +117,11 @@ normalize_tag() {
 }
 
 ensure_clean_worktree() {
+  local context="${1:-general}"
   if ! git diff --quiet || ! git diff --cached --quiet; then
     log_error "Working tree is not clean."
+    print_clean_worktree_help "${context}"
+    printf '%b\n' "${S_DIM}Current git status:${S_RESET}" >&2
     git status --short
     exit 1
   fi
@@ -119,6 +141,20 @@ ensure_branch_synced() {
     log_error "Local ${branch} is not at origin/${branch}."
     log_note "local : ${local_commit}"
     log_note "origin: ${remote_commit}"
+    exit 1
+  fi
+}
+
+ensure_head_in_branch_history() {
+  local branch="$1"
+  git fetch origin
+  if ! git rev-parse "origin/${branch}" >/dev/null 2>&1; then
+    log_error "Remote branch origin/${branch} not found."
+    exit 1
+  fi
+  if ! git merge-base --is-ancestor HEAD "origin/${branch}"; then
+    log_error "Current HEAD is not in origin/${branch} history."
+    log_note "The tag-triggered image workflow will reject tags outside origin/${branch} history."
     exit 1
   fi
 }
@@ -235,7 +271,7 @@ prep_release() {
   local tag="$1"
   local do_push="$2"
 
-  ensure_clean_worktree
+  ensure_clean_worktree "prep"
   log_note "Updating ${CHANGELOG_FILE} for ${tag}..."
   update_changelog "${tag}"
 
@@ -349,13 +385,15 @@ main() {
       prep_release "${tag}" "$(( 1 - no_push ))"
       ;;
     publish)
-      ensure_clean_worktree
+      ensure_clean_worktree "publish"
       if [[ "${allow_non_main}" -eq 0 && "${branch}" != "${MAIN_BRANCH}" ]]; then
         log_error "--publish must run on ${MAIN_BRANCH} (current: ${branch}). Use --allow-non-main to override."
         exit 1
       fi
       if [[ "${allow_non_main}" -eq 0 ]]; then
         ensure_branch_synced "${MAIN_BRANCH}"
+      else
+        ensure_head_in_branch_history "${MAIN_BRANCH}"
       fi
       create_and_push_tag "${tag}"
       ;;

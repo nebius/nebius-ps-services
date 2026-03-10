@@ -184,13 +184,11 @@ It also seeds required runtime Kubernetes Secrets used by bridge auth.
   - SemVer from Git tags via `setuptools-scm`.
   - Tag format: `mysterybox-bridge-vMAJOR.MINOR.PATCH`.
 - **Container image version** (runtime artifact):
-  - Always publishes immutable `sha-<shortsha>` tags.
-  - On `main`, also publishes `latest`.
-  - On release tags, publishes:
+  - Release tag publishes immutable image tags:
+    - `sha-<shortsha>`
     - `<MAJOR.MINOR.PATCH>`
     - `<MAJOR.MINOR.PATCH>-g<shortsha>`
-  - On manual `workflow_dispatch` with `release_version=X.Y.Z`, publishes:
-    - `<MAJOR.MINOR.PATCH>-g<shortsha>`
+  - PR and `main` validation build the image in CI but do not publish registry tags.
 - **Helm chart version** (deployment packaging):
   - `Chart.yaml.version` is chart SemVer and changes when chart packaging changes.
   - `Chart.yaml.appVersion` tracks the default app/image SemVer.
@@ -200,22 +198,16 @@ Recommended production deployment strategy:
 - Pin images by digest (`image.digest`) instead of mutable tags.
 - Treat chart version and app version as separate release lifecycles.
 
-## Image CI Publish
+## Image Workflows
 
-- Workflow: `.github/workflows/mysterybox-bridge-image.yml`
-- Trigger:
-  - push to `main` with changes under `services/mysterybox-bridge/webhook/**`
-  - push of `mysterybox-bridge-v*` tags
-  - manual `workflow_dispatch` (for rebuilds such as base-image CVE refresh)
+- CI workflow: `.github/workflows/mysterybox-bridge-webhook-ci.yml`
+  - validates Python checks on PRs, `main`, and manual runs
+  - performs a local Docker build smoke test without pushing
+- Publish workflow: `.github/workflows/mysterybox-bridge-image.yml`
+  - triggers only from pushed `mysterybox-bridge-v*` tags
 - Important:
   - pushing `mysterybox-bridge-vX.Y.Z` triggers image publish immediately
   - a later `main` push is not required for tag-triggered release images
-- Manual `workflow_dispatch` tagging behavior:
-  - always publishes `sha-<shortsha>`
-  - optionally publishes `latest` (only when `source_ref=main`)
-  - optionally publishes `<X.Y.Z>-g<shortsha>` when `release_version=X.Y.Z`
-    in the GitHub Actions "Run workflow" form
-  - plain `<X.Y.Z>` is reserved for `mysterybox-bridge-vX.Y.Z` tag pushes
 - Registry target: `quay.io/nebius/mysterybox-bridge`
 - Required GitHub secret: `QUAY_MYSTERYBOX` (recommended format: `username:token`)
 - Optional GitHub variable: `QUAY_MYSTERYBOX_USERNAME` (used when secret contains token only)
@@ -236,12 +228,11 @@ cd services/mysterybox-bridge
 
 Notes:
 
-- `release_version` is a manual input only for `workflow_dispatch`
-  (GitHub Actions -> `mysterybox-bridge-image` -> `Run workflow`).
 - `--publish` defaults to clean, up-to-date `main` for safety.
 - `--prep` now also requires a clean worktree before it rewrites `CHANGELOG.md`.
 - `--allow-non-main` exists as an explicit override when you intentionally
-  want to release from a non-main branch.
+  want to release outside `main`, but the tagged commit must still already be
+  in `origin/main` history or the workflow will reject it.
 - `--prep` is for working branches before PR merge.
 - `--publish` pushes the release tag immediately, which triggers
   image publish from the tagged commit.
