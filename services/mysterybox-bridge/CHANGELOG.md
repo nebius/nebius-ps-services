@@ -16,3 +16,5 @@ All notable changes to this project are tracked here. This changelog follows
 - Newer releases go above older releases.
 
 ## [Unreleased]
+
+## [mysterybox-bridge-v0.1.0] - 2026-03-10
