@@ -16,8 +16,8 @@ from . import __version__
 from .config_loader import (
     GatewayGroupSpec,
     ResolvedDeploymentPlan,
+    build_config_from_peer_files,
     load_local_config,
-    merge_peer_configs_into_local_config,
     merge_with_peer_configs,
 )
 from .config_template import DEFAULT_CONFIG_TEMPLATE
@@ -1354,14 +1354,18 @@ def create_from_peer_config(
         ..., help="Path for new configuration file (recommended: *.config.yaml)"
     ),
     peer_config_file: list[Path] = typer.Option(
-        ..., exists=True, readable=True, help="Vendor peer config file(s)"
+        ...,
+        exists=True,
+        readable=True,
+        help="Peer config file(s). Supported formats: .txt, .csv, .json, .yaml, .yml",
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing file if it exists"),
 ):
-    """Create a new configuration file by merging peer configs into the template.
+    """Create a schema-aligned configuration from keyword-imported peer inputs.
 
-    This generates a standalone YAML config file aligned with the schema for
-    review and validation before deployment.
+    This generates a standalone YAML config file from `.txt`, `.csv`, `.json`,
+    `.yaml`, or `.yml` peer inputs using the shared keyword-based importer.
+    The generated output is validated against the config schema before write.
 
     Safe to rerun: if the target file already contains the exact generated
     output for the same inputs, the command exits successfully without
@@ -1377,7 +1381,7 @@ def create_from_peer_config(
         console.print(
             Panel.fit(
                 "[bold red]✗ No peer config file provided[/bold red]\n\n"
-                "Use --peer-config-file to specify at least one vendor config.",
+                "Use --peer-config-file to specify at least one input file.",
                 title="[red]Error[/red]",
                 border_style="red",
             )
@@ -1408,15 +1412,16 @@ def create_from_peer_config(
 
     try:
         base_cfg = yaml.safe_load(DEFAULT_CONFIG_TEMPLATE) or {}
-        merged_cfg = merge_peer_configs_into_local_config(
-            base_cfg, peer_config_file, prefer_peer=True
-        )
+        merged_cfg = build_config_from_peer_files(base_cfg, peer_config_file)
+        from .schema import validate_config
+
+        validate_config(merged_cfg)
         desired_text = _normalize_file_text(yaml.safe_dump(merged_cfg, sort_keys=False))
 
         if merged_cfg == base_cfg:
             console.print(
-                "[yellow]⚠️  Peer config did not change the template. "
-                "Review the file and fill in any missing fields manually.[/yellow]"
+                "[yellow]⚠️  The importer did not detect meaningful peer fields. "
+                "Review the input file and fill in any missing values manually.[/yellow]"
             )
 
         if config_file.exists() and not force:

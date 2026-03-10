@@ -14,6 +14,12 @@ import yaml
 from pydantic import ValidationError
 
 from . import schema
+from .peer_parsers.common import detect_vendor as _detect_vendor_common
+from .peer_parsers.importer import (
+    build_connection_config,
+    merge_connection_specs,
+    parse_peer_source,
+)
 
 
 @dataclass
@@ -233,16 +239,7 @@ def load_local_config(
 
 
 def _detect_vendor(text: str) -> str:
-    t_lower = text.lower()
-    if "google cloud" in t_lower or "cloud router" in t_lower or "ha vpn" in t_lower:
-        return "gcp"
-    if "aws" in t_lower or "amazon" in t_lower or "customer gateway" in t_lower:
-        return "aws"
-    if "azure" in t_lower or "virtual network gateway" in t_lower:
-        return "azure"
-    if "cisco" in t_lower or "ios" in t_lower or "asa" in t_lower:
-        return "cisco"
-    return "generic"
+    return _detect_vendor_common(text)
 
 
 def _validate_tunnel_inner_ips(tunnel: dict, tunnel_name: str) -> None:
@@ -301,26 +298,67 @@ def _validate_tunnel_inner_ips(tunnel: dict, tunnel_name: str) -> None:
 
 
 def _parse_peer_file(path: Path) -> dict:
-    from .peer_parsers import aws as aws_parser
-    from .peer_parsers import azure as azure_parser
-    from .peer_parsers import cisco as cisco_parser
-    from .peer_parsers import gcp as gcp_parser
+    parsed_specs = merge_connection_specs(parse_peer_source(path))
+    if not parsed_specs:
+        return {"vendor": "generic", "tunnels": []}
+    if len(parsed_specs) == 1:
+        parsed = parsed_specs[0]
+        parsed.setdefault("tunnels", [])
+        parsed.setdefault("vendor", "generic")
+        return parsed
 
-    text = path.read_text(encoding="utf-8", errors="ignore")
-    vendor = _detect_vendor(text)
-    if vendor == "gcp":
-        parsed: dict[str, t.Any] = gcp_parser.parse(text)
-    elif vendor == "aws":
-        parsed = aws_parser.parse(text)
-    elif vendor == "azure":
-        parsed = azure_parser.parse(text)
-    elif vendor == "cisco":
-        parsed = cisco_parser.parse(text)
-    else:
-        parsed = {"tunnels": []}
-    if "vendor" not in parsed:
-        parsed["vendor"] = vendor
-    return parsed
+    combined: dict[str, t.Any] = {
+        "vendor": parsed_specs[0].get("vendor", "generic"),
+        "routing_mode": next(
+            (spec.get("routing_mode") for spec in parsed_specs if spec.get("routing_mode")),
+            None,
+        ),
+        "remote_asn": next(
+            (spec.get("remote_asn") for spec in parsed_specs if spec.get("remote_asn") is not None),
+            None,
+        ),
+        "remote_prefixes": [],
+        "tunnels": [],
+    }
+    vendors = {str(spec.get("vendor") or "generic") for spec in parsed_specs}
+    if len(vendors) > 1:
+        combined["vendor"] = "generic"
+
+    for spec in parsed_specs:
+        combined["tunnels"].extend(spec.get("tunnels") or [])
+        for prefix in spec.get("remote_prefixes") or []:
+            if prefix not in combined["remote_prefixes"]:
+                combined["remote_prefixes"].append(prefix)
+
+    if not combined["remote_prefixes"]:
+        combined.pop("remote_prefixes", None)
+    return combined
+
+
+def build_config_from_peer_files(base_cfg: dict, peer_files: list[Path]) -> dict:
+    cfg = copy.deepcopy(base_cfg)
+    parsed_specs: list[dict[str, t.Any]] = []
+    for peer_file in peer_files:
+        parsed_specs.extend(parse_peer_source(peer_file))
+
+    merged_specs = merge_connection_specs(parsed_specs)
+    if not merged_specs:
+        return cfg
+
+    cfg["connections"] = [
+        build_connection_config(spec, connection_index=index)
+        for index, spec in enumerate(merged_specs)
+    ]
+
+    routing_modes = {str(conn.get("routing_mode")) for conn in cfg["connections"] if conn.get("routing_mode")}
+    if len(routing_modes) == 1:
+        defaults = cfg.get("defaults") or {}
+        routing = defaults.get("routing") or {}
+        routing["mode"] = next(iter(routing_modes))
+        defaults["routing"] = routing
+        cfg["defaults"] = defaults
+
+    return cfg
 
 
 def _merge_fields(yaml_val, peer_val, default_val=None):
@@ -459,7 +497,7 @@ def _normalize_peer_specs(peer_specs: list[dict]) -> list[dict]:
 def merge_peer_configs_into_local_config(
     local_cfg: dict, peer_files: list[Path], *, prefer_peer: bool = False
 ) -> dict:
-    """Merge vendor peer configs into a local config dict.
+    """Merge keyword-imported peer data into an existing local config dict.
 
     prefer_peer=True will overwrite existing values with peer values when present.
     prefer_peer=False only fills missing fields (local config wins).
@@ -474,11 +512,20 @@ def merge_peer_configs_into_local_config(
 
     peer_vendor = next((spec.get("vendor") for spec in peer_specs if spec.get("vendor")), None)
     peer_remote_asn: int | None = None
+    peer_routing_mode = next(
+        (spec.get("routing_mode") for spec in peer_specs if spec.get("routing_mode")),
+        None,
+    )
+    peer_remote_prefixes: list[str] = []
     for spec in peer_specs:
         if spec.get("remote_asn") is not None:
             peer_remote_asn = _to_int(spec.get("remote_asn"))
             if peer_remote_asn is not None:
                 break
+    for spec in peer_specs:
+        for prefix in spec.get("remote_prefixes") or []:
+            if prefix not in peer_remote_prefixes:
+                peer_remote_prefixes.append(prefix)
 
     def merge_value(yaml_val, peer_val, default_val=None):
         return _merge_with_preference(yaml_val, peer_val, prefer_peer, default_val)
@@ -489,12 +536,20 @@ def merge_peer_configs_into_local_config(
         if prefer_peer and peer_vendor:
             conn["vendor"] = peer_vendor
             conn_vendor = peer_vendor
+        if peer_routing_mode and (prefer_peer or not conn.get("routing_mode")):
+            conn["routing_mode"] = peer_routing_mode
+        if peer_remote_prefixes and (prefer_peer or not conn.get("remote_prefixes")):
+            conn["remote_prefixes"] = peer_remote_prefixes
 
         conn_bgp = conn.get("bgp") or {}
         conn_remote_asn = _to_int(conn_bgp.get("remote_asn"))
         if peer_remote_asn is not None and (prefer_peer or conn_remote_asn is None):
             conn_bgp["remote_asn"] = peer_remote_asn
             conn_remote_asn = peer_remote_asn
+        if conn.get("routing_mode") == "bgp":
+            conn_bgp["enabled"] = True
+        elif conn.get("routing_mode") == "static":
+            conn_bgp["enabled"] = False
         conn["bgp"] = conn_bgp
 
         conn_tunnels = conn.get("tunnels") or []
