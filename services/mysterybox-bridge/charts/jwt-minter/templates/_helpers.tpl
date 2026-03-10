@@ -46,6 +46,12 @@ app.kubernetes.io/part-of: {{ .Values.global.partOf | quote }}
 {{- end -}}
 
 {{- define "jwt-minter.image" -}}
+{{- if not .Values.image.repository -}}
+{{- fail "image.repository is required" -}}
+{{- end -}}
+{{- if and (not .Values.image.digest) (not .Values.image.tag) -}}
+{{- fail "image.tag or image.digest is required" -}}
+{{- end -}}
 {{- if .Values.image.digest -}}
 {{- printf "%s@%s" .Values.image.repository .Values.image.digest -}}
 {{- else -}}

@@ -24,6 +24,7 @@ dependencies = [
 dev = [
   "build>=1.2,<2",
   "pytest>=8.2,<9",
+  "pytest-cov>=6.0,<7",
   "ruff>=0.6,<1",
 ]
 
@@ -46,7 +47,18 @@ git_describe_command = "git describe --dirty --tags --long --match mysterybox-br
 search_parent_directories = true
 
 [tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers"
+markers = [
+  "integration: isolated integration smoke tests",
+]
 testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["mysterybox_bridge"]
+
+[tool.coverage.report]
+skip_empty = true
 
 [tool.ruff]
 line-length = 100

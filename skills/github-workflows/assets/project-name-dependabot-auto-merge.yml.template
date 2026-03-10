@@ -1,4 +1,4 @@
-name: dependabot-auto-merge
+name: __PROJECT_NAME__-dependabot-auto-merge
 
 on:
   pull_request_target:
@@ -13,12 +13,12 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: dependabot-auto-merge-${{ github.event.pull_request.number }}
+  group: __PROJECT_NAME__-dependabot-auto-merge-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
   auto-merge:
-    name: dependabot-auto-merge
+    name: __PROJECT_NAME__-dependabot-auto-merge
     if: github.actor == 'dependabot[bot]' && github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:

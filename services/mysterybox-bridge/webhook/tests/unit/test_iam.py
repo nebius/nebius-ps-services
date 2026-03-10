@@ -60,7 +60,10 @@ def test_sdk_provider_prefers_token(monkeypatch) -> None:
     assert sdk.kwargs == {"credentials": "token-value"}
 
 
-def test_sdk_provider_uses_service_account_when_token_missing(monkeypatch, tmp_path: Path) -> None:
+def test_sdk_provider_uses_service_account_when_token_missing(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
     monkeypatch.setattr(iam, "_load_sdk_class", lambda: FakeSDK)
 
     provider = SDKProvider(_settings_with_service_account(tmp_path))

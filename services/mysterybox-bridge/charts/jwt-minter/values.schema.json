@@ -14,13 +14,65 @@
           "enum": ["Always", "IfNotPresent", "Never"]
         }
       },
-      "required": ["repository", "pullPolicy"]
+      "required": ["repository", "pullPolicy"],
+      "anyOf": [
+        {
+          "properties": {
+            "tag": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "properties": {
+            "digest": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "global": {
+      "type": "object",
+      "properties": {
+        "partOf": { "type": "string" },
+        "labels": { "type": "object" },
+        "annotations": { "type": "object" },
+        "imagePullSecrets": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "serviceAccount": {
+      "type": "object",
+      "properties": {
+        "create": { "type": "boolean" },
+        "name": { "type": "string" },
+        "automountServiceAccountToken": { "type": "boolean" }
+      }
     },
     "schedule": { "type": "string", "minLength": 1 },
+    "concurrencyPolicy": {
+      "type": "string",
+      "enum": ["Allow", "Forbid", "Replace"]
+    },
+    "startingDeadlineSeconds": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "successfulJobsHistoryLimit": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "failedJobsHistoryLimit": {
+      "type": "integer",
+      "minimum": 0
+    },
     "sourceSecret": {
       "type": "object",
       "properties": {
-        "name": { "type": "string" },
+        "name": { "type": "string", "minLength": 1 },
         "optional": { "type": "boolean" }
       },
       "required": ["optional"]
@@ -42,6 +94,17 @@
         "ttlSecondsAfterFinished": { "type": "integer", "minimum": 1 }
       }
     },
+    "tmpDir": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "mountPath": { "type": "string", "minLength": 1 }
+      },
+      "required": ["enabled", "mountPath"]
+    },
+    "resources": {
+      "type": "object"
+    },
     "token": {
       "type": "object",
       "properties": {
@@ -50,6 +113,16 @@
         "clockSkewSeconds": { "type": "integer", "minimum": 0 }
       },
       "required": ["ttlSeconds", "refreshBeforeSeconds", "clockSkewSeconds"]
+    },
+    "nodeSelector": {
+      "type": "object"
+    },
+    "tolerations": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "affinity": {
+      "type": "object"
     }
   }
 }

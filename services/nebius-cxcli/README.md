@@ -14,6 +14,7 @@ The current implementation is provider-driven and source-configured for Nebius e
 - [Features](#features)
 - [Runtime Metadata](#runtime-metadata)
 - [Recommended Workflow](#recommended-workflow)
+- [Releases](#releases)
 - [Commands](#commands)
 - [Auth Workflow](#auth-workflow)
 - [Examples](#examples)
@@ -150,6 +151,16 @@ Wizard field behavior:
    - `nebius-cxcli bootstrap-ci <config.yaml>`
 
 `create` is idempotent by default. Re-running the same instance identity reconciles selections and preserves existing values. Use `create --force` only when you want reset/overwrite behavior.
+
+## Releases
+
+Use the release flow in three steps:
+
+1. Prepare the changelog on your working branch with `./publish-release.sh --prep X.Y.Z`.
+2. Merge that branch to `main`.
+3. From a clean, synced `main`, create and push the release tag with `./publish-release.sh --publish X.Y.Z`.
+
+The publish step creates the annotated tag `nebius-cxcli-vX.Y.Z`. That tag triggers the repository workflow at `.github/workflows/nebius-cxcli-release.yml`, which rebuilds the wheel, verifies that the wheel version matches the tag, and publishes the GitHub Release from the tagged commit.
 
 ## Commands
 

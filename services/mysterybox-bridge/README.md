@@ -239,11 +239,14 @@ Notes:
 - `release_version` is a manual input only for `workflow_dispatch`
   (GitHub Actions -> `mysterybox-bridge-image` -> `Run workflow`).
 - `--publish` defaults to clean, up-to-date `main` for safety.
+- `--prep` now also requires a clean worktree before it rewrites `CHANGELOG.md`.
 - `--allow-non-main` exists as an explicit override when you intentionally
   want to release from a non-main branch.
 - `--prep` is for working branches before PR merge.
 - `--publish` pushes the release tag immediately, which triggers
   image publish from the tagged commit.
+- `--publish` refuses to tag if `CHANGELOG.md` does not already contain the
+  matching `mysterybox-bridge-vX.Y.Z` release heading.
 - Recommended governance:
   1. run `--prep` on a branch
   2. merge PR to `main`

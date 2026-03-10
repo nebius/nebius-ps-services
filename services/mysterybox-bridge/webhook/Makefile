@@ -2,7 +2,7 @@ VENV ?= .venv
 PYTHON ?= $(VENV)/bin/python
 .DEFAULT_GOAL := all
 
-.PHONY: all install fmt lint test build check
+.PHONY: all install fmt lint test test-unit test-integration coverage build check
 
 all: check build
 
@@ -17,10 +17,18 @@ fmt:
 lint:
 	$(PYTHON) -m ruff check src tests
 
-test:
-	$(PYTHON) -m pytest -q tests
+test: test-unit
+
+test-unit:
+	$(PYTHON) -m pytest -q -m "not integration" tests/unit
+
+test-integration:
+	$(PYTHON) -m pytest -q -m integration tests/integration
+
+coverage:
+	$(PYTHON) -m pytest --cov=mysterybox_bridge --cov-report=term-missing tests/unit
 
 build:
 	$(PYTHON) -m build --wheel
 
-check: lint test
+check: lint test-unit
