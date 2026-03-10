@@ -1,44 +1,21 @@
 name: mysterybox-bridge-image
 
 on:
-  pull_request:
-    paths:
-      - "services/mysterybox-bridge/webhook/**"
-      - ".github/workflows/mysterybox-bridge-image.yml"
   push:
-    branches: ["main"]
     tags:
       - "mysterybox-bridge-v*"
-    paths:
-      - "services/mysterybox-bridge/webhook/**"
-      - ".github/workflows/mysterybox-bridge-image.yml"
-  workflow_dispatch:
-    inputs:
-      source_ref:
-        description: "Git ref (branch, tag, or SHA) to build"
-        required: false
-        default: "main"
-        type: string
-      release_version:
-        description: "Optional release SemVer (X.Y.Z) to publish X.Y.Z-g<sha> on manual runs"
-        required: false
-        type: string
-      publish_latest:
-        description: "Also publish :latest (recommended only for main)"
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: mysterybox-bridge-image-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: mysterybox-bridge-image-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   IMAGE_NAME: quay.io/nebius/mysterybox-bridge
   WEBHOOK_DIR: services/mysterybox-bridge/webhook
+  MAIN_BRANCH: main
 
 jobs:
   test:
@@ -52,7 +29,6 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          ref: ${{ inputs.source_ref || github.ref }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -77,7 +53,6 @@ jobs:
   build-and-push:
     name: mysterybox-bridge-build-and-push
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'
     needs: [test]
     environment:
       name: mysterybox-image-publish
@@ -86,52 +61,31 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          ref: ${{ inputs.source_ref || github.ref }}
 
-      - name: Authorize workflow_dispatch actor
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/github-script@v8
-        with:
-          script: |
-            const { owner, repo } = context.repo;
-            const username = context.actor;
-            const response = await github.rest.repos.getCollaboratorPermissionLevel({
-              owner,
-              repo,
-              username,
-            });
-            const permission = response.data.permission;
-            core.info(`workflow_dispatch actor '${username}' permission: ${permission}`);
-            if (permission !== "admin") {
-              core.setFailed(
-                `workflow_dispatch publish is restricted to repository admins; actor '${username}' has '${permission}'.`
-              );
-            }
-
-      - name: Validate workflow_dispatch inputs
-        if: github.event_name == 'workflow_dispatch'
+      - name: Resolve tagged release metadata
+        id: release
         env:
-          SOURCE_REF: ${{ inputs.source_ref }}
-          RELEASE_VERSION: ${{ inputs.release_version }}
-          PUBLISH_LATEST: ${{ inputs.publish_latest }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
 
-          if [[ -n "${RELEASE_VERSION}" && ! "${RELEASE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::release_version must match X.Y.Z"
+          if [[ ! "${REF_NAME}" =~ ^mysterybox-bridge-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "::error::Tag '${REF_NAME}' must match mysterybox-bridge-vMAJOR.MINOR.PATCH"
             exit 1
           fi
 
-          if [[ "${PUBLISH_LATEST}" == "true" && "${SOURCE_REF}" != "main" && "${SOURCE_REF}" != "refs/heads/main" ]]; then
-            echo "::error::publish_latest=true is only allowed with source_ref=main"
-            exit 1
-          fi
+          echo "tag=${REF_NAME}" >> "$GITHUB_OUTPUT"
+          echo "version=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-list -n 1 "${REF_NAME}")" >> "$GITHUB_OUTPUT"
 
-      - name: Resolve source commit
-        id: source
+      - name: Ensure tag commit belongs to main history
         run: |
           set -euo pipefail
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          git fetch origin "${MAIN_BRANCH}" --depth=1
+          if ! git merge-base --is-ancestor "${{ steps.release.outputs.commit }}" "origin/${MAIN_BRANCH}"; then
+            echo "::error::Tag commit ${{ steps.release.outputs.commit }} is not in origin/${MAIN_BRANCH} history"
+            exit 1
+          fi
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -144,7 +98,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ -z "${QUAY_SECRET:-}" ]; then
+          if [[ -z "${QUAY_SECRET:-}" ]]; then
             echo "::error::Missing required secret QUAY_MYSTERYBOX"
             exit 1
           fi
@@ -153,9 +107,11 @@ jobs:
             echo "username=${QUAY_SECRET%%:*}" >> "$GITHUB_OUTPUT"
             echo "password=${QUAY_SECRET#*:}" >> "$GITHUB_OUTPUT"
           else
-            username="${QUAY_USERNAME_VAR:-nebius}"
-            echo "::notice::Using QUAY_MYSTERYBOX as token and username '${username}'."
-            echo "::notice::For robot accounts, prefer secret format 'username:token' or set repo variable QUAY_MYSTERYBOX_USERNAME."
+            username="${QUAY_USERNAME_VAR:-}"
+            if [[ -z "${username}" ]]; then
+              echo "::error::Token-only secret QUAY_MYSTERYBOX requires repo variable QUAY_MYSTERYBOX_USERNAME"
+              exit 1
+            fi
             echo "username=${username}" >> "$GITHUB_OUTPUT"
             echo "password=${QUAY_SECRET}" >> "$GITHUB_OUTPUT"
           fi
@@ -167,46 +123,19 @@ jobs:
           username: ${{ steps.quay_creds.outputs.username }}
           password: ${{ steps.quay_creds.outputs.password }}
 
-      - name: Resolve image tags
-        id: image_tags
+      - name: Resolve image metadata
+        id: image
         env:
-          EVENT_NAME: ${{ github.event_name }}
-          REF_NAME: ${{ github.ref_name }}
-          REF_TYPE: ${{ github.ref_type }}
-          SHA: ${{ steps.source.outputs.sha }}
-          RELEASE_VERSION: ${{ inputs.release_version }}
-          PUBLISH_LATEST: ${{ inputs.publish_latest }}
+          COMMIT: ${{ steps.release.outputs.commit }}
+          VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
 
-          short_sha="${SHA::7}"
-          tags="${IMAGE_NAME}:sha-${short_sha}"
-
-          if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
-            if [[ "${PUBLISH_LATEST}" == "true" ]]; then
-              tags="${tags}"$'\n'"${IMAGE_NAME}:latest"
-            fi
-            if [[ -n "${RELEASE_VERSION}" ]]; then
-              tags="${tags}"$'\n'"${IMAGE_NAME}:${RELEASE_VERSION}-g${short_sha}"
-            fi
-          else
-            if [[ "${REF_TYPE}" == "branch" && "${REF_NAME}" == "main" ]]; then
-              tags="${tags}"$'\n'"${IMAGE_NAME}:latest"
-            fi
-
-            if [[ "${REF_TYPE}" == "tag" ]]; then
-              if [[ "${REF_NAME}" =~ ^mysterybox-bridge-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-                semver="${BASH_REMATCH[1]}"
-                tags="${tags}"$'\n'"${IMAGE_NAME}:${semver}"
-                tags="${tags}"$'\n'"${IMAGE_NAME}:${semver}-g${short_sha}"
-              else
-                echo "::error::Tag '${REF_NAME}' must match mysterybox-bridge-vMAJOR.MINOR.PATCH"
-                exit 1
-              fi
-            fi
-          fi
+          short_sha="${COMMIT::7}"
+          tags="${IMAGE_NAME}:sha-${short_sha}"$'\n'"${IMAGE_NAME}:${VERSION}"$'\n'"${IMAGE_NAME}:${VERSION}-g${short_sha}"
 
           {
+            echo "package_version=${VERSION}"
             echo "tags<<EOF"
             echo "${tags}"
             echo "EOF"
@@ -220,14 +149,17 @@ jobs:
           file: ${{ env.WEBHOOK_DIR }}/Dockerfile
           push: true
           provenance: false
-          tags: ${{ steps.image_tags.outputs.tags }}
+          tags: ${{ steps.image.outputs.tags }}
+          build-args: |
+            MYSTERYBOX_BRIDGE_WEBHOOK_VERSION=${{ steps.image.outputs.package_version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Write publish manifest
         env:
-          TAGS: ${{ steps.image_tags.outputs.tags }}
+          TAGS: ${{ steps.image.outputs.tags }}
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          PACKAGE_VERSION: ${{ steps.image.outputs.package_version }}
         run: |
           set -euo pipefail
           tags_json="$(printf '%s\n' "${TAGS}" | jq -R -s -c 'split("\n") | map(select(length > 0))')"
@@ -236,7 +168,10 @@ jobs:
             --arg event "${GITHUB_EVENT_NAME}" \
             --arg ref "${GITHUB_REF}" \
             --arg ref_name "${GITHUB_REF_NAME}" \
-            --arg sha "${{ steps.source.outputs.sha }}" \
+            --arg tag "${{ steps.release.outputs.tag }}" \
+            --arg version "${{ steps.release.outputs.version }}" \
+            --arg sha "${{ steps.release.outputs.commit }}" \
+            --arg package_version "${PACKAGE_VERSION}" \
             --arg digest "${IMAGE_DIGEST}" \
             --arg run_id "${GITHUB_RUN_ID}" \
             --arg run_attempt "${GITHUB_RUN_ATTEMPT}" \
@@ -248,7 +183,10 @@ jobs:
               event: $event,
               ref: $ref,
               ref_name: $ref_name,
+              tag: $tag,
+              version: $version,
               sha: $sha,
+              package_version: $package_version,
               tags: $tags,
               digest: $digest,
               run_id: $run_id,
@@ -264,20 +202,22 @@ jobs:
 
       - name: Publish run summary
         env:
-          TAGS: ${{ steps.image_tags.outputs.tags }}
+          TAGS: ${{ steps.image.outputs.tags }}
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          PACKAGE_VERSION: ${{ steps.image.outputs.package_version }}
         run: |
+          set -euo pipefail
           {
             echo "### mysterybox-bridge image publish"
             echo ""
-            echo "- Actor: \`${GITHUB_ACTOR}\`"
-            echo "- Event: \`${GITHUB_EVENT_NAME}\`"
-            echo "- Ref: \`${GITHUB_REF}\`"
-            echo "- Commit: \`${{ steps.source.outputs.sha }}\`"
+            echo "- Tag: \`${{ steps.release.outputs.tag }}\`"
+            echo "- Version: \`${{ steps.release.outputs.version }}\`"
+            echo "- Commit: \`${{ steps.release.outputs.commit }}\`"
+            echo "- Package version: \`${PACKAGE_VERSION}\`"
             echo "- Digest: \`${IMAGE_DIGEST}\`"
             echo ""
             echo "#### Tags"
             while IFS= read -r tag; do
-              [ -n "${tag}" ] && echo "- \`${tag}\`"
+              [[ -n "${tag}" ]] && echo "- \`${tag}\`"
             done <<< "${TAGS}"
           } >> "$GITHUB_STEP_SUMMARY"
