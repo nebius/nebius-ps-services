@@ -14,6 +14,10 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [nebius-vpngw-v0.5.3] - 2026-03-10
+
+- Made the output path optional for `create-from-peer-config`; when omitted, the generated config now defaults to `./nebius-vpngw.config.yaml`.
+- Added `--local-config-file` as an output-file alias for `create-from-peer-config`, with fail-fast validation if it conflicts with the positional output path.
 ## [nebius-vpngw-v0.5.2] - 2026-03-08
 
 - Expanded the pytest-based test suite, split unit/integration coverage, centralized test config in `pyproject.toml`, and added `Makefile` targets plus service-scoped CI.

@@ -1350,8 +1350,21 @@ def prep_network(
 
 @app.command(options_metavar="")
 def create_from_peer_config(
-    config_file: Path = typer.Argument(
-        ..., help="Path for new configuration file (recommended: *.config.yaml)"
+    config_file: Path | None = typer.Argument(
+        None,
+        help=(
+            "Path for new configuration file "
+            f"(default: ./{DEFAULT_CONFIG_FILENAME}; recommended: *.config.yaml)"
+        ),
+    ),
+    local_config_file: Path | None = typer.Option(
+        None,
+        "--local-config-file",
+        "-c",
+        help=(
+            "Output local config file path. "
+            "Alias for CONFIG_FILE on this command."
+        ),
     ),
     peer_config_file: list[Path] = typer.Option(
         ...,
@@ -1376,6 +1389,22 @@ def create_from_peer_config(
     from rich.panel import Panel
 
     console = Console()
+
+    if config_file is not None and local_config_file is not None and config_file != local_config_file:
+        console.print()
+        console.print(
+            Panel.fit(
+                "[bold red]✗ Conflicting output file arguments[/bold red]\n\n"
+                f"CONFIG_FILE: [cyan]{config_file}[/cyan]\n"
+                f"--local-config-file: [cyan]{local_config_file}[/cyan]\n\n"
+                "Provide only one output path, or pass the same value to both.",
+                title="[red]Error[/red]",
+                border_style="red",
+            )
+        )
+        raise typer.Exit(code=1)
+
+    config_file = local_config_file or config_file or (Path.cwd() / DEFAULT_CONFIG_FILENAME)
 
     if not peer_config_file:
         console.print(
