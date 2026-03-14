@@ -135,9 +135,30 @@ patterns = [
     re.compile(rf"^##\s+\[?{re.escape(version)}\]?(?:\s+-.*)?$"),
 ]
 
-if not any(any(pattern.match(line.strip()) for pattern in patterns) for line in lines):
-    print(f"Missing changelog section for {tag} in {changelog_path}", file=sys.stderr)
-    sys.exit(1)
+if any(any(pattern.match(line.strip()) for pattern in patterns) for line in lines):
+    sys.exit(0)
+
+unreleased_notes = []
+capture_unreleased = False
+for line in lines:
+    stripped = line.strip()
+    if stripped == "## [Unreleased]":
+        capture_unreleased = True
+        continue
+    if capture_unreleased and stripped.startswith("## "):
+        break
+    if capture_unreleased:
+        unreleased_notes.append(line)
+
+message = f"Missing changelog section for {tag} in {changelog_path}"
+if "\n".join(unreleased_notes).strip():
+    message += (
+        f". Unreleased still has content; run ./publish-release.sh --prep {version} "
+        "on a clean branch and merge that changelog commit to main first."
+    )
+
+print(message, file=sys.stderr)
+sys.exit(1)
 PY
 }
 
