@@ -1,0 +1,62 @@
+# macOS filesystem metadata
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100/
+.Trashes/
+.fseventsd/
+
+# VS Code (ignore local workspace state, allow shareable config)
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+*.code-workspace
+.history/
+
+# Common editor temp files
+*.swp
+*.swo
+*~
+
+# Logs and temp output
+*.log
+tmp/
+temp/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.secret
+*.token
+
+# Python virtualenvs and caches
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+.ipynb_checkpoints/
+
+# Python packaging artifacts
+build/
+dist/
+*.egg-info/
+pip-wheel-metadata/
+src/github_report/_version.py
+
+# Local tool caches
+.cache/
+coverage/
