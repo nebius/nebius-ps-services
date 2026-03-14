@@ -16,4 +16,6 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [github-report-v0.1.0] - 2026-03-14
+
 - first release
