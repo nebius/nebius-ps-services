@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from contextlib import nullcontext
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
@@ -15,6 +16,12 @@ from github_report.models import (
     UserContributorRow,
 )
 from github_report.settings import SortBy, WindowKind
+
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _normalize_help_output(text: str) -> str:
+    return " ".join(ANSI_ESCAPE_RE.sub("", text).split())
 
 
 def sample_report() -> ReportBundle:
@@ -349,39 +356,43 @@ def test_list_repos_command_renders_markdown() -> None:
 
 def test_root_help_mentions_org_override() -> None:
     result = CliRunner().invoke(app, ["--help"])
+    output = _normalize_help_output(result.stdout)
 
     assert result.exit_code == 0
-    assert "--org" in result.stdout
-    assert "Each command accepts `--org`" in result.stdout
-    assert "Examples:" in result.stdout
-    assert "github-report top-users --top 5 --days 60 --output report.txt" in result.stdout
-    assert "github-report list-repos --output repos.txt" in result.stdout
-    assert "repo-breakdown" not in result.stdout
+    assert "--org" in output
+    assert "Each command accepts `--org`" in output
+    assert "Examples:" in output
+    assert "github-report top-users --top 5 --days 60 --output report.txt" in output
+    assert "github-report list-repos --output repos.txt" in output
+    assert "repo-breakdown" not in output
 
 
 def test_top_users_help_mentions_exclude_option() -> None:
     result = CliRunner().invoke(app, ["top-users", "--help"])
+    output = _normalize_help_output(result.stdout)
 
     assert result.exit_code == 0
-    assert "--all-time" in result.stdout
-    assert "--days" in result.stdout
-    assert "[default: (30)]" in result.stdout
-    assert "--no-all-time" not in result.stdout
-    assert "--exclude" in result.stdout
+    assert "--all-time" in output
+    assert "--days" in output
+    assert "[default: (30)]" in output
+    assert "--no-all-time" not in output
+    assert "--exclude" in output
 
 
 def test_top_users_help_includes_examples() -> None:
     result = CliRunner().invoke(app, ["top-users", "--help"])
+    output = _normalize_help_output(result.stdout)
 
     assert result.exit_code == 0
-    assert "Examples:" in result.stdout
-    assert "github-report top-users --top 5 --days 60" in result.stdout
-    assert "github-report top-users --exclude old-app --output report.txt" in result.stdout
+    assert "Examples:" in output
+    assert "github-report top-users --top 5 --days 60" in output
+    assert "github-report top-users --exclude old-app --output report.txt" in output
 
 
 def test_list_repos_help_includes_examples() -> None:
     result = CliRunner().invoke(app, ["list-repos", "--help"])
+    output = _normalize_help_output(result.stdout)
 
     assert result.exit_code == 0
-    assert "Examples:" in result.stdout
-    assert "github-report list-repos --org acme --output repos.txt" in result.stdout
+    assert "Examples:" in output
+    assert "github-report list-repos --org acme --output repos.txt" in output
