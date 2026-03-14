@@ -15,3 +15,5 @@ All notable changes to this project are tracked here. This changelog follows
   `## [github-report-vX.Y.Z] - YYYY-MM-DD`
 
 ## [Unreleased]
+
+- first release
