@@ -30,6 +30,7 @@ Script helper to install Codex skills into `~/.agents/skills`.
 - Recognizes skill folders by `SKILL.md`.
 - Keeps installs idempotent across repeated runs.
 - Avoids overwriting skills that belong to a different source.
+- Supports removing one installed skill by its visible Codex skill name.
 - Removes stale skills only for the same source.
 
 ## Requirements
@@ -42,6 +43,7 @@ Script helper to install Codex skills into `~/.agents/skills`.
 
 ```bash
 ./install-skills.sh [options] [source] [destination_dir]
+./install-skills.sh --remove-skill <skill_name> [destination_dir]
 ```
 
 ### Source
@@ -59,6 +61,11 @@ Script helper to install Codex skills into `~/.agents/skills`.
 ### Options
 
 - `-h`, `--help`: Show help.
+- `--remove-skill <skill_name>`: Remove one installed skill from the destination.
+  You can pass either:
+  - the skill `name:` from `SKILL.md`, which is the name Codex shows in VS Code
+    and uses for routing
+  - the installed skill folder name under `~/.agents/skills`
 
 ## Examples
 
@@ -77,6 +84,12 @@ Script helper to install Codex skills into `~/.agents/skills`.
 
 # Install from GitHub nested skills folder to custom destination
 ./install-skills.sh "https://github.com/openai/skills/tree/main/skills" "~/.agents/skills"
+
+# Remove an installed skill by the same name shown in Codex chat
+./install-skills.sh --remove-skill nebius
+
+# Remove an installed skill by its folder name
+./install-skills.sh --remove-skill vendor-nebius
 ```
 
 ## Notes
@@ -84,3 +97,11 @@ Script helper to install Codex skills into `~/.agents/skills`.
 - Existing unmanaged folders in destination are never overwritten.
 - If a skill exists but belongs to another source, it is skipped.
 - A valid skill folder must contain `SKILL.md`.
+- `--remove-skill` deletes the matching skill folder from the destination and
+  removes its local manifest entries.
+- After removing a skill, reload the VS Code extension host to refresh skill
+  discovery.
+- Reinstalling from a source that still contains the skill will add it back.
+- The installer uses `rsync --delete` inside each managed skill directory, and
+  it also removes stale skills that were previously installed from the same
+  source.
