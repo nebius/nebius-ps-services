@@ -150,6 +150,89 @@ jobs:
 
           echo "path=${asset}" >> "$GITHUB_OUTPUT"
 
+      - name: Package release assets
+        if: steps.state.outputs.release_exists == 'false'
+        id: package
+        run: |
+          set -euo pipefail
+
+          release_dir="release-assets"
+          installer_name="install-github-report.sh"
+          guide_name="INSTALL.txt"
+          bundle_name="github-report-install-${{ steps.version.outputs.version }}.tar.gz"
+          checksums_name="github-report-${{ steps.version.outputs.version }}-SHA256SUMS.txt"
+
+          rm -rf "${release_dir}"
+          mkdir -p "${release_dir}/bundle"
+
+          cp "${{ steps.asset.outputs.path }}" "${release_dir}/"
+          cp "${installer_name}" "${release_dir}/${installer_name}"
+          chmod 0755 "${release_dir}/${installer_name}"
+
+          python - "${release_dir}/${guide_name}" "${bundle_name}" "${{ steps.version.outputs.tag }}" <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+          from textwrap import dedent
+
+          guide_path, bundle_name, tag = sys.argv[1:4]
+          repository = os.environ["GITHUB_REPOSITORY"]
+
+          content = dedent(
+              f"""
+              github-report install guide
+              =========================
+
+              Recommended install path: use the bundled install archive from this release.
+
+              1. Extract this archive.
+              2. Open a terminal in the extracted folder.
+              3. Run:
+
+                 bash ./install-github-report.sh
+
+              What the installer does:
+              - installs Python automatically when needed on macOS and Ubuntu/Debian-style Linux
+              - installs the bundled github-report wheel
+              - creates the github-report launcher in ~/.local/bin
+              - verifies the installed version
+              - explains how to create a GitHub account and token if you do not have one yet
+
+              If you want to install directly from the release page without extracting first:
+
+                 curl -fsSLO https://github.com/{repository}/releases/download/{tag}/{bundle_name}
+                 tar -xzf {bundle_name}
+                 bash ./install-github-report.sh
+              """
+          ).lstrip()
+
+          Path(guide_path).write_text(content, encoding="utf-8")
+          PY
+
+          cp "${release_dir}/${installer_name}" "${release_dir}/bundle/${installer_name}"
+          cp "${release_dir}/${guide_name}" "${release_dir}/bundle/${guide_name}"
+          cp "${{ steps.asset.outputs.path }}" "${release_dir}/bundle/"
+
+          tar -C "${release_dir}/bundle" -czf "${release_dir}/${bundle_name}" \
+            "${installer_name}" \
+            "${guide_name}" \
+            "$(basename -- "${{ steps.asset.outputs.path }}")"
+
+          (
+            cd "${release_dir}"
+            shasum -a 256 \
+              "$(basename -- "${{ steps.asset.outputs.path }}")" \
+              "${installer_name}" \
+              "${guide_name}" \
+              "${bundle_name}" > "${checksums_name}"
+          )
+
+          echo "wheel_path=${release_dir}/$(basename -- "${{ steps.asset.outputs.path }}")" >> "$GITHUB_OUTPUT"
+          echo "installer_path=${release_dir}/${installer_name}" >> "$GITHUB_OUTPUT"
+          echo "guide_path=${release_dir}/${guide_name}" >> "$GITHUB_OUTPUT"
+          echo "bundle_path=${release_dir}/${bundle_name}" >> "$GITHUB_OUTPUT"
+          echo "checksums_path=${release_dir}/${checksums_name}" >> "$GITHUB_OUTPUT"
+
       - name: Generate release notes from changelog
         if: steps.state.outputs.release_exists == 'false'
         id: notes
@@ -159,6 +242,7 @@ jobs:
           import pathlib
           import re
           import sys
+          from textwrap import dedent
 
           tag = sys.argv[1]
           version = sys.argv[2]
@@ -189,7 +273,26 @@ jobs:
           if not notes_text:
               raise SystemExit(f"Changelog section for {tag} is empty")
 
-          pathlib.Path("release-notes.md").write_text(notes_text + "\n", encoding="utf-8")
+          install_section = dedent(
+              f"""
+              ## Install
+
+              Recommended: download the bundled install archive from this release and run:
+
+              ```bash
+              curl -fsSLO https://github.com/${{ github.repository }}/releases/download/{tag}/github-report-install-{version}.tar.gz
+              tar -xzf github-report-install-{version}.tar.gz
+              bash ./install-github-report.sh
+              ```
+
+              No git clone is required.
+              """
+          ).strip()
+
+          pathlib.Path("release-notes.md").write_text(
+              notes_text + "\n\n" + install_section + "\n",
+              encoding="utf-8",
+          )
           PY
           echo "path=release-notes.md" >> "$GITHUB_OUTPUT"
 
@@ -199,7 +302,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh release create "${{ steps.version.outputs.tag }}" "${{ steps.asset.outputs.path }}" \
+          gh release create "${{ steps.version.outputs.tag }}" \
+            "${{ steps.package.outputs.wheel_path }}" \
+            "${{ steps.package.outputs.installer_path }}" \
+            "${{ steps.package.outputs.guide_path }}" \
+            "${{ steps.package.outputs.bundle_path }}" \
+            "${{ steps.package.outputs.checksums_path }}" \
             --title "${{ steps.version.outputs.tag }}" \
             --notes-file "${{ steps.notes.outputs.path }}"
 
@@ -214,7 +322,11 @@ jobs:
             --arg tag "${{ steps.version.outputs.tag }}" \
             --arg version "${{ steps.version.outputs.version }}" \
             --arg sha "${{ steps.revision.outputs.commit }}" \
-            --arg asset "${{ steps.asset.outputs.path }}" \
+            --arg wheel "${{ steps.package.outputs.wheel_path }}" \
+            --arg installer "${{ steps.package.outputs.installer_path }}" \
+            --arg guide "${{ steps.package.outputs.guide_path }}" \
+            --arg bundle "${{ steps.package.outputs.bundle_path }}" \
+            --arg checksums "${{ steps.package.outputs.checksums_path }}" \
             --arg run_id "${GITHUB_RUN_ID}" \
             --arg run_attempt "${GITHUB_RUN_ATTEMPT}" \
             --arg repository "${GITHUB_REPOSITORY}" \
@@ -226,7 +338,13 @@ jobs:
               tag: $tag,
               version: $version,
               sha: $sha,
-              asset: $asset,
+              assets: {
+                wheel: $wheel,
+                installer: $installer,
+                guide: $guide,
+                bundle: $bundle,
+                checksums: $checksums
+              },
               run_id: $run_id,
               run_attempt: $run_attempt,
               timestamp_utc: now | todate
@@ -253,4 +371,11 @@ jobs:
             echo "- Version: \`${{ steps.version.outputs.version }}\`"
             echo "- Commit: \`${{ steps.revision.outputs.commit }}\`"
             echo "- Release exists: \`${{ steps.state.outputs.release_exists }}\`"
+            if [[ "${{ steps.state.outputs.release_exists }}" == "false" ]]; then
+              echo "- Wheel asset: \`${{ steps.package.outputs.wheel_path }}\`"
+              echo "- Installer asset: \`${{ steps.package.outputs.installer_path }}\`"
+              echo "- Install guide asset: \`${{ steps.package.outputs.guide_path }}\`"
+              echo "- Bundle asset: \`${{ steps.package.outputs.bundle_path }}\`"
+              echo "- Checksums asset: \`${{ steps.package.outputs.checksums_path }}\`"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
