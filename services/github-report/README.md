@@ -63,16 +63,37 @@ pip install -e ".[dev]"
 
 ## End-User Setup
 
-For non-developer installs, use the setup script:
+No git clone is required.
+
+Keep the installer in the service root, not under `src/`. It is an
+application/distribution artifact, not a Python package module.
+
+Recommended for end users: download the bundled install archive from the
+matching GitHub Release and run it from the extracted folder:
 
 ```bash
-./setup-github-report.sh
+curl -fsSLO \
+  https://github.com/nebius/nebius-ps-services/releases/download/github-report-v0.1.0/github-report-install-v0.1.0.tar.gz
+tar -xzf github-report-install-v0.1.0.tar.gz
+bash ./install-github-report.sh
 ```
 
-The script checks macOS/Linux prerequisites, verifies `GITHUB_TOKEN` or
-`GH_TOKEN`, downloads the latest published `github-report` wheel from GitHub
-Releases, installs it into a dedicated virtual environment, and creates a
-`~/.local/bin/github-report` launcher.
+The release also includes these assets:
+
+- `github-report-install-<version>.tar.gz`: recommended bundle for end users
+- `install-github-report.sh`: standalone installer
+- `github_report-<version>-py3-none-any.whl`: wheel
+- `INSTALL.txt`: plain-language install guide
+- `github-report-<version>-SHA256SUMS.txt`: checksums
+
+When the bundle already contains `install-github-report.sh` and the matching
+wheel, the installer uses that local wheel directly. If no bundled wheel is
+present, it falls back to downloading the latest published wheel from GitHub
+Releases. In both cases it installs into a dedicated virtual environment and
+creates a `~/.local/bin/github-report` launcher. If you do not already have a
+GitHub account or token, the installer also shows the signup link, the token
+creation link, the minimum token permissions, and copy-paste commands for
+setting `GITHUB_TOKEN`.
 
 ## Usage
 

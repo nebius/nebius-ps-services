@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
 S_RESET=""
 S_BOLD=""
 S_DIM=""
@@ -13,6 +15,7 @@ PROJECT_NAME="github-report"
 PROJECT_DIST="github_report"
 REPO_OWNER="nebius"
 REPO_NAME="nebius-ps-services"
+SIGNUP_URL="https://github.com/signup"
 INSTALL_ROOT="${GITHUB_REPORT_INSTALL_ROOT:-${HOME}/.local/share/github-report}"
 VENV_DIR="${INSTALL_ROOT}/venv"
 BIN_DIR="${GITHUB_REPORT_BIN_DIR:-${HOME}/.local/bin}"
@@ -58,24 +61,85 @@ log_success() {
   printf '%b\n' "${S_GREEN}$1${S_RESET}"
 }
 
+log_step() {
+  printf '\n%b\n' "${S_BOLD}${S_CYAN}$1${S_RESET}"
+}
+
+print_token_guidance() {
+  local shell_rc="$1"
+
+  log_note "github-report needs a GitHub account and a GitHub token to read repository activity."
+  log_note "If you do not have a GitHub account yet, create one here first:"
+  printf '  %s\n' "${SIGNUP_URL}"
+  printf '\n'
+
+  log_note "After you sign in, create a fine-grained personal access token here:"
+  printf '  %s\n' "${DOCS_URL}"
+  printf '  %s\n' "${TOKEN_WIZARD_URL}"
+  printf '\n'
+
+  log_note "Recommended minimum token settings for github-report:"
+  printf '  - Token type: Fine-grained personal access token\n'
+  printf '  - Resource owner: %s\n' "${REPO_OWNER}"
+  printf '  - Repository access: All repositories in the org for org-wide reports, or only the repositories you want to scan\n'
+  printf '  - Repository permissions: Metadata (read-only), Contents (read-only)\n'
+  printf '  - No write permissions are needed\n'
+  printf '\n'
+
+  log_note "Important notes:"
+  printf '  - If your organization requires approval for fine-grained tokens, wait for approval before running the installer again\n'
+  printf '  - If you use a classic token with an SSO-protected organization, you may need to authorize it for SSO after creation\n'
+  printf '\n'
+
+  log_note "Quick start for this terminal only:"
+  printf '  export GITHUB_TOKEN=YOUR_TOKEN_HERE\n'
+  printf '\n'
+
+  if [[ -n "${shell_rc}" ]]; then
+    log_note "Save it for future terminal sessions:"
+    printf "  echo 'export GITHUB_TOKEN=YOUR_TOKEN_HERE' >> %s\n" "${shell_rc}"
+    printf "  source %s\n" "${shell_rc}"
+  else
+    log_note "Set the token in your current shell before re-running the installer:"
+    printf '  export GITHUB_TOKEN=YOUR_TOKEN_HERE\n'
+  fi
+}
+
+show_welcome() {
+  printf '%b\n' "${S_BOLD}${PROJECT_NAME} installer${S_RESET}"
+  log_note "This installer is designed for end users on macOS and Ubuntu/Debian-style Linux."
+  log_note "It will guide you through the full setup automatically when possible."
+  printf '\n'
+  printf '%s\n' "It will:"
+  printf '%s\n' "  1. Check your operating system and install Python if needed"
+  printf '%s\n' "  2. Check GitHub access or explain how to create a GitHub account and token"
+  printf '%s\n' "  3. Install ${PROJECT_NAME} and create a launcher command"
+  printf '%s\n' "  4. Verify that the CLI is installed correctly"
+  printf '\n'
+  log_note "You may be asked for your computer password if system packages need to be installed."
+}
+
 show_usage() {
   printf '%b\n' "${S_BOLD}Usage:${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./setup-github-report.sh${S_RESET} ${S_DIM}[options]${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}bash ./install-github-report.sh${S_RESET} ${S_DIM}[options]${S_RESET}"
   printf '\n'
   printf '%b\n' "${S_BOLD}Options:${S_RESET}"
   printf '%b\n' "  ${S_YELLOW}-h, --help${S_RESET}          Show help"
   printf '%b\n' "  ${S_YELLOW}--dry-run${S_RESET}           Print actions without downloading or installing"
   printf '\n'
   printf '%b\n' "${S_BOLD}What it does:${S_RESET}"
-  printf '%b\n' "  - Checks macOS/Linux prerequisites and installs missing ones when supported"
-  printf '%b\n' "  - Verifies ${S_CYAN}GITHUB_TOKEN${S_RESET} or ${S_CYAN}GH_TOKEN${S_RESET}"
-  printf '%b\n' "  - Downloads the latest published ${PROJECT_NAME} wheel from GitHub Releases"
+  printf '%b\n' "  - Checks macOS/Ubuntu prerequisites and installs missing ones when supported"
+  printf '%b\n' "  - Installs Python automatically when it is missing or unsupported"
+  printf '%b\n' "  - Installs from a bundled ${PROJECT_NAME} wheel when one is next to this script"
+  printf '%b\n' "  - Otherwise downloads the latest published ${PROJECT_NAME} wheel from GitHub Releases"
+  printf '%b\n' "  - Explains how to create a GitHub account and token if you do not have one yet"
   printf '%b\n' "  - Installs ${PROJECT_NAME} into ${S_CYAN}${VENV_DIR}${S_RESET}"
   printf '%b\n' "  - Creates ${S_CYAN}${BIN_DIR}/github-report${S_RESET}"
+  printf '%b\n' "  - Verifies that the installed CLI starts correctly"
   printf '\n'
   printf '%b\n' "${S_BOLD}Examples:${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./setup-github-report.sh${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./setup-github-report.sh --dry-run${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}bash ./install-github-report.sh${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}bash ./install-github-report.sh --dry-run${S_RESET}"
 }
 
 cleanup() {
@@ -88,6 +152,24 @@ trap cleanup EXIT
 
 have_cmd() {
   command -v "$1" >/dev/null 2>&1
+}
+
+load_homebrew_env() {
+  local brew_cmd=""
+
+  if have_cmd brew; then
+    brew_cmd="brew"
+  elif [[ -x "/opt/homebrew/bin/brew" ]]; then
+    brew_cmd="/opt/homebrew/bin/brew"
+  elif [[ -x "/usr/local/bin/brew" ]]; then
+    brew_cmd="/usr/local/bin/brew"
+  else
+    return 1
+  fi
+
+  # Ensure newly installed Homebrew is usable in the current shell.
+  eval "$("${brew_cmd}" shellenv)"
+  return 0
 }
 
 format_cmd() {
@@ -139,7 +221,8 @@ python_meets_minimum() {
   local candidate="$1"
   "${candidate}" - <<'PY' >/dev/null 2>&1
 import sys
-raise SystemExit(0 if sys.version_info >= (3, 11) else 1)
+version = sys.version_info
+raise SystemExit(0 if (3, 11) <= version[:2] < (3, 14) else 1)
 PY
 }
 
@@ -156,6 +239,7 @@ find_python_cmd() {
 
 ensure_homebrew() {
   if have_cmd brew; then
+    load_homebrew_env >/dev/null 2>&1 || true
     return 0
   fi
   if ! have_cmd curl; then
@@ -169,10 +253,15 @@ ensure_homebrew() {
   fi
   NONINTERACTIVE=1 /bin/bash -c \
     "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  if ! load_homebrew_env; then
+    log_error "Homebrew was installed but could not be loaded into the current shell."
+    exit 1
+  fi
 }
 
 install_macos_dependencies() {
   local packages=()
+  log_note "Detected macOS."
   ensure_homebrew
   if ! find_python_cmd >/dev/null 2>&1; then
     packages+=("python@3.12")
@@ -189,6 +278,7 @@ install_macos_dependencies() {
 
 install_linux_dependencies() {
   if have_cmd apt-get; then
+    log_note "Detected Ubuntu/Debian-style Linux."
     log_note "Installing required Linux packages with apt-get."
     run_privileged_cmd apt-get update
     run_privileged_cmd apt-get install -y curl tar python3 python3-venv || true
@@ -240,7 +330,7 @@ ensure_prerequisites() {
   fi
 
   if ! PYTHON_CMD="$(find_python_cmd)"; then
-    log_error "Python 3.11 or newer is required, but no supported interpreter was found."
+    log_error "Python 3.11, 3.12, or 3.13 is required, but no supported interpreter was found."
     exit 1
   fi
 
@@ -269,26 +359,9 @@ detect_shell_rc() {
 show_token_guidance() {
   local shell_rc=""
   shell_rc="$(detect_shell_rc || true)"
-  log_error "GITHUB_TOKEN or GH_TOKEN is not set."
+  log_error "GITHUB_TOKEN or GH_TOKEN is not set yet."
   printf '\n'
-  log_note "Create a GitHub personal access token here:"
-  printf '  %s\n' "${DOCS_URL}"
-  printf '  %s\n' "${TOKEN_WIZARD_URL}"
-  printf '\n'
-  log_note "Recommended minimum access:"
-  printf '  - Resource owner: %s\n' "${REPO_OWNER}"
-  printf '  - Repository access: %s/%s\n' "${REPO_OWNER}" "${REPO_NAME}"
-  printf '  - Contents: Read-only\n'
-  printf '  - Metadata: Read-only\n'
-  printf '\n'
-  if [[ -n "${shell_rc}" ]]; then
-    log_note "Set the token for future terminal sessions:"
-    printf "  printf 'export GITHUB_TOKEN=YOUR_TOKEN_HERE\\n' >> %s\n" "${shell_rc}"
-    printf "  source %s\n" "${shell_rc}"
-  else
-    log_note "Export it in your current shell before re-running the script:"
-    printf '  export GITHUB_TOKEN=YOUR_TOKEN_HERE\n'
-  fi
+  print_token_guidance "${shell_rc}"
 }
 
 ensure_github_token() {
@@ -304,7 +377,32 @@ ensure_github_token() {
   exit 1
 }
 
-resolve_source() {
+resolve_local_source() {
+  local bundled_wheels=()
+
+  shopt -s nullglob
+  bundled_wheels=( "${SCRIPT_DIR}/${PROJECT_DIST}-"*.whl )
+  shopt -u nullglob
+
+  if [[ "${#bundled_wheels[@]}" -eq 0 ]]; then
+    return 1
+  fi
+
+  if [[ "${#bundled_wheels[@]}" -gt 1 ]]; then
+    log_error "Found multiple bundled ${PROJECT_DIST}-*.whl files next to this script. Keep only one wheel beside install-github-report.sh."
+    exit 1
+  fi
+
+  SOURCE_KIND="bundled_wheel"
+  SOURCE_REF="local bundle"
+  SOURCE_FILE="$(basename -- "${bundled_wheels[0]}")"
+  WHEEL_PATH="${bundled_wheels[0]}"
+
+  log_success "Using bundled wheel ${SOURCE_FILE} from ${SCRIPT_DIR}."
+  return 0
+}
+
+resolve_release_source() {
   local metadata
   metadata="$(
     REPO_OWNER="${REPO_OWNER}" \
@@ -340,7 +438,8 @@ except urllib.error.HTTPError as exc:
     print(
         "ERROR="
         f"GitHub API returned HTTP {exc.code} for {repo_owner}/{repo_name} releases. "
-        "Verify that your token can read repository contents and metadata."
+        "Verify that your token has read-only Metadata and Contents permissions, "
+        "and that any required organization approval or SSO authorization is complete."
     )
     raise SystemExit(0)
 except urllib.error.URLError as exc:
@@ -391,6 +490,23 @@ PY
   log_success "Using latest published wheel asset from release ${SOURCE_REF}."
 }
 
+resolve_source() {
+  if resolve_local_source; then
+    return 0
+  fi
+
+  ensure_github_token
+  if [[ "${DRY_RUN}" -eq 1 && "${TOKEN_MISSING}" -eq 1 ]]; then
+    SOURCE_KIND="release_asset"
+    SOURCE_REF="dry-run placeholder"
+    SOURCE_FILE="${PROJECT_DIST}-X.Y.Z-py3-none-any.whl"
+    log_note "Dry-run: no bundled wheel found, so GitHub release lookup was skipped."
+    return 0
+  fi
+
+  resolve_release_source
+}
+
 prepare_install_dirs() {
   run_cmd mkdir -p "${INSTALL_ROOT}" "${BIN_DIR}"
   if [[ ! -d "${VENV_DIR}" ]]; then
@@ -404,6 +520,11 @@ venv_python() {
 }
 
 download_wheel() {
+  if [[ "${SOURCE_KIND}" == "bundled_wheel" ]]; then
+    log_note "Using bundled wheel ${SOURCE_FILE}; no download needed."
+    return 0
+  fi
+
   TMP_DIR="$(mktemp -d -t github-report-setup.XXXXXX)"
   WHEEL_PATH="${TMP_DIR}/${SOURCE_FILE}"
   log_note "Downloading release wheel ${SOURCE_FILE}"
@@ -441,6 +562,44 @@ install_wheel() {
   printf "  2. Run %s\n" "$(format_cmd "${BIN_DIR}/github-report" top-users --top 10)"
 }
 
+verify_installation() {
+  local launcher_path="${BIN_DIR}/github-report"
+  local installed_version=""
+  local expected_version=""
+
+  if [[ ! -x "${launcher_path}" ]]; then
+    log_error "Installation finished, but ${launcher_path} was not created."
+    exit 1
+  fi
+
+  if ! installed_version="$("${launcher_path}" --version 2>/dev/null)"; then
+    log_error "github-report was installed, but the launcher did not start correctly."
+    exit 1
+  fi
+
+  if [[ "${SOURCE_FILE}" =~ ^${PROJECT_DIST}-([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+    expected_version="${BASH_REMATCH[1]}"
+    if [[ "${installed_version}" != "${expected_version}" ]]; then
+      log_error "Installed version ${installed_version} does not match expected version ${expected_version}."
+      exit 1
+    fi
+  fi
+
+  log_success "Verified github-report installation (${installed_version})."
+}
+
+show_runtime_token_reminder() {
+  if [[ -n "${GITHUB_TOKEN:-${GH_TOKEN:-}}" ]]; then
+    log_success "GitHub token detected. github-report can use it immediately."
+    return 0
+  fi
+
+  printf '\n'
+  log_warn "github-report is installed, but no GitHub token is set yet."
+  log_warn "You need a GitHub account and token before the CLI can fetch report data."
+  print_token_guidance "$(detect_shell_rc || true)"
+}
+
 main() {
   init_output_style
 
@@ -471,13 +630,12 @@ main() {
     esac
   done
 
+  show_welcome
+  log_step "Step 1 of 4: Checking your computer"
   ensure_prerequisites
-  ensure_github_token
-  if [[ "${DRY_RUN}" -eq 1 && "${TOKEN_MISSING}" -eq 1 ]]; then
-    log_note "Dry-run complete. Release lookup was skipped because no GitHub token is configured."
-    exit 0
-  fi
+  log_step "Step 2 of 4: Checking GitHub access"
   resolve_source
+  log_step "Step 3 of 4: Preparing installation"
   prepare_install_dirs
   if [[ "${DRY_RUN}" -eq 1 ]]; then
     log_note "Dry-run complete. No files were downloaded or installed."
@@ -485,6 +643,9 @@ main() {
   fi
   download_wheel
   install_wheel
+  log_step "Step 4 of 4: Verifying the installation"
+  verify_installation
+  show_runtime_token_reminder
 }
 
 main "$@"
