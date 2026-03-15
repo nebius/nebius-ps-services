@@ -196,7 +196,7 @@ jobs:
               - installs the bundled github-report wheel
               - creates the github-report launcher in ~/.local/bin
               - verifies the installed version
-              - explains how to create a GitHub account and token if you do not have one yet
+              - explains the GitHub token permissions needed for report access
 
               If you want to install directly from the release page without extracting first:
 

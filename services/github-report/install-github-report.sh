@@ -13,14 +13,11 @@ S_CYAN=""
 
 PROJECT_NAME="github-report"
 PROJECT_DIST="github_report"
-REPO_OWNER="nebius"
-REPO_NAME="nebius-ps-services"
-SIGNUP_URL="https://github.com/signup"
+RELEASE_REPO_OWNER="nebius"
+RELEASE_REPO_NAME="nebius-ps-services"
 INSTALL_ROOT="${GITHUB_REPORT_INSTALL_ROOT:-${HOME}/.local/share/github-report}"
 VENV_DIR="${INSTALL_ROOT}/venv"
 BIN_DIR="${GITHUB_REPORT_BIN_DIR:-${HOME}/.local/bin}"
-DOCS_URL="https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens"
-TOKEN_WIZARD_URL="https://github.com/settings/personal-access-tokens/new?name=github-report&description=Read+access+for+github-report&target_name=nebius&contents=read&metadata=read"
 TMP_DIR=""
 OS_FAMILY=""
 DRY_RUN=0
@@ -32,6 +29,7 @@ SOURCE_REF=""
 SOURCE_URL=""
 SOURCE_FILE=""
 WHEEL_PATH=""
+PREVIOUS_INSTALLED_VERSION=""
 
 init_output_style() {
   if [[ ( -t 1 || -t 2 ) && "${TERM:-}" != "dumb" && -z "${NO_COLOR:-}" ]]; then
@@ -68,27 +66,13 @@ log_step() {
 print_token_guidance() {
   local shell_rc="$1"
 
-  log_note "github-report needs a GitHub account and a GitHub token to read repository activity."
-  log_note "If you do not have a GitHub account yet, create one here first:"
-  printf '  %s\n' "${SIGNUP_URL}"
-  printf '\n'
-
-  log_note "After you sign in, create a fine-grained personal access token here:"
-  printf '  %s\n' "${DOCS_URL}"
-  printf '  %s\n' "${TOKEN_WIZARD_URL}"
-  printf '\n'
+  log_note "github-report needs a GitHub token to read repository activity."
 
   log_note "Recommended minimum token settings for github-report:"
   printf '  - Token type: Fine-grained personal access token\n'
-  printf '  - Resource owner: %s\n' "${REPO_OWNER}"
-  printf '  - Repository access: All repositories in the org for org-wide reports, or only the repositories you want to scan\n'
+  printf '  - Repository access: All repositories under that owner for owner-wide reports, or only the repositories you want to scan\n'
   printf '  - Repository permissions: Metadata (read-only), Contents (read-only)\n'
   printf '  - No write permissions are needed\n'
-  printf '\n'
-
-  log_note "Important notes:"
-  printf '  - If your organization requires approval for fine-grained tokens, wait for approval before running the installer again\n'
-  printf '  - If you use a classic token with an SSO-protected organization, you may need to authorize it for SSO after creation\n'
   printf '\n'
 
   log_note "Quick start for this terminal only:"
@@ -112,7 +96,7 @@ show_welcome() {
   printf '\n'
   printf '%s\n' "It will:"
   printf '%s\n' "  1. Check your operating system and install Python if needed"
-  printf '%s\n' "  2. Check GitHub access or explain how to create a GitHub account and token"
+  printf '%s\n' "  2. Check GitHub access or explain the required token permissions"
   printf '%s\n' "  3. Install ${PROJECT_NAME} and create a launcher command"
   printf '%s\n' "  4. Verify that the CLI is installed correctly"
   printf '\n'
@@ -132,7 +116,7 @@ show_usage() {
   printf '%b\n' "  - Installs Python automatically when it is missing or unsupported"
   printf '%b\n' "  - Installs from a bundled ${PROJECT_NAME} wheel when one is next to this script"
   printf '%b\n' "  - Otherwise downloads the latest published ${PROJECT_NAME} wheel from GitHub Releases"
-  printf '%b\n' "  - Explains how to create a GitHub account and token if you do not have one yet"
+  printf '%b\n' "  - Explains the GitHub token permissions needed for report access"
   printf '%b\n' "  - Installs ${PROJECT_NAME} into ${S_CYAN}${VENV_DIR}${S_RESET}"
   printf '%b\n' "  - Creates ${S_CYAN}${BIN_DIR}/github-report${S_RESET}"
   printf '%b\n' "  - Verifies that the installed CLI starts correctly"
@@ -356,6 +340,14 @@ detect_shell_rc() {
   esac
 }
 
+wheel_version_from_filename() {
+  if [[ "${SOURCE_FILE}" =~ ^${PROJECT_DIST}-([^-]+)- ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  return 1
+}
+
 show_token_guidance() {
   local shell_rc=""
   shell_rc="$(detect_shell_rc || true)"
@@ -405,8 +397,8 @@ resolve_local_source() {
 resolve_release_source() {
   local metadata
   metadata="$(
-    REPO_OWNER="${REPO_OWNER}" \
-    REPO_NAME="${REPO_NAME}" \
+    RELEASE_REPO_OWNER="${RELEASE_REPO_OWNER}" \
+    RELEASE_REPO_NAME="${RELEASE_REPO_NAME}" \
     PROJECT_DIST="${PROJECT_DIST}" \
     GITHUB_API_TOKEN="${GITHUB_API_TOKEN}" \
     "${PYTHON_CMD}" - <<'PY'
@@ -415,8 +407,8 @@ import os
 import urllib.error
 import urllib.request
 
-repo_owner = os.environ["REPO_OWNER"]
-repo_name = os.environ["REPO_NAME"]
+repo_owner = os.environ["RELEASE_REPO_OWNER"]
+repo_name = os.environ["RELEASE_REPO_NAME"]
 project_dist = os.environ["PROJECT_DIST"]
 token = os.environ["GITHUB_API_TOKEN"]
 
@@ -438,8 +430,7 @@ except urllib.error.HTTPError as exc:
     print(
         "ERROR="
         f"GitHub API returned HTTP {exc.code} for {repo_owner}/{repo_name} releases. "
-        "Verify that your token has read-only Metadata and Contents permissions, "
-        "and that any required organization approval or SSO authorization is complete."
+        "Verify that your token can read GitHub release metadata and assets for this repository."
     )
     raise SystemExit(0)
 except urllib.error.URLError as exc:
@@ -509,10 +500,30 @@ resolve_source() {
 
 prepare_install_dirs() {
   run_cmd mkdir -p "${INSTALL_ROOT}" "${BIN_DIR}"
+
   if [[ ! -d "${VENV_DIR}" ]]; then
     log_note "Creating virtual environment at ${VENV_DIR}"
     run_cmd "${PYTHON_CMD}" -m venv "${VENV_DIR}"
+    return 0
   fi
+
+  if [[ ! -x "$(venv_python)" ]]; then
+    log_warn "Existing virtual environment at ${VENV_DIR} is incomplete. Recreating it."
+    run_cmd rm -rf "${VENV_DIR}"
+    run_cmd "${PYTHON_CMD}" -m venv "${VENV_DIR}"
+    return 0
+  fi
+
+  log_note "Refreshing existing virtual environment at ${VENV_DIR}"
+  run_cmd "${PYTHON_CMD}" -m venv --upgrade "${VENV_DIR}"
+}
+
+current_installed_version() {
+  local launcher_path="${BIN_DIR}/github-report"
+  if [[ ! -x "${launcher_path}" ]]; then
+    return 0
+  fi
+  "${launcher_path}" --version 2>/dev/null || true
 }
 
 venv_python() {
@@ -541,12 +552,18 @@ install_wheel() {
   local launcher_target
   venv_py="$(venv_python)"
   launcher_target="${VENV_DIR}/bin/github-report"
+  PREVIOUS_INSTALLED_VERSION="$(current_installed_version)"
 
+  run_cmd "${venv_py}" -m ensurepip --upgrade
   run_cmd "${venv_py}" -m pip install --upgrade pip
-  run_cmd "${venv_py}" -m pip install --force-reinstall "${WHEEL_PATH}"
+  run_cmd "${venv_py}" -m pip install --upgrade --force-reinstall --no-cache-dir "${WHEEL_PATH}"
   run_cmd ln -sfn "${launcher_target}" "${BIN_DIR}/github-report"
 
-  log_success "Installed ${PROJECT_NAME} into ${VENV_DIR}"
+  if [[ -n "${PREVIOUS_INSTALLED_VERSION}" ]]; then
+    log_success "Updated ${PROJECT_NAME} installation in ${VENV_DIR}"
+  else
+    log_success "Installed ${PROJECT_NAME} into ${VENV_DIR}"
+  fi
   log_success "Launcher created at ${BIN_DIR}/github-report"
 
   if [[ ":${PATH}:" != *":${BIN_DIR}:"* ]]; then
@@ -559,7 +576,7 @@ install_wheel() {
   printf '\n'
   log_note "Next steps:"
   printf "  1. Run %s\n" "$(format_cmd "${BIN_DIR}/github-report" --help)"
-  printf "  2. Run %s\n" "$(format_cmd "${BIN_DIR}/github-report" top-users --top 10)"
+  printf "  2. Run %s\n" "$(format_cmd "${BIN_DIR}/github-report" top-users --owner YOUR_GITHUB_OWNER --top 10)"
 }
 
 verify_installation() {
@@ -577,12 +594,16 @@ verify_installation() {
     exit 1
   fi
 
-  if [[ "${SOURCE_FILE}" =~ ^${PROJECT_DIST}-([0-9]+\.[0-9]+\.[0-9]+) ]]; then
-    expected_version="${BASH_REMATCH[1]}"
-    if [[ "${installed_version}" != "${expected_version}" ]]; then
-      log_error "Installed version ${installed_version} does not match expected version ${expected_version}."
-      exit 1
-    fi
+  expected_version="$(wheel_version_from_filename || true)"
+  if [[ -n "${expected_version}" && "${installed_version}" != "${expected_version}" ]]; then
+    log_error "Installed version ${installed_version} does not match expected version ${expected_version}."
+    exit 1
+  fi
+
+  if [[ -n "${PREVIOUS_INSTALLED_VERSION}" && "${PREVIOUS_INSTALLED_VERSION}" != "${installed_version}" ]]; then
+    log_success "Upgraded ${PROJECT_NAME} from ${PREVIOUS_INSTALLED_VERSION} to ${installed_version}."
+  elif [[ -n "${PREVIOUS_INSTALLED_VERSION}" ]]; then
+    log_success "Reinstalled ${PROJECT_NAME} ${installed_version} cleanly."
   fi
 
   log_success "Verified github-report installation (${installed_version})."
@@ -596,7 +617,7 @@ show_runtime_token_reminder() {
 
   printf '\n'
   log_warn "github-report is installed, but no GitHub token is set yet."
-  log_warn "You need a GitHub account and token before the CLI can fetch report data."
+  log_warn "You need a GitHub token before the CLI can fetch report data."
   print_token_guidance "$(detect_shell_rc || true)"
 }
 

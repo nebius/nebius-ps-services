@@ -35,18 +35,18 @@ class GitHubReportService:
         self._graphql_client_cls = graphql_client_cls
 
     def list_repositories(self, options: ListReposOptions) -> list[RepositoryRef]:
-        """Return accessible repositories for an organization."""
+        """Return accessible repositories for an owner."""
 
         token = resolve_github_token()
         client = self._metadata_client_cls(token)
-        return client.list_accessible_repositories(options.org)
+        return client.list_accessible_repositories(options.owner)
 
     async def build_report(self, options: ReportOptions) -> ReportBundle:
         """Build both the aggregated and detailed report views."""
 
         token = resolve_github_token()
         metadata_client = self._metadata_client_cls(token)
-        available_repositories = metadata_client.list_accessible_repositories(options.org)
+        available_repositories = metadata_client.list_accessible_repositories(options.owner)
         selected_repositories = select_repositories(
             available_repositories,
             options.repos,
@@ -71,7 +71,7 @@ class GitHubReportService:
         )
         top_users = summarize_users(repo_rows, options.sort_by)
         metadata = ReportMetadata(
-            org=options.org,
+            owner=options.owner,
             generated_at=utc_now(),
             since=options.since,
             until=options.until,

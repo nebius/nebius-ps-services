@@ -9,7 +9,6 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-DEFAULT_ORG = "nebius"
 DEFAULT_TOP = 10
 DEFAULT_LOOKBACK_DAYS = 30
 DEFAULT_TIMEOUT_SECONDS = 30.0
@@ -45,7 +44,7 @@ class ReportOptions(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    org: str = Field(default=DEFAULT_ORG, min_length=1)
+    owner: str = Field(min_length=1)
     top: int = Field(default=DEFAULT_TOP, ge=1, le=1000)
     since: datetime | None = None
     until: datetime
@@ -60,12 +59,12 @@ class ReportOptions(BaseModel):
     window_kind: WindowKind = WindowKind.relative_days
     lookback_days: int | None = Field(default=DEFAULT_LOOKBACK_DAYS, ge=1, le=3650)
 
-    @field_validator("org")
+    @field_validator("owner")
     @classmethod
-    def normalize_org(cls, value: str) -> str:
+    def normalize_owner(cls, value: str) -> str:
         normalized = value.strip()
         if not normalized:
-            raise ValueError("Organization name must not be empty.")
+            raise ValueError("Owner name must not be empty.")
         return normalized
 
     @model_validator(mode="after")
@@ -80,16 +79,16 @@ class ListReposOptions(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    org: str = Field(default=DEFAULT_ORG, min_length=1)
+    owner: str = Field(min_length=1)
     format: OutputFormat = OutputFormat.markdown
     output: Path | None = None
 
-    @field_validator("org")
+    @field_validator("owner")
     @classmethod
-    def normalize_org(cls, value: str) -> str:
+    def normalize_owner(cls, value: str) -> str:
         normalized = value.strip()
         if not normalized:
-            raise ValueError("Organization name must not be empty.")
+            raise ValueError("Owner name must not be empty.")
         return normalized
 
 
@@ -143,19 +142,19 @@ def parse_datetime_input(
     return parsed_dt
 
 
-def normalize_repo_name(org: str, repo_name: str) -> str:
-    """Normalize a repo token to an org-qualified full name."""
+def normalize_repo_name(owner: str, repo_name: str) -> str:
+    """Normalize a repo token to an owner-qualified full name."""
 
     candidate = repo_name.strip()
     if not candidate:
         raise ValueError("Repository names must not be empty.")
 
     if "/" not in candidate:
-        return f"{org}/{candidate}"
+        return f"{owner}/{candidate}"
 
-    owner, name = candidate.split("/", 1)
-    if owner != org:
-        raise ValueError(f"Repository {candidate!r} does not belong to org {org!r}.")
+    repo_owner, name = candidate.split("/", 1)
+    if repo_owner != owner:
+        raise ValueError(f"Repository {candidate!r} does not belong to owner {owner!r}.")
     if not name:
         raise ValueError(f"Repository {candidate!r} is invalid.")
     return candidate
@@ -184,14 +183,14 @@ def parse_repo_file(path: Path | None) -> list[str]:
     return entries
 
 
-def resolve_repo_filters(org: str, repos: str | None, repos_file: Path | None) -> tuple[str, ...]:
+def resolve_repo_filters(owner: str, repos: str | None, repos_file: Path | None) -> tuple[str, ...]:
     """Merge repo filters from CLI inputs into a deduplicated tuple."""
 
     combined = parse_repo_csv(repos) + parse_repo_file(repos_file)
     normalized: list[str] = []
     seen: set[str] = set()
     for item in combined:
-        repo_name = normalize_repo_name(org, item)
+        repo_name = normalize_repo_name(owner, item)
         if repo_name not in seen:
             normalized.append(repo_name)
             seen.add(repo_name)
@@ -200,7 +199,7 @@ def resolve_repo_filters(org: str, repos: str | None, repos_file: Path | None) -
 
 def build_report_options(
     *,
-    org: str = DEFAULT_ORG,
+    owner: str,
     top: int = DEFAULT_TOP,
     since: str | None = None,
     days: int | None = None,
@@ -218,7 +217,7 @@ def build_report_options(
 ) -> ReportOptions:
     """Build a validated report settings object from raw CLI input."""
 
-    org_name = org.strip()
+    owner_name = owner.strip()
     if days is not None and _has_cli_value(since):
         raise ValueError("--days cannot be combined with --since.")
     if days is not None and all_time:
@@ -240,15 +239,15 @@ def build_report_options(
         since_dt = until_dt - timedelta(days=lookback_days)
 
     return ReportOptions(
-        org=org_name,
+        owner=owner_name,
         top=top,
         since=since_dt,
         until=until_dt,
         include_bots=include_bots,
         format=format,
         output=output,
-        repos=resolve_repo_filters(org_name, repos, repos_file),
-        exclude_repos=resolve_repo_filters(org_name, exclude, None),
+        repos=resolve_repo_filters(owner_name, repos, repos_file),
+        exclude_repos=resolve_repo_filters(owner_name, exclude, None),
         concurrency=concurrency,
         timeout_seconds=timeout_seconds,
         sort_by=sort_by,
@@ -259,13 +258,13 @@ def build_report_options(
 
 def build_list_repos_options(
     *,
-    org: str = DEFAULT_ORG,
+    owner: str,
     format: OutputFormat = OutputFormat.markdown,
     output: Path | None = None,
 ) -> ListReposOptions:
     """Build a validated repository list settings object from raw CLI input."""
 
-    return ListReposOptions(org=org, format=format, output=output)
+    return ListReposOptions(owner=owner, format=format, output=output)
 
 
 def model_dump_any(model: BaseModel) -> dict[str, Any]:

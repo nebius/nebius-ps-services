@@ -96,7 +96,7 @@ def render_repo_breakdown(report: ReportBundle, *, limit: int, output_format: Ou
 
 
 def render_repo_list(
-    repositories: list[RepositoryRef], *, org: str, output_format: OutputFormat
+    repositories: list[RepositoryRef], *, owner: str, output_format: OutputFormat
 ) -> str:
     """Render accessible repository metadata."""
 
@@ -110,12 +110,12 @@ def render_repo_list(
             )
         return buffer.getvalue()
     if output_format is OutputFormat.html:
-        return render_repo_list_html(repositories, org=org)
+        return render_repo_list_html(repositories, owner=owner)
     if output_format is OutputFormat.text:
-        return render_repo_list_text(repositories, org=org)
+        return render_repo_list_text(repositories, owner=owner)
 
     lines = [
-        f"# Accessible Repositories for {org}",
+        f"# Accessible Repositories for {owner}",
         "",
         f"Total repositories: {len(repositories)}",
         "",
@@ -152,7 +152,7 @@ def render_top_users_terminal(report: ReportBundle, *, limit: int) -> Renderable
         )
 
     return Group(
-        Text(f"Top Contributors for {metadata.org}", style="bold"),
+        Text(f"Top Contributors for {metadata.owner}", style="bold"),
         _build_report_summary_table(report),
         table,
     )
@@ -179,13 +179,13 @@ def render_repo_breakdown_terminal(report: ReportBundle, *, limit: int) -> Rende
         )
 
     return Group(
-        Text(f"Repository Breakdown for {metadata.org}", style="bold"),
+        Text(f"Repository Breakdown for {metadata.owner}", style="bold"),
         _build_report_summary_table(report),
         table,
     )
 
 
-def render_repo_list_terminal(repositories: list[RepositoryRef], *, org: str) -> RenderableType:
+def render_repo_list_terminal(repositories: list[RepositoryRef], *, owner: str) -> RenderableType:
     """Render repository metadata for interactive terminals."""
 
     table = Table(box=box.ROUNDED, header_style="bold cyan")
@@ -201,7 +201,7 @@ def render_repo_list_terminal(repositories: list[RepositoryRef], *, org: str) ->
         )
 
     return Group(
-        Text(f"Accessible Repositories for {org}", style="bold"),
+        Text(f"Accessible Repositories for {owner}", style="bold"),
         Text(f"Total repositories: {len(repositories)}", style="dim"),
         table,
     )
@@ -262,7 +262,7 @@ def render_top_users_text(report: ReportBundle, rows: list[UserContributorRow]) 
             )
         )
     return render_text_document(
-        title=f"Top Contributors for {report.metadata.org}",
+        title=f"Top Contributors for {report.metadata.owner}",
         summary_rows=build_summary_rows(report),
         body_title="Contributors",
         body_lines=entry_lines,
@@ -286,14 +286,14 @@ def render_repo_breakdown_text(report: ReportBundle, rows: list[RepoContributorR
             )
         )
     return render_text_document(
-        title=f"Repository Breakdown for {report.metadata.org}",
+        title=f"Repository Breakdown for {report.metadata.owner}",
         summary_rows=build_summary_rows(report),
         body_title="Contributor Rows",
         body_lines=entry_lines,
     )
 
 
-def render_repo_list_text(repositories: list[RepositoryRef], *, org: str) -> str:
+def render_repo_list_text(repositories: list[RepositoryRef], *, owner: str) -> str:
     """Render repository metadata as plain text."""
 
     entry_lines: list[str] = []
@@ -309,7 +309,7 @@ def render_repo_list_text(repositories: list[RepositoryRef], *, org: str) -> str
             )
         )
     return render_text_document(
-        title=f"Accessible Repositories for {org}",
+        title=f"Accessible Repositories for {owner}",
         summary_rows=[("Total repositories", str(len(repositories)))],
         body_title="Repositories",
         body_lines=entry_lines,
@@ -321,7 +321,7 @@ def render_top_users_markdown(report: ReportBundle, rows: list[UserContributorRo
 
     metadata = report.metadata
     lines = [
-        f"# Top Contributors for {metadata.org}",
+        f"# Top Contributors for {metadata.owner}",
         "",
         f"- Generated at: `{format_datetime_for_display(metadata.generated_at)}`",
         f"- Window: `{describe_window(metadata)}`",
@@ -348,7 +348,7 @@ def render_repo_breakdown_markdown(report: ReportBundle, rows: list[RepoContribu
 
     metadata = report.metadata
     lines = [
-        f"# Repository Breakdown for {metadata.org}",
+        f"# Repository Breakdown for {metadata.owner}",
         "",
         f"- Generated at: `{format_datetime_for_display(metadata.generated_at)}`",
         f"- Window: `{describe_window(metadata)}`",
@@ -376,7 +376,7 @@ def render_top_users_html(report: ReportBundle, rows: list[UserContributorRow]) 
 
     metadata = report.metadata
     return render_html_document(
-        title=f"Top Contributors for {metadata.org}",
+        title=f"Top Contributors for {metadata.owner}",
         summary_rows=build_summary_rows(report),
         headers=[
             ("rank", "num"),
@@ -403,7 +403,7 @@ def render_repo_breakdown_html(report: ReportBundle, rows: list[RepoContributorR
 
     metadata = report.metadata
     return render_html_document(
-        title=f"Repository Breakdown for {metadata.org}",
+        title=f"Repository Breakdown for {metadata.owner}",
         summary_rows=build_summary_rows(report),
         headers=[
             ("rank", "num"),
@@ -425,11 +425,11 @@ def render_repo_breakdown_html(report: ReportBundle, rows: list[RepoContributorR
     )
 
 
-def render_repo_list_html(repositories: list[RepositoryRef], *, org: str) -> str:
+def render_repo_list_html(repositories: list[RepositoryRef], *, owner: str) -> str:
     """Render repository metadata as HTML."""
 
     return render_html_document(
-        title=f"Accessible Repositories for {org}",
+        title=f"Accessible Repositories for {owner}",
         summary_rows=[("Total repositories", str(len(repositories)))],
         headers=[
             ("repo_name", "text"),

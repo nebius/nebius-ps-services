@@ -1,10 +1,10 @@
 # github-report
 
 `github-report` is a Python CLI that ranks contributors across GitHub
-repositories in an organization.
+repositories owned by a GitHub organization or personal account.
 
-It works with any GitHub organization that your token can access. The default
-org is `nebius`.
+It works with any GitHub owner that your token can access. `--owner` is
+required for every report or listing command.
 
 It is optimized for executive reporting:
 
@@ -34,13 +34,13 @@ Word or Google Docs with table formatting preserved.
 
 ## Defaults
 
-- organization: `nebius`
+- owner: none, must be provided with `--owner`
 - report window: relative days, defaulting to `--days 30`
 - output format: `markdown`
 - ranking: `modifications`
 - top rows: `10`
 - bots: excluded when GitHub classifies the account type as `Bot`
-- repositories: all accessible repos in the organization
+- repositories: all accessible repos under the selected owner
 - branch scope: repository default branch only
 
 When you omit `--since` and `--all-time`, the CLI uses a relative-days window.
@@ -97,43 +97,42 @@ setting `GITHUB_TOKEN`.
 
 ## Usage
 
-Show the top 10 contributors across all accessible repos in the default org
-(`nebius`) for the last 30 days:
+Show the top 10 contributors across all accessible repos under an organization:
 
 ```bash
-github-report top-users
+github-report top-users --owner nebius
 ```
 
 The explicit equivalent is:
 
 ```bash
-github-report top-users --days 30
+github-report top-users --owner nebius --days 30
 ```
 
 Run the same report against another organization:
 
 ```bash
-github-report --org my-github-org top-users
+github-report --owner lm-academy top-users
 ```
 
-You can also override the organization at the command level:
+Run the same report against a personal account:
 
 ```bash
-github-report top-users --org my-github-org
+github-report top-users --owner dashabalashova
 ```
 
 Show the top 50 contributors since a specific date. This already ranks by
 modifications by default:
 
 ```bash
-github-report top-users --top 50 --since 2026-01-01
+github-report top-users --owner nebius --top 50 --since 2026-01-01
 ```
 
 Use a relative lookback window when you want the last `N` days instead of a
 fixed start date:
 
 ```bash
-github-report top-users --top 50 --days 60
+github-report top-users --owner nebius --top 50 --days 60
 ```
 
 `--days` cannot be combined with `--since`. `--all-time` bypasses both.
@@ -142,39 +141,39 @@ You can combine `--days` with `--until` to anchor that relative window at a
 specific end time:
 
 ```bash
-github-report top-users --top 50 --days 60 --until 2026-03-01
+github-report top-users --owner lm-academy --top 50 --days 60 --until 2026-03-01
 ```
 
 You can also anchor the default `--days 30` window without passing `--days`
 explicitly:
 
 ```bash
-github-report top-users --top 50 --until 2026-03-01
+github-report top-users --owner nebius --top 50 --until 2026-03-01
 ```
 
 Switch back to commit-first ranking when you need it:
 
 ```bash
-github-report top-users --top 50 --since 2026-01-01 --sort-by commits
+github-report top-users --owner nebius --top 50 --since 2026-01-01 --sort-by commits
 ```
 
 Show contributor rows per repository instead of aggregating across the selected
 repos:
 
 ```bash
-github-report top-users --per-repo --top 50 --since 2026-01-01
+github-report top-users --owner dashabalashova --per-repo --top 50 --since 2026-01-01
 ```
 
 Limit the report to a small repo set:
 
 ```bash
-github-report top-users --repos pysdk,gosdk,api --since 2026-02-01
+github-report top-users --owner nebius --repos pysdk,gosdk,api --since 2026-02-01
 ```
 
-Exclude specific repositories from an org-wide report:
+Exclude specific repositories from an owner-wide report:
 
 ```bash
-github-report top-users --exclude csa-soperator-deployments,api --since 2026-02-01
+github-report top-users --owner nebius --exclude csa-soperator-deployments,api --since 2026-02-01
 ```
 
 Exclusions are applied after `--repos` and `--repos-file`, so you can start
@@ -183,49 +182,57 @@ with a small include list and still subtract a few repositories.
 Load repo filters from a text file:
 
 ```bash
-github-report top-users --repos-file repos.txt --since 2026-02-01
+github-report top-users --owner lm-academy --repos-file repos.txt --since 2026-02-01
+```
+
+Limit the report to one repo under an organization or personal account:
+
+```bash
+github-report top-users --owner lm-academy --repos github-actions-course --all-time
+
+github-report top-users --owner dashabalashova --repos boltz-benchmark --all-time
 ```
 
 Write CSV output to a file:
 
 ```bash
-github-report top-users --per-repo --format csv --output report.csv --all-time
+github-report top-users --owner nebius --per-repo --format csv --output report.csv --all-time
 ```
 
 Write Markdown output without passing `--format` explicitly:
 
 ```bash
-github-report top-users --output report.md
+github-report top-users --owner nebius --output report.md
 ```
 
 Write plain text output for easier copy/paste into Slack or editors:
 
 ```bash
-github-report top-users --output report.txt
+github-report top-users --owner nebius --output report.txt
 ```
 
 Write HTML output for easier copy/paste into Word:
 
 ```bash
-github-report top-users --output report.html
+github-report top-users --owner nebius --output report.html
 ```
 
 List accessible repositories before building a filter file:
 
 ```bash
-github-report list-repos
+github-report list-repos --owner nebius
 ```
 
-List repositories in another organization:
+List repositories for a personal account:
 
 ```bash
-github-report list-repos --org my-github-org
+github-report list-repos --owner dashabalashova
 ```
 
 ## Repo Filter File
 
 `--repos-file` accepts one repo per line. Short names are resolved against the
-selected org.
+selected owner.
 
 ```text
 # comments are allowed
