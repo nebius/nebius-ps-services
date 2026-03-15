@@ -55,7 +55,7 @@ class RepoScanResult:
 class ReportMetadata:
     """Metadata shared by every emitted report."""
 
-    org: str
+    owner: str
     generated_at: datetime
     since: datetime | None
     until: datetime

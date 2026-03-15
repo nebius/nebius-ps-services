@@ -72,11 +72,15 @@ class GitHubMetadataClient:
     def __init__(self, token: str, *, per_page: int = 100) -> None:
         self._client = Github(auth=Auth.Token(token), per_page=per_page)
 
-    def list_accessible_repositories(self, org_name: str) -> list[RepositoryRef]:
-        """List repositories visible to the authenticated user for an org."""
+    def list_accessible_repositories(self, owner_name: str) -> list[RepositoryRef]:
+        """List repositories visible to the authenticated user for an owner."""
 
         try:
-            org = self._client.get_organization(org_name)
+            owner = self._client.get_user(owner_name)
+            if owner.type == "Organization":
+                repositories_iterable = self._client.get_organization(owner_name).get_repos()
+            else:
+                repositories_iterable = owner.get_repos()
             repositories = [
                 RepositoryRef(
                     name=repo.name,
@@ -84,11 +88,11 @@ class GitHubMetadataClient:
                     default_branch=repo.default_branch,
                     is_archived=repo.archived,
                 )
-                for repo in org.get_repos()
+                for repo in repositories_iterable
             ]
         except GithubException as exc:
             raise GitHubClientError(
-                f"GitHub repository discovery failed for org {org_name!r}."
+                f"GitHub repository discovery failed for owner {owner_name!r}."
             ) from exc
 
         return sorted(repositories, key=lambda repo: repo.full_name)

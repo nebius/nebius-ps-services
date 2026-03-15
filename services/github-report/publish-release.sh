@@ -199,8 +199,8 @@ for i, h in enumerate(headers):
 def normalize_content(content: str) -> str:
     stripped = content.strip("\n")
     if not stripped.strip():
-        return "\n"
-    return "\n\n" + stripped + "\n"
+        return "\n\n"
+    return "\n\n" + stripped + "\n\n"
 
 def merge_content(new_part: str, existing: str) -> str:
     parts = []
@@ -209,8 +209,8 @@ def merge_content(new_part: str, existing: str) -> str:
     if existing.strip():
         parts.append(existing.strip("\n"))
     if not parts:
-        return "\n"
-    return "\n\n" + "\n\n".join(parts) + "\n"
+        return "\n\n"
+    return "\n\n" + "\n\n".join(parts) + "\n\n"
 
 unreleased_idx = None
 tag_idx = None
@@ -243,6 +243,7 @@ else:
     sections[unreleased_idx] = (unreleased_header, "\n\n")
 
 new_text = preamble + "".join(f"{h}{c}" for h, c in sections)
+new_text = new_text.rstrip("\n") + "\n\n"
 path.write_text(new_text)
 PY
 }

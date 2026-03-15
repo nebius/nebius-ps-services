@@ -14,7 +14,7 @@ from github_report.settings import OutputFormat, SortBy, WindowKind
 
 def build_report_bundle() -> ReportBundle:
     metadata = ReportMetadata(
-        org="nebius",
+        owner="acme",
         generated_at=datetime(2026, 3, 13, 12, 0, 0, tzinfo=UTC),
         since=datetime(2026, 3, 1, 0, 0, 0, tzinfo=UTC),
         until=datetime(2026, 3, 13, 12, 0, 0, tzinfo=UTC),
@@ -35,7 +35,7 @@ def build_report_bundle() -> ReportBundle:
                 num_commits=7,
                 num_modifications=70,
                 repo_count=2,
-                repos=("nebius/gosdk", "nebius/pysdk"),
+                repos=("acme/gosdk", "acme/pysdk"),
             ),
             UserContributorRow(
                 "bob",
@@ -43,21 +43,21 @@ def build_report_bundle() -> ReportBundle:
                 num_commits=3,
                 num_modifications=20,
                 repo_count=1,
-                repos=("nebius/pysdk",),
+                repos=("acme/pysdk",),
             ),
         ],
         repo_rows=[
             RepoContributorRow(
                 "alice",
                 "Alice Example (@alice)",
-                "nebius/pysdk",
+                "acme/pysdk",
                 num_commits=4,
                 num_modifications=40,
             ),
             RepoContributorRow(
                 "alice",
                 "Alice Example (@alice)",
-                "nebius/gosdk",
+                "acme/gosdk",
                 num_commits=3,
                 num_modifications=30,
             ),
@@ -68,31 +68,31 @@ def build_report_bundle() -> ReportBundle:
 def test_render_top_users_markdown_contains_expected_headers() -> None:
     output = render_top_users(build_report_bundle(), limit=2, output_format=OutputFormat.markdown)
 
-    assert "# Top Contributors for nebius" in output
+    assert "# Top Contributors for acme" in output
     assert "- Window: `custom window (2026-03-01T00:00:00Z to 2026-03-13T12:00:00Z)`" in output
     assert "- Ranking metric: `modifications first, then commits`" in output
     assert "| rank | user_name | num_modifications | num_commits | repos |" in output
-    assert "| 1 | Alice Example (@alice) | 70 | 7 | nebius/gosdk, nebius/pysdk |" in output
+    assert "| 1 | Alice Example (@alice) | 70 | 7 | acme/gosdk, acme/pysdk |" in output
 
 
 def test_render_repo_breakdown_csv_has_expected_columns() -> None:
     output = render_repo_breakdown(build_report_bundle(), limit=2, output_format=OutputFormat.csv)
 
     assert output.splitlines()[0] == "rank,user_name,repo_name,num_modifications,num_commits"
-    assert "1,Alice Example (@alice),nebius/pysdk,40,4" in output
+    assert "1,Alice Example (@alice),acme/pysdk,40,4" in output
 
 
 def test_render_top_users_text_is_pretty_and_copy_paste_friendly() -> None:
     output = render_top_users(build_report_bundle(), limit=2, output_format=OutputFormat.text)
 
-    assert "Top Contributors for nebius" in output
+    assert "Top Contributors for acme" in output
     assert "Generated at" in output
     assert "2026-03-13T12:00:00Z" in output
     assert "Contributors" in output
     assert " 1. Alice Example (@alice)" in output
     assert "    Modifications : 70" in output
     assert "    Commits       : 7" in output
-    assert "    Repos         : nebius/gosdk, nebius/pysdk" in output
+    assert "    Repos         : acme/gosdk, acme/pysdk" in output
 
 
 def test_render_top_users_markdown_reflects_commit_first_ranking() -> None:
@@ -118,7 +118,7 @@ def test_render_top_users_html_contains_table_markup() -> None:
     output = render_top_users(build_report_bundle(), limit=2, output_format=OutputFormat.html)
 
     assert "<!DOCTYPE html>" in output
-    assert "<h1>Top Contributors for nebius</h1>" in output
+    assert "<h1>Top Contributors for acme</h1>" in output
     assert '<th class="num">rank</th>' in output
     assert '<td class="text">Alice Example (@alice)</td>' in output
-    assert '<td class="text">nebius/gosdk, nebius/pysdk</td>' in output
+    assert '<td class="text">acme/gosdk, acme/pysdk</td>' in output

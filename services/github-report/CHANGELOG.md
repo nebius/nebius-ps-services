@@ -16,10 +16,18 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [github-report-v0.1.2] - 2026-03-15
+
+- replace the org-specific CLI flow with a required `--owner` option that works for GitHub organizations and personal accounts
+- support activity reports for owner-wide scans and individual public repositories using the same modifications-then-commits ranking
+- make the installer idempotent for re-runs and wheel upgrades, and simplify GitHub token guidance for end users
+
 ## [github-report-v0.1.1] - 2026-03-15
 
 - improve installer guidance for Python setup, GitHub account/token creation, and post-install verification
 - publish installer, tarball, checksums, and install notes as release assets
+
 ## [github-report-v0.1.0] - 2026-03-14
 
 - first release
+

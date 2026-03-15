@@ -27,7 +27,6 @@ from github_report.services.github_client import GitHubClientError
 from github_report.services.reporting import GitHubReportService
 from github_report.settings import (
     DEFAULT_CONCURRENCY,
-    DEFAULT_ORG,
     DEFAULT_TIMEOUT_SECONDS,
     DEFAULT_TOP,
     OutputFormat,
@@ -41,15 +40,15 @@ ROOT_EPILOG = dedent(
     """
     Examples:
 
-      github-report top-users
+      github-report --owner nebius top-users
 
-      github-report top-users --top 5 --days 60 --output report.txt
+      github-report top-users --owner lm-academy --top 5 --days 60 --output report.txt
 
-      github-report top-users --exclude old-app --output report.txt
+      github-report top-users --owner dashabalashova --exclude old-app --output report.txt
 
-      github-report top-users --org acme --repos app-a,app-b --since 2026-01-01
+      github-report top-users --owner nebius --repos app-a,app-b --since 2026-01-01
 
-      github-report list-repos --output repos.txt
+      github-report list-repos --owner nebius --output repos.txt
     """
 ).strip()
 
@@ -57,8 +56,8 @@ app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
     help=(
-        "Rank GitHub contributors across the default branches of GitHub organization "
-        "repositories. Each command accepts `--org`; the default org is `nebius`."
+        "Rank GitHub contributors across the default branches of repositories owned by "
+        "a GitHub organization or personal account. Each command requires `--owner`."
     ),
     epilog=ROOT_EPILOG,
 )
@@ -70,15 +69,15 @@ TOP_USERS_EPILOG = dedent(
     """
     Examples:
 
-      github-report top-users
+      github-report top-users --owner nebius
 
-      github-report top-users --top 5 --days 60
+      github-report top-users --owner lm-academy --top 5 --days 60
 
-      github-report top-users --exclude old-app --output report.txt
+      github-report top-users --owner dashabalashova --exclude old-app --output report.txt
 
-      github-report top-users --org acme --repos app-a,app-b --since 2026-01-01
+      github-report top-users --owner nebius --repos app-a,app-b --since 2026-01-01
 
-      github-report top-users --per-repo --output report.html
+      github-report top-users --owner dashabalashova --per-repo --output report.html
     """
 ).strip()
 
@@ -86,11 +85,11 @@ LIST_REPOS_EPILOG = dedent(
     """
     Examples:
 
-      github-report list-repos
+      github-report list-repos --owner nebius
 
-      github-report list-repos --org acme --output repos.txt
+      github-report list-repos --owner lm-academy --output repos.txt
 
-      github-report list-repos --format html --output repos.html
+      github-report list-repos --owner dashabalashova --format html --output repos.html
     """
 ).strip()
 
@@ -104,14 +103,17 @@ def _version_callback(value: bool) -> None:
 @app.callback()
 def callback(
     ctx: typer.Context,
-    org: Annotated[
-        str,
+    owner: Annotated[
+        str | None,
         typer.Option(
-            "--org",
-            help="Default GitHub organization for commands. Each command accepts `--org`; the default org is `nebius`.",
-            show_default=True,
+            "--owner",
+            help=(
+                "GitHub owner for commands. Supports organizations and personal "
+                "accounts. Required unless provided on the subcommand."
+            ),
+            show_default=False,
         ),
-    ] = DEFAULT_ORG,
+    ] = None,
     version: Annotated[
         bool | None,
         typer.Option(
@@ -125,16 +127,20 @@ def callback(
 ) -> None:
     """CLI callback."""
 
-    ctx.obj = {"org": org}
+    ctx.obj = {"owner": owner}
 
 
 @app.command("top-users", epilog=TOP_USERS_EPILOG)
 def top_users(
     ctx: typer.Context,
-    org: Annotated[
+    owner: Annotated[
         str | None,
         typer.Option(
-            help="GitHub organization to scan. Overrides the root `--org`.", show_default=False
+            help=(
+                "GitHub owner to scan. Supports organizations and personal accounts. "
+                "Overrides the root `--owner`."
+            ),
+            show_default=False,
         ),
     ] = None,
     top: Annotated[int, typer.Option(help="Number of rows to emit.")] = DEFAULT_TOP,
@@ -164,12 +170,12 @@ def top_users(
     ] = False,
     repos: Annotated[
         str | None,
-        typer.Option(help="Comma-separated repo names or org/repo identifiers."),
+        typer.Option(help="Comma-separated repo names or owner/repo identifiers."),
     ] = None,
     exclude: Annotated[
         str | None,
         typer.Option(
-            help="Comma-separated repo names or org/repo identifiers to exclude."
+            help="Comma-separated repo names or owner/repo identifiers to exclude."
         ),
     ] = None,
     repos_file: Annotated[
@@ -214,11 +220,11 @@ def top_users(
         typer.Option(help="Per-request timeout in seconds."),
     ] = DEFAULT_TIMEOUT_SECONDS,
 ) -> None:
-    """Emit top contributors across selected repositories in an org."""
+    """Emit top contributors across selected repositories for an owner."""
 
     resolved_format = _resolve_output_format(ctx, format, output)
     options = _build_report_options(
-        org=_resolve_org(ctx, org),
+        owner=_resolve_owner(ctx, owner),
         top=top,
         since=since,
         days=days,
@@ -256,10 +262,13 @@ def top_users(
 @app.command("list-repos", epilog=LIST_REPOS_EPILOG)
 def list_repos(
     ctx: typer.Context,
-    org: Annotated[
+    owner: Annotated[
         str | None,
         typer.Option(
-            help="GitHub organization to inspect. Overrides the root `--org`.",
+            help=(
+                "GitHub owner to inspect. Supports organizations and personal accounts. "
+                "Overrides the root `--owner`."
+            ),
             show_default=False,
         ),
     ] = None,
@@ -272,11 +281,11 @@ def list_repos(
         typer.Option(help="Write the report to a file instead of stdout."),
     ] = None,
 ) -> None:
-    """List repositories visible to the configured token for an org."""
+    """List repositories visible to the configured token for an owner."""
 
     try:
         options = build_list_repos_options(
-            org=_resolve_org(ctx, org),
+            owner=_resolve_owner(ctx, owner),
             format=_resolve_output_format(ctx, format, output),
             output=output,
         )
@@ -287,10 +296,10 @@ def list_repos(
         _exit_with_error(str(exc), code=1)
 
     _write_output(
-        render_repo_list(repositories, org=options.org, output_format=options.format),
+        render_repo_list(repositories, owner=options.owner, output_format=options.format),
         options.output,
         renderable=(
-            render_repo_list_terminal(repositories, org=options.org)
+            render_repo_list_terminal(repositories, owner=options.owner)
             if options.output is None and options.format is OutputFormat.markdown
             else None
         ),
@@ -354,7 +363,7 @@ def _build_report_status_message(options: ReportOptions) -> str:
             f"{repo_scope}, excluding {excluded_repo_count} "
             f"{_pluralize_repos(excluded_repo_count)}"
         )
-    return f"Collecting GitHub activity for {options.org} ({repo_scope})..."
+    return f"Collecting GitHub activity for {options.owner} ({repo_scope})..."
 
 
 def _status_context(message: str):
@@ -370,12 +379,15 @@ def _pluralize_repos(count: int) -> str:
     return "repo" if count == 1 else "repos"
 
 
-def _resolve_org(ctx: typer.Context, command_org: str | None) -> str:
-    if command_org:
-        return command_org
-    if isinstance(ctx.obj, dict) and ctx.obj.get("org"):
-        return str(ctx.obj["org"])
-    return DEFAULT_ORG
+def _resolve_owner(ctx: typer.Context, command_owner: str | None) -> str:
+    if command_owner:
+        return command_owner
+    if isinstance(ctx.obj, dict) and ctx.obj.get("owner"):
+        return str(ctx.obj["owner"])
+    _exit_with_error(
+        "Missing required option '--owner'. Provide a GitHub organization or personal account.",
+        code=2,
+    )
 
 
 def _resolve_output_format(
