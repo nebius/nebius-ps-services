@@ -16,6 +16,9 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- improve installer guidance for Python setup, GitHub account/token creation, and post-install verification
+- publish installer, tarball, checksums, and install notes as release assets
+
 ## [github-report-v0.1.0] - 2026-03-14
 
 - first release
