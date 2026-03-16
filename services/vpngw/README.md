@@ -593,6 +593,8 @@ nebius-vpngw status --local-config-file <file>
 
 Shows tunnel status (including active/passive role), carrying-traffic indicator, BGP sessions, service health, routing validation.
 
+For multi-connection configs, `Carrying Traffic` is evaluated per connection, not once for the whole VM. If live BGP multipath is detected for the same prefix across different active connections, `status` prints an `ECMP Warning` panel that lists the overlapping prefix and the active tunnel names currently carrying it.
+
 **Manage routes:**
 
 ```bash
@@ -754,6 +756,8 @@ The gateway operates in **Active/Passive mode** to ensure symmetric routing with
 | **disable** | `ha_role: "disable"` (**must be explicit**) | Tunnel completely skipped (no IPsec, no BGP). |
 
 **Important:** If you omit `ha_role` on multiple tunnels, they will all default to `"active"`, creating ECMP load balancing that may cause asymmetric routing and packet loss. Always explicitly set one tunnel to `"passive"` in multi-tunnel configurations.
+
+Multiple `connections` on the same gateway are supported for multi-site designs. Keep the Active/Passive rule inside each connection, and prefer distinct site prefixes per connection. If different active connections learn the same prefix, FRR can install multipath for that prefix and `status` will warn with the overlapping prefix and active tunnel names.
 
 **Example:**
 

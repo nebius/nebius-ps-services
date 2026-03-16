@@ -134,6 +134,144 @@ def _build_ssh_base_cmd(key_path: Path | None) -> list[str]:
     return cmd
 
 
+def _normalize_role_value(value: t.Any) -> str:
+    if hasattr(value, "value"):
+        value = value.value
+    value = str(value or "").strip().lower()
+    return value or "unknown"
+
+
+def _select_carrying_tunnel_for_connection(
+    hostname: str,
+    connection_name: str | None,
+    tunnel_names: list[str],
+    tunnel_statuses: dict[str, str],
+    bgp_states: dict[str, str],
+    tunnel_bgp_map: dict[str, dict[str, str]],
+    tunnel_role_map: dict[str, dict[str, str]],
+    tunnel_connection_map: dict[str, dict[str, str]],
+) -> str | None:
+    established: list[str] = []
+
+    def _belongs_to_connection(tunnel_name: str) -> bool:
+        if not connection_name:
+            return True
+        mapped_name = tunnel_connection_map.get(hostname, {}).get(tunnel_name)
+        return mapped_name == connection_name
+
+    if bgp_states:
+        for name in tunnel_names:
+            if not _belongs_to_connection(name):
+                continue
+            peer_ip = tunnel_bgp_map.get(hostname, {}).get(name)
+            if not peer_ip:
+                continue
+            state = str(bgp_states.get(peer_ip, "")).strip().lower()
+            if state == "established":
+                established.append(name)
+    if not established:
+        for name in tunnel_names:
+            if not _belongs_to_connection(name):
+                continue
+            if str(tunnel_statuses.get(name, "")).upper() == "ESTABLISHED":
+                established.append(name)
+    if len(established) == 1:
+        return established[0]
+    if len(established) > 1:
+        for name in established:
+            role_value = _normalize_role_value(tunnel_role_map.get(hostname, {}).get(name))
+            if role_value == "active":
+                return name
+        return established[0]
+    return None
+
+
+def _detect_cross_connection_ecmp_warnings(
+    routes: dict[str, t.Any],
+    peer_connection_map: dict[str, str],
+    peer_tunnel_map: dict[str, str],
+    peer_role_map: dict[str, str],
+) -> list[dict[str, t.Any]]:
+    warnings: list[dict[str, t.Any]] = []
+
+    for prefix, raw_paths in (routes or {}).items():
+        if not isinstance(raw_paths, list):
+            continue
+
+        active_entries: list[dict[str, str]] = []
+        for path in raw_paths:
+            if not isinstance(path, dict) or not path.get("multipath"):
+                continue
+
+            peer_ip = str(path.get("peerId") or "").strip()
+            if not peer_ip:
+                nexthops = path.get("nexthops") or []
+                if isinstance(nexthops, list):
+                    for nexthop in nexthops:
+                        if not isinstance(nexthop, dict):
+                            continue
+                        candidate_ip = str(nexthop.get("ip") or "").strip()
+                        if candidate_ip and candidate_ip in peer_connection_map:
+                            peer_ip = candidate_ip
+                            break
+            if not peer_ip:
+                continue
+
+            role = _normalize_role_value(peer_role_map.get(peer_ip))
+            if role != "active":
+                continue
+
+            connection_name = peer_connection_map.get(peer_ip)
+            tunnel_name = peer_tunnel_map.get(peer_ip)
+            if not connection_name or not tunnel_name:
+                continue
+
+            active_entries.append(
+                {
+                    "connection": connection_name,
+                    "tunnel": tunnel_name,
+                    "peer_ip": peer_ip,
+                }
+            )
+
+        unique_connections = {entry["connection"] for entry in active_entries}
+        if len(unique_connections) < 2:
+            continue
+
+        warnings.append(
+            {
+                "prefix": prefix,
+                "connections": sorted(unique_connections),
+                "entries": sorted(
+                    active_entries,
+                    key=lambda entry: (entry["connection"], entry["tunnel"], entry["peer_ip"]),
+                ),
+            }
+        )
+
+    return warnings
+
+
+def _format_ecmp_warning_lines(
+    active_ecmp_warnings: dict[str, list[dict[str, t.Any]]],
+) -> list[str]:
+    warning_lines = [
+        "Live BGP multipath is active across different active connections for overlapping prefixes.",
+        "Traffic may be hash-split across more than one site-level connection for those prefixes.",
+    ]
+
+    for hostname, warnings in sorted(active_ecmp_warnings.items()):
+        warning_lines.append("")
+        warning_lines.append(f"Gateway VM: {hostname}")
+        for warning in warnings:
+            warning_lines.append(f"  Overlapping prefix: {warning['prefix']}")
+            warning_lines.append("  Active tunnels carrying this prefix:")
+            for entry in warning["entries"]:
+                warning_lines.append(f"    - {entry['tunnel']} (connection: {entry['connection']})")
+
+    return warning_lines
+
+
 def _build_remote_tunnel_restart_script() -> str:
     """Return a self-contained remote Python helper for tunnel restart.
 
@@ -1527,6 +1665,7 @@ def status(
     import subprocess
 
     from rich.console import Console
+    from rich.panel import Panel
     from rich.table import Table
 
     console = Console()
@@ -1620,6 +1759,11 @@ def status(
     tunnel_bgp_map: dict[str, dict[str, str]] = {}
     tunnel_peer_map: dict[str, dict[str, str]] = {}
     tunnel_role_map: dict[str, dict[str, str]] = {}
+    tunnel_connection_map: dict[str, dict[str, str]] = {}
+    peer_connection_map: dict[str, dict[str, str]] = {}
+    peer_tunnel_map: dict[str, dict[str, str]] = {}
+    peer_role_map: dict[str, dict[str, str]] = {}
+    ecmp_warnings_by_vm: dict[str, list[dict[str, t.Any]]] = {}
 
     def _normalize_mode(value: t.Any) -> str:
         if hasattr(value, "value"):
@@ -1627,16 +1771,11 @@ def status(
         value = str(value or "").strip().lower()
         return value or "bgp"
 
-    def _normalize_role(value: t.Any) -> str:
-        if hasattr(value, "value"):
-            value = value.value
-        value = str(value or "").strip().lower()
-        return value or "unknown"
-
     defaults_mode = _normalize_mode(
         (local_cfg.get("defaults", {}).get("routing", {}) or {}).get("mode")
     )
     for conn in local_cfg.get("connections") or []:
+        conn_name = str(conn.get("name") or "unnamed")
         conn_mode = _normalize_mode(conn.get("routing_mode") or defaults_mode)
         for tun in conn.get("tunnels") or []:
             try:
@@ -1647,17 +1786,28 @@ def status(
             tunnel_bgp_map.setdefault(hostname, {})
             tunnel_peer_map.setdefault(hostname, {})
             tunnel_role_map.setdefault(hostname, {})
+            tunnel_connection_map.setdefault(hostname, {})
+            peer_connection_map.setdefault(hostname, {})
+            peer_tunnel_map.setdefault(hostname, {})
+            peer_role_map.setdefault(hostname, {})
+            tunnel_name = str(tun.get("name") or f"tunnel{inst_idx}")
             if conn_mode == "bgp":
                 peer_ip = tun.get("inner_remote_ip")
                 if peer_ip:
-                    tunnel_bgp_map[hostname][tun.get("name") or f"tunnel{inst_idx}"] = str(peer_ip)
+                    peer_ip_text = str(peer_ip)
+                    tunnel_bgp_map[hostname][tunnel_name] = peer_ip_text
+                    peer_connection_map[hostname][peer_ip_text] = conn_name
+                    peer_tunnel_map[hostname][peer_ip_text] = tunnel_name
             remote_public_ip = tun.get("remote_public_ip")
             if remote_public_ip:
-                tunnel_peer_map[hostname][tun.get("name") or f"tunnel{inst_idx}"] = str(
-                    remote_public_ip
-                )
-            ha_role = _normalize_role(tun.get("ha_role") or "active")
-            tunnel_role_map[hostname][tun.get("name") or f"tunnel{inst_idx}"] = ha_role
+                tunnel_peer_map[hostname][tunnel_name] = str(remote_public_ip)
+            ha_role = _normalize_role_value(tun.get("ha_role") or "active")
+            tunnel_role_map[hostname][tunnel_name] = ha_role
+            tunnel_connection_map[hostname][tunnel_name] = conn_name
+            if conn_mode == "bgp":
+                peer_ip = tun.get("inner_remote_ip")
+                if peer_ip:
+                    peer_role_map[hostname][str(peer_ip)] = ha_role
 
     def format_role(role: str | None) -> str:
         role_value = role or "-"
@@ -1685,35 +1835,6 @@ def status(
             label = state.split()[0].capitalize()
             return f"[red]Down ({label})[/red]"
         return f"[red]{state}[/red]"
-
-    def select_carrying_tunnel(
-        hostname: str,
-        tunnel_names: list[str],
-        tunnel_statuses: dict[str, str],
-        bgp_states: dict[str, str],
-    ) -> str | None:
-        established: list[str] = []
-        if bgp_states:
-            for name in tunnel_names:
-                peer_ip = tunnel_bgp_map.get(hostname, {}).get(name)
-                if not peer_ip:
-                    continue
-                state = str(bgp_states.get(peer_ip, "")).strip().lower()
-                if state == "established":
-                    established.append(name)
-        if not established:
-            for name in tunnel_names:
-                if str(tunnel_statuses.get(name, "")).upper() == "ESTABLISHED":
-                    established.append(name)
-        if len(established) == 1:
-            return established[0]
-        if len(established) > 1:
-            for name in established:
-                role_value = _normalize_role(tunnel_role_map.get(hostname, {}).get(name))
-                if role_value == "active":
-                    return name
-            return established[0]
-        return None
 
     def format_carrying(tunnel_name: str, carrying_tunnel: str | None) -> str:
         if not carrying_tunnel:
@@ -1928,6 +2049,34 @@ def status(
             except Exception:
                 pass
 
+            try:
+                route_out = subprocess.run(
+                    [
+                        "ssh",
+                        "-o",
+                        "StrictHostKeyChecking=no",
+                        "-o",
+                        "ConnectTimeout=10",
+                        f"ubuntu@{target}",
+                        "sudo vtysh -c 'show bgp ipv4 unicast json'",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                if route_out.returncode == 0 and route_out.stdout:
+                    route_data = json.loads(route_out.stdout)
+                    routes = route_data.get("routes") or {}
+                    if isinstance(routes, dict):
+                        ecmp_warnings_by_vm[inst_cfg.hostname] = _detect_cross_connection_ecmp_warnings(
+                            routes,
+                            peer_connection_map.get(inst_cfg.hostname, {}),
+                            peer_tunnel_map.get(inst_cfg.hostname, {}),
+                            peer_role_map.get(inst_cfg.hostname, {}),
+                        )
+            except Exception:
+                pass
+
         # If any expected peers are missing uptime/state, query neighbors directly
         try:
             expected_peers = set(tunnel_bgp_map.get(inst_cfg.hostname, {}).values())
@@ -2045,12 +2194,7 @@ def status(
                                 ike_algos.append(algo_line)
 
                 if tunnel_statuses:
-                    carrying_tunnel = select_carrying_tunnel(
-                        inst_cfg.hostname,
-                        tunnel_order,
-                        tunnel_statuses,
-                        bgp_states,
-                    )
+                    carrying_by_connection: dict[str, str | None] = {}
                     for tunnel_name in tunnel_order:
                         status_text = tunnel_statuses[tunnel_name]
                         if status_text == "ESTABLISHED":
@@ -2074,7 +2218,24 @@ def status(
                         role = format_role(
                             tunnel_role_map.get(inst_cfg.hostname, {}).get(tunnel_name)
                         )
-                        carrying_display = format_carrying(tunnel_name, carrying_tunnel)
+                        connection_name = tunnel_connection_map.get(inst_cfg.hostname, {}).get(
+                            tunnel_name
+                        )
+                        cache_key = connection_name or "__all__"
+                        if cache_key not in carrying_by_connection:
+                            carrying_by_connection[cache_key] = _select_carrying_tunnel_for_connection(
+                                inst_cfg.hostname,
+                                connection_name,
+                                tunnel_order,
+                                tunnel_statuses,
+                                bgp_states,
+                                tunnel_bgp_map,
+                                tunnel_role_map,
+                                tunnel_connection_map,
+                            )
+                        carrying_display = format_carrying(
+                            tunnel_name, carrying_by_connection[cache_key]
+                        )
                         enc_algos = tunnel_encryption.get(tunnel_name) or []
                         if not enc_algos:
                             enc_algos = tunnel_ike_encryption.get(tunnel_name) or []
@@ -2200,12 +2361,7 @@ def status(
                 tunnel_statuses = {
                     name: str(info.get("status", "")).upper() for name, info in tunnels.items()
                 }
-                carrying_tunnel = select_carrying_tunnel(
-                    inst_cfg.hostname,
-                    list(tunnels.keys()),
-                    tunnel_statuses,
-                    bgp_states,
-                )
+                carrying_by_connection: dict[str, str | None] = {}
                 for tunnel_name, info in tunnels.items():
                     status_text = info["status"]
                     if status_text == "ESTABLISHED":
@@ -2218,7 +2374,22 @@ def status(
                     # Format BGP status with colors
                     bgp_status = info.get("bgp", "-")
                     bgp_display = format_bgp_status(bgp_status)
-                    carrying_display = format_carrying(tunnel_name, carrying_tunnel)
+                    connection_name = tunnel_connection_map.get(inst_cfg.hostname, {}).get(tunnel_name)
+                    cache_key = connection_name or "__all__"
+                    if cache_key not in carrying_by_connection:
+                        carrying_by_connection[cache_key] = _select_carrying_tunnel_for_connection(
+                            inst_cfg.hostname,
+                            connection_name,
+                            list(tunnels.keys()),
+                            tunnel_statuses,
+                            bgp_states,
+                            tunnel_bgp_map,
+                            tunnel_role_map,
+                            tunnel_connection_map,
+                        )
+                    carrying_display = format_carrying(
+                        tunnel_name, carrying_by_connection[cache_key]
+                    )
 
                     if peer_cfg_ip and peer_cfg_ip in bgp_uptime:
                         info["uptime"] = bgp_uptime[peer_cfg_ip]
@@ -2533,6 +2704,21 @@ print(json.dumps(health))
             )
 
     console.print(routing_table)
+
+    active_ecmp_warnings = {
+        hostname: warnings
+        for hostname, warnings in ecmp_warnings_by_vm.items()
+        if warnings
+    }
+    if active_ecmp_warnings:
+        warning_lines = _format_ecmp_warning_lines(active_ecmp_warnings)
+        console.print(
+            Panel.fit(
+                "\n".join(warning_lines),
+                title="[yellow]ECMP Warning[/yellow]",
+                border_style="yellow",
+            )
+        )
 
     gateway_group_cfg = local_cfg.get("gateway_group", {}) or {}
     gateway_subnet_cfg = gateway_group_cfg.get("subnet", {}) or {}

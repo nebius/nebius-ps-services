@@ -12,15 +12,20 @@ S_CYAN=""
 STATUS_ONLY=0
 ROTATE_EXISTING_TUNNELS=0
 ACTIVE_ACCOUNT=""
+APIPA_OVERRIDE_SET=0
+EXTERNAL_GW_NAME_EXPLICIT=0
+NETWORK_EXPLICIT=0
 DEFAULT_VPN_GATEWAY_NAME="ha-gw-nebius"
 DEFAULT_CLOUD_ROUTER_NAME="cr-nebius-ha"
-DEFAULT_EXTERNAL_GW_NAME="nebius-bgp-vpngw2"
-DEFAULT_TUNNEL1_NAME="gcp-ha-tunnel-1"
-DEFAULT_TUNNEL2_NAME="gcp-ha-tunnel-2"
-DEFAULT_IFACE1_NAME="gcp-ha-if-1"
-DEFAULT_IFACE2_NAME="gcp-ha-if-2"
-DEFAULT_PEER1_NAME="gcp-ha-peer-1"
-DEFAULT_PEER2_NAME="gcp-ha-peer-2"
+if [[ ${EXTERNAL_GW_NAME+x} == x ]]; then
+  EXTERNAL_GW_NAME_EXPLICIT=1
+fi
+if [[ ${NETWORK+x} == x ]]; then
+  NETWORK_EXPLICIT=1
+fi
+if [[ ${TUN1_CIDR+x} == x || ${TUN1_NEBIUS_IP+x} == x || ${TUN1_GCP_IP+x} == x || ${TUN2_CIDR+x} == x || ${TUN2_NEBIUS_IP+x} == x || ${TUN2_GCP_IP+x} == x ]]; then
+  APIPA_OVERRIDE_SET=1
+fi
 LOCAL_CONFIG_FILE="${LOCAL_CONFIG_FILE:-}"
 GCP_PROJECT_ID="${GCP_PROJECT_ID:-}"
 NEBIUS_PUBLIC_IP="${NEBIUS_PUBLIC_IP:-}"
@@ -30,13 +35,14 @@ VPN_GATEWAY_NAME="${VPN_GATEWAY_NAME:-${DEFAULT_VPN_GATEWAY_NAME}}"
 CLOUD_ROUTER_NAME="${CLOUD_ROUTER_NAME:-${DEFAULT_CLOUD_ROUTER_NAME}}"
 CLOUD_ROUTER_ASN="${CLOUD_ROUTER_ASN:-64514}"
 NEBIUS_ASN="${NEBIUS_ASN:-}"
-EXTERNAL_GW_NAME="${EXTERNAL_GW_NAME:-${DEFAULT_EXTERNAL_GW_NAME}}"
-TUNNEL1_NAME="${TUNNEL1_NAME:-${DEFAULT_TUNNEL1_NAME}}"
-TUNNEL2_NAME="${TUNNEL2_NAME:-${DEFAULT_TUNNEL2_NAME}}"
-IFACE1_NAME="${IFACE1_NAME:-${DEFAULT_IFACE1_NAME}}"
-IFACE2_NAME="${IFACE2_NAME:-${DEFAULT_IFACE2_NAME}}"
-PEER1_NAME="${PEER1_NAME:-${DEFAULT_PEER1_NAME}}"
-PEER2_NAME="${PEER2_NAME:-${DEFAULT_PEER2_NAME}}"
+CONNECTION_NAME="${CONNECTION_NAME:-}"
+EXTERNAL_GW_NAME="${EXTERNAL_GW_NAME:-}"
+TUNNEL1_NAME="${TUNNEL1_NAME:-}"
+TUNNEL2_NAME="${TUNNEL2_NAME:-}"
+IFACE1_NAME="${IFACE1_NAME:-}"
+IFACE2_NAME="${IFACE2_NAME:-}"
+PEER1_NAME="${PEER1_NAME:-}"
+PEER2_NAME="${PEER2_NAME:-}"
 TUN1_CIDR="${TUN1_CIDR:-169.254.10.0/30}"
 TUN1_NEBIUS_IP="${TUN1_NEBIUS_IP:-169.254.10.1}"
 TUN1_GCP_IP="${TUN1_GCP_IP:-169.254.10.2}"
@@ -45,6 +51,8 @@ TUN2_NEBIUS_IP="${TUN2_NEBIUS_IP:-169.254.11.1}"
 TUN2_GCP_IP="${TUN2_GCP_IP:-169.254.11.2}"
 ACTIVE_ADVERTISED_ROUTE_PRIORITY="${ACTIVE_ADVERTISED_ROUTE_PRIORITY:-0}"
 PASSIVE_ADVERTISED_ROUTE_PRIORITY="${PASSIVE_ADVERTISED_ROUTE_PRIORITY:-100}"
+PSK1_ENV_NAME="${PSK1_ENV_NAME:-}"
+PSK2_ENV_NAME="${PSK2_ENV_NAME:-}"
 PSK1="${PSK1:-}"
 PSK2="${PSK2:-}"
 POSITIONAL_ARGS=()
@@ -88,6 +96,22 @@ print(ipaddress.ip_network(sys.argv[1], strict=False), end="")
 PY
 }
 
+sanitize_env_token() {
+  printf '%s' "$1" | tr '[:lower:]-' '[:upper:]_'
+}
+
+derive_psk_env_names() {
+  local token=""
+
+  token="$(sanitize_env_token "${CONNECTION_NAME}")"
+  if [[ -z "${PSK1_ENV_NAME}" ]]; then
+    PSK1_ENV_NAME="GCP_${token}_TUNNEL_1_PSK"
+  fi
+  if [[ -z "${PSK2_ENV_NAME}" ]]; then
+    PSK2_ENV_NAME="GCP_${token}_TUNNEL_2_PSK"
+  fi
+}
+
 print_help_entry() {
   local label="$1"
   local description="$2"
@@ -110,6 +134,7 @@ confirm_create() {
   printf '%b\n' "${S_BOLD}Ready to create/update GCP VPN resources:${S_RESET}"
   printf '  GCP project:      %s\n' "${GCP_PROJECT_ID}"
   printf '  GCP region:       %s\n' "${REGION}"
+  printf '  Connection name:  %s\n' "${CONNECTION_NAME}"
   printf '  VPN gateway:      %s\n' "${VPN_GATEWAY_NAME}"
   printf '  Cloud Router:     %s\n' "${CLOUD_ROUTER_NAME}"
   printf '  GCP Cloud Router ASN: %s\n' "${CLOUD_ROUTER_ASN}"
@@ -118,6 +143,8 @@ confirm_create() {
   printf '  Nebius peer ASN:  %s\n' "${NEBIUS_ASN}"
   printf '  Tunnel 1 name:    %s\n' "${TUNNEL1_NAME}"
   printf '  Tunnel 2 name:    %s\n' "${TUNNEL2_NAME}"
+  printf '  Tunnel 1 APIPA:   %s (%s <-> %s)\n' "${TUN1_CIDR}" "${TUN1_NEBIUS_IP}" "${TUN1_GCP_IP}"
+  printf '  Tunnel 2 APIPA:   %s (%s <-> %s)\n' "${TUN2_CIDR}" "${TUN2_NEBIUS_IP}" "${TUN2_GCP_IP}"
   printf '\n'
   printf '%b' "${S_YELLOW}Continue with VPN creation on this GCP project? [y/N] ${S_RESET}"
 
@@ -146,11 +173,12 @@ show_usage() {
   fi
 
   printf '%b\n' "${S_BOLD}Usage:${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}${script_ref}${S_RESET} ${S_DIM}<gcp-project-id> <gcp-region> <nebius-public-ip> <nebius-asn>${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}${script_ref}${S_RESET} ${S_DIM}--connection-name <name> <gcp-project-id> <gcp-region> <nebius-public-ip> <nebius-asn>${S_RESET}"
   printf '%b\n' "  ${S_CYAN}${script_ref}${S_RESET} ${S_DIM}[options]${S_RESET}"
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Options:${S_RESET}"
+  print_help_entry "--connection-name NAME" "Required per-connection identifier for GCP resources and YAML output" "${S_YELLOW}"
   print_help_entry "-c, --local-config-file PATH" "Read Nebius config for auto-discovery" "${S_YELLOW}"
   print_help_entry "--gcp-project-id ID" "Override GCP project ID" "${S_YELLOW}"
   print_help_entry "--region REGION" "Override GCP region" "${S_YELLOW}"
@@ -163,47 +191,53 @@ show_usage() {
 
   printf '%b\n' "${S_BOLD}Resolution Order:${S_RESET}"
   printf '%b\n' "  1. Positional args: ${S_CYAN}<gcp-project-id> <gcp-region> <nebius-public-ip> <nebius-asn>${S_RESET}"
-  printf '%b\n' "  2. Explicit flags: ${S_CYAN}--gcp-project-id${S_RESET}, ${S_CYAN}--region${S_RESET}, ${S_CYAN}--nebius-public-ip${S_RESET}, ${S_CYAN}--nebius-asn${S_RESET}, ${S_CYAN}--local-config-file${S_RESET}"
-  printf '%b\n' "  3. Environment: ${S_CYAN}GCP_PROJECT_ID${S_RESET}, ${S_CYAN}REGION${S_RESET}, ${S_CYAN}NEBIUS_PUBLIC_IP${S_RESET}, ${S_CYAN}NEBIUS_ASN${S_RESET}, ${S_CYAN}LOCAL_CONFIG_FILE${S_RESET}"
+  printf '%b\n' "  2. Explicit flags: ${S_CYAN}--connection-name${S_RESET}, ${S_CYAN}--gcp-project-id${S_RESET}, ${S_CYAN}--region${S_RESET}, ${S_CYAN}--nebius-public-ip${S_RESET}, ${S_CYAN}--nebius-asn${S_RESET}, ${S_CYAN}--local-config-file${S_RESET}"
+  printf '%b\n' "  3. Environment: ${S_CYAN}CONNECTION_NAME${S_RESET}, ${S_CYAN}GCP_PROJECT_ID${S_RESET}, ${S_CYAN}REGION${S_RESET}, ${S_CYAN}NEBIUS_PUBLIC_IP${S_RESET}, ${S_CYAN}NEBIUS_ASN${S_RESET}, ${S_CYAN}LOCAL_CONFIG_FILE${S_RESET}"
   printf '%b\n' "  4. Auto-discovery: active gcloud project, local YAML config, first allocated Nebius external IP, local_asn"
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Useful Env Vars:${S_RESET}"
+  print_help_entry "CONNECTION_NAME" "Required connection identifier; one script run manages one connection" "${S_CYAN}"
   print_help_entry "PSK1, PSK2" "Supply or override tunnel PSKs" "${S_CYAN}"
   print_help_entry "NEBIUS_ASN" "Override Nebius peer ASN" "${S_CYAN}"
   print_help_entry "CLOUD_ROUTER_ASN" "Set the GCP Cloud Router ASN for new routers" "${S_CYAN}"
   print_help_entry "REGION, NETWORK" "Override GCP region or VPC network" "${S_CYAN}"
   print_help_entry "CLOUD_ROUTER_NAME" "Override the default Cloud Router name" "${S_CYAN}"
   print_help_entry "VPN_GATEWAY_NAME" "Override the default HA VPN gateway name" "${S_CYAN}"
-  print_help_entry "EXTERNAL_GW_NAME" "Override the default external VPN gateway name" "${S_CYAN}"
+  print_help_entry "EXTERNAL_GW_NAME" "Override the external VPN gateway resource name" "${S_CYAN}"
+  print_help_entry "TUN1_*, TUN2_*" "Override tunnel APIPA CIDRs or inner IPs explicitly" "${S_CYAN}"
+  print_help_entry "PSK1_ENV_NAME, PSK2_ENV_NAME" "Override the optional export variable names printed with the YAML block" "${S_CYAN}"
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Examples:${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}${script_ref} <gcp-project-id> <gcp-region> <nebius-public-ip> <nebius-asn>${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}${script_ref} --local-config-file <local-config-file> --region <gcp-region>${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}GCP_PROJECT_ID=<gcp-project-id> REGION=<gcp-region> NEBIUS_ASN=<nebius-asn> ${script_ref} --nebius-public-ip <nebius-public-ip>${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}PSK1=<tunnel-1-psk> PSK2=<tunnel-2-psk> ${script_ref} --rotate-existing-tunnels <gcp-project-id> <gcp-region> <nebius-public-ip> <nebius-asn>${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}${script_ref} --status --region <gcp-region>${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}${script_ref} --status --local-config-file <local-config-file>${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}${script_ref} --connection-name site-1 <gcp-project-id> <gcp-region> <nebius-public-ip> <nebius-asn>${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}${script_ref} --connection-name site-2 --local-config-file <local-config-file> --region <gcp-region>${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}CONNECTION_NAME=site-1 GCP_PROJECT_ID=<gcp-project-id> REGION=<gcp-region> NEBIUS_ASN=<nebius-asn> ${script_ref} --nebius-public-ip <nebius-public-ip>${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}CONNECTION_NAME=site-1 PSK1=<tunnel-1-psk> PSK2=<tunnel-2-psk> ${script_ref} --rotate-existing-tunnels <gcp-project-id> <gcp-region> <nebius-public-ip> <nebius-asn>${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}${script_ref} --connection-name site-1 --status --region <gcp-region>${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}${script_ref} --connection-name site-1 --status --local-config-file <local-config-file>${S_RESET}"
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Notes:${S_RESET}"
   printf '%b\n' "  - This script requires the ${S_CYAN}gcloud${S_RESET} CLI to be installed and in ${S_CYAN}PATH${S_RESET}."
   printf '%b\n' "  - If gcloud is not authenticated, the script runs ${S_CYAN}gcloud auth login${S_RESET}."
-  printf '%b\n' "  - Create mode requires a resolved GCP project, region, Nebius public IP, and Nebius peer ASN."
-  printf '%b\n' "  - Status mode requires a resolved GCP project and region. Nebius public IP is optional there and can come from ${S_CYAN}--nebius-public-ip${S_RESET} or ${S_CYAN}--local-config-file${S_RESET}."
+  printf '%b\n' "  - This helper is stateless per connection: each run manages exactly one connection identified by ${S_CYAN}--connection-name${S_RESET}."
+  printf '%b\n' "  - Create mode requires a connection name plus a resolved GCP project, region, Nebius public IP, and Nebius peer ASN."
+  printf '%b\n' "  - Status mode also requires a connection name. Nebius public IP is optional there and can come from ${S_CYAN}--nebius-public-ip${S_RESET} or ${S_CYAN}--local-config-file${S_RESET}."
   printf '%b\n' "  - The Nebius workflow is fixed to one public peer IP and exactly two tunnels on one GCP HA VPN gateway: one active and one passive."
-  printf '%b\n' "  - Google supports one HA VPN gateway and one Cloud Router serving multiple peer sites in the same region/VPC."
+  printf '%b\n' "  - Google can reuse one HA VPN gateway and one Cloud Router for multiple peer sites in the same region/VPC, but this helper's single-IP Nebius peer model allows only one active/passive tunnel pair per GCP HA VPN gateway."
   printf '%b\n' "  - If the selected HA VPN gateway already exists, the script prompts to reuse it or create a new gateway."
   printf '%b\n' "  - If the selected Cloud Router already exists, the script prompts to reuse it or create a new one."
   printf '%b\n' "  - The required ${S_CYAN}<nebius-asn>${S_RESET} input is the Nebius peer ASN. The GCP Cloud Router ASN is separate: existing router ASN when reused, or ${S_CYAN}CLOUD_ROUTER_ASN${S_RESET} when a new router is created."
   printf '%b\n' "  - If that Cloud Router already has Cloud NAT attached, the script warns that GCP documents this as unsupported for HA VPN. It still lets you reuse the router if you choose it."
   printf '%b\n' "  - The script creates or reuses the GCP HA VPN gateway, Cloud Router, external VPN gateway, tunnels, interfaces, and BGP peers. It does not create Cloud NAT."
-  printf '%b\n' "  - By default, connection-scoped names are derived from the Nebius public IP so reruns target the same external gateway, tunnels, interfaces, and peers."
-  printf '%b\n' "  - If the selected gateway or router already hosts another site and the default tunnel or peer names would collide, the script prompts for a new connection resource prefix."
+  printf '%b\n' "  - Tunnel, interface, and BGP peer names are derived from ${S_CYAN}--connection-name${S_RESET} unless you override them explicitly with env vars."
+  printf '%b\n' "  - The external VPN gateway is reused automatically when GCP already has a single-IP peer resource for the same Nebius public IP."
+  printf '%b\n' "  - Re-run the script with the same connection name to update that connection, or a different connection name to create a separate one."
+  printf '%b\n' "  - When you add another connection on a different GCP HA VPN gateway, the script auto-selects unused APIPA /30 ranges by checking the selected Cloud Router and the local config file when provided."
   printf '%b\n' "  - With ${S_CYAN}--rotate-existing-tunnels${S_RESET}, the script removes the matching BGP peers and router interfaces first, then recreates the tunnel pair with new PSKs."
   printf '%b\n' "  - Create mode prints the resolved inputs, then asks for confirmation."
-  printf '%b\n' "  - Successful runs print tunnel PSKs and a YAML snippet for the Nebius config."
+  printf '%b\n' "  - Successful runs print tunnel PSKs, optional export commands, and a complete Nebius connection block for just that connection."
 }
 
 require_cmd() {
@@ -275,6 +309,14 @@ import secrets
 print(secrets.token_urlsafe(32), end="")
 PY
   fi
+}
+
+yaml_double_quote() {
+  local value="$1"
+
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  printf '"%s"' "${value}"
 }
 
 ensure_auth() {
@@ -551,25 +593,6 @@ apply_new_gateway_name() {
 
   VPN_GATEWAY_NAME="${new_gateway_name}"
 
-  if [[ "${TUNNEL1_NAME}" == "${DEFAULT_TUNNEL1_NAME}" ]]; then
-    TUNNEL1_NAME="$(compose_resource_name "${VPN_GATEWAY_NAME}" "tunnel-1")"
-  fi
-  if [[ "${TUNNEL2_NAME}" == "${DEFAULT_TUNNEL2_NAME}" ]]; then
-    TUNNEL2_NAME="$(compose_resource_name "${VPN_GATEWAY_NAME}" "tunnel-2")"
-  fi
-  if [[ "${IFACE1_NAME}" == "${DEFAULT_IFACE1_NAME}" ]]; then
-    IFACE1_NAME="$(compose_resource_name "${VPN_GATEWAY_NAME}" "if-1")"
-  fi
-  if [[ "${IFACE2_NAME}" == "${DEFAULT_IFACE2_NAME}" ]]; then
-    IFACE2_NAME="$(compose_resource_name "${VPN_GATEWAY_NAME}" "if-2")"
-  fi
-  if [[ "${PEER1_NAME}" == "${DEFAULT_PEER1_NAME}" ]]; then
-    PEER1_NAME="$(compose_resource_name "${VPN_GATEWAY_NAME}" "peer-1")"
-  fi
-  if [[ "${PEER2_NAME}" == "${DEFAULT_PEER2_NAME}" ]]; then
-    PEER2_NAME="$(compose_resource_name "${VPN_GATEWAY_NAME}" "peer-2")"
-  fi
-
   log_note "Using new HA VPN gateway ${VPN_GATEWAY_NAME}"
   log_note "Tunnel names: ${TUNNEL1_NAME}, ${TUNNEL2_NAME}"
   log_note "Router interfaces: ${IFACE1_NAME}, ${IFACE2_NAME}"
@@ -593,6 +616,479 @@ adopt_existing_cloud_router_asn() {
   fi
 }
 
+resolve_network_from_existing_resources() {
+  local gateway_network=""
+  local router_network=""
+  local chosen_network=""
+
+  if [[ "${NETWORK_EXPLICIT}" -eq 1 ]]; then
+    return
+  fi
+
+  if resource_exists compute vpn-gateways describe "${VPN_GATEWAY_NAME}" --region "${REGION}" --project "${GCP_PROJECT_ID}"; then
+    gateway_network="$(gcloud compute vpn-gateways describe "${VPN_GATEWAY_NAME}" \
+      --region "${REGION}" \
+      --project "${GCP_PROJECT_ID}" \
+      --format='value(network)' 2>/dev/null || true)"
+    gateway_network="$(resource_basename "${gateway_network}")"
+  fi
+
+  if resource_exists compute routers describe "${CLOUD_ROUTER_NAME}" --region "${REGION}" --project "${GCP_PROJECT_ID}"; then
+    router_network="$(gcloud compute routers describe "${CLOUD_ROUTER_NAME}" \
+      --region "${REGION}" \
+      --project "${GCP_PROJECT_ID}" \
+      --format='value(network)' 2>/dev/null || true)"
+    router_network="$(resource_basename "${router_network}")"
+  fi
+
+  if [[ -n "${gateway_network}" && -n "${router_network}" && "${gateway_network}" != "${router_network}" ]]; then
+    log_error "Selected HA VPN gateway and Cloud Router are attached to different VPC networks: ${gateway_network} vs ${router_network}."
+    log_note "Pick resources from the same VPC or set NETWORK explicitly."
+    exit 1
+  fi
+
+  chosen_network="${gateway_network:-${router_network}}"
+  if [[ -n "${chosen_network}" ]]; then
+    NETWORK="${chosen_network}"
+    log_note "Using existing VPC network ${NETWORK} from selected GCP resources."
+  fi
+}
+
+resolve_connection_name() {
+  if [[ -z "${CONNECTION_NAME}" ]]; then
+    log_error "Connection name is required."
+    log_note "Pass --connection-name <name> or set CONNECTION_NAME."
+    exit 1
+  fi
+
+  if ! validate_gcp_resource_name "${CONNECTION_NAME}"; then
+    log_error "Invalid connection name '${CONNECTION_NAME}'."
+    log_note "Use lowercase letters, numbers, and hyphens, starting with a letter."
+    exit 1
+  fi
+
+  log_note "Using connection name ${CONNECTION_NAME}"
+}
+
+apply_connection_name_resources() {
+  local prefix="$1"
+
+  if [[ -z "${TUNNEL1_NAME}" ]]; then
+    TUNNEL1_NAME="$(compose_resource_name "${prefix}" "tunnel-1")"
+  fi
+  if [[ -z "${TUNNEL2_NAME}" ]]; then
+    TUNNEL2_NAME="$(compose_resource_name "${prefix}" "tunnel-2")"
+  fi
+  if [[ -z "${IFACE1_NAME}" ]]; then
+    IFACE1_NAME="$(compose_resource_name "${prefix}" "if-1")"
+  fi
+  if [[ -z "${IFACE2_NAME}" ]]; then
+    IFACE2_NAME="$(compose_resource_name "${prefix}" "if-2")"
+  fi
+  if [[ -z "${PEER1_NAME}" ]]; then
+    PEER1_NAME="$(compose_resource_name "${prefix}" "peer-1")"
+  fi
+  if [[ -z "${PEER2_NAME}" ]]; then
+    PEER2_NAME="$(compose_resource_name "${prefix}" "peer-2")"
+  fi
+
+  log_note "Tunnel names: ${TUNNEL1_NAME}, ${TUNNEL2_NAME}"
+  log_note "Router interfaces: ${IFACE1_NAME}, ${IFACE2_NAME}"
+  log_note "BGP peers: ${PEER1_NAME}, ${PEER2_NAME}"
+}
+
+find_existing_external_gateway_for_peer() {
+  local peer_ip="$1"
+  local gateway_json=""
+
+  gateway_json="$(gcloud compute external-vpn-gateways list \
+    --project "${GCP_PROJECT_ID}" \
+    --format=json 2>/dev/null || true)"
+  [[ -n "${gateway_json}" ]] || return 0
+
+  python3 - "${peer_ip}" "${gateway_json}" <<'PY'
+import json
+import sys
+
+peer_ip = sys.argv[1]
+gateways = json.loads(sys.argv[2])
+for gateway in gateways:
+    interfaces = gateway.get("interfaces") or []
+    first_ip = interfaces[0].get("ipAddress") if interfaces else ""
+    if gateway.get("redundancyType") != "SINGLE_IP_INTERNALLY_REDUNDANT":
+        continue
+    if len(interfaces) != 1 or first_ip != peer_ip:
+        continue
+    print(gateway.get("name") or "")
+PY
+}
+
+describe_external_gateway_shape() {
+  local gateway_name="$1"
+  local gateway_json=""
+
+  gateway_json="$(gcloud compute external-vpn-gateways describe "${gateway_name}" \
+    --project "${GCP_PROJECT_ID}" \
+    --format=json 2>/dev/null || true)"
+  [[ -n "${gateway_json}" ]] || return 0
+
+  python3 - "${gateway_json}" <<'PY'
+import json
+import sys
+
+data = json.loads(sys.argv[1])
+interfaces = data.get("interfaces") or []
+first_ip = interfaces[0].get("ipAddress") if interfaces else ""
+print("\t".join([str(first_ip or ""), str(data.get("redundancyType") or ""), str(len(interfaces))]))
+PY
+}
+
+resolve_external_gateway_name() {
+  local suggested_name=""
+  local matches=""
+  local match_count=0
+  local first_match=""
+  local line=""
+
+  if [[ -n "${EXTERNAL_GW_NAME}" && "${EXTERNAL_GW_NAME_EXPLICIT}" -eq 1 ]]; then
+    log_note "External VPN gateway: ${EXTERNAL_GW_NAME}"
+    return
+  fi
+
+  suggested_name="$(compose_resource_name "nebius-${NEBIUS_PUBLIC_IP//./-}" "peer")"
+  matches="$(find_existing_external_gateway_for_peer "${NEBIUS_PUBLIC_IP}" || true)"
+  while IFS= read -r line; do
+    [[ -n "${line}" ]] || continue
+    match_count=$((match_count + 1))
+    if [[ "${match_count}" -eq 1 ]]; then
+      first_match="${line}"
+    fi
+  done <<<"${matches}"
+
+  if [[ "${match_count}" -eq 1 ]]; then
+    EXTERNAL_GW_NAME="${first_match}"
+    log_note "Reusing external VPN gateway ${EXTERNAL_GW_NAME} for Nebius peer ${NEBIUS_PUBLIC_IP}"
+    return
+  fi
+
+  EXTERNAL_GW_NAME="${suggested_name}"
+  log_note "External VPN gateway: ${EXTERNAL_GW_NAME}"
+  if [[ "${match_count}" -gt 1 ]]; then
+    log_warn "Multiple external VPN gateways already represent ${NEBIUS_PUBLIC_IP}; using ${EXTERNAL_GW_NAME}. Set EXTERNAL_GW_NAME to pin a specific one."
+  fi
+}
+
+plan_tunnel_addressing() {
+  local router_interfaces=""
+  local router_peers=""
+  local plan_output=""
+  local key=""
+  local value=""
+  local plan_source=""
+  local connection_present="false"
+
+  require_cmd "python3"
+
+  if resource_exists compute routers describe "${CLOUD_ROUTER_NAME}" --region "${REGION}" --project "${GCP_PROJECT_ID}"; then
+    router_interfaces="$(router_interface_rows 2>/dev/null || true)"
+    router_peers="$(router_peer_rows 2>/dev/null || true)"
+  fi
+
+  if ! plan_output="$(python3 - "${LOCAL_CONFIG_FILE:-}" "${CONNECTION_NAME}" "${TUN1_CIDR}" "${TUN1_NEBIUS_IP}" "${TUN1_GCP_IP}" "${TUN2_CIDR}" "${TUN2_NEBIUS_IP}" "${TUN2_GCP_IP}" "${APIPA_OVERRIDE_SET}" "${IFACE1_NAME}" "${IFACE2_NAME}" "${router_interfaces}" "${router_peers}" <<'PY'
+import ipaddress
+import sys
+from pathlib import Path
+
+
+def parse_rows(raw: str) -> list[list[str]]:
+    if not raw.strip():
+        return []
+    return [line.split("\t") for line in raw.splitlines() if line.strip()]
+
+
+def tunnel_triplet_from_network(network: ipaddress.IPv4Network) -> tuple[str, str, str]:
+    hosts = list(network.hosts())
+    return (str(network), str(hosts[0]), str(hosts[1]))
+
+
+def validate_triplet(cidr: str, local_ip: str, remote_ip: str) -> str:
+    network = ipaddress.ip_network(cidr, strict=False)
+    if not network.subnet_of(ipaddress.ip_network("169.254.0.0/16")):
+        raise SystemExit(f"Tunnel CIDR {cidr} must be within 169.254.0.0/16")
+    if network.prefixlen != 30:
+        raise SystemExit(f"Tunnel CIDR {cidr} must be a /30")
+    local_addr = ipaddress.ip_address(local_ip)
+    remote_addr = ipaddress.ip_address(remote_ip)
+    if local_addr not in network:
+        raise SystemExit(f"Tunnel local IP {local_ip} is not inside {cidr}")
+    if remote_addr not in network:
+        raise SystemExit(f"Tunnel remote IP {remote_ip} is not inside {cidr}")
+    if local_addr == remote_addr:
+        raise SystemExit(f"Tunnel local IP {local_ip} must differ from remote IP {remote_ip}")
+    return str(network)
+
+
+config_path = Path(sys.argv[1]) if sys.argv[1] else None
+connection_name = sys.argv[2]
+explicit_tun1 = (sys.argv[3], sys.argv[4], sys.argv[5])
+explicit_tun2 = (sys.argv[6], sys.argv[7], sys.argv[8])
+explicit_override = sys.argv[9] == "1"
+iface1_name = sys.argv[10]
+iface2_name = sys.argv[11]
+router_interfaces_raw = sys.argv[12]
+router_peers_raw = sys.argv[13]
+
+current_config_tunnels: list[tuple[str, str, str]] = []
+used_config_cidrs: set[str] = set()
+
+if config_path and config_path.exists():
+    try:
+        import yaml
+    except ModuleNotFoundError as exc:  # pragma: no cover - handled by shell guard
+        raise SystemExit(f"missing dependency: {exc}")
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    for conn in data.get("connections") or []:
+        tunnels = conn.get("tunnels") or []
+        if conn.get("name") == connection_name:
+            for tunnel in tunnels:
+                cidr = tunnel.get("inner_cidr")
+                local_ip = tunnel.get("inner_local_ip")
+                remote_ip = tunnel.get("inner_remote_ip")
+                if cidr and local_ip and remote_ip:
+                    current_config_tunnels.append((str(cidr), str(local_ip), str(remote_ip)))
+            continue
+        for tunnel in tunnels:
+            cidr = tunnel.get("inner_cidr")
+            if cidr:
+                used_config_cidrs.add(str(ipaddress.ip_network(str(cidr), strict=False)))
+
+router_interface_rows = parse_rows(router_interfaces_raw)
+router_peer_rows = parse_rows(router_peers_raw)
+
+peer_ip_by_interface: dict[str, str] = {}
+for row in router_peer_rows:
+    if len(row) < 2:
+        continue
+    peer_ip_by_interface[row[0]] = row[1]
+
+current_router_tunnels: list[tuple[str, str, str]] = []
+used_router_cidrs: set[str] = set()
+for row in router_interface_rows:
+    if len(row) < 2:
+        continue
+    iface_name, iface_range = row[0], row[1]
+    if not iface_range:
+        continue
+    network = ipaddress.ip_network(iface_range, strict=False)
+    gcp_ip = str(ipaddress.ip_interface(iface_range).ip)
+    peer_ip = peer_ip_by_interface.get(iface_name, "")
+    if iface_name in {iface1_name, iface2_name} and peer_ip:
+        current_router_tunnels.append((str(network), str(ipaddress.ip_address(peer_ip)), gcp_ip))
+    else:
+        used_router_cidrs.add(str(network))
+
+candidate_tunnels: list[tuple[str, str, str]]
+plan_source = "generated"
+
+if explicit_override:
+    candidate_tunnels = [explicit_tun1, explicit_tun2]
+    plan_source = "explicit"
+elif len(current_router_tunnels) == 2:
+    ordered_router_tunnels = {
+        iface1_name: None,
+        iface2_name: None,
+    }
+    for row in router_interface_rows:
+        if len(row) < 2:
+            continue
+        iface_name, iface_range = row[0], row[1]
+        if iface_name not in ordered_router_tunnels or not iface_range:
+            continue
+        peer_ip = peer_ip_by_interface.get(iface_name)
+        if not peer_ip:
+            continue
+        network = ipaddress.ip_network(iface_range, strict=False)
+        gcp_ip = str(ipaddress.ip_interface(iface_range).ip)
+        ordered_router_tunnels[iface_name] = (str(network), str(ipaddress.ip_address(peer_ip)), gcp_ip)
+    if ordered_router_tunnels[iface1_name] is None or ordered_router_tunnels[iface2_name] is None:
+        raise SystemExit("Unable to resolve both tunnel address pairs from the selected Cloud Router")
+    candidate_tunnels = [ordered_router_tunnels[iface1_name], ordered_router_tunnels[iface2_name]]
+    plan_source = "gcp-existing"
+elif len(current_config_tunnels) >= 2:
+    candidate_tunnels = current_config_tunnels[:2]
+    plan_source = "config-existing"
+else:
+    candidate_tunnels = []
+    used_cidrs = used_config_cidrs | used_router_cidrs
+    for octet in range(10, 255):
+        network = ipaddress.ip_network(f"169.254.{octet}.0/30")
+        if str(network) in used_cidrs:
+            continue
+        candidate_tunnels.append(tunnel_triplet_from_network(network))
+        if len(candidate_tunnels) == 2:
+            break
+    if len(candidate_tunnels) != 2:
+        raise SystemExit("Unable to find two free APIPA /30 ranges for a new connection")
+
+validated_networks = []
+local_ips = []
+remote_ips = []
+for cidr, local_ip, remote_ip in candidate_tunnels:
+    validated_networks.append(validate_triplet(cidr, local_ip, remote_ip))
+    local_ips.append(local_ip)
+    remote_ips.append(remote_ip)
+
+if len(set(validated_networks)) != 2:
+    raise SystemExit("Tunnel CIDRs must be distinct for the connection")
+if len(set(local_ips)) != 2:
+    raise SystemExit("Tunnel local IPs must be distinct for the connection")
+if len(set(remote_ips)) != 2:
+    raise SystemExit("Tunnel remote IPs must be distinct for the connection")
+
+if plan_source != "gcp-existing":
+    conflicting = [cidr for cidr in validated_networks if cidr in used_router_cidrs]
+    if conflicting:
+        raise SystemExit(
+            "Chosen APIPA CIDRs already exist on the selected Cloud Router: "
+            + ", ".join(conflicting)
+        )
+
+if plan_source != "config-existing":
+    conflicting = [cidr for cidr in validated_networks if cidr in used_config_cidrs]
+    if conflicting:
+        raise SystemExit(
+            "Chosen APIPA CIDRs already exist in the local config: " + ", ".join(conflicting)
+        )
+
+print(f"PLAN_SOURCE={plan_source}")
+print(f"CONFIG_CONNECTION_PRESENT={'true' if len(current_config_tunnels) >= 1 else 'false'}")
+print(f"TUN1_CIDR={candidate_tunnels[0][0]}")
+print(f"TUN1_NEBIUS_IP={candidate_tunnels[0][1]}")
+print(f"TUN1_GCP_IP={candidate_tunnels[0][2]}")
+print(f"TUN2_CIDR={candidate_tunnels[1][0]}")
+print(f"TUN2_NEBIUS_IP={candidate_tunnels[1][1]}")
+print(f"TUN2_GCP_IP={candidate_tunnels[1][2]}")
+PY
+)"; then
+    log_error "Unable to plan unique tunnel APIPA values."
+    log_note "Pass --local-config-file for local YAML discovery, or override TUN1_/TUN2_ APIPA env vars explicitly."
+    exit 1
+  fi
+
+  while IFS='=' read -r key value; do
+    [[ -n "${key}" ]] || continue
+    case "${key}" in
+      PLAN_SOURCE) plan_source="${value}" ;;
+      CONFIG_CONNECTION_PRESENT) connection_present="${value}" ;;
+      TUN1_CIDR) TUN1_CIDR="${value}" ;;
+      TUN1_NEBIUS_IP) TUN1_NEBIUS_IP="${value}" ;;
+      TUN1_GCP_IP) TUN1_GCP_IP="${value}" ;;
+      TUN2_CIDR) TUN2_CIDR="${value}" ;;
+      TUN2_NEBIUS_IP) TUN2_NEBIUS_IP="${value}" ;;
+      TUN2_GCP_IP) TUN2_GCP_IP="${value}" ;;
+    esac
+  done <<<"${plan_output}"
+
+  case "${plan_source}" in
+    explicit)
+      log_note "Using explicit tunnel APIPA values."
+      ;;
+    gcp-existing)
+      log_note "Using tunnel APIPA values from existing Cloud Router state for connection ${CONNECTION_NAME}."
+      ;;
+    config-existing)
+      log_note "Using tunnel APIPA values from existing local config connection ${CONNECTION_NAME}."
+      ;;
+    generated)
+      log_note "Selected unused tunnel APIPA ranges ${TUN1_CIDR} and ${TUN2_CIDR} after checking the selected Cloud Router and local config."
+      ;;
+  esac
+
+  if [[ "${connection_present}" == "true" ]]; then
+    log_note "Connection ${CONNECTION_NAME} already exists in ${LOCAL_CONFIG_FILE}; replace that block instead of appending a duplicate."
+  fi
+}
+
+validate_router_routing_domain() {
+  local status_json=""
+  local routing_report=""
+  local key=""
+  local value=""
+  local peer_count="0"
+  local prefixes=""
+
+  if ! resource_exists compute routers describe "${CLOUD_ROUTER_NAME}" --region "${REGION}" --project "${GCP_PROJECT_ID}"; then
+    return
+  fi
+
+  status_json="$(gcloud compute routers get-status "${CLOUD_ROUTER_NAME}" --region "${REGION}" --project "${GCP_PROJECT_ID}" --format=json 2>/dev/null || true)"
+  [[ -n "${status_json}" ]] || return
+
+  if ! routing_report="$(python3 - "${status_json}" <<'PY'
+import json
+import sys
+
+data = json.loads(sys.argv[1])
+peer_statuses = ((data.get("result") or {}).get("bgpPeerStatus") or [])
+
+peer_routes = {}
+for peer in peer_statuses:
+    name = peer.get("name")
+    if not name:
+        continue
+    prefixes = sorted(
+        route.get("destRange")
+        for route in peer.get("advertisedRoutes") or []
+        if route.get("destRange")
+    )
+    peer_routes[name] = prefixes
+
+if not peer_routes:
+    print("PEER_COUNT=0")
+    print("PREFIXES=")
+    raise SystemExit(0)
+
+route_sets = {tuple(prefixes) for prefixes in peer_routes.values()}
+if len(route_sets) > 1:
+    details = "; ".join(
+        f"{name}: {','.join(prefixes) if prefixes else '<none>'}"
+        for name, prefixes in sorted(peer_routes.items())
+    )
+    print(
+        "Selected Cloud Router advertises different effective prefix sets across existing peers: "
+        + details
+    )
+    raise SystemExit(1)
+
+only_set = next(iter(route_sets))
+print(f"PEER_COUNT={len(peer_routes)}")
+print("PREFIXES=" + ",".join(only_set))
+PY
+)"; then
+    log_error "Selected Cloud Router has mixed routing domains across existing peers."
+    printf '%s\n' "${routing_report}" >&2
+    log_note "This helper expects one consistent advertised prefix set per Cloud Router side. Use a separate Cloud Router or manage per-peer advertisements manually."
+    exit 1
+  fi
+
+  while IFS='=' read -r key value; do
+    [[ -n "${key}" ]] || continue
+    case "${key}" in
+      PEER_COUNT) peer_count="${value}" ;;
+      PREFIXES) prefixes="${value}" ;;
+    esac
+  done <<<"${routing_report}"
+
+  if [[ "${peer_count}" != "0" ]]; then
+    if [[ -n "${prefixes}" ]]; then
+      log_note "Cloud Router ${CLOUD_ROUTER_NAME} currently advertises the same prefixes on all existing peers: ${prefixes}"
+    else
+      log_note "Cloud Router ${CLOUD_ROUTER_NAME} currently has existing peers with no advertised prefixes."
+    fi
+    log_note "A new peer on this Cloud Router will participate in the same routing domain unless you apply custom per-peer advertisements or policies outside this helper."
+  fi
+}
+
 resource_basename() {
   local ref="${1:-}"
 
@@ -604,131 +1100,136 @@ resource_basename() {
   printf '%s\n' "${ref##*/}"
 }
 
-list_contains_token() {
-  local haystack="$1"
-  local token="$2"
-  local normalized=""
+router_interface_rows() {
+  local router_json=""
 
-  normalized="$(printf '%s' "${haystack}" | tr ',[:space:]' ';')"
-  normalized=";${normalized};"
-  [[ "${normalized}" == *";${token};"* ]]
+  router_json="$(gcloud compute routers describe "${CLOUD_ROUTER_NAME}" \
+    --region "${REGION}" \
+    --project "${GCP_PROJECT_ID}" \
+    --format=json 2>/dev/null || true)"
+  [[ -n "${router_json}" ]] || return 0
+
+  python3 - "${router_json}" <<'PY'
+import json
+import sys
+
+data = json.loads(sys.argv[1])
+for iface in data.get("interfaces") or []:
+    print(
+        "\t".join(
+            [
+                str(iface.get("name") or ""),
+                str(iface.get("ipRange") or ""),
+                str(iface.get("linkedVpnTunnel") or ""),
+            ]
+        )
+    )
+PY
 }
 
-connection_prefix_base() {
-  printf 'nebius-%s\n' "${NEBIUS_PUBLIC_IP//./-}"
-}
+router_peer_rows() {
+  local router_json=""
 
-connection_names_are_default() {
-  [[ "${EXTERNAL_GW_NAME}" == "${DEFAULT_EXTERNAL_GW_NAME}" ]] && \
-    [[ "${TUNNEL1_NAME}" == "${DEFAULT_TUNNEL1_NAME}" ]] && \
-    [[ "${TUNNEL2_NAME}" == "${DEFAULT_TUNNEL2_NAME}" ]] && \
-    [[ "${IFACE1_NAME}" == "${DEFAULT_IFACE1_NAME}" ]] && \
-    [[ "${IFACE2_NAME}" == "${DEFAULT_IFACE2_NAME}" ]] && \
-    [[ "${PEER1_NAME}" == "${DEFAULT_PEER1_NAME}" ]] && \
-    [[ "${PEER2_NAME}" == "${DEFAULT_PEER2_NAME}" ]]
-}
+  router_json="$(gcloud compute routers describe "${CLOUD_ROUTER_NAME}" \
+    --region "${REGION}" \
+    --project "${GCP_PROJECT_ID}" \
+    --format=json 2>/dev/null || true)"
+  [[ -n "${router_json}" ]] || return 0
 
-set_connection_prefix_names() {
-  local prefix="$1"
+  python3 - "${router_json}" <<'PY'
+import json
+import sys
 
-  EXTERNAL_GW_NAME="$(compose_resource_name "${prefix}" "peer")"
-  TUNNEL1_NAME="$(compose_resource_name "${prefix}" "tunnel-1")"
-  TUNNEL2_NAME="$(compose_resource_name "${prefix}" "tunnel-2")"
-  IFACE1_NAME="$(compose_resource_name "${prefix}" "if-1")"
-  IFACE2_NAME="$(compose_resource_name "${prefix}" "if-2")"
-  PEER1_NAME="$(compose_resource_name "${prefix}" "peer-1")"
-  PEER2_NAME="$(compose_resource_name "${prefix}" "peer-2")"
-}
-
-initialize_connection_names() {
-  if [[ -n "${NEBIUS_PUBLIC_IP}" ]] && connection_names_are_default; then
-    set_connection_prefix_names "$(connection_prefix_base)"
-  fi
-}
-
-connection_prefix_in_use() {
-  local prefix="$1"
-  local ext_name=""
-  local tunnel1_name=""
-  local tunnel2_name=""
-  local iface1_name=""
-  local iface2_name=""
-  local peer1_name=""
-  local peer2_name=""
-  local router_interfaces=""
-  local router_peers=""
-
-  ext_name="$(compose_resource_name "${prefix}" "peer")"
-  tunnel1_name="$(compose_resource_name "${prefix}" "tunnel-1")"
-  tunnel2_name="$(compose_resource_name "${prefix}" "tunnel-2")"
-  iface1_name="$(compose_resource_name "${prefix}" "if-1")"
-  iface2_name="$(compose_resource_name "${prefix}" "if-2")"
-  peer1_name="$(compose_resource_name "${prefix}" "peer-1")"
-  peer2_name="$(compose_resource_name "${prefix}" "peer-2")"
-
-  if resource_exists compute external-vpn-gateways describe "${ext_name}" --project "${GCP_PROJECT_ID}"; then
-    return 0
-  fi
-  if resource_exists compute vpn-tunnels describe "${tunnel1_name}" --region "${REGION}" --project "${GCP_PROJECT_ID}"; then
-    return 0
-  fi
-  if resource_exists compute vpn-tunnels describe "${tunnel2_name}" --region "${REGION}" --project "${GCP_PROJECT_ID}"; then
-    return 0
-  fi
-
-  if resource_exists compute routers describe "${CLOUD_ROUTER_NAME}" --region "${REGION}" --project "${GCP_PROJECT_ID}"; then
-    router_interfaces="$(gcloud compute routers describe "${CLOUD_ROUTER_NAME}" --region "${REGION}" --project "${GCP_PROJECT_ID}" --format='value(interfaces.name)' 2>/dev/null || true)"
-    router_peers="$(gcloud compute routers describe "${CLOUD_ROUTER_NAME}" --region "${REGION}" --project "${GCP_PROJECT_ID}" --format='value(bgpPeers.name)' 2>/dev/null || true)"
-    if list_contains_token "${router_interfaces}" "${iface1_name}" || \
-      list_contains_token "${router_interfaces}" "${iface2_name}" || \
-      list_contains_token "${router_peers}" "${peer1_name}" || \
-      list_contains_token "${router_peers}" "${peer2_name}"; then
-      return 0
-    fi
-  fi
-
-  return 1
-}
-
-suggest_unique_connection_prefix() {
-  local base="$1"
-  local suffix=2
-  local candidate="${base}"
-
-  while connection_prefix_in_use "${candidate}"; do
-    candidate="$(compose_resource_name "${base}" "${suffix}")"
-    suffix=$((suffix + 1))
-  done
-
-  printf '%s\n' "${candidate}"
-}
-
-apply_connection_prefix() {
-  local prefix="$1"
-
-  set_connection_prefix_names "${prefix}"
-
-  log_note "Using connection resource prefix ${prefix}"
-  log_note "External VPN gateway: ${EXTERNAL_GW_NAME}"
-  log_note "Tunnel names: ${TUNNEL1_NAME}, ${TUNNEL2_NAME}"
-  log_note "Router interfaces: ${IFACE1_NAME}, ${IFACE2_NAME}"
-  log_note "BGP peers: ${PEER1_NAME}, ${PEER2_NAME}"
+data = json.loads(sys.argv[1])
+for peer in data.get("bgpPeers") or []:
+    print(
+        "\t".join(
+            [
+                str(peer.get("name") or ""),
+                str(peer.get("interfaceName") or ""),
+                str(peer.get("peerIpAddress") or ""),
+                str(peer.get("peerAsn") or ""),
+                str(peer.get("advertisedRoutePriority") or ""),
+            ]
+        )
+    )
+PY
 }
 
 router_has_interface() {
   local interface_name="$1"
-  local router_interfaces=""
 
-  router_interfaces="$(gcloud compute routers describe "${CLOUD_ROUTER_NAME}" --region "${REGION}" --project "${GCP_PROJECT_ID}" --format='value(interfaces.name)' 2>/dev/null || true)"
-  list_contains_token "${router_interfaces}" "${interface_name}"
+  router_interface_rows | awk -F $'\t' -v n="${interface_name}" '$1==n {found=1} END {exit(found ? 0 : 1)}'
 }
 
 router_has_peer() {
   local peer_name="$1"
-  local router_peers=""
 
-  router_peers="$(gcloud compute routers describe "${CLOUD_ROUTER_NAME}" --region "${REGION}" --project "${GCP_PROJECT_ID}" --format='value(bgpPeers.name)' 2>/dev/null || true)"
-  list_contains_token "${router_peers}" "${peer_name}"
+  router_peer_rows | awk -F $'\t' -v n="${peer_name}" '$1==n {found=1} END {exit(found ? 0 : 1)}'
+}
+
+gateway_peer_mapping_conflict_report() {
+  local report=""
+  local tunnel_rows=""
+  local tunnel_name=""
+  local tunnel_vpn_gw=""
+  local tunnel_peer_ext=""
+  local tunnel_iface=""
+  local tunnel_peer_iface=""
+
+  if ! resource_exists compute vpn-gateways describe "${VPN_GATEWAY_NAME}" --region "${REGION}" --project "${GCP_PROJECT_ID}"; then
+    printf '\n'
+    return
+  fi
+
+  if ! resource_exists compute external-vpn-gateways describe "${EXTERNAL_GW_NAME}" --project "${GCP_PROJECT_ID}"; then
+    printf '\n'
+    return
+  fi
+
+  tunnel_rows="$(gcloud compute vpn-tunnels list --project "${GCP_PROJECT_ID}" --regions "${REGION}" --format='csv[no-heading](name,vpnGateway,peerExternalGateway,vpnGatewayInterface,peerExternalGatewayInterface)' 2>/dev/null || true)"
+  while IFS=',' read -r tunnel_name tunnel_vpn_gw tunnel_peer_ext tunnel_iface tunnel_peer_iface; do
+    [[ -n "${tunnel_name}" ]] || continue
+    if [[ "$(resource_basename "${tunnel_vpn_gw}")" != "${VPN_GATEWAY_NAME}" ]]; then
+      continue
+    fi
+    if [[ "$(resource_basename "${tunnel_peer_ext}")" != "${EXTERNAL_GW_NAME}" ]]; then
+      continue
+    fi
+
+    case "${tunnel_iface}:${tunnel_peer_iface}" in
+      "0:0")
+        if [[ "${tunnel_name}" != "${TUNNEL1_NAME}" ]]; then
+          report+="  - HA VPN interface 0 to peer interface 0 is already used by tunnel '${tunnel_name}'.\n"
+        fi
+        ;;
+      "1:0")
+        if [[ "${tunnel_name}" != "${TUNNEL2_NAME}" ]]; then
+          report+="  - HA VPN interface 1 to peer interface 0 is already used by tunnel '${tunnel_name}'.\n"
+        fi
+        ;;
+    esac
+  done <<<"${tunnel_rows}"
+
+  printf '%b' "${report}"
+}
+
+assert_gateway_peer_tunnel_capacity() {
+  local mapping_conflict_report=""
+
+  mapping_conflict_report="$(gateway_peer_mapping_conflict_report)"
+  if [[ -z "${mapping_conflict_report}" ]]; then
+    return
+  fi
+
+  printf '\n'
+  printf '%b\n' "${S_BOLD}HA VPN interface mappings already consumed:${S_RESET}"
+  printf '%b' "${mapping_conflict_report}"
+  printf '\n'
+  log_error "HA VPN gateway '${VPN_GATEWAY_NAME}' cannot add another tunnel pair to peer '${EXTERNAL_GW_NAME}' on public IP ${NEBIUS_PUBLIC_IP}."
+  log_note "This helper models the Nebius side as a single-interface external VPN gateway. Google allows only one tunnel per unique local-interface and peer-interface mapping."
+  log_note "For a single-IP peer, the only mappings are 0->0 and 1->0. If both are already in use, create a new GCP HA VPN gateway for another connection to this same Nebius peer."
+  exit 1
 }
 
 remove_bgp_peer_if_present() {
@@ -759,8 +1260,8 @@ connection_conflict_report() {
   local report=""
   local existing_ip=""
   local existing_redundancy_type=""
-  local existing_interface_ids=""
   local existing_interface_count=0
+  local existing_gateway_shape=""
   local tunnel_state=""
   local tunnel_peer_ext=""
   local tunnel_vpn_gw=""
@@ -779,12 +1280,8 @@ connection_conflict_report() {
   local peer_priority=""
 
   if resource_exists compute external-vpn-gateways describe "${EXTERNAL_GW_NAME}" --project "${GCP_PROJECT_ID}"; then
-    existing_ip="$(gcloud compute external-vpn-gateways describe "${EXTERNAL_GW_NAME}" --project "${GCP_PROJECT_ID}" --format='value(interfaces[0].ipAddress)' 2>/dev/null || true)"
-    existing_redundancy_type="$(gcloud compute external-vpn-gateways describe "${EXTERNAL_GW_NAME}" --project "${GCP_PROJECT_ID}" --format='value(redundancyType)' 2>/dev/null || true)"
-    existing_interface_ids="$(gcloud compute external-vpn-gateways describe "${EXTERNAL_GW_NAME}" --project "${GCP_PROJECT_ID}" --format='csv[no-heading](interfaces[].id)' 2>/dev/null || true)"
-    if [[ -n "${existing_interface_ids}" ]]; then
-      existing_interface_count="$(awk -F',' '{print NF}' <<<"${existing_interface_ids}")"
-    fi
+    existing_gateway_shape="$(describe_external_gateway_shape "${EXTERNAL_GW_NAME}")"
+    IFS=$'\t' read -r existing_ip existing_redundancy_type existing_interface_count <<<"${existing_gateway_shape}"
     if [[ "${existing_ip}" != "${NEBIUS_PUBLIC_IP}" || "${existing_redundancy_type}" != "SINGLE_IP_INTERNALLY_REDUNDANT" || "${existing_interface_count}" -ne 1 ]]; then
       report+="  - External VPN gateway '${EXTERNAL_GW_NAME}' already represents a different peer or gateway shape.\n"
     fi
@@ -815,8 +1312,8 @@ connection_conflict_report() {
   fi
 
   if resource_exists compute routers describe "${CLOUD_ROUTER_NAME}" --region "${REGION}" --project "${GCP_PROJECT_ID}"; then
-    router_interfaces="$(gcloud compute routers describe "${CLOUD_ROUTER_NAME}" --region "${REGION}" --project "${GCP_PROJECT_ID}" --format='csv[no-heading](interfaces.name,interfaces.ipRange,interfaces.linkedVpnTunnel)' 2>/dev/null || true)"
-    while IFS=',' read -r iface_name iface_range iface_tunnel; do
+    router_interfaces="$(router_interface_rows 2>/dev/null || true)"
+    while IFS=$'\t' read -r iface_name iface_range iface_tunnel; do
       [[ -n "${iface_name}" ]] || continue
       case "${iface_name}" in
         "${IFACE1_NAME}")
@@ -832,8 +1329,8 @@ connection_conflict_report() {
       esac
     done <<<"${router_interfaces}"
 
-    router_peers="$(gcloud compute routers describe "${CLOUD_ROUTER_NAME}" --region "${REGION}" --project "${GCP_PROJECT_ID}" --format='csv[no-heading](bgpPeers.name,bgpPeers.interfaceName,bgpPeers.peerIpAddress,bgpPeers.peerAsn,bgpPeers.advertisedRoutePriority)' 2>/dev/null || true)"
-    while IFS=',' read -r peer_name peer_iface_name peer_ip peer_asn peer_priority; do
+    router_peers="$(router_peer_rows 2>/dev/null || true)"
+    while IFS=$'\t' read -r peer_name peer_iface_name peer_ip peer_asn peer_priority; do
       [[ -n "${peer_name}" ]] || continue
       case "${peer_name}" in
         "${PEER1_NAME}")
@@ -853,10 +1350,8 @@ connection_conflict_report() {
   printf '%b' "${report}"
 }
 
-choose_connection_resource_names() {
+assert_connection_resource_bindings() {
   local conflict_report=""
-  local suggested_prefix=""
-  local entered_prefix=""
 
   conflict_report="$(connection_conflict_report)"
   if [[ -z "${conflict_report}" ]]; then
@@ -864,39 +1359,12 @@ choose_connection_resource_names() {
   fi
 
   printf '\n'
-  printf '%b\n' "${S_BOLD}Connection resource name conflicts detected:${S_RESET}"
+  printf '%b\n' "${S_BOLD}Connection resource conflicts detected:${S_RESET}"
   printf '%b' "${conflict_report}"
   printf '\n'
-  log_note "The selected HA VPN gateway and Cloud Router can still be reused."
-  log_note "This Nebius site needs its own external VPN gateway, tunnel, interface, and BGP peer names."
-
-  suggested_prefix="$(suggest_unique_connection_prefix "$(connection_prefix_base)")"
-  while true; do
-    printf '%b' "${S_YELLOW}Enter a new connection resource prefix [${suggested_prefix}]: ${S_RESET}"
-    if ! read -r entered_prefix; then
-      printf '\n' >&2
-      log_error "Connection resource selection aborted."
-      exit 1
-    fi
-
-    if [[ -z "${entered_prefix}" ]]; then
-      entered_prefix="${suggested_prefix}"
-    fi
-
-    if ! validate_gcp_resource_name "${entered_prefix}"; then
-      log_warn "Invalid connection prefix '${entered_prefix}'. Use lowercase letters, numbers, and hyphens, starting with a letter."
-      continue
-    fi
-
-    if connection_prefix_in_use "${entered_prefix}"; then
-      log_warn "The connection prefix '${entered_prefix}' would still collide with existing resources."
-      suggested_prefix="$(suggest_unique_connection_prefix "${entered_prefix}")"
-      continue
-    fi
-
-    apply_connection_prefix "${entered_prefix}"
-    return
-  done
+  log_error "Connection '${CONNECTION_NAME}' is already bound to different GCP resources or peer values."
+  log_note "Reuse the same connection parameters to update this connection, or choose a different --connection-name for a separate connection."
+  exit 1
 }
 
 choose_vpn_gateway_name() {
@@ -915,6 +1383,7 @@ choose_vpn_gateway_name() {
   printf '  Region:  %s\n' "${REGION}"
   printf '\n'
   log_note "Google supports one HA VPN gateway connecting to multiple remote sites."
+  log_note "This helper still models the Nebius side as a single-interface peer. For the same Nebius public IP, one GCP HA VPN gateway can host only one active/passive tunnel pair."
   log_note "Default best practice: reuse the existing HA VPN gateway and Cloud Router when the region, VPC, and ASN fit."
   log_note "Create a new HA VPN gateway only when you want isolation, a different region/VPC, or additional scale/capacity."
   printf '\n'
@@ -1109,11 +1578,11 @@ status_report() {
   if resource_exists compute routers describe "${CLOUD_ROUTER_NAME}" --region "${REGION}" --project "${GCP_PROJECT_ID}"; then
     router_exists="true"
     router_asn="$(gcloud compute routers describe "${CLOUD_ROUTER_NAME}" --region "${REGION}" --project "${GCP_PROJECT_ID}" --format='value(bgp.asn)' 2>/dev/null || true)"
-    iface1_range="$(gcloud compute routers describe "${CLOUD_ROUTER_NAME}" --region "${REGION}" --project "${GCP_PROJECT_ID}" --format='value(interfaces.name,interfaces.ipRange)' 2>/dev/null | awk -v n="${IFACE1_NAME}" '$1==n {print $2; exit}')"
-    iface2_range="$(gcloud compute routers describe "${CLOUD_ROUTER_NAME}" --region "${REGION}" --project "${GCP_PROJECT_ID}" --format='value(interfaces.name,interfaces.ipRange)' 2>/dev/null | awk -v n="${IFACE2_NAME}" '$1==n {print $2; exit}')"
-    peer1_ip="$(gcloud compute routers describe "${CLOUD_ROUTER_NAME}" --region "${REGION}" --project "${GCP_PROJECT_ID}" --format='value(bgpPeers.name,bgpPeers.peerIpAddress)' 2>/dev/null | awk -v n="${PEER1_NAME}" '$1==n {print $2; exit}')"
-    peer2_ip="$(gcloud compute routers describe "${CLOUD_ROUTER_NAME}" --region "${REGION}" --project "${GCP_PROJECT_ID}" --format='value(bgpPeers.name,bgpPeers.peerIpAddress)' 2>/dev/null | awk -v n="${PEER2_NAME}" '$1==n {print $2; exit}')"
-    peer1_asn="$(gcloud compute routers describe "${CLOUD_ROUTER_NAME}" --region "${REGION}" --project "${GCP_PROJECT_ID}" --format='value(bgpPeers.name,bgpPeers.peerAsn)' 2>/dev/null | awk -v n="${PEER1_NAME}" '$1==n {print $2; exit}')"
+    iface1_range="$(router_interface_rows | awk -F $'\t' -v n="${IFACE1_NAME}" '$1==n {print $2; exit}')"
+    iface2_range="$(router_interface_rows | awk -F $'\t' -v n="${IFACE2_NAME}" '$1==n {print $2; exit}')"
+    peer1_ip="$(router_peer_rows | awk -F $'\t' -v n="${PEER1_NAME}" '$1==n {print $3; exit}')"
+    peer2_ip="$(router_peer_rows | awk -F $'\t' -v n="${PEER2_NAME}" '$1==n {print $3; exit}')"
+    peer1_asn="$(router_peer_rows | awk -F $'\t' -v n="${PEER1_NAME}" '$1==n {print $4; exit}')"
   fi
 
   if resource_exists compute external-vpn-gateways describe "${EXTERNAL_GW_NAME}" --project "${GCP_PROJECT_ID}"; then
@@ -1153,6 +1622,7 @@ status_report() {
   cat <<EOF
 
 Status (no changes made):
+  Connection name:     ${CONNECTION_NAME}
   GCP project:         ${GCP_PROJECT_ID}
   GCP account:         ${ACTIVE_ACCOUNT:-<unknown>}
   Region:              ${REGION}
@@ -1208,6 +1678,14 @@ parse_args() {
           exit 1
         fi
         LOCAL_CONFIG_FILE="$2"
+        shift 2
+        ;;
+      --connection-name)
+        if [[ $# -lt 2 ]]; then
+          log_error "Missing value for $1"
+          exit 1
+        fi
+        CONNECTION_NAME="$2"
         shift 2
         ;;
       --gcp-project-id)
@@ -1322,16 +1800,30 @@ main() {
     log_note "Using gcp_project=${GCP_PROJECT_ID} region=${REGION} network=${NETWORK}"
   fi
 
-  initialize_connection_names
+  resolve_connection_name
+  derive_psk_env_names
+  apply_connection_name_resources "${CONNECTION_NAME}"
 
   if [[ "${STATUS_ONLY}" -eq 1 ]]; then
+    if [[ -n "${NEBIUS_PUBLIC_IP}" || "${EXTERNAL_GW_NAME_EXPLICIT}" -eq 1 ]]; then
+      resolve_external_gateway_name
+    fi
+    plan_tunnel_addressing
+    if [[ -n "${CLOUD_ROUTER_NAME}" ]]; then
+      validate_router_routing_domain
+    fi
     status_report
     exit 0
   fi
 
   choose_vpn_gateway_name
   choose_cloud_router_name
-  choose_connection_resource_names
+  resolve_network_from_existing_resources
+  resolve_external_gateway_name
+  validate_router_routing_domain
+  assert_gateway_peer_tunnel_capacity
+  plan_tunnel_addressing
+  assert_connection_resource_bindings
   confirm_create
 
   if resource_exists compute vpn-gateways describe "${VPN_GATEWAY_NAME}" --region "${REGION}" --project "${GCP_PROJECT_ID}"; then
@@ -1365,13 +1857,8 @@ main() {
   fi
 
   if resource_exists compute external-vpn-gateways describe "${EXTERNAL_GW_NAME}" --project "${GCP_PROJECT_ID}"; then
-    existing_ip="$(gcloud compute external-vpn-gateways describe "${EXTERNAL_GW_NAME}" --project "${GCP_PROJECT_ID}" --format='value(interfaces[0].ipAddress)' 2>/dev/null || true)"
-    existing_redundancy_type="$(gcloud compute external-vpn-gateways describe "${EXTERNAL_GW_NAME}" --project "${GCP_PROJECT_ID}" --format='value(redundancyType)' 2>/dev/null || true)"
-    existing_interface_ids="$(gcloud compute external-vpn-gateways describe "${EXTERNAL_GW_NAME}" --project "${GCP_PROJECT_ID}" --format='csv[no-heading](interfaces[].id)' 2>/dev/null || true)"
-    existing_interface_count=0
-    if [[ -n "${existing_interface_ids}" ]]; then
-      existing_interface_count="$(awk -F',' '{print NF}' <<<"${existing_interface_ids}")"
-    fi
+    existing_gateway_shape="$(describe_external_gateway_shape "${EXTERNAL_GW_NAME}")"
+    IFS=$'\t' read -r existing_ip existing_redundancy_type existing_interface_count <<<"${existing_gateway_shape}"
     if [[ "${existing_ip}" != "${NEBIUS_PUBLIC_IP}" ]]; then
       log_error "External VPN gateway ${EXTERNAL_GW_NAME} already exists with IP ${existing_ip}, expected ${NEBIUS_PUBLIC_IP}."
       log_note "Delete it first or use a different EXTERNAL_GW_NAME."
@@ -1477,9 +1964,9 @@ main() {
       --shared-secret "${PSK2}"
   fi
 
-  router_ifaces="$(gcloud compute routers describe "${CLOUD_ROUTER_NAME}" --region "${REGION}" --project "${GCP_PROJECT_ID}" --format='value(interfaces.name,interfaces.ipRange)' 2>/dev/null || true)"
-  iface1_range="$(awk -v n="${IFACE1_NAME}" '$1==n {print $2; exit}' <<<"${router_ifaces}")"
-  iface2_range="$(awk -v n="${IFACE2_NAME}" '$1==n {print $2; exit}' <<<"${router_ifaces}")"
+  router_ifaces="$(router_interface_rows 2>/dev/null || true)"
+  iface1_range="$(awk -F $'\t' -v n="${IFACE1_NAME}" '$1==n {print $2; exit}' <<<"${router_ifaces}")"
+  iface2_range="$(awk -F $'\t' -v n="${IFACE2_NAME}" '$1==n {print $2; exit}' <<<"${router_ifaces}")"
 
   if [[ -n "${iface1_range}" ]]; then
     if [[ "${iface1_range}" != "${TUN1_GCP_IP}/30" ]]; then
@@ -1517,9 +2004,9 @@ main() {
       --vpn-tunnel-region "${REGION}"
   fi
 
-  router_peers="$(gcloud compute routers describe "${CLOUD_ROUTER_NAME}" --region "${REGION}" --project "${GCP_PROJECT_ID}" --format='value(bgpPeers.name,bgpPeers.peerIpAddress,bgpPeers.peerAsn,bgpPeers.advertisedRoutePriority)' 2>/dev/null || true)"
-  peer1_state="$(awk -v n="${PEER1_NAME}" '$1==n {print $2 "|" $3 "|" $4; exit}' <<<"${router_peers}")"
-  peer2_state="$(awk -v n="${PEER2_NAME}" '$1==n {print $2 "|" $3 "|" $4; exit}' <<<"${router_peers}")"
+  router_peers="$(router_peer_rows 2>/dev/null || true)"
+  peer1_state="$(awk -F $'\t' -v n="${PEER1_NAME}" '$1==n {print $3 "|" $4 "|" $5; exit}' <<<"${router_peers}")"
+  peer2_state="$(awk -F $'\t' -v n="${PEER2_NAME}" '$1==n {print $3 "|" $4 "|" $5; exit}' <<<"${router_peers}")"
 
   if [[ -n "${peer1_state}" ]]; then
     if [[ "${peer1_state}" != "${TUN1_NEBIUS_IP}|${NEBIUS_ASN}|${ACTIVE_ADVERTISED_ROUTE_PRIORITY}" ]]; then
@@ -1559,19 +2046,26 @@ main() {
 
   gcp_ip0="$(gcloud compute vpn-gateways describe "${VPN_GATEWAY_NAME}" --region "${REGION}" --project "${GCP_PROJECT_ID}" --format='value(vpnInterfaces[0].ipAddress)')"
   gcp_ip1="$(gcloud compute vpn-gateways describe "${VPN_GATEWAY_NAME}" --region "${REGION}" --project "${GCP_PROJECT_ID}" --format='value(vpnInterfaces[1].ipAddress)')"
+  psk_yaml_1=""
+  psk_yaml_2=""
 
   if [[ "${PSK1}" == "existing: no display" || "${PSK2}" == "existing: no display" ]]; then
-    psk_notice=$'Existing tunnel PSKs cannot be read back from GCP.\nRotate existing tunnels if you need newly generated PSKs printed here.'
-    psk_block=$'PSKs:\n  Tunnel 1: existing value retained (not displayed)\n  Tunnel 2: existing value retained (not displayed)'
+    psk_notice=$'Existing tunnel PSKs cannot be read back from GCP.\nRotate existing tunnels if you need newly generated PSKs printed here.\nIf you already know the PSKs, replace the placeholder values in the Nebius connection block below or use env vars.'
+    printf -v psk_block 'Optional env vars:\n  %s=<existing-psk-1>\n  %s=<existing-psk-2>' "${PSK1_ENV_NAME}" "${PSK2_ENV_NAME}"
+    psk_yaml_1="\${${PSK1_ENV_NAME}}"
+    psk_yaml_2="\${${PSK2_ENV_NAME}}"
   else
-    psk_notice="Export these PSKs before running validate/apply:"
-    printf -v psk_block "  export GCP_TUNNEL_1_PSK='%s'\n  export GCP_TUNNEL_2_PSK='%s'" "${PSK1}" "${PSK2}"
+    psk_notice=$'Literal PSKs are embedded in the Nebius connection block below.\nIf you prefer env vars instead, export them and replace the psk values with the optional variable names shown here.'
+    printf -v psk_block "Optional env vars:\n  export %s='%s'\n  export %s='%s'" "${PSK1_ENV_NAME}" "${PSK1}" "${PSK2_ENV_NAME}" "${PSK2}"
+    psk_yaml_1="${PSK1}"
+    psk_yaml_2="${PSK2}"
   fi
 
   cat <<EOF
 
 GCP side setup complete.
 
+  Connection name:     ${CONNECTION_NAME}
   GCP project:         ${GCP_PROJECT_ID}
   GCP account:         ${ACTIVE_ACCOUNT}
   Nebius public IP:    ${NEBIUS_PUBLIC_IP}
@@ -1583,30 +2077,33 @@ GCP side setup complete.
 ${psk_notice}
 ${psk_block}
 
-YAML snippet:
-  bgp:
-    enabled: true
-    remote_asn: ${CLOUD_ROUTER_ASN}
-    advertise_local_prefixes: true
-  tunnels:
-    - name: "${TUNNEL1_NAME}"
-      gateway_instance_index: 0
-      local_public_ip_index: 0
-      ha_role: "active"
-      remote_public_ip: "${gcp_ip0}"
-      psk: "\${GCP_TUNNEL_1_PSK}"
-      inner_cidr: "${TUN1_CIDR}"
-      inner_local_ip: "${TUN1_NEBIUS_IP}"
-      inner_remote_ip: "${TUN1_GCP_IP}"
-    - name: "${TUNNEL2_NAME}"
-      gateway_instance_index: 0
-      local_public_ip_index: 0
-      ha_role: "passive"
-      remote_public_ip: "${gcp_ip1}"
-      psk: "\${GCP_TUNNEL_2_PSK}"
-      inner_cidr: "${TUN2_CIDR}"
-      inner_local_ip: "${TUN2_NEBIUS_IP}"
-      inner_remote_ip: "${TUN2_GCP_IP}"
+Nebius connection block:
+  - name: "${CONNECTION_NAME}"
+    vendor: "gcp"
+    routing_mode: "bgp"
+    bgp:
+      enabled: true
+      remote_asn: ${CLOUD_ROUTER_ASN}
+      advertise_local_prefixes: true
+    tunnels:
+      - name: "${TUNNEL1_NAME}"
+        gateway_instance_index: 0
+        local_public_ip_index: 0
+        ha_role: "active"
+        remote_public_ip: "${gcp_ip0}"
+        psk: $(yaml_double_quote "${psk_yaml_1}")
+        inner_cidr: "${TUN1_CIDR}"
+        inner_local_ip: "${TUN1_NEBIUS_IP}"
+        inner_remote_ip: "${TUN1_GCP_IP}"
+      - name: "${TUNNEL2_NAME}"
+        gateway_instance_index: 0
+        local_public_ip_index: 0
+        ha_role: "passive"
+        remote_public_ip: "${gcp_ip1}"
+        psk: $(yaml_double_quote "${psk_yaml_2}")
+        inner_cidr: "${TUN2_CIDR}"
+        inner_local_ip: "${TUN2_NEBIUS_IP}"
+        inner_remote_ip: "${TUN2_GCP_IP}"
 EOF
 }
 
