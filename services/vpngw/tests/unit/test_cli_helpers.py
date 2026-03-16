@@ -8,8 +8,11 @@ import yaml
 from typer.testing import CliRunner
 
 from nebius_vpngw.cli import (
+    _detect_cross_connection_ecmp_warnings,
     _external_ips_assigned,
+    _format_ecmp_warning_lines,
     _registered_command_name,
+    _select_carrying_tunnel_for_connection,
     _should_prompt_add_routes_after_apply,
     _update_external_ips_in_yaml,
     app,
@@ -215,6 +218,145 @@ def test_prep_network_allows_missing_peer_psk_placeholders(
     assert result.exit_code == 0
     assert "Reserved public IPs:" in result.stdout
     assert "203.0.113.10" in result.stdout
+
+
+def test_select_carrying_tunnel_is_scoped_per_connection() -> None:
+    tunnel_bgp_map = {
+        "nebius-vpn-gw-0": {
+            "conn1-active": "169.254.10.2",
+            "conn1-passive": "169.254.11.2",
+            "conn2-active": "169.254.12.2",
+            "conn2-passive": "169.254.13.2",
+        }
+    }
+    tunnel_role_map = {
+        "nebius-vpn-gw-0": {
+            "conn1-active": "active",
+            "conn1-passive": "passive",
+            "conn2-active": "active",
+            "conn2-passive": "passive",
+        }
+    }
+    tunnel_connection_map = {
+        "nebius-vpn-gw-0": {
+            "conn1-active": "conn1",
+            "conn1-passive": "conn1",
+            "conn2-active": "conn2",
+            "conn2-passive": "conn2",
+        }
+    }
+    tunnel_statuses = {
+        "conn1-active": "ESTABLISHED",
+        "conn1-passive": "ESTABLISHED",
+        "conn2-active": "ESTABLISHED",
+        "conn2-passive": "ESTABLISHED",
+    }
+    bgp_states = {
+        "169.254.10.2": "Established",
+        "169.254.11.2": "Established",
+        "169.254.12.2": "Established",
+        "169.254.13.2": "Established",
+    }
+    tunnel_names = list(tunnel_statuses.keys())
+
+    assert (
+        _select_carrying_tunnel_for_connection(
+            "nebius-vpn-gw-0",
+            "conn1",
+            tunnel_names,
+            tunnel_statuses,
+            bgp_states,
+            tunnel_bgp_map,
+            tunnel_role_map,
+            tunnel_connection_map,
+        )
+        == "conn1-active"
+    )
+    assert (
+        _select_carrying_tunnel_for_connection(
+            "nebius-vpn-gw-0",
+            "conn2",
+            tunnel_names,
+            tunnel_statuses,
+            bgp_states,
+            tunnel_bgp_map,
+            tunnel_role_map,
+            tunnel_connection_map,
+        )
+        == "conn2-active"
+    )
+
+
+def test_detect_cross_connection_ecmp_warnings_for_active_paths() -> None:
+    routes = {
+        "10.10.0.0/24": [
+            {"peerId": "169.254.10.2", "multipath": True},
+            {"peerId": "169.254.12.2", "multipath": True},
+            {"peerId": "169.254.11.2", "multipath": False},
+            {"peerId": "169.254.13.2", "multipath": False},
+        ]
+    }
+    peer_connection_map = {
+        "169.254.10.2": "gcp-ha-vpn",
+        "169.254.11.2": "gcp-ha-vpn",
+        "169.254.12.2": "gcp-ha-vpn2",
+        "169.254.13.2": "gcp-ha-vpn2",
+    }
+    peer_tunnel_map = {
+        "169.254.10.2": "nebius-204-12-170-147-tunnel-1",
+        "169.254.11.2": "nebius-204-12-170-147-tunnel-2",
+        "169.254.12.2": "gcp-ha-vpn2-tunnel-1",
+        "169.254.13.2": "gcp-ha-vpn2-tunnel-2",
+    }
+    peer_role_map = {
+        "169.254.10.2": "active",
+        "169.254.11.2": "passive",
+        "169.254.12.2": "active",
+        "169.254.13.2": "passive",
+    }
+
+    warnings = _detect_cross_connection_ecmp_warnings(
+        routes,
+        peer_connection_map,
+        peer_tunnel_map,
+        peer_role_map,
+    )
+
+    assert len(warnings) == 1
+    assert warnings[0]["prefix"] == "10.10.0.0/24"
+    assert warnings[0]["connections"] == ["gcp-ha-vpn", "gcp-ha-vpn2"]
+
+
+def test_format_ecmp_warning_lines_groups_prefix_and_tunnels() -> None:
+    warning_lines = _format_ecmp_warning_lines(
+        {
+            "nebius-vpn-gw-0": [
+                {
+                    "prefix": "10.10.0.0/24",
+                    "entries": [
+                        {
+                            "connection": "gcp-ha-vpn",
+                            "tunnel": "nebius-204-12-170-147-tunnel-1",
+                            "peer_ip": "169.254.10.2",
+                        },
+                        {
+                            "connection": "gcp-ha-vpn2",
+                            "tunnel": "gcp-ha-vpn2-tunnel-1",
+                            "peer_ip": "169.254.12.2",
+                        },
+                    ],
+                }
+            ]
+        }
+    )
+
+    assert "Gateway VM: nebius-vpn-gw-0" in warning_lines
+    assert "  Overlapping prefix: 10.10.0.0/24" in warning_lines
+    assert "  Active tunnels carrying this prefix:" in warning_lines
+    assert (
+        "    - nebius-204-12-170-147-tunnel-1 (connection: gcp-ha-vpn)" in warning_lines
+    )
+    assert "    - gcp-ha-vpn2-tunnel-1 (connection: gcp-ha-vpn2)" in warning_lines
 
 
 def test_cli_help_command_order() -> None:

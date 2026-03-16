@@ -184,6 +184,13 @@ def validate_apipa_ip(v: str, field_name: str) -> str:
         raise ValueError(f"Invalid IP address '{v}': {e}") from e
 
 
+def _tunnel_location(connection_name: str, tunnel_name: str, instance_index: int) -> str:
+    return (
+        f"connection '{connection_name}' tunnel '{tunnel_name}' "
+        f"(gateway_instance_index={instance_index})"
+    )
+
+
 # ============================================================================
 # Configuration Models (bottom-up)
 # ============================================================================
@@ -899,6 +906,72 @@ class VPNGatewayConfig(BaseModel):
         duplicates = [n for n in names if names.count(n) > 1]
         if duplicates:
             raise ValueError(f"Duplicate connection names found: {set(duplicates)}")
+        return self
+
+    @model_validator(mode="after")
+    def validate_tunnel_names_unique_globally(self) -> VPNGatewayConfig:
+        """Ensure tunnel names are unique across the full config."""
+        locations_by_name: dict[str, list[str]] = {}
+        for conn in self.connections:
+            for tunnel in conn.tunnels:
+                locations_by_name.setdefault(tunnel.name, []).append(
+                    _tunnel_location(conn.name, tunnel.name, tunnel.gateway_instance_index)
+                )
+
+        duplicates = {
+            name: locations
+            for name, locations in locations_by_name.items()
+            if len(locations) > 1
+        }
+        if duplicates:
+            details = "; ".join(
+                f"{name}: {', '.join(locations)}"
+                for name, locations in sorted(duplicates.items())
+            )
+            raise ValueError(
+                "Tunnel names must be globally unique across all connections. "
+                f"Conflicts: {details}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_unique_apipa_values_per_instance(self) -> VPNGatewayConfig:
+        """Ensure APIPA tunnel values are unique per gateway instance."""
+        conflict_messages: list[str] = []
+
+        def collect_conflicts(field_name: str) -> None:
+            locations_by_key: dict[tuple[int, str], list[str]] = {}
+            for conn in self.connections:
+                for tunnel in conn.tunnels:
+                    value = getattr(tunnel, field_name, None)
+                    if not value:
+                        continue
+                    key = (tunnel.gateway_instance_index, str(value))
+                    locations_by_key.setdefault(key, []).append(
+                        _tunnel_location(conn.name, tunnel.name, tunnel.gateway_instance_index)
+                    )
+
+            conflicts = {
+                key: locations
+                for key, locations in locations_by_key.items()
+                if len(locations) > 1
+            }
+            if conflicts:
+                details = "; ".join(
+                    f"{field_name}='{value}' on gateway_instance_index={instance_index}: "
+                    f"{', '.join(locations)}"
+                    for (instance_index, value), locations in sorted(conflicts.items())
+                )
+                conflict_messages.append(
+                    f"{field_name} must be unique per gateway instance across all connections. "
+                    f"Conflicts: {details}"
+                )
+
+        collect_conflicts("inner_cidr")
+        collect_conflicts("inner_local_ip")
+        collect_conflicts("inner_remote_ip")
+        if conflict_messages:
+            raise ValueError(" ".join(conflict_messages))
         return self
 
     @model_validator(mode="after")

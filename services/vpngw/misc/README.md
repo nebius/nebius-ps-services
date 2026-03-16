@@ -1,128 +1,205 @@
 # `misc`
 
-This folder contains helper automation that is useful during deployment but is
-not part of the installed `nebius-vpngw` CLI surface.
+This folder contains deployment helpers that are separate from the installed
+`nebius-vpngw` CLI.
 
 ## Contents
 
-- `gcp-vpngw.sh`: bootstrap the GCP side of a Nebius-to-GCP site-to-site VPN.
+- `gcp-vpngw.sh`: configure one GCP-side HA VPN connection to a Nebius VPN
+  gateway and print the matching Nebius `connections:` block.
 
 ## `gcp-vpngw.sh`
 
-`gcp-vpngw.sh` creates or reuses the GCP resources needed for the current
-`nebius-vpngw` design:
+`gcp-vpngw.sh` is a stateless per-connection helper:
 
-- one GCP HA VPN gateway for the Nebius connection
-- one Cloud Router in the same region/VPC
-- one external VPN gateway that models the Nebius peer as a single public IP
-- exactly two HA VPN tunnels on the GCP side
+- one run manages exactly one connection
+- the connection is identified by `--connection-name` or `CONNECTION_NAME`
+- rerun with the same connection name to update that same connection
+- use a different connection name for a separate connection
+- the script does not keep local state about other connections
+
+The helper can reuse an existing GCP HA VPN gateway and Cloud Router, but it
+creates or reuses the connection-scoped resources for only the selected
+connection:
+
+- one external VPN gateway representing the Nebius peer as a single public IP
+- two HA VPN tunnels
 - two Cloud Router interfaces
 - two BGP peers
 
-After creation, it prints:
+Successful runs print:
 
-- the generated PSKs
-- the GCP tunnel public IPs
-- a YAML snippet to paste into the Nebius config under the GCP connection
+- tunnel PSKs when new tunnels are created or rotated
+- a complete Nebius `connections:` entry for that connection only
+- literal PSKs in the printed Nebius connection block when the helper knows
+  them
+- optional export commands with connection-specific variable names for users
+  who prefer env vars in YAML
 
-It creates or reuses the HA VPN gateway, Cloud Router, external VPN gateway,
-tunnel pair, router interfaces, and BGP peers. It does not create Cloud NAT.
+## Design Scope
 
-## Design Constraints
+This helper is intentionally narrow.
 
-This script is intentionally aligned to the current Nebius implementation.
+- It configures one active/passive GCP HA VPN connection at a time.
+- It models the Nebius side as a single external VPN gateway interface on GCP.
+- It emits exactly two tunnels for the connection:
+  - tunnel 1 as `ha_role: "active"`
+  - tunnel 2 as `ha_role: "passive"`
+- It is suitable for adding multiple GCP sites to one Nebius gateway by
+  running the helper once per site with a different connection name.
+- For this single-IP Nebius peer model, one GCP HA VPN gateway can host only
+  one tunnel pair to that peer because the valid interface mappings are `0->0`
+  and `1->0`.
+- A second connection to the same Nebius public IP therefore needs a different
+  GCP HA VPN gateway. The helper fails fast if the selected gateway already
+  consumes both mappings for that peer.
+- When adding another connection on a different GCP HA VPN gateway, the helper
+  can auto-pick unused APIPA `/30` ranges for the new pair.
 
-- Nebius currently exposes one public peer IP for this workflow.
-- The Nebius side is active/passive, not active/active.
-- The Nebius connection uses exactly two tunnels.
-- The GCP side for this workflow is therefore one HA VPN gateway plus two
-  tunnels to the same Nebius peer.
-- Tunnel 1 is emitted as `ha_role: "active"`.
-- Tunnel 2 is emitted as `ha_role: "passive"`.
-
-This script is not intended to build a general multi-gateway active/active
-topology for Nebius. If the GCP project already has an HA VPN gateway, the
-script prompts whether to reuse it or create a new one, but the Nebius
-connection created by this script still remains a single active/passive tunnel
-pair on one GCP HA VPN gateway.
+The main `nebius-vpngw` CLI is responsible for validating and applying the
+Nebius side. This helper only configures the GCP side and prints the Nebius
+connection block to paste into your YAML config.
 
 ## Prerequisites
 
-- Google Cloud CLI (`gcloud`) installed and available in `PATH`
+- `gcloud` installed and available in `PATH`
 - permission to create or update:
   - HA VPN gateways
   - Cloud Routers
   - external VPN gateways
   - VPN tunnels
-  - BGP peers and router interfaces
+  - router interfaces and BGP peers
 - a target GCP VPC network in the selected region
 - a Nebius public IP already allocated, or a local Nebius config file from
   which the script can discover it
 
 ## Required Inputs
 
-Create mode requires these values to be resolved:
+All modes require a connection name.
+
+- `--connection-name <name>` or `CONNECTION_NAME`
+
+Create mode also requires these values to resolve:
 
 - GCP project ID
 - GCP region
 - Nebius public IP
 - Nebius peer ASN
 
-The canonical positional form is:
+Canonical create form:
 
 ```bash
-./misc/gcp-vpngw.sh <gcp-project-id> <gcp-region> <nebius-public-ip> <nebius-asn>
+./misc/gcp-vpngw.sh --connection-name <name> \
+  <gcp-project-id> <gcp-region> <nebius-public-ip> <nebius-asn>
 ```
 
 The same values can also come from:
 
-- flags: `--gcp-project-id`, `--region`, `--nebius-public-ip`, `--nebius-asn`
-- env vars: `GCP_PROJECT_ID`, `REGION`, `NEBIUS_PUBLIC_IP`, `NEBIUS_ASN`
-- local Nebius config:
-  - public IP from allocated `gateway_group.external_ips`
+- flags:
+  - `--gcp-project-id`
+  - `--region`
+  - `--nebius-public-ip`
+  - `--nebius-asn`
+  - `--local-config-file`
+- env vars:
+  - `CONNECTION_NAME`
+  - `GCP_PROJECT_ID`
+  - `REGION`
+  - `NEBIUS_PUBLIC_IP`
+  - `NEBIUS_ASN`
+  - `LOCAL_CONFIG_FILE`
+- local Nebius config discovery:
+  - public IP from `gateway_group.external_ips`
   - ASN from `gateway.local_asn`
 
-If the connection-scoped names are left at their defaults, the script derives
-the external gateway, tunnel, interface, and BGP peer names from the Nebius
-public IP so repeated runs target the same GCP resources.
+When the helper reuses an existing HA VPN gateway or Cloud Router, it also
+auto-detects the VPC network from those resources unless `NETWORK` is set
+explicitly.
 
-The required `<nebius-asn>` input is the Nebius-side peer ASN. The GCP Cloud
-Router ASN is a separate setting:
+The required `<nebius-asn>` is the Nebius-side ASN. The GCP Cloud Router ASN
+is separate:
 
-- if you reuse an existing Cloud Router, the script reads and keeps that
-  router's actual ASN and uses it as `bgp.remote_asn` in the Nebius YAML
-- if you create a new Cloud Router, the script uses `CLOUD_ROUTER_ASN`
-  (default `64514`) as the GCP-side ASN
+- if the helper reuses an existing Cloud Router, it reads and keeps that
+  router's actual ASN
+- if the helper creates a new Cloud Router, it uses `CLOUD_ROUTER_ASN`
+  (default `64514`)
 
-## What The Script Does
+For multi-connection use, `--local-config-file` is strongly recommended. When
+it is available, the helper also checks the existing Nebius YAML so the newly
+printed connection block does not reuse tunnel APIPA ranges that are already in
+the file.
 
-At a high level, the script performs this flow:
+## Naming Model
 
-1. Check that `gcloud` is installed.
-2. Ensure there is an active GCP login, or run `gcloud auth login`.
-3. Resolve the project, region, Nebius public IP, and Nebius ASN.
-4. If the selected HA VPN gateway already exists, prompt whether to reuse it or
-   create a new one.
-5. Reuse or create the GCP HA VPN gateway.
-6. If the selected Cloud Router already exists, prompt whether to reuse it or
-   create a new one.
-7. If the selected Cloud Router already has Cloud NAT attached, warn that GCP
-   documents this as unsupported for HA VPN, but still allow reuse if the user
-   explicitly chooses it.
-8. If the selected Cloud Router is reused, keep its actual ASN and use that as
-   the GCP-side ASN in the final Nebius YAML output.
-9. If the selected gateway or router already hosts another site and the default
-   external gateway, tunnel, interface, or peer names would collide, prompt
-   for a new connection resource prefix and derive unique names from it.
-10. Reuse or create the Cloud Router.
-11. Reuse or create the external VPN gateway for the Nebius public IP.
-12. Reuse or create two VPN tunnels.
-13. Reuse or create two router interfaces and two BGP peers.
-14. Print the PSKs and the YAML snippet for the Nebius config.
+Tunnel, interface, and BGP peer names are derived from `--connection-name`
+unless you override them with env vars:
 
-If you run with `--rotate-existing-tunnels`, the script removes the matching
-BGP peers and router interfaces first, then recreates the tunnel pair with new
-PSKs.
+- `TUNNEL1_NAME`
+- `TUNNEL2_NAME`
+- `IFACE1_NAME`
+- `IFACE2_NAME`
+- `PEER1_NAME`
+- `PEER2_NAME`
+
+If you point the helper at older GCP resources whose names were created outside
+this naming model, pass those env var overrides explicitly for status or
+update operations. The canonical workflow is to let the helper own the
+connection-scoped GCP resource names from the first run.
+
+The external VPN gateway is treated as a peer-scoped resource instead of a
+connection-scoped one:
+
+- if GCP already has a single-IP external VPN gateway for the same Nebius
+  public IP, the helper reuses it automatically
+- otherwise it creates one with a name derived from the Nebius public IP
+- `EXTERNAL_GW_NAME` still overrides that choice explicitly
+
+This keeps the helper stateless while still making reruns idempotent.
+
+If the selected connection name already maps to GCP resources with different
+peer values, interfaces, or bindings, the script exits with a conflict error.
+Use the same connection parameters to update that connection, or choose a
+different connection name for a separate site.
+
+By default, the helper also derives connection-specific PSK variable names for
+the optional export commands it prints:
+
+- `GCP_<CONNECTION_NAME>_TUNNEL_1_PSK`
+- `GCP_<CONNECTION_NAME>_TUNNEL_2_PSK`
+
+You can override those printed variable names with `PSK1_ENV_NAME` and
+`PSK2_ENV_NAME`.
+
+For tunnel addressing:
+
+- if the selected connection already exists on the Cloud Router, the helper
+  reuses that connection's existing APIPA values
+- otherwise it chooses two unused `/30` ranges by checking the selected Cloud
+  Router first and the local Nebius config file when available
+- you can override APIPA values explicitly with `TUN1_*` and `TUN2_*`
+
+## What The Helper Does
+
+At a high level:
+
+1. Check that `gcloud` is available.
+2. Ensure an active GCP login exists, or run `gcloud auth login`.
+3. Resolve the connection name, project, region, Nebius public IP, and Nebius
+   ASN.
+4. Reuse or create the HA VPN gateway.
+5. Reuse or create the Cloud Router.
+6. Reuse the existing external VPN gateway for the Nebius peer IP when one is
+   already present, or create it when missing.
+7. Validate that the selected connection name still points to the same
+   connection-scoped resources and peer values.
+8. Reuse existing APIPA values for that connection when they already exist, or
+   auto-select two unused `/30` ranges for the new connection.
+9. Reuse or create the tunnel pair, router interfaces, and BGP peers for that
+   one connection.
+10. Print the PSKs and the Nebius connection block for that connection.
+
+With `--rotate-existing-tunnels`, the helper deletes the matching BGP peers and
+router interfaces first, then recreates the tunnel pair with new PSKs.
 
 ## Recommended Workflow
 
@@ -134,21 +211,37 @@ From the repo root:
 nebius-vpngw prep-network --local-config-file <local-config-file>
 ```
 
-1. Create the GCP side:
+1. Create the first GCP-side connection:
 
 ```bash
-./misc/gcp-vpngw.sh <gcp-project-id> <gcp-region> <nebius-public-ip> <nebius-asn>
+./misc/gcp-vpngw.sh --connection-name site-1 \
+  <gcp-project-id> <gcp-region> <nebius-public-ip> <nebius-asn>
 ```
 
 1. Export the printed PSKs:
 
 ```bash
-export GCP_TUNNEL_1_PSK='<printed-psk-1>'
-export GCP_TUNNEL_2_PSK='<printed-psk-2>'
+export GCP_SITE_1_TUNNEL_1_PSK='<printed-psk-1>'
+export GCP_SITE_1_TUNNEL_2_PSK='<printed-psk-2>'
 ```
 
-1. Paste the printed YAML snippet into the GCP connection section of the Nebius
-   config.
+1. Paste the printed connection block into `connections:` in the Nebius YAML.
+
+2. If you need another connection to the same Nebius public IP, choose a
+   different GCP HA VPN gateway name. Reusing the same Cloud Router is still
+   allowed when the region, VPC, and routing policy fit:
+
+```bash
+./misc/gcp-vpngw.sh --connection-name site-2 \
+  --local-config-file <local-config-file> \
+  <gcp-project-id> <gcp-region> <nebius-public-ip> <nebius-asn>
+```
+
+When the helper detects that the default HA VPN gateway is already using both
+`0->0` and `1->0` mappings to the selected single-IP Nebius peer, choose `n`
+when it asks whether to reuse the existing GCP HA VPN gateway and provide a
+new gateway name. Then either reuse the existing Cloud Router or create a new
+one, depending on your routing policy.
 
 1. Validate and apply the Nebius side:
 
@@ -163,51 +256,53 @@ From the repo root:
 
 ```bash
 ./misc/gcp-vpngw.sh --help
-./misc/gcp-vpngw.sh <gcp-project-id> <gcp-region> <nebius-public-ip> <nebius-asn>
-./misc/gcp-vpngw.sh --local-config-file <local-config-file> --region <gcp-region>
-./misc/gcp-vpngw.sh --status --region <gcp-region>
-./misc/gcp-vpngw.sh --status --local-config-file <local-config-file>
-PSK1=<tunnel-1-psk> PSK2=<tunnel-2-psk> ./misc/gcp-vpngw.sh --rotate-existing-tunnels <gcp-project-id> <gcp-region> <nebius-public-ip> <nebius-asn>
+./misc/gcp-vpngw.sh --connection-name site-1 \
+  <gcp-project-id> <gcp-region> <nebius-public-ip> <nebius-asn>
+./misc/gcp-vpngw.sh --connection-name site-2 \
+  --local-config-file <local-config-file> \
+  <gcp-project-id> <gcp-region> <nebius-public-ip> <nebius-asn>
+./misc/gcp-vpngw.sh --connection-name site-1 --status --region <gcp-region>
+./misc/gcp-vpngw.sh --connection-name site-1 \
+  --status --local-config-file <local-config-file>
+CONNECTION_NAME=site-1 PSK1=<tunnel-1-psk> PSK2=<tunnel-2-psk> \
+  ./misc/gcp-vpngw.sh --rotate-existing-tunnels \
+  <gcp-project-id> <gcp-region> <nebius-public-ip> <nebius-asn>
 ```
 
 From inside `misc/`:
 
 ```bash
 ./gcp-vpngw.sh --help
-./gcp-vpngw.sh <gcp-project-id> <gcp-region> <nebius-public-ip> <nebius-asn>
-./gcp-vpngw.sh --status --region <gcp-region>
+./gcp-vpngw.sh --connection-name site-1 \
+  <gcp-project-id> <gcp-region> <nebius-public-ip> <nebius-asn>
+./gcp-vpngw.sh --connection-name site-1 --status --region <gcp-region>
 ```
 
 ## Operational Notes
 
-- The script reuses an existing Cloud Router by default when the existing router
-  matches the region/VPC/ASN assumptions.
-- If the existing Cloud Router already has Cloud NAT attached, the script warns
-  that Google documents this as unsupported for HA VPN, but it can still reuse
-  that router if you explicitly choose to do so.
-- Status mode only needs the GCP project and region to be resolved. Nebius
-  public IP is optional there and can come from `--nebius-public-ip` or
-  `--local-config-file`.
-- By default, the script derives connection-scoped names from the Nebius public
-  IP so repeated runs stay idempotent and target the same GCP resources.
-- If the existing HA VPN gateway or Cloud Router already serves another site,
-  the script prompts for a new connection resource prefix so tunnel, interface,
-  peer, and external gateway names do not collide.
-- The required `<nebius-asn>` input is the Nebius-side peer ASN, not the GCP
-  Cloud Router ASN.
-- If the existing Cloud Router is reused, the script keeps that router's
-  actual ASN and prints it as `bgp.remote_asn` in the Nebius YAML snippet.
-- If a new Cloud Router is created, the GCP-side ASN comes from
-  `CLOUD_ROUTER_ASN` and defaults to `64514`.
-- The script does not create or modify Cloud NAT. If you choose a new Cloud
-  Router and want a separate NAT on it, create that NAT explicitly after the
-  VPN setup.
-- The script treats the Nebius peer as a single-interface external VPN gateway
-  on GCP.
-- The script emits exactly two tunnels and keeps the Nebius-side YAML in
-  active/passive form.
-- If existing tunnel names are reused, PSKs cannot be read back from GCP; the
-  script tells you to rotate them if you need fresh PSKs printed again.
+- One GCP HA VPN gateway and one Cloud Router can serve multiple peer sites in
+  the same GCP region and VPC, but this helper's single-IP Nebius peer model
+  uses peer interface `0` only.
+- HA VPN gateways and Cloud Routers are regional GCP resources. A different GCP
+  region needs a different gateway and Cloud Router in that region.
+- When the same Nebius public IP is reused for multiple connections, the helper
+  reuses the matching GCP external VPN gateway resource by default.
+- The helper does not create or modify Cloud NAT.
+- If the selected Cloud Router already has Cloud NAT attached, the helper warns
+  because Google documents that combination as unsupported for HA VPN.
+- Existing tunnel PSKs cannot be read back from GCP. Reuse keeps them in place;
+  `--rotate-existing-tunnels` is how you force new PSKs to be printed.
+- A second connection to the same single-IP Nebius peer cannot reuse the same
+  GCP HA VPN gateway after mappings `0->0` and `1->0` are already occupied.
+  The helper detects this and tells you to create a new GCP HA VPN gateway.
+- When you place that second connection on a different GCP HA VPN gateway, the
+  helper picks different tunnel APIPA values by checking the selected Cloud
+  Router and, when provided, the local Nebius YAML.
+- The printed Nebius connection block is meant to be combined with the main
+  config template and schema rules, which require globally unique tunnel names
+  and unique APIPA tunnel values per gateway instance.
+- If the local Nebius YAML already contains the same `connection.name`, replace
+  that existing block instead of appending a second block with the same name.
 
 ## References
 
@@ -215,7 +310,7 @@ From inside `misc/`:
   `https://cloud.google.com/network-connectivity/docs/vpn/support/best-practices`
 - HA VPN advanced topology guidance:
   `https://cloud.google.com/network-connectivity/docs/vpn/concepts/advanced`
-- HA VPN topologies and multi-site guidance:
-  `https://cloud.google.com/network-connectivity/docs/vpn/concepts/topologies-increase-bandwidth`
-- Cloud Router overview and creation:
-  `https://cloud.google.com/network-connectivity/docs/router/how-to/create-network-set-cloud-router-managed-by-router`
+- HA VPN topology guidance:
+  `https://cloud.google.com/network-connectivity/docs/vpn/concepts/topologies`
+- Cloud Router overview:
+  `https://cloud.google.com/network-connectivity/docs/router/concepts/overview`

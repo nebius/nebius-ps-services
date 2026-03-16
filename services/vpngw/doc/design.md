@@ -109,7 +109,7 @@ These features are not currently implemented but may be considered for future en
 
 **Deployment Modes:**
 
-- Single VM with multiple tunnels (active/active, VM is SPOF)
+- Single VM with multiple tunnels and multiple peer `connections` (current releases use active/passive per connection; the VM remains a SPOF)
 - Gateway group (N VMs) with per-tunnel pinning for VM-level HA
 
 ### Architecture Diagram
@@ -672,6 +672,8 @@ connections:
 | **disable** | `ha_role: "disable"` (**must be explicit**) | Tunnel is completely skipped (no IPsec, no BGP). Use for maintenance or cost optimization. |
 
 **Important:** The Active/Passive design requires **exactly one active tunnel** per connection **per gateway instance** to guarantee symmetric routing. Schema validation enforces this, and `defaults.ha_mode` is **required** and locked to `"active-passive"` (the only supported mode in current releases). If you omit `ha_role` on multiple tunnels, they will all default to `"active"` and create ECMP routing, which defeats the purpose of this design.
+
+**Multi-connection note:** The Active/Passive rule is scoped per connection, not globally across the gateway VM. This is intentional for multi-site topologies where each connection usually represents a different remote site and a different set of prefixes. If two different active connections learn the same prefix, FRR can still install live multipath for that overlapping prefix. Current releases surface that condition as a warning in `nebius-vpngw status`; operators should treat it as a routing-domain overlap to fix, not as the intended steady state.
 
 **Implementation note:** To allow the passive tunnel to carry data immediately after failover, **both tunnels** include `gateway.local_prefixes` in traffic selectors. This requires `if_id_in/if_id_out` binding via `swanctl` (VICI). The legacy `ipsec.conf` parser does **not** support `if_id_*`, so `swanctl` is mandatory for deterministic XFRM selection.
 
@@ -1434,6 +1436,8 @@ nebius-vpngw status --local-config-file <file>
 - BGP session state and prefix counts
 - Service health (agent, strongSwan, FRR)
 - Routing table health (table 220, APIPA routes over XFRM interfaces, orphaned routes)
+
+For multi-connection configs, the `Carrying Traffic` indicator is computed per connection so each connection shows its own preferred active tunnel. When FRR reports live multipath for the same prefix across different active connections, `status` prints an `ECMP Warning` section that names the overlapping prefix and the active tunnel names carrying it.
 
 ### Tunnel Status
 

@@ -21,6 +21,9 @@ DEFAULT_CONFIG_TEMPLATE = f"""\
 # - gateway.local_prefixes is the source of truth
 # - Use ${{VAR}} for secrets; keep *.config.yaml out of git
 # - Set values directly in YAML OR via ${{VAR}} envs (do not mix for the same field)
+# - Multiple connections can share one Nebius gateway/public IP
+# - Tunnel names must be globally unique across all connections
+# - APIPA /30s and inner IPs must be unique per gateway_instance_index
 
 version: {SCHEMA_VERSION}
 
@@ -114,7 +117,13 @@ defaults:
         detect_multiplier: 3
 
 connections:
-  - name: "gcp-ha-vpn"
+  # Add one connection block per peer site.
+  # For a second site, copy this block and change:
+  # - connection.name
+  # - tunnel names
+  # - remote_public_ip values
+  # - APIPA inner_cidr / inner_local_ip / inner_remote_ip values
+  - name: "gcp-site-1"
     vendor: "gcp"
     routing_mode: "bgp"
     # remote_prefixes: ["10.0.0.0/8"]  # optional allowlist for BGP
@@ -123,7 +132,7 @@ connections:
       remote_asn: 64514
       advertise_local_prefixes: true
     tunnels:
-      - name: "gcp-ha-tunnel-1"
+      - name: "gcp-site-1-tunnel-1"
         gateway_instance_index: 0
         local_public_ip_index: 0
         ha_role: "active"  # exactly one active per connection per VM
@@ -132,7 +141,7 @@ connections:
         inner_cidr: "169.254.10.0/30"  # inner_cidr must be /30
         inner_local_ip: "169.254.10.1"
         inner_remote_ip: "169.254.10.2"
-      - name: "gcp-ha-tunnel-2"
+      - name: "gcp-site-1-tunnel-2"
         gateway_instance_index: 0
         local_public_ip_index: 0
         ha_role: "passive"
