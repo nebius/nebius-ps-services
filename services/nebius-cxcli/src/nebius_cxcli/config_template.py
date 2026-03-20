@@ -7,12 +7,12 @@ from typing import TYPE_CHECKING
 
 import yaml
 
+from .component_defaults import resolve_component_defaults
+
 if TYPE_CHECKING:
     from .components import ComponentEntry
 
 CONFIG_VERSION = "v1"
-DEFAULT_SSH_USER_NAME = "ubuntu"
-DEFAULT_SSH_PUBLIC_KEY = "ssh-ed25519 AAAA-REPLACE-WITH-YOUR-KEY"
 
 
 @dataclass(frozen=True)
@@ -136,8 +136,6 @@ def _starter_payload(
             },
         },
         "infra": {
-            "ssh_user_name": DEFAULT_SSH_USER_NAME,
-            "ssh_public_key": DEFAULT_SSH_PUBLIC_KEY,
             "components": [],
         },
         "apps": {"charts": []},
@@ -156,10 +154,13 @@ def _starter_payload(
             "enabled": bool(entry.default_enabled),
             "inputs": {},
         }
-        if entry.source:
-            component_row["source"] = str(entry.source)
-        if entry.version:
-            component_row["version"] = str(entry.version)
+        if entry.defaults:
+            component_row = resolve_component_defaults(
+                component_node=component_row,
+                entry=entry,
+                preserve_existing_literal=True,
+                include_shared=False,
+            )
         components_node.append(component_row)
 
     apps_node = payload["apps"]
@@ -177,17 +178,25 @@ def _starter_payload(
         namespace = str(entry.default_namespace or "").strip() or entry.id
         release_name = str(entry.default_release_name or "").strip() or entry.id
         chart_repo = _canonical_chart_repo(chart_repo=chart_repo, chart_name=chart_name)
+        chart_row: dict[str, object] = {
+            "id": entry.id,
+            "group": _normalize_app_group(entry.group),
+            "enabled": bool(entry.default_enabled),
+            "repo": chart_repo,
+            "version": str(entry.version or ""),
+            "namespace": namespace,
+            "release-name": release_name,
+            "values": {},
+        }
+        if entry.defaults:
+            chart_row = resolve_component_defaults(
+                component_node=chart_row,
+                entry=entry,
+                preserve_existing_literal=True,
+                include_shared=False,
+            )
         charts_node.append(
-            {
-                "id": entry.id,
-                "group": _normalize_app_group(entry.group),
-                "enabled": bool(entry.default_enabled),
-                "repo": chart_repo,
-                "version": str(entry.version or ""),
-                "namespace": namespace,
-                "release-name": release_name,
-                "values": {},
-            }
+            chart_row
         )
 
     return payload

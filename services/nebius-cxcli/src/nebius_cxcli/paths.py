@@ -109,6 +109,28 @@ def resolve_instance_paths(
     )
 
 
+def resolve_generated_paths(target_path: Path, deployments_dir_hint: str | None = None) -> InstancePaths:
+    resolved = target_path.resolve()
+    generated_dir: Path | None = None
+
+    if resolved.name == "generated":
+        generated_dir = resolved
+    else:
+        for candidate in [resolved.parent, *resolved.parents]:
+            if candidate.name == "generated":
+                generated_dir = candidate
+                break
+
+    if generated_dir is None:
+        raise ValueError(
+            "Generated artifact path must point to `generated/`, one of its subdirectories, "
+            "or a file under that tree."
+        )
+
+    config_path = generated_dir.parent / "config.yaml"
+    return resolve_instance_paths(config_path, deployments_dir_hint=deployments_dir_hint)
+
+
 def validate_path_alignment(config: Any, paths: InstancePaths) -> None:
     """Ensure canonical config values and path hierarchy are synchronized."""
     errors: list[str] = []

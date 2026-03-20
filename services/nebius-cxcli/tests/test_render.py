@@ -5,12 +5,65 @@ from pathlib import Path
 import pytest
 import yaml
 
+import nebius_cxcli.component_sources as component_sources
+from nebius_cxcli.component_sources import (
+    ComponentOutput,
+    reset_component_sources_cache,
+    resolve_component_sources_file,
+    set_component_sources_file_override,
+)
 from nebius_cxcli.components import component_entries, reset_component_entry_cache
 from nebius_cxcli.config_loader import load_config
 from nebius_cxcli.config_model import to_dynamic_payload
 from nebius_cxcli.config_template import starter_config_yaml
 from nebius_cxcli.paths import resolve_instance_paths, validate_path_alignment
 from nebius_cxcli.render import render_instance
+from nebius_cxcli.runtime_introspection import reset_runtime_introspection_cache
+from nebius_cxcli.terraform_provider import build_provider_module_name
+
+
+def _reset_catalog_override() -> None:
+    set_component_sources_file_override(None)
+    reset_component_sources_cache()
+    reset_runtime_introspection_cache()
+    reset_component_entry_cache()
+
+
+def setup_function() -> None:
+    _reset_catalog_override()
+    _set_catalog_override(_local_catalog_path())
+
+
+def teardown_function() -> None:
+    _reset_catalog_override()
+
+
+@pytest.fixture(autouse=True)
+def _stub_catalog_output_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        component_sources,
+        "_discover_terraform_outputs",
+        lambda _source: (
+            ComponentOutput(
+                name="cluster_id",
+                kind="terraform_output",
+                source_path="cluster_id",
+                sensitive=False,
+            ),
+            ComponentOutput(
+                name="cluster_ca_certificate",
+                kind="terraform_output",
+                source_path="cluster_ca_certificate",
+                sensitive=True,
+            ),
+            ComponentOutput(
+                name="instance_id",
+                kind="terraform_output",
+                source_path="instance_id",
+                sensitive=False,
+            ),
+        ),
+    )
 
 
 def _instance_config_path(base: Path) -> Path:
@@ -39,9 +92,6 @@ def _starter_payload(*, selected_infra: set[str], selected_apps: set[str]) -> di
         )
     )
     assert isinstance(payload, dict)
-    payload["infra"]["ssh_public_key"] = (
-        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB8Yq7Rr0x2GdQ8gJ5Q40gF4yHahx7s6vH8kKf+demo"
-    )
     return payload
 
 
@@ -57,7 +107,39 @@ def _infra_component_row(payload: dict, component_id: str) -> dict:
     raise KeyError(component_id)
 
 
+def _set_catalog_override(path: Path) -> None:
+    set_component_sources_file_override(path)
+    reset_component_sources_cache()
+    reset_runtime_introspection_cache()
+    reset_component_entry_cache()
+
+
+def _local_catalog_path() -> Path:
+    return Path(__file__).resolve().parents[1] / "component_sources.yaml"
+
+
+def _catalog_with_shared_admin_ssh(
+    tmp_path: Path,
+    *,
+    user_name: str = "ubuntu",
+    public_key: str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB8Yq7Rr0x2GdQ8gJ5Q40gF4yHahx7s6vH8kKf+demo",
+) -> Path:
+    source_catalog = _local_catalog_path()
+    payload = yaml.safe_load(source_catalog.read_text(encoding="utf-8"))
+    assert isinstance(payload, dict)
+    shared = payload.setdefault("shared", {})
+    assert isinstance(shared, dict)
+    admin_ssh = shared.setdefault("admin_ssh", {})
+    assert isinstance(admin_ssh, dict)
+    admin_ssh["user_name"] = user_name
+    admin_ssh["public_key"] = public_key
+    override_path = tmp_path / "component_sources.yaml"
+    override_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    return override_path
+
+
 def test_render_creates_source_only_module_and_flux_outputs(tmp_path: Path) -> None:
+    _set_catalog_override(_local_catalog_path())
     reset_component_entry_cache()
     config_path = _instance_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -81,6 +163,7 @@ def test_render_creates_source_only_module_and_flux_outputs(tmp_path: Path) -> N
     variables_tf = (paths.infra_dir / "variables.tf").read_text(encoding="utf-8")
     backend_tf = (paths.infra_dir / "backend.tf").read_text(encoding="utf-8")
     main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
+    outputs_tf = (paths.infra_dir / "outputs.tf").read_text(encoding="utf-8")
     tfvars = (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
 
     assert "required_providers" in versions_tf
@@ -91,14 +174,25 @@ def test_render_creates_source_only_module_and_flux_outputs(tmp_path: Path) -> N
     assert 'provider "nebius"' in providers_tf
     assert 'module "mk8s" {' in main_tf
     assert 'module "custom-' not in main_tf
-    assert (
-        'source = "git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mk8s?ref=main"'
-        in main_tf
-    )
+    expected_mk8s_source = (
+        resolve_component_sources_file().parent / "../../platform-infra/modules/mk8s"
+    ).resolve()
+    assert f'source = "{expected_mk8s_source}"' in main_tf
     assert "subnet_id = var.mk8s_subnet_id" in main_tf
     assert "inputs = jsondecode(" not in main_tf
+    assert 'output "mk8s_cluster_id" {' in outputs_tf
+    assert "value       = module.mk8s.cluster_id" in outputs_tf
+    assert 'output "mk8s_cluster_ca_certificate" {' in outputs_tf
+    assert "value       = module.mk8s.cluster_ca_certificate" in outputs_tf
+    assert "sensitive   = true" in outputs_tf
     assert 'variable "mk8s_subnet_id" {' in variables_tf
     assert '"mk8s_subnet_id": "subnet-abc123"' in tfvars
+    assert '"mk8s_kube_network_service_cidrs": [' in tfvars
+    assert '"/20"' in tfvars
+    assert (
+        f'"nebius_provider_module_name": "{build_provider_module_name(client_name="client-a", project_id="project-456")}"'
+        in tfvars
+    )
 
     n8n_release = paths.flux_dir / "helmrelease-workloads-n8n.yaml"
     assert n8n_release.exists()
@@ -177,6 +271,62 @@ def test_render_dynamic_chart_shape_writes_flux_manifests(tmp_path: Path) -> Non
     assert release_doc["spec"]["chart"]["spec"]["chart"] == "runtime-app"
 
 
+def test_render_instance_resets_generated_bundle_preserves_flux_bootstrap_and_removes_stale_files(
+    tmp_path: Path,
+) -> None:
+    _set_catalog_override(_local_catalog_path())
+    reset_component_entry_cache()
+    config_path = _instance_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps={"gateway-helm"})
+    mk8s = _infra_component_row(payload, "mk8s")
+    mk8s_inputs = mk8s.setdefault("inputs", {})
+    if isinstance(mk8s_inputs, dict):
+        mk8s_inputs["subnet_id"] = "subnet-abc123"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_instance_paths(config_path)
+    validate_path_alignment(config, paths)
+
+    stale_tf = paths.infra_dir / "stale.tf"
+    bootstrap_flux_dir = paths.flux_dir / "flux-system"
+    bootstrap_sync = bootstrap_flux_dir / "gotk-sync.yaml"
+    bootstrap_components = bootstrap_flux_dir / "gotk-components.yaml"
+    bootstrap_kustomization = bootstrap_flux_dir / "kustomization.yaml"
+    stale_flux_file = paths.flux_dir / "stale.yaml"
+    stale_inventory = paths.inventory_dir / "old.json"
+    stale_top_level = paths.generated_dir / "obsolete.txt"
+    stale_tf.parent.mkdir(parents=True, exist_ok=True)
+    bootstrap_flux_dir.mkdir(parents=True, exist_ok=True)
+    stale_inventory.parent.mkdir(parents=True, exist_ok=True)
+    stale_tf.write_text("resource \"null_resource\" \"stale\" {}\n", encoding="utf-8")
+    bootstrap_sync.write_text("apiVersion: v1\nkind: ConfigMap\n", encoding="utf-8")
+    bootstrap_components.write_text("apiVersion: v1\nkind: ConfigMap\n", encoding="utf-8")
+    bootstrap_kustomization.write_text(
+        "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n- ./gotk-components.yaml\n- ./gotk-sync.yaml\n",
+        encoding="utf-8",
+    )
+    stale_flux_file.write_text("apiVersion: v1\nkind: Secret\n", encoding="utf-8")
+    stale_inventory.write_text("{}\n", encoding="utf-8")
+    stale_top_level.write_text("obsolete\n", encoding="utf-8")
+
+    render_instance(config, paths)
+
+    assert not stale_tf.exists()
+    assert not stale_flux_file.exists()
+    assert not stale_inventory.exists()
+    assert not stale_top_level.exists()
+    assert bootstrap_sync.exists()
+    assert bootstrap_components.exists()
+    assert bootstrap_kustomization.exists()
+    assert (paths.infra_dir / "main.tf").exists()
+    kustomization_doc = yaml.safe_load((paths.flux_dir / "kustomization.yaml").read_text(encoding="utf-8"))
+    assert "./flux-system" in kustomization_doc["resources"]
+    assert (paths.inventory_dir / "inventory.md").exists()
+
+
 def test_render_dynamic_oci_chart_writes_flux_oci_repository(tmp_path: Path) -> None:
     reset_component_entry_cache()
     config_path = _instance_config_path(tmp_path)
@@ -206,9 +356,13 @@ def test_render_dynamic_oci_chart_writes_flux_oci_repository(tmp_path: Path) -> 
     render_instance(config, paths)
 
     repo_sources = paths.flux_dir / "helm-repositories.yaml"
+    namespace_manifest = paths.flux_dir / "namespace-envoy-gateway-system.yaml"
     release = paths.flux_dir / "helmrelease-platform-envoy-gateway.yaml"
+    kustomization = paths.flux_dir / "kustomization.yaml"
     assert repo_sources.exists()
+    assert namespace_manifest.exists()
     assert release.exists()
+    assert kustomization.exists()
 
     repo_docs = [
         doc
@@ -225,8 +379,22 @@ def test_render_dynamic_oci_chart_writes_flux_oci_repository(tmp_path: Path) -> 
     assert chart_spec["chart"] == "gateway-helm"
     assert chart_spec["version"] == "1.4.2"
 
+    namespace_doc = yaml.safe_load(namespace_manifest.read_text(encoding="utf-8"))
+    assert namespace_doc == {
+        "apiVersion": "v1",
+        "kind": "Namespace",
+        "metadata": {"name": "envoy-gateway-system"},
+    }
 
-def test_render_rejects_legacy_nested_flux_layout(tmp_path: Path) -> None:
+    kustomization_doc = yaml.safe_load(kustomization.read_text(encoding="utf-8"))
+    assert "./namespace-envoy-gateway-system.yaml" in kustomization_doc["resources"]
+    assert (
+        kustomization_doc["resources"].index("./namespace-envoy-gateway-system.yaml")
+        < kustomization_doc["resources"].index("./helmrelease-platform-envoy-gateway.yaml")
+    )
+
+
+def test_render_removes_stale_legacy_nested_flux_layout(tmp_path: Path) -> None:
     reset_component_entry_cache()
     config_path = _instance_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -241,5 +409,417 @@ def test_render_rejects_legacy_nested_flux_layout(tmp_path: Path) -> None:
     # Simulate stale legacy layout from previous versions.
     (paths.flux_dir / "apps").mkdir(parents=True, exist_ok=True)
 
-    with pytest.raises(ValueError, match="Unsupported legacy Flux layout detected"):
+    render_instance(config, paths)
+
+    assert not (paths.flux_dir / "apps").exists()
+    assert (paths.flux_dir / "kustomization.yaml").exists()
+
+
+def test_render_rejects_unknown_custom_module_input(tmp_path: Path) -> None:
+    reset_component_entry_cache()
+    config_path = _instance_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
+    mk8s = _infra_component_row(payload, "mk8s")
+    mk8s["inputs"] = {
+        "parent_id": "project-456",
+        "cluster_name": "demo-cluster",
+        "subnet_id": "subnet-123",
+        "ssh_public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB8Yq7Rr0x2GdQ8gJ5Q40gF4yHahx7s6vH8kKf+demo",
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_instance_paths(config_path)
+    validate_path_alignment(config, paths)
+
+    with pytest.raises(ValueError, match="input 'ssh_public_key' is not declared by module"):
         render_instance(config, paths)
+
+
+def test_render_uses_shared_admin_ssh_username_binding_for_wireguard_jumphost(
+    tmp_path: Path,
+) -> None:
+    reset_component_entry_cache()
+    _set_catalog_override(_catalog_with_shared_admin_ssh(tmp_path, user_name="adminuser"))
+    config_path = _instance_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"wireguard-jumphost"}, selected_apps=set())
+    jumphost = _infra_component_row(payload, "wireguard-jumphost")
+    jumphost["inputs"] = {
+        "parent_id": "project-456",
+        "region": "eu-north1",
+        "subnet_id": "subnet-123",
+        "name": "wg-jumphost",
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_instance_paths(config_path)
+    validate_path_alignment(config, paths)
+
+    render_instance(config, paths)
+
+    main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
+    tfvars = (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
+
+    assert 'module "wireguard_jumphost" {' in main_tf
+    assert "ssh_user_name = var.wireguard_jumphost_ssh_user_name" in main_tf
+    assert '"wireguard_jumphost_ssh_user_name": "adminuser"' in tfvars
+    assert "wireguard_jumphost_ssh_public_key" not in tfvars
+
+
+def test_render_uses_shared_defaults_for_app_chart_values(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            {
+                "shared": {
+                    "admin_ssh": {
+                        "user_name": "adminuser",
+                        "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB8demo",
+                    }
+                },
+                "infra": {"tf_modules": []},
+                "apps": {
+                    "helm_charts": [
+                        {
+                            "name": "demo-app",
+                            "repo": "https://example.invalid/charts",
+                            "version": "1.0.0",
+                            "namespace": "demo",
+                            "releasename": "demo-app",
+                            "defaults": {
+                                "values.admin.sshUser": "shared.admin_ssh.user_name",
+                            },
+                        }
+                    ]
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    _set_catalog_override(sources_file)
+    monkeypatch.chdir(tmp_path)
+
+    config_path = _instance_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-456",
+                "region_id": "eu-north1",
+            },
+            "notifications": {"inventory_markdown": True, "email": "ops@example.com"},
+        },
+        "infra": {"components": []},
+        "apps": {
+            "charts": [
+                {
+                    "id": "demo-app",
+                    "group": "workloads",
+                    "enabled": True,
+                    "repo": "https://example.invalid/charts",
+                    "version": "1.0.0",
+                    "namespace": "demo",
+                    "release-name": "demo-app",
+                    "values": {},
+                }
+            ]
+        },
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_instance_paths(config_path)
+    validate_path_alignment(config, paths)
+
+    render_instance(config, paths)
+
+    release_doc = yaml.safe_load(
+        (paths.flux_dir / "helmrelease-workloads-demo-app.yaml").read_text(encoding="utf-8")
+    )
+    assert release_doc["spec"]["values"]["admin"]["sshUser"] == "adminuser"
+
+
+def test_render_supports_infra_input_binding_from_component_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    producer_dir = tmp_path / "modules" / "producer"
+    producer_dir.mkdir(parents=True, exist_ok=True)
+    (producer_dir / "main.tf").write_text('output "instance_id" { value = "instance-123" }\n', encoding="utf-8")
+
+    consumer_dir = tmp_path / "modules" / "consumer"
+    consumer_dir.mkdir(parents=True, exist_ok=True)
+    (consumer_dir / "variables.tf").write_text('variable "upstream_id" { type = string }\n', encoding="utf-8")
+    (consumer_dir / "main.tf").write_text("terraform {}\n", encoding="utf-8")
+
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            {
+                "infra": {
+                    "tf_modules": [
+                        {
+                            "module": "producer",
+                            "source": str(producer_dir),
+                            "outputs": {"tf_outputs": True},
+                        },
+                        {
+                            "module": "consumer",
+                            "source": str(consumer_dir),
+                            "input": {"inputs.upstream_id": "producer.instance_id"},
+                        },
+                    ]
+                },
+                "apps": {"helm_charts": []},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    _set_catalog_override(sources_file)
+    monkeypatch.chdir(tmp_path)
+
+    config_path = _instance_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-456",
+                "region_id": "eu-north1",
+            },
+            "notifications": {"inventory_markdown": True, "email": "ops@example.com"},
+        },
+        "infra": {
+            "components": [
+                {"id": "producer", "enabled": True, "source": str(producer_dir), "inputs": {}},
+                {"id": "consumer", "enabled": True, "source": str(consumer_dir), "inputs": {}},
+            ]
+        },
+        "apps": {"charts": []},
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_instance_paths(config_path)
+    validate_path_alignment(config, paths)
+
+    render_instance(config, paths)
+
+    main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
+    outputs_tf = (paths.infra_dir / "outputs.tf").read_text(encoding="utf-8")
+
+    assert 'module "consumer" {' in main_tf
+    assert "upstream_id = module.producer.instance_id" in main_tf
+    assert 'output "producer_instance_id" {' in outputs_tf
+    assert "value       = module.producer.instance_id" in outputs_tf
+
+
+def test_render_supports_app_input_binding_from_component_output_with_runtime_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mk8s_dir = tmp_path / "modules" / "mk8s"
+    mk8s_dir.mkdir(parents=True, exist_ok=True)
+    (mk8s_dir / "main.tf").write_text('output "cluster_id" { value = "cluster-u123" }\n', encoding="utf-8")
+
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            {
+                "infra": {
+                    "tf_modules": [
+                        {
+                            "module": "mk8s",
+                            "source": str(mk8s_dir),
+                            "outputs": {
+                                "tf_outputs": True,
+                                "static": {"access": "external"},
+                            },
+                        }
+                    ]
+                },
+                "apps": {
+                    "helm_charts": [
+                        {
+                            "name": "demo-app",
+                            "repo": "https://example.invalid/charts",
+                            "version": "1.0.0",
+                            "namespace": "demo",
+                            "releasename": "demo-app",
+                            "input": {
+                                "values.global.clusterId": "mk8s.cluster_id",
+                                "values.global.access": "mk8s.access",
+                            },
+                        }
+                    ]
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    _set_catalog_override(sources_file)
+    monkeypatch.chdir(tmp_path)
+
+    config_path = _instance_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-456",
+                "region_id": "eu-north1",
+            },
+            "notifications": {"inventory_markdown": True, "email": "ops@example.com"},
+        },
+        "infra": {
+            "components": [
+                {"id": "mk8s", "enabled": True, "source": str(mk8s_dir), "inputs": {}},
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "demo-app",
+                    "group": "workloads",
+                    "enabled": True,
+                    "repo": "https://example.invalid/charts",
+                    "version": "1.0.0",
+                    "namespace": "demo",
+                    "release-name": "demo-app",
+                    "values": {},
+                }
+            ]
+        },
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_instance_paths(config_path)
+    validate_path_alignment(config, paths)
+
+    render_instance(
+        config,
+        paths,
+        component_output_values={"mk8s.cluster_id": "cluster-u123"},
+    )
+
+    release_doc = yaml.safe_load(
+        (paths.flux_dir / "helmrelease-workloads-demo-app.yaml").read_text(encoding="utf-8")
+    )
+    assert release_doc["spec"]["values"]["global"]["clusterId"] == "cluster-u123"
+    assert release_doc["spec"]["values"]["global"]["access"] == "external"
+
+
+def test_render_uses_component_source_defaults_when_config_omits_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module_dir = tmp_path / "modules" / "demo-module"
+    module_dir.mkdir(parents=True, exist_ok=True)
+    (module_dir / "variables.tf").write_text(
+        'variable "cluster_name" { type = string }\nvariable "cpu_nodes_count" { type = number }\n',
+        encoding="utf-8",
+    )
+    (module_dir / "main.tf").write_text("terraform {}\n", encoding="utf-8")
+
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            {
+                "infra": {
+                    "tf_modules": [
+                        {
+                            "module": "demo-module",
+                            "source": str(module_dir),
+                            "defaults": {
+                                "inputs.cluster_name": "demo-cluster",
+                                "inputs.cpu_nodes_count": 3,
+                            },
+                        }
+                    ]
+                },
+                "apps": {
+                    "helm_charts": [
+                        {
+                            "name": "demo-app",
+                            "repo": "https://example.invalid/charts",
+                            "version": "1.0.0",
+                            "namespace": "demo",
+                            "releasename": "demo-app",
+                            "defaults": {
+                                "values.replicaCount": 2,
+                                "values.image.tag": "stable",
+                            },
+                        }
+                    ]
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    _set_catalog_override(sources_file)
+    monkeypatch.chdir(tmp_path)
+
+    config_path = _instance_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-456",
+                "region_id": "eu-north1",
+            },
+            "notifications": {"inventory_markdown": True, "email": "ops@example.com"},
+        },
+        "infra": {
+            "components": [
+                {"id": "demo-module", "enabled": True, "source": str(module_dir), "inputs": {}},
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "demo-app",
+                    "group": "workloads",
+                    "enabled": True,
+                    "repo": "https://example.invalid/charts",
+                    "version": "1.0.0",
+                    "namespace": "demo",
+                    "release-name": "demo-app",
+                    "values": {},
+                }
+            ]
+        },
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_instance_paths(config_path)
+    validate_path_alignment(config, paths)
+
+    render_instance(config, paths)
+
+    tfvars = (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
+    assert '"demo_module_cluster_name": "demo-cluster"' in tfvars
+    assert '"demo_module_cpu_nodes_count": 3' in tfvars
+
+    release_doc = yaml.safe_load(
+        (paths.flux_dir / "helmrelease-workloads-demo-app.yaml").read_text(encoding="utf-8")
+    )
+    assert release_doc["spec"]["values"]["replicaCount"] == 2
+    assert release_doc["spec"]["values"]["image"]["tag"] == "stable"

@@ -10,6 +10,8 @@ from nebius_cxcli.runtime_plugin_validation import run_runtime_validation_plugin
 
 
 def _get_path(payload: Mapping[str, Any], dotted_path: str, default: Any = None) -> Any:
+    if dotted_path == "shared.admin_ssh.user_name":
+        return payload.get("__shared_admin_ssh_user_name__", default)
     current: Any = payload
     for segment in dotted_path.split("."):
         if not isinstance(current, Mapping):
@@ -26,7 +28,7 @@ def _as_text(value: Any) -> str:
 
 def test_runtime_validation_plugins_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("NEBIUS_CXCLI_RUNTIME_VALIDATION_PLUGINS", raising=False)
-    payload = {"infra": {"ssh_user_name": "BAD USER"}}
+    payload = {"__shared_admin_ssh_user_name__": "BAD USER"}
 
     run_runtime_validation_plugins(
         payload=payload,
@@ -39,7 +41,7 @@ def test_runtime_validation_plugins_disabled_by_default(monkeypatch: pytest.Monk
 
 def test_runtime_validation_plugins_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NEBIUS_CXCLI_RUNTIME_VALIDATION_PLUGINS", "none")
-    payload = {"infra": {"ssh_user_name": "BAD USER"}}
+    payload = {"__shared_admin_ssh_user_name__": "BAD USER"}
 
     run_runtime_validation_plugins(
         payload=payload,
@@ -57,9 +59,9 @@ def test_runtime_validation_plugins_can_be_enabled_explicitly(
         "NEBIUS_CXCLI_RUNTIME_VALIDATION_PLUGINS",
         "nebius_cxcli.runtime_component_validation:validate_component_runtime_rules",
     )
-    payload = {"infra": {"ssh_user_name": "BAD USER"}}
+    payload = {"__shared_admin_ssh_user_name__": "BAD USER"}
 
-    with pytest.raises(ValueError, match="infra.ssh_user_name"):
+    with pytest.raises(ValueError, match="shared.admin_ssh.user_name"):
         run_runtime_validation_plugins(
             payload=payload,
             get_path=_get_path,

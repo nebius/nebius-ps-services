@@ -2,6 +2,8 @@
 
 Site-to-site IPsec/BGP VPN gateway for Nebius AI Cloud. Supports GCP HA VPN, AWS Site-to-Site VPN, Azure VPN Gateway, Cisco IOS, and custom peers.
 
+This project is an open source, self-service, VM-based Nebius VPN gateway. It is not a managed Nebius VPN service.
+
 ## Table of Contents
 
 - [Quick Start Guide](#quick-start-guide)
@@ -137,7 +139,9 @@ For advanced setup, continue with [Configuration](#configuration), [Commands](#c
 - **Idempotent:** Declarative YAML config, no manual state management
 - **Peer support:** GCP HA VPN, AWS Site-to-Site, Azure VPN Gateway, Cisco IOS
 - **Validation:** Strict Pydantic schema catches typos and invalid values
-- **HA options:** Single VM (multi-tunnel) or gateway group (VM-level HA, not supported on the current Nebius VM)
+- **HA options:** Tunnel-level active/passive HA on a single gateway VM
+- **Gateway groups:** Multiple independent gateway VMs with per-tunnel pinning; `gateway_group` is orchestration, not a clustered gateway service
+- **Current limit:** Multi-VM HA for one routed prefix is not supported today
 
 ## Installation (Detailed)
 
@@ -215,7 +219,15 @@ pip install -e ".[dev]"
 **Deployment modes:**
 
 - Single VM: Multiple tunnels, VM is single point of failure
-- Gateway group: Multiple VMs with per-tunnel pinning for VM-level HA
+- Gateway group: Multiple independent VMs with per-tunnel pinning
+
+**Current HA Boundary:**
+
+- Active/passive HA is supported only at the tunnel level inside a single gateway VM
+- Each gateway VM must keep exactly one active tunnel per connection
+- If the same site/prefixes are made active on more than one gateway VM, you create multiple active paths for the same prefix and reintroduce the ECMP/asymmetric-routing problem described later in this document
+- `gateway_group` is an orchestration grouping for provisioning and config distribution, not a clustered gateway service with shared control plane or shared dataplane ownership
+- Multi-VM HA for one prefix is not supported in current releases
 
 **Networking:**
 
@@ -390,6 +402,9 @@ connections:
 - `remote_prefixes` is **optional**
 - If omitted: BGP learns ALL routes advertised by peer dynamically
 - If specified: Acts as an inbound **whitelist filter** - only listed prefixes are accepted from BGP
+- The route you want must be advertised by the peer
+- `remote_prefixes` only allowlists advertised routes
+- It does not carve a smaller route out of a larger one
 - Routes are installed automatically by BGP, not manually
 - Example: Peer advertises 300 networks → you don't need to list all 300 in YAML
 
@@ -399,8 +414,10 @@ connections:
     vendor: gcp
     routing_mode: bgp
     # Optional: Whitelist specific prefixes (filter)
+    # The peer must advertise these exact routes
     remote_prefixes:
-      - "10.0.0.0/8"   # Only accept 10.0.0.0/8 from peer
+      - "10.10.10.0/24"
+      - "172.16.0.0/24"
     bgp:
       enabled: true
       remote_asn: 65001
@@ -413,6 +430,8 @@ connections:
         inner_local_ip: "169.254.10.1"
         inner_remote_ip: "169.254.10.2"
 ```
+
+Example: if the peer advertises `10.10.0.0/16` but you configure only `10.10.10.0/24`, the `/16` is rejected and the `/24` is only usable if the peer also advertises `10.10.10.0/24` explicitly.
 
 **Static Mode:**
 
@@ -756,6 +775,8 @@ The gateway operates in **Active/Passive mode** to ensure symmetric routing with
 | **disable** | `ha_role: "disable"` (**must be explicit**) | Tunnel completely skipped (no IPsec, no BGP). |
 
 **Important:** If you omit `ha_role` on multiple tunnels, they will all default to `"active"`, creating ECMP load balancing that may cause asymmetric routing and packet loss. Always explicitly set one tunnel to `"passive"` in multi-tunnel configurations.
+
+**Scope boundary:** This active/passive model is enforced per connection per gateway VM. If you create two gateway VMs and make the same site's prefixes active on both of them, each VM still has its own active tunnel and you end up with two active paths for the same prefix. That is outside the supported design and can reintroduce the ECMP/asymmetric-routing problem. `gateway_group` does not make those VMs a clustered gateway service; it only groups them for orchestration. Multi-VM HA for one prefix is not supported today.
 
 Multiple `connections` on the same gateway are supported for multi-site designs. Keep the Active/Passive rule inside each connection, and prefer distinct site prefixes per connection. If different active connections learn the same prefix, FRR can install multipath for that prefix and `status` will warn with the overlapping prefix and active tunnel names.
 

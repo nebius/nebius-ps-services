@@ -1,0 +1,592 @@
+"""Best-effort deployment status reporting during long-running apply operations."""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import threading
+import time
+from collections.abc import Callable, Mapping
+from contextlib import contextmanager, suppress
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any
+
+from nebius.aio.cli_config import Config
+from nebius.api.nebius.common.v1 import GetOperationRequest, ListOperationsRequest
+from nebius.api.nebius.mk8s.v1 import (
+    ClusterServiceClient,
+    ClusterStatus,
+    ListClustersRequest,
+    ListNodeGroupsRequest,
+    NodeGroupServiceClient,
+    NodeGroupStatus,
+)
+from nebius.sdk import SDK
+from rich.markup import escape
+
+from .runtime_config import to_plain_data
+
+
+def _as_text(value: Any) -> str:
+    return str(value).strip() if value is not None else ""
+
+
+def _format_elapsed(seconds: float) -> str:
+    total_seconds = max(0, int(seconds))
+    minutes, seconds_part = divmod(total_seconds, 60)
+    hours, minutes_part = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h{minutes_part:02d}m{seconds_part:02d}s"
+    if minutes:
+        return f"{minutes}m{seconds_part:02d}s"
+    return f"{seconds_part}s"
+
+
+def _shorten(text: str, *, limit: int = 72) -> str:
+    value = _as_text(text)
+    if len(value) <= limit:
+        return value
+    return value[: limit - 3] + "..."
+
+
+def _event_level_rank(level: str) -> int:
+    normalized = _as_text(level).upper()
+    if normalized == "ERROR":
+        return 3
+    if normalized == "WARN":
+        return 2
+    if normalized == "INFO":
+        return 1
+    return 0
+
+
+def _is_transient_node_group_warning(*, level: str, message: str, state_name: str) -> bool:
+    if _as_text(level).upper() != "WARN":
+        return False
+    if _as_text(state_name).upper() not in {"PROVISIONING", "CREATING"}:
+        return False
+    normalized = _as_text(message).lower()
+    return (
+        "node condition ready is false" in normalized
+        or "waiting for a node with matching providerid to exist" in normalized
+    )
+
+
+def _transient_node_group_note(message: str) -> str | None:
+    normalized = _as_text(message).lower()
+    if "waiting for a node with matching providerid to exist" in normalized:
+        return "waiting for node registration"
+    if "node condition ready is false" in normalized:
+        return "waiting for node readiness"
+    return None
+
+
+@dataclass(frozen=True)
+class Mk8sDeploymentTarget:
+    project_id: str
+    cluster_name: str
+
+
+def _mk8s_deployment_target(config: Any) -> Mk8sDeploymentTarget | None:
+    payload = to_plain_data(config)
+    if not isinstance(payload, dict):
+        return None
+    project_id = _as_text(payload.get("client_info", {}).get("nebius", {}).get("project_id"))
+    if not project_id:
+        return None
+    infra = payload.get("infra")
+    if not isinstance(infra, dict):
+        return None
+    components = infra.get("components")
+    if not isinstance(components, list):
+        return None
+    for item in components:
+        if not isinstance(item, Mapping) or not bool(item.get("enabled", False)):
+            continue
+        if _as_text(item.get("id")).lower() != "mk8s":
+            continue
+        inputs = item.get("inputs")
+        if not isinstance(inputs, Mapping):
+            continue
+        cluster_name = _as_text(inputs.get("cluster_name"))
+        if not cluster_name:
+            continue
+        return Mk8sDeploymentTarget(project_id=project_id, cluster_name=cluster_name)
+    return None
+
+
+class _HeartbeatPoller:
+    def summary(self) -> str:
+        return "API unavailable; heartbeat only"
+
+    def close(self) -> None:
+        return
+
+
+class _Mk8sStatusPoller:
+    def __init__(self, target: Mk8sDeploymentTarget) -> None:
+        self._target = target
+        self._cluster_id: str | None = None
+        self._auth_warning: str | None = None
+
+        if not os.environ.get("NEBIUS_IAM_TOKEN", "").strip():
+            completed = subprocess.run(
+                ["nebius", "iam", "get-access-token", "--format", "text"],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+            token = completed.stdout.strip()
+            if token:
+                os.environ["NEBIUS_IAM_TOKEN"] = token
+
+        self._sdk = SDK(config_reader=Config())
+        self._cluster_client = ClusterServiceClient(self._sdk)
+        self._node_group_client = NodeGroupServiceClient(self._sdk)
+
+    def _cluster_state_name(self, raw_state: Any) -> str:
+        try:
+            return ClusterStatus.State(int(raw_state)).name
+        except Exception:
+            text = _as_text(raw_state)
+            return text or "UNKNOWN"
+
+    def _node_group_state_name(self, raw_state: Any) -> str:
+        try:
+            return NodeGroupStatus.State(int(raw_state)).name
+        except Exception:
+            text = _as_text(raw_state)
+            return text or "UNKNOWN"
+
+    def _find_cluster(self):
+        response = self._cluster_client.list(
+            ListClustersRequest(parent_id=self._target.project_id)
+        ).wait()
+        items = list(getattr(response, "items", []))
+        for item in items:
+            metadata = getattr(item, "metadata", None)
+            if _as_text(getattr(metadata, "name", None)) == self._target.cluster_name:
+                return item
+        return None
+
+    def _list_node_groups(self, cluster_id: str) -> list[Any]:
+        response = self._node_group_client.list(
+            ListNodeGroupsRequest(parent_id=cluster_id)
+        ).wait()
+        return list(getattr(response, "items", []))
+
+    def _node_group_event_summaries(self, item: Any, *, state_name: str) -> tuple[str | None, tuple[str, ...]]:
+        status = getattr(item, "status", None)
+        events = list(getattr(status, "events", []) or [])
+        best_level = ""
+        best_message = ""
+        transient_notes: list[str] = []
+        for event in events:
+            last_occurrence = getattr(event, "last_occurrence", None)
+            level = _as_text(getattr(last_occurrence, "level", None)).upper()
+            if _event_level_rank(level) < _event_level_rank("WARN"):
+                continue
+            message = _as_text(getattr(last_occurrence, "message", None))
+            if not message:
+                continue
+            if _is_transient_node_group_warning(level=level, message=message, state_name=state_name):
+                note = _transient_node_group_note(message)
+                if note and note not in transient_notes:
+                    transient_notes.append(note)
+                continue
+            if _event_level_rank(level) > _event_level_rank(best_level):
+                best_level = level
+                best_message = message
+        if not best_level or not best_message:
+            return None, tuple(transient_notes)
+        metadata = getattr(item, "metadata", None)
+        name = _as_text(getattr(metadata, "name", None)) or _as_text(
+            getattr(metadata, "id", None) or getattr(item, "id", None)
+        )
+        return f"{best_level} {name}: {_shorten(best_message, limit=96)}", tuple(transient_notes)
+
+    def _latest_operation_summary(self, cluster_id: str) -> str | None:
+        operation_service = self._cluster_client.operation_service()
+        response = operation_service.list(ListOperationsRequest(resource_id=cluster_id)).wait()
+        operations = list(getattr(response, "operations", []) or [])
+        if not operations:
+            return None
+
+        latest = operations[0]
+        latest_created = getattr(latest, "created_at", None)
+        for item in operations[1:]:
+            created_at = getattr(item, "created_at", None)
+            if created_at and (not latest_created or created_at > latest_created):
+                latest = item
+                latest_created = created_at
+
+        operation_id = _as_text(getattr(latest, "id", None))
+        description = _as_text(getattr(latest, "description", None)) or "operation"
+        age_summary = ""
+        if latest_created is not None:
+            with suppress(Exception):
+                age_summary = _format_elapsed(
+                    max(0.0, (datetime.now(latest_created.tzinfo) - latest_created).total_seconds())
+                )
+        done_summary = "state unknown"
+        with suppress(Exception):
+            full = operation_service.get(GetOperationRequest(id=operation_id)).wait()
+            done = full.done()
+            done_summary = "done" if done else "running"
+        parts = [description]
+        if operation_id:
+            parts.append(operation_id)
+        parts.append(done_summary)
+        if age_summary:
+            parts.append(age_summary)
+        return "op " + " ".join(parts)
+
+    def summary(self) -> str:
+        cluster = self._find_cluster()
+        if cluster is None:
+            return (
+                f"mk8s cluster '{self._target.cluster_name}' is not visible yet in "
+                f"project {self._target.project_id}."
+            )
+
+        metadata = getattr(cluster, "metadata", None)
+        status = getattr(cluster, "status", None)
+        cluster_id = _as_text(getattr(metadata, "id", None) or getattr(cluster, "id", None))
+        if cluster_id:
+            self._cluster_id = cluster_id
+        state_name = self._cluster_state_name(getattr(status, "state", None))
+        control_plane = getattr(status, "control_plane", None)
+        endpoints = getattr(control_plane, "endpoints", None)
+        public_endpoint = _as_text(getattr(endpoints, "public_endpoint", None))
+        private_endpoint = _as_text(getattr(endpoints, "private_endpoint", None))
+        endpoint_summary = (
+            "public endpoint ready"
+            if public_endpoint
+            else "private endpoint ready"
+            if private_endpoint
+            else "endpoints pending"
+        )
+        operation_summary = self._latest_operation_summary(cluster_id) if cluster_id else None
+
+        node_groups = self._list_node_groups(cluster_id) if cluster_id else []
+        if not node_groups:
+            node_group_summary = "node groups 0"
+            alert_summary = ""
+            note_summary = ""
+        else:
+            summaries: list[str] = []
+            alerts: list[str] = []
+            notes: list[str] = []
+            for item in node_groups:
+                group_meta = getattr(item, "metadata", None)
+                group_status = getattr(item, "status", None)
+                name = _as_text(getattr(group_meta, "name", None)) or _as_text(
+                    getattr(group_meta, "id", None) or getattr(item, "id", None)
+                )
+                state = self._node_group_state_name(getattr(group_status, "state", None))
+                ready = getattr(group_status, "ready_node_count", None)
+                target = getattr(group_status, "target_node_count", None)
+                if ready is not None and target is not None:
+                    summaries.append(f"{name}:{state} {ready}/{target} ready")
+                else:
+                    summaries.append(f"{name}:{state}")
+                alert, transient_notes = self._node_group_event_summaries(item, state_name=state)
+                if alert:
+                    alerts.append(alert)
+                if transient_notes:
+                    rendered_notes = "/".join(transient_notes)
+                    note_text = f"{name}: {rendered_notes}"
+                    if note_text not in notes:
+                        notes.append(note_text)
+            node_group_summary = "node groups " + ", ".join(summaries)
+            alert_summary = f"; alerts {' | '.join(alerts[:2])}" if alerts else ""
+            note_summary = f"; notes {' | '.join(notes[:2])}" if notes else ""
+
+        cluster_label = self._target.cluster_name
+        if cluster_id:
+            cluster_label = f"{cluster_label} ({cluster_id})"
+        parts = [
+            f"mk8s {cluster_label}: {state_name}",
+            endpoint_summary,
+            node_group_summary,
+        ]
+        if operation_summary:
+            parts.append(operation_summary)
+        rendered = "; ".join(parts) + "."
+        return f"{rendered}{note_summary}{alert_summary}"
+
+    def close(self) -> None:
+        self._sdk.sync_close()
+
+
+@dataclass
+class TerraformApplyProgress:
+    planned_add: int = 0
+    planned_change: int = 0
+    planned_destroy: int = 0
+    total_planned: int | None = None
+    completed: int = 0
+    active: dict[str, str] = field(default_factory=dict)
+    last_transition: str = "apply starting"
+    final_summary: str | None = None
+
+    def _record_planned_action(self, action: str) -> None:
+        normalized = action.strip().lower()
+        if normalized == "create":
+            self.planned_add += 1
+        elif normalized == "update":
+            self.planned_change += 1
+        elif normalized in {"delete", "destroy"}:
+            self.planned_destroy += 1
+        elif normalized == "replace":
+            self.planned_destroy += 1
+            self.planned_add += 1
+
+    def update_from_event(self, event: Mapping[str, Any]) -> bool:
+        event_type = _as_text(event.get("type"))
+        if event_type == "planned_change":
+            change = event.get("change")
+            if isinstance(change, Mapping):
+                self._record_planned_action(_as_text(change.get("action")))
+            return False
+
+        if event_type == "change_summary":
+            changes = event.get("changes")
+            if not isinstance(changes, Mapping):
+                return False
+            operation = _as_text(changes.get("operation"))
+            add = int(changes.get("add", 0) or 0)
+            change_count = int(changes.get("change", 0) or 0)
+            destroy = int(changes.get("remove", 0) or 0)
+            total = add + change_count + destroy
+            if operation == "plan":
+                self.planned_add = add
+                self.planned_change = change_count
+                self.planned_destroy = destroy
+                self.total_planned = total
+                self.last_transition = f"plan {add} add, {change_count} change, {destroy} destroy"
+                return True
+            if operation == "apply":
+                self.final_summary = (
+                    f"apply complete {add} add, {change_count} change, {destroy} destroy"
+                )
+                self.last_transition = self.final_summary
+                if self.total_planned is None:
+                    self.total_planned = total
+                return True
+            return False
+
+        if event_type == "apply_start":
+            hook = event.get("hook")
+            if not isinstance(hook, Mapping):
+                return False
+            resource = hook.get("resource")
+            if not isinstance(resource, Mapping):
+                return False
+            addr = _as_text(resource.get("addr"))
+            action = _as_text(hook.get("action")) or "apply"
+            if not addr:
+                return False
+            self.active[addr] = action
+            self.last_transition = f"started {_shorten(addr)} ({action})"
+            return True
+
+        if event_type == "apply_complete":
+            hook = event.get("hook")
+            if not isinstance(hook, Mapping):
+                return False
+            resource = hook.get("resource")
+            if not isinstance(resource, Mapping):
+                return False
+            addr = _as_text(resource.get("addr"))
+            action = _as_text(hook.get("action")) or "apply"
+            elapsed_seconds = hook.get("elapsed_seconds")
+            if addr:
+                self.active.pop(addr, None)
+            self.completed += 1
+            elapsed_label = (
+                f" after {_format_elapsed(float(elapsed_seconds))}"
+                if isinstance(elapsed_seconds, (int, float))
+                else ""
+            )
+            self.last_transition = f"completed {_shorten(addr)} ({action}){elapsed_label}"
+            return True
+
+        if event_type == "diagnostic":
+            diagnostic = event.get("diagnostic")
+            if not isinstance(diagnostic, Mapping):
+                return False
+            severity = _as_text(diagnostic.get("severity")).lower()
+            summary = _as_text(diagnostic.get("summary")) or "Terraform diagnostic"
+            if severity not in {"warning", "error"}:
+                return False
+            self.last_transition = f"{severity}: {_shorten(summary)}"
+            return True
+
+        return False
+
+    def summary(self) -> str:
+        if self.final_summary:
+            return self.final_summary
+
+        parts: list[str] = []
+        if self.total_planned is not None:
+            parts.append(f"{self.completed}/{self.total_planned} complete")
+        elif self.completed:
+            parts.append(f"{self.completed} complete")
+        else:
+            parts.append("starting")
+
+        if self.active:
+            active_items = list(self.active.items())[:2]
+            active_summary = ", ".join(
+                f"{_shorten(addr)} ({action})" for addr, action in active_items
+            )
+            if len(self.active) > 2:
+                active_summary += f", +{len(self.active) - 2} more"
+            parts.append(f"active {active_summary}")
+
+        if self.last_transition:
+            parts.append(self.last_transition)
+        return "; ".join(parts)
+
+
+class DeploymentStatusReporter:
+    def __init__(
+        self,
+        config: Any,
+        *,
+        emit: Callable[[str], None],
+        poll_interval_seconds: float = 15.0,
+        repeat_interval_seconds: float = 60.0,
+    ) -> None:
+        self._emit = emit
+        self._poll_interval_seconds = poll_interval_seconds
+        self._repeat_interval_seconds = repeat_interval_seconds
+        self._stop_event = threading.Event()
+        self._lock = threading.Lock()
+        self._started_at = time.monotonic()
+        self._last_message = ""
+        self._last_emit_at = 0.0
+        self._terraform = TerraformApplyProgress()
+        self._thread: threading.Thread | None = None
+
+        target = _mk8s_deployment_target(config)
+        if target is None:
+            self._poller: _HeartbeatPoller | _Mk8sStatusPoller = _HeartbeatPoller()
+            self._startup_notice = None
+        else:
+            try:
+                self._poller = _Mk8sStatusPoller(target)
+                self._startup_notice = (
+                    f"Watching Terraform + Nebius status for mk8s cluster '{target.cluster_name}' "
+                    f"in project {target.project_id}."
+                )
+            except Exception as exc:
+                self._poller = _HeartbeatPoller()
+                self._startup_notice = (
+                    "Nebius API status is unavailable; falling back to Terraform + elapsed heartbeat. "
+                    f"Reason: {exc}"
+                )
+        try:
+            self._api_summary = self._poller.summary()
+        except Exception as exc:
+            self._poller.close()
+            self._poller = _HeartbeatPoller()
+            self._api_summary = self._poller.summary()
+            self._startup_notice = (
+                "Nebius API initial status lookup failed; falling back to Terraform + elapsed heartbeat. "
+                f"Reason: {exc}"
+            )
+
+    def _build_status_message(self, *, force: bool = False) -> str | None:
+        with self._lock:
+            elapsed = _format_elapsed(time.monotonic() - self._started_at)
+            plain_message = (
+                f"Status [{elapsed}] TF: {self._terraform.summary()} | API: {self._api_summary}"
+            )
+            message = (
+                f"[bold white]Status[/bold white] [dim][{escape(elapsed)}][/dim]\n"
+                f"[bold yellow]TF [/bold yellow] {escape(self._terraform.summary())}\n"
+                f"[bold cyan]API[/bold cyan] {escape(self._api_summary)}"
+            )
+            now = time.monotonic()
+            if (
+                not force
+                and plain_message == self._last_message
+                and (now - self._last_emit_at) < self._repeat_interval_seconds
+            ):
+                return None
+            self._last_message = plain_message
+            self._last_emit_at = now
+            return message
+
+    def _emit_status(self, *, force: bool = False) -> None:
+        message = self._build_status_message(force=force)
+        if message:
+            self._emit(message)
+
+    def snapshot(self) -> str:
+        with self._lock:
+            elapsed = _format_elapsed(time.monotonic() - self._started_at)
+            return f"Status [{elapsed}] TF: {self._terraform.summary()} | API: {self._api_summary}"
+
+    def _run(self) -> None:
+        while not self._stop_event.wait(self._poll_interval_seconds):
+            try:
+                api_summary = self._poller.summary()
+            except Exception as exc:
+                self._emit(
+                    "Nebius API status reporter failed; continuing with Terraform + elapsed heartbeat: "
+                    f"{exc}"
+                )
+                self._poller.close()
+                self._poller = _HeartbeatPoller()
+                api_summary = self._poller.summary()
+            with self._lock:
+                self._api_summary = api_summary
+            self._emit_status()
+
+    def start(self) -> DeploymentStatusReporter:
+        if self._startup_notice:
+            self._emit(self._startup_notice)
+        self._emit_status(force=True)
+        self._thread = threading.Thread(
+            target=self._run,
+            name="nebius-cxcli-deploy-status",
+            daemon=True,
+        )
+        self._thread.start()
+        return self
+
+    def handle_terraform_event(self, event: Mapping[str, Any]) -> None:
+        if self._terraform.update_from_event(event):
+            self._emit_status(force=True)
+
+    def close(self) -> None:
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=max(1.0, self._poll_interval_seconds + 1.0))
+        self._poller.close()
+
+
+@contextmanager
+def deployment_status_reporting(
+    config: Any,
+    *,
+    emit: Callable[[str], None],
+    poll_interval_seconds: float = 15.0,
+    repeat_interval_seconds: float = 60.0,
+):
+    reporter = DeploymentStatusReporter(
+        config,
+        emit=emit,
+        poll_interval_seconds=poll_interval_seconds,
+        repeat_interval_seconds=repeat_interval_seconds,
+    ).start()
+    try:
+        yield reporter
+    finally:
+        reporter.close()

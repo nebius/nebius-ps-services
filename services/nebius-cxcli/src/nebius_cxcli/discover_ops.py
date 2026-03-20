@@ -1,4 +1,4 @@
-"""CI-oriented helpers for discovering changed configs."""
+"""CI-oriented helpers for discovering changed deployment instances."""
 
 from __future__ import annotations
 
@@ -103,6 +103,11 @@ def _scan_all_configs(*, deployment_path: Path, repo_root: Path) -> set[str]:
     return candidates
 
 
+def _generated_relative_for_config(config_relative: str) -> str:
+    config_path = Path(_normalize(config_relative))
+    return config_path.parent.joinpath("generated").as_posix()
+
+
 def _infer_client_project_from_path(config_relative: str) -> tuple[str, str] | None:
     parts = [token for token in _normalize(config_relative).split("/") if token]
     if len(parts) < 4 or parts[-1] != "config.yaml":
@@ -140,13 +145,31 @@ def _environment_name_for_config(*, root: Path, config_relative: str) -> str:
     return build_github_environment_name(client_name=client_name, project_id=project_id)
 
 
+def _config_relative_from_changed(path: str) -> str | None:
+    normalized = _normalize(path)
+    parts = [token for token in normalized.split("/") if token]
+    if len(parts) < 4:
+        return None
+    if normalized.endswith("config.yaml") and parts[-4] == "instances":
+        return normalized
+    if "generated" not in parts:
+        return None
+    generated_index = parts.index("generated")
+    if generated_index < 3:
+        return None
+    if parts[generated_index - 3] != "instances":
+        return None
+    prefix = parts[:generated_index]
+    return "/".join([*prefix, "config.yaml"])
+
+
 def discover_configs(
     *,
     deployments_dir: str,
     include_all: bool = False,
     repo_root: Path | None = None,
-) -> dict[str, list[dict[str, str]]]:
-    """Build discover payload for config.yaml files in this run."""
+) -> dict[str, list[dict[str, object]]]:
+    """Build discover payload for changed or known deployment instances in this run."""
     deployment_path = Path(deployments_dir)
     if repo_root is not None:
         root = repo_root.resolve()
@@ -163,25 +186,57 @@ def discover_configs(
     except ValueError:
         deployment_root = _normalize(str(deployment_path))
 
-    candidates: set[str] = set()
+    candidates: dict[str, dict[str, object]] = {}
 
     if include_all:
-        candidates.update(_scan_all_configs(deployment_path=deployment_path, repo_root=root))
+        for config_relative in _scan_all_configs(deployment_path=deployment_path, repo_root=root):
+            candidates[config_relative] = {
+                "config": config_relative,
+                "generated": _generated_relative_for_config(config_relative),
+                "config_changed": False,
+                "generated_changed": False,
+            }
     else:
         changed_files = _changed_files(cwd=root)
         if changed_files is None:
-            candidates.update(_scan_all_configs(deployment_path=deployment_path, repo_root=root))
+            for config_relative in _scan_all_configs(deployment_path=deployment_path, repo_root=root):
+                candidates[config_relative] = {
+                    "config": config_relative,
+                    "generated": _generated_relative_for_config(config_relative),
+                    "config_changed": False,
+                    "generated_changed": False,
+                }
         else:
             for changed in changed_files:
                 normalized = _normalize(changed)
-                if not normalized.endswith("config.yaml"):
-                    continue
                 marker = f"/{deployment_root}/"
-                if marker in f"/{normalized}/":
-                    candidates.add(normalized)
+                if marker not in f"/{normalized}/":
+                    continue
+                config_relative = _config_relative_from_changed(normalized)
+                if not config_relative:
+                    continue
+                candidate = candidates.setdefault(
+                    config_relative,
+                    {
+                        "config": config_relative,
+                        "generated": _generated_relative_for_config(config_relative),
+                        "config_changed": False,
+                        "generated_changed": False,
+                    },
+                )
+                if normalized.endswith("config.yaml"):
+                    candidate["config_changed"] = True
+                elif "/generated/" in f"/{normalized}/":
+                    candidate["generated_changed"] = True
 
     include = [
-        {"config": path, "github_environment": _environment_name_for_config(root=root, config_relative=path)}
-        for path in sorted(candidates)
+        {
+            **candidate,
+            "github_environment": _environment_name_for_config(
+                root=root,
+                config_relative=str(candidate["config"]),
+            ),
+        }
+        for _path, candidate in sorted(candidates.items())
     ]
     return {"include": include}

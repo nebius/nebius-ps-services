@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from types import SimpleNamespace
 
 import pytest
 
 import nebius_cxcli.terraform_backend as terraform_backend
 from nebius_cxcli.runtime_config import wrap_runtime_config
-from nebius_cxcli.terraform_backend import backend_settings_from_config, render_backend_tf
+from nebius_cxcli.terraform_backend import (
+    backend_settings_from_config,
+    read_state_lock_info,
+    render_backend_tf,
+    terraform_state_lock_object_key,
+)
 
 
 def _config(*, client_name: str = "client-a", project_id: str = "project-456", region: str = "eu-north1"):
@@ -56,6 +62,56 @@ def test_render_backend_tf_is_non_secret_and_includes_locking() -> None:
     assert "use_lockfile = true" in rendered
     assert "access_key" not in rendered
     assert "secret_key" not in rendered
+
+
+def test_terraform_state_lock_object_key_appends_tflock_suffix() -> None:
+    settings = backend_settings_from_config(_config())
+    assert terraform_state_lock_object_key(settings) == "terraform.tfstate.tflock"
+
+
+def test_read_state_lock_info_returns_none_when_lock_object_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = backend_settings_from_config(_config())
+    monkeypatch.setattr(terraform_backend.shutil, "which", lambda _name: "/usr/bin/aws")
+
+    def _fake_run(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        return subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout="",
+            stderr="download failed: s3://bucket/key to - An error occurred (404) when calling the HeadObject operation: Not Found",
+        )
+
+    monkeypatch.setattr(terraform_backend.subprocess, "run", _fake_run)
+
+    assert read_state_lock_info(settings) is None
+
+
+def test_read_state_lock_info_parses_lock_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = backend_settings_from_config(_config())
+    monkeypatch.setattr(terraform_backend.shutil, "which", lambda _name: "/usr/bin/aws")
+
+    def _fake_run(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        return subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=(
+                '{"ID":"lock-123","Operation":"OperationTypeApply","Info":"","Who":"rezab@host",'
+                '"Version":"1.14.1","Created":"2026-03-19T02:04:39Z","Path":"bucket/terraform.tfstate"}'
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(terraform_backend.subprocess, "run", _fake_run)
+
+    lock_info = read_state_lock_info(settings)
+
+    assert lock_info is not None
+    assert lock_info.lock_id == "lock-123"
+    assert lock_info.who == "rezab@host"
+    assert lock_info.bucket == settings.bucket
+    assert lock_info.object_key == "terraform.tfstate.tflock"
 
 
 def test_is_not_found_error_accepts_storage_nosuchbucket_shape() -> None:

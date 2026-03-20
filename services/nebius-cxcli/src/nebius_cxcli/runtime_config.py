@@ -68,3 +68,22 @@ def read_path(payload: Mapping[str, Any], dotted_path: str) -> Any | None:
             return None
         current = current[matched]
     return current
+
+
+def _catalog_shared_payload() -> Mapping[str, Any]:
+    from .component_sources import load_component_sources
+
+    sources = load_component_sources()
+    shared = to_plain_data(sources.shared)
+    if not isinstance(shared, Mapping):
+        return {}
+    return {"shared": dict(shared)}
+
+
+def read_path_with_catalog(payload: Mapping[str, Any], dotted_path: str) -> Any | None:
+    value = read_path(payload, dotted_path)
+    if value is not None:
+        return value
+    if not str(dotted_path).strip().startswith("shared."):
+        return None
+    return read_path(_catalog_shared_payload(), dotted_path)

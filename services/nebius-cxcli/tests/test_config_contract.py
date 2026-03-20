@@ -17,6 +17,7 @@ def test_starter_template_is_runtime_valid() -> None:
 
     payload = yaml.safe_load(yaml_text)
     assert isinstance(payload, dict)
+    assert "shared" not in payload
     config = validate_config(payload)
     assert config.version == "v1"
     assert config.client_info.client_name == "client-a"

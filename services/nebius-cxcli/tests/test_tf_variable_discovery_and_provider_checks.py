@@ -78,8 +78,6 @@ def test_wizard_prompts_required_tf_variables_only_by_default(
                 "notifications": {"inventory_markdown": True, "email": None},
             },
             "infra": {
-                "ssh_user_name": "ubuntu",
-                "ssh_public_key": "ssh-ed25519 AAAA-test",
                 "components": [
                     {
                         "id": "mk8s",
@@ -182,8 +180,6 @@ def test_wizard_prompts_dependent_fields_when_enabled_toggle_is_true(
                 "notifications": {"inventory_markdown": True, "email": None},
             },
             "infra": {
-                "ssh_user_name": "ubuntu",
-                "ssh_public_key": "ssh-ed25519 AAAA-test",
                 "components": [
                     {
                         "id": "mk8s",

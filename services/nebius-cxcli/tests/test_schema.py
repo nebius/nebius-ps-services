@@ -98,6 +98,18 @@ def test_schema_rejects_unknown_root_key(tmp_path: Path) -> None:
     assert "unknown field(s) at root" in str(exc_info.value)
 
 
+def test_schema_rejects_shared_root_key(tmp_path: Path) -> None:
+    payload = _dynamic_payload()
+    payload["shared"] = {"admin_ssh": {"user_name": "ubuntu", "public_key": "ssh-ed25519 AAAA demo"}}
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc_info:
+        load_config(config_path)
+    assert "unknown field(s) at root: shared" in str(exc_info.value)
+
+
 def test_schema_rejects_legacy_client_info_fields(tmp_path: Path) -> None:
     payload = _dynamic_payload()
     client_info = payload.get("client_info")

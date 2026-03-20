@@ -11,31 +11,16 @@ client_info:
     email: ops@example.com
 
 infra:
-  ssh_user_name: ubuntu
-  ssh_public_key: ssh-ed25519 AAAA-REPLACE-WITH-YOUR-KEY
   components:
     - id: mk8s
       enabled: true
-      source: ../../platform-infra/modules/mk8s
       inputs:
-        subnet_id: vpcsubnet-REPLACE-ME
-        cpu_nodes:
-          count: 2
-          platform: cpu-d3
-          preset: 4vcpu-16gb
-          preemptible: false
-          public_ips: false
-        gpu_nodes:
-          enabled: false
-        api_endpoint:
-          public: false
-    - id: wireguard-jumphost
-      enabled: false
-      source: ../../platform-infra/modules/wireguard-jumphost
-      inputs:
-        subnet_id: vpcsubnet-REPLACE-ME
-        platform: cpu-d3
-        preset: 4vcpu-16gb
+        parent_id: project-REDACTED
+        cluster_name: example-cluster
+        subnet_id: vpcsubnet-REDACTED
+        cpu_nodes_platform: cpu-d3
+        cpu_nodes_preset: 4vcpu-16gb
+        gpu_enabled: false
 
 apps:
   charts:
@@ -47,12 +32,3 @@ apps:
       namespace: envoy-gateway-system
       release-name: envoy-gateway
       values: {}
-    - id: n8n
-      group: workloads
-      enabled: true
-      repo: https://community-charts.github.io/helm-charts
-      version: 1.16.29
-      namespace: n8n
-      release-name: n8n
-      values:
-        replicaCount: 2

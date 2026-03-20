@@ -9,23 +9,31 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .components import component_entries
+from .component_defaults import (
+    resolve_component_defaults,
+    set_component_path,
+    shared_default_conflicts,
+)
+from .component_sources import ComponentOutput, Handoff, component_output_root_name
+from .component_wiring import (
+    _UNRESOLVED,
+    component_output_ref,
+    input_binding_conflicts,
+    output_lookup,
+    resolve_static_component_output,
+)
+from .components import ComponentEntry, component_entries
 from .paths import InstancePaths
 from .provider_components import provider_resource_name_for_component
 from .runtime_config import to_plain_data
-from .runtime_introspection import module_variables
+from .runtime_introspection import module_variables, resolve_module_source_path
 from .templates import NEBIUS_PROVIDER_SOURCE, NEBIUS_PROVIDER_VERSION
 from .terraform_backend import backend_settings_from_config, render_backend_tf
+from .terraform_provider import DEFAULT_PROVIDER_MODULE_NAME, build_provider_module_name
 
 DEFAULT_TERRAFORM_REQUIRED_VERSION = ">= 1.10.0"
-MODULE_GIT_URL_ENV = "NEBIUS_CXCLI_MODULE_GIT_URL"
-MODULE_GIT_REF_ENV = "NEBIUS_CXCLI_MODULE_GIT_REF"
-DEFAULT_MODULE_GIT_URL = "https://github.com/nebius/nebius-ps-services.git"
-DEFAULT_MODULE_GIT_REF = "main"
-_PLATFORM_MODULE_MARKER = "platform-infra/modules/"
 _ALLOWED_TERRAFORM_TYPE_TOKENS = re.compile(r"^[A-Za-z0-9_(),.\[\] ]+$")
 _ALLOWED_GIT_REF = re.compile(r"^[A-Za-z0-9._/\-]+$")
-_DEFAULT_PROVIDER_MODULE_NAME = "nebius-cxcli"
 _PROVIDER_VAR_MODULE_NAME = "nebius_provider_module_name"
 _PROVIDER_VAR_PARENT_ID = "nebius_provider_parent_id"
 _PROVIDER_VAR_SA_ID = "nebius_service_account_id"
@@ -37,18 +45,27 @@ _PROVIDER_VAR_CREDENTIALS_FILE = "nebius_service_account_credentials_file"
 @dataclass(frozen=True)
 class _VariableBinding:
     argument_name: str
-    variable_name: str
-    type_expr: str
-    value: Any
+    variable_name: str | None
+    type_expr: str | None
+    value: Any | None
     description: str
+    expression: str | None = None
+
+
+@dataclass(frozen=True)
+class _HclExpression:
+    expression: str
 
 
 @dataclass(frozen=True)
 class _ModulePlan:
+    component_id: str
     module_name: str
     module_source: str
     module_version: str | None
     bindings: tuple[_VariableBinding, ...]
+    outputs: tuple[ComponentOutput, ...] = ()
+    handoff: Handoff | None = None
 
 
 def _ensure_parent(path: Path) -> None:
@@ -125,6 +142,8 @@ def _safe_hcl_identifier(value: str, *, fallback_prefix: str) -> str:
 
 
 def _hcl_value(value: Any, *, indent: int = 2) -> str:
+    if isinstance(value, _HclExpression):
+        return value.expression
     if value is None:
         return "null"
     if isinstance(value, bool):
@@ -154,6 +173,16 @@ def _hcl_value(value: Any, *, indent: int = 2) -> str:
     return json.dumps(to_plain_data(value))
 
 
+def _contains_hcl_expression(value: Any) -> bool:
+    if isinstance(value, _HclExpression):
+        return True
+    if isinstance(value, list):
+        return any(_contains_hcl_expression(item) for item in value)
+    if isinstance(value, dict):
+        return any(_contains_hcl_expression(item) for item in value.values())
+    return False
+
+
 def _normalize_module_mode(
     *,
     source: str,
@@ -167,6 +196,18 @@ def _normalize_module_mode(
     if (entry_origin or "").strip().lower() == "provider":
         return "provider"
     return "custom"
+
+
+def _effective_component_source(*, row: dict[str, Any], entry: ComponentEntry | None) -> str:
+    if entry is not None and str(entry.source or "").strip():
+        return str(entry.source).strip()
+    return str(row.get("source", "")).strip()
+
+
+def _effective_component_version(*, row: dict[str, Any], entry: ComponentEntry | None) -> str:
+    if entry is not None and str(entry.version or "").strip():
+        return str(entry.version).strip()
+    return str(row.get("version", "")).strip()
 
 
 def _dynamic_provider_component_rows(payload: dict[str, Any]) -> tuple[dict[str, Any], ...]:
@@ -187,12 +228,23 @@ def _dynamic_provider_component_rows(payload: dict[str, Any]) -> tuple[dict[str,
         component_id = str(item.get("id", "")).strip().lower()
         if not component_id:
             continue
-        inputs = item.get("inputs", {})
+        entry = entry_by_id.get(component_id)
+        resolved_item = (
+            resolve_component_defaults(
+                payload=payload,
+                component_node=item,
+                entry=entry,
+                preserve_existing_literal=True,
+                preserve_existing_shared=False,
+            )
+            if entry is not None and entry.defaults
+            else dict(item)
+        )
+        inputs = resolved_item.get("inputs", {})
         if not isinstance(inputs, dict):
             inputs = {}
-        source = str(item.get("source", "")).strip()
-        version = str(item.get("version", "")).strip()
-        entry = entry_by_id.get(component_id)
+        source = _effective_component_source(row=resolved_item, entry=entry)
+        version = _effective_component_version(row=resolved_item, entry=entry)
         mode = _normalize_module_mode(
             source=source,
             inputs=inputs,
@@ -306,15 +358,6 @@ def _normalize_git_ref(value: str | None) -> str | None:
     return token
 
 
-def _platform_module_suffix(module_source: str) -> str | None:
-    normalized = module_source.replace("\\", "/").strip()
-    marker_index = normalized.find(_PLATFORM_MODULE_MARKER)
-    if marker_index < 0:
-        return None
-    suffix = normalized[marker_index:].strip("/")
-    return suffix or None
-
-
 def _module_source_with_ref(source: str, ref: str | None) -> str:
     if not ref:
         return source
@@ -338,13 +381,16 @@ def _canonical_module_source(
         return _module_source_with_ref(source, explicit_ref)
     if source.startswith(("http://", "https://", "oci://")):
         return source
-
-    platform_suffix = _platform_module_suffix(source)
-    if platform_suffix:
-        repo_url = os.environ.get(MODULE_GIT_URL_ENV, "").strip().rstrip("/") or DEFAULT_MODULE_GIT_URL
-        fallback_ref = _normalize_git_ref(os.environ.get(MODULE_GIT_REF_ENV, "").strip()) or DEFAULT_MODULE_GIT_REF
-        module_ref = explicit_ref or fallback_ref
-        return f"git::{repo_url}//{platform_suffix}?ref={module_ref}"
+    local_path = resolve_module_source_path(source)
+    if local_path is not None:
+        if explicit_ref:
+            raise ValueError(
+                f"module source '{module_source}' resolves to a local directory, so version/ref "
+                f"'{module_version}' is not supported. Use an explicit Git source like "
+                "'git::https://github.com/org/repo.git//modules/mk8s?ref=v1.2.3' if you need "
+                "a pinned remote ref."
+            )
+        return str(local_path)
 
     return source
 
@@ -395,7 +441,10 @@ def _build_module_plans(config: Any) -> tuple[_ModulePlan, ...]:
     used_module_names: set[str] = set()
     used_variable_names: set[str] = set()
 
-    entry_by_id = {entry.id: entry for entry in component_entries("infra")}
+    infra_entry_by_id = {entry.id: entry for entry in component_entries("infra")}
+    all_entry_by_id = {
+        entry.id: entry for entry in (*component_entries("infra"), *component_entries("apps"))
+    }
     infra = payload.get("infra")
     if not isinstance(infra, dict):
         return ()
@@ -403,6 +452,8 @@ def _build_module_plans(config: Any) -> tuple[_ModulePlan, ...]:
     if not isinstance(components, list):
         return ()
 
+    prepared_rows: list[dict[str, Any]] = []
+    module_name_by_component_id: dict[str, str] = {}
     for item in components:
         if not isinstance(item, dict):
             continue
@@ -411,13 +462,30 @@ def _build_module_plans(config: Any) -> tuple[_ModulePlan, ...]:
         component_id = str(item.get("id", "")).strip().lower()
         if not component_id:
             continue
-        inputs = item.get("inputs", {})
+        entry = infra_entry_by_id.get(component_id)
+        resolved_item = dict(item)
+        if entry is not None and entry.defaults:
+            resolved_item = resolve_component_defaults(
+                payload=payload,
+                component_node=resolved_item,
+                entry=entry,
+                preserve_existing_literal=True,
+                preserve_existing_shared=False,
+            )
+        if entry is not None:
+            conflicts = shared_default_conflicts(item, entry)
+            if conflicts:
+                target_path, source_path = conflicts[0]
+                raise ValueError(
+                    f"infra component '{component_id}' field '{target_path}' is managed by shared default "
+                    f"'{source_path}' and must not be set explicitly"
+                )
+        inputs = resolved_item.get("inputs", {})
         if not isinstance(inputs, dict):
             inputs = {}
-        source = str(item.get("source", "")).strip()
-        version = str(item.get("version", "")).strip() or None
+        source = _effective_component_source(row=resolved_item, entry=entry)
+        version = _effective_component_version(row=resolved_item, entry=entry) or None
 
-        entry = entry_by_id.get(component_id)
         mode = _normalize_module_mode(
             source=source,
             inputs=inputs,
@@ -457,12 +525,106 @@ def _build_module_plans(config: Any) -> tuple[_ModulePlan, ...]:
             raise ValueError(
                 f"infra component '{component_id}' is enabled for module rendering but has no source"
             )
+        declared_argument_names = {
+            str(spec.name).strip().lower().replace("-", "_")
+            for spec in module_variables(module_source_raw)
+            if str(spec.name).strip()
+        }
+        if declared_argument_names:
+            for raw_arg_name in sorted(module_inputs.keys()):
+                argument_name = str(raw_arg_name).strip().replace("-", "_")
+                normalized_argument_name = argument_name.lower()
+                if normalized_argument_name not in declared_argument_names:
+                    raise ValueError(
+                        f"infra component '{component_id}' input '{raw_arg_name}' "
+                        f"is not declared by module '{module_source_raw}'"
+                    )
         module_source = _canonical_module_source(
             module_source=module_source_raw,
             module_version=module_version,
         )
 
-        type_hints = _module_type_hints(module_source_raw)
+        prepared_rows.append(
+            {
+                "component_id": component_id,
+                "entry": entry,
+                "resolved_item": resolved_item,
+                "module_name": module_name,
+                "module_source": module_source,
+                "module_version": module_version,
+                "module_inputs": module_inputs,
+                "type_hints": _module_type_hints(module_source_raw),
+            }
+        )
+        module_name_by_component_id[component_id] = module_name
+
+    for prepared in prepared_rows:
+        component_id = str(prepared["component_id"])
+        entry = prepared["entry"]
+        resolved_item = prepared["resolved_item"]
+        module_name = str(prepared["module_name"])
+        module_source = str(prepared["module_source"])
+        module_version = prepared["module_version"]
+        module_inputs = dict(prepared["module_inputs"])
+        type_hints = dict(prepared["type_hints"])
+
+        if entry is not None and entry.input_bindings:
+            conflicts = input_binding_conflicts(resolved_item, entry)
+            if conflicts:
+                target_path, source_ref = conflicts[0]
+                raise ValueError(
+                    f"infra component '{component_id}' field '{target_path}' is managed by component input "
+                    f"binding '{source_ref}' and must not be set explicitly"
+                )
+            for binding in entry.input_bindings:
+                source_entry = all_entry_by_id.get(binding.source_component_id)
+                source_ref = component_output_ref(
+                    binding.source_component_id,
+                    binding.source_output_name,
+                )
+                if source_entry is None:
+                    raise ValueError(
+                        f"infra component '{component_id}' input binding '{binding.target_path}' references "
+                        f"unknown component '{binding.source_component_id}'"
+                    )
+                source_output = output_lookup(source_entry).get(binding.source_output_name)
+                if source_output is None:
+                    raise ValueError(
+                        f"infra component '{component_id}' input binding '{binding.target_path}' references "
+                        f"undeclared output '{source_ref}'"
+                    )
+
+                static_value = resolve_static_component_output(
+                    payload,
+                    component_id=binding.source_component_id,
+                    output_name=binding.source_output_name,
+                )
+                if static_value is not _UNRESOLVED:
+                    set_component_path(module_inputs, binding.target_path, static_value)
+                    continue
+
+                if source_output.kind != "terraform_output":
+                    raise ValueError(
+                        f"infra component '{component_id}' input binding '{binding.target_path}' could not "
+                        f"resolve output '{source_ref}' from the current config payload"
+                    )
+                if source_entry.scope != "infra":
+                    raise ValueError(
+                        f"infra component '{component_id}' input binding '{binding.target_path}' references "
+                        f"Terraform output '{source_ref}' from non-infra component '{binding.source_component_id}'"
+                    )
+                source_module_name = module_name_by_component_id.get(binding.source_component_id)
+                if not source_module_name:
+                    raise ValueError(
+                        f"infra component '{component_id}' input binding '{binding.target_path}' requires "
+                        f"enabled infra component '{binding.source_component_id}'"
+                    )
+                set_component_path(
+                    module_inputs,
+                    binding.target_path,
+                    _HclExpression(f"module.{source_module_name}.{source_output.source_path}"),
+                )
+
         bindings: list[_VariableBinding] = []
         for raw_arg_name in sorted(module_inputs.keys()):
             argument_name = str(raw_arg_name).strip().replace("-", "_")
@@ -471,6 +633,19 @@ def _build_module_plans(config: Any) -> tuple[_ModulePlan, ...]:
                     f"infra component '{component_id}' input '{raw_arg_name}' is not a valid Terraform argument name"
                 )
             arg_key = argument_name.lower().replace("-", "_")
+            value = module_inputs[raw_arg_name]
+            if _contains_hcl_expression(value):
+                bindings.append(
+                    _VariableBinding(
+                        argument_name=argument_name,
+                        variable_name=None,
+                        type_expr=None,
+                        value=None,
+                        description=f"{component_id} module argument '{argument_name}'",
+                        expression=_hcl_value(value, indent=4),
+                    )
+                )
+                continue
             var_base = _safe_hcl_identifier(
                 f"{module_name}_{arg_key}",
                 fallback_prefix=f"{module_name}_input",
@@ -481,7 +656,6 @@ def _build_module_plans(config: Any) -> tuple[_ModulePlan, ...]:
                 variable_name = f"{var_base}_{suffix}"
                 suffix += 1
             used_variable_names.add(variable_name)
-            value = module_inputs[raw_arg_name]
             type_expr = _variable_type_expr(
                 type_hint=type_hints.get(arg_key),
                 value=value,
@@ -492,18 +666,19 @@ def _build_module_plans(config: Any) -> tuple[_ModulePlan, ...]:
                     variable_name=variable_name,
                     type_expr=type_expr,
                     value=value,
-                    description=(
-                        f"{component_id} module argument '{argument_name}'"
-                    ),
+                    description=f"{component_id} module argument '{argument_name}'",
                 )
             )
 
         plans.append(
             _ModulePlan(
+                component_id=component_id,
                 module_name=module_name,
                 module_source=module_source,
                 module_version=module_version,
                 bindings=tuple(bindings),
+                outputs=entry.outputs if entry is not None else (),
+                handoff=entry.handoff if entry is not None else None,
             )
         )
 
@@ -518,6 +693,9 @@ def _render_module_block(plan: _ModulePlan) -> str:
     if plan.module_version and _is_registry_source(plan.module_source):
         lines.append(f'  version = "{plan.module_version}"')
     for binding in plan.bindings:
+        if binding.expression is not None:
+            lines.append(f"  {binding.argument_name} = {binding.expression}")
+            continue
         lines.append(f"  {binding.argument_name} = var.{binding.variable_name}")
     lines.append("}")
     return "\n".join(lines)
@@ -529,7 +707,7 @@ def _render_provider_variable_blocks() -> tuple[str, ...]:
             _PROVIDER_VAR_MODULE_NAME,
             "string",
             "Nebius provider module_name for API traceability",
-            _DEFAULT_PROVIDER_MODULE_NAME,
+            DEFAULT_PROVIDER_MODULE_NAME,
             False,
         ),
         (
@@ -589,6 +767,8 @@ def _render_variables_tf(plans: tuple[_ModulePlan, ...]) -> str:
     blocks: list[str] = list(_render_provider_variable_blocks())
     for plan in plans:
         for binding in plan.bindings:
+            if binding.variable_name is None or binding.type_expr is None:
+                continue
             lines = [
                 f'variable "{binding.variable_name}" {{',
                 f"  type = {binding.type_expr}",
@@ -605,15 +785,62 @@ def _render_tfvars_json(plans: tuple[_ModulePlan, ...]) -> dict[str, Any]:
     payload: dict[str, Any] = {}
     for plan in plans:
         for binding in plan.bindings:
+            if binding.variable_name is None:
+                continue
             payload[binding.variable_name] = binding.value
     return payload
+
+
+def _handoff_output_name(plan: _ModulePlan) -> str:
+    return component_output_root_name(
+        plan.component_id,
+        plan.handoff.cluster_id_output_name,
+    )
+
+
+def _render_outputs_tf(plans: tuple[_ModulePlan, ...]) -> str:
+    blocks: list[str] = []
+    for plan in plans:
+        output_by_name = {output.name: output for output in plan.outputs}
+        for output in plan.outputs:
+            if output.kind != "terraform_output":
+                continue
+            description = f"Exported output '{output.name}' from component '{plan.component_id}'"
+            if (
+                plan.handoff is not None
+                and output.name == plan.handoff.cluster_id_output_name
+            ):
+                description = "Cluster ID used for kubeconfig handoff during deploy/bootstrap flows"
+            blocks.append(
+                "\n".join(
+                    [
+                        f'output "{component_output_root_name(plan.component_id, output.name)}" {{',
+                        f"  description = {json.dumps(description)}",
+                        f"  value       = module.{plan.module_name}.{output.source_path}",
+                        *(
+                            ["  sensitive   = true"]
+                            if output.sensitive
+                            else []
+                        ),
+                        "}",
+                    ]
+                )
+            )
+        if plan.handoff is not None and plan.handoff.cluster_id_output_name not in output_by_name:
+            raise ValueError(
+                f"infra component '{plan.component_id}' handoff.cluster_id "
+                f"'{plan.handoff.cluster_id_output_name}' is not declared under outputs"
+            )
+    if not blocks:
+        return "# No Terraform outputs were generated\n"
+    return "\n\n".join(blocks) + "\n"
 
 
 def _provider_static_tfvars(config: Any) -> dict[str, Any]:
     payload = to_plain_data(config)
     if not isinstance(payload, dict):
         return {
-            _PROVIDER_VAR_MODULE_NAME: _DEFAULT_PROVIDER_MODULE_NAME,
+            _PROVIDER_VAR_MODULE_NAME: DEFAULT_PROVIDER_MODULE_NAME,
             _PROVIDER_VAR_PARENT_ID: "",
         }
 
@@ -627,18 +854,11 @@ def _provider_static_tfvars(config: Any) -> dict[str, Any]:
     client_name = str(client_info.get("client_name") or "").strip()
     project_id = str(nebius.get("project_id") or "").strip()
 
-    module_name = "-".join(
-        token
-        for token in (_DEFAULT_PROVIDER_MODULE_NAME, client_name, project_id)
-        if token
-    )
-    module_name = re.sub(r"[^A-Za-z0-9._/-]", "-", module_name)
-    module_name = re.sub(r"-+", "-", module_name).strip("-")
-    if not module_name:
-        module_name = _DEFAULT_PROVIDER_MODULE_NAME
-
     return {
-        _PROVIDER_VAR_MODULE_NAME: module_name,
+        _PROVIDER_VAR_MODULE_NAME: build_provider_module_name(
+            client_name=client_name,
+            project_id=project_id,
+        ),
         _PROVIDER_VAR_PARENT_ID: project_id,
     }
 
@@ -681,6 +901,10 @@ def render_terraform_artifacts(config: Any, paths: InstancePaths) -> list[Path]:
         ),
     )
     written.append(main_tf_path)
+
+    outputs_tf_path = paths.infra_dir / "outputs.tf"
+    _write_text(outputs_tf_path, _render_outputs_tf(module_plans))
+    written.append(outputs_tf_path)
 
     tfvars_path = paths.infra_dir / "terraform.auto.tfvars.json"
     _write_text(tfvars_path, json.dumps(tfvars_payload, indent=2, sort_keys=True) + "\n")

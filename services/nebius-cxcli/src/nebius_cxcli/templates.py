@@ -33,11 +33,20 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
         on:
           pull_request:
             paths:
-              - "**/{deployments_dir}/**/config.yaml"
+              - "**/{deployments_dir}/**/generated/**"
+              - ".github/workflows/nebius-deployments.yml"
           push:
             branches: [ "main" ]
             paths:
-              - "**/{deployments_dir}/**/config.yaml"
+              - "**/{deployments_dir}/**/generated/**"
+              - ".github/workflows/nebius-deployments.yml"
+
+        permissions:
+          contents: read
+
+        concurrency:
+          group: nebius-deployments-${{{{ github.workflow }}}}-${{{{ github.ref }}}}
+          cancel-in-progress: true
 
         env:
           NEBIUS_DISCOVER_TARGET: {discover_target}
@@ -49,22 +58,24 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
             outputs:
               discovery: ${{{{ steps.discover.outputs.discovery }}}}
             steps:
-              - uses: actions/checkout@v4
+              - uses: actions/checkout@v6
                 with:
                   fetch-depth: 0
 
-              - uses: actions/setup-python@v5
+              - uses: actions/setup-python@v6
                 with:
                   python-version: "3.12"
 
               - name: Install nebius-cxcli
                 run: |
+                  set -euo pipefail
                   pip install --upgrade pip
                   pip install "git+{NEBIUS_PS_SERVICES_REPO}@${{{{ env.NEBIUS_CXCLI_REF }}}}#subdirectory=services/nebius-cxcli"
 
-              - name: Discover changed configs
+              - name: Discover changed deployment instances
                 id: discover
                 run: |
+                  set -euo pipefail
                   nebius-cxcli discover "${{{{ env.NEBIUS_DISCOVER_TARGET }}}}" > discover.json
                   echo "discovery=$(cat discover.json)" >> "$GITHUB_OUTPUT"
 
@@ -78,14 +89,17 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
               fail-fast: false
               matrix: ${{{{ fromJson(needs.discover.outputs.discovery) }}}}
             steps:
-              - uses: actions/checkout@v4
+              - uses: actions/checkout@v6
 
-              - uses: actions/setup-python@v5
+              - uses: actions/setup-python@v6
                 with:
                   python-version: "3.12"
 
+              - uses: azure/setup-kubectl@v4
+
               - name: Install nebius-cxcli
                 run: |
+                  set -euo pipefail
                   pip install --upgrade pip
                   pip install "git+{NEBIUS_PS_SERVICES_REPO}@${{{{ env.NEBIUS_CXCLI_REF }}}}#subdirectory=services/nebius-cxcli"
 
@@ -109,19 +123,20 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                   echo "AWS_ACCESS_KEY_ID=${{NEBIUS_S3_ACCESS_KEY_ID}}" >> "$GITHUB_ENV"
                   echo "AWS_SECRET_ACCESS_KEY=${{NEBIUS_S3_SECRET_ACCESS_KEY}}" >> "$GITHUB_ENV"
 
-              - name: Validate and render
+              - name: Validate generated artifacts
                 run: |
-                  nebius-cxcli validate --strict "${{{{ matrix.config }}}}"
-                  nebius-cxcli render "${{{{ matrix.config }}}}"
+                  set -euo pipefail
+                  nebius-cxcli validate-generated "${{{{ matrix.generated }}}}"
 
               - name: Terraform plan
                 env:
                   NEBIUS_SA_ID: ${{{{ secrets.NEBIUS_SA_ID }}}}
                   NEBIUS_AUTH_PUBLIC_KEY_ID: ${{{{ secrets.NEBIUS_AUTH_PUBLIC_KEY_ID }}}}
                 run: |
+                  set -euo pipefail
                   # If config uses infra.mysterybox secrets, expose each
                   # required value_from_env variable in this step.
-                  nebius-cxcli terraform plan "${{{{ matrix.config }}}}"
+                  nebius-cxcli terraform plan "${{{{ matrix.generated }}}}"
 
           apply:
             if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -133,14 +148,17 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
               fail-fast: false
               matrix: ${{{{ fromJson(needs.discover.outputs.discovery) }}}}
             steps:
-              - uses: actions/checkout@v4
+              - uses: actions/checkout@v6
 
-              - uses: actions/setup-python@v5
+              - uses: actions/setup-python@v6
                 with:
                   python-version: "3.12"
 
+              - uses: azure/setup-kubectl@v4
+
               - name: Install nebius-cxcli
                 run: |
+                  set -euo pipefail
                   pip install --upgrade pip
                   pip install "git+{NEBIUS_PS_SERVICES_REPO}@${{{{ env.NEBIUS_CXCLI_REF }}}}#subdirectory=services/nebius-cxcli"
 
@@ -164,68 +182,27 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                   echo "AWS_ACCESS_KEY_ID=${{NEBIUS_S3_ACCESS_KEY_ID}}" >> "$GITHUB_ENV"
                   echo "AWS_SECRET_ACCESS_KEY=${{NEBIUS_S3_SECRET_ACCESS_KEY}}" >> "$GITHUB_ENV"
 
-              - name: Validate and render
+              - name: Validate generated artifacts
                 run: |
-                  nebius-cxcli validate --strict "${{{{ matrix.config }}}}"
-                  nebius-cxcli render "${{{{ matrix.config }}}}"
+                  set -euo pipefail
+                  nebius-cxcli validate-generated "${{{{ matrix.generated }}}}"
 
               - name: Terraform apply
                 env:
                   NEBIUS_SA_ID: ${{{{ secrets.NEBIUS_SA_ID }}}}
                   NEBIUS_AUTH_PUBLIC_KEY_ID: ${{{{ secrets.NEBIUS_AUTH_PUBLIC_KEY_ID }}}}
                 run: |
+                  set -euo pipefail
                   # If config uses infra.mysterybox secrets, expose each
                   # required value_from_env variable in this step.
-                  nebius-cxcli terraform apply "${{{{ matrix.config }}}}"
-
-              - name: Install Flux CLI
-                run: |
-                  curl -s https://fluxcd.io/install.sh | sudo bash
-                  flux --version
+                  nebius-cxcli terraform apply "${{{{ matrix.generated }}}}"
 
               - name: Install Nebius CLI
                 run: |
+                  set -euo pipefail
                   curl -sSL https://storage.eu-north1.nebius.cloud/cli/install.sh | bash
                   echo "${{{{ env.HOME }}}}/.nebius/bin" >> "$GITHUB_PATH"
                   nebius version --full
-
-              - name: Configure kubeconfig for Flux
-                env:
-                  CONFIG_PATH: ${{{{ matrix.config }}}}
-                  NB_SA_ID: ${{{{ secrets.NEBIUS_SA_ID }}}}
-                  NB_AUTHKEY_ID: ${{{{ secrets.NEBIUS_AUTH_PUBLIC_KEY_ID }}}}
-                  NB_AUTH_PRIVATE_KEY_FILE: ${{{{ env.NEBIUS_AUTH_PRIVATE_KEY_FILE }}}}
-                run: |
-                  set -euo pipefail
-                  if [[ -z "${{NB_SA_ID:-}}" || -z "${{NB_AUTHKEY_ID:-}}" || -z "${{NB_AUTH_PRIVATE_KEY_FILE:-}}" ]]; then
-                    echo "Missing required values: NEBIUS_SA_ID, NEBIUS_AUTH_PUBLIC_KEY_ID, NEBIUS_AUTH_PRIVATE_KEY_FILE"
-                    exit 1
-                  fi
-
-                  PROJECT_ID="$(python - <<'PY'
-                  import os
-                  from pathlib import Path
-                  import yaml
-
-                  cfg = Path(os.environ["CONFIG_PATH"])
-                  payload = yaml.safe_load(cfg.read_text(encoding="utf-8")) or {{}}
-                  print(payload["client_info"]["nebius"]["project_id"])
-                  PY
-                  )"
-
-                  PROFILE="ci-sa-${{GITHUB_RUN_ID}}-${{GITHUB_RUN_ATTEMPT}}"
-                  nebius profile create \\
-                    --profile "${{PROFILE}}" \\
-                    --endpoint api.nebius.cloud \\
-                    --service-account-id "${{NB_SA_ID}}" \\
-                    --public-key-id "${{NB_AUTHKEY_ID}}" \\
-                    --private-key-file "${{NB_AUTH_PRIVATE_KEY_FILE}}" \\
-                    --parent-id "${{PROJECT_ID}}"
-
-                  INFRA_DIR="$(dirname "${{CONFIG_PATH}}")/generated/infra"
-                  CLUSTER_ID="$(terraform -chdir="${{INFRA_DIR}}" output -raw mk8s_cluster_id)"
-                  nebius mk8s cluster get-credentials --id "${{CLUSTER_ID}}" --external --profile "${{PROFILE}}"
-                  kubectl cluster-info
 
               - name: Bootstrap/reconcile Flux
                 env:
@@ -235,14 +212,21 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                   NEBIUS_AUTH_PRIVATE_KEY_PEM: ${{{{ secrets.NEBIUS_AUTH_PRIVATE_KEY_PEM }}}}
                   NEBIUS_API_ENDPOINT: api.nebius.cloud:443
                 run: |
-                  nebius-cxcli flux bootstrap "${{{{ matrix.config }}}}"
+                  set -euo pipefail
+                  nebius-cxcli flux bootstrap "${{{{ matrix.generated }}}}"
 
               - name: Inventory outputs
+                run: |
+                  set -euo pipefail
+                  nebius-cxcli inventory write "${{{{ matrix.generated }}}}"
+
+              - name: Email inventory
+                if: ${{{{ github.run_attempt == '1' }}}}
                 env:
                   SMTP_PASSWORD: ${{{{ secrets.SMTP_PASSWORD }}}}
                 run: |
-                  nebius-cxcli inventory write "${{{{ matrix.config }}}}"
-                  nebius-cxcli email "${{{{ matrix.config }}}}"
+                  set -euo pipefail
+                  nebius-cxcli email "${{{{ matrix.generated }}}}"
         """
         ).strip()
         + "\n"

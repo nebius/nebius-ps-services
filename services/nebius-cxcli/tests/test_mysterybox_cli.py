@@ -8,6 +8,7 @@ from nebius_cxcli.cli import _terraform_runtime_env
 from nebius_cxcli.components import component_entries
 from nebius_cxcli.config_loader import load_config
 from nebius_cxcli.config_template import starter_config_yaml
+from nebius_cxcli.terraform_provider import build_provider_module_name
 
 
 def _build_config(tmp_path: Path):
@@ -37,7 +38,10 @@ def test_terraform_runtime_env_builds_mysterybox_tf_var(tmp_path: Path, monkeypa
     runtime_env = _terraform_runtime_env(cfg)
 
     assert runtime_env == {
-        "TF_VAR_nebius_provider_module_name": "nebius-cxcli-client-a-project-456",
+        "TF_VAR_nebius_provider_module_name": build_provider_module_name(
+            client_name="client-a",
+            project_id="project-456",
+        ),
         "TF_VAR_nebius_provider_parent_id": "project-456",
     }
 
@@ -50,6 +54,9 @@ def test_terraform_runtime_env_fails_when_mysterybox_env_missing(
     monkeypatch.delenv("N8N_BASIC_AUTH_PASSWORD", raising=False)
 
     assert _terraform_runtime_env(cfg) == {
-        "TF_VAR_nebius_provider_module_name": "nebius-cxcli-client-a-project-456",
+        "TF_VAR_nebius_provider_module_name": build_provider_module_name(
+            client_name="client-a",
+            project_id="project-456",
+        ),
         "TF_VAR_nebius_provider_parent_id": "project-456",
     }

@@ -9,7 +9,14 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, Literal, cast
 
-from .component_sources import load_component_sources, reset_component_sources_cache
+from .component_sources import (
+    ComponentDefault,
+    ComponentInputBinding,
+    ComponentOutput,
+    Handoff,
+    load_component_sources,
+    reset_component_sources_cache,
+)
 
 ComponentScope = Literal["infra", "apps"]
 COMPONENT_ID_PATTERN = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
@@ -37,6 +44,10 @@ class ComponentEntry:
     chart_repo: str | None = None
     default_namespace: str | None = None
     default_release_name: str | None = None
+    defaults: tuple[ComponentDefault, ...] = ()
+    outputs: tuple[ComponentOutput, ...] = ()
+    input_bindings: tuple[ComponentInputBinding, ...] = ()
+    handoff: Handoff | None = None
 
 
 def _humanize_component_id(component_id: str) -> str:
@@ -103,6 +114,10 @@ def _infra_component_entries() -> tuple[ComponentEntry, ...]:
                 source=module.source,
                 version=module.version,
                 group=module.group,
+                defaults=module.defaults,
+                outputs=module.outputs,
+                input_bindings=module.input_bindings,
+                handoff=module.handoff,
             )
         )
         entry_ids.add(component_id)
@@ -120,6 +135,9 @@ def _entry_from_helm_chart(
     version: str | None,
     namespace: str | None,
     default_enabled: bool = False,
+    defaults: tuple[ComponentDefault, ...] = (),
+    outputs: tuple[ComponentOutput, ...] = (),
+    input_bindings: tuple[ComponentInputBinding, ...] = (),
 ) -> ComponentEntry:
     config_key = _normalize_config_key(component_id)
     normalized_group = (group or "").strip()
@@ -145,6 +163,9 @@ def _entry_from_helm_chart(
         chart_repo=repo,
         default_namespace=namespace,
         default_release_name=release_name,
+        defaults=defaults,
+        outputs=outputs,
+        input_bindings=input_bindings,
     )
 
 
@@ -173,6 +194,9 @@ def _app_component_entries() -> tuple[ComponentEntry, ...]:
                 version=chart.version,
                 namespace=chart.namespace,
                 default_enabled=bool(chart.enable),
+                defaults=chart.defaults,
+                outputs=chart.outputs,
+                input_bindings=chart.input_bindings,
             )
         )
         entry_ids.add(component_id)

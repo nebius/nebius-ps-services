@@ -49,6 +49,8 @@
 
 Deliver a VM-based site-to-site VPN gateway for Nebius AI Cloud using IPsec (strongSwan) and routing (FRR for BGP, static as fallback). Provide a CLI orchestrator plus per-VM agent with idempotent configuration from a single YAML file, with optional peer-config import to generate that YAML. Support common cloud and on-premises peers (GCP HA VPN, AWS Site-to-Site VPN, Azure VPN Gateway, Cisco IOS).
 
+This project is an open source, self-service, VM-based VPN gateway. It is not a managed Nebius VPN service.
+
 ## Goals & Non-Goals
 
 **Goals:**
@@ -62,6 +64,12 @@ Deliver a VM-based site-to-site VPN gateway for Nebius AI Cloud using IPsec (str
 **Non-goals:**
 
 These features are not currently implemented but may be considered for future enhancements:
+
+- **Multi-VM HA for one routed prefix:**
+  - *What it means:* More than one gateway VM safely carrying the same site's routed prefixes as a coordinated HA service
+  - *Current limitation:* `gateway_group` only orchestrates independent gateway VMs; it does not create a clustered control plane or clustered dataplane
+  - *Why it matters:* If the same prefix becomes active on more than one gateway VM, you create multiple active paths and reintroduce the ECMP/asymmetric-routing problem this design avoids
+  - *Status:* Not supported in current releases
 
 - **ECMP (Equal-Cost Multi-Path) in VPC route tables:**
   - *What it does:* Allows load balancing traffic across multiple gateway VMs for the same destination prefix
@@ -110,7 +118,15 @@ These features are not currently implemented but may be considered for future en
 **Deployment Modes:**
 
 - Single VM with multiple tunnels and multiple peer `connections` (current releases use active/passive per connection; the VM remains a SPOF)
-- Gateway group (N VMs) with per-tunnel pinning for VM-level HA
+- Gateway group (N VMs) with per-tunnel pinning for orchestration across independent VMs
+
+**Current HA Boundary:**
+
+- Active/passive HA is supported only at the tunnel level inside a single gateway VM
+- Each gateway VM must keep exactly one active tunnel per connection
+- `gateway_group` is an orchestration grouping, not a clustered gateway service
+- Creating multiple gateway VMs does not provide shared control-plane state or shared dataplane ownership for a single routed prefix
+- Multi-VM HA for one prefix is not supported today
 
 ### Architecture Diagram
 
@@ -672,6 +688,8 @@ connections:
 | **disable** | `ha_role: "disable"` (**must be explicit**) | Tunnel is completely skipped (no IPsec, no BGP). Use for maintenance or cost optimization. |
 
 **Important:** The Active/Passive design requires **exactly one active tunnel** per connection **per gateway instance** to guarantee symmetric routing. Schema validation enforces this, and `defaults.ha_mode` is **required** and locked to `"active-passive"` (the only supported mode in current releases). If you omit `ha_role` on multiple tunnels, they will all default to `"active"` and create ECMP routing, which defeats the purpose of this design.
+
+**Gateway-group boundary:** This rule stops at the gateway-VM boundary. If you create two gateway VMs and make the same site's prefixes active on both VMs, then each VM still has its own active tunnel and you end up with two active paths for the same prefix between Nebius and the customer network. That is the same class of multipath/asymmetric-routing problem described above. Current releases do not coordinate multiple VMs as a single HA service for one prefix, so multi-VM HA for one prefix is not supported today. `gateway_group` is only an orchestration grouping for provisioning and config distribution.
 
 **Multi-connection note:** The Active/Passive rule is scoped per connection, not globally across the gateway VM. This is intentional for multi-site topologies where each connection usually represents a different remote site and a different set of prefixes. If two different active connections learn the same prefix, FRR can still install live multipath for that overlapping prefix. Current releases surface that condition as a warning in `nebius-vpngw status`; operators should treat it as a routing-domain overlap to fix, not as the intended steady state.
 

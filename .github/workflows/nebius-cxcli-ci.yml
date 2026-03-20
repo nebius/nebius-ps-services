@@ -27,6 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
+        shell: bash
         working-directory: services/nebius-cxcli
     steps:
       - uses: actions/checkout@v6
@@ -45,7 +46,45 @@ jobs:
       - name: Test
         run: python -m pytest -q
       - name: Build wheel
+        env:
+          RELEASE_REF: ${{ github.sha }}
         run: |
           set -euo pipefail
           rm -rf build dist
+          backup="$(mktemp)"
+          cp component_sources.yaml "${backup}"
+          trap 'mv "${backup}" component_sources.yaml' EXIT
+          python - "${RELEASE_REF}" <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          release_ref = sys.argv[1]
+          source = pathlib.Path("component_sources.release.yaml").read_text(encoding="utf-8")
+          rendered = re.sub(r"\?ref=main\b", f"?ref={release_ref}", source)
+          pathlib.Path("component_sources.yaml").write_text(rendered, encoding="utf-8")
+          PY
           python -m build --wheel
+
+      - name: Verify bundled component sources in wheel
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import pathlib
+          import zipfile
+
+          wheels = sorted(pathlib.Path("dist").glob("*.whl"))
+          if not wheels:
+              raise SystemExit("No wheel found in dist/")
+
+          wheel = wheels[0]
+          with zipfile.ZipFile(wheel) as zf:
+              names = zf.namelist()
+
+          if not any(name.endswith("nebius_cxcli/component_sources.yaml") for name in names):
+              raise SystemExit(
+                  f"{wheel.name} is missing bundled nebius_cxcli/component_sources.yaml"
+              )
+
+          print(f"Verified bundled component_sources.yaml in {wheel.name}")
+          PY

@@ -1054,6 +1054,38 @@ class VPNGatewayConfig(BaseModel):
 
         return self
 
+    @model_validator(mode="after")
+    def validate_external_ips_unique_globally(self) -> VPNGatewayConfig:
+        """Ensure configured external IP assignments are globally unique."""
+        external_ips = self.gateway_group.external_ips
+        if not external_ips:
+            return self
+
+        locations_by_ip: dict[str, list[str]] = {}
+        for inst_index, inst_ips in enumerate(external_ips):
+            for nic_index, ip in enumerate(inst_ips or []):
+                if not ip:
+                    continue
+                normalized_ip = str(ipaddress.ip_address(ip))
+                locations_by_ip.setdefault(normalized_ip, []).append(
+                    f"external_ips[{inst_index}][{nic_index}]"
+                )
+
+        duplicates = {
+            ip: locations for ip, locations in locations_by_ip.items() if len(locations) > 1
+        }
+        if duplicates:
+            details = "; ".join(
+                f"{ip}: {', '.join(locations)}"
+                for ip, locations in sorted(duplicates.items())
+            )
+            raise ValueError(
+                "gateway_group.external_ips entries must be globally unique. "
+                f"Conflicts: {details}"
+            )
+
+        return self
+
 
 # ============================================================================
 # Public API

@@ -6,6 +6,8 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import subprocess
 import time
 from collections.abc import Mapping
 from contextlib import suppress
@@ -30,6 +32,19 @@ class TerraformBackendSettings:
     bucket: str
     key: str
     endpoint: str
+
+
+@dataclass(frozen=True)
+class TerraformStateLockInfo:
+    lock_id: str
+    path: str
+    operation: str
+    who: str
+    version: str
+    created: str
+    info: str
+    bucket: str
+    object_key: str
 
 
 def _as_mapping(value: Any) -> Mapping[str, Any]:
@@ -143,6 +158,85 @@ def render_backend_tf(settings: TerraformBackendSettings) -> str:
         "    skip_metadata_api_check     = true\n"
         "  }\n"
         "}\n"
+    )
+
+
+def terraform_state_lock_object_key(settings: TerraformBackendSettings) -> str:
+    return f"{settings.key}.tflock"
+
+
+def _require_aws_cli() -> None:
+    if shutil.which("aws"):
+        return
+    raise RuntimeError(
+        "aws CLI is required to inspect the remote Terraform state lock object, but it was not found in PATH"
+    )
+
+
+def read_state_lock_info(
+    settings: TerraformBackendSettings,
+    *,
+    extra_env: dict[str, str] | None = None,
+) -> TerraformStateLockInfo | None:
+    _require_aws_cli()
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
+
+    object_key = terraform_state_lock_object_key(settings)
+    command = [
+        "aws",
+        "--cli-connect-timeout",
+        "5",
+        "--cli-read-timeout",
+        "5",
+        "--endpoint-url",
+        settings.endpoint,
+        "s3",
+        "cp",
+        f"s3://{settings.bucket}/{object_key}",
+        "-",
+    ]
+    completed = subprocess.run(
+        command,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    if completed.returncode != 0:
+        message = (completed.stderr or completed.stdout or "").strip()
+        if _is_not_found_error(RuntimeError(message)):
+            return None
+        raise RuntimeError(
+            "Failed to inspect remote Terraform state lock object "
+            f"`s3://{settings.bucket}/{object_key}` via aws CLI: {message or 'unknown error'}"
+        )
+
+    try:
+        payload = json.loads(completed.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            "Remote Terraform state lock object did not contain valid JSON: "
+            f"{exc}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("Remote Terraform state lock object did not contain a JSON mapping")
+
+    lock_id = _as_text(payload.get("ID"))
+    if not lock_id:
+        raise RuntimeError("Remote Terraform state lock object is missing required field `ID`")
+    return TerraformStateLockInfo(
+        lock_id=lock_id,
+        path=_as_text(payload.get("Path")),
+        operation=_as_text(payload.get("Operation")),
+        who=_as_text(payload.get("Who")),
+        version=_as_text(payload.get("Version")),
+        created=_as_text(payload.get("Created")),
+        info=_as_text(payload.get("Info")),
+        bucket=settings.bucket,
+        object_key=object_key,
     )
 
 
