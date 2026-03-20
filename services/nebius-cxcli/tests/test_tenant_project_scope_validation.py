@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 import nebius_cxcli.cli as cli
@@ -139,31 +137,7 @@ def test_seed_infra_project_scope_defaults_uses_client_project_id(
     assert inputs["project_id"] == "project-456"
 
 
-def test_infer_default_ssh_public_key_prefers_id_ed25519_pub(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    ssh_dir = tmp_path / ".ssh"
-    ssh_dir.mkdir(parents=True)
-    (ssh_dir / "id_rsa.pub").write_text("ssh-rsa AAAA-rsa", encoding="utf-8")
-    (ssh_dir / "id_ed25519.pub").write_text("ssh-ed25519 AAAA-ed25519", encoding="utf-8")
-    monkeypatch.setattr(cli.Path, "home", lambda: tmp_path)
-
-    assert cli._infer_default_ssh_public_key() == "ssh-ed25519 AAAA-ed25519"
-
-
-def test_seed_default_shared_ssh_public_key_overrides_placeholder() -> None:
-    payload = {
-        "infra": {
-            "ssh_public_key": "ssh-ed25519 AAAA-REPLACE-WITH-YOUR-KEY",
-            "components": [],
-        }
-    }
-    cli._seed_default_shared_ssh_public_key(payload=payload, inferred_key="ssh-ed25519 AAAA-user")
-    assert payload["infra"]["ssh_public_key"] == "ssh-ed25519 AAAA-user"
-
-
-def test_seed_infra_project_scope_defaults_sets_component_ssh_public_key(
+def test_seed_infra_project_scope_defaults_does_not_copy_shared_ssh_fields(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -173,8 +147,13 @@ def test_seed_infra_project_scope_defaults_sets_component_ssh_public_key(
     )
     payload = {
         "client_info": {"nebius": {"project_id": "project-456"}},
+        "shared": {
+            "admin_ssh": {
+                "user_name": "ubuntu",
+                "public_key": "ssh-ed25519 AAAA-shared",
+            }
+        },
         "infra": {
-            "ssh_public_key": "ssh-ed25519 AAAA-shared",
             "components": [
                 {
                     "id": "mk8s",
@@ -199,4 +178,4 @@ def test_seed_infra_project_scope_defaults_sets_component_ssh_public_key(
     cli._seed_infra_project_scope_defaults(payload=payload, infra_entries=entries)
     inputs = payload["infra"]["components"][0]["inputs"]
     assert inputs["parent_id"] == "project-456"
-    assert inputs["ssh_public_key"] == "ssh-ed25519 AAAA-shared"
+    assert "ssh_public_key" not in inputs

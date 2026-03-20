@@ -9,6 +9,20 @@ from typing import Any
 
 import yaml
 
+from .component_defaults import (
+    resolve_component_defaults,
+    set_component_path,
+    shared_default_conflicts,
+)
+from .component_wiring import (
+    _UNRESOLVED,
+    component_entry_lookup,
+    component_output_ref,
+    input_binding_conflicts,
+    output_lookup,
+    resolve_static_component_output,
+)
+from .components import component_entries
 from .paths import InstancePaths
 from .runtime_config import to_plain_data
 
@@ -20,6 +34,13 @@ def _ensure_parent(path: Path) -> None:
 def _write_text(path: Path, content: str) -> None:
     _ensure_parent(path)
     path.write_text(content, encoding="utf-8")
+
+
+def _bootstrap_flux_resource(paths: InstancePaths) -> str | None:
+    bootstrap_kustomization = paths.flux_dir / "flux-system" / "kustomization.yaml"
+    if bootstrap_kustomization.exists():
+        return "./flux-system"
+    return None
 
 
 def _helm_repository_doc(name: str, url: str, *, repo_type: str = "default") -> dict[str, Any]:
@@ -40,6 +61,14 @@ def _git_repository_doc(name: str, url: str, ref: str) -> dict[str, Any]:
         "kind": "GitRepository",
         "metadata": {"name": name, "namespace": "flux-system"},
         "spec": {"interval": "5m", "url": url, "ref": {"branch": ref}},
+    }
+
+
+def _namespace_doc(name: str) -> dict[str, Any]:
+    return {
+        "apiVersion": "v1",
+        "kind": "Namespace",
+        "metadata": {"name": name},
     }
 
 
@@ -122,12 +151,19 @@ def _file_slug(value: str) -> str:
     return "".join(ch if ch.isalnum() or ch in "-." else "-" for ch in value)
 
 
-def _configured_app_release_specs(config: Any) -> list[dict[str, Any]]:
+def _configured_app_release_specs(
+    config: Any,
+    *,
+    component_output_values: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     payload = to_plain_data(config)
     if not isinstance(payload, dict):
         return []
 
     specs: list[dict[str, Any]] = []
+    resolved_component_outputs = component_output_values or {}
+    entry_by_id = {entry.id: entry for entry in component_entries("apps")}
+    all_entry_by_id = component_entry_lookup()
     apps_node = payload.get("apps")
     if isinstance(apps_node, dict):
         dynamic_charts = apps_node.get("charts")
@@ -138,8 +174,78 @@ def _configured_app_release_specs(config: Any) -> list[dict[str, Any]]:
                 entry_id = str(raw_chart.get("id", "")).strip().lower()
                 if not entry_id or not bool(raw_chart.get("enabled", False)):
                     continue
+                entry = entry_by_id.get(entry_id)
+                chart_node = dict(raw_chart)
+                if entry is not None and entry.defaults:
+                    chart_node = resolve_component_defaults(
+                        payload=payload,
+                        component_node=chart_node,
+                        entry=entry,
+                        preserve_existing_literal=True,
+                        preserve_existing_shared=False,
+                    )
+                if entry is not None:
+                    conflicts = shared_default_conflicts(raw_chart, entry)
+                    if conflicts:
+                        target_path, source_path = conflicts[0]
+                        raise ValueError(
+                            f"apps chart '{entry_id}' field '{target_path}' is managed by shared default "
+                            f"'{source_path}' and must not be set explicitly"
+                        )
 
-                values_node = raw_chart.get("values", {})
+                if entry is not None and entry.input_bindings:
+                    conflicts = input_binding_conflicts(chart_node, entry)
+                    if conflicts:
+                        target_path, source_ref = conflicts[0]
+                        raise ValueError(
+                            f"apps chart '{entry_id}' field '{target_path}' is managed by component input "
+                            f"binding '{source_ref}' and must not be set explicitly"
+                        )
+                    for binding in entry.input_bindings:
+                        source_entry = all_entry_by_id.get(binding.source_component_id)
+                        source_ref = component_output_ref(
+                            binding.source_component_id,
+                            binding.source_output_name,
+                        )
+                        if source_entry is None:
+                            raise ValueError(
+                                f"apps chart '{entry_id}' input binding '{binding.target_path}' references "
+                                f"unknown component '{binding.source_component_id}'"
+                            )
+                        source_output = output_lookup(source_entry).get(binding.source_output_name)
+                        if source_output is None:
+                            raise ValueError(
+                                f"apps chart '{entry_id}' input binding '{binding.target_path}' references "
+                                f"undeclared output '{source_ref}'"
+                            )
+
+                        static_value = resolve_static_component_output(
+                            payload,
+                            component_id=binding.source_component_id,
+                            output_name=binding.source_output_name,
+                        )
+                        if static_value is not _UNRESOLVED:
+                            set_component_path(chart_node, binding.target_path, static_value)
+                            continue
+
+                        if source_output.kind != "terraform_output":
+                            raise ValueError(
+                                f"apps chart '{entry_id}' input binding '{binding.target_path}' could not "
+                                f"resolve output '{source_ref}' from the current config payload"
+                            )
+                        if source_ref not in resolved_component_outputs:
+                            raise ValueError(
+                                f"apps chart '{entry_id}' input binding '{binding.target_path}' requires "
+                                f"Terraform-derived output '{source_ref}', but that value is not available yet. "
+                                "Run `deploy`, or rerun `render` after Terraform state exists."
+                            )
+                        set_component_path(
+                            chart_node,
+                            binding.target_path,
+                            resolved_component_outputs[source_ref],
+                        )
+
+                values_node = chart_node.get("values", {})
                 if values_node is None:
                     values_node = {}
                 if not isinstance(values_node, dict):
@@ -147,9 +253,9 @@ def _configured_app_release_specs(config: Any) -> list[dict[str, Any]]:
                         f"apps.charts[{entry_id}].values must be a mapping for enabled chart '{entry_id}'"
                     )
 
-                chart_repo = str(raw_chart.get("repo", "")).strip()
+                chart_repo = str(chart_node.get("repo", "")).strip()
                 chart_name = entry_id
-                chart_version = str(raw_chart.get("version", "")).strip()
+                chart_version = str(chart_node.get("version", "")).strip()
                 if not chart_repo:
                     raise ValueError(
                         f"apps.charts[{entry_id}].repo is required for enabled chart '{entry_id}'"
@@ -165,18 +271,18 @@ def _configured_app_release_specs(config: Any) -> list[dict[str, Any]]:
                         f"apps.charts[{entry_id}].version is required for enabled chart '{entry_id}'"
                     )
 
-                namespace = str(raw_chart.get("namespace", "")).strip()
+                namespace = str(chart_node.get("namespace", "")).strip()
                 if not namespace:
                     raise ValueError(
                         f"apps.charts[{entry_id}].namespace is required for enabled chart '{entry_id}'"
                     )
                 release_name = str(
-                    raw_chart.get("release-name", raw_chart.get("release_name", entry_id))
+                    chart_node.get("release-name", chart_node.get("release_name", entry_id))
                 ).strip() or entry_id
                 repo_name_default = f"helm-{_file_slug(entry_id)}"
                 repo_name = repo_name_default
                 interval = "5m"
-                scope = str(raw_chart.get("group", "")).strip().lower() or "workloads"
+                scope = str(chart_node.get("group", "")).strip().lower() or "workloads"
                 chart_values = values_node
 
                 specs.append(
@@ -240,12 +346,24 @@ class _FluxRenderState:
     resources: list[str] = field(default_factory=lambda: ["./helm-repositories.yaml"])
     repositories: list[dict[str, Any]] = field(default_factory=list)
     seen_repo_names: set[str] = field(default_factory=set)
+    seen_namespaces: set[str] = field(default_factory=set)
 
     def add_repository_doc(self, *, repo_name: str, doc: dict[str, Any]) -> None:
         if repo_name in self.seen_repo_names:
             return
         self.repositories.append(doc)
         self.seen_repo_names.add(repo_name)
+
+    def ensure_namespace(self, namespace: str) -> None:
+        normalized = namespace.strip()
+        if not normalized or normalized in self.seen_namespaces:
+            return
+        namespace_file = Path(f"namespace-{_file_slug(normalized)}.yaml")
+        absolute_file = self.paths.flux_dir / namespace_file
+        _write_text(absolute_file, yaml.safe_dump(_namespace_doc(normalized), sort_keys=False))
+        self.files.append(absolute_file)
+        self.resources.append(f"./{namespace_file.as_posix()}")
+        self.seen_namespaces.add(normalized)
 
     def write_doc(self, relative_file: Path, doc: dict[str, Any]) -> None:
         absolute_file = self.paths.flux_dir / relative_file
@@ -278,6 +396,7 @@ def _render_flux_app_helm_releases(
                 doc=_git_repository_doc(source_name, source_url, source_ref or "main"),
             )
             flux_source_kind = "GitRepository"
+        state.ensure_namespace(namespace)
         release_file_name = (
             f"helmrelease-{_file_slug(scope)}-{_file_slug(release_name)}.yaml"
         )
@@ -296,7 +415,12 @@ def _render_flux_app_helm_releases(
         )
 
 
-def render_flux(config: Any, paths: InstancePaths) -> list[Path]:
+def render_flux(
+    config: Any,
+    paths: InstancePaths,
+    *,
+    component_output_values: dict[str, Any] | None = None,
+) -> list[Path]:
     legacy_dirs = [
         path
         for path in (paths.flux_dir / "apps", paths.flux_dir / "sources")
@@ -311,7 +435,13 @@ def render_flux(config: Any, paths: InstancePaths) -> list[Path]:
         )
 
     state = _FluxRenderState(paths=paths)
-    _render_flux_app_helm_releases(state, release_specs=_configured_app_release_specs(config))
+    _render_flux_app_helm_releases(
+        state,
+        release_specs=_configured_app_release_specs(
+            config,
+            component_output_values=component_output_values,
+        ),
+    )
 
     repos_path = paths.flux_dir / "helm-repositories.yaml"
     _ensure_parent(repos_path)
@@ -328,7 +458,11 @@ def render_flux(config: Any, paths: InstancePaths) -> list[Path]:
     kustomization_doc = {
         "apiVersion": "kustomize.config.k8s.io/v1beta1",
         "kind": "Kustomization",
-        "resources": state.resources,
+        "resources": (
+            [bootstrap_resource, *state.resources]
+            if (bootstrap_resource := _bootstrap_flux_resource(paths))
+            else state.resources
+        ),
     }
     kustomization_path = paths.flux_dir / "kustomization.yaml"
     _write_text(kustomization_path, yaml.safe_dump(kustomization_doc, sort_keys=False))

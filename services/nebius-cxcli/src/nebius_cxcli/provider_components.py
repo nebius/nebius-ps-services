@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -12,6 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from .managed_tools import resolve_terraform_binary
 from .templates import NEBIUS_PROVIDER_SOURCE, NEBIUS_PROVIDER_VERSION
 
 
@@ -62,7 +62,9 @@ def _provider_resource_prefix() -> str:
 
 
 def _provider_schema_payload(timeout_seconds: int = 60) -> dict:
-    if not shutil.which("terraform"):
+    try:
+        terraform_bin = resolve_terraform_binary()
+    except Exception:
         return {}
     provider_source = _provider_source()
     provider_version = _provider_version()
@@ -97,7 +99,7 @@ def _provider_schema_payload(timeout_seconds: int = 60) -> dict:
             encoding="utf-8",
         )
         init = subprocess.run(
-            ["terraform", "init", "-backend=false", "-input=false", "-no-color"],
+            [terraform_bin, "init", "-backend=false", "-input=false", "-no-color"],
             cwd=tmp_path,
             capture_output=True,
             text=True,
@@ -107,7 +109,7 @@ def _provider_schema_payload(timeout_seconds: int = 60) -> dict:
             return {}
 
         schema = subprocess.run(
-            ["terraform", "providers", "schema", "-json"],
+            [terraform_bin, "providers", "schema", "-json"],
             cwd=tmp_path,
             capture_output=True,
             text=True,

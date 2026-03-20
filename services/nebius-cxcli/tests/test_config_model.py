@@ -6,8 +6,10 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
+import nebius_cxcli.component_sources as component_sources
 from nebius_cxcli.cli import app
 from nebius_cxcli.component_sources import (
+    ComponentOutput,
     reset_component_sources_cache,
     set_component_sources_file_override,
 )
@@ -26,6 +28,37 @@ def _reset_component_state(monkeypatch: pytest.MonkeyPatch) -> None:
         "nebius_cxcli.cli._validate_tenant_project_ids_or_prompt",
         lambda **kwargs: (kwargs["tenant_id"], kwargs["project_id"]),
     )
+    monkeypatch.setattr(
+        component_sources,
+        "_discover_terraform_outputs",
+        lambda _source: (
+            ComponentOutput(
+                name="cluster_id",
+                kind="terraform_output",
+                source_path="cluster_id",
+                sensitive=False,
+            ),
+            ComponentOutput(
+                name="cluster_ca_certificate",
+                kind="terraform_output",
+                source_path="cluster_ca_certificate",
+                sensitive=True,
+            ),
+        ),
+    )
+    monkeypatch.setattr("nebius_cxcli.cli.module_variables", lambda _source: ())
+    monkeypatch.setattr("nebius_cxcli.cli.module_variable_names", lambda _source: ())
+    monkeypatch.setattr("nebius_cxcli.cli.module_required_variables", lambda _source: ())
+    monkeypatch.setattr("nebius_cxcli.cli.helm_chart_default_values", lambda **_kwargs: {})
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._helm_chart_metadata",
+        lambda *, chart_name_or_ref, chart_repo, chart_version, cache=None: (
+            chart_name_or_ref,
+            set(),
+            None,
+        ),
+    )
+    monkeypatch.setattr("nebius_cxcli.cli._with_infra_provider_groups", lambda entries: entries)
     set_component_sources_file_override(None)
     reset_component_sources_cache()
     reset_component_entry_cache()

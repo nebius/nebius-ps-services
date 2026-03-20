@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import atexit
 import copy
+import getpass
 import json
 import os
 import re
+import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -16,20 +19,42 @@ import urllib.error
 import urllib.request
 from collections import deque
 from collections.abc import Callable, Mapping
+from contextlib import ExitStack, suppress
 from dataclasses import dataclass, replace
+from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any
 
 import typer
 import yaml
 from rich.console import Console
+from rich.markup import escape
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
 
-from . import __version__
+from . import __version__, native_logs
+from .component_defaults import (
+    default_target_paths,
+    literal_default_input_leaf_names,
+    managed_default_payload_paths,
+    resolve_component_defaults,
+    shared_default_conflicts,
+    shared_default_input_sources,
+)
 from .component_sources import (
+    component_output_root_name,
     load_component_sources,
     resolve_component_sources_file,
     set_component_sources_file_override,
+)
+from .component_wiring import (
+    _UNRESOLVED,
+    component_entry_lookup,
+    component_output_ref,
+    input_binding_conflicts,
+    input_binding_leaf_names,
+    managed_input_binding_payload_paths,
+    output_lookup,
+    resolve_static_component_output,
 )
 from .components import (
     COMPONENT_ID_PATTERN,
@@ -39,9 +64,24 @@ from .components import (
     resolve_component_dependencies,
 )
 from .config_loader import load_config
-from .config_template import DEFAULT_SSH_PUBLIC_KEY, starter_config_yaml
+from .config_template import starter_config_yaml
+from .deployment_status import deployment_status_reporting
 from .discover_ops import discover_configs
-from .flux_ops import ensure_flux
+from .flux_ops import (
+    ensure_flux,
+    flux_bootstrap_resources_installed,
+    flux_controllers_installed,
+    flux_crds_installed,
+    install_flux_controllers,
+    wait_for_flux_resource_apis,
+    wait_for_rendered_flux_resources,
+)
+from .flux_render import render_flux
+from .generated_manifest import (
+    load_generated_manifest,
+    runtime_config_from_manifest,
+    write_generated_manifest,
+)
 from .github_secrets import (
     build_github_environment_name,
     detect_github_repo_slug,
@@ -55,9 +95,16 @@ from .iam_bootstrap import (
     auth_public_key_exists,
     bootstrap_ci_service_account,
 )
+from .infra_render import render_terraform_artifacts
 from .inventory_ops import write_inventory
+from .mk8s_preflight import validate_mk8s_network_preflight
 from .notify_ops import send_inventory_email
-from .paths import InstancePaths, resolve_instance_paths, validate_path_alignment
+from .paths import (
+    InstancePaths,
+    resolve_generated_paths,
+    resolve_instance_paths,
+    validate_path_alignment,
+)
 from .provider_components import (
     infer_infra_component_category,
     provider_component_match_status,
@@ -70,18 +117,34 @@ from .provider_options import (
     ProviderOptionLookup,
     TenantProjectValidationResult,
 )
-from .render import render_instance
-from .runtime_config import read_path, to_plain_data
+from .render import reset_generated_bundle
+from .runtime_config import read_path_with_catalog, to_plain_data
 from .runtime_introspection import (
     helm_chart_default_values,
     merge_chart_defaults_with_overrides,
+    module_output_names,
     module_required_variables,
+    module_source_validation_issues,
     module_variable_names,
     module_variables,
 )
 from .templates import customer_workflow_yaml, default_cli_ref
-from .terraform_backend import backend_settings_from_config, ensure_state_bucket
-from .terraform_ops import terraform_apply, terraform_init, terraform_plan
+from .terraform_backend import (
+    TerraformStateLockInfo,
+    backend_settings_from_config,
+    ensure_state_bucket,
+    read_state_lock_info,
+)
+from .terraform_ops import (
+    terraform_apply,
+    terraform_force_unlock,
+    terraform_init,
+    terraform_output_json,
+    terraform_output_raw,
+    terraform_plan,
+    terraform_validate,
+)
+from .terraform_provider import build_provider_module_name
 
 console = Console()
 DEFAULT_REGION_ID = "eu-north1"
@@ -107,18 +170,18 @@ _TEMP_PRIVATE_KEY_FILES: list[Path] = []
 _RUNTIME_TF_SERVICE_ACCOUNT_NAME = "nebius-cxcli-tf-sa"
 _RUNTIME_AUTH_CACHE_ENV = "NEBIUS_CXCLI_RUNTIME_AUTH_DIR"
 _RUNTIME_AUTH_CACHE_FILE = "runtime-auth.json"
-_QUIET_NATIVE_LOG_ENV_DEFAULTS: dict[str, str] = {
-    "GRPC_VERBOSITY": "ERROR",
-    "GLOG_minloglevel": "2",
-    "ABSL_LOG_SEVERITY_LEVEL": "2",
-}
+_BENIGN_KUBECTL_OUTPUT_MARKERS = (
+    "token from NEBIUS_IAM_TOKEN env is used",
+    "missing the kubectl.kubernetes.io/last-applied-configuration annotation",
+    "The missing annotation will be patched automatically.",
+)
 app = typer.Typer(
     add_completion=False,
-    help="Provider-driven Nebius automation CLI (single config.yaml workflow).",
+    help="Nebius artifact generator and deployer: render from config.yaml, then deploy generated artifacts.",
 )
-terraform_app = typer.Typer(help="Run Terraform operations in generated/infra")
-flux_app = typer.Typer(help="Bootstrap or reconcile Flux")
-inventory_app = typer.Typer(help="Inventory output commands")
+terraform_app = typer.Typer(help="Run infra-only Terraform operations against generated artifacts")
+flux_app = typer.Typer(help="Apply or bootstrap Flux using generated artifacts")
+inventory_app = typer.Typer(help="Refresh local inventory artifacts from generated bundle metadata")
 
 app.add_typer(terraform_app, name="terraform")
 app.add_typer(flux_app, name="flux")
@@ -157,10 +220,11 @@ def main_callback(
         typer.Option(
             "--component-sources-file",
             help=(
-                "Path to component_sources.yaml. "
-                "Used by create starter flow "
-                "(fallback order: cwd ./component_sources.yaml -> env -> user/global -> repo/bundled). "
-                "Used for source-backed validation and create flows."
+                "Global optional override for the component sources file. "
+                "Use this to point nebius-cxcli at a different component_sources.yaml path. "
+                "When omitted, nebius-cxcli resolves the default file name "
+                "'component_sources.yaml' from the standard search order "
+                "(cwd -> env -> user/global -> repo/bundled)."
             ),
         ),
     ] = None,
@@ -179,6 +243,56 @@ def _load_context(config_path: Path) -> tuple:
     return config, paths
 
 
+def _load_runtime_context(config_path: Path) -> tuple:
+    config, paths = _load_context(config_path)
+    _validate_active_component_sources(config)
+    return config, paths
+
+
+def _load_generated_context(target_path: Path) -> tuple:
+    paths = resolve_generated_paths(target_path)
+    manifest = load_generated_manifest(paths.generated_dir)
+    config = runtime_config_from_manifest(manifest)
+    return config, paths, manifest
+
+
+def _render_overwrite_warning(paths: InstancePaths) -> str | None:
+    if not paths.generated_dir.exists():
+        return None
+    existing_files = sorted(path for path in paths.generated_dir.rglob("*") if path.is_file())
+    if not existing_files:
+        return None
+    return (
+        "Render will overwrite existing generated artifacts under "
+        f"{paths.generated_dir}. Keep using `config.yaml` as the original render contract, "
+        "but treat the generated files as the deployable customer artifacts. "
+        "Bootstrap-owned `generated/flux/flux-system` is preserved."
+    )
+
+
+def _can_prompt_for_render_overwrite() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _confirm_render_overwrite(paths: InstancePaths, *, force: bool) -> bool:
+    overwrite_warning = _render_overwrite_warning(paths)
+    if not overwrite_warning:
+        return True
+    console.print(f"[yellow]WARNING:[/yellow] {overwrite_warning}")
+    if force:
+        return True
+    if not _can_prompt_for_render_overwrite():
+        raise RuntimeError(
+            "Render would overwrite existing generated artifacts in a non-interactive session. "
+            "Re-run with `--force` to confirm the reset."
+        )
+    return typer.confirm(
+        "Continue and overwrite the existing generated artifacts?",
+        default=False,
+        show_default=True,
+    )
+
+
 def _exit_with_error(exc: Exception) -> None:
     console.print(f"[red]ERROR:[/red] {exc}")
     raise typer.Exit(code=1) from exc
@@ -186,9 +300,34 @@ def _exit_with_error(exc: Exception) -> None:
 
 def _configure_quiet_native_logs() -> None:
     """Reduce noisy native gRPC/absl logs while keeping warnings/errors visible."""
-    for env_name, env_value in _QUIET_NATIVE_LOG_ENV_DEFAULTS.items():
+    for env_name, env_value in native_logs.QUIET_NATIVE_LOG_ENV_DEFAULTS.items():
         if not os.environ.get(env_name):
             os.environ[env_name] = env_value
+
+
+def _filter_benign_kubectl_output(text: str) -> str:
+    kept_lines = [
+        line
+        for line in text.splitlines()
+        if not any(marker in line for marker in _BENIGN_KUBECTL_OUTPUT_MARKERS)
+    ]
+    return "\n".join(kept_lines).strip()
+
+
+def _effective_catalog_component_source(
+    *, row: Mapping[str, Any], entry: ComponentEntry | None
+) -> str:
+    if entry is not None and str(entry.source or "").strip():
+        return str(entry.source).strip()
+    return str(row.get("source", "")).strip()
+
+
+def _effective_catalog_component_version(
+    *, row: Mapping[str, Any], entry: ComponentEntry | None
+) -> str:
+    if entry is not None and str(entry.version or "").strip():
+        return str(entry.version).strip()
+    return str(row.get("version", "")).strip()
 
 
 def _resolve_deployments_root(base_path: Path) -> Path:
@@ -274,35 +413,6 @@ def _non_empty_text(value: object | None) -> str:
     if value is None:
         return ""
     return str(value).strip()
-
-
-def _infer_default_ssh_public_key() -> str | None:
-    ssh_dir = Path.home() / ".ssh"
-    if not ssh_dir.exists() or not ssh_dir.is_dir():
-        return None
-
-    preferred_files = (
-        "id_ed25519.pub",
-        "id_ecdsa.pub",
-        "id_rsa.pub",
-        "id_dsa.pub",
-    )
-    candidate_paths: list[Path] = [ssh_dir / name for name in preferred_files]
-    candidate_paths.extend(sorted(path for path in ssh_dir.glob("*.pub") if path.is_file()))
-
-    seen: set[Path] = set()
-    for path in candidate_paths:
-        resolved = path.resolve()
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-        try:
-            value = path.read_text(encoding="utf-8").strip()
-        except Exception:
-            continue
-        if value:
-            return value
-    return None
 
 
 def _validate_tenant_project_ids_or_prompt(
@@ -792,7 +902,7 @@ def _read_payload_field(payload: dict[str, Any], field_path: str) -> Any:
             return _get_payload_value(payload, parsed)
         except Exception:
             return None
-    return read_path(payload, field_path)
+    return read_path_with_catalog(payload, field_path)
 
 
 def _dynamic_infra_component_path(payload: dict[str, Any], component_id: str) -> PayloadPath | None:
@@ -1318,10 +1428,6 @@ def _seed_component_prompt_fields(
 
     # For source-defined terraform modules, seed required variables under component inputs.
     if entry.origin == "custom":
-        if entry.source and not component_node.get("source"):
-            component_node["source"] = str(entry.source)
-        if entry.version and not component_node.get("version"):
-            component_node["version"] = str(entry.version)
         inputs_node = component_node.get("inputs")
         if not isinstance(inputs_node, dict):
             inputs_node = {}
@@ -1522,19 +1628,6 @@ def _run_component_field_wizard(
     if not isinstance(payload, dict):
         raise RuntimeError("Generated config template is not a YAML mapping")
 
-    if not _wizard_continue_phase("Continue to shared infra settings?", default=True):
-        return yaml.safe_dump(payload, sort_keys=False), False
-
-    for shared_path in ("infra.ssh_user_name", "infra.ssh_public_key"):
-        resolved = _resolve_payload_path(payload, shared_path)
-        if resolved is None:
-            continue
-        current = _get_payload_value(payload, resolved)
-        updated, should_stop = _prompt_scalar_override(_format_payload_path(resolved), current)
-        if should_stop:
-            return yaml.safe_dump(payload, sort_keys=False), False
-        _set_payload_value(payload, resolved, updated)
-
     selected_components: list[ComponentEntry] = []
     selected_components.extend(entry for entry in infra_entries if entry.id in selected_infra)
     selected_components.extend(entry for entry in app_entries if entry.id in selected_apps)
@@ -1550,11 +1643,28 @@ def _run_component_field_wizard(
 
         _hydrate_app_component_values_from_chart_defaults(payload=payload, entry=entry)
         required_leaf_names = _required_leaf_names_for_entry(entry)
+        required_leaf_names -= set(shared_default_input_sources(entry))
         _seed_component_prompt_fields(
             payload=payload,
             entry=entry,
             required_leaf_names=required_leaf_names,
         )
+
+        component_path = _dynamic_component_path(payload, entry)
+        if component_path is not None and entry.defaults:
+            component_node = _get_payload_value(payload, component_path)
+            resolved_component_node = resolve_component_defaults(
+                component_node=component_node if isinstance(component_node, dict) else {},
+                entry=entry,
+                preserve_existing_literal=True,
+                include_shared=False,
+            )
+            _set_payload_value(payload, component_path, resolved_component_node)
+        bound_prompt_paths = (
+            managed_default_payload_paths(component_path, entry) if component_path is not None else set()
+        )
+        if component_path is not None:
+            bound_prompt_paths |= managed_input_binding_payload_paths(component_path, entry)
 
         declared_prompt_paths: list[PayloadPath] = []
         for full_path_label in _declared_wizard_field_labels(entry):
@@ -1566,6 +1676,8 @@ def _run_component_field_wizard(
                 continue
             value = _get_payload_value(payload, resolved_declared)
             if isinstance(value, (dict, list)):
+                continue
+            if resolved_declared in bound_prompt_paths:
                 continue
             declared_prompt_paths.append(resolved_declared)
 
@@ -1581,7 +1693,6 @@ def _run_component_field_wizard(
             prompt_paths.append(path)
 
         module_dependency_expander: Any = None
-        component_path = _dynamic_component_path(payload, entry)
         if component_path is not None:
             if entry.scope == "infra" and entry.origin == "custom":
                 # Infra wizard prompts are module-input driven for source-backed modules.
@@ -1596,9 +1707,6 @@ def _run_component_field_wizard(
                     default_project_scope_id = _non_empty_text(
                         _read_payload_field(payload, "client_info.nebius.project_id")
                     )
-                    default_shared_ssh_public_key = _non_empty_text(
-                        _read_payload_field(payload, "infra.ssh_public_key")
-                    )
 
                     def _seed_input_value(
                         leaf_name: str,
@@ -1606,7 +1714,6 @@ def _run_component_field_wizard(
                         required_only: bool,
                         module_inputs: dict[str, Any] = module_inputs,
                         default_project_scope_id: str = default_project_scope_id,
-                        default_shared_ssh_public_key: str = default_shared_ssh_public_key,
                         module_specs_by_leaf: dict[str, Any] = module_specs_by_leaf,
                     ) -> None:
                         current_value = _resolve_mapping_segment(module_inputs, leaf_name)
@@ -1614,9 +1721,6 @@ def _run_component_field_wizard(
                             return
                         if leaf_name in {"parent_id", "project_id"} and default_project_scope_id:
                             module_inputs[leaf_name] = default_project_scope_id
-                            return
-                        if leaf_name == "ssh_public_key" and default_shared_ssh_public_key:
-                            module_inputs[leaf_name] = default_shared_ssh_public_key
                             return
                         spec = module_specs_by_leaf.get(leaf_name)
                         if spec is not None and spec.has_default:
@@ -1651,6 +1755,7 @@ def _run_component_field_wizard(
                         spec: Any,
                         *,
                         required: bool,
+                        bound_prompt_paths: set[PayloadPath] = bound_prompt_paths,
                         module_inputs: dict[str, Any] = module_inputs,
                         module_inputs_path: PayloadPath = module_inputs_path,
                         seen_prompt_labels: set[str] = seen_prompt_labels,
@@ -1666,6 +1771,8 @@ def _run_component_field_wizard(
                             else:
                                 key = leaf_name.replace("-", "_")
                         full_path = module_inputs_path + (key,)
+                        if full_path in bound_prompt_paths:
+                            return
                         if full_path in prompt_paths:
                             return
                         label = _format_payload_path(full_path)
@@ -1730,6 +1837,8 @@ def _run_component_field_wizard(
                 # App wizard prompts are Helm values-driven.
                 for key in ("namespace", "release-name"):
                     full_path = component_path + (key,)
+                    if full_path in bound_prompt_paths:
+                        continue
                     label = _format_payload_path(full_path)
                     if label in seen_prompt_labels:
                         continue
@@ -1745,6 +1854,8 @@ def _run_component_field_wizard(
                 if values_path is not None and isinstance(values_node, dict):
                     for relative_path in _collect_scalar_leaf_paths(values_node):
                         full_path = values_path + relative_path
+                        if full_path in bound_prompt_paths:
+                            continue
                         label = _format_payload_path(full_path)
                         if label in seen_prompt_labels:
                             continue
@@ -1754,6 +1865,8 @@ def _run_component_field_wizard(
                 component_node = _get_payload_value(payload, component_path)
                 for relative_path in _collect_scalar_leaf_paths(component_node):
                     full_path = component_path + relative_path
+                    if full_path in bound_prompt_paths:
+                        continue
                     label = _format_payload_path(full_path)
                     if label in seen_prompt_labels:
                         continue
@@ -2314,39 +2427,16 @@ def _validate_enabled_chart_sources(config: Any) -> list[str]:
     if not isinstance(payload, dict):
         return ["Runtime config payload must be a mapping"]
 
-    checks: list[tuple[str, str, str, str]] = []
     for chart_row in _dynamic_enabled_app_chart_rows(payload):
         chart_id = str(chart_row["id"])
         chart_repo = str(chart_row.get("repo", "")).strip()
         chart_version = str(chart_row.get("version", "")).strip()
-        if not chart_repo:
-            issues.append(f"chart validation failed for apps:{chart_id}: repo is required")
-            continue
-        checks.append(
-            (
-                f"apps:{chart_id}",
-                chart_id,
-                chart_repo,
-                chart_version,
-            )
-        )
-
-    cache: _ChartMetaCache = {}
-    for component_id, chart_name_or_ref, chart_repo, chart_version in checks:
-        _deps, error = _helm_chart_dependency_names(
-            chart_name_or_ref=chart_name_or_ref,
+        for issue in _helm_chart_validation_issues(
+            chart_name=chart_id,
             chart_repo=chart_repo,
             chart_version=chart_version,
-            cache=cache,
-        )
-        if error:
-            source_display = _chart_source_display(
-                chart_name_or_ref=chart_name_or_ref,
-                chart_repo=chart_repo,
-            )
-            issues.append(
-                f"chart validation failed for {component_id} ({source_display}): {error}"
-            )
+        ):
+            issues.append(f"apps.charts[{chart_id}] {issue}")
     return issues
 
 
@@ -2356,6 +2446,11 @@ _SEMVER_TAG_PATTERN = re.compile(r"^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 def _is_http_chart_repo(repo: str) -> bool:
     normalized = repo.strip().lower()
     return normalized.startswith("http://") or normalized.startswith("https://")
+
+
+def _is_github_tree_chart_repo(repo: str) -> bool:
+    token = repo.strip().rstrip("/")
+    return re.match(r"^https://github\.com/[^/]+/[^/]+/tree/[^/]+/.+$", token) is not None
 
 
 def _is_oci_chart_repo(repo: str) -> bool:
@@ -2372,11 +2467,16 @@ def _resolve_local_module_source_path(module_source: str) -> Path | None:
     if candidate.is_absolute():
         return candidate if candidate.exists() and candidate.is_dir() else None
 
-    roots = (
-        Path.cwd(),
-        Path(__file__).resolve().parents[1],
-        Path(__file__).resolve().parents[2],
-        Path(__file__).resolve().parents[3],
+    roots: list[Path] = []
+    with suppress(ValueError):
+        roots.append(resolve_component_sources_file().parent)
+    roots.extend(
+        [
+            Path.cwd(),
+            Path(__file__).resolve().parents[1],
+            Path(__file__).resolve().parents[2],
+            Path(__file__).resolve().parents[3],
+        ]
     )
     for root in roots:
         resolved = (root / source).resolve()
@@ -2426,6 +2526,105 @@ def _fetch_helm_repo_index(repo: str) -> tuple[dict[str, Any] | None, str | None
     return payload, None
 
 
+@lru_cache(maxsize=64)
+def _helm_chart_validation_issues(
+    *,
+    chart_name: str,
+    chart_repo: str,
+    chart_version: str,
+) -> tuple[str, ...]:
+    issues: list[str] = []
+    chart_id = chart_name.strip()
+    repo = chart_repo.strip()
+    version = chart_version.strip()
+    github_tree_repo = _is_github_tree_chart_repo(repo)
+    source_display = (
+        repo
+        if github_tree_repo
+        else _chart_source_display(chart_name_or_ref=chart_id, chart_repo=repo)
+    )
+
+    if not chart_id:
+        return ("name is required",)
+    if not repo:
+        return ("repo is required",)
+
+    requires_version = not github_tree_repo
+    if requires_version and not version:
+        issues.append("version is required for Helm repository and OCI chart sources")
+
+    if _is_oci_chart_repo(repo):
+        repo_ref = _canonical_app_chart_repo(chart_repo=repo, chart_name=chart_id)
+        repo_tail = repo_ref.rsplit("/", maxsplit=1)[-1].strip().lower()
+        if repo_tail != chart_id.lower():
+            issues.append(
+                f"OCI ref basename must match chart name '{chart_id}': {repo_ref}"
+            )
+        if version and not _SEMVER_TAG_PATTERN.fullmatch(version):
+            issues.append(f"OCI version must be a semantic version tag (got '{version}')")
+    elif _is_http_chart_repo(repo):
+        if not github_tree_repo:
+            index_payload, index_error = _fetch_helm_repo_index(repo)
+            if index_error:
+                issues.append(index_error)
+            elif isinstance(index_payload, Mapping):
+                entries = index_payload.get("entries", {})
+                chart_entries = entries.get(chart_id) if isinstance(entries, Mapping) else None
+                if not isinstance(chart_entries, list):
+                    issues.append(f"was not found in repo index.yaml entries at {repo}")
+                elif version:
+                    available_versions = [
+                        str(item.get("version", "")).strip()
+                        for item in chart_entries
+                        if isinstance(item, Mapping)
+                    ]
+                    if available_versions and not any(
+                        _versions_match(version, candidate) for candidate in available_versions
+                    ):
+                        preview = ", ".join(sorted(available_versions)[:8])
+                        issues.append(
+                            f"version '{version}' was not found in index.yaml. Available versions include: {preview}"
+                        )
+    else:
+        issues.append(
+            "repo must start with 'https://' (Helm repo or supported GitHub tree URL) "
+            f"or 'oci://', got '{repo}'"
+        )
+
+    if issues:
+        return tuple(issues)
+
+    try:
+        helm_client = HelmClient()
+    except Exception as exc:
+        return (
+            f"requires helm for source validation ({source_display}): {str(exc).strip() or 'helm unavailable'}",
+        )
+
+    try:
+        chart_meta = helm_client.show_chart(
+            reference=HelmChartReference(
+                chart_name=chart_id,
+                chart_repo=repo,
+                chart_version=version,
+            )
+        )
+    except Exception as exc:
+        return (f"could not be resolved by helm ({source_display}): {exc}",)
+
+    resolved_name = str(chart_meta.get("name", "")).strip().lower()
+    if resolved_name and resolved_name != chart_id.lower():
+        issues.append(f"resolved chart name '{resolved_name}' does not match '{chart_id}'")
+
+    resolved_version = str(chart_meta.get("version", "")).strip()
+    if version and resolved_version and not _versions_match(version, resolved_version):
+        issues.append(
+            f"resolved chart version '{resolved_version}' does not match configured version '{version}'"
+        )
+
+    return tuple(issues)
+
+
 def _validate_component_sources_registry(
     *,
     progress_callback: Callable[[str, int, int], None] | None = None,
@@ -2446,6 +2645,9 @@ def _validate_component_sources_registry(
     if progress_callback is not None:
         progress_callback("init", 0, total_items)
 
+    declared_entries: dict[str, tuple[str, Any]] = {}
+    duplicate_ids: set[str] = set()
+
     for module in sources.tf_modules:
         module_id = module.module.strip().lower()
         module_source = module.source.strip()
@@ -2458,26 +2660,17 @@ def _validate_component_sources_registry(
                 f"infra.tf_modules[{module_id}] module name must use lowercase letters, digits, and hyphens"
             )
             continue
+        if module_id in declared_entries:
+            duplicate_ids.add(module_id)
+        else:
+            declared_entries[module_id] = ("infra", module)
         if not module_source:
             issues.append(f"infra.tf_modules[{module_id}] is missing source")
             continue
+        for issue in module_source_validation_issues(module_source):
+            issues.append(f"infra.tf_modules[{module_id}] {issue}")
         local_module_path = _resolve_local_module_source_path(module_source)
-        if module_source.startswith(("git::", "http://", "https://", "oci://")):
-            warnings.append(
-                f"infra.tf_modules[{module_id}] uses remote source '{module_source}'; "
-                "local module structure checks were skipped."
-            )
-            continue
         if local_module_path is None:
-            issues.append(
-                f"infra.tf_modules[{module_id}] source does not resolve to an existing directory: {module_source}"
-            )
-            continue
-        tf_files = sorted(local_module_path.glob("*.tf"))
-        if not tf_files:
-            issues.append(
-                f"infra.tf_modules[{module_id}] source directory has no Terraform files (*.tf): {local_module_path}"
-            )
             continue
         if not (local_module_path / "main.tf").exists():
             warnings.append(
@@ -2500,19 +2693,9 @@ def _validate_component_sources_registry(
                 "wizard field discovery may be limited."
             )
 
-    helm_client: HelmClient | None = None
-    helm_unavailable_reason = ""
-    try:
-        helm_client = HelmClient()
-    except Exception as exc:
-        helm_unavailable_reason = str(exc).strip() or "helm unavailable"
-        warnings.append(
-            "Helm chart reachability checks were skipped because helm is not available: "
-            f"{helm_unavailable_reason}"
-        )
-
     for chart in sources.helm_charts:
         chart_name = chart.name.strip()
+        chart_id = _normalize_component_token(chart_name)
         repo = str(chart.repo or "").strip()
         version = str(chart.version or "").strip()
         chart_label = f"apps.helm_charts[{chart_name}]"
@@ -2521,110 +2704,169 @@ def _validate_component_sources_registry(
         if not chart_name:
             issues.append("apps.helm_charts[] entry has empty name")
             continue
-        if not repo:
-            issues.append(f"{chart_label} is missing repo")
-            continue
-        if not version:
-            issues.append(f"{chart_label} is missing version")
-            continue
+        if chart_id in declared_entries:
+            duplicate_ids.add(chart_id)
+        else:
+            declared_entries[chart_id] = ("apps", chart)
+        for issue in _helm_chart_validation_issues(
+            chart_name=chart_name,
+            chart_repo=repo,
+            chart_version=version,
+        ):
+            issues.append(f"{chart_label} {issue}")
 
-        if _is_oci_chart_repo(repo):
-            repo_ref = _canonical_app_chart_repo(chart_repo=repo, chart_name=chart_name)
-            repo_tail = repo_ref.rsplit("/", maxsplit=1)[-1].strip().lower()
-            if repo_tail != chart_name.lower():
-                issues.append(
-                    f"{chart_label} OCI ref basename must match chart name "
-                    f"('{chart_name}'): {repo_ref}"
-                )
-            if not _SEMVER_TAG_PATTERN.fullmatch(version):
-                issues.append(
-                    f"{chart_label} OCI version must be a semantic version tag (got '{version}')"
-                )
-            if helm_client is not None:
-                try:
-                    chart_meta = helm_client.show_chart(
-                        reference=HelmChartReference(
-                            chart_name=chart_name,
-                            chart_repo=repo,
-                            chart_version=version,
-                        )
-                    )
-                except Exception as exc:
-                    warnings.append(f"{chart_label} OCI lookup warning: {exc}")
-                    continue
-                resolved_name = str(chart_meta.get("name", "")).strip().lower()
-                if resolved_name and resolved_name != chart_name.lower():
-                    issues.append(
-                        f"{chart_label} resolved chart name '{resolved_name}' does not match '{chart_name}'"
-                    )
-                resolved_version = str(chart_meta.get("version", "")).strip()
-                if resolved_version and not _versions_match(version, resolved_version):
-                    issues.append(
-                        f"{chart_label} resolved chart version '{resolved_version}' "
-                        f"does not match configured version '{version}'"
-                    )
-            continue
-
-        if _is_http_chart_repo(repo):
-            index_payload, index_error = _fetch_helm_repo_index(repo)
-            if index_error:
-                warnings.append(f"{chart_label} {index_error}")
-            elif isinstance(index_payload, Mapping):
-                entries = index_payload.get("entries", {})
-                chart_entries = entries.get(chart_name) if isinstance(entries, Mapping) else None
-                if not isinstance(chart_entries, list):
-                    issues.append(
-                        f"{chart_label} was not found in repo index.yaml entries at {repo}"
-                    )
-                else:
-                    available_versions = [
-                        str(item.get("version", "")).strip()
-                        for item in chart_entries
-                        if isinstance(item, Mapping)
-                    ]
-                    if available_versions and not any(
-                        _versions_match(version, candidate) for candidate in available_versions
-                    ):
-                        preview = ", ".join(sorted(available_versions)[:8])
-                        issues.append(
-                            f"{chart_label} version '{version}' was not found in index.yaml. "
-                            f"Available versions include: {preview}"
-                        )
-            if helm_client is not None:
-                search_rows = helm_client.search_repo(chart_name=chart_name, chart_repo=repo)
-                if not search_rows:
-                    warnings.append(
-                        f"{chart_label} was not found by 'helm search repo' in {repo}. "
-                        "Confirm the chart name and repository index."
-                    )
-                try:
-                    chart_meta = helm_client.show_chart(
-                        reference=HelmChartReference(
-                            chart_name=chart_name,
-                            chart_repo=repo,
-                            chart_version=version,
-                        )
-                    )
-                except Exception as exc:
-                    warnings.append(f"{chart_label} HTTP repo lookup warning: {exc}")
-                else:
-                    resolved_name = str(chart_meta.get("name", "")).strip().lower()
-                    if resolved_name and resolved_name != chart_name.lower():
-                        issues.append(
-                            f"{chart_label} resolved chart name '{resolved_name}' does not match '{chart_name}'"
-                        )
-                    resolved_version = str(chart_meta.get("version", "")).strip()
-                    if resolved_version and not _versions_match(version, resolved_version):
-                        issues.append(
-                            f"{chart_label} resolved chart version '{resolved_version}' "
-                            f"does not match configured version '{version}'"
-                        )
-            continue
-
+    for component_id in sorted(duplicate_ids):
         issues.append(
-            f"{chart_label} repo must start with 'https://' (Helm index repo) "
-            f"or 'oci://' (direct OCI chart), got '{repo}'"
+            f"component id '{component_id}' is declared more than once across infra/apps. "
+            "Cross-component bindings require globally unique component ids."
         )
+
+    for component_id, (scope, source_entry) in declared_entries.items():
+        output_by_name = {output.name: output for output in source_entry.outputs}
+        default_targets = default_target_paths(source_entry)
+        declared_module_input_names: set[str] = set()
+
+        if scope == "apps":
+            for output in source_entry.outputs:
+                if output.kind == "terraform_output":
+                    issues.append(
+                        f"apps component '{component_id}' output '{output.name}' cannot use "
+                        "Terraform-backed outputs; Helm chart sources may export config/static values only."
+                    )
+        else:
+            module_source = str(source_entry.source or "").strip()
+            declared_module_outputs = set(module_output_names(module_source)) if module_source else set()
+            declared_module_input_names = {
+                _normalize_leaf_name(name) for name in module_variable_names(module_source)
+            } if module_source else set()
+            is_local_like_source = bool(module_source) and not module_source.lower().startswith(
+                ("git::", "http://", "https://", "oci://")
+            )
+            for output in source_entry.outputs:
+                if output.kind != "terraform_output":
+                    continue
+                if output.source_path and (
+                    (declared_module_outputs and output.source_path not in declared_module_outputs)
+                    or (is_local_like_source and output.source_path not in declared_module_outputs)
+                ):
+                    issues.append(
+                        f"infra component '{component_id}' output '{output.name}' references Terraform output "
+                        f"'{output.source_path}', but module source '{module_source}' does not expose it"
+                    )
+
+        for default in source_entry.defaults:
+            if default.kind != "shared" or not default.source_path.startswith("shared."):
+                continue
+            shared_value = read_path_with_catalog({}, default.source_path)
+            if shared_value is None:
+                issues.append(
+                    f"{scope} component '{component_id}' shared default '{default.target_path}' references "
+                    f"missing catalog shared path '{default.source_path}'"
+                )
+            elif isinstance(shared_value, str) and not shared_value.strip():
+                warnings.append(
+                    f"{scope} component '{component_id}' shared default '{default.target_path}' references "
+                    f"blank catalog shared value '{default.source_path}'. Commands that need this default "
+                    "will fail until the active component_sources.yaml sets it."
+                )
+
+        for binding in source_entry.input_bindings:
+            if binding.target_path in default_targets:
+                issues.append(
+                    f"{scope} component '{component_id}' target path '{binding.target_path}' is managed by both "
+                    "defaults and input; choose one binding mechanism."
+                )
+            expected_prefix = "inputs." if scope == "infra" else "values."
+            if not binding.target_path.startswith(expected_prefix):
+                issues.append(
+                    f"{scope} component '{component_id}' input binding target '{binding.target_path}' must start "
+                    f"with '{expected_prefix}'"
+                )
+            if scope == "infra":
+                target_segments = [
+                    segment.strip() for segment in binding.target_path.split(".") if segment.strip()
+                ]
+                if len(target_segments) >= 2:
+                    target_leaf = _normalize_leaf_name(target_segments[1])
+                    if declared_module_input_names and target_leaf not in declared_module_input_names:
+                        issues.append(
+                            f"{scope} component '{component_id}' input binding target "
+                            f"'{binding.target_path}' does not match any declared module input "
+                            f"for source '{source_entry.source}'"
+                        )
+            source_info = declared_entries.get(binding.source_component_id)
+            if source_info is None:
+                issues.append(
+                    f"{scope} component '{component_id}' input binding '{binding.target_path}' references "
+                    f"unknown component '{binding.source_component_id}'"
+                )
+                continue
+            source_scope, source_component = source_info
+            source_output = {output.name: output for output in source_component.outputs}.get(
+                binding.source_output_name
+            )
+            if source_output is None:
+                issues.append(
+                    f"{scope} component '{component_id}' input binding '{binding.target_path}' references "
+                    f"undeclared output '{binding.source_component_id}.{binding.source_output_name}'"
+                )
+                continue
+            if source_output.kind == "terraform_output" and source_scope != "infra":
+                issues.append(
+                    f"{scope} component '{component_id}' input binding '{binding.target_path}' references "
+                    f"terraform_output from non-infra component '{binding.source_component_id}'"
+                )
+
+        expected_default_prefix = "inputs." if scope == "infra" else "values."
+        for target_path in sorted(default_targets):
+            if not target_path.startswith(expected_default_prefix):
+                issues.append(
+                    f"{scope} component '{component_id}' default target '{target_path}' must start "
+                    f"with '{expected_default_prefix}'"
+                )
+            if scope == "infra":
+                target_segments = [segment.strip() for segment in target_path.split(".") if segment.strip()]
+                if len(target_segments) >= 2:
+                    target_leaf = _normalize_leaf_name(target_segments[1])
+                    if declared_module_input_names and target_leaf not in declared_module_input_names:
+                        issues.append(
+                            f"{scope} component '{component_id}' default target '{target_path}' does not "
+                            f"match any declared module input for source '{source_entry.source}'"
+                        )
+
+        handoff = getattr(source_entry, "handoff", None)
+        if handoff is not None:
+            cluster_id_output = output_by_name.get(handoff.cluster_id_output_name)
+            if cluster_id_output is None:
+                issues.append(
+                    f"{scope} component '{component_id}' handoff.cluster_id "
+                    f"'{handoff.cluster_id_output_name}' is not declared under outputs"
+                )
+            elif cluster_id_output.kind != "terraform_output":
+                issues.append(
+                    f"{scope} component '{component_id}' handoff.cluster_id "
+                    f"'{handoff.cluster_id_output_name}' must point to a Terraform-backed exported output alias"
+                )
+
+            access_output = output_by_name.get(handoff.access_output_name)
+            if access_output is None:
+                issues.append(
+                    f"{scope} component '{component_id}' handoff.access "
+                    f"'{handoff.access_output_name}' is not declared under outputs"
+                )
+            elif access_output.kind == "terraform_output":
+                issues.append(
+                    f"{scope} component '{component_id}' handoff.access "
+                    f"'{handoff.access_output_name}' must point to a config/static exported output alias"
+                )
+            elif access_output.kind == "static":
+                access_value = str(access_output.value or "").strip().lower()
+                if access_value not in {"external", "internal"}:
+                    issues.append(
+                        f"{scope} component '{component_id}' handoff.access "
+                        f"'{handoff.access_output_name}' resolves to invalid static value "
+                        f"'{access_output.value}'. Expected 'external' or 'internal'."
+                    )
 
     if progress_callback is not None:
         progress_callback("done", total_items, total_items)
@@ -2701,6 +2943,16 @@ def _dynamic_provider_field_checks(
         component_path = _dynamic_infra_component_path(payload, component_id)
         if component_path is None:
             continue
+        if entry.defaults:
+            component_node = _get_payload_value(payload, component_path)
+            resolved_component_node = resolve_component_defaults(
+                payload=payload,
+                component_node=component_node if isinstance(component_node, dict) else {},
+                entry=entry,
+                preserve_existing_literal=True,
+                preserve_existing_shared=False,
+            )
+            _set_payload_value(payload, component_path, resolved_component_node)
         inputs_path = component_path + ("inputs",)
         inputs_node = _get_payload_value(payload, inputs_path)
         if not isinstance(inputs_node, (dict, list)):
@@ -2773,23 +3025,64 @@ def _required_enabled_infra_field_issues(
             continue
 
         source = str(row.get("source", "")).strip()
+        entry = entry_by_id.get(component_id)
         if not source:
-            source = str(entry_by_id.get(component_id).source if component_id in entry_by_id else "").strip()
+            source = str(entry.source if entry is not None else "").strip()
         if not source:
             continue
+
+        if entry is not None and entry.defaults:
+            resolved_row = resolve_component_defaults(
+                payload=payload,
+                component_node=dict(row),
+                entry=entry,
+                preserve_existing_literal=True,
+                preserve_existing_shared=False,
+            )
+            inputs = resolved_row.get("inputs", {})
+            if not isinstance(inputs, Mapping):
+                inputs = {}
 
         required_leaf_names = {_normalize_leaf_name(name) for name in module_required_variables(source)}
         if not required_leaf_names:
             continue
+        binding_by_leaf = shared_default_input_sources(entry) if entry is not None else {}
+        required_leaf_names -= input_binding_leaf_names(entry) if entry is not None else set()
+        required_leaf_names -= (
+            literal_default_input_leaf_names(entry) if entry is not None else set()
+        )
 
         if not isinstance(inputs, Mapping):
             for leaf_name in sorted(required_leaf_names):
+                binding_source = binding_by_leaf.get(leaf_name)
+                if binding_source:
+                    bound_value = _read_payload_field(payload, binding_source)
+                    if bound_value is not None and not (
+                        isinstance(bound_value, str) and not bound_value.strip()
+                    ):
+                        continue
+                    issues.append(
+                        f"{binding_source} is required for infra.components[{component_id}].inputs.{leaf_name}"
+                    )
+                    continue
                 issues.append(
                     f"infra.components[{component_id}].inputs.{leaf_name} is required"
                 )
             continue
         for leaf_name in sorted(required_leaf_names):
             value = _resolve_mapping_segment(inputs, leaf_name)
+            if value is None or (isinstance(value, str) and not value.strip()):
+                binding_source = binding_by_leaf.get(leaf_name)
+                if binding_source:
+                    bound_value = _read_payload_field(payload, binding_source)
+                    if bound_value is not None and not (
+                        isinstance(bound_value, str) and not bound_value.strip()
+                    ):
+                        continue
+                    issues.append(
+                        f"{binding_source} is required for infra.components[{component_id}].inputs.{leaf_name}"
+                    )
+                    continue
             if value is None or (isinstance(value, str) and not value.strip()):
                 issues.append(
                     f"infra.components[{component_id}].inputs.{leaf_name} is required"
@@ -2815,9 +3108,9 @@ def _dynamic_enabled_infra_component_rows(payload: dict[str, Any]) -> list[dict[
         if not component_id:
             continue
         inputs = dict(item.get("inputs", {})) if isinstance(item.get("inputs"), Mapping) else {}
-        source = str(item.get("source", "")).strip()
-        version = str(item.get("version", "")).strip()
         entry = entry_by_id.get(component_id)
+        source = _effective_catalog_component_source(row=item, entry=entry)
+        version = _effective_catalog_component_version(row=item, entry=entry)
         if source:
             inferred_mode = "custom"
         elif any(key in inputs for key in ("resource_type", "provider_resource_type")) or (
@@ -2887,8 +3180,227 @@ def _enabled_custom_module_source_issues(
             source = str(entry_by_id.get(component_id).source if component_id in entry_by_id else "").strip()
         if not source:
             issues.append(
-                f"infra component '{component_id}' is enabled but has no module source configured"
+                f"infra.components[{component_id}] is enabled but has no module source configured"
             )
+            continue
+        for issue in module_source_validation_issues(source):
+            issues.append(f"infra.components[{component_id}] {issue}")
+        entry = entry_by_id.get(component_id)
+        if entry is None:
+            continue
+        declared_outputs = set(module_output_names(source))
+        is_local_like_source = not source.lower().startswith(("git::", "http://", "https://", "oci://"))
+        for output in entry.outputs:
+            if output.kind != "terraform_output":
+                continue
+            required_output = str(output.source_path).strip()
+            if required_output and (
+                (declared_outputs and required_output not in declared_outputs)
+                or (is_local_like_source and required_output not in declared_outputs)
+            ):
+                issues.append(
+                    f"infra.components[{component_id}] module source '{source}' must expose output "
+                    f"'{required_output}' for declared component output '{output.name}'"
+                )
+    return issues
+
+
+def _active_component_input_binding_issues(payload: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+    all_entries = component_entry_lookup()
+    active_rows: dict[str, dict[str, Any]] = {}
+    for row in _dynamic_enabled_infra_component_rows(payload):
+        active_rows[str(row["id"])] = row
+    for row in _dynamic_enabled_app_chart_rows(payload):
+        active_rows[str(row["id"])] = row
+
+    for component_id, row in active_rows.items():
+        entry = all_entries.get(component_id)
+        if entry is None or not entry.input_bindings:
+            continue
+        for target_path, source_ref in input_binding_conflicts(row, entry):
+            issues.append(
+                f"{entry.scope}.components[{component_id}].{target_path} is managed by component input binding "
+                f"'{source_ref}' and must not be set explicitly"
+                if entry.scope == "infra"
+                else f"apps.charts[{component_id}].{target_path} is managed by component input binding "
+                f"'{source_ref}' and must not be set explicitly"
+            )
+        for binding in entry.input_bindings:
+            source_entry = all_entries.get(binding.source_component_id)
+            source_ref = component_output_ref(binding.source_component_id, binding.source_output_name)
+            if source_entry is None:
+                issues.append(
+                    f"{entry.scope} component '{component_id}' input binding '{binding.target_path}' references "
+                    f"unknown component '{binding.source_component_id}'"
+                )
+                continue
+            if binding.source_component_id not in active_rows:
+                issues.append(
+                    f"{entry.scope} component '{component_id}' input binding '{binding.target_path}' requires "
+                    f"enabled source component '{binding.source_component_id}'"
+                )
+                continue
+            source_output = output_lookup(source_entry).get(binding.source_output_name)
+            if source_output is None:
+                issues.append(
+                    f"{entry.scope} component '{component_id}' input binding '{binding.target_path}' references "
+                    f"undeclared output '{source_ref}'"
+                )
+                continue
+            if source_output.kind != "terraform_output":
+                static_value = resolve_static_component_output(
+                    payload,
+                    component_id=binding.source_component_id,
+                    output_name=binding.source_output_name,
+                )
+                if static_value is _UNRESOLVED:
+                    issues.append(
+                        f"{entry.scope} component '{component_id}' input binding '{binding.target_path}' could not "
+                        f"resolve non-Terraform output '{source_ref}' from the active config/catalog"
+                    )
+    return issues
+
+
+def _active_handoff_issues(payload: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+    infra_entry_by_id = {entry.id: entry for entry in component_entries("infra")}
+    for row in _dynamic_enabled_infra_component_rows(payload):
+        component_id = str(row["id"])
+        entry = infra_entry_by_id.get(component_id)
+        if entry is None or entry.handoff is None:
+            continue
+
+        access_output = output_lookup(entry).get(entry.handoff.access_output_name)
+        if access_output is None:
+            issues.append(
+                f"infra component '{component_id}' handoff.access "
+                f"'{entry.handoff.access_output_name}' is not declared under outputs"
+            )
+            continue
+        if access_output.kind == "terraform_output":
+            issues.append(
+                f"infra component '{component_id}' handoff.access "
+                f"'{entry.handoff.access_output_name}' must resolve from config/static output, not Terraform state"
+            )
+            continue
+
+        access_value = resolve_static_component_output(
+            payload,
+            component_id=component_id,
+            output_name=entry.handoff.access_output_name,
+        )
+        if access_value is _UNRESOLVED:
+            issues.append(
+                f"infra component '{component_id}' handoff.access "
+                f"'{entry.handoff.access_output_name}' could not be resolved from the active config/catalog"
+            )
+            continue
+        normalized_access = str(access_value).strip().lower()
+        if normalized_access not in {"external", "internal"}:
+            issues.append(
+                f"infra component '{component_id}' handoff.access "
+                f"'{entry.handoff.access_output_name}' resolved to '{access_value}'. "
+                "Expected 'external' or 'internal'."
+            )
+    return issues
+
+
+def _validate_active_component_sources(config: Any) -> None:
+    payload = to_plain_data(config)
+    if not isinstance(payload, dict):
+        raise RuntimeError("Runtime config payload must be a mapping")
+
+    issues: list[str] = []
+    infra_entries = component_entries("infra")
+    issues.extend(_enabled_custom_module_source_issues(payload=payload, infra_entries=infra_entries))
+    issues.extend(_active_component_input_binding_issues(payload))
+    issues.extend(_active_handoff_issues(payload))
+    issues.extend(_validate_enabled_chart_sources(config))
+    if issues:
+        raise RuntimeError("Active component source validation failed:\n  - " + "\n  - ".join(issues))
+
+
+def _binding_conflict_issues(payload: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+
+    infra_entry_by_id = {entry.id: entry for entry in component_entries("infra")}
+    for row in _dynamic_enabled_infra_component_rows(payload):
+        component_id = str(row["id"])
+        entry = infra_entry_by_id.get(component_id)
+        if entry is None:
+            continue
+        for target_path, source_path in shared_default_conflicts(row, entry):
+            issues.append(
+                f"infra.components[{component_id}].{target_path} is managed by shared default "
+                f"'{source_path}' and must not be set explicitly"
+            )
+        for target_path, source_ref in input_binding_conflicts(row, entry):
+            issues.append(
+                f"infra.components[{component_id}].{target_path} is managed by component input binding "
+                f"'{source_ref}' and must not be set explicitly"
+            )
+
+    app_entry_by_id = {entry.id: entry for entry in component_entries("apps")}
+    for row in _dynamic_enabled_app_chart_rows(payload):
+        chart_id = str(row["id"])
+        entry = app_entry_by_id.get(chart_id)
+        if entry is None:
+            continue
+        for target_path, source_path in shared_default_conflicts(row, entry):
+            issues.append(
+                f"apps.charts[{chart_id}].{target_path} is managed by shared default "
+                f"'{source_path}' and must not be set explicitly"
+            )
+        for target_path, source_ref in input_binding_conflicts(row, entry):
+            issues.append(
+                f"apps.charts[{chart_id}].{target_path} is managed by component input binding "
+                f"'{source_ref}' and must not be set explicitly"
+            )
+
+    return issues
+
+
+def _enabled_custom_module_input_schema_issues(
+    *,
+    payload: dict[str, Any],
+    infra_entries: tuple[ComponentEntry, ...],
+) -> list[str]:
+    issues: list[str] = []
+    entry_by_id = {entry.id: entry for entry in infra_entries}
+    helper_input_names = {
+        "module_name",
+        "depends_on_platform",
+        "resource_type",
+        "provider_resource_type",
+    }
+    for row in _dynamic_enabled_infra_component_rows(payload):
+        if row.get("mode") != "custom":
+            continue
+        component_id = str(row["id"])
+        inputs = row.get("inputs", {})
+        if not isinstance(inputs, Mapping):
+            continue
+        source = str(row.get("source", "")).strip()
+        if not source:
+            source = str(entry_by_id.get(component_id).source if component_id in entry_by_id else "").strip()
+        if not source:
+            continue
+        declared_leaf_names = {
+            _normalize_leaf_name(name)
+            for name in module_variable_names(source)
+        }
+        if not declared_leaf_names:
+            continue
+        for raw_name in sorted(inputs.keys()):
+            input_name = str(raw_name).strip()
+            normalized_name = _normalize_leaf_name(input_name)
+            if not normalized_name or normalized_name in helper_input_names:
+                continue
+            if normalized_name not in declared_leaf_names:
+                issues.append(
+                    f"infra.components[{component_id}].inputs.{input_name} is not declared by module '{source}'"
+                )
     return issues
 
 
@@ -2960,7 +3472,11 @@ def _validate_strict_config(config: Any) -> None:
     infra_entries = component_entries("infra")
     issues.extend(_validate_component_dependencies(config))
     issues.extend(_required_enabled_infra_field_issues(payload=payload, infra_entries=infra_entries))
+    issues.extend(_binding_conflict_issues(payload))
+    issues.extend(_active_component_input_binding_issues(payload))
+    issues.extend(_active_handoff_issues(payload))
     issues.extend(_enabled_custom_module_source_issues(payload=payload, infra_entries=infra_entries))
+    issues.extend(_enabled_custom_module_input_schema_issues(payload=payload, infra_entries=infra_entries))
     issues.extend(_enabled_provider_schema_match_issues(payload=payload, infra_entries=infra_entries))
     issues.extend(_placeholder_value_issues(payload))
     if issues:
@@ -3494,10 +4010,10 @@ def _terraform_runtime_env(config: Any) -> dict[str, str]:
 
     project_id = str(config.client_info.nebius.project_id).strip()
     client_name = str(config.client_info.client_name).strip()
-    module_name = "-".join(token for token in ("nebius-cxcli", client_name, project_id) if token)
-    module_name = re.sub(r"[^A-Za-z0-9._/-]", "-", module_name)
-    module_name = re.sub(r"-+", "-", module_name).strip("-") or "nebius-cxcli"
-    runtime_env["TF_VAR_nebius_provider_module_name"] = module_name
+    runtime_env["TF_VAR_nebius_provider_module_name"] = build_provider_module_name(
+        client_name=client_name,
+        project_id=project_id,
+    )
     runtime_env["TF_VAR_nebius_provider_parent_id"] = project_id
 
     credentials_file = os.environ.get("NEBIUS_AUTH_CREDENTIALS_FILE", "").strip()
@@ -3554,10 +4070,9 @@ def _try_generate_terraform_lock_file(
     config: Any,
     paths: InstancePaths,
 ) -> bool:
-    if not shutil.which("terraform"):
-        return False
     try:
-        # Render performs create-if-missing runtime auth bootstrap for lockfile generation.
+        # Render performs create-if-missing runtime auth bootstrap for lockfile generation
+        # and can use the managed Terraform binary when Terraform is not already in PATH.
         _ensure_terraform_backend_ready(config, auto_auth_bootstrap=True)
         terraform_init(paths.infra_dir, extra_env=_terraform_runtime_env(config))
     except Exception as exc:
@@ -3569,55 +4084,823 @@ def _try_generate_terraform_lock_file(
     return (paths.infra_dir / ".terraform.lock.hcl").exists()
 
 
-def _apply_rendered_flux(paths: InstancePaths) -> None:
+def _first_non_empty_line(text: str) -> str | None:
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if line:
+            return line
+    return None
+
+
+def _write_generated_runtime_manifest(config: Any, paths: InstancePaths) -> Path:
+    return write_generated_manifest(
+        config=config,
+        paths=paths,
+        handoffs=_enabled_cluster_handoffs(config),
+        required_component_outputs=_required_runtime_component_output_specs(config),
+    )
+
+
+def _active_chart_count(config: Any) -> int:
+    payload = to_plain_data(config)
+    if not isinstance(payload, dict):
+        return 0
+    apps = payload.get("apps")
+    if not isinstance(apps, dict):
+        return 0
+    charts = apps.get("charts")
+    if not isinstance(charts, list):
+        return 0
+    return sum(1 for item in charts if isinstance(item, Mapping) and bool(item.get("enabled", False)))
+
+
+def _required_runtime_component_output_specs(config: Any) -> list[dict[str, str]]:
+    payload = to_plain_data(config)
+    if not isinstance(payload, dict):
+        return []
+
+    all_entries = component_entry_lookup()
+    required: list[dict[str, str]] = []
+    seen_refs: set[str] = set()
+    apps = payload.get("apps")
+    if not isinstance(apps, dict):
+        return []
+    charts = apps.get("charts")
+    if not isinstance(charts, list):
+        return []
+    for item in charts:
+        if not isinstance(item, Mapping) or not bool(item.get("enabled", False)):
+            continue
+        chart_id = str(item.get("id", "")).strip().lower()
+        if not chart_id:
+            continue
+        entry = all_entries.get(chart_id)
+        if entry is None:
+            continue
+        for binding in entry.input_bindings:
+            source_entry = all_entries.get(binding.source_component_id)
+            if source_entry is None:
+                continue
+            source_output = output_lookup(source_entry).get(binding.source_output_name)
+            if source_output is None or source_output.kind != "terraform_output":
+                continue
+            source_ref = component_output_ref(binding.source_component_id, binding.source_output_name)
+            if source_ref in seen_refs:
+                continue
+            seen_refs.add(source_ref)
+            required.append(
+                {
+                    "component_id": binding.source_component_id,
+                    "output_name": binding.source_output_name,
+                    "source_ref": source_ref,
+                }
+            )
+    return required
+
+
+def _runtime_component_output_values(
+    config: Any,
+    paths: InstancePaths,
+    *,
+    required_specs: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    required = required_specs if required_specs is not None else _required_runtime_component_output_specs(config)
+    if not required:
+        return {}
+
+    try:
+        terraform_outputs = terraform_output_json(
+            paths.infra_dir,
+            extra_env=_terraform_runtime_env(config),
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "This config declares app input bindings that depend on Terraform module outputs, but those "
+            "outputs are not available yet. Run `deploy`, or rerun `render` after Terraform state exists. "
+            f"Terraform output lookup failed: {exc}"
+        ) from exc
+
+    resolved: dict[str, Any] = {}
+    missing: list[str] = []
+    for spec in required:
+        root_output_name = component_output_root_name(
+            spec["component_id"],
+            spec["output_name"],
+        )
+        output_payload = terraform_outputs.get(root_output_name)
+        if not isinstance(output_payload, Mapping) or "value" not in output_payload:
+            missing.append(root_output_name)
+            continue
+        resolved[spec["source_ref"]] = to_plain_data(output_payload["value"])
+    if missing:
+        raise RuntimeError(
+            "Terraform state is missing required rendered root outputs for app input bindings: "
+            + ", ".join(sorted(missing))
+            + ". Rerender infra and apply Terraform before retrying."
+        )
+    return resolved
+
+
+def _requires_flux_terraform_state(config: Any) -> bool:
+    if _active_chart_count(config) == 0:
+        return False
+    return bool(_enabled_cluster_handoffs(config) or _required_runtime_component_output_specs(config))
+
+
+def _manifest_cluster_handoffs(manifest: Mapping[str, Any]) -> list[dict[str, str]]:
+    deploy_node = manifest.get("deploy")
+    if not isinstance(deploy_node, Mapping):
+        return []
+    raw_handoffs = deploy_node.get("handoffs")
+    if not isinstance(raw_handoffs, list):
+        return []
+    handoffs: list[dict[str, str]] = []
+    for item in raw_handoffs:
+        if not isinstance(item, Mapping):
+            continue
+        handoffs.append(
+            {
+                "component_id": str(item.get("component_id", "")).strip().lower(),
+                "cluster_id_output_name": str(item.get("cluster_id_output_name", "")).strip(),
+                "component_output_ref": str(item.get("component_output_ref", "")).strip(),
+                "access": str(item.get("access", "")).strip().lower(),
+            }
+        )
+    return [item for item in handoffs if item["cluster_id_output_name"]]
+
+
+def _manifest_required_component_output_specs(manifest: Mapping[str, Any]) -> list[dict[str, str]]:
+    deploy_node = manifest.get("deploy")
+    if not isinstance(deploy_node, Mapping):
+        return []
+    raw_specs = deploy_node.get("required_component_outputs")
+    if not isinstance(raw_specs, list):
+        return []
+    specs: list[dict[str, str]] = []
+    for item in raw_specs:
+        if not isinstance(item, Mapping):
+            continue
+        specs.append(
+            {
+                "component_id": str(item.get("component_id", "")).strip().lower(),
+                "output_name": str(item.get("output_name", "")).strip(),
+                "source_ref": str(item.get("source_ref", "")).strip(),
+            }
+        )
+    return [item for item in specs if item["component_id"] and item["output_name"] and item["source_ref"]]
+
+
+def _manifest_requires_flux_terraform_state(manifest: Mapping[str, Any]) -> bool:
+    return bool(
+        _manifest_cluster_handoffs(manifest)
+        or _manifest_required_component_output_specs(manifest)
+    )
+
+
+def _enabled_cluster_handoffs(config: Any) -> list[dict[str, str]]:
+    payload = to_plain_data(config)
+    if not isinstance(payload, dict):
+        return []
+    infra = payload.get("infra")
+    if not isinstance(infra, dict):
+        return []
+    components = infra.get("components")
+    if not isinstance(components, list):
+        return []
+    entry_by_id = {entry.id: entry for entry in component_entries("infra")}
+    handoffs: list[dict[str, str]] = []
+    for item in components:
+        if not isinstance(item, Mapping):
+            continue
+        if not bool(item.get("enabled", False)):
+            continue
+        component_id = str(item.get("id", "")).strip().lower()
+        if not component_id:
+            continue
+        entry = entry_by_id.get(component_id)
+        if entry is None or entry.handoff is None:
+            continue
+        access_value = resolve_static_component_output(
+            payload,
+            component_id=component_id,
+            output_name=entry.handoff.access_output_name,
+        )
+        if access_value is _UNRESOLVED:
+            raise RuntimeError(
+                f"infra component '{component_id}' handoff.access "
+                f"'{entry.handoff.access_output_name}' could not be resolved from the active config/catalog"
+            )
+        normalized_access = str(access_value).strip().lower()
+        if normalized_access not in {"external", "internal"}:
+            raise RuntimeError(
+                f"infra component '{component_id}' handoff.access "
+                f"'{entry.handoff.access_output_name}' resolved to '{access_value}'. "
+                "Expected 'external' or 'internal'."
+            )
+        handoffs.append(
+            {
+                "component_id": component_id,
+                "cluster_id_output_name": component_output_root_name(
+                    component_id,
+                    entry.handoff.cluster_id_output_name,
+                ),
+                "component_output_ref": component_output_ref(
+                    component_id,
+                    entry.handoff.cluster_id_output_name,
+                ),
+                "access": normalized_access,
+            }
+        )
+    return handoffs
+
+
+def _run_command_for_cluster_handoff(
+    cmd: list[str],
+    *,
+    env: dict[str, str],
+    timeout: int,
+    failure_context: str,
+) -> None:
+    def _meaningful_lines(text: str) -> list[str]:
+        ignored_prefixes = (
+            "token from nebius_iam_token env is used",
+        )
+        lines: list[str] = []
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            normalized = line.lower()
+            if any(normalized.startswith(prefix) for prefix in ignored_prefixes):
+                continue
+            lines.append(line)
+        return lines
+
+    try:
+        completed = subprocess.run(
+            cmd,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        detail_lines = _meaningful_lines(exc.stderr or "")
+        if not detail_lines:
+            detail_lines = _meaningful_lines(exc.stdout or "")
+        detail = detail_lines[0] if detail_lines else ""
+        message = failure_context
+        if detail:
+            message = f"{message}: {detail}"
+        raise RuntimeError(message) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"{failure_context}: command timed out after {timeout} seconds") from exc
+
+    meaningful_stderr_lines = _meaningful_lines(completed.stderr or "")
+    if meaningful_stderr_lines:
+        sys.stderr.write("\n".join(meaningful_stderr_lines))
+        if not meaningful_stderr_lines[-1].endswith("\n"):
+            sys.stderr.write("\n")
+
+
+def _truthy_env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes"}
+
+
+def _should_persist_local_kubeconfig() -> bool:
+    if _truthy_env_flag("CI"):
+        return False
+    override = os.environ.get("NEBIUS_CXCLI_PERSIST_LOCAL_KUBECONFIG", "").strip()
+    if override:
+        return override.lower() in {"1", "true", "yes"}
+    return True
+
+
+def _persist_cluster_handoff_kubeconfig(
+    *,
+    cluster_id: str,
+    access: str,
+    profile_name: str | None = None,
+    profile_env: dict[str, str] | None = None,
+) -> Path | None:
+    if not _should_persist_local_kubeconfig():
+        return None
+
+    local_kubeconfig = Path.home().expanduser() / ".kube" / "config"
+    local_kubeconfig.parent.mkdir(parents=True, exist_ok=True)
+
+    persist_env = os.environ.copy()
+    persist_env["HOME"] = str(Path.home().expanduser())
+    if profile_env and profile_env.get("XDG_CONFIG_HOME"):
+        persist_env["XDG_CONFIG_HOME"] = str(profile_env["XDG_CONFIG_HOME"])
+
+    cmd = [
+        "nebius",
+        "mk8s",
+        "cluster",
+        "get-credentials",
+        "--id",
+        cluster_id,
+        f"--{access}",
+        "--force",
+        "--kubeconfig",
+        str(local_kubeconfig),
+    ]
+    if profile_name:
+        cmd.extend(["--profile", profile_name])
+
+    try:
+        _run_command_for_cluster_handoff(
+            cmd,
+            env=persist_env,
+            timeout=180,
+            failure_context=(
+                "Failed to update local kubeconfig at "
+                f"{local_kubeconfig} from the declared cluster handoff"
+            ),
+        )
+    except Exception as exc:
+        console.print(f"[yellow]WARNING:[/yellow] {exc}")
+        return None
+
+    console.print(f"Updated local kubeconfig at {local_kubeconfig}")
+    return local_kubeconfig
+
+
+def _prepare_cluster_handoff_kube_env(
+    config: Any,
+    paths: InstancePaths,
+    *,
+    stack: ExitStack,
+    handoffs: list[dict[str, str]] | None = None,
+) -> dict[str, str] | None:
+    if _active_chart_count(config) == 0:
+        return None
+
+    handoffs = handoffs if handoffs is not None else _enabled_cluster_handoffs(config)
+    if not handoffs:
+        return None
+    if len(handoffs) > 1:
+        component_ids = ", ".join(sorted(handoff["component_id"] for handoff in handoffs))
+        raise RuntimeError(
+            "Multiple handoff-capable infra components are enabled for this run: "
+            f"{component_ids}. Enable only one cluster handoff source before running this command."
+        )
+    handoff = handoffs[0]
+    if not shutil.which("nebius"):
+        raise RuntimeError(
+            "nebius CLI is required when the config includes enabled apps charts "
+            "and a handoff-capable infra component. Install Nebius CLI or configure "
+            "kubeconfig manually before rerunning."
+        )
+
+    cluster_id = terraform_output_raw(
+        paths.infra_dir,
+        handoff["cluster_id_output_name"],
+        extra_env=_terraform_runtime_env(config),
+    )
+    if not cluster_id:
+        raise RuntimeError(
+            f"Terraform output `{handoff['cluster_id_output_name']}` is empty. The rendered Terraform root must expose "
+            "the cluster ID required for kubeconfig handoff before applying Flux manifests."
+        )
+
+    kube_root = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="nebius-cxcli-kube-")))
+    kubeconfig_path = kube_root / "config"
+
+    direct_env = os.environ.copy()
+    direct_env["KUBECONFIG"] = str(kubeconfig_path)
+    direct_attempt = subprocess.run(
+        [
+            "nebius",
+            "mk8s",
+            "cluster",
+            "get-credentials",
+            "--id",
+            cluster_id,
+            f"--{handoff['access']}",
+            "--force",
+            "--kubeconfig",
+            str(kubeconfig_path),
+        ],
+        env=direct_env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    if direct_attempt.returncode == 0:
+        _persist_cluster_handoff_kubeconfig(
+            cluster_id=cluster_id,
+            access=handoff["access"],
+        )
+        return {"KUBECONFIG": str(kubeconfig_path)}
+
+    service_account_id = os.environ.get("NEBIUS_SA_ID", "").strip()
+    auth_public_key_id = os.environ.get("NEBIUS_AUTH_PUBLIC_KEY_ID", "").strip()
+    private_key_file = os.environ.get("NEBIUS_AUTH_PRIVATE_KEY_FILE", "").strip()
+    if not (service_account_id and auth_public_key_id and private_key_file):
+        detail = _first_non_empty_line(direct_attempt.stderr or direct_attempt.stdout or "")
+        message = (
+            "Unable to configure kubeconfig from the declared cluster handoff. "
+            "The direct `nebius mk8s cluster get-credentials` attempt failed, and runtime auth "
+            "service-account values are not available to create a temporary Nebius CLI profile. "
+            "Run `nebius auth login`, or rerun with runtime auth material available "
+            "(for example `--auto-auth-bootstrap`)."
+        )
+        if detail:
+            message = f"{message} Failure detail: {detail}"
+        raise RuntimeError(message)
+
+    profile_root = Path(
+        stack.enter_context(tempfile.TemporaryDirectory(prefix="nebius-cxcli-nebius-profile-"))
+    )
+    xdg_config_home = profile_root / ".config"
+    xdg_config_home.mkdir(parents=True, exist_ok=True)
+    profile_env = os.environ.copy()
+    profile_env.update(
+        {
+            "HOME": str(profile_root),
+            "XDG_CONFIG_HOME": str(xdg_config_home),
+            "KUBECONFIG": str(kubeconfig_path),
+        }
+    )
+    endpoint = os.environ.get("NEBIUS_ENDPOINT", "").strip() or "api.nebius.cloud"
+    project_id = str(config.client_info.nebius.project_id).strip()
+    profile_name = f"cxcli-{int(time.time())}"
+    _run_command_for_cluster_handoff(
+        [
+            "nebius",
+            "profile",
+            "create",
+            "--profile",
+            profile_name,
+            "--endpoint",
+            endpoint,
+            "--service-account-id",
+            service_account_id,
+            "--public-key-id",
+            auth_public_key_id,
+            "--private-key-file",
+            private_key_file,
+            "--parent-id",
+            project_id,
+        ],
+        env=profile_env,
+        timeout=180,
+        failure_context="Failed to create temporary Nebius CLI profile for cluster handoff",
+    )
+    _run_command_for_cluster_handoff(
+        [
+            "nebius",
+            "mk8s",
+            "cluster",
+            "get-credentials",
+            "--id",
+            cluster_id,
+            f"--{handoff['access']}",
+            "--force",
+            "--kubeconfig",
+            str(kubeconfig_path),
+            "--profile",
+            profile_name,
+        ],
+        env=profile_env,
+        timeout=180,
+        failure_context=(
+            f"Failed to configure kubeconfig from Terraform output `{handoff['cluster_id_output_name']}` "
+            "for cluster handoff"
+        ),
+    )
+    _persist_cluster_handoff_kubeconfig(
+        cluster_id=cluster_id,
+        access=handoff["access"],
+        profile_name=profile_name,
+        profile_env=profile_env,
+    )
+    return {
+        "HOME": str(profile_root),
+        "XDG_CONFIG_HOME": str(xdg_config_home),
+        "KUBECONFIG": str(kubeconfig_path),
+    }
+
+
+def _apply_rendered_flux(paths: InstancePaths, *, extra_env: dict[str, str] | None = None) -> None:
     """Apply rendered Flux manifests in local deploy mode."""
     if not shutil.which("kubectl"):
         raise RuntimeError("kubectl is required for `deploy` but was not found in PATH")
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
 
-    flux_installed = (
-        subprocess.run(
-            ["kubectl", "get", "namespace", "flux-system"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        ).returncode
-        == 0
+    cluster_check = subprocess.run(
+        ["kubectl", "cluster-info"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if cluster_check.returncode != 0:
+        detail = _first_non_empty_line(cluster_check.stderr or cluster_check.stdout or "")
+        message = "kubectl could not reach the target Kubernetes cluster for local deploy"
+        if detail:
+            message = f"{message}: {detail}"
+        raise RuntimeError(message)
+
+    flux_installed = flux_controllers_installed(extra_env=extra_env) and flux_crds_installed(
+        extra_env=extra_env
     )
     if not flux_installed:
-        if not shutil.which("flux"):
-            raise RuntimeError(
-                "Flux controllers are not installed in the target cluster. "
-                "Install Flux CLI (`flux`) and rerun `deploy`, "
-                "or run `nebius-cxcli bootstrap-ci <config.yaml>` for CI-driven bootstrap."
-            )
-        subprocess.run(
-            ["flux", "install"],
-            check=True,
-            timeout=1800,
+        manifest_url = install_flux_controllers(extra_env=extra_env)
+        console.print(
+            "Installed Flux controllers in the target cluster from "
+            f"{manifest_url}"
         )
+    with tempfile.TemporaryDirectory(prefix="nebius-cxcli-kubectl-") as cache_dir:
+        cache_path = Path(cache_dir)
+        wait_for_flux_resource_apis(paths, extra_env=extra_env, cache_dir=cache_path)
 
-    # Local deploy mode does not require a Git repository; apply generated manifests directly.
-    subprocess.run(
-        ["kubectl", "apply", "-k", str(paths.flux_dir)],
-        check=True,
-        timeout=1800,
+        # Local deploy mode does not require a Git repository; apply generated manifests directly.
+        completed = subprocess.run(
+            ["kubectl", "--cache-dir", str(cache_path), "apply", "-k", str(paths.flux_dir)],
+            env=env,
+            timeout=1800,
+            capture_output=True,
+            text=True,
+        )
+        stdout = _filter_benign_kubectl_output(completed.stdout or "")
+        stderr = _filter_benign_kubectl_output(completed.stderr or "")
+        if stdout:
+            sys.stdout.write(stdout + ("\n" if not stdout.endswith("\n") else ""))
+        if stderr:
+            sys.stderr.write(stderr + ("\n" if not stderr.endswith("\n") else ""))
+        if completed.returncode != 0:
+            raise subprocess.CalledProcessError(
+                completed.returncode,
+                ["kubectl", "--cache-dir", str(cache_path), "apply", "-k", str(paths.flux_dir)],
+                output=stdout,
+                stderr=stderr,
+            )
+    console.print("Waiting for rendered Flux resources to become Ready.")
+    wait_for_rendered_flux_resources(
+        paths,
+        extra_env=extra_env,
+        emit=lambda message: console.print(message),
     )
 
 
-def _render_and_local_deploy(
+def _node_readiness_summary(*, extra_env: dict[str, str]) -> tuple[bool, str]:
+    env = os.environ.copy()
+    env.update(extra_env)
+    result = subprocess.run(
+        ["kubectl", "get", "nodes", "-o", "json"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        detail = _first_non_empty_line(result.stderr or result.stdout or "") or "kubectl get nodes failed"
+        return False, detail
+
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return False, "kubectl returned unreadable node status payload"
+
+    items = payload.get("items")
+    if not isinstance(items, list) or not items:
+        return False, "nodes 0/0 Ready; waiting for node registration"
+
+    total = 0
+    ready = 0
+    summaries: list[str] = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        metadata = item.get("metadata")
+        status = item.get("status")
+        name = ""
+        if isinstance(metadata, Mapping):
+            name = str(metadata.get("name", "")).strip()
+        conditions = status.get("conditions") if isinstance(status, Mapping) else None
+        ready_condition = False
+        if isinstance(conditions, list):
+            for condition in conditions:
+                if not isinstance(condition, Mapping):
+                    continue
+                if str(condition.get("type", "")).strip() != "Ready":
+                    continue
+                ready_condition = str(condition.get("status", "")).strip().lower() == "true"
+                break
+        total += 1
+        if ready_condition:
+            ready += 1
+        label = name or f"node-{total}"
+        summaries.append(f"{label}:{'Ready' if ready_condition else 'NotReady'}")
+
+    if total == 0:
+        return False, "nodes 0/0 Ready; waiting for node registration"
+
+    summary = f"nodes {ready}/{total} Ready"
+    if summaries:
+        detail = ", ".join(summaries[:3])
+        if len(summaries) > 3:
+            detail += f", +{len(summaries) - 3} more"
+        summary = f"{summary}; {detail}"
+    return ready == total, summary
+
+
+def _wait_for_cluster_nodes_ready(
+    *,
+    extra_env: dict[str, str] | None,
+    emit: Callable[[str], None],
+    timeout_seconds: float = 900.0,
+    poll_interval_seconds: float = 10.0,
+) -> None:
+    if not extra_env or not extra_env.get("KUBECONFIG"):
+        return
+
+    emit("Waiting for target Kubernetes nodes to become Ready before Flux deployment.")
+    started_at = time.monotonic()
+    last_summary = ""
+    last_emit_at = 0.0
+    repeat_interval_seconds = 60.0
+    while True:
+        ready, summary = _node_readiness_summary(extra_env=extra_env)
+        elapsed = int(max(0.0, time.monotonic() - started_at))
+        message = (
+            f"[bold white]Kubernetes[/bold white] [dim][{elapsed}s][/dim] {escape(summary)}"
+        )
+        now = time.monotonic()
+        if ready:
+            emit(message)
+            return
+        if summary != last_summary or (now - last_emit_at) >= repeat_interval_seconds:
+            emit(message)
+            last_summary = summary
+            last_emit_at = now
+        if (now - started_at) >= timeout_seconds:
+            raise RuntimeError(
+                "Target Kubernetes cluster nodes did not become Ready before Flux deployment. "
+                f"Last known status: {summary}"
+            )
+        time.sleep(poll_interval_seconds)
+
+
+def _deploy_generated_artifacts(
+    config: Any,
+    paths: InstancePaths,
+    manifest: Mapping[str, Any],
+    *,
+    auto_auth_bootstrap: bool,
+) -> None:
+    """Deploy an existing generated artifact bundle without rerendering it."""
+    _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
+    runtime_env = _terraform_runtime_env(config)
+    terraform_init(paths.infra_dir, extra_env=runtime_env)
+    terraform_validate(paths.infra_dir, extra_env=runtime_env, initialize=False)
+    _run_terraform_apply_with_status(config, paths, initialize=False)
+    write_inventory(config, paths)
+    with ExitStack() as stack:
+        kube_env = _prepare_cluster_handoff_kube_env(
+            config,
+            paths,
+            stack=stack,
+            handoffs=_manifest_cluster_handoffs(manifest),
+        )
+        _wait_for_cluster_nodes_ready(extra_env=kube_env, emit=lambda message: console.print(message))
+        _apply_rendered_flux(paths, extra_env=kube_env)
+        _warn_if_flux_gitops_not_bootstrapped(config, paths, extra_env=kube_env)
+
+
+def _run_terraform_apply_with_status(
+    config: Any,
+    paths: InstancePaths,
+    *,
+    initialize: bool = True,
+) -> None:
+    runtime_env = _terraform_runtime_env(config)
+    validate_mk8s_network_preflight(config)
+    with deployment_status_reporting(
+        config,
+        emit=lambda message: console.print(message),
+    ) as reporter:
+        try:
+            terraform_apply(
+                paths.infra_dir,
+                extra_env=runtime_env,
+                initialize=initialize,
+                event_callback=reporter.handle_terraform_event,
+            )
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"{exc}\n\nLast known deploy status:\n{reporter.snapshot()}"
+            ) from exc
+
+
+def _warn_if_flux_gitops_not_bootstrapped(
+    config: Any,
+    paths: InstancePaths,
+    *,
+    extra_env: dict[str, str] | None,
+) -> None:
+    if _active_chart_count(config) == 0:
+        return
+    if not extra_env or not extra_env.get("KUBECONFIG"):
+        return
+    if flux_bootstrap_resources_installed(extra_env=extra_env):
+        return
+    command = f"nebius-cxcli flux bootstrap {shlex.quote(str(paths.generated_dir))}"
+    console.print(
+        "[yellow]WARNING:[/yellow] Flux GitOps bootstrap is not configured for this cluster yet. "
+        "Local apply succeeded, but the cluster will not continuously sync from the Git repository "
+        "until you bootstrap it."
+    )
+    console.print("Run to enable GitOps sync:")
+    console.print(command, style="cyan", no_wrap=True, overflow="ignore")
+
+
+def _current_lock_owner_identity() -> str:
+    user = getpass.getuser().strip() or "unknown"
+    host = socket.gethostname().strip() or "unknown-host"
+    return f"{user}@{host}"
+
+
+def _active_local_terraform_processes() -> tuple[str, ...]:
+    try:
+        completed = subprocess.run(
+            ["ps", "-axo", "pid=,command="],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:
+        return ()
+
+    current_pid = os.getpid()
+    process_pattern = re.compile(
+        r"\b(terraform (apply|plan|force-unlock)|nebius-cxcli (deploy|terraform apply|terraform plan|terraform unlock))\b"
+    )
+    active: list[str] = []
+    for raw_line in (completed.stdout or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        pid_text, _, command = line.partition(" ")
+        try:
+            pid = int(pid_text.strip())
+        except ValueError:
+            continue
+        if pid == current_pid:
+            continue
+        normalized_command = command.strip()
+        if not normalized_command:
+            continue
+        if process_pattern.search(normalized_command):
+            active.append(normalized_command)
+    return tuple(active)
+
+
+def _unlock_terraform_state_lock(
     config: Any,
     paths: InstancePaths,
     *,
     auto_auth_bootstrap: bool,
-) -> int:
-    """Run strict validation, render, Terraform apply, then apply Flux manifests."""
-    _ensure_deployments_gitignore(deployments_root=paths.deployments_dir)
-    _validate_strict_config(config)
+    force: bool,
+) -> TerraformStateLockInfo | None:
+    if not paths.infra_dir.exists():
+        raise RuntimeError(
+            f"Rendered infra directory does not exist: {paths.infra_dir}. "
+            "Rerun `nebius-cxcli render <config.yaml>` first."
+        )
     _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
-    result = render_instance(config, paths)
-    terraform_apply(paths.infra_dir, extra_env=_terraform_runtime_env(config))
-    _apply_rendered_flux(paths)
-    return len(result.files_written)
+    runtime_env = _terraform_runtime_env(config)
+    settings = backend_settings_from_config(config)
+    lock_info = read_state_lock_info(settings, extra_env=runtime_env)
+    if lock_info is None:
+        return None
+
+    if not force:
+        active_processes = _active_local_terraform_processes()
+        if active_processes:
+            rendered_processes = "\n".join(f"  - {command}" for command in active_processes)
+            raise RuntimeError(
+                "Refusing to unlock Terraform state while local Terraform/deploy operations appear active:\n"
+                f"{rendered_processes}\n"
+                "Wait for those commands to finish, or rerun `terraform unlock --force` only after you have confirmed the lock is stale."
+            )
+        current_owner = _current_lock_owner_identity()
+        if lock_info.who and lock_info.who != current_owner:
+            raise RuntimeError(
+                "Refusing to unlock Terraform state lock owned by "
+                f"`{lock_info.who}` from current identity `{current_owner}`. "
+                "Rerun with `terraform unlock --force` only after you have confirmed that operation is no longer running."
+            )
+
+    terraform_force_unlock(paths.infra_dir, lock_info.lock_id, extra_env=runtime_env)
+    return lock_info
 
 
 def _resolve_project_id_for_auth_bootstrap(
@@ -3859,8 +5142,7 @@ _DEPLOYMENTS_GITIGNORE_END = "# <<< nebius-cxcli managed ignores <<<"
 _DEPLOYMENTS_GITIGNORE_LINES: tuple[str, ...] = (
     _DEPLOYMENTS_GITIGNORE_BEGIN,
     "# Generated by `nebius-cxcli create`.",
-    "# Keep generated artifacts versioned; ignore sensitive instance config and Terraform runtime files.",
-    "instances/*/*/config.yaml",
+    "# Keep the canonical instance config versioned in a private repo; ignore generated Terraform runtime files.",
     "instances/*/*/generated/infra/.terraform/",
     "instances/*/*/generated/infra/*.tfstate",
     "instances/*/*/generated/infra/*.tfstate.*",
@@ -4025,16 +5307,8 @@ def _filter_runtime_payload_for_selected_components(
                 "enabled": True,
                 "inputs": {},
             }
-            if entry.source:
-                row["source"] = str(entry.source)
-            if entry.version:
-                row["version"] = str(entry.version)
             infra_by_id[entry.id] = row
         else:
-            if entry.source and not str(row.get("source", "")).strip():
-                row["source"] = str(entry.source)
-            if entry.version and not str(row.get("version", "")).strip():
-                row["version"] = str(entry.version)
             if not isinstance(row.get("inputs"), Mapping):
                 row["inputs"] = {}
             row["enabled"] = True
@@ -4110,22 +5384,6 @@ def _filter_runtime_payload_for_selected_components(
     return runtime_payload
 
 
-def _seed_default_shared_ssh_public_key(
-    *,
-    payload: dict[str, Any],
-    inferred_key: str | None,
-) -> None:
-    if not inferred_key:
-        return
-    infra_node = payload.get("infra")
-    if not isinstance(infra_node, dict):
-        return
-    current_value = _non_empty_text(infra_node.get("ssh_public_key"))
-    if current_value and current_value != DEFAULT_SSH_PUBLIC_KEY:
-        return
-    infra_node["ssh_public_key"] = inferred_key
-
-
 def _seed_infra_project_scope_defaults(
     *,
     payload: dict[str, Any],
@@ -4154,16 +5412,12 @@ def _seed_infra_project_scope_defaults(
         if not isinstance(inputs, dict):
             continue
         entry = entry_by_id.get(component_id)
-        source = _non_empty_text(item.get("source")) or _non_empty_text(entry.source if entry else None)
+        source = _effective_catalog_component_source(row=item, entry=entry)
         if not source:
             continue
         leaf_names = {_normalize_leaf_name(name) for name in module_variable_names(source)}
         if not leaf_names:
             continue
-        shared_ssh_public_key = _non_empty_text(
-            _read_payload_field(payload, "infra.ssh_public_key")
-        )
-
         if "parent_id" in leaf_names and all(
             alias not in inputs for alias in ("parent_id", "parent-id")
         ):
@@ -4172,12 +5426,6 @@ def _seed_infra_project_scope_defaults(
             alias not in inputs for alias in ("project_id", "project-id")
         ):
             inputs["project_id"] = project_id
-        if (
-            "ssh_public_key" in leaf_names
-            and shared_ssh_public_key
-            and all(alias not in inputs for alias in ("ssh_public_key", "ssh-public-key"))
-        ):
-            inputs["ssh_public_key"] = shared_ssh_public_key
 
 
 @dataclass(frozen=True)
@@ -4450,7 +5698,6 @@ def create_command(
         )
         resolved_region_id = _region_or_prompt(region_id, interactive=interactive_mode)
         resolved_email = _optional_email_or_prompt(email, interactive=interactive_mode)
-        inferred_ssh_public_key = _infer_default_ssh_public_key()
 
         deployments_root = _resolve_deployments_root(base_path)
         existing_config_path = _instance_config_path(
@@ -4597,10 +5844,6 @@ def create_command(
             namespace_overrides=app_namespace_overrides,
             release_name_overrides=app_releasename_overrides,
         )
-        _seed_default_shared_ssh_public_key(
-            payload=starter_payload,
-            inferred_key=inferred_ssh_public_key,
-        )
         _seed_infra_project_scope_defaults(
             payload=starter_payload,
             infra_entries=infra_entries,
@@ -4660,12 +5903,13 @@ def create_command(
         if interactive_mode and not wizard_completed:
             console.print(
                 "[yellow]Wizard exited early.[/yellow] Remaining fields keep defaults. "
-                "Edit config.yaml manually before validate/deploy."
+                "Edit config.yaml manually before validate/render."
             )
         console.print(
             "Next steps: run `nebius-cxcli validate <config.yaml>`, "
-            "`nebius-cxcli bootstrap-ci <config.yaml>` (optional), then "
-            "`nebius-cxcli deploy <config.yaml>`."
+            "`nebius-cxcli render <config.yaml>`, "
+            "`nebius-cxcli bootstrap-ci <config.yaml>` (optional), then deploy from "
+            "`<instance>/generated` with `nebius-cxcli deploy <generated-dir>`."
         )
         console.print(
             "[yellow]Security warning:[/yellow] keep this customer repository private "
@@ -4721,7 +5965,7 @@ def bootstrap_ci_command(
         ),
     ] = "GH_TOKEN",
 ) -> None:
-    """Generate customer CI workflow and optionally perform full CI auth bootstrap."""
+    """Generate generated-artifact-only customer CI workflow and optionally perform full CI auth bootstrap."""
     try:
         if not auth_bootstrap and (github_repo is not None or github_token_env != "GH_TOKEN"):
             raise RuntimeError(
@@ -4781,15 +6025,55 @@ def validate_command(
 ) -> None:
     """Validate config.yaml with runtime source + provider/chart checks."""
     try:
-        config, _ = _load_context(config_path)
+        config, _ = _load_runtime_context(config_path)
         dependency_issues = _validate_component_dependencies(config)
         if dependency_issues:
             raise RuntimeError("Runtime validation failed:\n  - " + "\n  - ".join(dependency_issues))
         if strict:
             _validate_strict_config(config)
+            validate_mk8s_network_preflight(config)
             console.print(f"[green]Valid (strict):[/green] {config_path}")
             return
         console.print(f"[green]Valid:[/green] {config_path}")
+    except Exception as exc:  # pragma: no cover - CLI surface
+        _exit_with_error(exc)
+
+
+@app.command("validate-generated")
+def validate_generated_command(
+    generated_path: Annotated[
+        Path,
+        typer.Argument(help="Path to generated/ or one of its subdirectories"),
+    ],
+    auto_auth_bootstrap: Annotated[
+        bool,
+        typer.Option(
+            "--auto-auth-bootstrap/--no-auto-auth-bootstrap",
+            help="Automatically bootstrap runtime auth when env vars are missing",
+        ),
+    ] = True,
+) -> None:
+    """Validate an existing generated artifact bundle without rerendering it."""
+    try:
+        config, paths, _manifest = _load_generated_context(generated_path)
+        if not paths.infra_dir.exists():
+            raise RuntimeError(f"Rendered infra directory does not exist: {paths.infra_dir}")
+        _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
+        terraform_validate(paths.infra_dir, extra_env=_terraform_runtime_env(config))
+        if _active_chart_count(config) > 0:
+            if not shutil.which("kubectl"):
+                raise RuntimeError("kubectl is required for `validate-generated` but was not found in PATH")
+            subprocess.run(
+                ["kubectl", "kustomize", str(paths.flux_dir)],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        console.print(f"[green]Valid generated artifacts:[/green] {paths.generated_dir}")
+    except subprocess.CalledProcessError as exc:  # pragma: no cover - CLI surface
+        detail = _first_non_empty_line(exc.stderr or exc.stdout or "")
+        _exit_with_error(RuntimeError(detail or str(exc)))
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 
@@ -5116,16 +6400,38 @@ def auth_command(
 @app.command("render")
 def render_command(
     config_path: Annotated[Path, typer.Argument(help="Path to instance config.yaml")],
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Overwrite an existing generated bundle without interactive confirmation.",
+        ),
+    ] = False,
 ) -> None:
-    """Render artifacts under generated/ and try Terraform init for lock-file generation."""
+    """Render and overwrite generated artifacts from config.yaml, prompting before a reset unless --force is provided."""
     try:
-        config, paths = _load_context(config_path)
+        config, paths = _load_runtime_context(config_path)
+        if not _confirm_render_overwrite(paths, force=force):
+            console.print(
+                "[yellow]Render cancelled[/yellow]; existing generated artifacts were left untouched."
+            )
+            raise typer.Exit(code=0)
+        reset_generated_bundle(paths)
         gitignore_result = _ensure_deployments_gitignore(
             deployments_root=paths.deployments_dir,
         )
-        result = render_instance(config, paths)
+        paths.infra_dir.mkdir(parents=True, exist_ok=True)
+        paths.flux_dir.mkdir(parents=True, exist_ok=True)
+        paths.inventory_dir.mkdir(parents=True, exist_ok=True)
+        written: list[Path] = []
+        written.extend(render_terraform_artifacts(config, paths))
+        component_output_values = _runtime_component_output_values(config, paths)
+        written.extend(render_flux(config, paths, component_output_values=component_output_values))
+        write_inventory(config, paths)
+        manifest_path = _write_generated_runtime_manifest(config, paths)
         lock_generated = _try_generate_terraform_lock_file(config, paths)
-        console.print(f"Rendered {len(result.files_written)} file(s) under {paths.generated_dir}")
+        console.print(f"Rendered {len(sorted(written))} file(s) under {paths.generated_dir}")
+        console.print(f"Generated deployment manifest: {manifest_path}")
         if gitignore_result.path is not None:
             if gitignore_result.wrote:
                 console.print(f"Ensured deployments .gitignore: {gitignore_result.path}")
@@ -5133,13 +6439,20 @@ def render_command(
                 console.print(f"Deployments .gitignore up-to-date: {gitignore_result.path}")
         if lock_generated:
             console.print(f"Generated Terraform lock file: {paths.infra_dir / '.terraform.lock.hcl'}")
+    except typer.Exit:
+        raise
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 
 
 @app.command("deploy")
 def deploy_command(
-    config_path: Annotated[Path, typer.Argument(help="Path to instance config.yaml")],
+    generated_path: Annotated[
+        Path,
+        typer.Argument(
+            help="Path to generated/, generated/infra, generated/flux, or a file under generated/"
+        ),
+    ],
     auto_auth_bootstrap: Annotated[
         bool,
         typer.Option(
@@ -5150,23 +6463,26 @@ def deploy_command(
         ),
     ] = True,
 ) -> None:
-    """Validate (strict), render, terraform apply, and apply generated Flux manifests."""
+    """Deploy an existing generated artifact bundle: terraform apply, refresh inventory (infra + apps), then local Flux apply."""
     try:
-        config, paths = _load_context(config_path)
-        rendered_count = _render_and_local_deploy(
+        config, paths, manifest = _load_generated_context(generated_path)
+        _deploy_generated_artifacts(
             config,
             paths,
+            manifest,
             auto_auth_bootstrap=auto_auth_bootstrap,
         )
-        console.print(f"Rendered {rendered_count} file(s) under {paths.generated_dir}")
-        console.print("Local deploy completed.")
+        console.print(f"Local deploy completed from {paths.generated_dir}")
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 
 
 @terraform_app.command("plan")
 def terraform_plan_command(
-    config_path: Annotated[Path, typer.Argument(help="Path to instance config.yaml")],
+    generated_path: Annotated[
+        Path,
+        typer.Argument(help="Path to generated/ or generated/infra"),
+    ],
     auto_auth_bootstrap: Annotated[
         bool,
         typer.Option(
@@ -5175,18 +6491,24 @@ def terraform_plan_command(
         ),
     ] = True,
 ) -> None:
-    """Run terraform init and terraform plan in generated/infra."""
+    """Run terraform init and plan against an existing generated infra bundle; auto-download Terraform if missing."""
     try:
-        config, paths = _load_context(config_path)
+        config, paths, _manifest = _load_generated_context(generated_path)
         _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
-        terraform_plan(paths.infra_dir, extra_env=_terraform_runtime_env(config))
+        runtime_env = _terraform_runtime_env(config)
+        terraform_init(paths.infra_dir, extra_env=runtime_env)
+        terraform_validate(paths.infra_dir, extra_env=runtime_env, initialize=False)
+        terraform_plan(paths.infra_dir, extra_env=runtime_env, initialize=False)
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 
 
 @terraform_app.command("apply")
 def terraform_apply_command(
-    config_path: Annotated[Path, typer.Argument(help="Path to instance config.yaml")],
+    generated_path: Annotated[
+        Path,
+        typer.Argument(help="Path to generated/ or generated/infra"),
+    ],
     auto_auth_bootstrap: Annotated[
         bool,
         typer.Option(
@@ -5195,18 +6517,77 @@ def terraform_apply_command(
         ),
     ] = True,
 ) -> None:
-    """Run terraform init and terraform apply in generated/infra."""
+    """Refresh inventory, then run convergent terraform apply against existing generated infra; auto-download Terraform if missing."""
     try:
-        config, paths = _load_context(config_path)
+        config, paths, _manifest = _load_generated_context(generated_path)
         _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
-        terraform_apply(paths.infra_dir, extra_env=_terraform_runtime_env(config))
+        paths.inventory_dir.mkdir(parents=True, exist_ok=True)
+        write_inventory(config, paths)
+        runtime_env = _terraform_runtime_env(config)
+        terraform_init(paths.infra_dir, extra_env=runtime_env)
+        terraform_validate(paths.infra_dir, extra_env=runtime_env, initialize=False)
+        _run_terraform_apply_with_status(config, paths, initialize=False)
+    except Exception as exc:  # pragma: no cover - CLI surface
+        _exit_with_error(exc)
+
+
+@terraform_app.command("unlock")
+def terraform_unlock_command(
+    generated_path: Annotated[
+        Path,
+        typer.Argument(help="Path to generated/ or generated/infra"),
+    ],
+    auto_auth_bootstrap: Annotated[
+        bool,
+        typer.Option(
+            "--auto-auth-bootstrap/--no-auto-auth-bootstrap",
+            help="Automatically bootstrap runtime auth when env vars are missing",
+        ),
+    ] = True,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help=(
+                "Override local safety checks and force-unlock even when the lock owner is different "
+                "or local Terraform/deploy processes are still detected"
+            ),
+        ),
+    ] = False,
+) -> None:
+    """Clear a stale remote Terraform state lock for an existing generated infra bundle; auto-download Terraform if missing."""
+    try:
+        config, paths, _manifest = _load_generated_context(generated_path)
+        lock_info = _unlock_terraform_state_lock(
+            config,
+            paths,
+            auto_auth_bootstrap=auto_auth_bootstrap,
+            force=force,
+        )
+        if lock_info is None:
+            settings = backend_settings_from_config(config)
+            console.print(
+                "No remote Terraform state lock is present for "
+                f"{settings.bucket}/{settings.key}.tflock."
+            )
+            return
+        console.print(
+            "Terraform state lock cleared: "
+            f"id={lock_info.lock_id} "
+            f"owner={lock_info.who or '(unknown)'} "
+            f"created={lock_info.created or '(unknown)'} "
+            f"object={lock_info.bucket}/{lock_info.object_key}"
+        )
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 
 
 @flux_app.command("bootstrap")
 def flux_bootstrap_command(
-    config_path: Annotated[Path, typer.Argument(help="Path to instance config.yaml")],
+    generated_path: Annotated[
+        Path,
+        typer.Argument(help="Path to generated/ or generated/flux"),
+    ],
     auto_auth_bootstrap: Annotated[
         bool,
         typer.Option(
@@ -5215,17 +6596,75 @@ def flux_bootstrap_command(
         ),
     ] = False,
 ) -> None:
-    """Bootstrap Flux if missing, otherwise reconcile for idempotent day-2 runs."""
+    """Refresh inventory, then bootstrap or reconcile Flux against an existing generated flux bundle; auto-download Flux CLI if missing."""
     try:
-        config, paths = _load_context(config_path)
-        _ensure_runtime_auth_material(
-            config,
-            need_terraform=False,
-            need_eso_mysterybox=False,
-            auto_bootstrap=auto_auth_bootstrap,
+        config, paths, manifest = _load_generated_context(generated_path)
+        requires_cluster_handoff = bool(
+            _active_chart_count(config) and _manifest_cluster_handoffs(manifest)
         )
-        action = ensure_flux(paths)
+        if _manifest_requires_flux_terraform_state(manifest):
+            _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
+        else:
+            _ensure_runtime_auth_material(
+                config,
+                need_terraform=False,
+                need_eso_mysterybox=False,
+                auto_bootstrap=auto_auth_bootstrap,
+            )
+        paths.inventory_dir.mkdir(parents=True, exist_ok=True)
+        write_inventory(config, paths)
+        with ExitStack() as stack:
+            kube_env = (
+                _prepare_cluster_handoff_kube_env(
+                    config,
+                    paths,
+                    stack=stack,
+                    handoffs=_manifest_cluster_handoffs(manifest),
+                )
+                if requires_cluster_handoff
+                else None
+            )
+            _wait_for_cluster_nodes_ready(extra_env=kube_env, emit=lambda message: console.print(message))
+            action = ensure_flux(paths, extra_env=kube_env)
         console.print(f"Flux {action} for {paths.flux_dir}")
+    except Exception as exc:  # pragma: no cover - CLI surface
+        _exit_with_error(exc)
+
+
+@flux_app.command("apply")
+def flux_apply_command(
+    generated_path: Annotated[
+        Path,
+        typer.Argument(help="Path to generated/ or generated/flux"),
+    ],
+    auto_auth_bootstrap: Annotated[
+        bool,
+        typer.Option(
+            "--auto-auth-bootstrap/--no-auto-auth-bootstrap",
+            help="Automatically bootstrap runtime auth when env vars are missing",
+        ),
+    ] = True,
+) -> None:
+    """Refresh inventory (including apps artifacts) and apply an existing generated flux bundle directly for idempotent day-2 runs."""
+    try:
+        config, paths, manifest = _load_generated_context(generated_path)
+        if _active_chart_count(config) == 0:
+            raise RuntimeError("No enabled apps charts are configured for this instance.")
+        if _manifest_requires_flux_terraform_state(manifest):
+            _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
+        paths.inventory_dir.mkdir(parents=True, exist_ok=True)
+        write_inventory(config, paths)
+        with ExitStack() as stack:
+            kube_env = _prepare_cluster_handoff_kube_env(
+                config,
+                paths,
+                stack=stack,
+                handoffs=_manifest_cluster_handoffs(manifest),
+            )
+            _wait_for_cluster_nodes_ready(extra_env=kube_env, emit=lambda message: console.print(message))
+            _apply_rendered_flux(paths, extra_env=kube_env)
+            _warn_if_flux_gitops_not_bootstrapped(config, paths, extra_env=kube_env)
+        console.print(f"Flux applied from {paths.flux_dir}")
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 
@@ -5237,8 +6676,8 @@ def discover_command(
         typer.Argument(
             help=(
                 "Deployments root folder path. Works with any existing directory; "
-                "uses git change detection when target path is inside a git repository, "
-                "otherwise scans all config.yaml files."
+                "uses git change detection for changed config.yaml and generated/** paths when target "
+                "path is inside a git repository, otherwise scans all config.yaml files."
             )
         ),
     ],
@@ -5247,7 +6686,7 @@ def discover_command(
         typer.Option("--all", help="Include all config.yaml files instead of changed only"),
     ] = False,
 ) -> None:
-    """Print discover JSON payload for config.yaml files in this run."""
+    """Print discover JSON payload for changed deployment instances in this run."""
     try:
         base_path = target_path.resolve()
         _validate_deployments_root_target(base_path)
@@ -5270,11 +6709,14 @@ def discover_command(
 
 @inventory_app.command("write")
 def inventory_write_command(
-    config_path: Annotated[Path, typer.Argument(help="Path to instance config.yaml")],
+    generated_path: Annotated[
+        Path,
+        typer.Argument(help="Path to generated/ or generated/inventory"),
+    ],
 ) -> None:
-    """Write local non-sensitive inventory files."""
+    """Refresh local non-sensitive inventory artifacts."""
     try:
-        config, paths = _load_context(config_path)
+        config, paths, _manifest = _load_generated_context(generated_path)
         artifacts = write_inventory(config, paths)
         console.print(f"Inventory written: {artifacts.markdown}")
     except Exception as exc:  # pragma: no cover - CLI surface
@@ -5283,11 +6725,14 @@ def inventory_write_command(
 
 @app.command("email")
 def email_command(
-    config_path: Annotated[Path, typer.Argument(help="Path to instance config.yaml")],
+    generated_path: Annotated[
+        Path,
+        typer.Argument(help="Path to generated/ or generated/inventory"),
+    ],
 ) -> None:
     """Send inventory markdown via SMTP to client_info.notifications.email."""
     try:
-        config, paths = _load_context(config_path)
+        config, paths, _manifest = _load_generated_context(generated_path)
         sent = send_inventory_email(config, paths)
         if sent:
             console.print("Inventory email sent")

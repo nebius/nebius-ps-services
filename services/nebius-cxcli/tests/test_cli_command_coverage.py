@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 import re
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 from typer.testing import CliRunner
 
 import nebius_cxcli.cli as cli
+import nebius_cxcli.flux_ops as flux_ops
+from nebius_cxcli.component_sources import (
+    reset_component_sources_cache,
+    set_component_sources_file_override,
+)
 
 runner = CliRunner()
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
@@ -19,15 +26,21 @@ def _plain_output(text: str) -> str:
 
 def _fake_paths(tmp_path: Path) -> SimpleNamespace:
     return SimpleNamespace(
+        config_path=tmp_path / "instances" / "client-a--tenant-123" / "project-456" / "config.yaml",
+        repo_root=tmp_path,
         deployments_dir=tmp_path / "deployments",
         generated_dir=tmp_path / "generated",
         infra_dir=tmp_path / "generated" / "infra",
         flux_dir=tmp_path / "generated" / "flux",
+        inventory_dir=tmp_path / "generated" / "inventory",
+        path_client_name="client-a",
+        path_tenant_id="tenant-123",
+        path_project_id="project-456",
     )
 
 
 def test_validate_command_non_strict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(cli, "_load_context", lambda _path: (object(), object()))
+    monkeypatch.setattr(cli, "_load_runtime_context", lambda _path: (object(), object()))
     monkeypatch.setattr(cli, "_validate_component_dependencies", lambda _cfg: [])
 
     result = runner.invoke(cli.app, ["validate", str(tmp_path / "config.yaml")])
@@ -39,7 +52,7 @@ def test_validate_command_non_strict(tmp_path: Path, monkeypatch: pytest.MonkeyP
 def test_validate_command_strict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     strict_called: dict[str, bool] = {"called": False}
 
-    monkeypatch.setattr(cli, "_load_context", lambda _path: (object(), object()))
+    monkeypatch.setattr(cli, "_load_runtime_context", lambda _path: (object(), object()))
     monkeypatch.setattr(cli, "_validate_component_dependencies", lambda _cfg: [])
 
     def _fake_strict(_cfg: object) -> None:
@@ -58,14 +71,37 @@ def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.Mon
     fake_paths = _fake_paths(tmp_path)
     calls: dict[str, object] = {}
 
-    monkeypatch.setattr(cli, "_load_context", lambda _path: ("cfg", fake_paths))
-
-    def _fake_render_instance(config: object, paths: object) -> SimpleNamespace:
-        calls["config"] = config
-        calls["paths"] = paths
-        return SimpleNamespace(files_written=[tmp_path / "a.tf", tmp_path / "b.yaml"])
-
-    monkeypatch.setattr(cli, "render_instance", _fake_render_instance)
+    monkeypatch.setattr(cli, "_load_runtime_context", lambda _path: ("cfg", fake_paths))
+    monkeypatch.setattr(
+        cli,
+        "render_terraform_artifacts",
+        lambda config, paths: (
+            calls.update({"terraform_config": config, "terraform_paths": paths})
+            or [tmp_path / "a.tf"]
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_runtime_component_output_values",
+        lambda config, paths: (
+            calls.update({"outputs_config": config, "outputs_paths": paths})
+            or {}
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "render_flux",
+        lambda config, paths, *, component_output_values=None: (
+            calls.update(
+                {
+                    "flux_config": config,
+                    "flux_paths": paths,
+                    "flux_outputs": component_output_values,
+                }
+            )
+            or [tmp_path / "b.yaml"]
+        ),
+    )
     monkeypatch.setattr(
         cli,
         "_try_generate_terraform_lock_file",
@@ -79,47 +115,906 @@ def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.Mon
             or False
         ),
     )
+    monkeypatch.setattr(
+        cli,
+        "write_inventory",
+        lambda config, paths: calls.update({"inventory_config": config, "inventory_paths": paths})
+        or SimpleNamespace(markdown=paths.inventory_dir / "inventory.md"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_write_generated_runtime_manifest",
+        lambda config, paths: (
+            calls.update({"manifest_config": config, "manifest_paths": paths})
+            or paths.generated_dir / "nebius-cxcli-manifest.json"
+        ),
+    )
 
     result = runner.invoke(cli.app, ["render", str(tmp_path / "config.yaml")])
 
     assert result.exit_code == 0, result.output
     assert "Rendered 2 file(s)" in _plain_output(result.output)
     assert calls == {
-        "config": "cfg",
-        "paths": fake_paths,
+        "terraform_config": "cfg",
+        "terraform_paths": fake_paths,
+        "outputs_config": "cfg",
+        "outputs_paths": fake_paths,
+        "flux_config": "cfg",
+        "flux_paths": fake_paths,
+        "flux_outputs": {},
+        "inventory_config": "cfg",
+        "inventory_paths": fake_paths,
+        "manifest_config": "cfg",
+        "manifest_paths": fake_paths,
         "lock_config": "cfg",
         "lock_paths": fake_paths,
     }
 
 
+def test_render_command_requires_force_in_noninteractive_overwrite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_paths.generated_dir.mkdir(parents=True, exist_ok=True)
+    (fake_paths.generated_dir / "existing.txt").write_text("existing", encoding="utf-8")
+
+    called: dict[str, bool] = {"rendered": False}
+
+    monkeypatch.setattr(cli, "_load_runtime_context", lambda _path: ("cfg", fake_paths))
+    monkeypatch.setattr(cli, "_can_prompt_for_render_overwrite", lambda: False)
+    monkeypatch.setattr(
+        cli,
+        "render_terraform_artifacts",
+        lambda *_args, **_kwargs: called.update({"rendered": True}) or [],
+    )
+
+    result = runner.invoke(cli.app, ["render", str(tmp_path / "config.yaml")])
+
+    assert result.exit_code == 1, result.output
+    assert "--force" in _plain_output(result.output)
+    assert called["rendered"] is False
+
+
+def test_render_command_force_allows_noninteractive_overwrite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_paths.generated_dir.mkdir(parents=True, exist_ok=True)
+    (fake_paths.generated_dir / "existing.txt").write_text("existing", encoding="utf-8")
+    calls: dict[str, bool] = {"rendered": False}
+
+    monkeypatch.setattr(cli, "_load_runtime_context", lambda _path: ("cfg", fake_paths))
+    monkeypatch.setattr(cli, "_can_prompt_for_render_overwrite", lambda: False)
+    monkeypatch.setattr(
+        cli,
+        "render_terraform_artifacts",
+        lambda *_args, **_kwargs: calls.update({"rendered": True}) or [],
+    )
+    monkeypatch.setattr(cli, "_runtime_component_output_values", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(cli, "render_flux", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        cli,
+        "write_inventory",
+        lambda *_args, **_kwargs: SimpleNamespace(markdown=fake_paths.inventory_dir / "inventory.md"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_write_generated_runtime_manifest",
+        lambda *_args, **_kwargs: fake_paths.generated_dir / "nebius-cxcli-manifest.json",
+    )
+    monkeypatch.setattr(cli, "_try_generate_terraform_lock_file", lambda *_args, **_kwargs: False)
+
+    result = runner.invoke(cli.app, ["render", "--force", str(tmp_path / "config.yaml")])
+
+    assert result.exit_code == 0, result.output
+    assert calls["rendered"] is True
+
+
+def test_render_command_prompts_before_overwrite_when_interactive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_paths.generated_dir.mkdir(parents=True, exist_ok=True)
+    (fake_paths.generated_dir / "existing.txt").write_text("existing", encoding="utf-8")
+    calls: dict[str, bool] = {"rendered": False}
+
+    monkeypatch.setattr(cli, "_load_runtime_context", lambda _path: ("cfg", fake_paths))
+    monkeypatch.setattr(cli, "_can_prompt_for_render_overwrite", lambda: True)
+    monkeypatch.setattr(
+        cli,
+        "render_terraform_artifacts",
+        lambda *_args, **_kwargs: calls.update({"rendered": True}) or [],
+    )
+    monkeypatch.setattr(cli, "_runtime_component_output_values", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(cli, "render_flux", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        cli,
+        "write_inventory",
+        lambda *_args, **_kwargs: SimpleNamespace(markdown=fake_paths.inventory_dir / "inventory.md"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_write_generated_runtime_manifest",
+        lambda *_args, **_kwargs: fake_paths.generated_dir / "nebius-cxcli-manifest.json",
+    )
+    monkeypatch.setattr(cli, "_try_generate_terraform_lock_file", lambda *_args, **_kwargs: False)
+
+    result = runner.invoke(cli.app, ["render", str(tmp_path / "config.yaml")], input="y\n")
+
+    assert result.exit_code == 0, result.output
+    assert "Continue and overwrite the existing generated artifacts?" in _plain_output(result.output)
+    assert calls["rendered"] is True
+
+
+def test_render_command_decline_is_clean_cancel_not_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_paths.generated_dir.mkdir(parents=True, exist_ok=True)
+    (fake_paths.generated_dir / "existing.txt").write_text("existing", encoding="utf-8")
+    calls: dict[str, bool] = {"rendered": False}
+
+    monkeypatch.setattr(cli, "_load_runtime_context", lambda _path: ("cfg", fake_paths))
+    monkeypatch.setattr(cli, "_can_prompt_for_render_overwrite", lambda: True)
+    monkeypatch.setattr(
+        cli,
+        "render_terraform_artifacts",
+        lambda *_args, **_kwargs: calls.update({"rendered": True}) or [],
+    )
+
+    result = runner.invoke(cli.app, ["render", str(tmp_path / "config.yaml")], input="n\n")
+
+    assert result.exit_code == 0, result.output
+    assert "Render cancelled" in _plain_output(result.output)
+    assert "ERROR:" not in _plain_output(result.output)
+    assert calls["rendered"] is False
+
+
 def test_deploy_command_passes_auto_auth_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, object] = {}
+    manifest = {"schema": "nebius-cxcli-generated/v1"}
 
-    monkeypatch.setattr(cli, "_load_context", lambda _path: ("cfg", fake_paths))
+    monkeypatch.setattr(cli, "_load_generated_context", lambda _path: ("cfg", fake_paths, manifest))
 
-    def _fake_render_and_local_deploy(config: object, paths: object, *, auto_auth_bootstrap: bool) -> int:
+    def _fake_deploy_generated_artifacts(
+        config: object,
+        paths: object,
+        loaded_manifest: object,
+        *,
+        auto_auth_bootstrap: bool,
+    ) -> None:
         captured["config"] = config
         captured["paths"] = paths
+        captured["manifest"] = loaded_manifest
         captured["auto_auth_bootstrap"] = auto_auth_bootstrap
-        return 4
 
-    monkeypatch.setattr(cli, "_render_and_local_deploy", _fake_render_and_local_deploy)
+    monkeypatch.setattr(cli, "_deploy_generated_artifacts", _fake_deploy_generated_artifacts)
 
     result = runner.invoke(
         cli.app,
-        ["deploy", str(tmp_path / "config.yaml"), "--auto-auth-bootstrap"],
+        ["deploy", str(tmp_path / "generated"), "--auto-auth-bootstrap"],
     )
 
     assert result.exit_code == 0, result.output
     output = _plain_output(result.output)
-    assert "Rendered 4 file(s)" in output
-    assert "Local deploy completed." in output
+    assert "Local deploy completed from" in output
     assert captured == {
         "config": "cfg",
         "paths": fake_paths,
+        "manifest": manifest,
         "auto_auth_bootstrap": True,
     }
+
+
+def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    manifest = {
+        "deploy": {
+            "handoffs": [
+                {
+                    "component_id": "mk8s",
+                    "cluster_id_output_name": "mk8s_cluster_id",
+                    "component_output_ref": "mk8s.cluster_id",
+                    "access": "external",
+                }
+            ]
+        }
+    }
+    calls: list[tuple[object, ...]] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_ensure_terraform_backend_ready",
+        lambda config, *, auto_auth_bootstrap: calls.append(
+            ("backend", config, auto_auth_bootstrap)
+        ),
+    )
+    monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _config: {"TF_VAR_DEMO": "1"})
+    monkeypatch.setattr(
+        cli,
+        "terraform_init",
+        lambda infra_dir, *, extra_env=None: calls.append(("init", infra_dir, extra_env)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "terraform_validate",
+        lambda infra_dir, *, extra_env=None, initialize=True: calls.append(
+            ("validate", infra_dir, extra_env, initialize)
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_terraform_apply_with_status",
+        lambda config, paths, *, initialize=True: calls.append(
+            ("apply_with_status", config, paths, initialize)
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_prepare_cluster_handoff_kube_env",
+        lambda config, paths, *, stack, handoffs=None: (
+            calls.append(("kube_env", config, paths, handoffs)) or {"KUBECONFIG": "/tmp/kubeconfig"}
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_wait_for_cluster_nodes_ready",
+        lambda *, extra_env, emit: calls.append(("wait_nodes", extra_env)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_apply_rendered_flux",
+        lambda paths, *, extra_env=None: calls.append(("flux", paths, extra_env)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_warn_if_flux_gitops_not_bootstrapped",
+        lambda config, paths, *, extra_env=None: calls.append(("warn_bootstrap", config, paths, extra_env)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "write_inventory",
+        lambda config, paths: calls.append(("inventory", config, paths))
+        or SimpleNamespace(markdown=paths.inventory_dir / "inventory.md"),
+    )
+
+    cli._deploy_generated_artifacts("cfg", fake_paths, manifest, auto_auth_bootstrap=True)
+
+    assert calls == [
+        ("backend", "cfg", True),
+        ("init", fake_paths.infra_dir, {"TF_VAR_DEMO": "1"}),
+        ("validate", fake_paths.infra_dir, {"TF_VAR_DEMO": "1"}, False),
+        ("apply_with_status", "cfg", fake_paths, False),
+        ("inventory", "cfg", fake_paths),
+        (
+            "kube_env",
+            "cfg",
+            fake_paths,
+            [
+                {
+                    "component_id": "mk8s",
+                    "cluster_id_output_name": "mk8s_cluster_id",
+                    "component_output_ref": "mk8s.cluster_id",
+                    "access": "external",
+                }
+            ],
+        ),
+        ("wait_nodes", {"KUBECONFIG": "/tmp/kubeconfig"}),
+        ("flux", fake_paths, {"KUBECONFIG": "/tmp/kubeconfig"}),
+        ("warn_bootstrap", "cfg", fake_paths, {"KUBECONFIG": "/tmp/kubeconfig"}),
+    ]
+
+
+def test_apply_rendered_flux_installs_flux_controllers_when_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    calls: list[tuple[object, ...]] = []
+    cache_dirs: list[Path | None] = []
+    fake_paths.flux_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        cli.shutil,
+        "which",
+        lambda name: "/usr/bin/kubectl" if name == "kubectl" else None,
+    )
+    monkeypatch.setattr(
+        cli,
+        "flux_controllers_installed",
+        lambda *, extra_env=None: False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "flux_crds_installed",
+        lambda *, extra_env=None: False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "install_flux_controllers",
+        lambda *, extra_env=None: (
+            calls.append(("install_flux", extra_env))
+            or "https://github.com/fluxcd/flux2/releases/download/v2.8.0/install.yaml"
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "wait_for_flux_resource_apis",
+        lambda paths, *, extra_env=None, cache_dir=None: (
+            cache_dirs.append(cache_dir),
+            calls.append(("wait_flux_apis", paths, extra_env, cache_dir)),
+        )[-1],
+    )
+    monkeypatch.setattr(
+        cli,
+        "wait_for_rendered_flux_resources",
+        lambda paths, *, extra_env=None, emit=None: calls.append(("wait_flux", paths, extra_env)),
+    )
+
+    def _fake_run(
+        cmd: list[str],
+        *,
+        env: dict[str, str] | None = None,
+        capture_output: bool = False,
+        text: bool = False,
+        timeout: int | None = None,
+        check: bool = False,
+    ) -> SimpleNamespace:
+        calls.append(("run", tuple(cmd), env, capture_output, text, timeout, check))
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+
+    cli._apply_rendered_flux(fake_paths, extra_env={"KUBECONFIG": "/tmp/kubeconfig"})
+
+    assert ("install_flux", {"KUBECONFIG": "/tmp/kubeconfig"}) in calls
+    assert any(
+        call[0] == "run" and call[1] == ("kubectl", "cluster-info")
+        for call in calls
+    )
+    assert len(cache_dirs) == 1
+    cache_dir = cache_dirs[0]
+    assert isinstance(cache_dir, Path)
+    assert any(
+        call[0] == "run"
+        and call[1]
+        == ("kubectl", "--cache-dir", str(cache_dir), "apply", "-k", str(fake_paths.flux_dir))
+        for call in calls
+    )
+    assert ("wait_flux_apis", fake_paths, {"KUBECONFIG": "/tmp/kubeconfig"}, cache_dir) in calls
+    assert ("wait_flux", fake_paths, {"KUBECONFIG": "/tmp/kubeconfig"}) in calls
+
+
+def test_apply_rendered_flux_skips_flux_install_when_controllers_exist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    calls: list[tuple[object, ...]] = []
+    cache_dirs: list[Path | None] = []
+    fake_paths.flux_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        cli.shutil,
+        "which",
+        lambda name: "/usr/bin/kubectl" if name == "kubectl" else None,
+    )
+    monkeypatch.setattr(
+        cli,
+        "flux_controllers_installed",
+        lambda *, extra_env=None: True,
+    )
+    monkeypatch.setattr(
+        cli,
+        "flux_crds_installed",
+        lambda *, extra_env=None: True,
+    )
+    monkeypatch.setattr(
+        cli,
+        "install_flux_controllers",
+        lambda *, extra_env=None: calls.append(("install_flux", extra_env)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "wait_for_flux_resource_apis",
+        lambda paths, *, extra_env=None, cache_dir=None: (
+            cache_dirs.append(cache_dir),
+            calls.append(("wait_flux_apis", paths, extra_env, cache_dir)),
+        )[-1],
+    )
+    monkeypatch.setattr(
+        cli,
+        "wait_for_rendered_flux_resources",
+        lambda paths, *, extra_env=None, emit=None: calls.append(("wait_flux", paths, extra_env)),
+    )
+
+    def _fake_run(
+        cmd: list[str],
+        *,
+        env: dict[str, str] | None = None,
+        capture_output: bool = False,
+        text: bool = False,
+        timeout: int | None = None,
+        check: bool = False,
+    ) -> SimpleNamespace:
+        calls.append(("run", tuple(cmd), env, capture_output, text, timeout, check))
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+
+    cli._apply_rendered_flux(fake_paths, extra_env={"KUBECONFIG": "/tmp/kubeconfig"})
+
+    assert not any(call[0] == "install_flux" for call in calls)
+    assert len(cache_dirs) == 1
+    cache_dir = cache_dirs[0]
+    assert isinstance(cache_dir, Path)
+    assert any(
+        call[0] == "run"
+        and call[1]
+        == ("kubectl", "--cache-dir", str(cache_dir), "apply", "-k", str(fake_paths.flux_dir))
+        for call in calls
+    )
+    assert ("wait_flux_apis", fake_paths, {"KUBECONFIG": "/tmp/kubeconfig"}, cache_dir) in calls
+    assert ("wait_flux", fake_paths, {"KUBECONFIG": "/tmp/kubeconfig"}) in calls
+
+
+def test_filter_benign_kubectl_output_removes_known_noise() -> None:
+    raw = "\n".join(
+        [
+            "token from NEBIUS_IAM_TOKEN env is used",
+            (
+                "Warning: resource helmreleases/demo is missing the "
+                "kubectl.kubernetes.io/last-applied-configuration annotation"
+            ),
+            "The missing annotation will be patched automatically.",
+            "helmrelease.helm.toolkit.fluxcd.io/demo configured",
+        ]
+    )
+
+    filtered = cli._filter_benign_kubectl_output(raw)
+
+    assert "token from NEBIUS_IAM_TOKEN env is used" not in filtered
+    assert "last-applied-configuration annotation" not in filtered
+    assert "patched automatically" not in filtered
+    assert "helmrelease.helm.toolkit.fluxcd.io/demo configured" in filtered
+
+
+def test_apply_rendered_flux_reinstalls_when_flux_crds_are_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    calls: list[tuple[object, ...]] = []
+    fake_paths.flux_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        cli.shutil,
+        "which",
+        lambda name: "/usr/bin/kubectl" if name == "kubectl" else None,
+    )
+    monkeypatch.setattr(
+        cli,
+        "flux_controllers_installed",
+        lambda *, extra_env=None: True,
+    )
+    monkeypatch.setattr(
+        cli,
+        "flux_crds_installed",
+        lambda *, extra_env=None: False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "install_flux_controllers",
+        lambda *, extra_env=None: (
+            calls.append(("install_flux", extra_env))
+            or "https://github.com/fluxcd/flux2/releases/download/v2.8.0/install.yaml"
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "wait_for_flux_resource_apis",
+        lambda paths, *, extra_env=None, cache_dir=None: calls.append(
+            ("wait_flux_apis", paths, extra_env, cache_dir)
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "wait_for_rendered_flux_resources",
+        lambda paths, *, extra_env=None, emit=None: calls.append(("wait_flux", paths, extra_env)),
+    )
+    monkeypatch.setattr(
+        cli.subprocess,
+        "run",
+        lambda cmd, **kwargs: (
+            calls.append(("run", tuple(cmd))),
+            SimpleNamespace(returncode=0, stderr="", stdout=""),
+        )[-1],
+    )
+
+    cli._apply_rendered_flux(fake_paths, extra_env={"KUBECONFIG": "/tmp/kubeconfig"})
+
+    assert ("install_flux", {"KUBECONFIG": "/tmp/kubeconfig"}) in calls
+
+
+def test_wait_for_rendered_flux_resources_waits_for_sources_before_releases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    flux_dir = tmp_path / "generated" / "flux"
+    flux_dir.mkdir(parents=True, exist_ok=True)
+    (flux_dir / "kustomization.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "kustomize.config.k8s.io/v1beta1",
+                "kind": "Kustomization",
+                "resources": [
+                    "./helm-repositories.yaml",
+                    "./namespace-demo.yaml",
+                    "./helmrelease-demo.yaml",
+                ],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (flux_dir / "helm-repositories.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "source.toolkit.fluxcd.io/v1",
+                "kind": "HelmRepository",
+                "metadata": {"name": "demo", "namespace": "flux-system"},
+                "spec": {"interval": "30m", "url": "oci://example.invalid/demo", "type": "oci"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (flux_dir / "namespace-demo.yaml").write_text(
+        yaml.safe_dump(
+            {"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": "demo"}},
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (flux_dir / "helmrelease-demo.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "helm.toolkit.fluxcd.io/v2",
+                "kind": "HelmRelease",
+                "metadata": {"name": "demo", "namespace": "demo"},
+                "spec": {"interval": "5m", "chart": {"spec": {"chart": "demo"}}},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    calls: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(flux_ops, "_require_binary", lambda _name: None)
+    monkeypatch.setattr(
+        flux_ops,
+        "_kubectl_get_target",
+        lambda target, *, env, timeout_seconds=20: (
+            calls.append((target.kind, target.namespace, target.name))
+            or ({"status": {"conditions": [{"type": "Ready", "status": "True"}]}}, "")
+        ),
+    )
+
+    flux_ops.wait_for_rendered_flux_resources(
+        SimpleNamespace(flux_dir=flux_dir),
+        poll_interval_seconds=0.01,
+    )
+
+    assert calls == [
+        ("HelmRepository", "flux-system", "demo"),
+        ("HelmRelease", "demo", "demo"),
+    ]
+
+
+def test_wait_for_rendered_flux_resources_raises_with_guidance_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    flux_dir = tmp_path / "generated" / "flux"
+    flux_dir.mkdir(parents=True, exist_ok=True)
+    (flux_dir / "kustomization.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "kustomize.config.k8s.io/v1beta1",
+                "kind": "Kustomization",
+                "resources": ["./helmrelease-demo.yaml"],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (flux_dir / "helmrelease-demo.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "helm.toolkit.fluxcd.io/v2",
+                "kind": "HelmRelease",
+                "metadata": {"name": "demo", "namespace": "demo"},
+                "spec": {"interval": "5m", "chart": {"spec": {"chart": "demo"}}},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(flux_ops, "_require_binary", lambda _name: None)
+    monkeypatch.setattr(
+        flux_ops,
+        "_kubectl_get_target",
+        lambda target, *, env, timeout_seconds=20: (
+            {
+                "status": {
+                    "conditions": [
+                        {
+                            "type": "Ready",
+                            "status": "False",
+                            "reason": "InstallFailed",
+                            "message": "chart pull failed",
+                        }
+                    ]
+                }
+            },
+            "",
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="kubectl -n demo describe helmrelease\\.helm\\.toolkit\\.fluxcd\\.io/demo",
+    ):
+        flux_ops.wait_for_rendered_flux_resources(
+            SimpleNamespace(flux_dir=flux_dir),
+            timeout_seconds=0,
+        )
+
+
+def test_wait_for_rendered_flux_resources_emits_cluster_status_while_waiting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    flux_dir = tmp_path / "generated" / "flux"
+    flux_dir.mkdir(parents=True, exist_ok=True)
+    (flux_dir / "kustomization.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "kustomize.config.k8s.io/v1beta1",
+                "kind": "Kustomization",
+                "resources": ["./helmrelease-demo.yaml"],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (flux_dir / "helmrelease-demo.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "helm.toolkit.fluxcd.io/v2",
+                "kind": "HelmRelease",
+                "metadata": {"name": "demo", "namespace": "demo"},
+                "spec": {"interval": "5m", "chart": {"spec": {"chart": "demo"}}},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    emissions: list[str] = []
+    calls = {"count": 0}
+
+    monkeypatch.setattr(flux_ops, "_require_binary", lambda _name: None)
+
+    def _fake_get_target(target, *, env, timeout_seconds=20):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return (
+                {
+                    "status": {
+                        "conditions": [
+                            {
+                                "type": "Ready",
+                                "status": "False",
+                                "reason": "Progressing",
+                                "message": "waiting for first reconciliation",
+                            }
+                        ]
+                    }
+                },
+                "",
+            )
+        return (
+            {"status": {"conditions": [{"type": "Ready", "status": "True", "reason": "Succeeded"}]}},
+            "",
+        )
+
+    monkeypatch.setattr(flux_ops, "_kubectl_get_target", _fake_get_target)
+    monkeypatch.setattr(flux_ops.time, "sleep", lambda _seconds: None)
+
+    monotonic_values = iter([0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+    monkeypatch.setattr(flux_ops.time, "monotonic", lambda: next(monotonic_values))
+
+    flux_ops.wait_for_rendered_flux_resources(
+        SimpleNamespace(flux_dir=flux_dir),
+        emit=emissions.append,
+        poll_interval_seconds=0.01,
+        repeat_interval_seconds=0.01,
+    )
+
+    assert len(emissions) >= 2
+    plain = "\n".join(_plain_output(item) for item in emissions)
+    assert "Flux status" in plain
+    assert "HelmRelease" in plain
+    assert "demo/demo" in plain
+    assert "Progressing" in plain
+    assert "waiting for first reconciliation" in plain
+    assert "Ready" in plain
+    assert "Succeeded" in plain
+
+
+def test_wait_for_rendered_flux_resources_returns_when_only_sources_remain_pending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    flux_dir = tmp_path / "generated" / "flux"
+    flux_dir.mkdir(parents=True, exist_ok=True)
+    (flux_dir / "kustomization.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "kustomize.config.k8s.io/v1beta1",
+                "kind": "Kustomization",
+                "resources": [
+                    "./helm-repositories.yaml",
+                    "./helmrelease-demo.yaml",
+                ],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (flux_dir / "helm-repositories.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "source.toolkit.fluxcd.io/v1",
+                "kind": "HelmRepository",
+                "metadata": {"name": "demo", "namespace": "flux-system"},
+                "spec": {"interval": "30m", "url": "oci://example.invalid/demo", "type": "oci"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (flux_dir / "helmrelease-demo.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "helm.toolkit.fluxcd.io/v2",
+                "kind": "HelmRelease",
+                "metadata": {"name": "demo", "namespace": "demo"},
+                "spec": {"interval": "5m", "chart": {"spec": {"chart": "demo"}}},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    emissions: list[str] = []
+
+    monkeypatch.setattr(flux_ops, "_require_binary", lambda _name: None)
+
+    def _fake_get_target(target, *, env, timeout_seconds=20):
+        if target.kind == "HelmRepository":
+            return ({}, "")
+        return (
+            {"status": {"conditions": [{"type": "Ready", "status": "True", "reason": "InstallSucceeded"}]}},
+            "",
+        )
+
+    monkeypatch.setattr(flux_ops, "_kubectl_get_target", _fake_get_target)
+
+    flux_ops.wait_for_rendered_flux_resources(
+        SimpleNamespace(flux_dir=flux_dir),
+        emit=emissions.append,
+        poll_interval_seconds=0.01,
+    )
+
+    plain = "\n".join(_plain_output(item) for item in emissions)
+    assert "HelmRepository" in plain
+    assert "flux-system/demo" in plain
+    assert "controller has not published a Ready condition yet" in plain
+    assert "HelmRelease" in plain
+    assert "demo/demo" in plain
+    assert "InstallSucceeded" in plain
+    assert "Treating the local apply as successful" in plain
+    assert "NOTE:" in plain
+
+
+def test_flux_install_manifest_url_uses_default_pinned_release(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            {
+                "cli": {
+                    "flux": {
+                        "version": "v2.8.0",
+                    }
+                },
+                "infra": {"tf_modules": []},
+                "apps": {"helm_charts": []},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NEBIUS_CXCLI_COMPONENT_SOURCES_FILE", str(sources_file))
+    set_component_sources_file_override(None)
+    reset_component_sources_cache()
+    assert (
+        flux_ops.flux_install_manifest_url()
+        == "https://github.com/fluxcd/flux2/releases/download/v2.8.0/install.yaml"
+    )
+
+
+def test_run_terraform_apply_with_status_wraps_apply_in_status_reporting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    calls: list[tuple[object, ...]] = []
+    reporter = SimpleNamespace(handle_terraform_event="callback")
+
+    monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _cfg: {"TF_VAR_DEMO": "1"})
+
+    @contextmanager
+    def _fake_reporting(config: object, *, emit, poll_interval_seconds=15.0, repeat_interval_seconds=60.0):
+        calls.append(("status_enter", config, poll_interval_seconds, repeat_interval_seconds))
+        emit("hello")
+        yield reporter
+        calls.append(("status_exit", config))
+
+    monkeypatch.setattr(cli, "deployment_status_reporting", _fake_reporting)
+    monkeypatch.setattr(
+        cli,
+        "terraform_apply",
+        lambda infra_dir, *, extra_env=None, initialize=True, event_callback=None: calls.append(
+            ("apply", infra_dir, extra_env, initialize, event_callback)
+        ),
+    )
+    monkeypatch.setattr(
+        cli.console,
+        "print",
+        lambda message: calls.append(("print", message)),
+    )
+
+    cli._run_terraform_apply_with_status("cfg", fake_paths)
+
+    assert calls == [
+        ("status_enter", "cfg", 15.0, 60.0),
+        ("print", "hello"),
+        ("apply", fake_paths.infra_dir, {"TF_VAR_DEMO": "1"}, True, "callback"),
+        ("status_exit", "cfg"),
+    ]
+
+
+def test_run_terraform_apply_with_status_appends_last_known_status_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    reporter = SimpleNamespace(handle_terraform_event="callback", snapshot=lambda: "Status [10s] TF: failed | API: pending")
+
+    monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _cfg: {"TF_VAR_DEMO": "1"})
+
+    @contextmanager
+    def _fake_reporting(config: object, *, emit, poll_interval_seconds=15.0, repeat_interval_seconds=60.0):
+        yield reporter
+
+    monkeypatch.setattr(cli, "deployment_status_reporting", _fake_reporting)
+
+    def _fake_apply(infra_dir: Path, *, extra_env=None, initialize=True, event_callback=None) -> None:
+        raise RuntimeError("terraform failed")
+
+    monkeypatch.setattr(cli, "terraform_apply", _fake_apply)
+
+    with pytest.raises(RuntimeError, match="Last known deploy status"):
+        cli._run_terraform_apply_with_status("cfg", fake_paths)
 
 
 def test_terraform_plan_command_invokes_runtime_auth_and_plan(
@@ -127,8 +1022,9 @@ def test_terraform_plan_command_invokes_runtime_auth_and_plan(
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, object] = {}
+    manifest = {"schema": "nebius-cxcli-generated/v1"}
 
-    monkeypatch.setattr(cli, "_load_context", lambda _path: ("cfg", fake_paths))
+    monkeypatch.setattr(cli, "_load_generated_context", lambda _path: ("cfg", fake_paths, manifest))
 
     def _fake_ensure_terraform_backend_ready(
         config: object, *, auto_auth_bootstrap: bool
@@ -142,15 +1038,39 @@ def test_terraform_plan_command_invokes_runtime_auth_and_plan(
         cli, "_ensure_terraform_backend_ready", _fake_ensure_terraform_backend_ready
     )
     monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _cfg: {"TF_VAR_DEMO": "1"})
+    monkeypatch.setattr(
+        cli,
+        "terraform_init",
+        lambda infra_dir, *, extra_env=None: captured.setdefault(
+            "init", {"infra_dir": infra_dir, "extra_env": extra_env}
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "terraform_validate",
+        lambda infra_dir, *, extra_env=None, initialize=True: captured.setdefault(
+            "validate",
+            {"infra_dir": infra_dir, "extra_env": extra_env, "initialize": initialize},
+        ),
+    )
 
-    def _fake_terraform_plan(infra_dir: Path, *, extra_env: dict[str, str] | None = None) -> None:
-        captured["plan"] = {"infra_dir": infra_dir, "extra_env": extra_env}
+    def _fake_terraform_plan(
+        infra_dir: Path,
+        *,
+        extra_env: dict[str, str] | None = None,
+        initialize: bool = True,
+    ) -> None:
+        captured["plan"] = {
+            "infra_dir": infra_dir,
+            "extra_env": extra_env,
+            "initialize": initialize,
+        }
 
     monkeypatch.setattr(cli, "terraform_plan", _fake_terraform_plan)
 
     result = runner.invoke(
         cli.app,
-        ["terraform", "plan", str(tmp_path / "config.yaml"), "--auto-auth-bootstrap"],
+        ["terraform", "plan", str(tmp_path / "generated"), "--auto-auth-bootstrap"],
     )
 
     assert result.exit_code == 0, result.output
@@ -158,9 +1078,19 @@ def test_terraform_plan_command_invokes_runtime_auth_and_plan(
         "config": "cfg",
         "auto_auth_bootstrap": True,
     }
+    assert captured["init"] == {
+        "infra_dir": fake_paths.infra_dir,
+        "extra_env": {"TF_VAR_DEMO": "1"},
+    }
+    assert captured["validate"] == {
+        "infra_dir": fake_paths.infra_dir,
+        "extra_env": {"TF_VAR_DEMO": "1"},
+        "initialize": False,
+    }
     assert captured["plan"] == {
         "infra_dir": fake_paths.infra_dir,
         "extra_env": {"TF_VAR_DEMO": "1"},
+        "initialize": False,
     }
 
 
@@ -169,8 +1099,9 @@ def test_terraform_apply_command_invokes_runtime_auth_and_apply(
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, object] = {}
+    manifest = {"schema": "nebius-cxcli-generated/v1"}
 
-    monkeypatch.setattr(cli, "_load_context", lambda _path: ("cfg", fake_paths))
+    monkeypatch.setattr(cli, "_load_generated_context", lambda _path: ("cfg", fake_paths, manifest))
 
     def _fake_ensure_terraform_backend_ready(
         config: object, *, auto_auth_bootstrap: bool
@@ -184,15 +1115,37 @@ def test_terraform_apply_command_invokes_runtime_auth_and_apply(
         cli, "_ensure_terraform_backend_ready", _fake_ensure_terraform_backend_ready
     )
     monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _cfg: {"TF_VAR_DEMO": "1"})
-
-    def _fake_terraform_apply(infra_dir: Path, *, extra_env: dict[str, str] | None = None) -> None:
-        captured["apply"] = {"infra_dir": infra_dir, "extra_env": extra_env}
-
-    monkeypatch.setattr(cli, "terraform_apply", _fake_terraform_apply)
+    monkeypatch.setattr(
+        cli,
+        "terraform_init",
+        lambda infra_dir, *, extra_env=None: captured.setdefault(
+            "init", {"infra_dir": infra_dir, "extra_env": extra_env}
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "terraform_validate",
+        lambda infra_dir, *, extra_env=None, initialize=True: captured.setdefault(
+            "validate",
+            {"infra_dir": infra_dir, "extra_env": extra_env, "initialize": initialize},
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_terraform_apply_with_status",
+        lambda config, paths, *, initialize=True: captured.setdefault(
+            "apply", {"config": config, "paths": paths, "initialize": initialize}
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "write_inventory",
+        lambda config, paths: captured.setdefault("inventory", {"config": config, "paths": paths}),
+    )
 
     result = runner.invoke(
         cli.app,
-        ["terraform", "apply", str(tmp_path / "config.yaml"), "--auto-auth-bootstrap"],
+        ["terraform", "apply", str(tmp_path / "generated"), "--auto-auth-bootstrap"],
     )
 
     assert result.exit_code == 0, result.output
@@ -200,17 +1153,90 @@ def test_terraform_apply_command_invokes_runtime_auth_and_apply(
         "config": "cfg",
         "auto_auth_bootstrap": True,
     }
-    assert captured["apply"] == {
+    assert captured["init"] == {
         "infra_dir": fake_paths.infra_dir,
         "extra_env": {"TF_VAR_DEMO": "1"},
     }
+    assert captured["validate"] == {
+        "infra_dir": fake_paths.infra_dir,
+        "extra_env": {"TF_VAR_DEMO": "1"},
+        "initialize": False,
+    }
+    assert captured["apply"] == {
+        "config": "cfg",
+        "paths": fake_paths,
+        "initialize": False,
+    }
+    assert captured["inventory"] == {
+        "config": "cfg",
+        "paths": fake_paths,
+    }
+
+
+def test_terraform_unlock_command_reports_when_no_lock_is_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    manifest = {"schema": "nebius-cxcli-generated/v1"}
+
+    monkeypatch.setattr(cli, "_load_generated_context", lambda _path: ("cfg", fake_paths, manifest))
+    monkeypatch.setattr(
+        cli,
+        "_unlock_terraform_state_lock",
+        lambda config, paths, *, auto_auth_bootstrap, force: None,
+    )
+    monkeypatch.setattr(
+        cli,
+        "backend_settings_from_config",
+        lambda _cfg: SimpleNamespace(bucket="demo-bucket", key="terraform.tfstate"),
+    )
+
+    result = runner.invoke(cli.app, ["terraform", "unlock", str(tmp_path / "generated")])
+
+    assert result.exit_code == 0, result.output
+    plain = _plain_output(result.output).replace("\n", " ")
+    assert "No remote Terraform state lock is present for" in plain
+    assert "demo-bucket/terraform.tfstate.tflock." in plain
+
+
+def test_terraform_unlock_command_reports_cleared_lock_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    manifest = {"schema": "nebius-cxcli-generated/v1"}
+    lock_info = SimpleNamespace(
+        lock_id="lock-123",
+        who="rezab@host",
+        created="2026-03-19T02:04:39Z",
+        bucket="demo-bucket",
+        object_key="terraform.tfstate.tflock",
+    )
+
+    monkeypatch.setattr(cli, "_load_generated_context", lambda _path: ("cfg", fake_paths, manifest))
+    monkeypatch.setattr(
+        cli,
+        "_unlock_terraform_state_lock",
+        lambda config, paths, *, auto_auth_bootstrap, force: lock_info,
+    )
+
+    result = runner.invoke(
+        cli.app,
+        ["terraform", "unlock", str(tmp_path / "generated"), "--force"],
+    )
+
+    assert result.exit_code == 0, result.output
+    plain = _plain_output(result.output)
+    assert "Terraform state lock cleared:" in plain
+    assert "id=lock-123" in plain
+    assert "owner=rezab@host" in plain
 
 
 def test_flux_bootstrap_command_invokes_flux_ops(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, object] = {}
+    manifest = {"schema": "nebius-cxcli-generated/v1", "deploy": {}}
 
-    monkeypatch.setattr(cli, "_load_context", lambda _path: ("cfg", fake_paths))
+    monkeypatch.setattr(cli, "_load_generated_context", lambda _path: ("cfg", fake_paths, manifest))
 
     def _fake_ensure_runtime_auth_material(
         config: object,
@@ -227,11 +1253,16 @@ def test_flux_bootstrap_command_invokes_flux_ops(tmp_path: Path, monkeypatch: py
         }
 
     monkeypatch.setattr(cli, "_ensure_runtime_auth_material", _fake_ensure_runtime_auth_material)
-    monkeypatch.setattr(cli, "ensure_flux", lambda _paths: "reconciled")
+    monkeypatch.setattr(
+        cli,
+        "write_inventory",
+        lambda config, paths: captured.setdefault("inventory", {"config": config, "paths": paths}),
+    )
+    monkeypatch.setattr(cli, "ensure_flux", lambda _paths, *, extra_env=None: "reconciled")
 
     result = runner.invoke(
         cli.app,
-        ["flux", "bootstrap", str(tmp_path / "config.yaml"), "--auto-auth-bootstrap"],
+        ["flux", "bootstrap", str(tmp_path / "generated"), "--auto-auth-bootstrap"],
     )
 
     assert result.exit_code == 0, result.output
@@ -242,18 +1273,736 @@ def test_flux_bootstrap_command_invokes_flux_ops(tmp_path: Path, monkeypatch: py
         "need_eso_mysterybox": False,
         "auto_bootstrap": True,
     }
+    assert captured["inventory"] == {"config": "cfg", "paths": fake_paths}
+
+
+def test_ensure_flux_uses_managed_flux_binary_when_missing_from_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = SimpleNamespace(
+        repo_root=tmp_path,
+        flux_dir=tmp_path / "generated" / "flux",
+    )
+    fake_paths.flux_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("GITHUB_REF_NAME", "main")
+
+    calls: list[tuple[object, ...]] = []
+
+    monkeypatch.setattr(flux_ops, "_require_binary", lambda _name: None)
+    monkeypatch.setattr(flux_ops, "wait_for_flux_namespace_ready", lambda *, extra_env=None: None)
+    monkeypatch.setattr(flux_ops, "flux_controllers_installed", lambda *, extra_env=None: True)
+    monkeypatch.setattr(flux_ops, "flux_crds_installed", lambda *, extra_env=None: True)
+    monkeypatch.setattr(
+        flux_ops,
+        "flux_bootstrap_resources_installed",
+        lambda *, extra_env=None: True,
+    )
+    monkeypatch.setattr(flux_ops, "resolve_flux_binary", lambda: "/tmp/managed-flux")
+    monkeypatch.setattr(
+        flux_ops,
+        "_run",
+        lambda cmd, **kwargs: calls.append((tuple(cmd), kwargs)),
+    )
+
+    result = flux_ops.ensure_flux(fake_paths)
+
+    assert result == "reconciled"
+    assert calls == [
+        (
+            ("/tmp/managed-flux", "reconcile", "source", "git", "flux-system"),
+            {"timeout": 300, "extra_env": None},
+        ),
+        (
+            ("/tmp/managed-flux", "reconcile", "kustomization", "flux-system", "--with-source"),
+            {"timeout": 300, "extra_env": None},
+        ),
+    ]
+
+
+def test_ensure_flux_bootstrap_falls_back_to_git_origin_repo_slug(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = SimpleNamespace(
+        repo_root=tmp_path,
+        flux_dir=tmp_path / "generated" / "flux",
+    )
+    fake_paths.flux_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    monkeypatch.setenv("GITHUB_REF_NAME", "main")
+
+    calls: list[tuple[object, ...]] = []
+
+    monkeypatch.setattr(flux_ops, "_require_binary", lambda _name: None)
+    monkeypatch.setattr(flux_ops, "wait_for_flux_namespace_ready", lambda *, extra_env=None: None)
+    monkeypatch.setattr(flux_ops, "flux_controllers_installed", lambda *, extra_env=None: False)
+    monkeypatch.setattr(flux_ops, "flux_crds_installed", lambda *, extra_env=None: False)
+    monkeypatch.setattr(flux_ops, "resolve_flux_binary", lambda: "/tmp/managed-flux")
+    monkeypatch.setattr(flux_ops, "detect_github_repo_slug", lambda _repo_root: "owner/repo")
+    monkeypatch.setattr(
+        flux_ops,
+        "install_flux_controllers",
+        lambda *, extra_env=None: calls.append((("install_flux",), {"extra_env": extra_env})),
+    )
+    monkeypatch.setattr(
+        flux_ops,
+        "_run",
+        lambda cmd, **kwargs: calls.append((tuple(cmd), kwargs)),
+    )
+
+    result = flux_ops.ensure_flux(fake_paths)
+
+    assert result == "bootstrapped"
+    assert calls[0] == (("install_flux",), {"extra_env": None})
+    assert calls[1][0] == (
+        "/tmp/managed-flux",
+        "bootstrap",
+        "github",
+        "--owner",
+        "owner",
+        "--repository",
+        "repo",
+        "--branch",
+        "main",
+        "--path",
+        "generated/flux",
+        "--token-auth",
+    )
+
+
+def test_ensure_flux_bootstraps_when_controllers_exist_but_bootstrap_resources_do_not(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = SimpleNamespace(
+        repo_root=tmp_path,
+        flux_dir=tmp_path / "generated" / "flux",
+    )
+    fake_paths.flux_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("GITHUB_REF_NAME", "main")
+
+    calls: list[tuple[object, ...]] = []
+
+    monkeypatch.setattr(flux_ops, "_require_binary", lambda _name: None)
+    monkeypatch.setattr(flux_ops, "wait_for_flux_namespace_ready", lambda *, extra_env=None: None)
+    monkeypatch.setattr(flux_ops, "flux_controllers_installed", lambda *, extra_env=None: True)
+    monkeypatch.setattr(flux_ops, "flux_crds_installed", lambda *, extra_env=None: True)
+    monkeypatch.setattr(
+        flux_ops,
+        "flux_bootstrap_resources_installed",
+        lambda *, extra_env=None: False,
+    )
+    monkeypatch.setattr(flux_ops, "resolve_flux_binary", lambda: "/tmp/managed-flux")
+    monkeypatch.setattr(
+        flux_ops,
+        "_run",
+        lambda cmd, **kwargs: calls.append((tuple(cmd), kwargs)),
+    )
+
+    result = flux_ops.ensure_flux(fake_paths)
+
+    assert result == "bootstrapped"
+    assert calls == [
+        (
+            (
+                "/tmp/managed-flux",
+                "bootstrap",
+                "github",
+                "--owner",
+                "owner",
+                "--repository",
+                "repo",
+                "--branch",
+                "main",
+                "--path",
+                "generated/flux",
+                "--token-auth",
+            ),
+            {"cwd": fake_paths.repo_root, "timeout": 1800, "extra_env": None},
+        ),
+        (
+            ("/tmp/managed-flux", "reconcile", "kustomization", "flux-system", "--with-source"),
+            {"timeout": 300, "extra_env": None},
+        ),
+    ]
+
+
+def test_ensure_flux_reinstalls_when_crds_are_missing_then_reconciles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = SimpleNamespace(
+        repo_root=tmp_path,
+        flux_dir=tmp_path / "generated" / "flux",
+    )
+    fake_paths.flux_dir.mkdir(parents=True, exist_ok=True)
+
+    calls: list[tuple[object, ...]] = []
+
+    monkeypatch.setattr(flux_ops, "_require_binary", lambda _name: None)
+    monkeypatch.setattr(flux_ops, "wait_for_flux_namespace_ready", lambda *, extra_env=None: None)
+    monkeypatch.setattr(flux_ops, "flux_controllers_installed", lambda *, extra_env=None: True)
+    monkeypatch.setattr(flux_ops, "flux_crds_installed", lambda *, extra_env=None: False)
+    monkeypatch.setattr(
+        flux_ops,
+        "flux_bootstrap_resources_installed",
+        lambda *, extra_env=None: True,
+    )
+    monkeypatch.setattr(flux_ops, "resolve_flux_binary", lambda: "/tmp/managed-flux")
+    monkeypatch.setattr(
+        flux_ops,
+        "install_flux_controllers",
+        lambda *, extra_env=None: calls.append((("install_flux",), {"extra_env": extra_env})),
+    )
+    monkeypatch.setattr(
+        flux_ops,
+        "_run",
+        lambda cmd, **kwargs: calls.append((tuple(cmd), kwargs)),
+    )
+
+    result = flux_ops.ensure_flux(fake_paths)
+
+    assert result == "reconciled"
+    assert calls[0] == (("install_flux",), {"extra_env": None})
+    assert calls[1:] == [
+        (
+            ("/tmp/managed-flux", "reconcile", "source", "git", "flux-system"),
+            {"timeout": 300, "extra_env": None},
+        ),
+        (
+            ("/tmp/managed-flux", "reconcile", "kustomization", "flux-system", "--with-source"),
+            {"timeout": 300, "extra_env": None},
+        ),
+    ]
+
+
+def test_wait_for_flux_namespace_ready_fails_with_targeted_guidance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = {
+        "metadata": {"deletionTimestamp": "2026-03-20T13:28:57Z"},
+        "status": {
+            "phase": "Terminating",
+            "conditions": [
+                {
+                    "type": "NamespaceContentRemaining",
+                    "status": "True",
+                    "message": (
+                        "Some resources are remaining: "
+                        "helmcharts.source.toolkit.fluxcd.io has 1 resource instances, "
+                        "kustomizations.kustomize.toolkit.fluxcd.io has 1 resource instances"
+                    ),
+                },
+                {
+                    "type": "NamespaceFinalizersRemaining",
+                    "status": "True",
+                    "message": (
+                        "Some content in the namespace has finalizers remaining: "
+                        "finalizers.fluxcd.io in 2 resource instances"
+                    ),
+                },
+            ],
+        },
+    }
+    monotonic_values = iter((0.0, 31.0))
+
+    monkeypatch.setattr(
+        flux_ops,
+        "_get_namespace_payload",
+        lambda namespace, *, extra_env=None: payload,
+    )
+    monkeypatch.setattr(flux_ops.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(flux_ops.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(RuntimeError, match="stuck terminating") as excinfo:
+        flux_ops.wait_for_flux_namespace_ready(timeout_seconds=30)
+
+    message = str(excinfo.value)
+    assert re.search(
+        r"\bhelmcharts\.source\.toolkit\.fluxcd\.io has 1 resource instances\b",
+        message,
+    )
+    assert re.search(r"\bfinalizers\.fluxcd\.io\b", message)
+    assert "kubectl get namespace flux-system -o yaml" in message
+
+
+def test_install_flux_controllers_waits_for_namespace_before_apply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(flux_ops, "_require_binary", lambda _name: None)
+    monkeypatch.setattr(
+        flux_ops,
+        "wait_for_flux_namespace_ready",
+        lambda *, extra_env=None: calls.append(("wait_namespace", extra_env)),
+    )
+    monkeypatch.setattr(
+        flux_ops,
+        "wait_for_flux_crds_clear",
+        lambda *, extra_env=None: calls.append(("wait_crds_clear", extra_env)),
+    )
+    monkeypatch.setattr(
+        flux_ops,
+        "wait_for_flux_crds_ready",
+        lambda *, extra_env=None: calls.append(("wait_crds_ready", extra_env)),
+    )
+    monkeypatch.setattr(
+        flux_ops,
+        "_run_filtered_kubectl_apply",
+        lambda cmd, **kwargs: calls.append(("apply", tuple(cmd))),
+    )
+    monkeypatch.setattr(
+        flux_ops,
+        "_run",
+        lambda cmd, **kwargs: calls.append(("run", tuple(cmd))),
+    )
+
+    manifest_url = flux_ops.install_flux_controllers(extra_env={"KUBECONFIG": "/tmp/kubeconfig"})
+
+    assert manifest_url == "https://github.com/fluxcd/flux2/releases/download/v2.8.0/install.yaml"
+    assert calls[0] == ("wait_namespace", {"KUBECONFIG": "/tmp/kubeconfig"})
+    assert calls[1] == ("wait_crds_clear", {"KUBECONFIG": "/tmp/kubeconfig"})
+    assert calls[2] == (
+        "apply",
+        ("kubectl", "apply", "-f", manifest_url),
+    )
+    assert calls[-1] == ("wait_crds_ready", {"KUBECONFIG": "/tmp/kubeconfig"})
+
+
+def test_prepare_cluster_handoff_kube_env_persists_local_kubeconfig_on_direct_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_config = SimpleNamespace(
+        client_info=SimpleNamespace(
+            client_name="client-a",
+            nebius=SimpleNamespace(project_id="project-456"),
+        )
+    )
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(cli, "_active_chart_count", lambda _config: 1)
+    monkeypatch.setattr(
+        cli,
+        "_enabled_cluster_handoffs",
+        lambda _config: [
+            {
+                "component_id": "mk8s",
+                "cluster_id_output_name": "mk8s_cluster_id",
+                "access": "external",
+            }
+        ],
+    )
+    monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/nebius" if name == "nebius" else None)
+    monkeypatch.setattr(cli, "terraform_output_raw", lambda *_args, **_kwargs: "cluster-123")
+    monkeypatch.setattr(
+        cli.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stderr="", stdout=""),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_persist_cluster_handoff_kubeconfig",
+        lambda **kwargs: captured.setdefault("persist", kwargs) or Path.home() / ".kube" / "config",
+    )
+
+    with ExitStack() as stack:
+        env = cli._prepare_cluster_handoff_kube_env(fake_config, fake_paths, stack=stack)
+
+    assert env is not None
+    assert "KUBECONFIG" in env
+    assert captured["persist"] == {
+        "cluster_id": "cluster-123",
+        "access": "external",
+    }
+
+
+def test_prepare_cluster_handoff_kube_env_persists_local_kubeconfig_with_temp_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_config = SimpleNamespace(
+        client_info=SimpleNamespace(
+            client_name="client-a",
+            nebius=SimpleNamespace(project_id="project-456"),
+        )
+    )
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(cli, "_active_chart_count", lambda _config: 1)
+    monkeypatch.setattr(
+        cli,
+        "_enabled_cluster_handoffs",
+        lambda _config: [
+            {
+                "component_id": "mk8s",
+                "cluster_id_output_name": "mk8s_cluster_id",
+                "access": "external",
+            }
+        ],
+    )
+    monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/nebius" if name == "nebius" else None)
+    monkeypatch.setattr(cli, "terraform_output_raw", lambda *_args, **_kwargs: "cluster-123")
+    monkeypatch.setenv("NEBIUS_SA_ID", "sa-123")
+    monkeypatch.setenv("NEBIUS_AUTH_PUBLIC_KEY_ID", "apk-123")
+    monkeypatch.setenv("NEBIUS_AUTH_PRIVATE_KEY_FILE", "/tmp/auth.pem")
+
+    monkeypatch.setattr(
+        cli.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=1, stderr="direct failed", stdout=""),
+    )
+
+    def _fake_run_command(cmd, *, env, timeout, failure_context):
+        commands = captured.setdefault("commands", [])
+        commands.append((tuple(cmd), dict(env), timeout, failure_context))
+
+    monkeypatch.setattr(cli, "_run_command_for_cluster_handoff", _fake_run_command)
+    monkeypatch.setattr(
+        cli,
+        "_persist_cluster_handoff_kubeconfig",
+        lambda **kwargs: captured.setdefault("persist", kwargs) or Path.home() / ".kube" / "config",
+    )
+
+    with ExitStack() as stack:
+        env = cli._prepare_cluster_handoff_kube_env(fake_config, fake_paths, stack=stack)
+
+    assert env is not None
+    assert captured["persist"]["cluster_id"] == "cluster-123"
+    assert captured["persist"]["access"] == "external"
+    assert captured["persist"]["profile_name"].startswith("cxcli-")
+    assert "XDG_CONFIG_HOME" in captured["persist"]["profile_env"]
+
+
+def test_persist_cluster_handoff_kubeconfig_skips_in_ci(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CI", "true")
+
+    assert (
+        cli._persist_cluster_handoff_kubeconfig(
+            cluster_id="cluster-123",
+            access="external",
+        )
+        is None
+    )
+
+
+def test_persist_cluster_handoff_kubeconfig_uses_force_on_reruns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setenv("NEBIUS_CXCLI_PERSIST_LOCAL_KUBECONFIG", "true")
+    monkeypatch.setattr(
+        cli,
+        "_run_command_for_cluster_handoff",
+        lambda cmd, *, env, timeout, failure_context: captured.setdefault(
+            "cmd", tuple(cmd)
+        ),
+    )
+    monkeypatch.setattr(
+        cli.console,
+        "print",
+        lambda message: captured.setdefault("message", message),
+    )
+
+    result = cli._persist_cluster_handoff_kubeconfig(
+        cluster_id="cluster-123",
+        access="external",
+    )
+
+    assert result == Path.home().expanduser() / ".kube" / "config"
+    assert "--force" in captured["cmd"]
+
+
+def test_flux_bootstrap_command_uses_cluster_handoff_when_config_declares_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_config = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-456",
+                "region_id": "eu-north1",
+            },
+            "notifications": {},
+        },
+        "infra": {"components": [{"id": "mk8s", "enabled": True, "inputs": {}}]},
+        "apps": {"charts": [{"id": "gateway-helm", "enabled": True}]},
+    }
+    manifest = {
+        "schema": "nebius-cxcli-generated/v1",
+        "deploy": {
+            "handoffs": [
+                {
+                    "component_id": "mk8s",
+                    "cluster_id_output_name": "mk8s_cluster_id",
+                    "component_output_ref": "mk8s.cluster_id",
+                    "access": "external",
+                }
+            ]
+        },
+    }
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        cli, "_load_generated_context", lambda _path: (fake_config, fake_paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli,
+        "_ensure_terraform_backend_ready",
+        lambda config, *, auto_auth_bootstrap: captured.update(
+            {"backend": (config, auto_auth_bootstrap)}
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_prepare_cluster_handoff_kube_env",
+        lambda config, paths, *, stack, handoffs=None: (
+            captured.update({"handoff": (config, paths, handoffs)})
+            or {"KUBECONFIG": "/tmp/kubeconfig"}
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_wait_for_cluster_nodes_ready",
+        lambda *, extra_env, emit: captured.update({"wait_nodes": extra_env}),
+    )
+    monkeypatch.setattr(
+        cli,
+        "write_inventory",
+        lambda config, paths: captured.update({"inventory": (config, paths)}),
+    )
+    monkeypatch.setattr(
+        cli,
+        "ensure_flux",
+        lambda paths, *, extra_env=None: (
+            captured.update({"flux": (paths, extra_env)}) or "reconciled"
+        ),
+    )
+
+    result = runner.invoke(
+        cli.app,
+        ["flux", "bootstrap", str(tmp_path / "generated"), "--auto-auth-bootstrap"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["backend"] == (fake_config, True)
+    assert captured["inventory"] == (fake_config, fake_paths)
+    assert captured["handoff"] == (
+        fake_config,
+        fake_paths,
+        [
+            {
+                "component_id": "mk8s",
+                "cluster_id_output_name": "mk8s_cluster_id",
+                "component_output_ref": "mk8s.cluster_id",
+                "access": "external",
+            }
+        ],
+    )
+    assert captured["flux"] == (fake_paths, {"KUBECONFIG": "/tmp/kubeconfig"})
+    assert captured["wait_nodes"] == {"KUBECONFIG": "/tmp/kubeconfig"}
+
+
+def test_flux_apply_command_applies_rendered_flux_with_cluster_handoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_config = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-456",
+                "region_id": "eu-north1",
+            },
+            "notifications": {},
+        },
+        "infra": {"components": [{"id": "mk8s", "enabled": True, "inputs": {}}]},
+        "apps": {"charts": [{"id": "gateway-helm", "enabled": True}]},
+    }
+    manifest = {
+        "schema": "nebius-cxcli-generated/v1",
+        "deploy": {
+            "handoffs": [
+                {
+                    "component_id": "mk8s",
+                    "cluster_id_output_name": "mk8s_cluster_id",
+                    "component_output_ref": "mk8s.cluster_id",
+                    "access": "external",
+                }
+            ]
+        },
+    }
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        cli, "_load_generated_context", lambda _path: (fake_config, fake_paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli,
+        "_ensure_terraform_backend_ready",
+        lambda config, *, auto_auth_bootstrap: captured.update(
+            {"backend": (config, auto_auth_bootstrap)}
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_prepare_cluster_handoff_kube_env",
+        lambda config, paths, *, stack, handoffs=None: (
+            captured.update({"handoff": (config, paths, handoffs)})
+            or {"KUBECONFIG": "/tmp/kubeconfig"}
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_wait_for_cluster_nodes_ready",
+        lambda *, extra_env, emit: captured.update({"wait_nodes": extra_env}),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_apply_rendered_flux",
+        lambda paths, *, extra_env=None: captured.update({"apply_flux": (paths, extra_env)}),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_warn_if_flux_gitops_not_bootstrapped",
+        lambda config, paths, *, extra_env=None: captured.update(
+            {"warn_bootstrap": (config, paths, extra_env)}
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "write_inventory",
+        lambda config, paths: captured.update({"inventory": (config, paths)}),
+    )
+
+    result = runner.invoke(
+        cli.app,
+        ["flux", "apply", str(tmp_path / "generated"), "--auto-auth-bootstrap"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Flux applied from" in _plain_output(result.output)
+    assert captured["backend"] == (fake_config, True)
+    assert captured["inventory"] == (fake_config, fake_paths)
+    assert captured["handoff"] == (
+        fake_config,
+        fake_paths,
+        [
+            {
+                "component_id": "mk8s",
+                "cluster_id_output_name": "mk8s_cluster_id",
+                "component_output_ref": "mk8s.cluster_id",
+                "access": "external",
+            }
+        ],
+    )
+    assert captured["apply_flux"] == (fake_paths, {"KUBECONFIG": "/tmp/kubeconfig"})
+    assert captured["warn_bootstrap"] == (
+        fake_config,
+        fake_paths,
+        {"KUBECONFIG": "/tmp/kubeconfig"},
+    )
+    assert captured["wait_nodes"] == {"KUBECONFIG": "/tmp/kubeconfig"}
+
+
+def test_warn_if_flux_gitops_not_bootstrapped_prints_guidance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    messages: list[str] = []
+
+    monkeypatch.setattr(cli, "_active_chart_count", lambda _config: 1)
+    monkeypatch.setattr(
+        cli,
+        "flux_bootstrap_resources_installed",
+        lambda *, extra_env=None: False,
+    )
+    monkeypatch.setattr(
+        cli.console,
+        "print",
+        lambda message, *args, **kwargs: messages.append(str(message)),
+    )
+
+    cli._warn_if_flux_gitops_not_bootstrapped(
+        {"apps": {"charts": [{"id": "gateway-helm", "enabled": True}]}},
+        fake_paths,
+        extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
+    )
+
+    assert len(messages) >= 3
+    assert "Flux GitOps bootstrap is not configured" in messages[0]
+    assert "Run to enable GitOps sync:" in messages[1]
+    assert f"nebius-cxcli flux bootstrap {fake_paths.generated_dir}" == messages[2]
+
+
+def test_help_text_aligns_render_and_apply_surfaces() -> None:
+    top_result = runner.invoke(cli.app, ["--help"])
+    render_result = runner.invoke(cli.app, ["render", "--help"])
+    deploy_result = runner.invoke(cli.app, ["deploy", "--help"])
+    tf_apply_result = runner.invoke(cli.app, ["terraform", "apply", "--help"])
+    flux_apply_result = runner.invoke(cli.app, ["flux", "apply", "--help"])
+    flux_bootstrap_result = runner.invoke(cli.app, ["flux", "bootstrap", "--help"])
+
+    assert top_result.exit_code == 0, top_result.output
+    assert render_result.exit_code == 0, render_result.output
+    assert deploy_result.exit_code == 0, deploy_result.output
+    assert tf_apply_result.exit_code == 0, tf_apply_result.output
+    assert flux_apply_result.exit_code == 0, flux_apply_result.output
+    assert flux_bootstrap_result.exit_code == 0, flux_bootstrap_result.output
+
+    render_help = " ".join(_plain_output(render_result.output).split()).lower()
+    deploy_help = " ".join(_plain_output(deploy_result.output).split()).lower()
+    tf_apply_help = " ".join(_plain_output(tf_apply_result.output).split()).lower()
+    flux_apply_help = " ".join(_plain_output(flux_apply_result.output).split()).lower()
+    flux_bootstrap_help = " ".join(_plain_output(flux_bootstrap_result.output).split()).lower()
+
+    assert "prompting before a reset unless --force is provided" in render_help
+    assert "generated artifact bundle" in deploy_help
+    assert "refresh inventory" in deploy_help
+    assert "refresh inventory" in tf_apply_help
+    assert "refresh inventory" in flux_apply_help
+    assert "refresh inventory" in flux_bootstrap_help
+
+
+def test_flux_apply_command_fails_when_no_enabled_charts_exist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_config = {"apps": {"charts": []}}
+
+    monkeypatch.setattr(
+        cli,
+        "_load_generated_context",
+        lambda _path: (fake_config, fake_paths, {"schema": "nebius-cxcli-generated/v1", "deploy": {}}),
+    )
+
+    result = runner.invoke(cli.app, ["flux", "apply", str(tmp_path / "generated")])
+
+    assert result.exit_code == 1, result.output
+    assert "No enabled apps charts are configured for this instance." in _plain_output(result.output)
 
 
 def test_inventory_commands_invoke_inventory_ops(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fake_paths = _fake_paths(tmp_path)
-    monkeypatch.setattr(cli, "_load_context", lambda _path: ("cfg", fake_paths))
+    monkeypatch.setattr(
+        cli,
+        "_load_generated_context",
+        lambda _path: ("cfg", fake_paths, {"schema": "nebius-cxcli-generated/v1"}),
+    )
     monkeypatch.setattr(
         cli,
         "write_inventory",
         lambda _cfg, _paths: SimpleNamespace(markdown=tmp_path / "generated" / "inventory" / "inventory.md"),
     )
 
-    write_result = runner.invoke(cli.app, ["inventory", "write", str(tmp_path / "config.yaml")])
+    write_result = runner.invoke(cli.app, ["inventory", "write", str(tmp_path / "generated")])
 
     assert write_result.exit_code == 0, write_result.output
     assert "Inventory written:" in _plain_output(write_result.output)
@@ -261,15 +2010,19 @@ def test_inventory_commands_invoke_inventory_ops(tmp_path: Path, monkeypatch: py
 
 def test_email_command_handles_sent_and_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fake_paths = _fake_paths(tmp_path)
-    monkeypatch.setattr(cli, "_load_context", lambda _path: ("cfg", fake_paths))
+    monkeypatch.setattr(
+        cli,
+        "_load_generated_context",
+        lambda _path: ("cfg", fake_paths, {"schema": "nebius-cxcli-generated/v1"}),
+    )
 
     monkeypatch.setattr(cli, "send_inventory_email", lambda _cfg, _paths: True)
-    sent_result = runner.invoke(cli.app, ["email", str(tmp_path / "config.yaml")])
+    sent_result = runner.invoke(cli.app, ["email", str(tmp_path / "generated")])
     assert sent_result.exit_code == 0, sent_result.output
     assert "Inventory email sent" in _plain_output(sent_result.output)
 
     monkeypatch.setattr(cli, "send_inventory_email", lambda _cfg, _paths: False)
-    noop_result = runner.invoke(cli.app, ["email", str(tmp_path / "config.yaml")])
+    noop_result = runner.invoke(cli.app, ["email", str(tmp_path / "generated")])
     assert noop_result.exit_code == 0, noop_result.output
     assert "client_info.notifications.email not configured; nothing sent" in _plain_output(
         noop_result.output
@@ -283,6 +2036,74 @@ def test_top_level_help_has_single_auth_command_surface() -> None:
     assert "Manage runtime auth profile" in output
     assert "auth-runtime-profile" not in output
     assert re.search(r"\bauth\b", output) is not None
+
+
+def test_render_command_fails_before_render_when_active_source_validation_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "_load_context", lambda _path: ("cfg", _fake_paths(tmp_path)))
+    monkeypatch.setattr(
+        cli,
+        "_validate_active_component_sources",
+        lambda _cfg: (_ for _ in ()).throw(RuntimeError("broken source")),
+    )
+    monkeypatch.setattr(
+        cli,
+        "render_terraform_artifacts",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("render should not run")),
+    )
+
+    result = runner.invoke(cli.app, ["render", str(tmp_path / "config.yaml")])
+
+    assert result.exit_code == 1, result.output
+    assert "broken source" in _plain_output(result.output)
+
+
+def test_validate_active_component_sources_uses_active_catalog_not_config_source_override(
+    tmp_path: Path,
+) -> None:
+    module_dir = tmp_path / "mk8s-module"
+    module_dir.mkdir(parents=True, exist_ok=True)
+    (module_dir / "main.tf").write_text("terraform {}\n", encoding="utf-8")
+
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-456",
+                "region_id": "eu-north1",
+            },
+            "notifications": {},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "enabled": True,
+                    "source": str(module_dir),
+                    "inputs": {},
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    cli._validate_active_component_sources(payload)
+
+
+def test_top_level_help_describes_global_component_sources_override() -> None:
+    result = runner.invoke(cli.app, ["--help"])
+
+    assert result.exit_code == 0, result.output
+    output = _plain_output(result.output)
+    assert "--component-sources-file" in output
+    assert "Global optional override for the" in output
+    assert "component sources file. Use this to" in output
+    assert "point nebius-cxcli at a different" in output
+    assert "component_sources.yaml path. When" in output
+    assert "'component_sources.yaml' from the" in output
 
 
 def test_auth_help_has_no_subcommand_layer() -> None:

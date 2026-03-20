@@ -9,8 +9,10 @@ import yaml
 from typer.testing import CliRunner
 
 import nebius_cxcli.cli as cli_module
+import nebius_cxcli.component_sources as component_sources
 from nebius_cxcli.cli import _load_context, app
 from nebius_cxcli.component_sources import (
+    ComponentOutput,
     reset_component_sources_cache,
     set_component_sources_file_override,
 )
@@ -26,6 +28,37 @@ def _reset_runtime_state(monkeypatch: pytest.MonkeyPatch) -> None:
         "nebius_cxcli.cli._validate_tenant_project_ids_or_prompt",
         lambda **kwargs: (kwargs["tenant_id"], kwargs["project_id"]),
     )
+    monkeypatch.setattr(
+        component_sources,
+        "_discover_terraform_outputs",
+        lambda _source: (
+            ComponentOutput(
+                name="cluster_id",
+                kind="terraform_output",
+                source_path="cluster_id",
+                sensitive=False,
+            ),
+            ComponentOutput(
+                name="cluster_ca_certificate",
+                kind="terraform_output",
+                source_path="cluster_ca_certificate",
+                sensitive=True,
+            ),
+        ),
+    )
+    monkeypatch.setattr("nebius_cxcli.cli.module_variables", lambda _source: ())
+    monkeypatch.setattr("nebius_cxcli.cli.module_variable_names", lambda _source: ())
+    monkeypatch.setattr("nebius_cxcli.cli.module_required_variables", lambda _source: ())
+    monkeypatch.setattr("nebius_cxcli.cli.helm_chart_default_values", lambda **_kwargs: {})
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._helm_chart_metadata",
+        lambda *, chart_name_or_ref, chart_repo, chart_version, cache=None: (
+            chart_name_or_ref,
+            set(),
+            None,
+        ),
+    )
+    monkeypatch.setattr("nebius_cxcli.cli._with_infra_provider_groups", lambda entries: entries)
     set_component_sources_file_override(None)
     reset_component_sources_cache()
     reset_component_entry_cache()
@@ -135,7 +168,7 @@ def test_create_writes_deployments_gitignore_when_target_is_in_git_repo(tmp_path
     assert gitignore_path.exists()
     content = gitignore_path.read_text(encoding="utf-8")
     assert "instances/*/*/generated/" not in content.splitlines()
-    assert "instances/*/*/config.yaml" in content
+    assert "instances/*/*/config.yaml" not in content
     assert "instances/*/*/generated/infra/.terraform/" in content
     assert "instances/*/*/generated/infra/terraform.auto.tfvars.json" in content
 
@@ -173,12 +206,12 @@ def test_render_recreates_deployments_gitignore_in_git_repo(tmp_path: Path) -> N
     assert not gitignore_path.exists()
 
     config_path = _instance_config_path(deployments_root)
-    render_result = runner.invoke(app, ["render", str(config_path)])
+    render_result = runner.invoke(app, ["render", "--force", str(config_path)])
     assert render_result.exit_code == 0, render_result.output
     assert gitignore_path.exists()
     content = gitignore_path.read_text(encoding="utf-8")
     assert "instances/*/*/generated/" not in content.splitlines()
-    assert "instances/*/*/config.yaml" in content
+    assert "instances/*/*/config.yaml" not in content
     assert "instances/*/*/generated/infra/.terraform/" in content
     assert "instances/*/*/generated/infra/terraform.auto.tfvars.json" in content
 
@@ -352,6 +385,92 @@ def test_create_does_not_embed_component_sources_block(tmp_path: Path) -> None:
     assert "component_sources" not in payload
 
 
+def test_create_seeds_component_source_defaults_into_config(tmp_path: Path) -> None:
+    module_dir = tmp_path / "modules" / "demo-module"
+    module_dir.mkdir(parents=True, exist_ok=True)
+    (module_dir / "main.tf").write_text("terraform {}\n", encoding="utf-8")
+    (module_dir / "variables.tf").write_text(
+        'variable "cluster_name" { type = string }\n'
+        'variable "cpu_nodes_count" { type = number }\n',
+        encoding="utf-8",
+    )
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            {
+                "infra": {
+                    "tf_modules": [
+                        {
+                            "module": "demo-module",
+                            "source": str(module_dir),
+                            "enable": True,
+                            "defaults": {
+                                "inputs.cluster_name": "demo-cluster",
+                                "inputs.cpu_nodes_count": 3,
+                            },
+                        }
+                    ]
+                },
+                "apps": {
+                    "helm_charts": [
+                        {
+                            "name": "demo-app",
+                            "repo": "https://example.invalid/charts",
+                            "version": "1.0.0",
+                            "namespace": "demo",
+                            "releasename": "demo-app",
+                            "enable": True,
+                            "defaults": {
+                                "values.replicaCount": 2,
+                                "values.image.tag": "stable",
+                            },
+                        }
+                    ]
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    result = runner.invoke(
+        app,
+        [
+            "--component-sources-file",
+            str(sources_file),
+            "create",
+            str(deployments_root),
+            "--no-interactive",
+            "--client-name",
+            "client-a",
+            "--tenant-id",
+            "tenant-123",
+            "--project-id",
+            "project-456",
+            "--no-validate-sources",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+    payload = yaml.safe_load(_instance_config_path(deployments_root).read_text(encoding="utf-8"))
+    demo_module = next(
+        item
+        for item in payload["infra"]["components"]
+        if isinstance(item, dict) and item.get("id") == "demo-module"
+    )
+    assert demo_module["inputs"]["cluster_name"] == "demo-cluster"
+    assert demo_module["inputs"]["cpu_nodes_count"] == 3
+
+    demo_app = next(
+        item
+        for item in payload["apps"]["charts"]
+        if isinstance(item, dict) and item.get("id") == "demo-app"
+    )
+    assert demo_app["values"]["replicaCount"] == 2
+    assert demo_app["values"]["image"]["tag"] == "stable"
+
+
 def test_create_app_namespace_and_releasename_overrides(tmp_path: Path) -> None:
     deployments_root = tmp_path / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)
@@ -396,7 +515,14 @@ def test_create_updates_existing_instance_component_selection(tmp_path: Path) ->
 
     config_path = _instance_config_path(deployments_root)
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    payload["infra"]["ssh_user_name"] = "customuser"
+    components = payload.get("infra", {}).get("components", [])
+    assert isinstance(components, list)
+    mk8s_row = next(
+        row for row in components if isinstance(row, dict) and str(row.get("id", "")).strip() == "mk8s"
+    )
+    inputs = mk8s_row.setdefault("inputs", {})
+    assert isinstance(inputs, dict)
+    inputs["cluster_name"] = "custom-cluster"
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     second = _create_non_interactive(
@@ -412,7 +538,14 @@ def test_create_updates_existing_instance_component_selection(tmp_path: Path) ->
     refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     infra_enabled = _infra_enabled_map(refreshed)
     apps_enabled = _apps_enabled_map(refreshed)
-    assert refreshed["infra"]["ssh_user_name"] == "customuser"
+    refreshed_components = refreshed.get("infra", {}).get("components", [])
+    assert isinstance(refreshed_components, list)
+    refreshed_mk8s = next(
+        row for row in refreshed_components if isinstance(row, dict) and str(row.get("id", "")).strip() == "mk8s"
+    )
+    refreshed_inputs = refreshed_mk8s.get("inputs", {})
+    assert isinstance(refreshed_inputs, dict)
+    assert refreshed_inputs["cluster_name"] == "custom-cluster"
     assert infra_enabled["mk8s"] is True
     assert "object-storage" not in infra_enabled
     assert apps_enabled["n8n"] is True
@@ -512,6 +645,10 @@ def test_bootstrap_ci_no_auth_writes_workflow_in_repo_root(tmp_path: Path) -> No
     assert "NEBIUS_DISCOVER_TARGET: customer/deployments-root" in content
     assert "customer/deployments-root" in content
     assert "name: ${{ matrix.github_environment }}" in content
+    assert '**/customer/deployments-root/**/generated/**' in content
+    assert '**/customer/deployments-root/**/config.yaml' not in content
+    assert "Validate source contract changes" not in content
+    assert "validate-generated" in content
 
 
 def test_bootstrap_ci_no_auth_is_idempotent_without_force(tmp_path: Path) -> None:
@@ -595,6 +732,9 @@ def test_discover_accepts_non_git_directory(tmp_path: Path) -> None:
         "include": [
             {
                 "config": "deployments/instances/client-a--tenant-123/project-456/config.yaml",
+                "generated": "deployments/instances/client-a--tenant-123/project-456/generated",
+                "config_changed": False,
+                "generated_changed": False,
                 "github_environment": "client-a-project-456",
             }
         ]
@@ -625,6 +765,9 @@ def test_discover_in_git_repo_outputs_repo_relative_paths(tmp_path: Path) -> Non
         "include": [
             {
                 "config": "deployments/instances/client-a--tenant-123/project-456/config.yaml",
+                "generated": "deployments/instances/client-a--tenant-123/project-456/generated",
+                "config_changed": False,
+                "generated_changed": False,
                 "github_environment": "client-a-project-456",
             }
         ]

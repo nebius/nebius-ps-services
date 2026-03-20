@@ -43,6 +43,9 @@ def test_discover_include_all(tmp_path: Path, monkeypatch) -> None:
         "include": [
             {
                 "config": "nebius-deployments/instances/client-a--tenant-123/project-456/config.yaml",
+                "generated": "nebius-deployments/instances/client-a--tenant-123/project-456/generated",
+                "config_changed": False,
+                "generated_changed": False,
                 "github_environment": "client-a-project-456",
             }
         ]
@@ -72,6 +75,9 @@ def test_discover_without_git_falls_back_to_scan_all(tmp_path: Path, monkeypatch
         "include": [
             {
                 "config": "deployments/instances/client-a--tenant-123/project-456/config.yaml",
+                "generated": "deployments/instances/client-a--tenant-123/project-456/generated",
+                "config_changed": False,
+                "generated_changed": False,
                 "github_environment": "client-a-project-456",
             }
         ]
@@ -105,6 +111,51 @@ def test_discover_changed_files_works_on_initial_commit(tmp_path: Path, monkeypa
         "include": [
             {
                 "config": "deployments/instances/client-a--tenant-123/project-456/config.yaml",
+                "generated": "deployments/instances/client-a--tenant-123/project-456/generated",
+                "config_changed": True,
+                "generated_changed": False,
+                "github_environment": "client-a-project-456",
+            }
+        ]
+    }
+
+
+def test_discover_generated_change_maps_back_to_instance_config(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo_root = tmp_path / "repo"
+    config_path = (
+        repo_root
+        / "deployments"
+        / "instances"
+        / "client-a--tenant-123"
+        / "project-456"
+        / "config.yaml"
+    )
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text("version: v1\n", encoding="utf-8")
+    _git_init_and_commit(repo_root)
+
+    monkeypatch.chdir(repo_root)
+    monkeypatch.setattr(
+        "nebius_cxcli.discover_ops._changed_files",
+        lambda *, cwd: [
+            "deployments/instances/client-a--tenant-123/project-456/generated/flux/helmrelease-demo.yaml"
+        ],
+    )
+    payload = discover_configs(
+        deployments_dir="deployments",
+        include_all=False,
+        repo_root=repo_root,
+    )
+
+    assert payload == {
+        "include": [
+            {
+                "config": "deployments/instances/client-a--tenant-123/project-456/config.yaml",
+                "generated": "deployments/instances/client-a--tenant-123/project-456/generated",
+                "config_changed": False,
+                "generated_changed": True,
                 "github_environment": "client-a-project-456",
             }
         ]

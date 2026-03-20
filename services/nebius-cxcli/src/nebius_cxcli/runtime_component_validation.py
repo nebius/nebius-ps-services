@@ -19,10 +19,10 @@ def validate_component_runtime_rules(
     id_pattern: Pattern[str],
     env_var_pattern: Pattern[str],
 ) -> None:
-    ssh_user_name = as_text(get_path(payload, "infra.ssh_user_name"))
+    ssh_user_name = as_text(get_path(payload, "shared.admin_ssh.user_name"))
     if ssh_user_name and not _LINUX_USER_PATTERN.fullmatch(ssh_user_name):
         raise ValueError(
-            "infra.ssh_user_name must match Linux username format (for example ubuntu, admin_user)"
+            "shared.admin_ssh.user_name must match Linux username format (for example ubuntu, admin_user)"
         )
 
     if bool(get_path(payload, "infra.managed_postgresql.enabled", False)):

@@ -6,13 +6,21 @@ import pytest
 import yaml
 
 from nebius_cxcli.cli import _validate_enabled_chart_sources, _validate_strict_config
+from nebius_cxcli.component_sources import (
+    reset_component_sources_cache,
+    set_component_sources_file_override,
+)
 from nebius_cxcli.components import component_entries, reset_component_entry_cache
 from nebius_cxcli.config_loader import load_config
 from nebius_cxcli.config_template import starter_config_yaml
+from nebius_cxcli.runtime_introspection import reset_runtime_introspection_cache
 
 
 @pytest.fixture(autouse=True)
 def _reset_component_cache() -> None:
+    set_component_sources_file_override(None)
+    reset_component_sources_cache()
+    reset_runtime_introspection_cache()
     reset_component_entry_cache()
 
 
@@ -31,9 +39,6 @@ def _starter_payload(*, selected_infra: set[str], selected_apps: set[str]) -> di
         )
     )
     assert isinstance(payload, dict)
-    payload["infra"]["ssh_public_key"] = (
-        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB8Yq7Rr0x2GdQ8gJ5Q40gF4yHahx7s6vH8kKf+demo"
-    )
     return payload
 
 
@@ -47,6 +52,26 @@ def _infra_component_row(payload: dict, component_id: str) -> dict:
         if str(item.get("id", "")).strip().lower() == component_id:
             return item
     raise KeyError(component_id)
+
+
+def _catalog_with_shared_admin_ssh(
+    tmp_path: Path,
+    *,
+    user_name: str = "ubuntu",
+    public_key: str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB8Yq7Rr0x2GdQ8gJ5Q40gF4yHahx7s6vH8kKf+demo",
+) -> Path:
+    source_catalog = Path(__file__).resolve().parents[1] / "component_sources.yaml"
+    payload = yaml.safe_load(source_catalog.read_text(encoding="utf-8"))
+    assert isinstance(payload, dict)
+    shared = payload.setdefault("shared", {})
+    assert isinstance(shared, dict)
+    admin_ssh = shared.setdefault("admin_ssh", {})
+    assert isinstance(admin_ssh, dict)
+    admin_ssh["user_name"] = user_name
+    admin_ssh["public_key"] = public_key
+    override_path = tmp_path / "component_sources.yaml"
+    override_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    return override_path
 
 
 def test_strict_validation_requires_enabled_module_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -95,9 +120,95 @@ def test_strict_validation_checks_dynamic_custom_component_source(
 
     with pytest.raises(RuntimeError) as exc_info:
         _validate_strict_config(config)
-    assert "infra component 'runtime-custom' is enabled but has no module source configured" in str(
+    assert "infra.components[runtime-custom] is enabled but has no module source configured" in str(
         exc_info.value
     )
+
+
+def test_strict_validation_rejects_unknown_custom_module_inputs(tmp_path: Path) -> None:
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
+    mk8s = _infra_component_row(payload, "mk8s")
+    mk8s["inputs"] = {
+        "parent_id": "project-456",
+        "cluster_name": "demo-cluster",
+        "subnet_id": "subnet-123",
+        "ssh_public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB8Yq7Rr0x2GdQ8gJ5Q40gF4yHahx7s6vH8kKf+demo",
+    }
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    config = load_config(config_path)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        _validate_strict_config(config)
+    assert "infra.components[mk8s].inputs.ssh_public_key is not declared by module" in str(
+        exc_info.value
+    )
+
+
+def test_strict_validation_allows_explicit_ssh_public_key_for_jumphost(tmp_path: Path) -> None:
+    set_component_sources_file_override(_catalog_with_shared_admin_ssh(tmp_path))
+    reset_component_sources_cache()
+    reset_runtime_introspection_cache()
+    reset_component_entry_cache()
+    payload = _starter_payload(selected_infra={"wireguard-jumphost"}, selected_apps=set())
+    jumphost = _infra_component_row(payload, "wireguard-jumphost")
+    jumphost["inputs"] = {
+        "parent_id": "project-456",
+        "region": "eu-north1",
+        "subnet_id": "subnet-123",
+        "name": "wg-jumphost",
+        "ssh_public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB8Yq7Rr0x2GdQ8gJ5Q40gF4yHahx7s6vH8kKf+demo",
+    }
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    config = load_config(config_path)
+
+    _validate_strict_config(config)
+
+
+def test_strict_validation_rejects_missing_local_custom_module_source_dir(tmp_path: Path) -> None:
+    payload = _starter_payload(selected_infra=set(), selected_apps=set())
+    payload["infra"]["components"] = [
+        {
+            "id": "runtime-custom",
+            "enabled": True,
+            "source": str(tmp_path / "missing-module"),
+            "inputs": {},
+        }
+    ]
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    config = load_config(config_path)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        _validate_strict_config(config)
+    assert "does not resolve to an existing local directory" in str(exc_info.value)
+
+
+def test_strict_validation_rejects_local_custom_module_source_without_tf_files(tmp_path: Path) -> None:
+    module_dir = tmp_path / "empty-module"
+    module_dir.mkdir()
+
+    payload = _starter_payload(selected_infra=set(), selected_apps=set())
+    payload["infra"]["components"] = [
+        {
+            "id": "runtime-custom",
+            "enabled": True,
+            "source": str(module_dir),
+            "inputs": {},
+        }
+    ]
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    config = load_config(config_path)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        _validate_strict_config(config)
+    assert "has no Terraform .tf files" in str(exc_info.value)
 
 
 def test_validate_enabled_chart_sources_reports_lookup_error(
@@ -110,10 +221,10 @@ def test_validate_enabled_chart_sources_reports_lookup_error(
     config = load_config(config_path)
 
     monkeypatch.setattr(
-        "nebius_cxcli.cli._helm_chart_dependency_names",
-        lambda **_kwargs: (set(), "simulated lookup failure"),
+        "nebius_cxcli.cli._helm_chart_validation_issues",
+        lambda **_kwargs: ("simulated lookup failure",),
     )
 
     issues = _validate_enabled_chart_sources(config)
-    assert any("apps:n8n" in issue for issue in issues)
+    assert any("apps.charts[n8n]" in issue for issue in issues)
     assert any("simulated lookup failure" in issue for issue in issues)

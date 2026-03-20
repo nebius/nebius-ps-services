@@ -3,7 +3,7 @@ resource "nebius_mk8s_v1_cluster" "this" {
   name          = local.cluster_name_effective
   labels        = length(local.cluster_labels_effective) > 0 ? local.cluster_labels_effective : null
   control_plane = local.cluster_control_plane
-  kube_network  = try(local.cluster_overrides.kube_network, null)
+  kube_network  = length(local.cluster_kube_network) > 0 ? local.cluster_kube_network : null
 
   lifecycle {
     precondition {

@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from .components import ComponentScope, component_entries, component_lookup, parse_dependency_ref
+from .runtime_config import read_path_with_catalog
 from .runtime_plugin_validation import run_runtime_validation_plugins
 
 _ROOT_KEYS = frozenset({"version", "client_info", "infra", "apps"})
@@ -17,20 +18,8 @@ _CLIENT_NAME_PATTERN = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 
 
 def _get_path(payload: Mapping[str, Any], dotted_path: str, default: Any = None) -> Any:
-    current: Any = payload
-    for segment in dotted_path.split("."):
-        if not isinstance(current, Mapping):
-            return default
-        candidates = (segment, segment.replace("-", "_"), segment.replace("_", "-"))
-        matched = None
-        for candidate in candidates:
-            if candidate in current:
-                matched = current[candidate]
-                break
-        if matched is None:
-            return default
-        current = matched
-    return current
+    resolved = read_path_with_catalog(payload, dotted_path)
+    return default if resolved is None else resolved
 
 
 def _as_text(value: Any) -> str:
@@ -272,6 +261,18 @@ def validate_runtime_payload(payload: Mapping[str, Any]) -> None:
         raise ValueError("version must be 'v1'")
 
     _validate_client_info(payload)
+
+    infra = payload.get("infra")
+    if isinstance(infra, Mapping):
+        legacy_shared_paths = [key for key in ("ssh_user_name", "ssh_public_key") if key in infra]
+        if legacy_shared_paths:
+            raise ValueError(
+                "infra.ssh_user_name and infra.ssh_public_key are no longer root infra fields. "
+                "Set ssh_user_name/ssh_public_key on the selected jump-host component inputs instead "
+                "(for example infra.components[id=wireguard-jumphost].inputs.ssh_public_key). "
+                "component_sources.yaml shared.admin_ssh.user_name remains available for a non-sensitive "
+                "catalog-level default username."
+            )
 
     selected_by_scope: dict[ComponentScope, set[str]] = {
         "infra": _enabled_component_ids(payload, scope="infra"),

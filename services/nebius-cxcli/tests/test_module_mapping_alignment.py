@@ -3,13 +3,68 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 import yaml
 
+import nebius_cxcli.component_sources as component_sources
+from nebius_cxcli.component_sources import (
+    ComponentOutput,
+    reset_component_sources_cache,
+    resolve_component_sources_file,
+    set_component_sources_file_override,
+)
 from nebius_cxcli.components import component_entries, reset_component_entry_cache
 from nebius_cxcli.config_loader import load_config
 from nebius_cxcli.config_template import starter_config_yaml
 from nebius_cxcli.paths import resolve_instance_paths, validate_path_alignment
 from nebius_cxcli.render import render_instance
+from nebius_cxcli.runtime_introspection import ModuleVariable, reset_runtime_introspection_cache
+
+
+@pytest.fixture(autouse=True)
+def _stub_catalog_output_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        component_sources,
+        "_discover_terraform_outputs",
+        lambda _source: (
+            ComponentOutput(
+                name="cluster_id",
+                kind="terraform_output",
+                source_path="cluster_id",
+                sensitive=False,
+            ),
+            ComponentOutput(
+                name="cluster_ca_certificate",
+                kind="terraform_output",
+                source_path="cluster_ca_certificate",
+                sensitive=True,
+            ),
+            ComponentOutput(
+                name="instance_id",
+                kind="terraform_output",
+                source_path="instance_id",
+                sensitive=False,
+            ),
+        ),
+    )
+
+
+def _set_local_catalog_override() -> None:
+    set_component_sources_file_override(
+        Path(__file__).resolve().parents[1] / "component_sources.yaml"
+    )
+    reset_component_sources_cache()
+    reset_runtime_introspection_cache()
+    reset_component_entry_cache()
+
+
+def _set_portable_catalog_override() -> None:
+    set_component_sources_file_override(
+        Path(__file__).resolve().parents[1] / "component_sources.release.yaml"
+    )
+    reset_component_sources_cache()
+    reset_runtime_introspection_cache()
+    reset_component_entry_cache()
 
 
 def _instance_config_path(base: Path) -> Path:
@@ -51,6 +106,7 @@ def _payload_with_mk8s() -> dict:
 
 
 def test_render_tfvars_are_backed_by_declared_variables(tmp_path: Path) -> None:
+    _set_local_catalog_override()
     reset_component_entry_cache()
     config_path = _instance_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -76,9 +132,31 @@ def test_render_tfvars_are_backed_by_declared_variables(tmp_path: Path) -> None:
         assert f"var.{key}" in main_tf or f"var.{key}" in providers_tf
 
 
-def test_render_uses_component_version_as_git_ref_for_local_module_sources(
+def test_render_uses_resolved_local_path_for_local_module_sources(
     tmp_path: Path,
 ) -> None:
+    _set_local_catalog_override()
+    reset_component_entry_cache()
+    config_path = _instance_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = _payload_with_mk8s()
+
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_instance_paths(config_path)
+    validate_path_alignment(config, paths)
+    render_instance(config, paths)
+
+    main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
+    expected_mk8s_source = (
+        resolve_component_sources_file().parent / "../../platform-infra/modules/mk8s"
+    ).resolve()
+    assert f'source = "{expected_mk8s_source}"' in main_tf
+
+
+def test_render_rejects_version_for_local_module_sources(tmp_path: Path) -> None:
+    _set_local_catalog_override()
     reset_component_entry_cache()
     config_path = _instance_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -96,10 +174,58 @@ def test_render_uses_component_version_as_git_ref_for_local_module_sources(
     config = load_config(config_path)
     paths = resolve_instance_paths(config_path)
     validate_path_alignment(config, paths)
+
+    with pytest.raises(ValueError, match="resolves to a local directory"):
+        render_instance(config, paths)
+
+
+def test_render_prefers_active_catalog_source_over_stale_config_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_portable_catalog_override()
+    config_path = _instance_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = _payload_with_mk8s()
+
+    components = payload.get("infra", {}).get("components", [])
+    assert isinstance(components, list)
+    for row in components:
+        if isinstance(row, dict) and str(row.get("id", "")).strip().lower() == "mk8s":
+            row["source"] = "../../platform-infra/modules/mk8s"
+            break
+
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    monkeypatch.setattr(
+        "nebius_cxcli.infra_render.module_variables",
+        lambda _source: (
+            ModuleVariable(name="parent_id", required=False, type_hint="string"),
+            ModuleVariable(name="cluster_name", required=False, type_hint="string"),
+            ModuleVariable(name="cpu_nodes_platform", required=False, type_hint="string"),
+            ModuleVariable(name="cpu_nodes_preset", required=False, type_hint="string"),
+            ModuleVariable(name="subnet_id", required=False, type_hint="string"),
+            ModuleVariable(name="gpu_enabled", required=False, type_hint="bool"),
+            ModuleVariable(
+                name="mk8s_cluster_public_endpoint",
+                required=False,
+                type_hint="bool",
+            ),
+            ModuleVariable(
+                name="kube_network_service_cidrs",
+                required=False,
+                type_hint="list(string)",
+            ),
+        ),
+    )
+
+    config = load_config(config_path)
+    paths = resolve_instance_paths(config_path)
+    validate_path_alignment(config, paths)
     render_instance(config, paths)
 
     main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
     assert (
-        'source = "git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mk8s?ref=v0.1.0"'
+        'source = "git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mk8s?ref=main"'
         in main_tf
     )

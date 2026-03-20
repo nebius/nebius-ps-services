@@ -132,3 +132,12 @@ def test_schema_allows_same_apipa_values_on_different_instances(sample_config: d
     validated = validate_config(cfg)
 
     assert [t.gateway_instance_index for t in validated.connections[1].tunnels] == [1]
+
+
+def test_schema_rejects_duplicate_external_ips_across_instances(sample_config: dict) -> None:
+    cfg = _base_bgp_config(sample_config)
+    cfg["gateway_group"]["instance_count"] = 2
+    cfg["gateway_group"]["external_ips"] = [["203.0.113.10"], ["203.0.113.10"]]
+
+    with pytest.raises(ValueError, match="external_ips entries must be globally unique"):
+        validate_config(cfg)

@@ -14,6 +14,9 @@ Out of scope:
 - in-cluster app/operator lifecycle (Flux/GitOps responsibility)
 - kubeconfig retrieval and local `kubectl` setup
 
+When this module is consumed through `nebius-cxcli`, the CLI can perform the
+post-apply kubeconfig handoff if the source catalog declares that contract.
+
 ## What this module does
 
 - Creates one MK8s cluster with control-plane settings.
@@ -85,6 +88,7 @@ module "mk8s" {
   - `k8s_version`
   - `etcd_cluster_size`
   - `mk8s_cluster_public_endpoint`
+  - `kube_network_service_cidrs`
 - CPU node group controls:
   - `cpu_nodes_count`
   - `cpu_nodes_platform` (required when CPU node group is enabled)
@@ -120,6 +124,18 @@ module "mk8s" {
 - `control_plane_public_endpoint`
 - `cluster_ca_certificate` (sensitive)
 
+`cluster_id` is the required output consumed by `nebius-cxcli` when this module
+is used as a kubeconfig handoff-capable cluster source for `deploy`/Flux flows.
+
+`kube_network_service_cidrs` defaults to `["/20"]` in this module. That is
+intentional. Nebius treats an omitted MK8s service CIDR as `["/16"]`, and on a
+single-pool `/16` subnet that can consume the entire subnet pool and stall
+control-plane provisioning before any node groups are created.
+
+For direct Terraform usage, the example roots under `examples/` now re-expose
+`cluster_id` and `cluster_name` as root outputs so `terraform output` can be
+used directly from the example directory.
+
 ## Validation and fail-fast behavior
 
 - `gpu_enabled = true` requires:
@@ -136,6 +152,13 @@ module "mk8s" {
 
 - `examples/minimal`: CPU-only baseline.
 - `examples/gpu`: GPU node group with MIG labels and explicit drivers preset.
+
+Example output usage after apply:
+
+```bash
+terraform -chdir=examples/minimal output -raw cluster_id
+terraform -chdir=examples/minimal output -raw cluster_name
+```
 
 ## nebius-cxcli mapping
 

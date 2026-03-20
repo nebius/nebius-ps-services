@@ -26,6 +26,17 @@ locals {
     length(local.cluster_control_plane_endpoints) > 0 ? { endpoints = local.cluster_control_plane_endpoints } : {}
   )
 
+  cluster_kube_network_override = coalesce(try(local.cluster_overrides.kube_network, null), {})
+  cluster_kube_network_base = (
+    length(var.kube_network_service_cidrs) > 0
+    ? { service_cidrs = var.kube_network_service_cidrs }
+    : {}
+  )
+  cluster_kube_network = merge(
+    local.cluster_kube_network_base,
+    local.cluster_kube_network_override
+  )
+
   cluster_parent_id        = try(local.cluster_overrides.parent_id, var.parent_id)
   cluster_name_effective   = try(local.cluster_overrides.name, var.cluster_name)
   cluster_labels_effective = coalesce(try(local.cluster_overrides.labels, null), {})
@@ -51,7 +62,7 @@ locals {
   cpu_template           = merge(local.cpu_template_base, local.cpu_template_override)
   cpu_effective_platform = try(trimspace(local.cpu_template.resources.platform), "")
   cpu_effective_preset   = try(trimspace(local.cpu_template.resources.preset), "")
-  cpu_autoscaling        = coalesce(try(local.cpu_overrides.autoscaling, null), null)
+  cpu_autoscaling        = try(local.cpu_overrides.autoscaling, null)
   cpu_fixed_node_count = (
     local.cpu_autoscaling != null
     ? try(local.cpu_overrides.fixed_node_count, null)
@@ -121,7 +132,7 @@ locals {
 
   gpu_group_name_prefix = try(local.gpu_overrides.name, "${var.cluster_name}-ng-gpu")
   gpu_labels            = coalesce(try(local.gpu_overrides.labels, null), {})
-  gpu_autoscaling       = coalesce(try(local.gpu_overrides.autoscaling, null), null)
+  gpu_autoscaling       = try(local.gpu_overrides.autoscaling, null)
   gpu_fixed_node_count = (
     local.gpu_autoscaling != null
     ? try(local.gpu_overrides.fixed_node_count, null)

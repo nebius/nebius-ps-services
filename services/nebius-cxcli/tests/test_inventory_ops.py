@@ -38,9 +38,6 @@ def _starter_payload(*, selected_infra: set[str], selected_apps: set[str]) -> di
         )
     )
     assert isinstance(payload, dict)
-    payload["infra"]["ssh_public_key"] = (
-        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB8Yq7Rr0x2GdQ8gJ5Q40gF4yHahx7s6vH8kKf+demo"
-    )
     return payload
 
 
@@ -97,7 +94,38 @@ def test_write_inventory_handles_dynamic_component_model(tmp_path: Path) -> None
     artifacts = write_inventory(config, paths)
     assert artifacts.markdown.exists()
     assert artifacts.apps_json.exists()
+    assert artifacts.mk8s_json is not None
+    assert artifacts.mk8s_json.exists()
+    assert artifacts.postgresql_json is None
+    assert not (paths.inventory_dir / "postgresql.json").exists()
+    assert artifacts.sfs_json is None
+    assert not (paths.inventory_dir / "sfs.json").exists()
 
     apps_payload = json.loads(artifacts.apps_json.read_text(encoding="utf-8"))
     assert apps_payload["n8n"]["enabled"] is True
     assert apps_payload["n8n"]["hostname"] == "n8n.example.com"
+
+
+def test_write_inventory_removes_stale_disabled_component_files(tmp_path: Path) -> None:
+    reset_component_entry_cache()
+    config_path = _instance_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_instance_paths(config_path)
+    validate_path_alignment(config, paths)
+    paths.inventory_dir.mkdir(parents=True, exist_ok=True)
+    stale_pg = paths.inventory_dir / "postgresql.json"
+    stale_sfs = paths.inventory_dir / "sfs.json"
+    stale_pg.write_text("{\"enabled\": true}\n", encoding="utf-8")
+    stale_sfs.write_text("{\"enabled\": true}\n", encoding="utf-8")
+
+    artifacts = write_inventory(config, paths)
+
+    assert artifacts.postgresql_json is None
+    assert artifacts.sfs_json is None
+    assert not stale_pg.exists()
+    assert not stale_sfs.exists()

@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .component_wiring import resolved_component_row
 from .paths import InstancePaths
 from .runtime_config import to_plain_data
 
@@ -16,9 +16,9 @@ from .runtime_config import to_plain_data
 @dataclass(frozen=True)
 class InventoryArtifacts:
     infra_json: Path
-    mk8s_json: Path
-    postgresql_json: Path
-    sfs_json: Path
+    mk8s_json: Path | None
+    postgresql_json: Path | None
+    sfs_json: Path | None
     apps_json: Path
     markdown: Path
 
@@ -63,7 +63,8 @@ def _infra_component_rows(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
         component_id = _normalize_component_id(_lookup(item, "id"))
         if not component_id:
             continue
-        result[component_id] = _mapping(item)
+        _entry, resolved = resolved_component_row(payload, component_id=component_id)
+        result[component_id] = _mapping(resolved if isinstance(resolved, Mapping) else item)
     return result
 
 
@@ -79,7 +80,8 @@ def _app_chart_rows(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
         chart_id = _normalize_component_id(_lookup(item, "id"))
         if not chart_id:
             continue
-        result[chart_id] = _mapping(item)
+        _entry, resolved = resolved_component_row(payload, component_id=chart_id)
+        result[chart_id] = _mapping(resolved if isinstance(resolved, Mapping) else item)
     return result
 
 
@@ -142,10 +144,8 @@ def _build_payload(config: Any, paths: InstancePaths) -> dict[str, dict]:
         )
     )
 
-    now = datetime.now(UTC).isoformat()
     return {
         "infra": {
-            "generated_at": now,
             "instance": paths.instance_slug,
             "project_id": project_id,
             "region": region_id,
@@ -221,6 +221,18 @@ def _build_payload(config: Any, paths: InstancePaths) -> dict[str, dict]:
     }
 
 
+def _write_json(path: Path, payload: Mapping[str, Any]) -> Path:
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
+def _write_optional_json(path: Path, payload: Mapping[str, Any], *, enabled: bool) -> Path | None:
+    if not enabled:
+        path.unlink(missing_ok=True)
+        return None
+    return _write_json(path, payload)
+
+
 def write_inventory(config: Any, paths: InstancePaths) -> InventoryArtifacts:
     """Write non-sensitive inventory artifacts to disk."""
     payload = _build_payload(config, paths)
@@ -232,21 +244,28 @@ def write_inventory(config: Any, paths: InstancePaths) -> InventoryArtifacts:
     sfs_path = paths.inventory_dir / "sfs.json"
     apps_path = paths.inventory_dir / "apps.json"
 
-    infra_path.write_text(
-        json.dumps(payload["infra"], indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    _write_json(
+        infra_path,
+        payload["infra"],
     )
-    mk8s_path.write_text(
-        json.dumps(payload["mk8s"], indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    mk8s_artifact = _write_optional_json(
+        mk8s_path,
+        payload["mk8s"],
+        enabled=bool(payload["infra"]["mk8s_enabled"]),
     )
-    pg_path.write_text(
-        json.dumps(payload["postgresql"], indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
+    pg_artifact = _write_optional_json(
+        pg_path,
+        payload["postgresql"],
+        enabled=bool(payload["postgresql"]["enabled"]),
     )
-    sfs_path.write_text(
-        json.dumps(payload["sfs"], indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    sfs_artifact = _write_optional_json(
+        sfs_path,
+        payload["sfs"],
+        enabled=bool(payload["sfs"]["enabled"]),
     )
-    apps_path.write_text(
-        json.dumps(payload["apps"], indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    _write_json(
+        apps_path,
+        payload["apps"],
     )
 
     payload_data = to_plain_data(config)
@@ -265,7 +284,6 @@ def write_inventory(config: Any, paths: InstancePaths) -> InventoryArtifacts:
         f"- Tenant: `{_coalesce(_lookup(nebius, 'tenant_id'), paths.path_tenant_id)}`",
         f"- Project: `{_coalesce(_lookup(nebius, 'project_id'), '')}`",
         f"- Region: `{payload['infra']['region']}`",
-        f"- Generated: `{payload['infra']['generated_at']}`",
         "",
         "## Components",
         f"- MK8s: `{payload['infra']['mk8s_enabled']}`",
@@ -285,10 +303,9 @@ def write_inventory(config: Any, paths: InstancePaths) -> InventoryArtifacts:
 
     return InventoryArtifacts(
         infra_json=infra_path,
-        mk8s_json=mk8s_path,
-        postgresql_json=pg_path,
-        sfs_json=sfs_path,
+        mk8s_json=mk8s_artifact,
+        postgresql_json=pg_artifact,
+        sfs_json=sfs_artifact,
         apps_json=apps_path,
         markdown=markdown_path,
     )
-

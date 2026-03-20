@@ -24,6 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
+        shell: bash
         working-directory: ${{ env.APP_DIR }}
     steps:
       - name: Checkout
@@ -94,14 +95,31 @@ jobs:
 
       - name: Build artifact
         if: steps.state.outputs.release_exists == 'false'
+        env:
+          RELEASE_REF: ${{ steps.version.outputs.tag }}
         run: |
           set -euo pipefail
           rm -rf build dist
+          backup="$(mktemp)"
+          cp component_sources.yaml "${backup}"
+          trap 'mv "${backup}" component_sources.yaml' EXIT
+          python - "${RELEASE_REF}" <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          release_ref = sys.argv[1]
+          source = pathlib.Path("component_sources.release.yaml").read_text(encoding="utf-8")
+          rendered = re.sub(r"\?ref=main\b", f"?ref={release_ref}", source)
+          pathlib.Path("component_sources.yaml").write_text(rendered, encoding="utf-8")
+          PY
           python -m build --wheel
 
-      - name: Resolve and verify artifact
+      - name: Resolve and verify release assets
         if: steps.state.outputs.release_exists == 'false'
         id: asset
+        env:
+          RELEASE_REF: ${{ steps.version.outputs.tag }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -133,7 +151,38 @@ jobs:
             exit 1
           fi
 
+          python - "${asset}" <<'PY'
+          import sys
+          import zipfile
+
+          wheel = sys.argv[1]
+          with zipfile.ZipFile(wheel) as zf:
+              names = zf.namelist()
+
+          if not any(name.endswith("nebius_cxcli/component_sources.yaml") for name in names):
+              raise SystemExit(
+                  f"{wheel} is missing bundled nebius_cxcli/component_sources.yaml"
+              )
+          PY
+
+          release_dir="release-assets"
+          catalog_asset="${release_dir}/component_sources.yaml"
+          rm -rf "${release_dir}"
+          mkdir -p "${release_dir}"
+          python - "${RELEASE_REF}" "${catalog_asset}" <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          release_ref = sys.argv[1]
+          catalog_path = pathlib.Path(sys.argv[2])
+          source = pathlib.Path("component_sources.release.yaml").read_text(encoding="utf-8")
+          rendered = re.sub(r"\?ref=main\b", f"?ref={release_ref}", source)
+          catalog_path.write_text(rendered, encoding="utf-8")
+          PY
+
           echo "path=${asset}" >> "$GITHUB_OUTPUT"
+          echo "catalog_path=${catalog_asset}" >> "$GITHUB_OUTPUT"
 
       - name: Generate release notes from changelog
         if: steps.state.outputs.release_exists == 'false'
@@ -184,7 +233,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh release create "${{ steps.version.outputs.tag }}" "${{ steps.asset.outputs.path }}" \
+          gh release create "${{ steps.version.outputs.tag }}" \
+            "${{ steps.asset.outputs.path }}" \
+            "${{ steps.asset.outputs.catalog_path }}" \
             --title "${{ steps.version.outputs.tag }}" \
             --notes-file "${{ steps.notes.outputs.path }}"
 
@@ -200,6 +251,7 @@ jobs:
             --arg version "${{ steps.version.outputs.version }}" \
             --arg sha "${{ steps.revision.outputs.commit }}" \
             --arg asset "${{ steps.asset.outputs.path }}" \
+            --arg component_sources_asset "${{ steps.asset.outputs.catalog_path }}" \
             --arg run_id "${GITHUB_RUN_ID}" \
             --arg run_attempt "${GITHUB_RUN_ATTEMPT}" \
             --arg repository "${GITHUB_REPOSITORY}" \
@@ -212,6 +264,7 @@ jobs:
               version: $version,
               sha: $sha,
               asset: $asset,
+              component_sources_asset: $component_sources_asset,
               run_id: $run_id,
               run_attempt: $run_attempt,
               timestamp_utc: now | todate

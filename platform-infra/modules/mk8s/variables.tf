@@ -66,6 +66,22 @@ variable "mk8s_cluster_public_endpoint" {
   nullable    = false
 }
 
+variable "kube_network_service_cidrs" {
+  description = "CIDR blocks for Kubernetes Service ClusterIP allocation. Defaults to a smaller /20 allocation to avoid Nebius' broad /16 implicit default on single-pool subnets."
+  type        = list(string)
+  default     = ["/20"]
+  nullable    = false
+  validation {
+    condition = (
+      length(var.kube_network_service_cidrs) == 1 &&
+      alltrue([
+        for cidr in var.kube_network_service_cidrs : length(trimspace(cidr)) > 0
+      ])
+    )
+    error_message = "kube_network_service_cidrs must contain exactly one non-empty CIDR or prefix-length string."
+  }
+}
+
 variable "cpu_nodes_count" {
   description = "Fixed node count for CPU node group."
   type        = number
