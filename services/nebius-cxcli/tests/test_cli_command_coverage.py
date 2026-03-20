@@ -1517,8 +1517,11 @@ def test_wait_for_flux_namespace_ready_fails_with_targeted_guidance(
         flux_ops.wait_for_flux_namespace_ready(timeout_seconds=30)
 
     message = str(excinfo.value)
-    assert "helmcharts.source.toolkit.fluxcd.io has 1 resource instances" in message
-    assert "finalizers.fluxcd.io" in message
+    assert re.search(
+        r"\bhelmcharts\.source\.toolkit\.fluxcd\.io has 1 resource instances\b",
+        message,
+    )
+    assert re.search(r"\bfinalizers\.fluxcd\.io\b", message)
     assert "kubectl get namespace flux-system -o yaml" in message
 
 
@@ -1545,6 +1548,11 @@ def test_install_flux_controllers_waits_for_namespace_before_apply(
     )
     monkeypatch.setattr(
         flux_ops,
+        "_run_filtered_kubectl_apply",
+        lambda cmd, **kwargs: calls.append(("apply", tuple(cmd))),
+    )
+    monkeypatch.setattr(
+        flux_ops,
         "_run",
         lambda cmd, **kwargs: calls.append(("run", tuple(cmd))),
     )
@@ -1555,7 +1563,7 @@ def test_install_flux_controllers_waits_for_namespace_before_apply(
     assert calls[0] == ("wait_namespace", {"KUBECONFIG": "/tmp/kubeconfig"})
     assert calls[1] == ("wait_crds_clear", {"KUBECONFIG": "/tmp/kubeconfig"})
     assert calls[2] == (
-        "run",
+        "apply",
         ("kubectl", "apply", "-f", manifest_url),
     )
     assert calls[-1] == ("wait_crds_ready", {"KUBECONFIG": "/tmp/kubeconfig"})
