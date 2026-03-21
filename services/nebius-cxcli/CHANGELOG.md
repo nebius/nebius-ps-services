@@ -6,12 +6,15 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Prepare release `v0.1.2`.
+
 ## [nebius-cxcli-v0.1.1] - 2026-03-20
 
 - Split the workflow model into generator-side commands for `config.yaml` and customer-side commands for deploying the rendered `generated/` artifacts.
 - Added generated bundle manifests, stricter render reset guardrails, and customer-side validation for portable deployment bundles.
 - Hardened local deploy and Flux apply/bootstrap flows with better readiness checks, clearer status output, and safer Flux recovery behavior.
 - Aligned release packaging and GitHub workflows so published wheels bundle the rewritten portable release catalog instead of local development sources.
+
 ## [nebius-cxcli-v0.1.0] - 2026-02-22
 
 - Initial scaffold for `nebius-cxcli`.
