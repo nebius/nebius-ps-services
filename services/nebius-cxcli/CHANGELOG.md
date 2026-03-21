@@ -6,6 +6,13 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [nebius-cxcli-v0.1.3] - 2026-03-21
+
+- Hardened release publishing so tagged wheels use the exact tag version and verify bundled portable component sources through shared release-catalog helpers.
+- Limited release catalog ref rewriting to this monorepo's module sources and now fail release validation when external module sources are left on floating refs or local paths.
+- Added PR-side coverage for release catalog rendering and wheel verification so release packaging errors are caught before tagging.
+- Fixed `publish-release.sh --prep` changelog rewriting so moved release notes preserve Markdownlint-safe blank lines around lists and headings.
+
 ## [nebius-cxcli-v0.1.2] - 2026-03-20
 
 - Prepare release `v0.1.2`.
