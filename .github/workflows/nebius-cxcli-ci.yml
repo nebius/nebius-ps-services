@@ -54,28 +54,10 @@ jobs:
           backup="$(mktemp)"
           cp component_sources.yaml "${backup}"
           trap 'mv "${backup}" component_sources.yaml' EXIT
-          python - "${RELEASE_REF}" <<'PY'
-          import pathlib
-          import sys
-          import yaml
-
-          release_ref = sys.argv[1]
-          repo_prefix = "git::https://github.com/nebius/nebius-ps-services.git//"
-          payload = yaml.safe_load(
-              pathlib.Path("component_sources.release.yaml").read_text(encoding="utf-8")
-          ) or {}
-          modules = (((payload or {}).get("infra") or {}).get("tf_modules") or [])
-          for module in modules:
-              if not isinstance(module, dict):
-                  continue
-              source = str(module.get("source", "")).strip()
-              if source.startswith(repo_prefix):
-                  module["source"] = source.replace("?ref=main", f"?ref={release_ref}")
-          pathlib.Path("component_sources.yaml").write_text(
-              yaml.safe_dump(payload, sort_keys=False),
-              encoding="utf-8",
-          )
-          PY
+          python -m nebius_cxcli.release_catalog render \
+            --input component_sources.release.yaml \
+            --output component_sources.yaml \
+            --release-ref "${RELEASE_REF}"
           python -m build --wheel
 
       - name: Verify bundled component sources in wheel
@@ -83,59 +65,12 @@ jobs:
           RELEASE_REF: ${{ github.sha }}
         run: |
           set -euo pipefail
-          python - "${RELEASE_REF}" <<'PY'
-          import pathlib
-          import re
-          import sys
-          import yaml
-          import zipfile
-
-          release_ref = sys.argv[1]
-          wheels = sorted(pathlib.Path("dist").glob("*.whl"))
-          if not wheels:
-              raise SystemExit("No wheel found in dist/")
-
-          wheel = wheels[0]
-          with zipfile.ZipFile(wheel) as zf:
-              names = zf.namelist()
-              candidate_names = [
-                  name for name in names if name.endswith("nebius_cxcli/component_sources.yaml")
-              ]
-              if not candidate_names:
-                  raise SystemExit(
-                      f"{wheel.name} is missing bundled nebius_cxcli/component_sources.yaml"
-                  )
-              bundled = yaml.safe_load(zf.read(candidate_names[0]).decode("utf-8")) or {}
-
-          modules = (((bundled or {}).get("infra") or {}).get("tf_modules") or [])
-          if not isinstance(modules, list) or not modules:
-              raise SystemExit(f"{wheel.name} bundled component sources has no infra.tf_modules entries")
-
-          repo_prefix = "git::https://github.com/nebius/nebius-ps-services.git//"
-          local_path_pattern = re.compile(r"^(?:\.\.?/|/|[A-Za-z]:[\\/])")
-          bad_sources = []
-          for module in modules:
-              if not isinstance(module, dict):
-                  continue
-              source = str(module.get("source", "")).strip()
-              if not source:
-                  bad_sources.append("<empty>")
-                  continue
-              if local_path_pattern.match(source):
-                  bad_sources.append(source)
-                  continue
-              if source.startswith(repo_prefix):
-                  if f"?ref={release_ref}" not in source or "?ref=main" in source:
-                      bad_sources.append(source)
-                  continue
-              if "?ref=main" in source:
-                  bad_sources.append(source or "<empty>")
-
-          if bad_sources:
-              raise SystemExit(
-                  f"{wheel.name} bundled component sources contains non-portable or incorrectly pinned module sources: "
-                  + ", ".join(bad_sources)
-              )
-
-          print(f"Verified bundled portable component_sources.yaml in {wheel.name}")
-          PY
+          wheel="$(find dist -maxdepth 1 -name '*.whl' | sort | head -n 1)"
+          if [[ -z "${wheel}" ]]; then
+            echo "::error::No wheel found in dist/"
+            exit 1
+          fi
+          python -m nebius_cxcli.release_catalog verify-wheel \
+            --wheel "${wheel}" \
+            --release-ref "${RELEASE_REF}"
+          echo "Verified bundled portable component_sources.yaml in ${wheel}"
