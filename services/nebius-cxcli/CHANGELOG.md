@@ -9,6 +9,7 @@ All notable changes to this project are tracked here. This changelog follows
 ## [nebius-cxcli-v0.1.2] - 2026-03-20
 
 - Prepare release `v0.1.2`.
+
 ## [nebius-cxcli-v0.1.1] - 2026-03-20
 
 - Split the workflow model into generator-side commands for `config.yaml` and customer-side commands for deploying the rendered `generated/` artifacts.
