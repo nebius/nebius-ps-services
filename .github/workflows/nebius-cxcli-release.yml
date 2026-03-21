@@ -97,6 +97,7 @@ jobs:
         if: steps.state.outputs.release_exists == 'false'
         env:
           RELEASE_REF: ${{ steps.version.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           rm -rf build dist
@@ -125,7 +126,7 @@ jobs:
               encoding="utf-8",
           )
           PY
-          python -m build --wheel
+          SETUPTOOLS_SCM_PRETEND_VERSION="${RELEASE_VERSION}" python -m build --wheel
 
       - name: Resolve and verify release assets
         if: steps.state.outputs.release_exists == 'false'
