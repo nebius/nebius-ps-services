@@ -12,10 +12,12 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-from .component_sources import load_component_sources
+from .component_sources import load_cli_settings
 
 FLUX_RELEASES_URL = "https://github.com/fluxcd/flux2/releases"
 TERRAFORM_RELEASES_URL = "https://releases.hashicorp.com/terraform"
+FLUX_VERSION_ENV = "NEBIUS_CXCLI_FLUX_VERSION"
+TERRAFORM_VERSION_ENV = "NEBIUS_CXCLI_TERRAFORM_VERSION"
 
 
 def _cache_root() -> Path:
@@ -117,11 +119,25 @@ def _write_terraform_binary(version: str, destination: Path) -> Path:
     return destination
 
 
+def configured_flux_version() -> str:
+    override = os.environ.get(FLUX_VERSION_ENV, "").strip()
+    if override:
+        return override if override.startswith("v") else f"v{override}"
+    return load_cli_settings().flux.version
+
+
+def configured_terraform_version() -> str:
+    override = os.environ.get(TERRAFORM_VERSION_ENV, "").strip()
+    if override:
+        return override
+    return load_cli_settings().terraform.version
+
+
 def resolve_flux_binary() -> str:
     from_path = shutil.which("flux")
     if from_path:
         return from_path
-    version = load_component_sources().cli.flux.version
+    version = configured_flux_version()
     destination = _cached_binary_path(tool="flux", version=version)
     if destination.exists() and os.access(destination, os.X_OK):
         return str(destination)
@@ -135,7 +151,7 @@ def resolve_terraform_binary() -> str:
     from_path = shutil.which("terraform")
     if from_path:
         return from_path
-    version = load_component_sources().cli.terraform.version
+    version = configured_terraform_version()
     destination = _cached_binary_path(tool="terraform", version=version)
     if destination.exists() and os.access(destination, os.X_OK):
         return str(destination)

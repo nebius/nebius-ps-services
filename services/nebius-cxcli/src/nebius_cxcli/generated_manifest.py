@@ -27,6 +27,8 @@ def build_generated_manifest(
     paths: InstancePaths,
     handoffs: Sequence[Mapping[str, Any]],
     required_component_outputs: Sequence[Mapping[str, Any]],
+    flux_version: str | None = None,
+    terraform_version: str | None = None,
 ) -> dict[str, Any]:
     payload = to_plain_data(config)
     if not isinstance(payload, Mapping):
@@ -48,6 +50,10 @@ def build_generated_manifest(
             "flux_dir": _repo_relative_path(paths.flux_dir, root=paths.repo_root),
             "inventory_dir": _repo_relative_path(paths.inventory_dir, root=paths.repo_root),
         },
+        "tools": {
+            "flux_version": str(flux_version or "").strip(),
+            "terraform_version": str(terraform_version or "").strip(),
+        },
         "deploy": {
             "handoffs": [dict(item) for item in handoffs],
             "required_component_outputs": [dict(item) for item in required_component_outputs],
@@ -66,12 +72,16 @@ def write_generated_manifest(
     paths: InstancePaths,
     handoffs: Sequence[Mapping[str, Any]],
     required_component_outputs: Sequence[Mapping[str, Any]],
+    flux_version: str | None = None,
+    terraform_version: str | None = None,
 ) -> Path:
     manifest = build_generated_manifest(
         config=config,
         paths=paths,
         handoffs=handoffs,
         required_component_outputs=required_component_outputs,
+        flux_version=flux_version,
+        terraform_version=terraform_version,
     )
     path = manifest_path_for_generated_dir(paths.generated_dir)
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -642,6 +642,13 @@ def test_bootstrap_ci_no_auth_writes_workflow_in_repo_root(tmp_path: Path) -> No
     assert workflow.exists()
 
     content = workflow.read_text(encoding="utf-8")
+    assert "defaults:" in content
+    assert "shell: bash" in content
+    assert "cache: pip" in content
+    assert "has_changes" in content
+    assert 'echo "NEBIUS_SA_ID=${NEBIUS_SA_ID}"' in content
+    assert 'echo "NEBIUS_AUTH_PUBLIC_KEY_ID=${NEBIUS_AUTH_PUBLIC_KEY_ID}"' in content
+    assert 'echo "NEBIUS_AUTH_PRIVATE_KEY_FILE=${KEY_PATH}"' in content
     assert "NEBIUS_DISCOVER_TARGET: customer/deployments-root" in content
     assert "customer/deployments-root" in content
     assert "name: ${{ matrix.github_environment }}" in content
@@ -649,6 +656,8 @@ def test_bootstrap_ci_no_auth_writes_workflow_in_repo_root(tmp_path: Path) -> No
     assert '**/customer/deployments-root/**/config.yaml' not in content
     assert "Validate source contract changes" not in content
     assert "validate-generated" in content
+    assert "Inventory outputs" not in content
+    assert "Email inventory" not in content
 
 
 def test_bootstrap_ci_no_auth_is_idempotent_without_force(tmp_path: Path) -> None:

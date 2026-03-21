@@ -105,13 +105,25 @@ jobs:
           trap 'mv "${backup}" component_sources.yaml' EXIT
           python - "${RELEASE_REF}" <<'PY'
           import pathlib
-          import re
           import sys
+          import yaml
 
           release_ref = sys.argv[1]
-          source = pathlib.Path("component_sources.release.yaml").read_text(encoding="utf-8")
-          rendered = re.sub(r"\?ref=main\b", f"?ref={release_ref}", source)
-          pathlib.Path("component_sources.yaml").write_text(rendered, encoding="utf-8")
+          repo_prefix = "git::https://github.com/nebius/nebius-ps-services.git//"
+          payload = yaml.safe_load(
+              pathlib.Path("component_sources.release.yaml").read_text(encoding="utf-8")
+          ) or {}
+          modules = (((payload or {}).get("infra") or {}).get("tf_modules") or [])
+          for module in modules:
+              if not isinstance(module, dict):
+                  continue
+              source = str(module.get("source", "")).strip()
+              if source.startswith(repo_prefix):
+                  module["source"] = source.replace("?ref=main", f"?ref={release_ref}")
+          pathlib.Path("component_sources.yaml").write_text(
+              yaml.safe_dump(payload, sort_keys=False),
+              encoding="utf-8",
+          )
           PY
           python -m build --wheel
 
@@ -151,17 +163,54 @@ jobs:
             exit 1
           fi
 
-          python - "${asset}" <<'PY'
+          python - "${asset}" "${RELEASE_REF}" <<'PY'
+          import re
           import sys
           import zipfile
+          import yaml
 
           wheel = sys.argv[1]
+          release_ref = sys.argv[2]
           with zipfile.ZipFile(wheel) as zf:
               names = zf.namelist()
+              candidate_names = [
+                  name for name in names if name.endswith("nebius_cxcli/component_sources.yaml")
+              ]
 
-          if not any(name.endswith("nebius_cxcli/component_sources.yaml") for name in names):
+          if not candidate_names:
               raise SystemExit(
                   f"{wheel} is missing bundled nebius_cxcli/component_sources.yaml"
+              )
+
+          bundled = yaml.safe_load(zf.read(candidate_names[0]).decode("utf-8")) or {}
+          modules = (((bundled or {}).get("infra") or {}).get("tf_modules") or [])
+          if not isinstance(modules, list) or not modules:
+              raise SystemExit(f"{wheel} bundled component sources has no infra.tf_modules entries")
+
+          repo_prefix = "git::https://github.com/nebius/nebius-ps-services.git//"
+          local_path_pattern = re.compile(r"^(?:\.\.?/|/|[A-Za-z]:[\\/])")
+          bad_sources = []
+          for module in modules:
+              if not isinstance(module, dict):
+                  continue
+              source = str(module.get("source", "")).strip()
+              if not source:
+                  bad_sources.append("<empty>")
+                  continue
+              if local_path_pattern.match(source):
+                  bad_sources.append(source)
+                  continue
+              if source.startswith(repo_prefix):
+                  if f"?ref={release_ref}" not in source or "?ref=main" in source:
+                      bad_sources.append(source)
+                  continue
+              if "?ref=main" in source:
+                  bad_sources.append(source or "<empty>")
+
+          if bad_sources:
+              raise SystemExit(
+                  f"{wheel} bundled component sources contains non-portable or incorrectly pinned module sources: "
+                  + ", ".join(bad_sources)
               )
           PY
 
@@ -171,14 +220,63 @@ jobs:
           mkdir -p "${release_dir}"
           python - "${RELEASE_REF}" "${catalog_asset}" <<'PY'
           import pathlib
-          import re
           import sys
+          import yaml
 
           release_ref = sys.argv[1]
           catalog_path = pathlib.Path(sys.argv[2])
-          source = pathlib.Path("component_sources.release.yaml").read_text(encoding="utf-8")
-          rendered = re.sub(r"\?ref=main\b", f"?ref={release_ref}", source)
-          catalog_path.write_text(rendered, encoding="utf-8")
+          repo_prefix = "git::https://github.com/nebius/nebius-ps-services.git//"
+          payload = yaml.safe_load(
+              pathlib.Path("component_sources.release.yaml").read_text(encoding="utf-8")
+          ) or {}
+          modules = (((payload or {}).get("infra") or {}).get("tf_modules") or [])
+          for module in modules:
+              if not isinstance(module, dict):
+                  continue
+              source = str(module.get("source", "")).strip()
+              if source.startswith(repo_prefix):
+                  module["source"] = source.replace("?ref=main", f"?ref={release_ref}")
+          catalog_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+          PY
+
+          python - "${catalog_asset}" "${RELEASE_REF}" <<'PY'
+          import pathlib
+          import re
+          import sys
+          import yaml
+
+          catalog_path = pathlib.Path(sys.argv[1])
+          release_ref = sys.argv[2]
+          payload = yaml.safe_load(catalog_path.read_text(encoding="utf-8")) or {}
+          modules = (((payload or {}).get("infra") or {}).get("tf_modules") or [])
+          if not isinstance(modules, list) or not modules:
+              raise SystemExit(f"{catalog_path} has no infra.tf_modules entries")
+
+          repo_prefix = "git::https://github.com/nebius/nebius-ps-services.git//"
+          local_path_pattern = re.compile(r"^(?:\.\.?/|/|[A-Za-z]:[\\/])")
+          bad_sources = []
+          for module in modules:
+              if not isinstance(module, dict):
+                  continue
+              source = str(module.get("source", "")).strip()
+              if not source:
+                  bad_sources.append("<empty>")
+                  continue
+              if local_path_pattern.match(source):
+                  bad_sources.append(source)
+                  continue
+              if source.startswith(repo_prefix):
+                  if f"?ref={release_ref}" not in source or "?ref=main" in source:
+                      bad_sources.append(source)
+                  continue
+              if "?ref=main" in source:
+                  bad_sources.append(source or "<empty>")
+
+          if bad_sources:
+              raise SystemExit(
+                  f"{catalog_path} contains non-portable or incorrectly pinned module sources: "
+                  + ", ".join(bad_sources)
+              )
           PY
 
           echo "path=${asset}" >> "$GITHUB_OUTPUT"

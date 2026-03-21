@@ -97,6 +97,7 @@ from .iam_bootstrap import (
 )
 from .infra_render import render_terraform_artifacts
 from .inventory_ops import write_inventory
+from .managed_tools import FLUX_VERSION_ENV, TERRAFORM_VERSION_ENV
 from .mk8s_preflight import validate_mk8s_network_preflight
 from .notify_ops import send_inventory_email
 from .paths import (
@@ -252,8 +253,21 @@ def _load_runtime_context(config_path: Path) -> tuple:
 def _load_generated_context(target_path: Path) -> tuple:
     paths = resolve_generated_paths(target_path)
     manifest = load_generated_manifest(paths.generated_dir)
+    _apply_generated_tool_version_overrides(manifest)
     config = runtime_config_from_manifest(manifest)
     return config, paths, manifest
+
+
+def _apply_generated_tool_version_overrides(manifest: Mapping[str, Any]) -> None:
+    tools = manifest.get("tools")
+    if not isinstance(tools, Mapping):
+        return
+    flux_version = str(tools.get("flux_version", "")).strip()
+    terraform_version = str(tools.get("terraform_version", "")).strip()
+    if flux_version and not os.environ.get(FLUX_VERSION_ENV, "").strip():
+        os.environ[FLUX_VERSION_ENV] = flux_version
+    if terraform_version and not os.environ.get(TERRAFORM_VERSION_ENV, "").strip():
+        os.environ[TERRAFORM_VERSION_ENV] = terraform_version
 
 
 def _render_overwrite_warning(paths: InstancePaths) -> str | None:
@@ -4093,11 +4107,14 @@ def _first_non_empty_line(text: str) -> str | None:
 
 
 def _write_generated_runtime_manifest(config: Any, paths: InstancePaths) -> Path:
+    sources = load_component_sources()
     return write_generated_manifest(
         config=config,
         paths=paths,
         handoffs=_enabled_cluster_handoffs(config),
         required_component_outputs=_required_runtime_component_output_specs(config),
+        flux_version=sources.cli.flux.version,
+        terraform_version=sources.cli.terraform.version,
     )
 
 
