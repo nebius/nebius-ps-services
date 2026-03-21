@@ -688,6 +688,14 @@ def _load_sources_from_path(path: Path) -> ComponentSources:
     return _parse_sources_payload(payload)
 
 
+def _load_cli_settings_from_path(path: Path) -> CliSettings:
+    with path.open("r", encoding="utf-8") as handle:
+        payload = yaml.safe_load(handle) or {}
+    if not isinstance(payload, dict):
+        raise ValueError("component sources root must be a mapping")
+    return _parse_cli_settings(payload.get("cli"))
+
+
 def _load_bundled_component_sources() -> ComponentSources:
     resource = importlib_resources.files("nebius_cxcli").joinpath(BUNDLED_COMPONENT_SOURCES_FILENAME)
     try:
@@ -707,6 +715,27 @@ def _load_bundled_component_sources() -> ComponentSources:
     )
 
 
+def _load_bundled_cli_settings() -> CliSettings:
+    resource = importlib_resources.files("nebius_cxcli").joinpath(BUNDLED_COMPONENT_SOURCES_FILENAME)
+    try:
+        payload = yaml.safe_load(resource.read_text(encoding="utf-8")) or {}
+        if not isinstance(payload, dict):
+            raise ValueError("component sources root must be a mapping")
+        return _parse_cli_settings(payload.get("cli"))
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass
+
+    prefix_candidate = Path(sys.prefix) / "nebius_cxcli" / BUNDLED_COMPONENT_SOURCES_FILENAME
+    if prefix_candidate.exists() and prefix_candidate.is_file():
+        return _load_cli_settings_from_path(prefix_candidate)
+
+    raise FileNotFoundError(
+        "Bundled component sources file is missing from the installed package layout."
+    )
+
+
 @lru_cache(maxsize=8)
 def _load_sources_cached(path_text: str) -> ComponentSources:
     return _load_sources_from_path(Path(path_text))
@@ -715,6 +744,16 @@ def _load_sources_cached(path_text: str) -> ComponentSources:
 @lru_cache(maxsize=1)
 def _load_bundled_sources_cached() -> ComponentSources:
     return _load_bundled_component_sources()
+
+
+@lru_cache(maxsize=8)
+def _load_cli_settings_cached(path_text: str) -> CliSettings:
+    return _load_cli_settings_from_path(Path(path_text))
+
+
+@lru_cache(maxsize=1)
+def _load_bundled_cli_settings_cached() -> CliSettings:
+    return _load_bundled_cli_settings()
 
 
 def _can_use_bundled_default(*, explicit: Path | None) -> bool:
@@ -735,6 +774,18 @@ def load_component_sources(*, explicit: Path | None = None) -> ComponentSources:
     return _load_sources_cached(str(path))
 
 
+def load_cli_settings(*, explicit: Path | None = None) -> CliSettings:
+    try:
+        path = resolve_component_sources_file(explicit=explicit)
+    except ValueError:
+        if _can_use_bundled_default(explicit=explicit):
+            return _load_bundled_cli_settings_cached()
+        raise
+    return _load_cli_settings_cached(str(path))
+
+
 def reset_component_sources_cache() -> None:
     _load_sources_cached.cache_clear()
     _load_bundled_sources_cached.cache_clear()
+    _load_cli_settings_cached.cache_clear()
+    _load_bundled_cli_settings_cached.cache_clear()

@@ -1,8 +1,8 @@
 # Portable/release catalog template.
-# Release/CI workflows stage this file and rewrite the Git module refs from
-# `?ref=main` to the current tag or commit before bundling/publishing it.
-# If you use this file manually for cross-machine generation, pin those refs to
-# a released tag or specific commit first instead of using `main`.
+# Release/CI workflows stage this file and rewrite only this monorepo's module
+# refs from `?ref=main` to the current tag or commit before bundling/publishing
+# it. External module sources are left unchanged and must already be pinned to a
+# released tag or specific commit if you want reproducible customer artifacts.
 
 cli:
   flux:

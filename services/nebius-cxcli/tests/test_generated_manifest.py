@@ -67,6 +67,8 @@ def test_build_generated_manifest_uses_repo_relative_paths(tmp_path: Path) -> No
         paths=paths,
         handoffs=[{"component_id": "mk8s", "access": "external"}],
         required_component_outputs=[{"component_id": "mk8s", "output_name": "cluster_id"}],
+        flux_version="v2.8.0",
+        terraform_version="1.14.1",
     )
 
     assert manifest["schema"] == GENERATED_MANIFEST_SCHEMA
@@ -78,6 +80,10 @@ def test_build_generated_manifest_uses_repo_relative_paths(tmp_path: Path) -> No
         "infra_dir": "deployments/instances/client-a--tenant-123/project-456/generated/infra",
         "flux_dir": "deployments/instances/client-a--tenant-123/project-456/generated/flux",
         "inventory_dir": "deployments/instances/client-a--tenant-123/project-456/generated/inventory",
+    }
+    assert manifest["tools"] == {
+        "flux_version": "v2.8.0",
+        "terraform_version": "1.14.1",
     }
     assert manifest["deploy"]["handoffs"] == [{"component_id": "mk8s", "access": "external"}]
     assert manifest["deploy"]["required_component_outputs"] == [
@@ -93,6 +99,8 @@ def test_write_load_and_runtime_config_round_trip(tmp_path: Path) -> None:
         paths=paths,
         handoffs=[{"component_id": "mk8s"}],
         required_component_outputs=[{"component_id": "mk8s", "output_name": "cluster_id"}],
+        flux_version="v2.8.0",
+        terraform_version="1.14.1",
     )
 
     assert written_path == manifest_path_for_generated_dir(paths.generated_dir)
@@ -104,6 +112,10 @@ def test_write_load_and_runtime_config_round_trip(tmp_path: Path) -> None:
     assert runtime_config.client_info.client_name == "client-a"
     assert runtime_config.client_info.nebius.project_id == "project-456"
     assert runtime_config.infra.components[0].inputs.cluster_name == "clust1"
+    assert loaded["tools"] == {
+        "flux_version": "v2.8.0",
+        "terraform_version": "1.14.1",
+    }
 
 
 def test_load_generated_manifest_rejects_missing_manifest(tmp_path: Path) -> None:

@@ -48,6 +48,10 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
           group: nebius-deployments-${{{{ github.workflow }}}}-${{{{ github.ref }}}}
           cancel-in-progress: true
 
+        defaults:
+          run:
+            shell: bash
+
         env:
           NEBIUS_DISCOVER_TARGET: {discover_target}
           NEBIUS_CXCLI_REF: {cli_ref}
@@ -57,6 +61,7 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
             runs-on: ubuntu-latest
             outputs:
               discovery: ${{{{ steps.discover.outputs.discovery }}}}
+              has_changes: ${{{{ steps.discover.outputs.has_changes }}}}
             steps:
               - uses: actions/checkout@v6
                 with:
@@ -65,6 +70,7 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
               - uses: actions/setup-python@v6
                 with:
                   python-version: "3.12"
+                  cache: pip
 
               - name: Install nebius-cxcli
                 run: |
@@ -78,9 +84,16 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                   set -euo pipefail
                   nebius-cxcli discover "${{{{ env.NEBIUS_DISCOVER_TARGET }}}}" > discover.json
                   echo "discovery=$(cat discover.json)" >> "$GITHUB_OUTPUT"
+                  python - <<'PY' >> "$GITHUB_OUTPUT"
+                  import json
+                  from pathlib import Path
+                  payload = json.loads(Path("discover.json").read_text(encoding="utf-8"))
+                  include = payload.get("include", [])
+                  print("has_changes=true" if include else "has_changes=false")
+                  PY
 
           plan:
-            if: github.event_name == 'pull_request'
+            if: github.event_name == 'pull_request' && needs.discover.outputs.has_changes == 'true'
             needs: [ discover ]
             runs-on: ubuntu-latest
             environment:
@@ -94,6 +107,7 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
               - uses: actions/setup-python@v6
                 with:
                   python-version: "3.12"
+                  cache: pip
 
               - uses: azure/setup-kubectl@v4
 
@@ -119,9 +133,13 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                   KEY_PATH="${{RUNNER_TEMP}}/nebius-auth-private.pem"
                   printf '%s\\n' "${{NEBIUS_AUTH_PRIVATE_KEY_PEM}}" > "${{KEY_PATH}}"
                   chmod 600 "${{KEY_PATH}}"
-                  echo "NEBIUS_AUTH_PRIVATE_KEY_FILE=${{KEY_PATH}}" >> "$GITHUB_ENV"
-                  echo "AWS_ACCESS_KEY_ID=${{NEBIUS_S3_ACCESS_KEY_ID}}" >> "$GITHUB_ENV"
-                  echo "AWS_SECRET_ACCESS_KEY=${{NEBIUS_S3_SECRET_ACCESS_KEY}}" >> "$GITHUB_ENV"
+                  {{
+                    echo "NEBIUS_SA_ID=${{NEBIUS_SA_ID}}"
+                    echo "NEBIUS_AUTH_PUBLIC_KEY_ID=${{NEBIUS_AUTH_PUBLIC_KEY_ID}}"
+                    echo "NEBIUS_AUTH_PRIVATE_KEY_FILE=${{KEY_PATH}}"
+                    echo "AWS_ACCESS_KEY_ID=${{NEBIUS_S3_ACCESS_KEY_ID}}"
+                    echo "AWS_SECRET_ACCESS_KEY=${{NEBIUS_S3_SECRET_ACCESS_KEY}}"
+                  }} >> "$GITHUB_ENV"
 
               - name: Validate generated artifacts
                 run: |
@@ -139,7 +157,7 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                   nebius-cxcli terraform plan "${{{{ matrix.generated }}}}"
 
           apply:
-            if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+            if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.discover.outputs.has_changes == 'true'
             needs: [ discover ]
             runs-on: ubuntu-latest
             environment:
@@ -153,6 +171,7 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
               - uses: actions/setup-python@v6
                 with:
                   python-version: "3.12"
+                  cache: pip
 
               - uses: azure/setup-kubectl@v4
 
@@ -178,9 +197,13 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                   KEY_PATH="${{RUNNER_TEMP}}/nebius-auth-private.pem"
                   printf '%s\\n' "${{NEBIUS_AUTH_PRIVATE_KEY_PEM}}" > "${{KEY_PATH}}"
                   chmod 600 "${{KEY_PATH}}"
-                  echo "NEBIUS_AUTH_PRIVATE_KEY_FILE=${{KEY_PATH}}" >> "$GITHUB_ENV"
-                  echo "AWS_ACCESS_KEY_ID=${{NEBIUS_S3_ACCESS_KEY_ID}}" >> "$GITHUB_ENV"
-                  echo "AWS_SECRET_ACCESS_KEY=${{NEBIUS_S3_SECRET_ACCESS_KEY}}" >> "$GITHUB_ENV"
+                  {{
+                    echo "NEBIUS_SA_ID=${{NEBIUS_SA_ID}}"
+                    echo "NEBIUS_AUTH_PUBLIC_KEY_ID=${{NEBIUS_AUTH_PUBLIC_KEY_ID}}"
+                    echo "NEBIUS_AUTH_PRIVATE_KEY_FILE=${{KEY_PATH}}"
+                    echo "AWS_ACCESS_KEY_ID=${{NEBIUS_S3_ACCESS_KEY_ID}}"
+                    echo "AWS_SECRET_ACCESS_KEY=${{NEBIUS_S3_SECRET_ACCESS_KEY}}"
+                  }} >> "$GITHUB_ENV"
 
               - name: Validate generated artifacts
                 run: |
@@ -214,19 +237,6 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                 run: |
                   set -euo pipefail
                   nebius-cxcli flux bootstrap "${{{{ matrix.generated }}}}"
-
-              - name: Inventory outputs
-                run: |
-                  set -euo pipefail
-                  nebius-cxcli inventory write "${{{{ matrix.generated }}}}"
-
-              - name: Email inventory
-                if: ${{{{ github.run_attempt == '1' }}}}
-                env:
-                  SMTP_PASSWORD: ${{{{ secrets.SMTP_PASSWORD }}}}
-                run: |
-                  set -euo pipefail
-                  nebius-cxcli email "${{{{ matrix.generated }}}}"
         """
         ).strip()
         + "\n"

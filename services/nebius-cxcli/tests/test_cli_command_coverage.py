@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
@@ -15,6 +16,7 @@ from nebius_cxcli.component_sources import (
     reset_component_sources_cache,
     set_component_sources_file_override,
 )
+from nebius_cxcli.managed_tools import FLUX_VERSION_ENV, TERRAFORM_VERSION_ENV
 
 runner = CliRunner()
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
@@ -65,6 +67,34 @@ def test_validate_command_strict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert result.exit_code == 0, result.output
     assert "Valid (strict):" in _plain_output(result.output)
     assert strict_called["called"] is True
+
+
+def test_load_generated_context_exports_manifest_tool_versions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_manifest = {
+        "tools": {
+            "flux_version": "v2.8.0",
+            "terraform_version": "1.14.1",
+        },
+        "runtime_config": {"client_info": {"client_name": "client-a", "nebius": {"project_id": "project-456"}}},
+    }
+    runtime_config = SimpleNamespace(client_info=SimpleNamespace(client_name="client-a"))
+
+    monkeypatch.delenv(FLUX_VERSION_ENV, raising=False)
+    monkeypatch.delenv(TERRAFORM_VERSION_ENV, raising=False)
+    monkeypatch.setattr(cli, "resolve_generated_paths", lambda _target: fake_paths)
+    monkeypatch.setattr(cli, "load_generated_manifest", lambda _generated_dir: fake_manifest)
+    monkeypatch.setattr(cli, "runtime_config_from_manifest", lambda _manifest: runtime_config)
+
+    config, paths, manifest = cli._load_generated_context(tmp_path / "generated")
+
+    assert config is runtime_config
+    assert paths is fake_paths
+    assert manifest is fake_manifest
+    assert os.environ[FLUX_VERSION_ENV] == "v2.8.0"
+    assert os.environ[TERRAFORM_VERSION_ENV] == "1.14.1"
 
 
 def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

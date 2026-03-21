@@ -16,9 +16,8 @@ from typing import Any
 import yaml
 from rich.markup import escape
 
-from .component_sources import load_component_sources
 from .github_secrets import detect_github_repo_slug
-from .managed_tools import FLUX_RELEASES_URL, resolve_flux_binary
+from .managed_tools import FLUX_RELEASES_URL, configured_flux_version, resolve_flux_binary
 from .paths import InstancePaths
 
 FLUX_NAMESPACE = "flux-system"
@@ -474,7 +473,7 @@ def flux_bootstrap_resources_installed(*, extra_env: dict[str, str] | None = Non
 
 
 def flux_install_manifest_url() -> str:
-    version = load_component_sources().cli.flux.version
+    version = configured_flux_version()
     return f"{FLUX_RELEASES_URL}/download/{version}/install.yaml"
 
 
