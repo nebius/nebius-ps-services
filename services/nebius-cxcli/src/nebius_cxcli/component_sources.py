@@ -15,6 +15,9 @@ from typing import Any
 import yaml
 
 DEFAULT_COMPONENT_SOURCES_FILE = (Path(__file__).resolve().parents[2] / "component_sources.yaml").resolve()
+CANONICAL_PORTABLE_COMPONENT_SOURCES_FILE = (
+    Path(__file__).resolve().parents[2] / "component_sources.release.yaml"
+).resolve()
 USER_COMPONENT_SOURCES_FILE = (Path.home() / ".config" / "nebius-cxcli" / "component_sources.yaml").resolve()
 GLOBAL_COMPONENT_SOURCES_FILE = Path("/etc/nebius-cxcli/component_sources.yaml")
 BUNDLED_COMPONENT_SOURCES_FILENAME = "component_sources.yaml"
@@ -710,6 +713,12 @@ def _load_bundled_component_sources() -> ComponentSources:
     if prefix_candidate.exists() and prefix_candidate.is_file():
         return _load_sources_from_path(prefix_candidate)
 
+    if (
+        CANONICAL_PORTABLE_COMPONENT_SOURCES_FILE.exists()
+        and CANONICAL_PORTABLE_COMPONENT_SOURCES_FILE.is_file()
+    ):
+        return _load_sources_from_path(CANONICAL_PORTABLE_COMPONENT_SOURCES_FILE)
+
     raise FileNotFoundError(
         "Bundled component sources file is missing from the installed package layout."
     )
@@ -730,6 +739,12 @@ def _load_bundled_cli_settings() -> CliSettings:
     prefix_candidate = Path(sys.prefix) / "nebius_cxcli" / BUNDLED_COMPONENT_SOURCES_FILENAME
     if prefix_candidate.exists() and prefix_candidate.is_file():
         return _load_cli_settings_from_path(prefix_candidate)
+
+    if (
+        CANONICAL_PORTABLE_COMPONENT_SOURCES_FILE.exists()
+        and CANONICAL_PORTABLE_COMPONENT_SOURCES_FILE.is_file()
+    ):
+        return _load_cli_settings_from_path(CANONICAL_PORTABLE_COMPONENT_SOURCES_FILE)
 
     raise FileNotFoundError(
         "Bundled component sources file is missing from the installed package layout."

@@ -273,13 +273,48 @@ def test_load_component_sources_falls_back_to_bundled_default(monkeypatch, tmp_p
     bundled_dir.mkdir(parents=True, exist_ok=True)
     bundled_file = bundled_dir / "component_sources.yaml"
     _write_sources_file(bundled_file, module_name="bundled-mod")
-    monkeypatch.setattr("nebius_cxcli.component_sources.sys.prefix", str(tmp_path))
+    monkeypatch.setattr(
+        "nebius_cxcli.component_sources.importlib_resources.files",
+        lambda _package: bundled_dir,
+    )
 
     set_component_sources_file_override(None)
     reset_component_sources_cache()
 
     loaded = load_component_sources()
     assert loaded.tf_modules[0].module == "bundled-mod"
+
+
+def test_load_component_sources_falls_back_to_repo_release_catalog_when_bundled_missing(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    missing_default = tmp_path / "missing-default.yaml"
+    missing_user = tmp_path / "missing-user.yaml"
+    missing_global = tmp_path / "missing-global.yaml"
+    missing_prefix = tmp_path / "missing-prefix"
+    release_file = tmp_path / "component_sources.release.yaml"
+
+    monkeypatch.setattr("nebius_cxcli.component_sources.DEFAULT_COMPONENT_SOURCES_FILE", missing_default)
+    monkeypatch.setattr("nebius_cxcli.component_sources.USER_COMPONENT_SOURCES_FILE", missing_user)
+    monkeypatch.setattr("nebius_cxcli.component_sources.GLOBAL_COMPONENT_SOURCES_FILE", missing_global)
+    monkeypatch.setattr(
+        "nebius_cxcli.component_sources.CANONICAL_PORTABLE_COMPONENT_SOURCES_FILE",
+        release_file,
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.component_sources.importlib_resources.files",
+        lambda _package: missing_prefix,
+    )
+    monkeypatch.setattr("nebius_cxcli.component_sources.sys.prefix", str(missing_prefix))
+    monkeypatch.delenv("NEBIUS_CXCLI_COMPONENT_SOURCES_FILE", raising=False)
+
+    _write_sources_file(release_file, module_name="portable-mod")
+    set_component_sources_file_override(None)
+    reset_component_sources_cache()
+
+    loaded = load_component_sources()
+    assert loaded.tf_modules[0].module == "portable-mod"
 
 
 def test_bundled_mk8s_outputs_preserve_sensitive_metadata() -> None:

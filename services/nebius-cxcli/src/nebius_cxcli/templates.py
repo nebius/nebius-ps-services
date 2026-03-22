@@ -54,7 +54,7 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
 
         env:
           NEBIUS_DISCOVER_TARGET: {discover_target}
-          NEBIUS_CXCLI_REF: {cli_ref}
+          NEBIUS_CXCLI_REF: ${{{{ vars.NEBIUS_CXCLI_REF || '{cli_ref}' }}}}
 
         jobs:
           discover:

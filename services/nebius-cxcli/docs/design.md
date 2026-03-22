@@ -185,7 +185,14 @@ Resolution precedence:
 4. user file `~/.config/nebius-cxcli/component_sources.yaml`
 5. global file `/etc/nebius-cxcli/component_sources.yaml`
 6. repo default `component_sources.yaml` (when present)
-7. bundled package default (`<install-prefix>/nebius_cxcli/component_sources.yaml` from wheel data-files)
+7. bundled package default (`nebius_cxcli/component_sources.yaml` packaged inside the install)
+
+Catalog-selection policy:
+
+- Automatic catalog resolution is a convenience default for interactive use.
+- Installed-package fallback is portable by default: when no external catalog override is present, the packaged `nebius_cxcli/component_sources.yaml` uses Git Terraform module sources.
+- Generator-side automation that must be deterministic and portable should set `--component-sources-file` or `NEBIUS_CXCLI_COMPONENT_SOURCES_FILE` explicitly.
+- Customer-side commands that operate on `generated/` should not require the original render environment's local source catalog in order to resolve Terraform module paths.
 
 Instance self-containment:
 
@@ -313,6 +320,8 @@ The command boundary is intentional:
 - Generates `.github/workflows/nebius-deployments.yml`.
 - Generated customer workflow is artifact-driven: it watches and deploys only `generated/**`.
 - `config.yaml` remains in the customer repo as a manual render/reset contract and does not trigger customer CI deployment.
+- `--cli-ref` is the explicit escape hatch when generator-side automation must pin the generated customer workflow to a specific nebius-cxcli branch, tag, or commit for PR validation.
+- Generated workflows also support a GitHub repo/org variable override `NEBIUS_CXCLI_REF`, which takes precedence over the generated default ref.
 - Optional CI auth/environment-secret bootstrap.
 
 ### `auth` (flag-driven)
@@ -412,7 +421,8 @@ Infra render:
 - Local Terraform module sources are rendered as resolved filesystem paths. Use an explicit `git::...//subdir?ref=...` source in `component_sources.yaml` when you need a portable or pinned remote module reference.
 - `component_sources.yaml` is the working-tree developer default for checked-out local Terraform module paths.
 - `component_sources.release.yaml` is the portable/release override for CI or cross-machine generation.
-- Release workflows stage `component_sources.release.yaml` as the bundled `component_sources.yaml` during wheel/release builds and rewrite its Terraform Git module refs from `?ref=main` to the current tag or commit before publishing it.
+- Build/package steps derive the bundled `nebius_cxcli/component_sources.yaml` fallback from `component_sources.release.yaml`, and release workflows rewrite its Terraform Git module refs from `?ref=main` to the current tag or commit before publishing it.
+- Generator-side commands may rely on automatic catalog resolution for local development, but portable automation should set `--component-sources-file` or `NEBIUS_CXCLI_COMPONENT_SOURCES_FILE` explicitly.
 - Deterministic output files:
   - `generated/nebius-cxcli-manifest.json`
   - `generated/infra/backend.tf`
@@ -430,6 +440,7 @@ Infra render:
 - Backend lock recovery is explicit: `terraform unlock <generated-dir>` inspects the remote `.tflock` object for the rendered backend and then uses Terraform `force-unlock` only when the lock appears stale. By default it refuses to unlock while local Terraform/deploy operations are still active or when the recorded lock owner differs from the current local identity.
 - `terraform unlock` still requires `aws` CLI in `PATH`; Terraform itself may come from `PATH` or the managed Terraform download path.
 - Local `deploy` validates the rendered Terraform root before apply, then if enabled charts and a `handoff`-enabled infra component are present it resolves the rendered cluster ID output and prepares kubeconfig before applying rendered Flux manifests.
+- Customer-side commands operate on the rendered `generated/` bundle as the deploy contract and do not need the source catalog to recover local Terraform module paths from the original render machine.
 - On non-CI local runs, that same cluster handoff also updates the user kubeconfig at `~/.kube/config`, so the target MK8s cluster is immediately usable with `kubectl` after `deploy`, `flux apply`, or `flux bootstrap`.
 - Before `deploy`, `flux apply`, or `flux bootstrap` starts Flux work against a handed-off MK8s cluster, the CLI waits for Kubernetes nodes to become `Ready` so Terraform completion is not treated as workload readiness.
 - `terraform plan` and `terraform apply` operate on the existing generated infra bundle rather than rerendering from `config.yaml`.
