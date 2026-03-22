@@ -107,7 +107,7 @@ Resolution precedence:
 4. `~/.config/nebius-cxcli/component_sources.yaml`
 5. `/etc/nebius-cxcli/component_sources.yaml`
 6. repo default `component_sources.yaml` (when present)
-7. bundled package default (`<install-prefix>/nebius_cxcli/component_sources.yaml` from wheel data-files)
+7. bundled package default (`nebius_cxcli/component_sources.yaml` packaged inside the install)
 
 `--component-sources-file` is a global optional override for the active source catalog path.  
 When omitted, nebius-cxcli resolves the default file name `component_sources.yaml` from the standard search order above.  
@@ -168,8 +168,15 @@ Recommended catalog split:
 - `component_sources.yaml`: repo-local developer catalog, using local filesystem module paths for fast iteration
 - `component_sources.release.yaml`: portable/release catalog, using Git module sources so generated artifacts work on other machines and in CI
 
-The portable/release catalog is a template. The CI/release workflows stage `component_sources.release.yaml` as the bundled `component_sources.yaml` and rewrite its Terraform Git module refs from `?ref=main` to the current commit/tag before building the wheel or publishing the raw catalog asset.
+The portable/release catalog is a template. Build/package steps derive the bundled `nebius_cxcli/component_sources.yaml` fallback from `component_sources.release.yaml`, and the CI/release workflows rewrite its Terraform Git module refs from `?ref=main` to the current commit/tag before building the wheel or publishing the raw catalog asset.
 If you use `component_sources.release.yaml` manually outside those workflows, pin its Git refs to a released tag or commit first instead of using `main`.
+
+Recommended workflow:
+
+- Automatic catalog resolution is a convenience default, not a portability guarantee.
+- Installed-package fallback is portable by default: when no repo-local/user/global override is present, the packaged `nebius_cxcli/component_sources.yaml` uses Git Terraform module sources.
+- For generator-side automation that must be deterministic and portable, set `--component-sources-file` or `NEBIUS_CXCLI_COMPONENT_SOURCES_FILE` explicitly.
+- Customer-side commands that operate on `generated/` do not need the source catalog to resolve Terraform module paths from the original render environment.
 
 Typical usage:
 
@@ -487,6 +494,7 @@ nebius-cxcli render /path/to/config.yaml
 - `render <config.yaml>`
   - Generates the deployable bundle under `generated/`, refreshes inventory, writes `generated/nebius-cxcli-manifest.json`, and treats rerender as a reset operation.
   - Rerender recreates the managed generated bundle from a clean canonical layout without stale files from earlier renders, while preserving bootstrap-owned `generated/flux/flux-system`.
+  - Automatic catalog resolution is acceptable for local development, but deterministic portable generation should set `--component-sources-file` or `NEBIUS_CXCLI_COMPONENT_SOURCES_FILE` explicitly.
   - If `generated/` already contains files, `render` prompts before overwrite in an interactive terminal.
   - In non-interactive contexts, use `nebius-cxcli render --force <config.yaml>` to confirm the reset explicitly.
 
@@ -502,10 +510,11 @@ nebius-cxcli flux bootstrap /path/to/generated
 
 - `validate-generated <generated-dir>`
   - Validates an existing generated bundle without rerendering it. Runs `terraform validate` against `generated/infra` and `kubectl kustomize` against `generated/flux` when apps exist.
+  - Uses the generated bundle as the deploy contract; it does not need the original render machine's local module paths.
 - `deploy <generated-dir>`
   - Full local deploy from the generated bundle: Terraform apply first, then inventory refresh for both infra and apps artifacts, then Flux apply. If GitOps bootstrap is not configured yet, the CLI warns and prints the follow-up `flux bootstrap` command.
 - `terraform apply <generated-dir>`
-  - Infra-only apply from the generated Terraform bundle. Safe to rerun sequentially for convergence.
+  - Infra-only apply from the generated Terraform bundle. Safe to rerun sequentially for convergence, and does not depend on resolving the original source catalog's module paths.
 - `flux apply <generated-dir>`
   - Apps-only direct apply from the generated Flux bundle. Safe to rerun sequentially for day-2 reconciliation. If GitOps bootstrap is not configured yet, the CLI warns and prints the follow-up `flux bootstrap` command.
 - `flux bootstrap <generated-dir>`
@@ -528,6 +537,8 @@ nebius-cxcli auth --instance-config /path/to/config.yaml --validate-profile
   - Scaffolds or reconciles the instance `config.yaml` and generated-folder skeleton.
 - `bootstrap-ci <config.yaml>`
   - Generates the customer GitHub Actions workflow and can optionally bootstrap/sync CI auth secrets. The generated workflow watches and deploys only `generated/**`.
+  - Use `--cli-ref <branch|tag|sha>` when the workflow should install a specific nebius-cxcli ref for PR or branch validation instead of the default release tag or `main`.
+  - Generated workflows also honor an optional GitHub repo/org variable `NEBIUS_CXCLI_REF`; when set, it overrides the generated default ref without editing the workflow file.
 - `discover <target_path>`
   - Returns changed deployment instances for CI matrix generation.
 - `terraform plan <generated-dir>`
@@ -546,7 +557,7 @@ Common command flags:
 - `create`:
   `--client-name`, `--tenant-id`, `--project-id`, `--region-id`, `--email`, `--infra`, `--app`, `--app-namespace`, `--app-releasename`, `--validate-sources/--no-validate-sources`, `--no-interactive`, `--force`
 - `bootstrap-ci`:
-  `--force`, `--auth-bootstrap/--no-auth-bootstrap`, `--github-repo`, `--github-token-env`
+  `--force`, `--auth-bootstrap/--no-auth-bootstrap`, `--github-repo`, `--github-token-env`, `--cli-ref`
 - `validate`: `--strict`
 - `deploy`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`
 - `discover`: `--all`

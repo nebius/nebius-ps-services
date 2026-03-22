@@ -1367,6 +1367,11 @@ def test_ensure_flux_bootstrap_falls_back_to_git_origin_repo_slug(
     monkeypatch.setattr(flux_ops, "wait_for_flux_namespace_ready", lambda *, extra_env=None: None)
     monkeypatch.setattr(flux_ops, "flux_controllers_installed", lambda *, extra_env=None: False)
     monkeypatch.setattr(flux_ops, "flux_crds_installed", lambda *, extra_env=None: False)
+    monkeypatch.setattr(
+        flux_ops,
+        "flux_bootstrap_resources_installed",
+        lambda *, extra_env=None: False,
+    )
     monkeypatch.setattr(flux_ops, "resolve_flux_binary", lambda: "/tmp/managed-flux")
     monkeypatch.setattr(flux_ops, "detect_github_repo_slug", lambda _repo_root: "owner/repo")
     monkeypatch.setattr(
@@ -2171,7 +2176,7 @@ def test_bootstrap_ci_command_with_auth_passes_github_flags(
     monkeypatch.setattr(
         cli,
         "_ensure_ci_workflow_for_deployments_root",
-        lambda *, deployments_root, force: fake_workflow,
+        lambda *, deployments_root, force, cli_ref: captured.update({"cli_ref": cli_ref}) or fake_workflow,
     )
 
     def _fake_auto_bootstrap(**kwargs: object) -> None:
@@ -2198,6 +2203,7 @@ def test_bootstrap_ci_command_with_auth_passes_github_flags(
     assert captured["github_environment"] == "client-a-project-123"
     assert captured["github_repo"] == "owner/repo"
     assert captured["github_token_env"] == "MY_GH_TOKEN"
+    assert captured["cli_ref"] == cli.default_cli_ref()
 
 
 def test_auth_requires_action_flag() -> None:

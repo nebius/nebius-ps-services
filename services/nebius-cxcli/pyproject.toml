@@ -40,9 +40,6 @@ package-dir = {"" = "src"}
 where = ["src"]
 include = ["nebius_cxcli*"]
 
-[tool.setuptools.data-files]
-nebius_cxcli = ["component_sources.yaml"]
-
 [tool.setuptools_scm]
 version_scheme = "python-simplified-semver"
 local_scheme = "no-local-version"
@@ -69,5 +66,5 @@ filterwarnings = [
 ]
 
 [build-system]
-requires = ["setuptools>=69", "setuptools-scm>=8"]
+requires = ["setuptools>=69", "setuptools-scm>=8", "PyYAML>=6.0.2,<7.0.0"]
 build-backend = "setuptools.build_meta"

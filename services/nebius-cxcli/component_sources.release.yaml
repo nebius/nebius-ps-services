@@ -1,4 +1,6 @@
-# Portable/release catalog template.
+# Canonical portable/release catalog template.
+# Build/package steps derive the bundled `nebius_cxcli/component_sources.yaml`
+# fallback from this file.
 # Release/CI workflows stage this file and rewrite only this monorepo's module
 # refs from `?ref=main` to the current tag or commit before bundling/publishing
 # it. External module sources are left unchanged and must already be pinned to a

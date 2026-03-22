@@ -658,6 +658,7 @@ def test_bootstrap_ci_no_auth_writes_workflow_in_repo_root(tmp_path: Path) -> No
     assert "validate-generated" in content
     assert "Inventory outputs" not in content
     assert "Email inventory" not in content
+    assert "NEBIUS_CXCLI_REF: ${{ vars.NEBIUS_CXCLI_REF || 'main' }}" in content
 
 
 def test_bootstrap_ci_no_auth_is_idempotent_without_force(tmp_path: Path) -> None:
@@ -679,6 +680,39 @@ def test_bootstrap_ci_no_auth_is_idempotent_without_force(tmp_path: Path) -> Non
     assert second.exit_code == 0, second.output
     assert "Workflow exists, keeping current file:" in second.output
     assert "Skipped CI auth bootstrap/secrets sync." in second.output
+
+
+def test_bootstrap_ci_cli_ref_overrides_generated_workflow_pin(tmp_path: Path) -> None:
+    repo_root = tmp_path / "customer-repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    _git_init(repo_root)
+
+    deployments_root = repo_root / "customer" / "deployments-root"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    create_result = _create_non_interactive(deployments_root)
+    assert create_result.exit_code == 0, create_result.output
+
+    config_path = _instance_config_path(deployments_root)
+    bootstrap = runner.invoke(
+        app,
+        [
+            "bootstrap-ci",
+            str(config_path),
+            "--no-auth-bootstrap",
+            "--cli-ref",
+            "feature/test-portable-catalog",
+        ],
+    )
+    assert bootstrap.exit_code == 0, bootstrap.output
+    assert "Workflow CLI ref: feature/test-portable-catalog" in bootstrap.output
+
+    workflow = repo_root / ".github" / "workflows" / "nebius-deployments.yml"
+    content = workflow.read_text(encoding="utf-8")
+    assert (
+        "NEBIUS_CXCLI_REF: ${{ vars.NEBIUS_CXCLI_REF || 'feature/test-portable-catalog' }}"
+        in content
+    )
 
 
 def test_bootstrap_ci_rejects_github_flags_when_no_auth(tmp_path: Path) -> None:

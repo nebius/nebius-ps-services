@@ -5456,6 +5456,7 @@ def _ensure_ci_workflow_for_deployments_root(
     *,
     deployments_root: Path,
     force: bool,
+    cli_ref: str,
 ) -> CIWorkflowBootstrapResult:
     repo_root = _require_git_root(deployments_root)
     workflows_path = repo_root / ".github" / "workflows"
@@ -5477,7 +5478,7 @@ def _ensure_ci_workflow_for_deployments_root(
         customer_workflow_yaml(
             deployments_dir=deployments_dir_for_ci,
             discover_target=discover_target_for_ci,
-            cli_ref=default_cli_ref(),
+            cli_ref=cli_ref,
         ),
         encoding="utf-8",
     )
@@ -5981,6 +5982,17 @@ def bootstrap_ci_command(
             ),
         ),
     ] = "GH_TOKEN",
+    cli_ref: Annotated[
+        str | None,
+        typer.Option(
+            "--cli-ref",
+            help=(
+                "Git ref used by the generated customer workflow when it installs nebius-cxcli "
+                "(branch, tag, or commit SHA). Defaults to the current release tag for stable "
+                "builds, otherwise 'main'."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Generate generated-artifact-only customer CI workflow and optionally perform full CI auth bootstrap."""
     try:
@@ -5990,6 +6002,7 @@ def bootstrap_ci_command(
             )
 
         config, paths = _load_context(config_path)
+        resolved_cli_ref = str(cli_ref or "").strip() or default_cli_ref()
         github_environment = _github_environment_name_for_identity(
             client_name=str(config.client_info.client_name),
             project_id=str(config.client_info.nebius.project_id),
@@ -5997,6 +6010,7 @@ def bootstrap_ci_command(
         workflow = _ensure_ci_workflow_for_deployments_root(
             deployments_root=paths.deployments_dir,
             force=force,
+            cli_ref=resolved_cli_ref,
         )
 
         if auth_bootstrap:
@@ -6022,6 +6036,7 @@ def bootstrap_ci_command(
         else:
             console.print(f"Workflow exists, keeping current file: {workflow.workflow_file}")
         console.print(f"GitHub environment: {github_environment}")
+        console.print(f"Workflow CLI ref: {resolved_cli_ref}")
         if not auth_bootstrap:
             console.print("Skipped CI auth bootstrap/secrets sync.")
         console.print("CI bootstrap completed.")
