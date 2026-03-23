@@ -55,6 +55,7 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
         env:
           NEBIUS_DISCOVER_TARGET: {discover_target}
           NEBIUS_CXCLI_REF: ${{{{ vars.NEBIUS_CXCLI_REF || '{cli_ref}' }}}}
+          NEBIUS_CXCLI_PYTHON_VERSION: "3.12"
 
         jobs:
           discover:
@@ -69,7 +70,7 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
 
               - uses: actions/setup-python@v6
                 with:
-                  python-version: "3.12"
+                  python-version: ${{{{ env.NEBIUS_CXCLI_PYTHON_VERSION }}}}
                   cache: pip
 
               - name: Install nebius-cxcli
@@ -83,12 +84,12 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                 run: |
                   set -euo pipefail
                   nebius-cxcli discover "${{{{ env.NEBIUS_DISCOVER_TARGET }}}}" > discover.json
-                  echo "discovery=$(cat discover.json)" >> "$GITHUB_OUTPUT"
                   python - <<'PY' >> "$GITHUB_OUTPUT"
                   import json
                   from pathlib import Path
                   payload = json.loads(Path("discover.json").read_text(encoding="utf-8"))
                   include = payload.get("include", [])
+                  print(f"discovery={{json.dumps(payload, separators=(',', ':'))}}")
                   print("has_changes=true" if include else "has_changes=false")
                   PY
 
@@ -106,7 +107,7 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
 
               - uses: actions/setup-python@v6
                 with:
-                  python-version: "3.12"
+                  python-version: ${{{{ env.NEBIUS_CXCLI_PYTHON_VERSION }}}}
                   cache: pip
 
               - uses: azure/setup-kubectl@v4
@@ -144,7 +145,7 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
               - name: Validate generated artifacts
                 run: |
                   set -euo pipefail
-                  nebius-cxcli validate-generated "${{{{ matrix.generated }}}}"
+                  nebius-cxcli validate-generated --portable "${{{{ matrix.generated }}}}"
 
               - name: Terraform plan
                 env:
@@ -170,7 +171,7 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
 
               - uses: actions/setup-python@v6
                 with:
-                  python-version: "3.12"
+                  python-version: ${{{{ env.NEBIUS_CXCLI_PYTHON_VERSION }}}}
                   cache: pip
 
               - uses: azure/setup-kubectl@v4
@@ -208,7 +209,7 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
               - name: Validate generated artifacts
                 run: |
                   set -euo pipefail
-                  nebius-cxcli validate-generated "${{{{ matrix.generated }}}}"
+                  nebius-cxcli validate-generated --portable "${{{{ matrix.generated }}}}"
 
               - name: Terraform apply
                 env:

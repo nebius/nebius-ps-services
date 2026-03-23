@@ -8,17 +8,18 @@ import yaml
 import nebius_cxcli.component_sources as component_sources
 from nebius_cxcli.component_sources import (
     ComponentOutput,
+    load_component_sources,
     reset_component_sources_cache,
-    resolve_component_sources_file,
     set_component_sources_file_override,
 )
 from nebius_cxcli.components import component_entries, reset_component_entry_cache
 from nebius_cxcli.config_loader import load_config
 from nebius_cxcli.config_model import to_dynamic_payload
 from nebius_cxcli.config_template import starter_config_yaml
+from nebius_cxcli.infra_render import RenderProfile
 from nebius_cxcli.paths import resolve_instance_paths, validate_path_alignment
 from nebius_cxcli.render import render_instance
-from nebius_cxcli.runtime_introspection import reset_runtime_introspection_cache
+from nebius_cxcli.runtime_introspection import ModuleVariable, reset_runtime_introspection_cache
 from nebius_cxcli.terraform_provider import build_provider_module_name
 
 
@@ -138,7 +139,9 @@ def _catalog_with_shared_admin_ssh(
     return override_path
 
 
-def test_render_creates_source_only_module_and_flux_outputs(tmp_path: Path) -> None:
+def test_render_creates_source_only_module_and_flux_outputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _set_catalog_override(_local_catalog_path())
     reset_component_entry_cache()
     config_path = _instance_config_path(tmp_path)
@@ -151,11 +154,33 @@ def test_render_creates_source_only_module_and_flux_outputs(tmp_path: Path) -> N
         mk8s_inputs["subnet_id"] = "subnet-abc123"
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
+    monkeypatch.setattr(
+        "nebius_cxcli.infra_render.module_variables",
+        lambda _source: (
+            ModuleVariable(name="parent_id", required=False, type_hint="string"),
+            ModuleVariable(name="cluster_name", required=False, type_hint="string"),
+            ModuleVariable(name="cpu_nodes_platform", required=False, type_hint="string"),
+            ModuleVariable(name="cpu_nodes_preset", required=False, type_hint="string"),
+            ModuleVariable(name="subnet_id", required=False, type_hint="string"),
+            ModuleVariable(name="gpu_enabled", required=False, type_hint="bool"),
+            ModuleVariable(
+                name="mk8s_cluster_public_endpoint",
+                required=False,
+                type_hint="bool",
+            ),
+            ModuleVariable(
+                name="kube_network_service_cidrs",
+                required=False,
+                type_hint="list(string)",
+            ),
+        ),
+    )
+
     config = load_config(config_path)
     paths = resolve_instance_paths(config_path)
     validate_path_alignment(config, paths)
 
-    result = render_instance(config, paths)
+    result = render_instance(config, paths, render_profile=RenderProfile.PORTABLE)
     assert len(result.files_written) >= 5
 
     versions_tf = (paths.infra_dir / "versions.tf").read_text(encoding="utf-8")
@@ -174,10 +199,13 @@ def test_render_creates_source_only_module_and_flux_outputs(tmp_path: Path) -> N
     assert 'provider "nebius"' in providers_tf
     assert 'module "mk8s" {' in main_tf
     assert 'module "custom-' not in main_tf
-    expected_mk8s_source = (
-        resolve_component_sources_file().parent / "../../platform-infra/modules/mk8s"
-    ).resolve()
-    assert f'source = "{expected_mk8s_source}"' in main_tf
+    portable_catalog = load_component_sources(
+        explicit=Path(__file__).resolve().parents[1] / "component_sources.release.yaml"
+    )
+    mk8s_source = next(
+        item.source for item in portable_catalog.tf_modules if item.module == "mk8s"
+    )
+    assert f'source = "{mk8s_source}"' in main_tf
     assert "subnet_id = var.mk8s_subnet_id" in main_tf
     assert "inputs = jsondecode(" not in main_tf
     assert 'output "mk8s_cluster_id" {' in outputs_tf
@@ -225,7 +253,7 @@ def test_render_emits_dynamic_provider_resource_blocks(tmp_path: Path) -> None:
     paths = resolve_instance_paths(config_path)
     validate_path_alignment(config, paths)
 
-    render_instance(config, paths)
+    render_instance(config, paths, render_profile=RenderProfile.LOCAL_DEV)
 
     main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
     assert 'resource "nebius_vpc_v1_network" "runtime_network"' in main_tf
@@ -259,7 +287,7 @@ def test_render_dynamic_chart_shape_writes_flux_manifests(tmp_path: Path) -> Non
     paths = resolve_instance_paths(config_path)
     validate_path_alignment(config, paths)
 
-    render_instance(config, paths)
+    render_instance(config, paths, render_profile=RenderProfile.LOCAL_DEV)
 
     repo_sources = paths.flux_dir / "helm-repositories.yaml"
     release = paths.flux_dir / "helmrelease-workloads-runtime-app.yaml"
@@ -312,7 +340,7 @@ def test_render_instance_resets_generated_bundle_preserves_flux_bootstrap_and_re
     stale_inventory.write_text("{}\n", encoding="utf-8")
     stale_top_level.write_text("obsolete\n", encoding="utf-8")
 
-    render_instance(config, paths)
+    render_instance(config, paths, render_profile=RenderProfile.LOCAL_DEV)
 
     assert not stale_tf.exists()
     assert not stale_flux_file.exists()
@@ -353,7 +381,7 @@ def test_render_dynamic_oci_chart_writes_flux_oci_repository(tmp_path: Path) -> 
     paths = resolve_instance_paths(config_path)
     validate_path_alignment(config, paths)
 
-    render_instance(config, paths)
+    render_instance(config, paths, render_profile=RenderProfile.LOCAL_DEV)
 
     repo_sources = paths.flux_dir / "helm-repositories.yaml"
     namespace_manifest = paths.flux_dir / "namespace-envoy-gateway-system.yaml"
@@ -409,7 +437,7 @@ def test_render_removes_stale_legacy_nested_flux_layout(tmp_path: Path) -> None:
     # Simulate stale legacy layout from previous versions.
     (paths.flux_dir / "apps").mkdir(parents=True, exist_ok=True)
 
-    render_instance(config, paths)
+    render_instance(config, paths, render_profile=RenderProfile.LOCAL_DEV)
 
     assert not (paths.flux_dir / "apps").exists()
     assert (paths.flux_dir / "kustomization.yaml").exists()
@@ -435,7 +463,7 @@ def test_render_rejects_unknown_custom_module_input(tmp_path: Path) -> None:
     validate_path_alignment(config, paths)
 
     with pytest.raises(ValueError, match="input 'ssh_public_key' is not declared by module"):
-        render_instance(config, paths)
+        render_instance(config, paths, render_profile=RenderProfile.LOCAL_DEV)
 
 
 def test_render_uses_shared_admin_ssh_username_binding_for_wireguard_jumphost(
@@ -460,7 +488,7 @@ def test_render_uses_shared_admin_ssh_username_binding_for_wireguard_jumphost(
     paths = resolve_instance_paths(config_path)
     validate_path_alignment(config, paths)
 
-    render_instance(config, paths)
+    render_instance(config, paths, render_profile=RenderProfile.LOCAL_DEV)
 
     main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
     tfvars = (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
@@ -540,7 +568,7 @@ def test_render_uses_shared_defaults_for_app_chart_values(tmp_path: Path, monkey
     paths = resolve_instance_paths(config_path)
     validate_path_alignment(config, paths)
 
-    render_instance(config, paths)
+    render_instance(config, paths, render_profile=RenderProfile.LOCAL_DEV)
 
     release_doc = yaml.safe_load(
         (paths.flux_dir / "helmrelease-workloads-demo-app.yaml").read_text(encoding="utf-8")
@@ -614,7 +642,7 @@ def test_render_supports_infra_input_binding_from_component_output(
     paths = resolve_instance_paths(config_path)
     validate_path_alignment(config, paths)
 
-    render_instance(config, paths)
+    render_instance(config, paths, render_profile=RenderProfile.LOCAL_DEV)
 
     main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
     outputs_tf = (paths.infra_dir / "outputs.tf").read_text(encoding="utf-8")
@@ -714,6 +742,7 @@ def test_render_supports_app_input_binding_from_component_output_with_runtime_va
         config,
         paths,
         component_output_values={"mk8s.cluster_id": "cluster-u123"},
+        render_profile=RenderProfile.LOCAL_DEV,
     )
 
     release_doc = yaml.safe_load(
@@ -812,7 +841,7 @@ def test_render_uses_component_source_defaults_when_config_omits_values(
     paths = resolve_instance_paths(config_path)
     validate_path_alignment(config, paths)
 
-    render_instance(config, paths)
+    render_instance(config, paths, render_profile=RenderProfile.LOCAL_DEV)
 
     tfvars = (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
     assert '"demo_module_cluster_name": "demo-cluster"' in tfvars

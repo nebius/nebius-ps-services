@@ -16,6 +16,7 @@ from nebius_cxcli.component_sources import (
     reset_component_sources_cache,
     set_component_sources_file_override,
 )
+from nebius_cxcli.infra_render import RenderProfile
 from nebius_cxcli.managed_tools import FLUX_VERSION_ENV, TERRAFORM_VERSION_ENV
 
 runner = CliRunner()
@@ -42,20 +43,38 @@ def _fake_paths(tmp_path: Path) -> SimpleNamespace:
 
 
 def test_validate_command_non_strict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
     monkeypatch.setattr(cli, "_load_runtime_context", lambda _path: (object(), object()))
     monkeypatch.setattr(cli, "_validate_component_dependencies", lambda _cfg: [])
+    monkeypatch.setattr(
+        cli,
+        "rendered_module_sources",
+        lambda config, *, render_profile: (
+            captured.update({"config": config, "render_profile": render_profile}) or ()
+        ),
+    )
 
     result = runner.invoke(cli.app, ["validate", str(tmp_path / "config.yaml")])
 
     assert result.exit_code == 0, result.output
     assert "Valid:" in _plain_output(result.output)
+    assert captured["render_profile"] == RenderProfile.PORTABLE
 
 
 def test_validate_command_strict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     strict_called: dict[str, bool] = {"called": False}
+    captured: dict[str, object] = {}
 
     monkeypatch.setattr(cli, "_load_runtime_context", lambda _path: (object(), object()))
     monkeypatch.setattr(cli, "_validate_component_dependencies", lambda _cfg: [])
+    monkeypatch.setattr(cli, "validate_mk8s_network_preflight", lambda _cfg: None)
+    monkeypatch.setattr(
+        cli,
+        "rendered_module_sources",
+        lambda config, *, render_profile: (
+            captured.update({"config": config, "render_profile": render_profile}) or ()
+        ),
+    )
 
     def _fake_strict(_cfg: object) -> None:
         strict_called["called"] = True
@@ -67,6 +86,31 @@ def test_validate_command_strict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert result.exit_code == 0, result.output
     assert "Valid (strict):" in _plain_output(result.output)
     assert strict_called["called"] is True
+    assert captured["render_profile"] == RenderProfile.PORTABLE
+
+
+def test_validate_command_accepts_local_dev_render_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(cli, "_load_runtime_context", lambda _path: (object(), object()))
+    monkeypatch.setattr(cli, "_validate_component_dependencies", lambda _cfg: [])
+    monkeypatch.setattr(
+        cli,
+        "rendered_module_sources",
+        lambda config, *, render_profile: (
+            captured.update({"config": config, "render_profile": render_profile}) or ()
+        ),
+    )
+
+    result = runner.invoke(
+        cli.app,
+        ["validate", "--render-profile", "local-dev", str(tmp_path / "config.yaml")],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["render_profile"] == RenderProfile.LOCAL_DEV
 
 
 def test_load_generated_context_exports_manifest_tool_versions(
@@ -105,8 +149,14 @@ def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.Mon
     monkeypatch.setattr(
         cli,
         "render_terraform_artifacts",
-        lambda config, paths: (
-            calls.update({"terraform_config": config, "terraform_paths": paths})
+        lambda config, paths, *, render_profile: (
+            calls.update(
+                {
+                    "terraform_config": config,
+                    "terraform_paths": paths,
+                    "terraform_profile": render_profile,
+                }
+            )
             or [tmp_path / "a.tf"]
         ),
     )
@@ -154,8 +204,14 @@ def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.Mon
     monkeypatch.setattr(
         cli,
         "_write_generated_runtime_manifest",
-        lambda config, paths: (
-            calls.update({"manifest_config": config, "manifest_paths": paths})
+        lambda config, paths, *, render_profile: (
+            calls.update(
+                {
+                    "manifest_config": config,
+                    "manifest_paths": paths,
+                    "manifest_profile": render_profile,
+                }
+            )
             or paths.generated_dir / "nebius-cxcli-manifest.json"
         ),
     )
@@ -167,6 +223,7 @@ def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.Mon
     assert calls == {
         "terraform_config": "cfg",
         "terraform_paths": fake_paths,
+        "terraform_profile": RenderProfile.PORTABLE,
         "outputs_config": "cfg",
         "outputs_paths": fake_paths,
         "flux_config": "cfg",
@@ -176,9 +233,136 @@ def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.Mon
         "inventory_paths": fake_paths,
         "manifest_config": "cfg",
         "manifest_paths": fake_paths,
+        "manifest_profile": RenderProfile.PORTABLE,
         "lock_config": "cfg",
         "lock_paths": fake_paths,
     }
+
+
+def test_render_command_accepts_local_dev_render_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    calls: dict[str, object] = {}
+
+    monkeypatch.setattr(cli, "_load_runtime_context", lambda _path: ("cfg", fake_paths))
+    monkeypatch.setattr(cli, "_confirm_render_overwrite", lambda _paths, *, force: True)
+    monkeypatch.setattr(cli, "reset_generated_bundle", lambda _paths: None)
+    monkeypatch.setattr(
+        cli,
+        "_ensure_deployments_gitignore",
+        lambda deployments_root: SimpleNamespace(path=None, wrote=False),
+    )
+    monkeypatch.setattr(
+        cli,
+        "render_terraform_artifacts",
+        lambda config, paths, *, render_profile: (
+            calls.update({"render_profile": render_profile}) or [tmp_path / "a.tf"]
+        ),
+    )
+    monkeypatch.setattr(cli, "_runtime_component_output_values", lambda config, paths: {})
+    monkeypatch.setattr(cli, "render_flux", lambda config, paths, *, component_output_values=None: [])
+    monkeypatch.setattr(cli, "write_inventory", lambda config, paths: None)
+    monkeypatch.setattr(
+        cli,
+        "_write_generated_runtime_manifest",
+        lambda config, paths, *, render_profile: paths.generated_dir / "manifest.json",
+    )
+    monkeypatch.setattr(cli, "_try_generate_terraform_lock_file", lambda config, paths: False)
+
+    result = runner.invoke(
+        cli.app,
+        ["render", "--render-profile", "local-dev", str(tmp_path / "config.yaml")],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls["render_profile"] == RenderProfile.LOCAL_DEV
+    assert "Render profile: local-dev" in _plain_output(result.output)
+    output = _plain_output(result.output)
+    assert "local-dev render profile may embed local Terraform" in output
+    assert "generated artifacts in CI" in output
+
+
+def test_validate_generated_command_portable_checks_module_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        cli,
+        "_load_generated_context",
+        lambda _path: ("cfg", fake_paths, {"render": {"module_sources": []}}),
+    )
+    monkeypatch.setattr(cli, "_ensure_terraform_backend_ready", lambda config, *, auto_auth_bootstrap: None)
+    monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _config: {})
+    monkeypatch.setattr(cli, "terraform_validate", lambda infra_dir, *, extra_env=None: None)
+    monkeypatch.setattr(cli, "_active_chart_count", lambda _config: 0)
+    monkeypatch.setattr(
+        cli,
+        "_validate_generated_bundle_portability",
+        lambda paths, manifest: captured.update({"paths": paths, "manifest": manifest}),
+    )
+
+    result = runner.invoke(
+        cli.app,
+        ["validate-generated", "--portable", str(tmp_path / "generated")],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["paths"] == fake_paths
+
+
+def test_validate_sources_command_reports_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sources = SimpleNamespace(
+        tf_modules=[SimpleNamespace(module="mk8s")],
+        helm_charts=[SimpleNamespace(name="gateway-helm")],
+    )
+    sources_file = tmp_path / "component_sources.yaml"
+
+    monkeypatch.setattr(cli, "load_component_sources", lambda: sources)
+    monkeypatch.setattr(
+        cli,
+        "_validate_component_sources_registry",
+        lambda progress_callback=None: (sources_file, [], []),
+    )
+
+    result = runner.invoke(cli.app, ["validate-sources"])
+
+    assert result.exit_code == 0, result.output
+    output = _plain_output(result.output)
+    normalized_output = output.replace("\n", "")
+    assert "Component sources valid:" in output
+    assert str(sources_file) in normalized_output
+
+
+def test_validate_sources_command_reports_warnings_and_fails_on_issues(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sources = SimpleNamespace(tf_modules=[], helm_charts=[])
+    sources_file = tmp_path / "component_sources.yaml"
+
+    monkeypatch.setattr(cli, "load_component_sources", lambda: sources)
+    monkeypatch.setattr(
+        cli,
+        "_validate_component_sources_registry",
+        lambda progress_callback=None: (
+            sources_file,
+            ["module source './broken-module' does not resolve to an existing directory"],
+            ["missing variables.tf"],
+        ),
+    )
+
+    result = runner.invoke(cli.app, ["validate-sources"])
+    output = _plain_output(result.output)
+    normalized_output = output.replace("\n", "")
+
+    assert result.exit_code == 1, result.output
+    assert "Warning: missing variables.tf" in output
+    assert "Component sources validation failed for" in output
+    assert str(sources_file) in normalized_output
+    assert "module source './broken-module' does not resolve to an existing directory" in output
 
 
 def test_render_command_requires_force_in_noninteractive_overwrite(
@@ -2173,6 +2357,12 @@ def test_bootstrap_ci_command_with_auth_passes_github_flags(
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(cli, "_load_context", lambda _path: (fake_config, fake_paths))
+    monkeypatch.setattr(cli, "_require_git_root", lambda _path: tmp_path)
+    monkeypatch.setattr(
+        cli,
+        "_preflight_bootstrap_ci_auth",
+        lambda *, github_repo, github_token_env, repo_root: github_repo or "owner/repo",
+    )
     monkeypatch.setattr(
         cli,
         "_ensure_ci_workflow_for_deployments_root",

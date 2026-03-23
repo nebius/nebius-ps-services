@@ -167,6 +167,7 @@ Recommended catalog split:
 
 - `component_sources.yaml`: repo-local developer catalog, using local filesystem module paths for fast iteration
 - `component_sources.release.yaml`: portable/release catalog, using Git module sources so generated artifacts work on other machines and in CI
+- The checked-in developer and portable catalogs should stay semantically identical apart from Terraform module `source` values; only the transport changes between local-dev and portable renders.
 
 The portable/release catalog is a template. Build/package steps derive the bundled `nebius_cxcli/component_sources.yaml` fallback from `component_sources.release.yaml`, and the CI/release workflows rewrite its Terraform Git module refs from `?ref=main` to the current commit/tag before building the wheel or publishing the raw catalog asset.
 If you use `component_sources.release.yaml` manually outside those workflows, pin its Git refs to a released tag or commit first instead of using `main`.
@@ -174,18 +175,21 @@ If you use `component_sources.release.yaml` manually outside those workflows, pi
 Recommended workflow:
 
 - Automatic catalog resolution is a convenience default, not a portability guarantee.
+- `validate` and `render` default to the `portable` render profile, which emits deployable Terraform module sources suitable for CI and other machines.
 - Installed-package fallback is portable by default: when no repo-local/user/global override is present, the packaged `nebius_cxcli/component_sources.yaml` uses Git Terraform module sources.
-- For generator-side automation that must be deterministic and portable, set `--component-sources-file` or `NEBIUS_CXCLI_COMPONENT_SOURCES_FILE` explicitly.
+- Use `--render-profile local-dev` when you intentionally want generated Terraform to point at checked-out local module paths for workstation testing.
+- Use `--component-sources-file` or `NEBIUS_CXCLI_COMPONENT_SOURCES_FILE` only when you need to override which catalog is active; it is not the primary portable-vs-local switch.
 - Customer-side commands that operate on `generated/` do not need the source catalog to resolve Terraform module paths from the original render environment.
 
 Typical usage:
 
 ```bash
 # Local development against checked-out Terraform modules
-nebius-cxcli --component-sources-file ./component_sources.yaml validate --strict /path/to/config.yaml
+nebius-cxcli validate --strict --render-profile local-dev /path/to/config.yaml
+nebius-cxcli render --render-profile local-dev /path/to/config.yaml
 
 # Portable generation for CI / another repository / another machine
-nebius-cxcli --component-sources-file ./component_sources.release.yaml render /path/to/config.yaml
+nebius-cxcli render /path/to/config.yaml
 ```
 
 Managed vs external local tools:
@@ -263,6 +267,7 @@ Terraform render output (canonical):
 - `generated/infra/providers.tf`
 - `generated/infra/variables.tf`
 - `generated/infra/main.tf`
+- `generated/infra/outputs.tf`
 - `generated/infra/terraform.auto.tfvars.json`
 - `generated/infra/.terraform.lock.hcl` (generated during `render` when Terraform is available from `PATH` or the managed download path and backend init succeeds)
 - Local Terraform module sources are rendered as resolved filesystem paths. Use an explicit `git::...//subdir?ref=...` source in `component_sources.yaml` when you want a portable or pinned remote module reference.
@@ -290,7 +295,7 @@ Wizard field behavior:
   - `project_subnets`
   - `project_networks`
   - `tenant_projects`
-- `mk8s_control_plane_versions`
+  - `mk8s_control_plane_versions`
 - When live provider options are unavailable, the wizard falls back to manual input.
 
 Shared-derived default example:
@@ -489,12 +494,16 @@ nebius-cxcli render /path/to/config.yaml
   - Validates the active `component_sources.yaml` catalog: Terraform module sources, Helm chart sources, and catalog contract shape.
 - `validate <config.yaml>`
   - Validates the instance contract and runtime shape without the stricter deployment-readiness checks.
+  - Defaults to `--render-profile portable`, so validation fails when the requested render contract would rely on non-portable local Terraform module paths.
 - `validate --strict <config.yaml>`
   - Adds stricter deployment-readiness checks on top of `validate`, including source-backed and runtime-backed checks used before rendering.
+  - Accepts `--render-profile {portable|local-dev}` like `validate`.
 - `render <config.yaml>`
   - Generates the deployable bundle under `generated/`, refreshes inventory, writes `generated/nebius-cxcli-manifest.json`, and treats rerender as a reset operation.
   - Rerender recreates the managed generated bundle from a clean canonical layout without stale files from earlier renders, while preserving bootstrap-owned `generated/flux/flux-system`.
-  - Automatic catalog resolution is acceptable for local development, but deterministic portable generation should set `--component-sources-file` or `NEBIUS_CXCLI_COMPONENT_SOURCES_FILE` explicitly.
+  - Defaults to `--render-profile portable`, which rewrites active local module sources to their portable Git/registry equivalents when available.
+  - Use `--render-profile local-dev` only for workstation testing against checked-out local Terraform modules; those generated artifacts are intentionally non-portable.
+  - Use `--component-sources-file` or `NEBIUS_CXCLI_COMPONENT_SOURCES_FILE` only when you need to select a non-default catalog file.
   - If `generated/` already contains files, `render` prompts before overwrite in an interactive terminal.
   - In non-interactive contexts, use `nebius-cxcli render --force <config.yaml>` to confirm the reset explicitly.
 
@@ -510,6 +519,7 @@ nebius-cxcli flux bootstrap /path/to/generated
 
 - `validate-generated <generated-dir>`
   - Validates an existing generated bundle without rerendering it. Runs `terraform validate` against `generated/infra` and `kubectl kustomize` against `generated/flux` when apps exist.
+  - Add `--portable` in CI or pre-commit checks to reject generated Terraform bundles that still embed local filesystem module paths.
   - Uses the generated bundle as the deploy contract; it does not need the original render machine's local module paths.
 - `deploy <generated-dir>`
   - Full local deploy from the generated bundle: Terraform apply first, then inventory refresh for both infra and apps artifacts, then Flux apply. If GitOps bootstrap is not configured yet, the CLI warns and prints the follow-up `flux bootstrap` command.
@@ -537,8 +547,14 @@ nebius-cxcli auth --instance-config /path/to/config.yaml --validate-profile
   - Scaffolds or reconciles the instance `config.yaml` and generated-folder skeleton.
 - `bootstrap-ci <config.yaml>`
   - Generates the customer GitHub Actions workflow and can optionally bootstrap/sync CI auth secrets. The generated workflow watches and deploys only `generated/**`.
+  - Generated workflows validate changed bundles with `nebius-cxcli validate-generated --portable` before Terraform plan/apply.
+  - Generated workflows also keep the Python version in one env var and emit compact single-line discovery JSON into `GITHUB_OUTPUT` so matrix handoff stays deterministic.
+  - The target `config.yaml` must already live inside the customer git repository because the workflow is written at that repo root under `.github/workflows/`.
+  - With default `--auth-bootstrap`, the command auto-detects the target GitHub repo from that checkout's `origin` remote. Use `--github-repo <owner/repo>` only as an explicit override when the remote is missing, non-GitHub, or not the repo you want to manage.
+  - When `--cli-ref` is omitted, generated workflows default to `main` for development builds and to `nebius-cxcli-v<version>` for stable tagged releases.
   - Use `--cli-ref <branch|tag|sha>` when the workflow should install a specific nebius-cxcli ref for PR or branch validation instead of the default release tag or `main`.
   - Generated workflows also honor an optional GitHub repo/org variable `NEBIUS_CXCLI_REF`; when set, it overrides the generated default ref without editing the workflow file.
+  - `bootstrap-ci` creates the GitHub Environment and syncs Environment Secrets. It does not create GitHub repo/org variables; `NEBIUS_CXCLI_REF` remains an optional manual override.
 - `discover <target_path>`
   - Returns changed deployment instances for CI matrix generation.
 - `terraform plan <generated-dir>`
@@ -558,11 +574,15 @@ Common command flags:
   `--client-name`, `--tenant-id`, `--project-id`, `--region-id`, `--email`, `--infra`, `--app`, `--app-namespace`, `--app-releasename`, `--validate-sources/--no-validate-sources`, `--no-interactive`, `--force`
 - `bootstrap-ci`:
   `--force`, `--auth-bootstrap/--no-auth-bootstrap`, `--github-repo`, `--github-token-env`, `--cli-ref`
-- `validate`: `--strict`
+- `validate`: `--strict`, `--render-profile`
+- `validate-generated`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--portable`
+- `render`: `--force`, `--render-profile`
 - `deploy`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`
 - `discover`: `--all`
 - `terraform plan`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`
 - `terraform apply`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`
+- `terraform unlock`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--force`
+- `flux apply`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`
 - `flux bootstrap`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`
 - `auth`:
   `--project-id`, `--instance-config`, `--client-name`, `--profile`, `--endpoint`, `--sdk-config-file`, `--github-repo`, `--github-token-env`, `--validate-profile`, `--create`, `--recreate`, `--bootstrap-ci`
@@ -597,20 +617,21 @@ Terraform runtime auth behavior:
   - GitHub environment name is `<client_name>-<project_id>`.
   - Requires existing local runtime auth profile (create first if missing).
 
-`bootstrap-ci <config.yaml>` remains the full CI workflow bootstrap command and can still perform complete CI auth bootstrap/sync for that config. The generated customer workflow is artifact-driven: it watches and deploys only `generated/**`.
+`bootstrap-ci <config.yaml>` remains the full CI workflow bootstrap command and can still perform complete CI auth bootstrap/sync for that config. The generated customer workflow is artifact-driven: it watches and deploys only `generated/**`. The command requires the target config to be inside the customer git repository, auto-detects the GitHub repo from that checkout when `--auth-bootstrap` is enabled, and uses `--github-repo` only as an explicit override.
 
 Generated workflow CLI ref:
 
 - The generated customer workflow sets `NEBIUS_CXCLI_REF` and installs `nebius-cxcli` from that git ref.
+- `bootstrap-ci` does not create the optional `NEBIUS_CXCLI_REF` GitHub repo/org variable; create that override manually only when you want to supersede the generated default ref.
 - `NEBIUS_CXCLI_REF: main` means the workflow installs the latest code from the repository main branch on each run. That is appropriate during active development before a release is cut.
-- After you cut and trust a released version, change `NEBIUS_CXCLI_REF` in `.github/workflows/nebius-deployments.yml` to the release tag, for example:
+- To pin the generated workflow up front, run `bootstrap-ci --cli-ref <branch|tag|sha>`.
+- To override the generated default later without editing the workflow YAML, create a GitHub repo/org variable `NEBIUS_CXCLI_REF`, for example:
 
 ```yaml
-env:
-  NEBIUS_CXCLI_REF: nebius-cxcli-v0.1.0
+NEBIUS_CXCLI_REF: nebius-cxcli-v0.1.0
 ```
 
-- Use a release tag in customer repos when you want reproducible CI behavior and do not want workflow runs to pick up new `main` branch changes automatically.
+- Use a release tag or commit SHA in customer repos when you want reproducible CI behavior and do not want workflow runs to pick up new `main` branch changes automatically.
 
 `deploy <generated-dir>` (default `--auto-auth-bootstrap`) uses the same runtime auth creation core as `auth --create` when auth material is missing.
 
@@ -638,9 +659,13 @@ nebius-cxcli create /path/to/deployments-root \
 nebius-cxcli validate --strict /path/to/config.yaml
 nebius-cxcli render /path/to/config.yaml
 
+# Local-dev render against checked-out Terraform modules
+nebius-cxcli validate --strict --render-profile local-dev /path/to/config.yaml
+nebius-cxcli render --render-profile local-dev /path/to/config.yaml
+
 # Customer side: validate and deploy generated bundle
 # Validate generated bundle before deploy
-nebius-cxcli validate-generated /path/to/generated
+nebius-cxcli validate-generated --portable /path/to/generated
 
 # Local deploy from generated artifacts
 nebius-cxcli deploy /path/to/generated
@@ -701,6 +726,12 @@ python -m nebius_cxcli --help
 python -m nebius_cxcli create --help
 python -m nebius_cxcli auth --help
 ```
+
+Test suite focus:
+
+- `tests/test_cli.py` and `tests/test_cli_command_coverage.py` cover the command contract, including `bootstrap-ci`, render-profile behavior, and generated-bundle validation paths.
+- `tests/test_component_sources.py` covers source-catalog loading and `validate-sources` registry validation rules.
+- `tests/test_github_secrets.py` covers GitHub repo/environment secret helper routing and environment-secret upsert orchestration.
 
 Runtime plugin env knobs:
 

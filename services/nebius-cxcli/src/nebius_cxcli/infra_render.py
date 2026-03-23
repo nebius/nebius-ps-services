@@ -6,15 +6,24 @@ import json
 import os
 import re
 from dataclasses import dataclass
+from enum import StrEnum
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 from .component_defaults import (
     resolve_component_defaults,
     set_component_path,
     shared_default_conflicts,
 )
-from .component_sources import ComponentOutput, Handoff, component_output_root_name
+from .component_sources import (
+    CANONICAL_PORTABLE_COMPONENT_SOURCES_FILE,
+    ComponentOutput,
+    Handoff,
+    component_output_root_name,
+)
 from .component_wiring import (
     _UNRESOLVED,
     component_output_ref,
@@ -34,12 +43,18 @@ from .terraform_provider import DEFAULT_PROVIDER_MODULE_NAME, build_provider_mod
 DEFAULT_TERRAFORM_REQUIRED_VERSION = ">= 1.10.0"
 _ALLOWED_TERRAFORM_TYPE_TOKENS = re.compile(r"^[A-Za-z0-9_(),.\[\] ]+$")
 _ALLOWED_GIT_REF = re.compile(r"^[A-Za-z0-9._/\-]+$")
+_LOCAL_SOURCE_PATTERN = re.compile(r"^(?:\.\.?/|/|~/|[A-Za-z]:[\\/])")
 _PROVIDER_VAR_MODULE_NAME = "nebius_provider_module_name"
 _PROVIDER_VAR_PARENT_ID = "nebius_provider_parent_id"
 _PROVIDER_VAR_SA_ID = "nebius_service_account_id"
 _PROVIDER_VAR_AUTH_PUBLIC_KEY_ID = "nebius_auth_public_key_id"
 _PROVIDER_VAR_AUTH_PRIVATE_KEY_FILE = "nebius_auth_private_key_file"
 _PROVIDER_VAR_CREDENTIALS_FILE = "nebius_service_account_credentials_file"
+
+
+class RenderProfile(StrEnum):
+    PORTABLE = "portable"
+    LOCAL_DEV = "local-dev"
 
 
 @dataclass(frozen=True)
@@ -66,6 +81,14 @@ class _ModulePlan:
     bindings: tuple[_VariableBinding, ...]
     outputs: tuple[ComponentOutput, ...] = ()
     handoff: Handoff | None = None
+
+
+@dataclass(frozen=True)
+class RenderedModuleSource:
+    component_id: str
+    module_name: str
+    source: str
+    portable: bool
 
 
 def _ensure_parent(path: Path) -> None:
@@ -367,6 +390,83 @@ def _module_source_with_ref(source: str, ref: str | None) -> str:
     return f"{source}{joiner}ref={ref}"
 
 
+def _source_uses_local_path(module_source: str) -> bool:
+    source = module_source.strip()
+    if not source:
+        return False
+    if source.startswith(("git::", "http://", "https://", "oci://")):
+        return False
+    if _LOCAL_SOURCE_PATTERN.match(source):
+        return True
+    return resolve_module_source_path(source) is not None
+
+
+def is_portable_module_source(module_source: str) -> bool:
+    return not _source_uses_local_path(module_source)
+
+
+@lru_cache(maxsize=1)
+def _portable_module_source_overrides() -> dict[str, str]:
+    if (
+        not CANONICAL_PORTABLE_COMPONENT_SOURCES_FILE.exists()
+        or not CANONICAL_PORTABLE_COMPONENT_SOURCES_FILE.is_file()
+    ):
+        return {}
+
+    payload = yaml.safe_load(
+        CANONICAL_PORTABLE_COMPONENT_SOURCES_FILE.read_text(encoding="utf-8")
+    ) or {}
+    if not isinstance(payload, dict):
+        return {}
+
+    modules = (((payload or {}).get("infra") or {}).get("tf_modules") or [])
+    if not isinstance(modules, list):
+        return {}
+
+    overrides: dict[str, str] = {}
+    for raw in modules:
+        if not isinstance(raw, dict):
+            continue
+        component_id = str(raw.get("module", "")).strip().lower()
+        source = str(raw.get("source", "")).strip()
+        if not component_id or not source:
+            continue
+        overrides[component_id] = source
+    return overrides
+
+
+def _module_source_for_render_profile(
+    *,
+    component_id: str,
+    module_source: str,
+    module_version: str | None,
+    render_profile: RenderProfile,
+) -> str:
+    source = module_source.strip()
+    if render_profile == RenderProfile.LOCAL_DEV or not _source_uses_local_path(source):
+        return source
+    if module_version:
+        raise ValueError(
+            f"module source '{module_source}' resolves to a local directory, so version/ref "
+            f"'{module_version}' is not supported. Use an explicit Git source like "
+            "'git::https://github.com/org/repo.git//modules/mk8s?ref=v1.2.3' if you need "
+            "a pinned remote ref."
+        )
+
+    override = _portable_module_source_overrides().get(component_id)
+    if not override:
+        raise ValueError(
+            f"infra component '{component_id}' resolves to local module source '{module_source}', "
+            f"but render profile '{render_profile.value}' requires a portable Git or registry source. "
+            "Point the active catalog at a portable source or rerun with --render-profile local-dev."
+        )
+    if not is_portable_module_source(override):
+        raise ValueError(
+            f"Portable source override for infra component '{component_id}' is still local: '{override}'"
+        )
+    return override
+
+
 def _canonical_module_source(
     *,
     module_source: str,
@@ -432,7 +532,11 @@ def _variable_type_expr(*, type_hint: str | None, value: Any) -> str:
     return _infer_variable_type_expr(value)
 
 
-def _build_module_plans(config: Any) -> tuple[_ModulePlan, ...]:
+def _build_module_plans(
+    config: Any,
+    *,
+    render_profile: RenderProfile = RenderProfile.PORTABLE,
+) -> tuple[_ModulePlan, ...]:
     payload = to_plain_data(config)
     if not isinstance(payload, dict):
         return ()
@@ -539,8 +643,14 @@ def _build_module_plans(config: Any) -> tuple[_ModulePlan, ...]:
                         f"infra component '{component_id}' input '{raw_arg_name}' "
                         f"is not declared by module '{module_source_raw}'"
                     )
-        module_source = _canonical_module_source(
+        selected_module_source = _module_source_for_render_profile(
+            component_id=component_id,
             module_source=module_source_raw,
+            module_version=module_version,
+            render_profile=render_profile,
+        )
+        module_source = _canonical_module_source(
+            module_source=selected_module_source,
             module_version=module_version,
         )
 
@@ -699,6 +809,22 @@ def _render_module_block(plan: _ModulePlan) -> str:
         lines.append(f"  {binding.argument_name} = var.{binding.variable_name}")
     lines.append("}")
     return "\n".join(lines)
+
+
+def rendered_module_sources(
+    config: Any,
+    *,
+    render_profile: RenderProfile = RenderProfile.PORTABLE,
+) -> tuple[RenderedModuleSource, ...]:
+    return tuple(
+        RenderedModuleSource(
+            component_id=plan.component_id,
+            module_name=plan.module_name,
+            source=plan.module_source,
+            portable=is_portable_module_source(plan.module_source),
+        )
+        for plan in _build_module_plans(config, render_profile=render_profile)
+    )
 
 
 def _render_provider_variable_blocks() -> tuple[str, ...]:
@@ -863,12 +989,17 @@ def _provider_static_tfvars(config: Any) -> dict[str, Any]:
     }
 
 
-def render_terraform_artifacts(config: Any, paths: InstancePaths) -> list[Path]:
+def render_terraform_artifacts(
+    config: Any,
+    paths: InstancePaths,
+    *,
+    render_profile: RenderProfile = RenderProfile.PORTABLE,
+) -> list[Path]:
     """Render deterministic Terraform root-module artifacts for one validated config."""
     written: list[Path] = []
 
     backend_settings = backend_settings_from_config(config)
-    module_plans = _build_module_plans(config)
+    module_plans = _build_module_plans(config, render_profile=render_profile)
     module_blocks = tuple(_render_module_block(plan) for plan in module_plans)
     provider_resource_blocks = _provider_resource_blocks(config)
     tfvars_payload = {

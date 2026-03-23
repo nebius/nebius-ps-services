@@ -18,7 +18,7 @@ import time
 import urllib.error
 import urllib.request
 from collections import deque
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import ExitStack, suppress
 from dataclasses import dataclass, replace
 from functools import lru_cache
@@ -95,7 +95,12 @@ from .iam_bootstrap import (
     auth_public_key_exists,
     bootstrap_ci_service_account,
 )
-from .infra_render import render_terraform_artifacts
+from .infra_render import (
+    RenderProfile,
+    is_portable_module_source,
+    render_terraform_artifacts,
+    rendered_module_sources,
+)
 from .inventory_ops import write_inventory
 from .managed_tools import FLUX_VERSION_ENV, TERRAFORM_VERSION_ENV
 from .mk8s_preflight import validate_mk8s_network_preflight
@@ -4106,13 +4111,104 @@ def _first_non_empty_line(text: str) -> str | None:
     return None
 
 
-def _write_generated_runtime_manifest(config: Any, paths: InstancePaths) -> Path:
+def _rendered_module_source_payload(
+    config: Any,
+    *,
+    render_profile: RenderProfile,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "component_id": item.component_id,
+            "module_name": item.module_name,
+            "source": item.source,
+            "portable": item.portable,
+        }
+        for item in rendered_module_sources(config, render_profile=render_profile)
+    ]
+
+
+def _generated_bundle_module_sources(
+    paths: InstancePaths,
+    manifest: Mapping[str, Any],
+) -> list[dict[str, str]]:
+    render = manifest.get("render")
+    if isinstance(render, Mapping):
+        raw_sources = render.get("module_sources")
+        if isinstance(raw_sources, Sequence):
+            collected: list[dict[str, str]] = []
+            for item in raw_sources:
+                if not isinstance(item, Mapping):
+                    continue
+                source = str(item.get("source", "")).strip()
+                if not source:
+                    continue
+                collected.append(
+                    {
+                        "component_id": str(item.get("component_id", "")).strip(),
+                        "module_name": str(item.get("module_name", "")).strip(),
+                        "source": source,
+                    }
+                )
+            if collected:
+                return collected
+
+    main_tf = paths.infra_dir / "main.tf"
+    if not main_tf.exists():
+        return []
+
+    pattern = re.compile(r'^\s*source\s*=\s*"([^"]+)"', re.MULTILINE)
+    return [
+        {
+            "component_id": "",
+            "module_name": "",
+            "source": match.group(1).strip(),
+        }
+        for match in pattern.finditer(main_tf.read_text(encoding="utf-8"))
+        if match.group(1).strip()
+    ]
+
+
+def _validate_generated_bundle_portability(
+    paths: InstancePaths,
+    manifest: Mapping[str, Any],
+) -> None:
+    module_sources = _generated_bundle_module_sources(paths, manifest)
+    non_portable = [
+        item
+        for item in module_sources
+        if not is_portable_module_source(str(item.get("source", "")))
+    ]
+    if not non_portable:
+        return
+
+    formatted = ", ".join(
+        (
+            f"{item['component_id']}={item['source']}"
+            if item.get("component_id")
+            else item["source"]
+        )
+        for item in non_portable
+    )
+    raise RuntimeError(
+        "Generated bundle is not portable; local Terraform module sources are present: "
+        f"{formatted}. Rerender with --render-profile portable before committing or using CI."
+    )
+
+
+def _write_generated_runtime_manifest(
+    config: Any,
+    paths: InstancePaths,
+    *,
+    render_profile: RenderProfile,
+) -> Path:
     sources = load_component_sources()
     return write_generated_manifest(
         config=config,
         paths=paths,
         handoffs=_enabled_cluster_handoffs(config),
         required_component_outputs=_required_runtime_component_output_specs(config),
+        render_profile=render_profile.value,
+        module_sources=_rendered_module_source_payload(config, render_profile=render_profile),
         flux_version=sources.cli.flux.version,
         terraform_version=sources.cli.terraform.version,
     )
@@ -4985,6 +5081,22 @@ def _resolve_github_repo_slug(
     if repo_root is None:
         raise RuntimeError("GitHub repo could not be resolved; provide --github-repo owner/repo")
     return detect_github_repo_slug(repo_root)
+
+
+def _preflight_bootstrap_ci_auth(
+    *,
+    github_repo: str | None,
+    github_token_env: str,
+    repo_root: Path,
+) -> str:
+    repo_slug = _resolve_github_repo_slug(explicit_repo_slug=github_repo, repo_root=repo_root)
+    github_token = read_github_token(preferred_env=github_token_env)
+    if github_token:
+        return repo_slug
+    raise RuntimeError(
+        "Automatic CI auth bootstrap requires a GitHub token. "
+        f"No token found in ${github_token_env}, $GH_TOKEN, or $GITHUB_TOKEN."
+    )
 
 
 def _sync_github_ci_secrets(
@@ -5965,8 +6077,9 @@ def bootstrap_ci_command(
         typer.Option(
             "--github-repo",
             help=(
-                "GitHub repository slug '<owner>/<repo>' for environment secret sync "
-                "(optional; falls back to git origin remote; "
+                "Optional override for the target GitHub repository slug '<owner>/<repo>' "
+                "used for environment secret sync. When omitted, resolves from the target "
+                "repository origin remote; "
                 "valid only when --auth-bootstrap is enabled)"
             ),
         ),
@@ -6003,10 +6116,18 @@ def bootstrap_ci_command(
 
         config, paths = _load_context(config_path)
         resolved_cli_ref = str(cli_ref or "").strip() or default_cli_ref()
+        repo_root = _require_git_root(paths.deployments_dir)
         github_environment = _github_environment_name_for_identity(
             client_name=str(config.client_info.client_name),
             project_id=str(config.client_info.nebius.project_id),
         )
+        resolved_github_repo: str | None = None
+        if auth_bootstrap:
+            resolved_github_repo = _preflight_bootstrap_ci_auth(
+                github_repo=github_repo,
+                github_token_env=github_token_env,
+                repo_root=repo_root,
+            )
         workflow = _ensure_ci_workflow_for_deployments_root(
             deployments_root=paths.deployments_dir,
             force=force,
@@ -6031,6 +6152,8 @@ def bootstrap_ci_command(
             )
 
         console.print(f"Repository root: {workflow.repo_root}")
+        if resolved_github_repo:
+            console.print(f"GitHub repository: {resolved_github_repo}")
         if workflow.wrote_workflow:
             console.print(f"Created: {workflow.workflow_file}")
         else:
@@ -6054,6 +6177,17 @@ def validate_command(
             help="Enable deployment-readiness checks (reject starter placeholders)",
         ),
     ] = False,
+    render_profile: Annotated[
+        RenderProfile,
+        typer.Option(
+            "--render-profile",
+            help=(
+                "Render contract to validate against: portable rejects bundles that would depend "
+                "on local Terraform module paths, local-dev allows checked-out module paths."
+            ),
+            case_sensitive=False,
+        ),
+    ] = RenderProfile.PORTABLE,
 ) -> None:
     """Validate config.yaml with runtime source + provider/chart checks."""
     try:
@@ -6064,6 +6198,8 @@ def validate_command(
         if strict:
             _validate_strict_config(config)
             validate_mk8s_network_preflight(config)
+        rendered_module_sources(config, render_profile=render_profile)
+        if strict:
             console.print(f"[green]Valid (strict):[/green] {config_path}")
             return
         console.print(f"[green]Valid:[/green] {config_path}")
@@ -6084,6 +6220,16 @@ def validate_generated_command(
             help="Automatically bootstrap runtime auth when env vars are missing",
         ),
     ] = True,
+    portable: Annotated[
+        bool,
+        typer.Option(
+            "--portable",
+            help=(
+                "Require the generated bundle to be portable by rejecting local Terraform module "
+                "sources in generated/infra/main.tf or the generated manifest."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Validate an existing generated artifact bundle without rerendering it."""
     try:
@@ -6102,6 +6248,8 @@ def validate_generated_command(
                 text=True,
                 timeout=60,
             )
+        if portable:
+            _validate_generated_bundle_portability(paths, _manifest)
         console.print(f"[green]Valid generated artifacts:[/green] {paths.generated_dir}")
     except subprocess.CalledProcessError as exc:  # pragma: no cover - CLI surface
         detail = _first_non_empty_line(exc.stderr or exc.stdout or "")
@@ -6246,7 +6394,11 @@ def auth_command(
         str | None,
         typer.Option(
             "--github-repo",
-            help="GitHub repository slug '<owner>/<repo>' for --bootstrap-ci",
+            help=(
+                "Optional override for the GitHub repository slug '<owner>/<repo>' used by "
+                "--bootstrap-ci. When omitted, resolves from --instance-config repo root or "
+                "the current git origin remote."
+            ),
         ),
     ] = None,
     github_token_env: Annotated[
@@ -6439,6 +6591,17 @@ def render_command(
             help="Overwrite an existing generated bundle without interactive confirmation.",
         ),
     ] = False,
+    render_profile: Annotated[
+        RenderProfile,
+        typer.Option(
+            "--render-profile",
+            help=(
+                "Generated artifact profile: portable emits Git/registry Terraform module sources "
+                "safe for CI and other machines, local-dev preserves resolved local module paths."
+            ),
+            case_sensitive=False,
+        ),
+    ] = RenderProfile.PORTABLE,
 ) -> None:
     """Render and overwrite generated artifacts from config.yaml, prompting before a reset unless --force is provided."""
     try:
@@ -6456,13 +6619,23 @@ def render_command(
         paths.flux_dir.mkdir(parents=True, exist_ok=True)
         paths.inventory_dir.mkdir(parents=True, exist_ok=True)
         written: list[Path] = []
-        written.extend(render_terraform_artifacts(config, paths))
+        written.extend(render_terraform_artifacts(config, paths, render_profile=render_profile))
         component_output_values = _runtime_component_output_values(config, paths)
         written.extend(render_flux(config, paths, component_output_values=component_output_values))
         write_inventory(config, paths)
-        manifest_path = _write_generated_runtime_manifest(config, paths)
+        manifest_path = _write_generated_runtime_manifest(
+            config,
+            paths,
+            render_profile=render_profile,
+        )
         lock_generated = _try_generate_terraform_lock_file(config, paths)
         console.print(f"Rendered {len(sorted(written))} file(s) under {paths.generated_dir}")
+        console.print(f"Render profile: {render_profile.value}")
+        if render_profile == RenderProfile.LOCAL_DEV:
+            console.print(
+                "[yellow]WARNING:[/yellow] local-dev render profile may embed local Terraform "
+                "module paths; do not commit or use these generated artifacts in CI."
+            )
         console.print(f"Generated deployment manifest: {manifest_path}")
         if gitignore_result.path is not None:
             if gitignore_result.wrote:

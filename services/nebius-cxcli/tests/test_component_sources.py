@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -98,6 +99,23 @@ def _write_sources_file(path: Path, *, module_name: str) -> None:
         ),
         encoding="utf-8",
     )
+
+
+def _normalized_catalog_signature(path: Path) -> dict[str, object]:
+    loaded = load_component_sources(explicit=path)
+    return {
+        "cli": asdict(loaded.cli),
+        "shared": loaded.shared,
+        "tf_modules": [
+            {
+                key: value
+                for key, value in asdict(module).items()
+                if key != "source"
+            }
+            for module in loaded.tf_modules
+        ],
+        "helm_charts": [asdict(chart) for chart in loaded.helm_charts],
+    }
 
 
 def test_component_sources_resolution_precedence(monkeypatch, tmp_path: Path) -> None:
@@ -336,6 +354,14 @@ def test_release_catalog_uses_portable_git_module_sources() -> None:
         mk8s.source
         == "git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mk8s?ref=main"
     )
+
+
+def test_checked_in_local_and_portable_catalogs_match_except_tf_module_sources() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    local_signature = _normalized_catalog_signature(project_root / "component_sources.yaml")
+    portable_signature = _normalized_catalog_signature(project_root / "component_sources.release.yaml")
+
+    assert portable_signature == local_signature
 
 
 def test_shipped_catalogs_do_not_embed_jump_host_public_key_defaults() -> None:

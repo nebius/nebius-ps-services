@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import quote
 
+import nebius_cxcli.github_secrets as github_secrets
 from nebius_cxcli.github_secrets import (
     _repo_slug_from_remote_url,
     build_github_environment_name,
     detect_github_repo_slug,
+    ensure_github_environment,
     read_github_token,
+    upsert_environment_secrets,
 )
 
 
@@ -58,3 +62,110 @@ def test_build_github_environment_name_normalizes_tokens() -> None:
         build_github_environment_name(client_name="Client A", project_id="project-123")
         == "client-a-project-123"
     )
+
+
+def test_ensure_github_environment_puts_encoded_environment(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        github_secrets,
+        "_github_request",
+        lambda *, method, path, token, payload=None: captured.update(
+            {
+                "method": method,
+                "path": path,
+                "token": token,
+                "payload": payload,
+            }
+        ),
+    )
+
+    ensure_github_environment(
+        repo_slug="owner/repo",
+        token="gh-token",
+        environment_name="Client A / project-123",
+    )
+
+    assert captured == {
+        "method": "PUT",
+        "path": f"/repos/owner/repo/environments/{quote('Client A / project-123', safe='')}",
+        "token": "gh-token",
+        "payload": {"deployment_branch_policy": None},
+    }
+
+
+def test_upsert_environment_secrets_ensures_environment_then_upserts_each_secret(monkeypatch) -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    monkeypatch.setattr(
+        github_secrets,
+        "ensure_github_environment",
+        lambda *, repo_slug, token, environment_name: calls.append(
+            (
+                "ensure",
+                {
+                    "repo_slug": repo_slug,
+                    "token": token,
+                    "environment_name": environment_name,
+                },
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        github_secrets,
+        "upsert_environment_secret",
+        lambda *, repo_slug, token, environment_name, secret_name, secret_value: calls.append(
+            (
+                "secret",
+                {
+                    "repo_slug": repo_slug,
+                    "token": token,
+                    "environment_name": environment_name,
+                    "secret_name": secret_name,
+                    "secret_value": secret_value,
+                },
+            )
+        ),
+    )
+
+    updated = upsert_environment_secrets(
+        repo_slug="owner/repo",
+        token="gh-token",
+        environment_name="client-a-project-123",
+        secrets={
+            "NEBIUS_SA_ID": "sa-123",
+            "FLUX_GITHUB_TOKEN": "flux-token",
+        },
+    )
+
+    assert updated == ["NEBIUS_SA_ID", "FLUX_GITHUB_TOKEN"]
+    assert calls == [
+        (
+            "ensure",
+            {
+                "repo_slug": "owner/repo",
+                "token": "gh-token",
+                "environment_name": "client-a-project-123",
+            },
+        ),
+        (
+            "secret",
+            {
+                "repo_slug": "owner/repo",
+                "token": "gh-token",
+                "environment_name": "client-a-project-123",
+                "secret_name": "NEBIUS_SA_ID",
+                "secret_value": "sa-123",
+            },
+        ),
+        (
+            "secret",
+            {
+                "repo_slug": "owner/repo",
+                "token": "gh-token",
+                "environment_name": "client-a-project-123",
+                "secret_name": "FLUX_GITHUB_TOKEN",
+                "secret_value": "flux-token",
+            },
+        ),
+    ]
