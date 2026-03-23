@@ -98,16 +98,10 @@ jobs:
         env:
           RELEASE_REF: ${{ steps.version.outputs.tag }}
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          NEBIUS_CXCLI_BUILD_COMPONENT_SOURCES_FILE: component_sources.release.yaml
         run: |
           set -euo pipefail
           rm -rf build dist
-          backup="$(mktemp)"
-          cp component_sources.yaml "${backup}"
-          trap 'mv "${backup}" component_sources.yaml' EXIT
-          python -m nebius_cxcli.release_catalog render \
-            --input component_sources.release.yaml \
-            --output component_sources.yaml \
-            --release-ref "${RELEASE_REF}"
           SETUPTOOLS_SCM_PRETEND_VERSION="${RELEASE_VERSION}" python -m build --wheel
 
       - name: Resolve and verify release assets
