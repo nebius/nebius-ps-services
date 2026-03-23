@@ -80,6 +80,7 @@ from .flux_render import render_flux
 from .generated_manifest import (
     load_generated_manifest,
     runtime_config_from_manifest,
+    terraform_tfvars_from_manifest,
     write_generated_manifest,
 )
 from .github_secrets import (
@@ -259,6 +260,7 @@ def _load_generated_context(target_path: Path) -> tuple:
     paths = resolve_generated_paths(target_path)
     manifest = load_generated_manifest(paths.generated_dir)
     _apply_generated_tool_version_overrides(manifest)
+    _materialize_generated_terraform_tfvars(paths, manifest)
     config = runtime_config_from_manifest(manifest)
     return config, paths, manifest
 
@@ -273,6 +275,17 @@ def _apply_generated_tool_version_overrides(manifest: Mapping[str, Any]) -> None
         os.environ[FLUX_VERSION_ENV] = flux_version
     if terraform_version and not os.environ.get(TERRAFORM_VERSION_ENV, "").strip():
         os.environ[TERRAFORM_VERSION_ENV] = terraform_version
+
+
+def _materialize_generated_terraform_tfvars(
+    paths: InstancePaths,
+    manifest: Mapping[str, Any],
+) -> Path:
+    payload = terraform_tfvars_from_manifest(manifest)
+    tfvars_path = paths.infra_dir / "terraform.auto.tfvars.json"
+    tfvars_path.parent.mkdir(parents=True, exist_ok=True)
+    tfvars_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return tfvars_path
 
 
 def _render_overwrite_warning(paths: InstancePaths) -> str | None:
@@ -4202,6 +4215,15 @@ def _write_generated_runtime_manifest(
     render_profile: RenderProfile,
 ) -> Path:
     sources = load_component_sources()
+    tfvars_path = paths.infra_dir / "terraform.auto.tfvars.json"
+    if not tfvars_path.exists():
+        raise RuntimeError(
+            f"Rendered Terraform inputs file is missing: {tfvars_path}. "
+            "Rerun `nebius-cxcli render <config.yaml>`."
+        )
+    terraform_tfvars = json.loads(tfvars_path.read_text(encoding="utf-8"))
+    if not isinstance(terraform_tfvars, Mapping):
+        raise RuntimeError(f"Rendered Terraform inputs file must contain a JSON object: {tfvars_path}")
     return write_generated_manifest(
         config=config,
         paths=paths,
@@ -4209,6 +4231,7 @@ def _write_generated_runtime_manifest(
         required_component_outputs=_required_runtime_component_output_specs(config),
         render_profile=render_profile.value,
         module_sources=_rendered_module_source_payload(config, render_profile=render_profile),
+        terraform_tfvars=terraform_tfvars,
         flux_version=sources.cli.flux.version,
         terraform_version=sources.cli.terraform.version,
     )
@@ -5562,43 +5585,48 @@ class CIWorkflowBootstrapResult:
     repo_root: Path
     workflow_file: Path
     wrote_workflow: bool
+    replaced_workflow: bool = False
 
 
 def _ensure_ci_workflow_for_deployments_root(
     *,
     deployments_root: Path,
-    force: bool,
     cli_ref: str,
 ) -> CIWorkflowBootstrapResult:
+    def _normalize_workflow_text(text: str) -> str:
+        normalized = text.replace("\r\n", "\n").rstrip("\n")
+        return f"{normalized}\n"
+
     repo_root = _require_git_root(deployments_root)
     workflows_path = repo_root / ".github" / "workflows"
     workflow_file = workflows_path / "nebius-deployments.yml"
     deployments_dir_for_ci = _relative_deployments_dir_for_ci(repo_root, deployments_root)
     discover_target_for_ci = _relative_discover_target_for_ci(repo_root, deployments_root)
+    expected_workflow = customer_workflow_yaml(
+        deployments_dir=deployments_dir_for_ci,
+        discover_target=discover_target_for_ci,
+        cli_ref=cli_ref,
+    )
 
     workflows_path.mkdir(parents=True, exist_ok=True)
 
-    wrote_workflow = False
-    if workflow_file.exists() and not force:
-        return CIWorkflowBootstrapResult(
-            repo_root=repo_root,
-            workflow_file=workflow_file,
-            wrote_workflow=wrote_workflow,
-        )
+    workflow_preexisted = workflow_file.exists()
+    if workflow_preexisted:
+        existing_workflow = workflow_file.read_text(encoding="utf-8")
+        if _normalize_workflow_text(existing_workflow) == _normalize_workflow_text(expected_workflow):
+            return CIWorkflowBootstrapResult(
+                repo_root=repo_root,
+                workflow_file=workflow_file,
+                wrote_workflow=False,
+                replaced_workflow=False,
+            )
 
-    workflow_file.write_text(
-        customer_workflow_yaml(
-            deployments_dir=deployments_dir_for_ci,
-            discover_target=discover_target_for_ci,
-            cli_ref=cli_ref,
-        ),
-        encoding="utf-8",
-    )
-    wrote_workflow = True
+    workflow_file.write_text(expected_workflow, encoding="utf-8")
     return CIWorkflowBootstrapResult(
         repo_root=repo_root,
         workflow_file=workflow_file,
-        wrote_workflow=wrote_workflow,
+        wrote_workflow=True,
+        replaced_workflow=workflow_preexisted,
     )
 
 
@@ -6055,13 +6083,6 @@ def create_command(
 @app.command("bootstrap-ci")
 def bootstrap_ci_command(
     config_path: Annotated[Path, typer.Argument(help="Path to instance config.yaml")],
-    force: Annotated[
-        bool,
-        typer.Option(
-            "--force",
-            help="Overwrite existing .github/workflows/nebius-deployments.yml when present",
-        ),
-    ] = False,
     auth_bootstrap: Annotated[
         bool,
         typer.Option(
@@ -6107,7 +6128,7 @@ def bootstrap_ci_command(
         ),
     ] = None,
 ) -> None:
-    """Generate generated-artifact-only customer CI workflow and optionally perform full CI auth bootstrap."""
+    """Generate or reconcile the generated-artifact-only customer CI workflow and optionally bootstrap CI auth."""
     try:
         if not auth_bootstrap and (github_repo is not None or github_token_env != "GH_TOKEN"):
             raise RuntimeError(
@@ -6130,7 +6151,6 @@ def bootstrap_ci_command(
             )
         workflow = _ensure_ci_workflow_for_deployments_root(
             deployments_root=paths.deployments_dir,
-            force=force,
             cli_ref=resolved_cli_ref,
         )
 
@@ -6155,9 +6175,12 @@ def bootstrap_ci_command(
         if resolved_github_repo:
             console.print(f"GitHub repository: {resolved_github_repo}")
         if workflow.wrote_workflow:
-            console.print(f"Created: {workflow.workflow_file}")
+            if workflow.replaced_workflow:
+                console.print(f"Updated: {workflow.workflow_file}")
+            else:
+                console.print(f"Created: {workflow.workflow_file}")
         else:
-            console.print(f"Workflow exists, keeping current file: {workflow.workflow_file}")
+            console.print(f"Workflow already aligned: {workflow.workflow_file}")
         console.print(f"GitHub environment: {github_environment}")
         console.print(f"Workflow CLI ref: {resolved_cli_ref}")
         if not auth_bootstrap:
@@ -6668,7 +6691,13 @@ def deploy_command(
         ),
     ] = True,
 ) -> None:
-    """Deploy an existing generated artifact bundle: terraform apply, refresh inventory (infra + apps), then local Flux apply."""
+    """Deploy an existing generated artifact bundle locally.
+
+    This command runs Terraform apply, refresh inventory, and applies Flux
+    from the committed generated bundle only. It does not create or update
+    GitHub workflows, environments, or CI secrets; use
+    `nebius-cxcli bootstrap-ci <config.yaml>` explicitly for that.
+    """
     try:
         config, paths, manifest = _load_generated_context(generated_path)
         _deploy_generated_artifacts(

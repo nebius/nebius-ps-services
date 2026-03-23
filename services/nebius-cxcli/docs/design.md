@@ -322,6 +322,7 @@ The command boundary is intentional:
 ### `bootstrap-ci <config.yaml>`
 
 - Generates `.github/workflows/nebius-deployments.yml`.
+- Re-running it automatically reconciles that CLI-managed workflow file to the latest template for the target repo/deployments path.
 - Generated customer workflow is artifact-driven: it watches and deploys only `generated/**`.
 - `config.yaml` remains in the customer repo as a manual render/reset contract and does not trigger customer CI deployment.
 - The target `config.yaml` must already live inside the customer git repository because the workflow is written at that repo root.
@@ -366,6 +367,7 @@ The command boundary is intentional:
 - `deploy <generated-dir>`
   - Full local deployment from the generated bundle: Terraform first, then inventory refresh for infra and apps artifacts, then Flux direct apply.
   - `--auto-auth-bootstrap/--no-auto-auth-bootstrap` controls runtime auth creation (default enabled).
+  - Does not run `bootstrap-ci` automatically, even when the generated bundle is inside a git repository; GitHub workflow/environment bootstrap stays an explicit generator-side action.
 - `terraform apply <generated-dir>`
   - Infra-only apply from the generated Terraform bundle.
   - `--auto-auth-bootstrap/--no-auto-auth-bootstrap` controls runtime auth creation (default enabled).
@@ -381,7 +383,7 @@ The command boundary is intentional:
 - `create <target_path>`
   - Scaffolds or reconciles the instance `config.yaml` and generated skeleton.
 - `bootstrap-ci <config.yaml>`
-  - Generates the customer workflow. The generated workflow watches and deploys only `generated/**`.
+  - Generates or reconciles the customer workflow. The generated workflow watches and deploys only `generated/**`.
 - `discover <target_path>`
   - Returns deployment-instance discovery payload for CI.
 - `terraform plan <generated-dir>`
@@ -404,11 +406,12 @@ The command boundary is intentional:
 - `validate`/`render`: deterministic and repeatable.
 - `validate-generated`: deterministic for a given generated bundle.
 - `deploy`: convergent behavior expected from apply/reconcile against a fixed generated bundle.
-- `bootstrap-ci`: idempotent workflow file handling; `--force` only for overwrite.
+- `bootstrap-ci`: idempotent reconcile; reruns auto-update the CLI-managed customer workflow and re-check GitHub environment secret presence.
 - `auth --create`: idempotent create-if-missing.
 - `auth --recreate`: explicit rotation path.
 - `auth --validate-profile`: read-only profile validation; safe to re-run.
 - `auth --bootstrap-ci`: idempotent environment-secret upsert from local cache.
+- `deploy` and other customer-side generated-bundle commands do not mutate GitHub CI state as a side effect.
 
 ## 10. Validation Model
 
@@ -525,13 +528,16 @@ Flux render:
 `bootstrap-ci`:
 
 - Generates workflow file.
+- Treats `.github/workflows/nebius-deployments.yml` as a CLI-managed file and automatically reconciles it to the latest generated contract on every rerun.
 - Requires the target config path to be inside the customer git repository so the workflow can be written at the repo root.
 - With auth bootstrap enabled, auto-detects the target GitHub repo from the checkout `origin` remote unless `--github-repo` overrides it.
 - Fails before writing the workflow if full GitHub bootstrap prerequisites are missing.
 - Derives GitHub environment name as `<client_name>-<project_id>`, ensures that environment exists, then checks/syncs missing environment secrets.
 - Generated customer workflows validate with `nebius-cxcli validate-generated --portable` before Terraform plan/apply so non-portable local module paths are rejected in PRs and main-branch deploy runs.
+- Generated customer workflows restore ignored `generated/infra/terraform.auto.tfvars.json` from `generated/nebius-cxcli-manifest.json` before Terraform plan/apply.
 - Generated customer workflows also keep the Python runtime version in one env var and write compact single-line discovery JSON to `GITHUB_OUTPUT` for stable matrix handoff.
 - Does not manage GitHub repo/org variables; `NEBIUS_CXCLI_REF` remains an optional manual override consumed by the generated workflow.
+- `generated/infra/terraform.auto.tfvars.json` remains ignored in private deployment repos; customer-side generated-bundle commands recreate it from `generated/nebius-cxcli-manifest.json` before Terraform plan/apply so CI does not depend on a committed tfvars file.
 
 `auth`:
 

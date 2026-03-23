@@ -147,6 +147,29 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                   set -euo pipefail
                   nebius-cxcli validate-generated --portable "${{{{ matrix.generated }}}}"
 
+              - name: Restore generated Terraform inputs
+                run: |
+                  set -euo pipefail
+                  python - <<'PY'
+                  import json
+                  from pathlib import Path
+
+                  bundle = Path("${{{{ matrix.generated }}}}")
+                  manifest_path = bundle / "nebius-cxcli-manifest.json"
+                  manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                  payload = ((manifest.get("render") or {{}}).get("terraform_tfvars"))
+                  if not isinstance(payload, dict):
+                      raise SystemExit(
+                          f"generated manifest is missing render.terraform_tfvars: {{manifest_path}}"
+                      )
+                  tfvars_path = bundle / "infra" / "terraform.auto.tfvars.json"
+                  tfvars_path.write_text(
+                      json.dumps(payload, indent=2, sort_keys=True) + "\\n",
+                      encoding="utf-8",
+                  )
+                  print(tfvars_path)
+                  PY
+
               - name: Terraform plan
                 env:
                   NEBIUS_SA_ID: ${{{{ secrets.NEBIUS_SA_ID }}}}
@@ -210,6 +233,29 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                 run: |
                   set -euo pipefail
                   nebius-cxcli validate-generated --portable "${{{{ matrix.generated }}}}"
+
+              - name: Restore generated Terraform inputs
+                run: |
+                  set -euo pipefail
+                  python - <<'PY'
+                  import json
+                  from pathlib import Path
+
+                  bundle = Path("${{{{ matrix.generated }}}}")
+                  manifest_path = bundle / "nebius-cxcli-manifest.json"
+                  manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                  payload = ((manifest.get("render") or {{}}).get("terraform_tfvars"))
+                  if not isinstance(payload, dict):
+                      raise SystemExit(
+                          f"generated manifest is missing render.terraform_tfvars: {{manifest_path}}"
+                      )
+                  tfvars_path = bundle / "infra" / "terraform.auto.tfvars.json"
+                  tfvars_path.write_text(
+                      json.dumps(payload, indent=2, sort_keys=True) + "\\n",
+                      encoding="utf-8",
+                  )
+                  print(tfvars_path)
+                  PY
 
               - name: Terraform apply
                 env:

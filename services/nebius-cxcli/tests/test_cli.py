@@ -658,6 +658,8 @@ def test_bootstrap_ci_no_auth_writes_workflow_in_repo_root(tmp_path: Path) -> No
     assert '**/customer/deployments-root/**/config.yaml' not in content
     assert "Validate source contract changes" not in content
     assert 'nebius-cxcli validate-generated --portable "${{ matrix.generated }}"' in content
+    assert "Restore generated Terraform inputs" in content
+    assert 'generated manifest is missing render.terraform_tfvars' in content
     assert 'print(f"discovery={json.dumps(payload, separators=(\',\', \':\'))}")' in content
     assert "Inventory outputs" not in content
     assert "Email inventory" not in content
@@ -681,8 +683,33 @@ def test_bootstrap_ci_no_auth_is_idempotent_without_force(tmp_path: Path) -> Non
 
     second = runner.invoke(app, ["bootstrap-ci", str(config_path), "--no-auth-bootstrap"])
     assert second.exit_code == 0, second.output
-    assert "Workflow exists, keeping current file:" in second.output
+    assert "Workflow already aligned:" in second.output
     assert "Skipped CI auth bootstrap/secrets sync." in second.output
+
+
+def test_bootstrap_ci_no_auth_reconciles_workflow_drift_automatically(tmp_path: Path) -> None:
+    repo_root = tmp_path / "customer-repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    _git_init(repo_root)
+
+    deployments_root = repo_root / "customer" / "deployments-root"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    create_result = _create_non_interactive(deployments_root)
+    assert create_result.exit_code == 0, create_result.output
+
+    config_path = _instance_config_path(deployments_root)
+    first = runner.invoke(app, ["bootstrap-ci", str(config_path), "--no-auth-bootstrap"])
+    assert first.exit_code == 0, first.output
+
+    workflow = repo_root / ".github" / "workflows" / "nebius-deployments.yml"
+    workflow.write_text("name: Drifted Customer Workflow\n", encoding="utf-8")
+
+    second = runner.invoke(app, ["bootstrap-ci", str(config_path), "--no-auth-bootstrap"])
+    assert second.exit_code == 0, second.output
+    assert "Updated:" in second.output
+    content = workflow.read_text(encoding="utf-8")
+    assert "name: Nebius Deployments" in content
+    assert "name: Drifted Customer Workflow" not in content
 
 
 def test_bootstrap_ci_cli_ref_overrides_generated_workflow_pin(tmp_path: Path) -> None:

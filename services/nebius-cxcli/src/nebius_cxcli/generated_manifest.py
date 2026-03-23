@@ -29,6 +29,7 @@ def build_generated_manifest(
     required_component_outputs: Sequence[Mapping[str, Any]],
     render_profile: str | None = None,
     module_sources: Sequence[Mapping[str, Any]] = (),
+    terraform_tfvars: Mapping[str, Any] | None = None,
     flux_version: str | None = None,
     terraform_version: str | None = None,
 ) -> dict[str, Any]:
@@ -60,6 +61,7 @@ def build_generated_manifest(
             "profile": str(render_profile or "").strip(),
             "portable": str(render_profile or "").strip() == "portable",
             "module_sources": [dict(item) for item in module_sources],
+            "terraform_tfvars": dict(terraform_tfvars or {}),
         },
         "deploy": {
             "handoffs": [dict(item) for item in handoffs],
@@ -81,6 +83,7 @@ def write_generated_manifest(
     required_component_outputs: Sequence[Mapping[str, Any]],
     render_profile: str | None = None,
     module_sources: Sequence[Mapping[str, Any]] = (),
+    terraform_tfvars: Mapping[str, Any] | None = None,
     flux_version: str | None = None,
     terraform_version: str | None = None,
 ) -> Path:
@@ -91,6 +94,7 @@ def write_generated_manifest(
         required_component_outputs=required_component_outputs,
         render_profile=render_profile,
         module_sources=module_sources,
+        terraform_tfvars=terraform_tfvars,
         flux_version=flux_version,
         terraform_version=terraform_version,
     )
@@ -121,3 +125,13 @@ def runtime_config_from_manifest(manifest: Mapping[str, Any]) -> AttrDict:
     if not isinstance(payload, Mapping):
         raise ValueError("Generated manifest is missing runtime_config")
     return wrap_runtime_config(dict(payload))
+
+
+def terraform_tfvars_from_manifest(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    render = manifest.get("render")
+    if not isinstance(render, Mapping):
+        raise ValueError("Generated manifest is missing render metadata")
+    payload = render.get("terraform_tfvars")
+    if not isinstance(payload, Mapping):
+        raise ValueError("Generated manifest is missing render.terraform_tfvars")
+    return dict(payload)

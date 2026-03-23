@@ -12,6 +12,7 @@ from nebius_cxcli.generated_manifest import (
     load_generated_manifest,
     manifest_path_for_generated_dir,
     runtime_config_from_manifest,
+    terraform_tfvars_from_manifest,
     write_generated_manifest,
 )
 from nebius_cxcli.paths import InstancePaths
@@ -67,6 +68,7 @@ def test_build_generated_manifest_uses_repo_relative_paths(tmp_path: Path) -> No
         paths=paths,
         handoffs=[{"component_id": "mk8s", "access": "external"}],
         required_component_outputs=[{"component_id": "mk8s", "output_name": "cluster_id"}],
+        terraform_tfvars={"mk8s_cluster_name": "clust1"},
         flux_version="v2.8.0",
         terraform_version="1.14.1",
     )
@@ -89,6 +91,7 @@ def test_build_generated_manifest_uses_repo_relative_paths(tmp_path: Path) -> No
     assert manifest["deploy"]["required_component_outputs"] == [
         {"component_id": "mk8s", "output_name": "cluster_id"}
     ]
+    assert manifest["render"]["terraform_tfvars"] == {"mk8s_cluster_name": "clust1"}
 
 
 def test_write_load_and_runtime_config_round_trip(tmp_path: Path) -> None:
@@ -99,6 +102,7 @@ def test_write_load_and_runtime_config_round_trip(tmp_path: Path) -> None:
         paths=paths,
         handoffs=[{"component_id": "mk8s"}],
         required_component_outputs=[{"component_id": "mk8s", "output_name": "cluster_id"}],
+        terraform_tfvars={"mk8s_cluster_name": "clust1"},
         flux_version="v2.8.0",
         terraform_version="1.14.1",
     )
@@ -108,10 +112,12 @@ def test_write_load_and_runtime_config_round_trip(tmp_path: Path) -> None:
 
     loaded = load_generated_manifest(paths.generated_dir)
     runtime_config = runtime_config_from_manifest(loaded)
+    tfvars = terraform_tfvars_from_manifest(loaded)
 
     assert runtime_config.client_info.client_name == "client-a"
     assert runtime_config.client_info.nebius.project_id == "project-456"
     assert runtime_config.infra.components[0].inputs.cluster_name == "clust1"
+    assert tfvars == {"mk8s_cluster_name": "clust1"}
     assert loaded["tools"] == {
         "flux_version": "v2.8.0",
         "terraform_version": "1.14.1",
@@ -136,3 +142,8 @@ def test_load_generated_manifest_rejects_unsupported_schema(tmp_path: Path) -> N
 def test_runtime_config_from_manifest_requires_runtime_config() -> None:
     with pytest.raises(ValueError, match="missing runtime_config"):
         runtime_config_from_manifest({"schema": GENERATED_MANIFEST_SCHEMA})
+
+
+def test_terraform_tfvars_from_manifest_requires_render_tfvars() -> None:
+    with pytest.raises(ValueError, match="missing render\\.terraform_tfvars"):
+        terraform_tfvars_from_manifest({"schema": GENERATED_MANIFEST_SCHEMA, "render": {}})

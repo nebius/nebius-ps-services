@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 from contextlib import ExitStack, contextmanager
@@ -117,10 +118,16 @@ def test_load_generated_context_exports_manifest_tool_versions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
+    fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
     fake_manifest = {
         "tools": {
             "flux_version": "v2.8.0",
             "terraform_version": "1.14.1",
+        },
+        "render": {
+            "terraform_tfvars": {
+                "mk8s_cluster_name": "clust1",
+            }
         },
         "runtime_config": {"client_info": {"client_name": "client-a", "nebius": {"project_id": "project-456"}}},
     }
@@ -139,6 +146,9 @@ def test_load_generated_context_exports_manifest_tool_versions(
     assert manifest is fake_manifest
     assert os.environ[FLUX_VERSION_ENV] == "v2.8.0"
     assert os.environ[TERRAFORM_VERSION_ENV] == "1.14.1"
+    assert json.loads((fake_paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")) == {
+        "mk8s_cluster_name": "clust1"
+    }
 
 
 def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -490,6 +500,18 @@ def test_deploy_command_passes_auto_auth_flag(tmp_path: Path, monkeypatch: pytes
     manifest = {"schema": "nebius-cxcli-generated/v1"}
 
     monkeypatch.setattr(cli, "_load_generated_context", lambda _path: ("cfg", fake_paths, manifest))
+    monkeypatch.setattr(
+        cli,
+        "_ensure_ci_workflow_for_deployments_root",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("deploy must not bootstrap CI workflow")),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_auto_bootstrap_ci_auth_and_secrets",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("deploy must not bootstrap GitHub CI auth/secrets")
+        ),
+    )
 
     def _fake_deploy_generated_artifacts(
         config: object,
@@ -2184,10 +2206,25 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
 
     assert "prompting before a reset unless --force is provided" in render_help
     assert "generated artifact bundle" in deploy_help
+    assert "does not create or update github workflows" in deploy_help
     assert "refresh inventory" in deploy_help
     assert "refresh inventory" in tf_apply_help
     assert "refresh inventory" in flux_apply_help
     assert "refresh inventory" in flux_bootstrap_help
+
+
+def test_bootstrap_ci_help_reflects_reconcile_first_contract() -> None:
+    result = runner.invoke(cli.app, ["bootstrap-ci", "--help"])
+
+    assert result.exit_code == 0, result.output
+    plain_output = _plain_output(result.output)
+    output = " ".join(plain_output.split()).lower()
+
+    assert "--force" not in output
+    assert "--auth-bootstrap" in output
+    assert "--no-auth-bootstrap" in output
+    assert "--cli-ref" in output
+    assert "[default: auth-bootstrap]" in plain_output
 
 
 def test_flux_apply_command_fails_when_no_enabled_charts_exist(
@@ -2352,6 +2389,7 @@ def test_bootstrap_ci_command_with_auth_passes_github_flags(
         repo_root=tmp_path,
         workflow_file=tmp_path / ".github" / "workflows" / "nebius-deployments.yml",
         wrote_workflow=True,
+        replaced_workflow=False,
     )
 
     captured: dict[str, object] = {}
@@ -2366,7 +2404,7 @@ def test_bootstrap_ci_command_with_auth_passes_github_flags(
     monkeypatch.setattr(
         cli,
         "_ensure_ci_workflow_for_deployments_root",
-        lambda *, deployments_root, force, cli_ref: captured.update({"cli_ref": cli_ref}) or fake_workflow,
+        lambda *, deployments_root, cli_ref: captured.update({"cli_ref": cli_ref}) or fake_workflow,
     )
 
     def _fake_auto_bootstrap(**kwargs: object) -> None:
