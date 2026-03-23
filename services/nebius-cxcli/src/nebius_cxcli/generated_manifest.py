@@ -27,6 +27,8 @@ def build_generated_manifest(
     paths: InstancePaths,
     handoffs: Sequence[Mapping[str, Any]],
     required_component_outputs: Sequence[Mapping[str, Any]],
+    render_profile: str | None = None,
+    module_sources: Sequence[Mapping[str, Any]] = (),
     flux_version: str | None = None,
     terraform_version: str | None = None,
 ) -> dict[str, Any]:
@@ -54,6 +56,11 @@ def build_generated_manifest(
             "flux_version": str(flux_version or "").strip(),
             "terraform_version": str(terraform_version or "").strip(),
         },
+        "render": {
+            "profile": str(render_profile or "").strip(),
+            "portable": str(render_profile or "").strip() == "portable",
+            "module_sources": [dict(item) for item in module_sources],
+        },
         "deploy": {
             "handoffs": [dict(item) for item in handoffs],
             "required_component_outputs": [dict(item) for item in required_component_outputs],
@@ -72,6 +79,8 @@ def write_generated_manifest(
     paths: InstancePaths,
     handoffs: Sequence[Mapping[str, Any]],
     required_component_outputs: Sequence[Mapping[str, Any]],
+    render_profile: str | None = None,
+    module_sources: Sequence[Mapping[str, Any]] = (),
     flux_version: str | None = None,
     terraform_version: str | None = None,
 ) -> Path:
@@ -80,6 +89,8 @@ def write_generated_manifest(
         paths=paths,
         handoffs=handoffs,
         required_component_outputs=required_component_outputs,
+        render_profile=render_profile,
+        module_sources=module_sources,
         flux_version=flux_version,
         terraform_version=terraform_version,
     )

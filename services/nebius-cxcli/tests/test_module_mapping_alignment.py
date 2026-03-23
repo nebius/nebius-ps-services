@@ -16,6 +16,7 @@ from nebius_cxcli.component_sources import (
 from nebius_cxcli.components import component_entries, reset_component_entry_cache
 from nebius_cxcli.config_loader import load_config
 from nebius_cxcli.config_template import starter_config_yaml
+from nebius_cxcli.infra_render import RenderProfile
 from nebius_cxcli.paths import resolve_instance_paths, validate_path_alignment
 from nebius_cxcli.render import render_instance
 from nebius_cxcli.runtime_introspection import ModuleVariable, reset_runtime_introspection_cache
@@ -116,7 +117,7 @@ def test_render_tfvars_are_backed_by_declared_variables(tmp_path: Path) -> None:
     config = load_config(config_path)
     paths = resolve_instance_paths(config_path)
     validate_path_alignment(config, paths)
-    render_instance(config, paths)
+    render_instance(config, paths, render_profile=RenderProfile.LOCAL_DEV)
 
     main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
     providers_tf = (paths.infra_dir / "providers.tf").read_text(encoding="utf-8")
@@ -146,7 +147,7 @@ def test_render_uses_resolved_local_path_for_local_module_sources(
     config = load_config(config_path)
     paths = resolve_instance_paths(config_path)
     validate_path_alignment(config, paths)
-    render_instance(config, paths)
+    render_instance(config, paths, render_profile=RenderProfile.LOCAL_DEV)
 
     main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
     expected_mk8s_source = (
@@ -222,7 +223,7 @@ def test_render_prefers_active_catalog_source_over_stale_config_source(
     config = load_config(config_path)
     paths = resolve_instance_paths(config_path)
     validate_path_alignment(config, paths)
-    render_instance(config, paths)
+    render_instance(config, paths, render_profile=RenderProfile.PORTABLE)
 
     main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
     assert (

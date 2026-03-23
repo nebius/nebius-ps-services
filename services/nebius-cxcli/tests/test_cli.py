@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 
 import nebius_cxcli.cli as cli_module
 import nebius_cxcli.component_sources as component_sources
+import nebius_cxcli.templates as templates_module
 from nebius_cxcli.cli import _load_context, app
 from nebius_cxcli.component_sources import (
     ComponentOutput,
@@ -646,6 +647,7 @@ def test_bootstrap_ci_no_auth_writes_workflow_in_repo_root(tmp_path: Path) -> No
     assert "shell: bash" in content
     assert "cache: pip" in content
     assert "has_changes" in content
+    assert 'NEBIUS_CXCLI_PYTHON_VERSION: "3.12"' in content
     assert 'echo "NEBIUS_SA_ID=${NEBIUS_SA_ID}"' in content
     assert 'echo "NEBIUS_AUTH_PUBLIC_KEY_ID=${NEBIUS_AUTH_PUBLIC_KEY_ID}"' in content
     assert 'echo "NEBIUS_AUTH_PRIVATE_KEY_FILE=${KEY_PATH}"' in content
@@ -655,10 +657,11 @@ def test_bootstrap_ci_no_auth_writes_workflow_in_repo_root(tmp_path: Path) -> No
     assert '**/customer/deployments-root/**/generated/**' in content
     assert '**/customer/deployments-root/**/config.yaml' not in content
     assert "Validate source contract changes" not in content
-    assert "validate-generated" in content
+    assert 'nebius-cxcli validate-generated --portable "${{ matrix.generated }}"' in content
+    assert 'print(f"discovery={json.dumps(payload, separators=(\',\', \':\'))}")' in content
     assert "Inventory outputs" not in content
     assert "Email inventory" not in content
-    assert "NEBIUS_CXCLI_REF: ${{ vars.NEBIUS_CXCLI_REF || 'main' }}" in content
+    assert f"NEBIUS_CXCLI_REF: ${{{{ vars.NEBIUS_CXCLI_REF || '{cli_module.default_cli_ref()}' }}}}" in content
 
 
 def test_bootstrap_ci_no_auth_is_idempotent_without_force(tmp_path: Path) -> None:
@@ -713,6 +716,89 @@ def test_bootstrap_ci_cli_ref_overrides_generated_workflow_pin(tmp_path: Path) -
         "NEBIUS_CXCLI_REF: ${{ vars.NEBIUS_CXCLI_REF || 'feature/test-portable-catalog' }}"
         in content
     )
+
+
+def test_bootstrap_ci_no_auth_uses_release_tag_default_for_stable_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path / "customer-repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    _git_init(repo_root)
+
+    deployments_root = repo_root / "customer" / "deployments-root"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    create_result = _create_non_interactive(deployments_root)
+    assert create_result.exit_code == 0, create_result.output
+
+    monkeypatch.setattr(templates_module, "__version__", "1.2.3")
+
+    config_path = _instance_config_path(deployments_root)
+    bootstrap = runner.invoke(app, ["bootstrap-ci", str(config_path), "--no-auth-bootstrap"])
+    assert bootstrap.exit_code == 0, bootstrap.output
+
+    workflow = repo_root / ".github" / "workflows" / "nebius-deployments.yml"
+    content = workflow.read_text(encoding="utf-8")
+    assert "NEBIUS_CXCLI_REF: ${{ vars.NEBIUS_CXCLI_REF || 'nebius-cxcli-v1.2.3' }}" in content
+
+
+def test_bootstrap_ci_auth_bootstrap_fails_before_writing_workflow_when_repo_unresolved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path / "customer-repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    _git_init(repo_root)
+
+    deployments_root = repo_root / "customer" / "deployments-root"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    create_result = _create_non_interactive(deployments_root)
+    assert create_result.exit_code == 0, create_result.output
+
+    monkeypatch.setenv("GH_TOKEN", "token-123")
+
+    config_path = _instance_config_path(deployments_root)
+    bootstrap = runner.invoke(app, ["bootstrap-ci", str(config_path)])
+    assert bootstrap.exit_code == 1, bootstrap.output
+    assert "Failed to resolve git origin remote under" in bootstrap.output
+    assert "Set --github-repo" in bootstrap.output
+    assert "owner/repo explicitly." in bootstrap.output
+
+    workflow = repo_root / ".github" / "workflows" / "nebius-deployments.yml"
+    assert not workflow.exists()
+
+
+def test_bootstrap_ci_auth_bootstrap_accepts_explicit_github_repo_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path / "customer-repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    _git_init(repo_root)
+
+    deployments_root = repo_root / "customer" / "deployments-root"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    create_result = _create_non_interactive(deployments_root)
+    assert create_result.exit_code == 0, create_result.output
+
+    monkeypatch.setenv("GH_TOKEN", "token-123")
+    monkeypatch.setattr(cli_module, "_auto_bootstrap_ci_auth_and_secrets", lambda **_kwargs: None)
+
+    config_path = _instance_config_path(deployments_root)
+    bootstrap = runner.invoke(
+        app,
+        [
+            "bootstrap-ci",
+            str(config_path),
+            "--github-repo",
+            "owner/repo",
+        ],
+    )
+    assert bootstrap.exit_code == 0, bootstrap.output
+    assert "GitHub repository: owner/repo" in bootstrap.output
+
+    workflow = repo_root / ".github" / "workflows" / "nebius-deployments.yml"
+    assert workflow.exists()
 
 
 def test_bootstrap_ci_rejects_github_flags_when_no_auth(tmp_path: Path) -> None:

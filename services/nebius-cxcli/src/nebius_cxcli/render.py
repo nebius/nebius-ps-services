@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .flux_render import render_flux
-from .infra_render import render_terraform_artifacts
+from .infra_render import RenderProfile, render_terraform_artifacts
 from .inventory_ops import write_inventory
 from .paths import InstancePaths
 
@@ -51,6 +51,7 @@ def render_instance(
     paths: InstancePaths,
     *,
     component_output_values: dict[str, Any] | None = None,
+    render_profile: RenderProfile = RenderProfile.PORTABLE,
 ) -> RenderResult:
     """Render Terraform and Flux artifacts for one validated config."""
     reset_generated_bundle(paths)
@@ -59,7 +60,7 @@ def render_instance(
     paths.inventory_dir.mkdir(parents=True, exist_ok=True)
 
     written: list[Path] = []
-    written.extend(render_terraform_artifacts(config, paths))
+    written.extend(render_terraform_artifacts(config, paths, render_profile=render_profile))
     written.extend(render_flux(config, paths, component_output_values=component_output_values))
     write_inventory(config, paths)
     return RenderResult(files_written=sorted(written))
