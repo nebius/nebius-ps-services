@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import nebius_cxcli.deployment_status as deployment_status_module
 from nebius_cxcli.deployment_status import (
     DeploymentStatusReporter,
     Mk8sDeploymentTarget,
@@ -217,3 +218,38 @@ def test_transient_node_group_warnings_are_classified_as_notes() -> None:
     assert _transient_node_group_note(
         "Waiting for a node with matching ProviderID to exist for node mk8snodegroup-123"
     ) == "waiting for node registration"
+
+
+def test_mk8s_status_poller_uses_shared_sdk_auth(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    sdk = object()
+
+    class _FakeClusterClient:
+        def __init__(self, current_sdk):
+            captured["cluster_sdk"] = current_sdk
+
+    class _FakeNodeGroupClient:
+        def __init__(self, current_sdk):
+            captured["node_group_sdk"] = current_sdk
+
+    monkeypatch.setattr(
+        deployment_status_module,
+        "init_nebius_sdk",
+        lambda *, parent_id, context: (
+            captured.update({"parent_id": parent_id, "context": context}) or sdk
+        ),
+    )
+    monkeypatch.setattr(deployment_status_module, "ClusterServiceClient", _FakeClusterClient)
+    monkeypatch.setattr(deployment_status_module, "NodeGroupServiceClient", _FakeNodeGroupClient)
+
+    poller = deployment_status_module._Mk8sStatusPoller(
+        Mk8sDeploymentTarget(project_id="project-u123", cluster_name="clust1")
+    )
+
+    assert captured == {
+        "parent_id": "project-u123",
+        "context": "deployment status polling",
+        "cluster_sdk": sdk,
+        "node_group_sdk": sdk,
+    }
+    assert poller._sdk is sdk

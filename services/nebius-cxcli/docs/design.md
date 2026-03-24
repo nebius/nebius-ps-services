@@ -221,7 +221,7 @@ Wizard field/option model:
 - `component_sources.yaml` can declare top-level `shared` values, and `defaults` entries can reference them with `shared.<path>` so shared values flow into Terraform module inputs or Helm chart values without duplicating them in component config blocks.
 - `shared` is catalog-only; `config.yaml` must not declare a root `shared` block.
 - The shipped public catalogs should contain only non-sensitive shared defaults. Per-instance SSH public keys for jump-host modules belong in the private instance `config.yaml`, not in `component_sources.yaml`.
-- The bundled `mk8s` source entry sets `defaults.inputs.mk8s_cluster_public_endpoint: true` because its cluster handoff contract is `access: external`. That keeps local kubeconfig handoff aligned with `nebius mk8s cluster get-credentials --external`.
+- The bundled `mk8s` source entry sets `defaults.inputs.mk8s_cluster_public_endpoint: true` because its cluster handoff contract is `access: external`. That keeps local kubeconfig handoff aligned with the cluster's public-endpoint selection for external access.
 - The bundled `mk8s` source entry also sets `defaults.inputs.kube_network_service_cidrs: ["/20"]`. Nebius defaults omitted MK8s service CIDRs to `["/16"]`; on a single-pool `/16` subnet that can consume the entire pool and stall control-plane provisioning. `validate --strict` and `deploy` now preflight that case against the live subnet before Terraform apply.
 - `component_sources.yaml` can also declare producer-side `outputs` exports and consumer-side `input` bindings so component outputs feed other component inputs without adding hardcoded wiring to the CLI.
 - Optional module inputs are prompted when already set, when they are toggle fields, or when dependency-enabled prefixes are active (for example `gpu_enabled=true` enables `gpu_*` prompts).
@@ -327,8 +327,11 @@ The command boundary is intentional:
 - `config.yaml` remains in the customer repo as a manual render/reset contract and does not trigger customer CI deployment.
 - The target `config.yaml` must already live inside the customer git repository because the workflow is written at that repo root.
 - With default `--auth-bootstrap`, the command resolves the target GitHub repo from the checkout `origin` remote. `--github-repo` is only an explicit override for missing, non-GitHub, or remapped remotes.
+- `--github-token-env` affects only auth bootstrap and environment secret sync. It is the escape hatch when the GitHub API token is not exposed as `GH_TOKEN`/`GITHUB_TOKEN`.
 - When `--cli-ref` is omitted, the generated workflow defaults to `main` for development builds and `nebius-cxcli-v<version>` for stable tagged releases.
 - `--cli-ref` is the explicit escape hatch when generator-side automation must pin the generated customer workflow to a specific nebius-cxcli branch, tag, or commit for PR validation.
+- `--cli-ref` selects the `nebius-cxcli` source ref to install from `nebius-ps-services`; it does not select or mutate the branch of the customer target repo.
+- Example: `nebius-cxcli bootstrap-ci /path/to/config.yaml --cli-ref <branch|tag|sha>`.
 - Generated workflows also support a GitHub repo/org variable override `NEBIUS_CXCLI_REF`, which takes precedence over the generated default ref.
 - The intended ref controls are generator-time pinning via `--cli-ref` and optional runtime override via the GitHub variable; editing the generated workflow YAML is not required for normal use.
 - Optional CI auth/environment-secret bootstrap creates the GitHub Environment and syncs Environment Secrets, but does not manage GitHub repo/org variables.
@@ -339,6 +342,7 @@ The command boundary is intentional:
 - `auth --recreate` always rotates runtime auth material and rewrites cache.
 - `auth --validate-profile` inspects cached runtime auth profile metadata/private key and verifies Nebius auth public key visibility.
 - `auth --bootstrap-ci` syncs local runtime auth cache material into GitHub environment secrets.
+- `auth --profile` and `auth --sdk-config-file` target Nebius SDK config resolution; they do not require the standalone `nebius` CLI binary.
 
 ## 6. Generator-side Commands
 
@@ -465,8 +469,10 @@ Infra render:
 - `terraform unlock` still requires `aws` CLI in `PATH`; Terraform itself may come from `PATH` or the managed Terraform download path.
 - Local `deploy` validates the rendered Terraform root before apply, then if enabled charts and a `handoff`-enabled infra component are present it resolves the rendered cluster ID output and prepares kubeconfig before applying rendered Flux manifests.
 - Customer-side commands operate on the rendered `generated/` bundle as the deploy contract and do not need the source catalog to recover local Terraform module paths from the original render machine.
-- On non-CI local runs, that same cluster handoff also updates the user kubeconfig at `~/.kube/config`, so the target MK8s cluster is immediately usable with `kubectl` after `deploy`, `flux apply`, or `flux bootstrap`.
-- Before `deploy`, `flux apply`, or `flux bootstrap` starts Flux work against a handed-off MK8s cluster, the CLI waits for Kubernetes nodes to become `Ready` so Terraform completion is not treated as workload readiness.
+- On non-CI local runs, that same cluster handoff also updates the user kubeconfig at `~/.kube/config` with a `nebius-cxcli` exec-based credential entry, so the target MK8s cluster is immediately usable with `kubectl` after `deploy`, `flux apply`, or `flux bootstrap` without a separate Nebius CLI install.
+- Before `deploy`, `flux apply`, or `flux bootstrap` starts Flux work against a handed-off MK8s cluster, the CLI performs a fast node-readiness probe first and only enters a wait loop when the nodes are not `Ready` yet. Healthy existing clusters proceed to Flux work immediately.
+- After that handoff, the local Flux phase keeps one continuous spinner alive and updates its message across cluster reachability, Flux API discovery, rendered-manifest apply, and the final rendered-resource readiness wait so the command remains visibly active during quiet kubectl/Flux setup work.
+- In non-interactive environments, those same phase updates degrade to ordinary printed lines rather than transient spinner frames, so CI logs stay readable without requiring terminal animation support.
 - `terraform plan` and `terraform apply` operate on the existing generated infra bundle rather than rerendering from `config.yaml`.
 - `terraform apply` is a sequentially idempotent infra-only path for a given `generated/infra` bundle. Repeated runs converge through Terraform state; concurrent runs against the same backend are intentionally blocked by remote state locking.
 - During long-running `terraform apply`, local `deploy` and `terraform apply` emit one merged status surface: Terraform apply transitions plus a light Nebius MK8s API snapshot. When an enabled `mk8s` component is present and Nebius SDK auth is available, the CLI polls Nebius MK8s API for cluster/node-group state; otherwise it falls back to an elapsed heartbeat for the API side.
@@ -535,6 +541,7 @@ Flux render:
 - Derives GitHub environment name as `<client_name>-<project_id>`, ensures that environment exists, then checks/syncs missing environment secrets.
 - Generated customer workflows validate with `nebius-cxcli validate-generated --portable` before Terraform plan/apply so non-portable local module paths are rejected in PRs and main-branch deploy runs.
 - Generated customer workflows restore ignored `generated/infra/terraform.auto.tfvars.json` from `generated/nebius-cxcli-manifest.json` before Terraform plan/apply.
+- Generated customer workflows do not install the standalone `nebius` CLI; MK8s kubeconfig handoff and token retrieval stay inside `nebius-cxcli` via the Nebius SDK.
 - Generated customer workflows also keep the Python runtime version in one env var and write compact single-line discovery JSON to `GITHUB_OUTPUT` for stable matrix handoff.
 - Does not manage GitHub repo/org variables; `NEBIUS_CXCLI_REF` remains an optional manual override consumed by the generated workflow.
 - `generated/infra/terraform.auto.tfvars.json` remains ignored in private deployment repos; customer-side generated-bundle commands recreate it from `generated/nebius-cxcli-manifest.json` before Terraform plan/apply so CI does not depend on a committed tfvars file.
@@ -564,7 +571,13 @@ Current runtime implementation is Nebius-focused:
 
 The component source model itself is Terraform-module + Helm-chart based, but this release does not claim full multi-vendor runtime support.
 
-## 14. Source Code Structure
+## 14. Runtime Versioning
+
+- Installed wheels rely on package metadata for the published version.
+- Source/editable checkouts prefer live `setuptools-scm` git state over a generated `_version.py` cache so local runtime behavior matches the current repo state, including dirty/dev suffixes.
+- `publish-release.sh --publish X.Y.Z` creates the service tag locally, verifies that the tagged source checkout resolves `nebius_cxcli.__version__ == X.Y.Z`, and only then pushes the tag to trigger the release workflow.
+
+## 15. Source Code Structure
 
 - `src/nebius_cxcli/cli.py`: CLI entrypoints, orchestration, strict checks, command behavior.
 - `src/nebius_cxcli/component_sources.py`: source registry loading + precedence resolution.
@@ -593,9 +606,12 @@ The component source model itself is Terraform-module + Helm-chart based, but th
 - `component_sources.yaml`: repo-level starter source registry editable by operators.
 - `<install-prefix>/nebius_cxcli/component_sources.yaml` (wheel data-file): bundled fallback source registry shipped inside wheel builds.
 - The `nebius-cxcli` GitHub release workflow publishes both the wheel and the raw portable catalog file so operators can download the editable source catalog directly from the release page with module refs already pinned to the published release tag.
+- The repo CI and release workflows run the same local `make all` verification contract before wheel verification or release publication so GitHub Actions and local development stay on one lint/test/build path.
+- Post-`make all` workflow verification uses the repo `.venv/bin/python` for `nebius_cxcli.release_catalog` commands so wheel/catalog checks import the checked-out editable package reliably under GitHub Actions.
 
 Primary automated test ownership:
 
 - `tests/test_cli.py` and `tests/test_cli_command_coverage.py`: CLI command contract and workflow-generation behavior.
 - `tests/test_component_sources.py`: component source precedence and validation rules, including `validate-sources` registry checks.
 - `tests/test_github_secrets.py`: GitHub repo/environment secret helper behavior, including environment creation and environment-secret upsert orchestration.
+- `tests/test_setup_build.py`: setup/build packaging contract, with CI build env isolated so source selection and release-ref rewrite precedence stay deterministic under GitHub Actions.

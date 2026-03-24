@@ -73,7 +73,7 @@ def test_init_nebius_sdk_uses_service_account_key_when_set(
     assert sdk.kwargs["parent_id"] == "project-1"
 
 
-def test_init_nebius_sdk_falls_back_to_cli_config_and_token_fetch(
+def test_init_nebius_sdk_falls_back_to_sdk_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _install_fake_nebius_modules(monkeypatch)
@@ -82,14 +82,6 @@ def test_init_nebius_sdk_falls_back_to_cli_config_and_token_fetch(
     monkeypatch.delenv("NEBIUS_AUTH_PUBLIC_KEY_ID", raising=False)
     monkeypatch.delenv("NEBIUS_AUTH_PRIVATE_KEY_FILE", raising=False)
 
-    called = {"value": False}
-
-    def _fake_token_loader(*, timeout_seconds: int = 10) -> str | None:
-        called["value"] = True
-        return "token"
-
-    monkeypatch.setattr(sdk_auth, "ensure_nebius_iam_token_from_cli", _fake_token_loader)
-
     sdk = sdk_auth.init_nebius_sdk(
         profile="dev",
         endpoint="api.example.invalid",
@@ -97,8 +89,6 @@ def test_init_nebius_sdk_falls_back_to_cli_config_and_token_fetch(
         context="test",
     )
 
-    assert called["value"] is True
     assert sdk.kwargs["parent_id"] == "project-1"
     config = sdk.kwargs["config_reader"]
     assert config.kwargs == {"profile": "dev", "endpoint": "api.example.invalid"}
-

@@ -36,23 +36,13 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - name: Install dependencies
-        run: |
-          set -euo pipefail
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-      - name: Lint
-        run: python -m ruff check src tests
-      - name: Test
-        run: python -m pytest -q
-      - name: Build wheel
+      - name: Verify service with local make contract
         env:
           RELEASE_REF: ${{ github.sha }}
           NEBIUS_CXCLI_BUILD_COMPONENT_SOURCES_FILE: component_sources.release.yaml
         run: |
           set -euo pipefail
-          rm -rf build dist
-          python -m build --wheel
+          make all
 
       - name: Verify bundled component sources in wheel
         env:
@@ -64,7 +54,7 @@ jobs:
             echo "::error::No wheel found in dist/"
             exit 1
           fi
-          python -m nebius_cxcli.release_catalog verify-wheel \
+          .venv/bin/python -m nebius_cxcli.release_catalog verify-wheel \
             --wheel "${wheel}" \
             --release-ref "${RELEASE_REF}"
           echo "Verified bundled portable component_sources.yaml in ${wheel}"

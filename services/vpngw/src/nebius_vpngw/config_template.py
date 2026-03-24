@@ -111,7 +111,7 @@ defaults:
       graceful_restart: false
       max_prefixes: 1000
       bfd:
-        enabled: false  # enable only if peer supports BFD
+        enabled: false  # enable only if the peer platform explicitly supports BFD
         transmit_interval_ms: 300
         receive_interval_ms: 300
         detect_multiplier: 3

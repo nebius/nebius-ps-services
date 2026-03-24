@@ -650,6 +650,8 @@ def test_apply_rendered_flux_installs_flux_controllers_when_missing(
     fake_paths = _fake_paths(tmp_path)
     calls: list[tuple[object, ...]] = []
     cache_dirs: list[Path | None] = []
+    status_start: list[tuple[str, str | None]] = []
+    status_updates: list[str] = []
     fake_paths.flux_dir.mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr(
@@ -702,6 +704,19 @@ def test_apply_rendered_flux_installs_flux_controllers_when_missing(
         return SimpleNamespace(returncode=0, stderr="", stdout="")
 
     monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+    monkeypatch.setattr(cli, "_console_is_terminal", lambda: True)
+
+    class _FakeStatus:
+        def update(self, message: str, **_kwargs: object) -> None:
+            status_updates.append(message)
+
+    @contextmanager
+    def _fake_status(message: str, **kwargs: object):
+        spinner = kwargs.get("spinner")
+        status_start.append((message, spinner if isinstance(spinner, str) else None))
+        yield _FakeStatus()
+
+    monkeypatch.setattr(cli.console, "status", _fake_status)
 
     cli._apply_rendered_flux(fake_paths, extra_env={"KUBECONFIG": "/tmp/kubeconfig"})
 
@@ -721,6 +736,16 @@ def test_apply_rendered_flux_installs_flux_controllers_when_missing(
     )
     assert ("wait_flux_apis", fake_paths, {"KUBECONFIG": "/tmp/kubeconfig"}, cache_dir) in calls
     assert ("wait_flux", fake_paths, {"KUBECONFIG": "/tmp/kubeconfig"}) in calls
+    assert status_start == [
+        ("[cyan]Preparing Flux deployment...[/cyan]", "dots"),
+    ]
+    assert status_updates == [
+        "[cyan]Checking target Kubernetes cluster reachability...[/cyan]",
+        "[cyan]Installing Flux controllers into the target cluster...[/cyan]",
+        "[cyan]Waiting for Flux resource APIs to become discoverable...[/cyan]",
+        "[cyan]Applying rendered Flux manifests to the target cluster...[/cyan]",
+        "[cyan]Waiting for rendered Flux resources to become Ready...[/cyan]",
+    ]
 
 
 def test_apply_rendered_flux_skips_flux_install_when_controllers_exist(
@@ -729,6 +754,8 @@ def test_apply_rendered_flux_skips_flux_install_when_controllers_exist(
     fake_paths = _fake_paths(tmp_path)
     calls: list[tuple[object, ...]] = []
     cache_dirs: list[Path | None] = []
+    status_start: list[tuple[str, str | None]] = []
+    status_updates: list[str] = []
     fake_paths.flux_dir.mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr(
@@ -778,6 +805,19 @@ def test_apply_rendered_flux_skips_flux_install_when_controllers_exist(
         return SimpleNamespace(returncode=0, stderr="", stdout="")
 
     monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+    monkeypatch.setattr(cli, "_console_is_terminal", lambda: True)
+
+    class _FakeStatus:
+        def update(self, message: str, **_kwargs: object) -> None:
+            status_updates.append(message)
+
+    @contextmanager
+    def _fake_status(message: str, **kwargs: object):
+        spinner = kwargs.get("spinner")
+        status_start.append((message, spinner if isinstance(spinner, str) else None))
+        yield _FakeStatus()
+
+    monkeypatch.setattr(cli.console, "status", _fake_status)
 
     cli._apply_rendered_flux(fake_paths, extra_env={"KUBECONFIG": "/tmp/kubeconfig"})
 
@@ -793,6 +833,59 @@ def test_apply_rendered_flux_skips_flux_install_when_controllers_exist(
     )
     assert ("wait_flux_apis", fake_paths, {"KUBECONFIG": "/tmp/kubeconfig"}, cache_dir) in calls
     assert ("wait_flux", fake_paths, {"KUBECONFIG": "/tmp/kubeconfig"}) in calls
+    assert status_start == [
+        ("[cyan]Preparing Flux deployment...[/cyan]", "dots"),
+    ]
+    assert status_updates == [
+        "[cyan]Checking target Kubernetes cluster reachability...[/cyan]",
+        "[cyan]Waiting for Flux resource APIs to become discoverable...[/cyan]",
+        "[cyan]Applying rendered Flux manifests to the target cluster...[/cyan]",
+        "[cyan]Waiting for rendered Flux resources to become Ready...[/cyan]",
+    ]
+
+
+def test_apply_rendered_flux_prints_phase_lines_when_console_is_not_terminal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_paths.flux_dir.mkdir(parents=True, exist_ok=True)
+    printed: list[str] = []
+
+    monkeypatch.setattr(
+        cli.shutil,
+        "which",
+        lambda name: "/usr/bin/kubectl" if name == "kubectl" else None,
+    )
+    monkeypatch.setattr(cli, "flux_controllers_installed", lambda *, extra_env=None: True)
+    monkeypatch.setattr(cli, "flux_crds_installed", lambda *, extra_env=None: True)
+    monkeypatch.setattr(cli, "wait_for_flux_resource_apis", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "wait_for_rendered_flux_resources", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        cli.subprocess,
+        "run",
+        lambda cmd, **kwargs: SimpleNamespace(returncode=0, stderr="", stdout=""),
+    )
+    monkeypatch.setattr(cli, "_console_is_terminal", lambda: False)
+    monkeypatch.setattr(cli.console, "print", lambda message, *args, **kwargs: printed.append(str(message)))
+
+    class _FakeStatus:
+        def update(self, _message: str, **_kwargs: object) -> None:
+            return
+
+    @contextmanager
+    def _fake_status(message: str, **kwargs: object):
+        yield _FakeStatus()
+
+    monkeypatch.setattr(cli.console, "status", _fake_status)
+
+    cli._apply_rendered_flux(fake_paths, extra_env={"KUBECONFIG": "/tmp/kubeconfig"})
+
+    assert printed == [
+        "[cyan]Checking target Kubernetes cluster reachability...[/cyan]",
+        "[cyan]Waiting for Flux resource APIs to become discoverable...[/cyan]",
+        "[cyan]Applying rendered Flux manifests to the target cluster...[/cyan]",
+        "[cyan]Waiting for rendered Flux resources to become Ready...[/cyan]",
+    ]
 
 
 def test_filter_benign_kubectl_output_removes_known_noise() -> None:
@@ -1810,7 +1903,7 @@ def test_install_flux_controllers_waits_for_namespace_before_apply(
     assert calls[-1] == ("wait_crds_ready", {"KUBECONFIG": "/tmp/kubeconfig"})
 
 
-def test_prepare_cluster_handoff_kube_env_persists_local_kubeconfig_on_direct_success(
+def test_prepare_cluster_handoff_kube_env_writes_exec_kubeconfig_and_persists_local_copy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
@@ -1821,6 +1914,15 @@ def test_prepare_cluster_handoff_kube_env_persists_local_kubeconfig_on_direct_su
         )
     )
     captured: dict[str, object] = {}
+    spec = cli._Mk8sKubeconfigSpec(
+        cluster_entry_name="cluster-entry",
+        user_entry_name="user-entry",
+        context_name="context-entry",
+        server="https://mk8s.example.invalid",
+        ca_pem="FAKE-CA",
+        exec_command="/usr/local/bin/nebius-cxcli",
+        exec_args=("mk8s-token", "--project-id", "project-456", "--client-name", "client-a"),
+    )
 
     monkeypatch.setattr(cli, "_active_chart_count", lambda _config: 1)
     monkeypatch.setattr(
@@ -1834,31 +1936,43 @@ def test_prepare_cluster_handoff_kube_env_persists_local_kubeconfig_on_direct_su
             }
         ],
     )
-    monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/nebius" if name == "nebius" else None)
     monkeypatch.setattr(cli, "terraform_output_raw", lambda *_args, **_kwargs: "cluster-123")
+    monkeypatch.setattr(cli, "_runtime_auth_env_available", lambda: True)
     monkeypatch.setattr(
-        cli.subprocess,
-        "run",
-        lambda *args, **kwargs: SimpleNamespace(returncode=0, stderr="", stdout=""),
+        cli,
+        "_mk8s_cluster_handoff_spec",
+        lambda config, *, cluster_id, access: (
+            captured.update({"handoff_spec": (config, cluster_id, access)}) or spec
+        ),
     )
     monkeypatch.setattr(
         cli,
         "_persist_cluster_handoff_kubeconfig",
-        lambda **kwargs: captured.setdefault("persist", kwargs) or Path.home() / ".kube" / "config",
+        lambda *, spec: captured.setdefault("persist", spec) or Path.home() / ".kube" / "config",
     )
 
     with ExitStack() as stack:
         env = cli._prepare_cluster_handoff_kube_env(fake_config, fake_paths, stack=stack)
+        assert env is not None
+        kubeconfig_path = Path(env["KUBECONFIG"])
+        kubeconfig = yaml.safe_load(kubeconfig_path.read_text(encoding="utf-8"))
 
-    assert env is not None
-    assert "KUBECONFIG" in env
-    assert captured["persist"] == {
-        "cluster_id": "cluster-123",
-        "access": "external",
-    }
+    assert captured["handoff_spec"] == (fake_config, "cluster-123", "external")
+    assert captured["persist"] == spec
+    assert kubeconfig["clusters"][0]["cluster"]["server"] == "https://mk8s.example.invalid"
+    assert kubeconfig["users"][0]["user"]["exec"]["command"] == "/usr/local/bin/nebius-cxcli"
+    assert kubeconfig["users"][0]["user"]["exec"]["args"] == [
+        "mk8s-token",
+        "--project-id",
+        "project-456",
+        "--client-name",
+        "client-a",
+    ]
+    assert kubeconfig["users"][0]["user"]["exec"]["interactiveMode"] == "Never"
+    assert kubeconfig["current-context"] == "context-entry"
 
 
-def test_prepare_cluster_handoff_kube_env_persists_local_kubeconfig_with_temp_profile(
+def test_prepare_cluster_handoff_kube_env_loads_runtime_auth_cache_when_env_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
@@ -1869,6 +1983,15 @@ def test_prepare_cluster_handoff_kube_env_persists_local_kubeconfig_with_temp_pr
         )
     )
     captured: dict[str, object] = {}
+    spec = cli._Mk8sKubeconfigSpec(
+        cluster_entry_name="cluster-entry",
+        user_entry_name="user-entry",
+        context_name="context-entry",
+        server="https://mk8s.example.invalid",
+        ca_pem="FAKE-CA",
+        exec_command="/usr/local/bin/nebius-cxcli",
+        exec_args=("mk8s-token",),
+    )
 
     monkeypatch.setattr(cli, "_active_chart_count", lambda _config: 1)
     monkeypatch.setattr(
@@ -1882,37 +2005,40 @@ def test_prepare_cluster_handoff_kube_env_persists_local_kubeconfig_with_temp_pr
             }
         ],
     )
-    monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/nebius" if name == "nebius" else None)
     monkeypatch.setattr(cli, "terraform_output_raw", lambda *_args, **_kwargs: "cluster-123")
-    monkeypatch.setenv("NEBIUS_SA_ID", "sa-123")
-    monkeypatch.setenv("NEBIUS_AUTH_PUBLIC_KEY_ID", "apk-123")
-    monkeypatch.setenv("NEBIUS_AUTH_PRIVATE_KEY_FILE", "/tmp/auth.pem")
-
     monkeypatch.setattr(
-        cli.subprocess,
-        "run",
-        lambda *args, **kwargs: SimpleNamespace(returncode=1, stderr="direct failed", stdout=""),
+        cli,
+        "_runtime_auth_env_available",
+        lambda: False,
     )
-
-    def _fake_run_command(cmd, *, env, timeout, failure_context):
-        commands = captured.setdefault("commands", [])
-        commands.append((tuple(cmd), dict(env), timeout, failure_context))
-
-    monkeypatch.setattr(cli, "_run_command_for_cluster_handoff", _fake_run_command)
+    monkeypatch.setattr(
+        cli,
+        "_runtime_auth_cache_load",
+        lambda *, project_id, client_name: captured.setdefault(
+            "cache_load", (project_id, client_name)
+        )
+        or True,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_mk8s_cluster_handoff_spec",
+        lambda config, *, cluster_id, access: (
+            captured.update({"handoff_spec": (config, cluster_id, access)}) or spec
+        ),
+    )
     monkeypatch.setattr(
         cli,
         "_persist_cluster_handoff_kubeconfig",
-        lambda **kwargs: captured.setdefault("persist", kwargs) or Path.home() / ".kube" / "config",
+        lambda *, spec: captured.setdefault("persist", spec) or Path.home() / ".kube" / "config",
     )
 
     with ExitStack() as stack:
         env = cli._prepare_cluster_handoff_kube_env(fake_config, fake_paths, stack=stack)
 
     assert env is not None
-    assert captured["persist"]["cluster_id"] == "cluster-123"
-    assert captured["persist"]["access"] == "external"
-    assert captured["persist"]["profile_name"].startswith("cxcli-")
-    assert "XDG_CONFIG_HOME" in captured["persist"]["profile_env"]
+    assert captured["cache_load"] == ("project-456", "client-a")
+    assert captured["handoff_spec"] == (fake_config, "cluster-123", "external")
+    assert captured["persist"] == spec
 
 
 def test_persist_cluster_handoff_kubeconfig_skips_in_ci(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1920,40 +2046,182 @@ def test_persist_cluster_handoff_kubeconfig_skips_in_ci(monkeypatch: pytest.Monk
 
     assert (
         cli._persist_cluster_handoff_kubeconfig(
-            cluster_id="cluster-123",
-            access="external",
+            spec=cli._Mk8sKubeconfigSpec(
+                cluster_entry_name="cluster-entry",
+                user_entry_name="user-entry",
+                context_name="context-entry",
+                server="https://mk8s.example.invalid",
+                ca_pem="FAKE-CA",
+                exec_command="/usr/local/bin/nebius-cxcli",
+                exec_args=("mk8s-token",),
+            ),
         )
         is None
     )
 
 
-def test_persist_cluster_handoff_kubeconfig_uses_force_on_reruns(
+def test_persist_cluster_handoff_kubeconfig_merges_exec_entries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setenv("NEBIUS_CXCLI_PERSIST_LOCAL_KUBECONFIG", "true")
+    kubeconfig_path = tmp_path / ".kube" / "config"
+    kubeconfig_path.parent.mkdir(parents=True, exist_ok=True)
+    kubeconfig_path.write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "v1",
+                "kind": "Config",
+                "clusters": [{"name": "existing-cluster", "cluster": {"server": "https://existing"}}],
+                "users": [{"name": "existing-user", "user": {"token": "existing"}}],
+                "contexts": [
+                    {
+                        "name": "existing-context",
+                        "context": {"cluster": "existing-cluster", "user": "existing-user"},
+                    }
+                ],
+                "current-context": "existing-context",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    spec = cli._Mk8sKubeconfigSpec(
+        cluster_entry_name="cluster-entry",
+        user_entry_name="user-entry",
+        context_name="context-entry",
+        server="https://mk8s.example.invalid",
+        ca_pem="FAKE-CA",
+        exec_command="/usr/local/bin/nebius-cxcli",
+        exec_args=("mk8s-token", "--project-id", "project-456"),
+    )
+
+    result = cli._persist_cluster_handoff_kubeconfig(
+        spec=spec,
+    )
+
+    persisted = yaml.safe_load(kubeconfig_path.read_text(encoding="utf-8"))
+    assert result == kubeconfig_path
+    assert persisted["current-context"] == "context-entry"
+    assert [entry["name"] for entry in persisted["clusters"]] == [
+        "existing-cluster",
+        "cluster-entry",
+    ]
+    assert persisted["users"][-1]["user"]["exec"]["command"] == "/usr/local/bin/nebius-cxcli"
+    assert persisted["contexts"][-1]["context"]["cluster"] == "cluster-entry"
+
+
+def test_mk8s_token_command_emits_exec_credential_from_sdk(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, object] = {}
 
-    monkeypatch.delenv("CI", raising=False)
-    monkeypatch.setenv("NEBIUS_CXCLI_PERSIST_LOCAL_KUBECONFIG", "true")
+    class _FakeSDK:
+        def get_token_sync(self, *, timeout):  # type: ignore[no-untyped-def]
+            captured["timeout"] = timeout
+            return SimpleNamespace(
+                token="token-123",
+                expiration=cli.datetime(2026, 1, 2, 3, 4, 5, tzinfo=cli.UTC),
+            )
+
+        def sync_close(self) -> None:
+            captured["closed"] = True
+
+    monkeypatch.setattr(cli, "_runtime_auth_env_available", lambda: False)
     monkeypatch.setattr(
         cli,
-        "_run_command_for_cluster_handoff",
-        lambda cmd, *, env, timeout, failure_context: captured.setdefault(
-            "cmd", tuple(cmd)
-        ),
+        "_runtime_auth_cache_load",
+        lambda *, project_id, client_name: captured.setdefault(
+            "cache_load", (project_id, client_name)
+        )
+        or True,
     )
     monkeypatch.setattr(
-        cli.console,
-        "print",
-        lambda message: captured.setdefault("message", message),
+        cli,
+        "init_nebius_sdk",
+        lambda *, parent_id, endpoint, context: (
+            captured.update({"sdk_init": (parent_id, endpoint, context)}) or _FakeSDK()
+        ),
     )
 
-    result = cli._persist_cluster_handoff_kubeconfig(
-        cluster_id="cluster-123",
-        access="external",
+    result = runner.invoke(
+        cli.app,
+        [
+            "mk8s-token",
+            "--project-id",
+            "project-456",
+            "--client-name",
+            "client-a",
+            "--endpoint",
+            "api.example.invalid",
+        ],
     )
 
-    assert result == Path.home().expanduser() / ".kube" / "config"
-    assert "--force" in captured["cmd"]
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert captured["cache_load"] == ("project-456", "client-a")
+    assert captured["sdk_init"] == ("project-456", "api.example.invalid", "MK8s exec auth")
+    assert captured["timeout"] == 20.0
+    assert captured["closed"] is True
+    assert payload["apiVersion"] == "client.authentication.k8s.io/v1"
+    assert payload["kind"] == "ExecCredential"
+    assert payload["status"]["token"] == "token-123"
+    assert payload["status"]["expirationTimestamp"] == "2026-01-02T03:04:05Z"
+
+
+def test_wait_for_cluster_nodes_ready_returns_immediately_when_nodes_are_already_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    messages: list[str] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_node_readiness_summary",
+        lambda *, extra_env: (True, "nodes 2/2 Ready; compute-1:Ready, compute-2:Ready"),
+    )
+
+    cli._wait_for_cluster_nodes_ready(
+        extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
+        emit=messages.append,
+    )
+
+    assert messages == [
+        "[bold white]Kubernetes[/bold white] [dim][0s][/dim] "
+        "nodes 2/2 Ready; compute-1:Ready, compute-2:Ready; "
+        "already Ready, continuing with Flux deployment."
+    ]
+
+
+def test_wait_for_cluster_nodes_ready_announces_wait_only_when_nodes_are_not_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    messages: list[str] = []
+    sleeps: list[float] = []
+    states = iter(
+        [
+            (False, "nodes 0/2 Ready; waiting for node registration"),
+            (True, "nodes 2/2 Ready; compute-1:Ready, compute-2:Ready"),
+        ]
+    )
+    monotonic_values = iter([100.0, 110.0, 110.0])
+
+    monkeypatch.setattr(cli, "_node_readiness_summary", lambda *, extra_env: next(states))
+    monkeypatch.setattr(cli.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(cli.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    cli._wait_for_cluster_nodes_ready(
+        extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
+        emit=messages.append,
+    )
+
+    assert messages == [
+        "Target Kubernetes nodes are not Ready yet; waiting before Flux deployment.",
+        "[bold white]Kubernetes[/bold white] [dim][0s][/dim] nodes 0/2 Ready; waiting for node registration",
+        "[bold white]Kubernetes[/bold white] [dim][10s][/dim] nodes 2/2 Ready; compute-1:Ready, compute-2:Ready",
+    ]
+    assert sleeps == [10.0]
 
 
 def test_flux_bootstrap_command_uses_cluster_handoff_when_config_declares_it(
@@ -2224,7 +2492,21 @@ def test_bootstrap_ci_help_reflects_reconcile_first_contract() -> None:
     assert "--auth-bootstrap" in output
     assert "--no-auth-bootstrap" in output
     assert "--cli-ref" in output
+    assert "CLI-managed customer GitHub workflow" in plain_output
     assert "[default: auth-bootstrap]" in plain_output
+    assert "[default: GH_TOKEN]" in plain_output
+
+
+def test_auth_help_reflects_sdk_auth_contract() -> None:
+    result = runner.invoke(cli.app, ["auth", "--help"])
+
+    assert result.exit_code == 0, result.output
+    plain_output = _plain_output(result.output)
+
+    assert "Nebius SDK config profile name" in plain_output
+    assert "Optional path to Nebius SDK config file" in plain_output
+    assert "Nebius CLI profile name used by Nebius SDK" not in plain_output
+    assert "Nebius SDK/CLI config file" not in plain_output
 
 
 def test_flux_apply_command_fails_when_no_enabled_charts_exist(

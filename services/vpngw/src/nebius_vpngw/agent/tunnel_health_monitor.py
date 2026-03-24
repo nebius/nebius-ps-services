@@ -21,7 +21,7 @@ Recovery Actions:
 
 Best Practice References:
 - AWS VPN: Monitors DPD and restarts tunnels on keepalive failure
-- GCP HA VPN: Uses BFD for sub-second failure detection
+- Managed VPN peers vary; do not assume BFD support from BGP support alone
 - Azure VPN: Implements tunnel health probes with auto-recovery
 """
 

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-import subprocess
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -12,7 +10,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from nebius.aio.cli_config import Config
 from nebius.api.nebius.common.v1 import GetOperationRequest, ListOperationsRequest
 from nebius.api.nebius.mk8s.v1 import (
     ClusterServiceClient,
@@ -22,10 +19,10 @@ from nebius.api.nebius.mk8s.v1 import (
     NodeGroupServiceClient,
     NodeGroupStatus,
 )
-from nebius.sdk import SDK
 from rich.markup import escape
 
 from .runtime_config import to_plain_data
+from .sdk_auth import init_nebius_sdk
 
 
 def _as_text(value: Any) -> str:
@@ -130,19 +127,10 @@ class _Mk8sStatusPoller:
         self._cluster_id: str | None = None
         self._auth_warning: str | None = None
 
-        if not os.environ.get("NEBIUS_IAM_TOKEN", "").strip():
-            completed = subprocess.run(
-                ["nebius", "iam", "get-access-token", "--format", "text"],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=20,
-            )
-            token = completed.stdout.strip()
-            if token:
-                os.environ["NEBIUS_IAM_TOKEN"] = token
-
-        self._sdk = SDK(config_reader=Config())
+        self._sdk = init_nebius_sdk(
+            parent_id=target.project_id,
+            context="deployment status polling",
+        )
         self._cluster_client = ClusterServiceClient(self._sdk)
         self._node_group_client = NodeGroupServiceClient(self._sdk)
 
