@@ -9,6 +9,13 @@ import yaml
 
 
 def _load_setup_module(monkeypatch) -> ModuleType:
+    for env_name in (
+        "NEBIUS_CXCLI_BUILD_COMPONENT_SOURCES_FILE",
+        "NEBIUS_CXCLI_BUILD_RELEASE_REF",
+        "RELEASE_REF",
+        "NEBIUS_CXCLI_REF",
+    ):
+        monkeypatch.delenv(env_name, raising=False)
     monkeypatch.setattr(setuptools, "setup", lambda *args, **kwargs: None)
     setup_path = Path(__file__).resolve().parents[1] / "setup.py"
     spec = importlib.util.spec_from_file_location("nebius_cxcli_setup_test", setup_path)
@@ -67,6 +74,23 @@ def test_render_bundled_component_sources_rewrites_ref_from_build_env(
     rendered = yaml.safe_load(module._render_bundled_component_sources(catalog))
 
     assert rendered["infra"]["tf_modules"][0]["source"].endswith("?ref=feature/test-portable-catalog")
+
+
+def test_render_bundled_component_sources_prefers_release_ref_over_cli_ref(
+    monkeypatch, tmp_path: Path
+) -> None:
+    module = _load_setup_module(monkeypatch)
+    catalog = tmp_path / "component_sources.release.yaml"
+    _write_catalog(
+        catalog,
+        "git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mk8s?ref=main",
+    )
+    monkeypatch.setenv("NEBIUS_CXCLI_REF", "feature/test-portable-catalog")
+    monkeypatch.setenv("RELEASE_REF", "deadbeefcafebabe")
+
+    rendered = yaml.safe_load(module._render_bundled_component_sources(catalog))
+
+    assert rendered["infra"]["tf_modules"][0]["source"].endswith("?ref=deadbeefcafebabe")
 
 
 def test_select_bundled_component_sources_falls_back_when_root_catalog_is_local_path(

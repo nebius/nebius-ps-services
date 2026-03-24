@@ -749,6 +749,7 @@ python -m nebius_cxcli auth --help
 
 Test suite focus:
 
+- `tests/test_setup_build.py` isolates ambient CI build env vars so setup/build source-selection and ref-rewrite behavior are verified deterministically.
 - `tests/test_cli.py` and `tests/test_cli_command_coverage.py` cover the command contract, including `bootstrap-ci`, render-profile behavior, and generated-bundle validation paths.
 - `tests/test_component_sources.py` covers source-catalog loading and `validate-sources` registry validation rules.
 - `tests/test_github_secrets.py` covers GitHub repo/environment secret helper routing and environment-secret upsert orchestration.

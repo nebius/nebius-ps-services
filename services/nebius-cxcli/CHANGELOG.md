@@ -6,6 +6,8 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Hardened `tests/test_setup_build.py` against ambient GitHub Actions build env leakage so setup/build source-selection and release-ref rewrite tests stay deterministic in CI.
+
 ## [nebius-cxcli-v0.1.7] - 2026-03-23
 
 - Removed the standalone `nebius` CLI dependency from MK8s kubeconfig handoff and token retrieval; `deploy`, `flux apply`, `flux bootstrap`, and generated customer workflows now use Nebius SDK-backed exec kubeconfig entries through `nebius-cxcli` itself.

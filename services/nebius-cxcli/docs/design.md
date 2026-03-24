@@ -613,3 +613,4 @@ Primary automated test ownership:
 - `tests/test_cli.py` and `tests/test_cli_command_coverage.py`: CLI command contract and workflow-generation behavior.
 - `tests/test_component_sources.py`: component source precedence and validation rules, including `validate-sources` registry checks.
 - `tests/test_github_secrets.py`: GitHub repo/environment secret helper behavior, including environment creation and environment-secret upsert orchestration.
+- `tests/test_setup_build.py`: setup/build packaging contract, with CI build env isolated so source selection and release-ref rewrite precedence stay deterministic under GitHub Actions.
