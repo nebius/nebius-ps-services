@@ -362,6 +362,17 @@ Global default under `defaults.routing.mode`; override per connection/tunnel.
 
 **Static mode:** Used for VPC route management and included in leftsubnet selectors
 
+### Nebius Managed Kubernetes Notes
+
+For a typical Nebius Managed Kubernetes deployment, use the stable worker-subnet CIDR in `gateway.local_prefixes`, not the current per-node Pod CIDRs.
+
+- Worker nodes and Pod IPs commonly share the same Nebius VPC subnet CIDR; the per-node Pod `/24`s are dynamic allocator artifacts, not a stable routing contract.
+- `add-routes-local` operates at the subnet route-table layer. Pods do not need custom routes if the worker subnet is selected by overlap with `gateway.local_prefixes`.
+- `ClusterIP` remains a cluster-internal virtual IP. Even if service VIPs fall inside the same advertised subnet, remote networks should not use `ClusterIP` over VPN.
+- Current Nebius MK8s clusters commonly use Cilium with `routing-mode: native`, `enable-endpoint-routes: true`, and `kube-proxy-replacement: true`.
+- Cilium commonly exempts private destinations in `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, and `169.254.0.0/16` from masquerading. For those destinations, remote peers may see Pod IPs as the source and must route/allow the cluster subnet accordingly.
+- For stable remote consumption, use Pod IPs directly or expose services through a routable frontend (`NodePort`, `LoadBalancer`, or Ingress/Gateway), not `ClusterIP`.
+
 ### Remote Prefixes
 
 `connection.remote_prefixes` has different semantics depending on routing mode:
@@ -587,7 +598,7 @@ The configuration fields `local_prefixes` and `remote_prefixes` have different m
 - `bgpd` daemon for BGP routing
 - Runs over XFRM interfaces using APIPA inner IPs
 - Configurable timers with a baseline 3:1 ratio (hold time = 3 × keepalive)
-- Optional BFD for sub-second failure detection (disabled by default; requires peer support)
+- Optional BFD for sub-second failure detection (disabled by default; peer support is vendor/platform specific)
 - Graceful restart is optional; disable for faster withdrawal if needed
 - Install policy: use FRR 10.x from the official repo without pinning a single build (repo rotations can remove older builds). Apply performs a fallback install if FRR is missing.
 
@@ -595,6 +606,7 @@ The configuration fields `local_prefixes` and `remote_prefixes` have different m
 
 - **3:1 baseline:** `hold_time = 3 × keepalive`, `dpd_timeout = 3 × dpd_interval`
 - **Faster convergence:** Enable BFD instead of pushing BGP timers too low
+- **Vendor check first:** BFD support and timer floors vary by peer; verify the peer docs before enabling it
 - **Routing-first failover:** Keep BGP hold shorter than DPD timeout so routes withdraw before IPsec cleanup
 - **Noisy links:** Increase timers if you see route flapping from transient loss
 
@@ -928,7 +940,7 @@ If GCP still shows both routes with same priority:
 
 **Design rule:** Keep `BGP hold < DPD timeout` so routes withdraw before IPsec cleanup.
 
-**BFD compatibility:** Enabling BFD on the Nebius side is safe; if the peer does not support BFD, the session stays down and BGP falls back to its timers. If the peer supports BFD and it is enabled on both sides, BFD becomes the fast failure detector.
+**BFD compatibility:** Treat BFD as an explicit peer capability, not a generic BGP feature. Enable it only when the peer vendor/platform docs say BFD is supported for that specific VPN/BGP workflow and the negotiated timers are compatible.
 
 ### Manual Failover (CLI)
 
@@ -1795,12 +1807,13 @@ nebius-vpngw apply --local-config-file test.config.yaml
 - `publish-release.sh` is the local helper for this service.
 - `vpngw-ci.yml` is reserved for pull requests and manual CI runs.
 - `vpngw-release.yml` is the dedicated tag-driven release workflow for `nebius-vpngw-v*`.
+- Source/editable checkouts resolve runtime version from live `setuptools-scm` git state instead of trusting a generated `_version.py` cache.
 
 Release sequence:
 
 1. Run `./publish-release.sh --prep X.Y.Z` on your working branch to update `CHANGELOG.md`, commit it, and push the branch.
 2. Merge the release preparation PR into `main`.
-3. Run `./publish-release.sh --publish X.Y.Z` from a clean, synced `main`.
+3. Run `./publish-release.sh --publish X.Y.Z` from a clean, synced `main`; the script verifies that the tagged source checkout resolves `nebius_vpngw.__version__ == X.Y.Z` before it pushes the tag.
 4. The pushed tag triggers `vpngw-release.yml`, which checks out the tagged commit from `services/vpngw`, runs lint/tests, builds the wheel, verifies the artifact version, and creates the GitHub Release.
 
 The local publish script does not build or upload release artifacts itself. Its job is only to create and push the annotated service tag.

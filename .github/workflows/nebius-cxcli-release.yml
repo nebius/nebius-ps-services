@@ -78,31 +78,16 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
-        if: steps.state.outputs.release_exists == 'false'
-        run: |
-          set -euo pipefail
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-
-      - name: Lint
-        if: steps.state.outputs.release_exists == 'false'
-        run: python -m ruff check src tests
-
-      - name: Test
-        if: steps.state.outputs.release_exists == 'false'
-        run: python -m pytest -q
-
-      - name: Build artifact
+      - name: Verify service with local make contract
         if: steps.state.outputs.release_exists == 'false'
         env:
           RELEASE_REF: ${{ steps.version.outputs.tag }}
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
           NEBIUS_CXCLI_BUILD_COMPONENT_SOURCES_FILE: component_sources.release.yaml
+          SETUPTOOLS_SCM_PRETEND_VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          rm -rf build dist
-          SETUPTOOLS_SCM_PRETEND_VERSION="${RELEASE_VERSION}" python -m build --wheel
+          make all
 
       - name: Resolve and verify release assets
         if: steps.state.outputs.release_exists == 'false'

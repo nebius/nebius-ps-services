@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import atexit
+import base64
 import copy
 import getpass
 import json
@@ -21,6 +22,7 @@ from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import ExitStack, suppress
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any
@@ -135,6 +137,7 @@ from .runtime_introspection import (
     module_variable_names,
     module_variables,
 )
+from .sdk_auth import init_nebius_sdk
 from .templates import customer_workflow_yaml, default_cli_ref
 from .terraform_backend import (
     TerraformStateLockInfo,
@@ -154,6 +157,12 @@ from .terraform_ops import (
 from .terraform_provider import build_provider_module_name
 
 console = Console()
+
+
+def _console_is_terminal() -> bool:
+    return bool(console.is_terminal)
+
+
 DEFAULT_REGION_ID = "eu-north1"
 SUPPORTED_REGION_IDS: tuple[str, ...] = (
     "eu-north1",
@@ -4450,54 +4459,15 @@ def _enabled_cluster_handoffs(config: Any) -> list[dict[str, str]]:
     return handoffs
 
 
-def _run_command_for_cluster_handoff(
-    cmd: list[str],
-    *,
-    env: dict[str, str],
-    timeout: int,
-    failure_context: str,
-) -> None:
-    def _meaningful_lines(text: str) -> list[str]:
-        ignored_prefixes = (
-            "token from nebius_iam_token env is used",
-        )
-        lines: list[str] = []
-        for raw_line in text.splitlines():
-            line = raw_line.strip()
-            if not line:
-                continue
-            normalized = line.lower()
-            if any(normalized.startswith(prefix) for prefix in ignored_prefixes):
-                continue
-            lines.append(line)
-        return lines
-
-    try:
-        completed = subprocess.run(
-            cmd,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=True,
-        )
-    except subprocess.CalledProcessError as exc:
-        detail_lines = _meaningful_lines(exc.stderr or "")
-        if not detail_lines:
-            detail_lines = _meaningful_lines(exc.stdout or "")
-        detail = detail_lines[0] if detail_lines else ""
-        message = failure_context
-        if detail:
-            message = f"{message}: {detail}"
-        raise RuntimeError(message) from exc
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(f"{failure_context}: command timed out after {timeout} seconds") from exc
-
-    meaningful_stderr_lines = _meaningful_lines(completed.stderr or "")
-    if meaningful_stderr_lines:
-        sys.stderr.write("\n".join(meaningful_stderr_lines))
-        if not meaningful_stderr_lines[-1].endswith("\n"):
-            sys.stderr.write("\n")
+@dataclass(frozen=True)
+class _Mk8sKubeconfigSpec:
+    cluster_entry_name: str
+    user_entry_name: str
+    context_name: str
+    server: str
+    ca_pem: str
+    exec_command: str
+    exec_args: tuple[str, ...]
 
 
 def _truthy_env_flag(name: str) -> bool:
@@ -4513,12 +4483,196 @@ def _should_persist_local_kubeconfig() -> bool:
     return True
 
 
-def _persist_cluster_handoff_kubeconfig(
+def _runtime_auth_env_available() -> bool:
+    if _non_empty_text(os.environ.get("NEBIUS_AUTH_CREDENTIALS_FILE")):
+        return True
+    if _non_empty_text(os.environ.get("NEBIUS_IAM_TOKEN")):
+        return True
+    return all(
+        _non_empty_text(os.environ.get(name))
+        for name in (
+            "NEBIUS_SA_ID",
+            "NEBIUS_AUTH_PUBLIC_KEY_ID",
+            "NEBIUS_AUTH_PRIVATE_KEY_FILE",
+        )
+    )
+
+
+def _iso8601_utc(value: object | None) -> str | None:
+    if not isinstance(value, datetime):
+        return None
+    timestamp = value.astimezone(UTC)
+    return timestamp.isoformat().replace("+00:00", "Z")
+
+
+def _normalize_kube_server(endpoint: str) -> str:
+    normalized = _non_empty_text(endpoint)
+    if not normalized:
+        return ""
+    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", normalized):
+        return normalized
+    return f"https://{normalized}"
+
+
+def _mk8s_token_exec_command(
+    *,
+    project_id: str,
+    client_name: str,
+    endpoint: str | None,
+) -> tuple[str, tuple[str, ...]]:
+    args = ["mk8s-token"]
+    if project_id:
+        args.extend(["--project-id", project_id])
+    if client_name:
+        args.extend(["--client-name", client_name])
+    if endpoint:
+        args.extend(["--endpoint", endpoint])
+    cli_path = shutil.which("nebius-cxcli")
+    if cli_path:
+        return cli_path, tuple(args)
+    return sys.executable, ("-m", "nebius_cxcli", *args)
+
+
+def _mk8s_kubeconfig_payload(spec: _Mk8sKubeconfigSpec) -> dict[str, Any]:
+    ca_data = base64.b64encode(spec.ca_pem.encode("utf-8")).decode("ascii")
+    return {
+        "apiVersion": "v1",
+        "kind": "Config",
+        "preferences": {},
+        "clusters": [
+            {
+                "name": spec.cluster_entry_name,
+                "cluster": {
+                    "server": spec.server,
+                    "certificate-authority-data": ca_data,
+                },
+            }
+        ],
+        "users": [
+            {
+                "name": spec.user_entry_name,
+                "user": {
+                    "exec": {
+                        "apiVersion": "client.authentication.k8s.io/v1",
+                        "command": spec.exec_command,
+                        "args": list(spec.exec_args),
+                        "interactiveMode": "Never",
+                        "provideClusterInfo": False,
+                    }
+                },
+            }
+        ],
+        "contexts": [
+            {
+                "name": spec.context_name,
+                "context": {
+                    "cluster": spec.cluster_entry_name,
+                    "user": spec.user_entry_name,
+                },
+            }
+        ],
+        "current-context": spec.context_name,
+    }
+
+
+def _write_kubeconfig_file(path: Path, spec: _Mk8sKubeconfigSpec) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        yaml.safe_dump(_mk8s_kubeconfig_payload(spec), sort_keys=False),
+        encoding="utf-8",
+    )
+
+
+def _upsert_named_kubeconfig_entry(
+    items: object,
+    *,
+    entry_name: str,
+    replacement: dict[str, Any],
+) -> list[Any]:
+    rendered = list(items) if isinstance(items, list) else []
+    kept = [
+        item
+        for item in rendered
+        if not (
+            isinstance(item, dict) and _non_empty_text(item.get("name")) == entry_name
+        )
+    ]
+    kept.append(replacement)
+    return kept
+
+
+def _mk8s_cluster_handoff_spec(
+    config: Any,
     *,
     cluster_id: str,
     access: str,
-    profile_name: str | None = None,
-    profile_env: dict[str, str] | None = None,
+) -> _Mk8sKubeconfigSpec:
+    try:
+        from nebius.api.nebius.mk8s.v1 import ClusterServiceClient, GetClusterRequest
+    except Exception as exc:  # pragma: no cover - import guard
+        raise RuntimeError(
+            "Nebius mk8s SDK bindings are required for cluster handoff kubeconfig generation."
+        ) from exc
+
+    project_id = str(config.client_info.nebius.project_id).strip()
+    client_name = str(config.client_info.client_name).strip()
+    endpoint_override = _non_empty_text(os.environ.get("NEBIUS_ENDPOINT")) or None
+    sdk = init_nebius_sdk(
+        parent_id=project_id or None,
+        endpoint=endpoint_override,
+        context="MK8s cluster handoff",
+    )
+    try:
+        cluster = ClusterServiceClient(sdk).get(GetClusterRequest(id=cluster_id)).wait()
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to resolve MK8s cluster '{cluster_id}' for cluster handoff kubeconfig generation."
+        ) from exc
+    finally:
+        with suppress(Exception):
+            sdk.sync_close()
+
+    metadata = getattr(cluster, "metadata", None)
+    status = getattr(cluster, "status", None)
+    cluster_name = _non_empty_text(getattr(metadata, "name", None)) or cluster_id
+    control_plane = getattr(status, "control_plane", None)
+    endpoints = getattr(control_plane, "endpoints", None)
+    auth = getattr(control_plane, "auth", None)
+    endpoint_field = "public_endpoint" if access == "external" else "private_endpoint"
+    endpoint_value = _non_empty_text(getattr(endpoints, endpoint_field, None))
+    if not endpoint_value:
+        raise RuntimeError(
+            f"MK8s cluster '{cluster_name}' does not expose a usable {access} endpoint yet."
+        )
+    ca_pem = _non_empty_text(getattr(auth, "cluster_ca_certificate", None))
+    if not ca_pem:
+        raise RuntimeError(
+            f"MK8s cluster '{cluster_name}' did not return a cluster CA certificate for handoff."
+        )
+
+    cluster_name_token = _runtime_auth_cache_segment(cluster_name, fallback="cluster")
+    cluster_id_token = _runtime_auth_cache_segment(cluster_id, fallback="cluster-id")
+    access_token = _runtime_auth_cache_segment(access, fallback="access")
+    entry_base = f"nebius-{cluster_name_token}-{cluster_id_token}-{access_token}"
+    exec_command, exec_args = _mk8s_token_exec_command(
+        project_id=project_id,
+        client_name=client_name,
+        endpoint=endpoint_override,
+    )
+    return _Mk8sKubeconfigSpec(
+        cluster_entry_name=f"{entry_base}-cluster",
+        user_entry_name=f"{entry_base}-user",
+        context_name=entry_base,
+        server=_normalize_kube_server(endpoint_value),
+        ca_pem=ca_pem,
+        exec_command=exec_command,
+        exec_args=exec_args,
+    )
+
+
+def _persist_cluster_handoff_kubeconfig(
+    *,
+    spec: _Mk8sKubeconfigSpec,
 ) -> Path | None:
     if not _should_persist_local_kubeconfig():
         return None
@@ -4526,35 +4680,44 @@ def _persist_cluster_handoff_kubeconfig(
     local_kubeconfig = Path.home().expanduser() / ".kube" / "config"
     local_kubeconfig.parent.mkdir(parents=True, exist_ok=True)
 
-    persist_env = os.environ.copy()
-    persist_env["HOME"] = str(Path.home().expanduser())
-    if profile_env and profile_env.get("XDG_CONFIG_HOME"):
-        persist_env["XDG_CONFIG_HOME"] = str(profile_env["XDG_CONFIG_HOME"])
-
-    cmd = [
-        "nebius",
-        "mk8s",
-        "cluster",
-        "get-credentials",
-        "--id",
-        cluster_id,
-        f"--{access}",
-        "--force",
-        "--kubeconfig",
-        str(local_kubeconfig),
-    ]
-    if profile_name:
-        cmd.extend(["--profile", profile_name])
-
     try:
-        _run_command_for_cluster_handoff(
-            cmd,
-            env=persist_env,
-            timeout=180,
-            failure_context=(
-                "Failed to update local kubeconfig at "
-                f"{local_kubeconfig} from the declared cluster handoff"
-            ),
+        if local_kubeconfig.exists():
+            loaded = yaml.safe_load(local_kubeconfig.read_text(encoding="utf-8"))
+            if loaded is None:
+                payload: dict[str, Any] = {}
+            elif isinstance(loaded, dict):
+                payload = copy.deepcopy(loaded)
+            else:
+                raise RuntimeError(
+                    f"Existing kubeconfig at {local_kubeconfig} is not a YAML mapping."
+                )
+        else:
+            payload = {}
+
+        rendered = _mk8s_kubeconfig_payload(spec)
+        payload["apiVersion"] = "v1"
+        payload["kind"] = "Config"
+        if not isinstance(payload.get("preferences"), dict):
+            payload["preferences"] = {}
+        payload["clusters"] = _upsert_named_kubeconfig_entry(
+            payload.get("clusters"),
+            entry_name=spec.cluster_entry_name,
+            replacement=rendered["clusters"][0],
+        )
+        payload["users"] = _upsert_named_kubeconfig_entry(
+            payload.get("users"),
+            entry_name=spec.user_entry_name,
+            replacement=rendered["users"][0],
+        )
+        payload["contexts"] = _upsert_named_kubeconfig_entry(
+            payload.get("contexts"),
+            entry_name=spec.context_name,
+            replacement=rendered["contexts"][0],
+        )
+        payload["current-context"] = spec.context_name
+        local_kubeconfig.write_text(
+            yaml.safe_dump(payload, sort_keys=False),
+            encoding="utf-8",
         )
     except Exception as exc:
         console.print(f"[yellow]WARNING:[/yellow] {exc}")
@@ -4584,12 +4747,6 @@ def _prepare_cluster_handoff_kube_env(
             f"{component_ids}. Enable only one cluster handoff source before running this command."
         )
     handoff = handoffs[0]
-    if not shutil.which("nebius"):
-        raise RuntimeError(
-            "nebius CLI is required when the config includes enabled apps charts "
-            "and a handoff-capable infra component. Install Nebius CLI or configure "
-            "kubeconfig manually before rerunning."
-        )
 
     cluster_id = terraform_output_raw(
         paths.infra_dir,
@@ -4602,123 +4759,20 @@ def _prepare_cluster_handoff_kube_env(
             "the cluster ID required for kubeconfig handoff before applying Flux manifests."
         )
 
-    kube_root = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="nebius-cxcli-kube-")))
-    kubeconfig_path = kube_root / "config"
-
-    direct_env = os.environ.copy()
-    direct_env["KUBECONFIG"] = str(kubeconfig_path)
-    direct_attempt = subprocess.run(
-        [
-            "nebius",
-            "mk8s",
-            "cluster",
-            "get-credentials",
-            "--id",
-            cluster_id,
-            f"--{handoff['access']}",
-            "--force",
-            "--kubeconfig",
-            str(kubeconfig_path),
-        ],
-        env=direct_env,
-        capture_output=True,
-        text=True,
-        timeout=180,
-    )
-    if direct_attempt.returncode == 0:
-        _persist_cluster_handoff_kubeconfig(
-            cluster_id=cluster_id,
-            access=handoff["access"],
-        )
-        return {"KUBECONFIG": str(kubeconfig_path)}
-
-    service_account_id = os.environ.get("NEBIUS_SA_ID", "").strip()
-    auth_public_key_id = os.environ.get("NEBIUS_AUTH_PUBLIC_KEY_ID", "").strip()
-    private_key_file = os.environ.get("NEBIUS_AUTH_PRIVATE_KEY_FILE", "").strip()
-    if not (service_account_id and auth_public_key_id and private_key_file):
-        detail = _first_non_empty_line(direct_attempt.stderr or direct_attempt.stdout or "")
-        message = (
-            "Unable to configure kubeconfig from the declared cluster handoff. "
-            "The direct `nebius mk8s cluster get-credentials` attempt failed, and runtime auth "
-            "service-account values are not available to create a temporary Nebius CLI profile. "
-            "Run `nebius auth login`, or rerun with runtime auth material available "
-            "(for example `--auto-auth-bootstrap`)."
-        )
-        if detail:
-            message = f"{message} Failure detail: {detail}"
-        raise RuntimeError(message)
-
-    profile_root = Path(
-        stack.enter_context(tempfile.TemporaryDirectory(prefix="nebius-cxcli-nebius-profile-"))
-    )
-    xdg_config_home = profile_root / ".config"
-    xdg_config_home.mkdir(parents=True, exist_ok=True)
-    profile_env = os.environ.copy()
-    profile_env.update(
-        {
-            "HOME": str(profile_root),
-            "XDG_CONFIG_HOME": str(xdg_config_home),
-            "KUBECONFIG": str(kubeconfig_path),
-        }
-    )
-    endpoint = os.environ.get("NEBIUS_ENDPOINT", "").strip() or "api.nebius.cloud"
-    project_id = str(config.client_info.nebius.project_id).strip()
-    profile_name = f"cxcli-{int(time.time())}"
-    _run_command_for_cluster_handoff(
-        [
-            "nebius",
-            "profile",
-            "create",
-            "--profile",
-            profile_name,
-            "--endpoint",
-            endpoint,
-            "--service-account-id",
-            service_account_id,
-            "--public-key-id",
-            auth_public_key_id,
-            "--private-key-file",
-            private_key_file,
-            "--parent-id",
-            project_id,
-        ],
-        env=profile_env,
-        timeout=180,
-        failure_context="Failed to create temporary Nebius CLI profile for cluster handoff",
-    )
-    _run_command_for_cluster_handoff(
-        [
-            "nebius",
-            "mk8s",
-            "cluster",
-            "get-credentials",
-            "--id",
-            cluster_id,
-            f"--{handoff['access']}",
-            "--force",
-            "--kubeconfig",
-            str(kubeconfig_path),
-            "--profile",
-            profile_name,
-        ],
-        env=profile_env,
-        timeout=180,
-        failure_context=(
-            f"Failed to configure kubeconfig from Terraform output `{handoff['cluster_id_output_name']}` "
-            "for cluster handoff"
-        ),
-    )
-    _persist_cluster_handoff_kubeconfig(
+    if not _runtime_auth_env_available():
+        project_id = str(config.client_info.nebius.project_id).strip()
+        client_name = str(config.client_info.client_name).strip()
+        _runtime_auth_cache_load(project_id=project_id, client_name=client_name)
+    spec = _mk8s_cluster_handoff_spec(
+        config,
         cluster_id=cluster_id,
         access=handoff["access"],
-        profile_name=profile_name,
-        profile_env=profile_env,
     )
-    return {
-        "HOME": str(profile_root),
-        "XDG_CONFIG_HOME": str(xdg_config_home),
-        "KUBECONFIG": str(kubeconfig_path),
-    }
+    kube_root = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="nebius-cxcli-kube-")))
+    kubeconfig_path = kube_root / "config"
+    _write_kubeconfig_file(kubeconfig_path, spec)
+    _persist_cluster_handoff_kubeconfig(spec=spec)
+    return {"KUBECONFIG": str(kubeconfig_path)}
 
 
 def _apply_rendered_flux(paths: InstancePaths, *, extra_env: dict[str, str] | None = None) -> None:
@@ -4728,61 +4782,77 @@ def _apply_rendered_flux(paths: InstancePaths, *, extra_env: dict[str, str] | No
     env = os.environ.copy()
     if extra_env:
         env.update(extra_env)
+    with console.status(
+        "[cyan]Preparing Flux deployment...[/cyan]",
+        spinner="dots",
+    ) as status:
+        last_phase = ""
 
-    cluster_check = subprocess.run(
-        ["kubectl", "cluster-info"],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    if cluster_check.returncode != 0:
-        detail = _first_non_empty_line(cluster_check.stderr or cluster_check.stdout or "")
-        message = "kubectl could not reach the target Kubernetes cluster for local deploy"
-        if detail:
-            message = f"{message}: {detail}"
-        raise RuntimeError(message)
+        def _set_phase(message: str) -> None:
+            nonlocal last_phase
+            status.update(message)
+            if not _console_is_terminal() and message != last_phase:
+                console.print(message)
+            last_phase = message
 
-    flux_installed = flux_controllers_installed(extra_env=extra_env) and flux_crds_installed(
-        extra_env=extra_env
-    )
-    if not flux_installed:
-        manifest_url = install_flux_controllers(extra_env=extra_env)
-        console.print(
-            "Installed Flux controllers in the target cluster from "
-            f"{manifest_url}"
-        )
-    with tempfile.TemporaryDirectory(prefix="nebius-cxcli-kubectl-") as cache_dir:
-        cache_path = Path(cache_dir)
-        wait_for_flux_resource_apis(paths, extra_env=extra_env, cache_dir=cache_path)
-
-        # Local deploy mode does not require a Git repository; apply generated manifests directly.
-        completed = subprocess.run(
-            ["kubectl", "--cache-dir", str(cache_path), "apply", "-k", str(paths.flux_dir)],
+        _set_phase("[cyan]Checking target Kubernetes cluster reachability...[/cyan]")
+        cluster_check = subprocess.run(
+            ["kubectl", "cluster-info"],
             env=env,
-            timeout=1800,
             capture_output=True,
             text=True,
+            timeout=60,
         )
-        stdout = _filter_benign_kubectl_output(completed.stdout or "")
-        stderr = _filter_benign_kubectl_output(completed.stderr or "")
-        if stdout:
-            sys.stdout.write(stdout + ("\n" if not stdout.endswith("\n") else ""))
-        if stderr:
-            sys.stderr.write(stderr + ("\n" if not stderr.endswith("\n") else ""))
-        if completed.returncode != 0:
-            raise subprocess.CalledProcessError(
-                completed.returncode,
-                ["kubectl", "--cache-dir", str(cache_path), "apply", "-k", str(paths.flux_dir)],
-                output=stdout,
-                stderr=stderr,
+        if cluster_check.returncode != 0:
+            detail = _first_non_empty_line(cluster_check.stderr or cluster_check.stdout or "")
+            message = "kubectl could not reach the target Kubernetes cluster for local deploy"
+            if detail:
+                message = f"{message}: {detail}"
+            raise RuntimeError(message)
+
+        flux_installed = flux_controllers_installed(extra_env=extra_env) and flux_crds_installed(
+            extra_env=extra_env
+        )
+        if not flux_installed:
+            _set_phase("[cyan]Installing Flux controllers into the target cluster...[/cyan]")
+            manifest_url = install_flux_controllers(extra_env=extra_env)
+            console.print(
+                "Installed Flux controllers in the target cluster from "
+                f"{manifest_url}"
             )
-    console.print("Waiting for rendered Flux resources to become Ready.")
-    wait_for_rendered_flux_resources(
-        paths,
-        extra_env=extra_env,
-        emit=lambda message: console.print(message),
-    )
+        with tempfile.TemporaryDirectory(prefix="nebius-cxcli-kubectl-") as cache_dir:
+            cache_path = Path(cache_dir)
+            _set_phase("[cyan]Waiting for Flux resource APIs to become discoverable...[/cyan]")
+            wait_for_flux_resource_apis(paths, extra_env=extra_env, cache_dir=cache_path)
+
+            # Local deploy mode does not require a Git repository; apply generated manifests directly.
+            _set_phase("[cyan]Applying rendered Flux manifests to the target cluster...[/cyan]")
+            completed = subprocess.run(
+                ["kubectl", "--cache-dir", str(cache_path), "apply", "-k", str(paths.flux_dir)],
+                env=env,
+                timeout=1800,
+                capture_output=True,
+                text=True,
+            )
+            stdout = _filter_benign_kubectl_output(completed.stdout or "")
+            stderr = _filter_benign_kubectl_output(completed.stderr or "")
+            if stdout:
+                sys.stdout.write(stdout + ("\n" if not stdout.endswith("\n") else ""))
+            if stderr:
+                sys.stderr.write(stderr + ("\n" if not stderr.endswith("\n") else ""))
+            if completed.returncode != 0:
+                raise subprocess.CalledProcessError(
+                    completed.returncode,
+                    ["kubectl", "--cache-dir", str(cache_path), "apply", "-k", str(paths.flux_dir)],
+                    output=stdout,
+                    stderr=stderr,
+                )
+        _set_phase("[cyan]Waiting for rendered Flux resources to become Ready...[/cyan]")
+        wait_for_rendered_flux_resources(
+            paths,
+            extra_env=extra_env,
+            emit=lambda message: console.print(message),
+        )
 
 
 def _node_readiness_summary(*, extra_env: dict[str, str]) -> tuple[bool, str]:
@@ -4857,12 +4927,20 @@ def _wait_for_cluster_nodes_ready(
     if not extra_env or not extra_env.get("KUBECONFIG"):
         return
 
-    emit("Waiting for target Kubernetes nodes to become Ready before Flux deployment.")
     started_at = time.monotonic()
-    last_summary = ""
-    last_emit_at = 0.0
+    ready, summary = _node_readiness_summary(extra_env=extra_env)
+    initial_message = f"[bold white]Kubernetes[/bold white] [dim][0s][/dim] {escape(summary)}"
+    if ready:
+        emit(f"{initial_message}; already Ready, continuing with Flux deployment.")
+        return
+
+    emit("Target Kubernetes nodes are not Ready yet; waiting before Flux deployment.")
+    emit(initial_message)
+    last_summary = summary
+    last_emit_at = started_at
     repeat_interval_seconds = 60.0
     while True:
+        time.sleep(poll_interval_seconds)
         ready, summary = _node_readiness_summary(extra_env=extra_env)
         elapsed = int(max(0.0, time.monotonic() - started_at))
         message = (
@@ -4881,7 +4959,6 @@ def _wait_for_cluster_nodes_ready(
                 "Target Kubernetes cluster nodes did not become Ready before Flux deployment. "
                 f"Last known status: {summary}"
             )
-        time.sleep(poll_interval_seconds)
 
 
 def _deploy_generated_artifacts(
@@ -6082,7 +6159,12 @@ def create_command(
 
 @app.command("bootstrap-ci")
 def bootstrap_ci_command(
-    config_path: Annotated[Path, typer.Argument(help="Path to instance config.yaml")],
+    config_path: Annotated[
+        Path,
+        typer.Argument(
+            help="Path to instance config.yaml inside the target customer git repository"
+        ),
+    ],
     auth_bootstrap: Annotated[
         bool,
         typer.Option(
@@ -6099,9 +6181,9 @@ def bootstrap_ci_command(
             "--github-repo",
             help=(
                 "Optional override for the target GitHub repository slug '<owner>/<repo>' "
-                "used for environment secret sync. When omitted, resolves from the target "
-                "repository origin remote; "
-                "valid only when --auth-bootstrap is enabled)"
+                "used for auth bootstrap and environment secret sync. Normally auto-detected "
+                "from the target repository origin remote; valid only when "
+                "--auth-bootstrap is enabled."
             ),
         ),
     ] = None,
@@ -6110,9 +6192,9 @@ def bootstrap_ci_command(
         typer.Option(
             "--github-token-env",
             help=(
-                "Environment variable name holding GitHub token for secret sync "
-                "(falls back to GH_TOKEN/GITHUB_TOKEN; "
-                "valid only when --auth-bootstrap is enabled)"
+                "Environment variable name holding the GitHub token used for auth bootstrap "
+                "and environment secret sync (falls back to GH_TOKEN/GITHUB_TOKEN; valid only "
+                "when --auth-bootstrap is enabled)."
             ),
         ),
     ] = "GH_TOKEN",
@@ -6128,7 +6210,7 @@ def bootstrap_ci_command(
         ),
     ] = None,
 ) -> None:
-    """Generate or reconcile the generated-artifact-only customer CI workflow and optionally bootstrap CI auth."""
+    """Generate or reconcile the CLI-managed customer GitHub workflow and optionally bootstrap CI auth."""
     try:
         if not auth_bootstrap and (github_repo is not None or github_token_env != "GH_TOKEN"):
             raise RuntimeError(
@@ -6400,7 +6482,7 @@ def auth_command(
     ] = None,
     profile: Annotated[
         str | None,
-        typer.Option("--profile", help="Nebius CLI profile name used by Nebius SDK"),
+        typer.Option("--profile", help="Nebius SDK config profile name"),
     ] = None,
     endpoint: Annotated[
         str | None,
@@ -6410,7 +6492,7 @@ def auth_command(
         Path | None,
         typer.Option(
             "--sdk-config-file",
-            help="Optional path to Nebius SDK/CLI config file",
+            help="Optional path to Nebius SDK config file",
         ),
     ] = None,
     github_repo: Annotated[
@@ -6669,6 +6751,55 @@ def render_command(
             console.print(f"Generated Terraform lock file: {paths.infra_dir / '.terraform.lock.hcl'}")
     except typer.Exit:
         raise
+    except Exception as exc:  # pragma: no cover - CLI surface
+        _exit_with_error(exc)
+
+
+@app.command("mk8s-token", hidden=True)
+def mk8s_token_command(
+    project_id: Annotated[
+        str | None,
+        typer.Option("--project-id", help="Project ID used to resolve cached runtime auth."),
+    ] = None,
+    client_name: Annotated[
+        str | None,
+        typer.Option("--client-name", help="Client name used to resolve cached runtime auth."),
+    ] = None,
+    endpoint: Annotated[
+        str | None,
+        typer.Option("--endpoint", help="Optional Nebius API endpoint override."),
+    ] = None,
+) -> None:
+    """Emit ExecCredential JSON for MK8s kubeconfig exec auth."""
+    try:
+        if not _runtime_auth_env_available() and project_id and client_name:
+            _runtime_auth_cache_load(project_id=project_id, client_name=client_name)
+        sdk = init_nebius_sdk(
+            parent_id=project_id or None,
+            endpoint=endpoint,
+            context="MK8s exec auth",
+        )
+        try:
+            token = sdk.get_token_sync(timeout=20.0)
+        finally:
+            with suppress(Exception):
+                sdk.sync_close()
+        token_value = _non_empty_text(getattr(token, "token", None))
+        if not token_value:
+            raise RuntimeError("Nebius SDK returned an empty IAM token for MK8s exec auth.")
+        status: dict[str, str] = {"token": token_value}
+        expiration = _iso8601_utc(getattr(token, "expiration", None))
+        if expiration:
+            status["expirationTimestamp"] = expiration
+        print(
+            json.dumps(
+                {
+                    "apiVersion": "client.authentication.k8s.io/v1",
+                    "kind": "ExecCredential",
+                    "status": status,
+                }
+            )
+        )
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 

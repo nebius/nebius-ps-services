@@ -3,34 +3,11 @@
 from __future__ import annotations
 
 import os
-import subprocess
 from pathlib import Path
 
 
 def _as_text(value: object) -> str:
     return str(value or "").strip()
-
-
-def ensure_nebius_iam_token_from_cli(*, timeout_seconds: int = 10) -> str | None:
-    """Load NEBIUS_IAM_TOKEN from Nebius CLI when it is not already set."""
-    existing = _as_text(os.environ.get("NEBIUS_IAM_TOKEN"))
-    if existing:
-        return existing
-    try:
-        completed = subprocess.run(
-            ["nebius", "iam", "get-access-token", "--format", "text"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-        )
-    except Exception:
-        return None
-    token = completed.stdout.strip()
-    if token:
-        os.environ["NEBIUS_IAM_TOKEN"] = token
-        return token
-    return None
 
 
 def init_nebius_sdk(
@@ -82,15 +59,13 @@ def init_nebius_sdk(
             kwargs["parent_id"] = parent_id
         return SDK(**kwargs)
 
-    ensure_nebius_iam_token_from_cli()
-
     try:
         from nebius.aio.cli_config import Config
     except Exception as exc:  # pragma: no cover - import guard
         raise RuntimeError(
             f"Failed to initialize Nebius SDK credentials for {context}. "
             "Provide NEBIUS_AUTH_CREDENTIALS_FILE, service-account key env values, "
-            "set NEBIUS_IAM_TOKEN, or run `nebius auth login`."
+            "set NEBIUS_IAM_TOKEN, or provide a Nebius SDK config/profile."
         ) from exc
 
     config_kwargs: dict[str, object] = {}
@@ -112,5 +87,5 @@ def init_nebius_sdk(
             f"Failed to initialize Nebius SDK credentials for {context}. "
             "Provide NEBIUS_AUTH_CREDENTIALS_FILE, runtime auth env vars "
             "(NEBIUS_SA_ID/NEBIUS_AUTH_PUBLIC_KEY_ID/NEBIUS_AUTH_PRIVATE_KEY_FILE), "
-            "set NEBIUS_IAM_TOKEN, or configure Nebius CLI with `nebius auth login`."
+            "set NEBIUS_IAM_TOKEN, or provide a Nebius SDK config/profile."
         ) from exc

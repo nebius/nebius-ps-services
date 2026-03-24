@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import importlib
 import os
-import subprocess
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+
+from .sdk_auth import init_nebius_sdk
 
 SUPPORTED_PROVIDER_OPTION_SOURCES = frozenset(
     {
@@ -161,7 +162,6 @@ class ProviderOptionLookup:
     def __init__(self) -> None:
         self._sdk: object | None = None
         self._sdk_failed = False
-        self._token_checked = False
         self._cache: dict[tuple[object, ...], tuple[OptionChoice, ...]] = {}
 
     def resolve(
@@ -224,7 +224,7 @@ class ProviderOptionLookup:
                 valid=False,
                 message=(
                     "Unable to initialize Nebius SDK. "
-                    "Run `nebius iam get-access-token --format text` and verify Nebius CLI auth/profile."
+                    "Provide Nebius SDK credentials via env vars, credentials file, or SDK config/profile."
                 ),
                 retryable=False,
             )
@@ -678,48 +678,18 @@ class ProviderOptionLookup:
         if self._sdk is not None:
             return self._sdk
 
-        self._ensure_runtime_token()
-        try:
-            from nebius.aio.cli_config import Config
-            from nebius.sdk import SDK
-        except Exception:
-            self._sdk_failed = True
-            return None
-
-        config_kwargs: dict[str, object] = {}
         sdk_config_file = os.environ.get("NEBIUS_CXCLI_PROVIDER_SDK_CONFIG_FILE", "").strip()
-        if sdk_config_file:
-            config_kwargs["config_file"] = Path(sdk_config_file)
         sdk_profile = os.environ.get("NEBIUS_CXCLI_PROVIDER_AUTH_PROFILE", "").strip()
-        if sdk_profile:
-            config_kwargs["profile"] = sdk_profile
         sdk_endpoint = os.environ.get("NEBIUS_CXCLI_PROVIDER_AUTH_ENDPOINT", "").strip()
-        if sdk_endpoint:
-            config_kwargs["endpoint"] = sdk_endpoint
 
         try:
-            self._sdk = SDK(config_reader=Config(**config_kwargs))
+            self._sdk = init_nebius_sdk(
+                profile=sdk_profile or None,
+                endpoint=sdk_endpoint or None,
+                config_file=Path(sdk_config_file) if sdk_config_file else None,
+                context="provider option lookup",
+            )
             return self._sdk
         except Exception:
             self._sdk_failed = True
             return None
-
-    def _ensure_runtime_token(self) -> None:
-        if self._token_checked:
-            return
-        self._token_checked = True
-        if os.environ.get("NEBIUS_IAM_TOKEN", "").strip():
-            return
-        try:
-            completed = subprocess.run(
-                ["nebius", "iam", "get-access-token", "--format", "text"],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-        except Exception:
-            return
-        token = completed.stdout.strip()
-        if token:
-            os.environ["NEBIUS_IAM_TOKEN"] = token

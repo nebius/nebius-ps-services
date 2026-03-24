@@ -261,11 +261,40 @@ ensure_tag_absent() {
   fi
 }
 
+verify_runtime_version_matches_tag() {
+  local tag="$1"
+  local expected_version="${tag##*-v}"
+  local resolved_version=""
+
+  log_note "Verifying runtime version resolves to ${expected_version} on the local tag..."
+  if ! resolved_version="$(
+    PYTHONPATH="${SCRIPT_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}" python3 - "${expected_version}" <<'PY'
+import sys
+
+expected = sys.argv[1]
+
+from nebius_cxcli import __version__
+
+if __version__ != expected:
+    print(__version__, end="")
+    raise SystemExit(1)
+
+print(__version__, end="")
+PY
+  )"; then
+    log_error \
+      "Runtime version mismatch after tagging. Source checkout resolved to '${resolved_version:-unknown}' instead of '${expected_version}'."
+    exit 1
+  fi
+  log_success "Runtime version resolved to ${resolved_version}."
+}
+
 create_and_push_tag() {
   local tag="$1"
   ensure_release_heading_present "${tag}"
   ensure_tag_absent "${tag}"
   git tag -a "${tag}" -m "Release ${tag}"
+  verify_runtime_version_matches_tag "${tag}"
   git push origin "refs/tags/${tag}"
   log_success "Tag pushed: ${tag}"
   log_success "Release workflow will run from this tag push."

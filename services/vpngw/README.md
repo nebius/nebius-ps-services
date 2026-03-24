@@ -841,6 +841,17 @@ connections:
         inner_remote_ip: "169.254.10.2"
 ```
 
+### Nebius Managed Kubernetes
+
+For a typical Nebius Managed Kubernetes cluster, treat the stable worker-subnet CIDR as `gateway.local_prefixes`, not the current per-node Pod `/24`s.
+
+- Common pattern: worker nodes and Pod IPs come from the same Nebius VPC subnet CIDR; the current Pod CIDRs are node-assigned and can change.
+- Route model: `add-routes-local` updates the worker subnet route table so traffic for remote prefixes goes to the VPN gateway. Pods do not need custom routes.
+- ClusterIP: do not treat `ClusterIP` as a VPN target. It is a cluster-internal virtual IP, even if it falls inside the same routed subnet range.
+- Cilium defaults commonly seen on Nebius MK8s: `routing-mode: native`, `enable-endpoint-routes: true`, `kube-proxy-replacement: true`.
+- Cilium masquerade note: private destinations in `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, and `169.254.0.0/16` are commonly exempt from masquerading. For those prefixes, the remote side may see Pod IPs as the source, so return routing and firewall policy must allow the cluster subnet.
+- Stable remote access: use Pod IPs directly, or expose services with `NodePort`, `LoadBalancer`, or Ingress/Gateway. Do not rely on `ClusterIP` over VPN.
+
 ### Static Routing
 
 **Advantages:**
@@ -941,7 +952,7 @@ defaults:
         detect_multiplier: 3
 ```
 
-**BFD behavior:** If the peer does not support BFD, the BFD session stays down and BGP continues with normal timers. Enable BFD only when both sides support it.
+**BFD behavior:** BFD support is vendor-specific. The values above are FRR-side defaults, not cloud-vendor-safe defaults. Enable BFD only after confirming the peer platform supports BFD for this VPN type and that both sides use compatible timers. GCP HA VPN and Azure VPN Gateway S2S do not support BFD for BGP over VPN.
 
 ### BGP Troubleshooting
 
@@ -1692,7 +1703,7 @@ python -m ruff check src --fix
 
 ## Release & Versioning
 
-- Versions are derived from annotated Git tags (`nebius-vpngw-vMAJOR.MINOR.PATCH`) via `setuptools-scm`; no manual edits to `pyproject.toml` are needed. The generated version is written to `src/nebius_vpngw/_version.py` during build and surfaced via `nebius-vpngw --version`.
+- Versions are derived from annotated Git tags (`nebius-vpngw-vMAJOR.MINOR.PATCH`) via `setuptools-scm`; no manual edits to `pyproject.toml` are needed. Installed packages use published package metadata, while source/editable checkouts prefer live SCM state over a generated `_version.py` cache.
 - Semantic Versioning policy:
   - **MAJOR:** breaking changes (CLI flags removed/changed, behavior changes that could break scripts).
   - **MINOR:** backward-compatible features (new options, new Nebius resources supported).
@@ -1705,6 +1716,7 @@ python -m ruff check src --fix
 - `publish-release.sh` is the local release helper for this service.
 - `vpngw-ci.yml` is for PR validation and manual CI only; it does not run from `nebius-vpngw-v*` tags.
 - `vpngw-release.yml` is the dedicated release workflow for this service and is triggered only by `nebius-vpngw-v*` tags.
+- The local `publish-release.sh --publish X.Y.Z` flow creates the service tag locally and verifies that the tagged source checkout resolves `nebius_vpngw.__version__ == X.Y.Z` before it pushes the tag.
 - The release workflow checks out the tagged commit from `services/vpngw`, runs lint and tests, builds the wheel, verifies the wheel version matches the tag, and publishes the GitHub Release asset.
 
 ### Choosing the next SemVer

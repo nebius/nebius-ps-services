@@ -267,20 +267,12 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                   # required value_from_env variable in this step.
                   nebius-cxcli terraform apply "${{{{ matrix.generated }}}}"
 
-              - name: Install Nebius CLI
-                run: |
-                  set -euo pipefail
-                  curl -sSL https://storage.eu-north1.nebius.cloud/cli/install.sh | bash
-                  echo "${{{{ env.HOME }}}}/.nebius/bin" >> "$GITHUB_PATH"
-                  nebius version --full
-
               - name: Bootstrap/reconcile Flux
                 env:
                   GITHUB_TOKEN: ${{{{ secrets.FLUX_GITHUB_TOKEN }}}}
                   NEBIUS_SA_ID: ${{{{ secrets.NEBIUS_SA_ID }}}}
                   NEBIUS_AUTH_PUBLIC_KEY_ID: ${{{{ secrets.NEBIUS_AUTH_PUBLIC_KEY_ID }}}}
                   NEBIUS_AUTH_PRIVATE_KEY_PEM: ${{{{ secrets.NEBIUS_AUTH_PRIVATE_KEY_PEM }}}}
-                  NEBIUS_API_ENDPOINT: api.nebius.cloud:443
                 run: |
                   set -euo pipefail
                   nebius-cxcli flux bootstrap "${{{{ matrix.generated }}}}"

@@ -48,7 +48,7 @@ The current implementation is provider-driven and source-configured for Nebius e
 - Customer-side generated-bundle commands recreate ignored `generated/infra/terraform.auto.tfvars.json` from the committed manifest before Terraform runs, so deployable repos do not need to version that sensitive duplicate file.
 - `deploy`, `terraform plan/apply/unlock`, `flux apply/bootstrap`, `inventory write`, and `email` all operate on an existing generated bundle instead of reading `config.yaml`.
 - `terraform apply`, `flux apply`, and `deploy` are designed for sequential idempotent reruns against the same generated bundle.
-- `bootstrap-ci` generates CI workflow and can bootstrap/sync CI environment secrets.
+- `bootstrap-ci` generates or reconciles the customer CI workflow and, by default, bootstraps/syncs the required GitHub Environment secrets.
 - `discover` outputs deployment-instance discovery JSON with `config`, `generated`, `config_changed`, `generated_changed`, and `github_environment`.
 
 ## Runtime Metadata
@@ -286,7 +286,7 @@ Wizard field behavior:
 - Prompt labels include Terraform input type hints (for example `string`, `number`, `bool`) and `required` markers.
 - Source-backed infra `inputs.parent_id`/`inputs.project_id` default to `client_info.nebius.project_id` when those variables exist.
 - `component_sources.yaml` can declare top-level `shared` values and shared-derived `defaults` so components read shared values from the active source catalog instead of duplicating them under component `inputs` or chart `values`.
-- The bundled `mk8s` catalog entry defaults `inputs.mk8s_cluster_public_endpoint: true` because its handoff contract is `access: external`; that keeps local `deploy`/Flux handoff aligned with Nebius CLI `get-credentials --external`.
+- The bundled `mk8s` catalog entry defaults `inputs.mk8s_cluster_public_endpoint: true` because its handoff contract is `access: external`; that keeps local `deploy`/Flux handoff aligned with public-endpoint selection for external access.
 - The bundled `mk8s` catalog entry also defaults `inputs.kube_network_service_cidrs: ["/20"]`. Nebius treats an omitted MK8s service CIDR as `["/16"]`; on a single-pool `/16` subnet that can consume the whole pool and leave no address space for control-plane allocations, which looks like a long `PROVISIONING` stall.
 - Provider-backed option lists are inferred by field patterns and resolved live from Nebius APIs when available.
 - Current built-in provider option sources include:
@@ -434,8 +434,10 @@ Local `deploy`/`flux bootstrap` behavior when apps + a handoff-enabled cluster c
 - Remote state lock failures are called out separately: the CLI explains that Terraform never acquired the backend lock, so the run created nothing, and points at the stale `.tflock` object metadata when Terraform provides it.
 - When Nebius MK8s node-group status reports `ERROR` events, the merged status block includes those alerts. Known transient bootstrap warnings such as waiting for ProviderID registration or temporary `Ready=False` node conditions are shown as notes instead of alerts while the node group is still provisioning.
 - After apply, `deploy` reads the rendered Terraform output declared by `handoff.cluster_id` and configures a temporary kubeconfig before applying Flux manifests.
-- On non-CI local runs, that same cluster handoff also updates the user kubeconfig at `~/.kube/config`, so `kubectl` can be used against the target cluster after `deploy`, `flux apply`, or `flux bootstrap` without another manual `nebius mk8s cluster get-credentials` step.
-- Before `deploy`, `flux apply`, or `flux bootstrap` starts Flux work against a handed-off MK8s cluster, the CLI waits for Kubernetes nodes to become `Ready` so Terraform completion is not mistaken for workload readiness.
+- On non-CI local runs, that same cluster handoff also updates the user kubeconfig at `~/.kube/config` with a `nebius-cxcli` exec-based credential entry, so `kubectl` can be used against the target cluster after `deploy`, `flux apply`, or `flux bootstrap` without installing a separate Nebius CLI.
+- Before `deploy`, `flux apply`, or `flux bootstrap` starts Flux work against a handed-off MK8s cluster, the CLI first checks Kubernetes node readiness and only waits when the nodes are not `Ready` yet. When the cluster is already healthy, it proceeds to Flux work immediately instead of presenting that probe as a wait.
+- Once the cluster handoff is ready, the local Flux phase now keeps one continuous spinner alive and updates its message through cluster reachability, Flux API discovery, rendered manifest apply, and the final rendered-resource readiness wait so the command does not go visually idle between phases.
+- In non-interactive logs such as GitHub Actions, those same phase updates fall back to stable printed lines instead of transient spinner frames, so CI logs remain readable and do not depend on TTY animation support.
 - Generated Flux artifacts are treated as the deploy truth. If an app chart depends on Terraform-backed component outputs, you must rerender after the needed Terraform state exists before treating `generated/flux` as the final GitOps payload.
 - Flux render writes explicit Namespace manifests for chart target namespaces before namespaced `HelmRelease` resources, so local `kubectl apply -k generated/flux` does not fail with `namespaces "<name>" not found`.
 - Flux uses a split namespace model in this project: shared Flux control-plane and source objects such as `HelmRepository` / `GitRepository` typically live in `flux-system`, while the actual `HelmRelease` and workload pods live in their target app namespace. A workload namespace does not need its own dedicated source object unless it truly uses a different chart or repo source.
@@ -458,7 +460,7 @@ Local `deploy`/`flux bootstrap` behavior when apps + a handoff-enabled cluster c
 - `deploy` requires `kubectl`. It also requires `nebius` CLI when the generated bundle includes enabled charts and a `handoff`-enabled infra component.
 - `flux bootstrap` still needs network access to GitHub releases when the managed Flux CLI download path is used.
 - The managed Terraform download path needs network access to HashiCorp releases when Terraform is not already in `PATH`.
-- If your Nebius CLI is already logged in, `deploy` reuses that auth. Otherwise rerun with runtime auth material available, for example `--auto-auth-bootstrap`.
+- If your Nebius SDK config already has auth, `deploy` can reuse that SDK config. Otherwise rerun with runtime auth material available, for example `--auto-auth-bootstrap`.
 
 ## Releases
 
@@ -468,7 +470,9 @@ Use the release flow in three steps:
 2. Merge that branch to `main`.
 3. From a clean, synced `main`, create and push the release tag with `./publish-release.sh --publish X.Y.Z`.
 
-The publish step creates the annotated tag `nebius-cxcli-vX.Y.Z`. That tag triggers the repository workflow at `.github/workflows/nebius-cxcli-release.yml`, which rebuilds the wheel, verifies that the wheel version matches the tag, verifies that the bundled fallback `component_sources.yaml` is present inside the wheel, and publishes the GitHub Release from the tagged commit.
+The publish step creates the annotated tag `nebius-cxcli-vX.Y.Z`. That tag triggers the repository workflow at `.github/workflows/nebius-cxcli-release.yml`, which reruns the same local `make all` verification contract, verifies that the wheel version matches the tag, verifies that the bundled fallback `component_sources.yaml` is present inside the wheel, and publishes the GitHub Release from the tagged commit.
+
+In source/editable checkouts, runtime version resolution prefers live `setuptools-scm` git state over a generated `_version.py` cache. The local `./publish-release.sh --publish X.Y.Z` flow also verifies that the tagged source checkout resolves `nebius-cxcli.__version__ == X.Y.Z` before it pushes the release tag.
 
 Release assets for `nebius-cxcli` now include:
 
@@ -548,17 +552,23 @@ nebius-cxcli auth --instance-config /path/to/config.yaml --validate-profile
 - `create <target_path>`
   - Scaffolds or reconciles the instance `config.yaml` and generated-folder skeleton.
 - `bootstrap-ci <config.yaml>`
-  - Generates the customer GitHub Actions workflow and can optionally bootstrap/sync CI auth secrets. The generated workflow watches and deploys only `generated/**`.
+  - Generates or reconciles the customer GitHub Actions workflow and, by default, bootstraps/syncs the required GitHub Environment secrets. The generated workflow watches and deploys only `generated/**`.
   - The workflow file is CLI-managed. Re-running `bootstrap-ci` automatically reconciles `.github/workflows/nebius-deployments.yml` to the latest generated contract and is idempotent when no drift exists.
   - Generated workflows validate changed bundles with `nebius-cxcli validate-generated --portable` before Terraform plan/apply.
   - Generated workflows restore ignored `generated/infra/terraform.auto.tfvars.json` from `generated/nebius-cxcli-manifest.json` before Terraform plan/apply.
+  - Generated workflows do not install the standalone `nebius` CLI. MK8s kubeconfig handoff and token retrieval stay inside `nebius-cxcli` via the Nebius SDK.
   - Generated workflows also keep the Python version in one env var and emit compact single-line discovery JSON into `GITHUB_OUTPUT` so matrix handoff stays deterministic.
   - The target `config.yaml` must already live inside the customer git repository because the workflow is written at that repo root under `.github/workflows/`.
   - `--auth-bootstrap` is already enabled by default. Re-running `bootstrap-ci` normally reconciles both the managed workflow and the GitHub Environment/Secrets contract; use `--no-auth-bootstrap` only when you intentionally want workflow-only reconciliation without touching GitHub secrets.
+  - The GitHub Environment contract consists of these required secrets: `NEBIUS_SA_ID`, `NEBIUS_AUTH_PUBLIC_KEY_ID`, `NEBIUS_AUTH_PRIVATE_KEY_PEM`, `NEBIUS_S3_ACCESS_KEY_ID`, `NEBIUS_S3_SECRET_ACCESS_KEY`, and `FLUX_GITHUB_TOKEN`.
   - With default `--auth-bootstrap`, the command auto-detects the target GitHub repo from that checkout's `origin` remote. Use `--github-repo <owner/repo>` only as an explicit override when the remote is missing, non-GitHub, or not the repo you want to manage.
+  - `--github-token-env <ENV>` only affects auth bootstrap and environment secret sync. Use it when the GitHub API token is stored in a non-default environment variable instead of `GH_TOKEN`/`GITHUB_TOKEN`.
   - When `--cli-ref` is omitted, generated workflows default to `main` for development builds and to `nebius-cxcli-v<version>` for stable tagged releases.
-  - Use `--cli-ref <branch|tag|sha>` when the workflow should install a specific nebius-cxcli ref for PR or branch validation instead of the default release tag or `main`.
+  - Use `--cli-ref <branch|tag|sha>` when you want `bootstrap-ci` to bake a specific default install ref into the generated workflow.
+  - `--cli-ref` is the `nebius-cxcli` source ref for the generated workflow to install from `nebius-ps-services`; it is not the branch of the target customer repo.
+  - Example: `nebius-cxcli bootstrap-ci /path/to/config.yaml --cli-ref feature/my-branch`
   - Generated workflows also honor an optional GitHub repo/org variable `NEBIUS_CXCLI_REF`; when set, it overrides the generated default ref without editing the workflow file.
+  - Customers do not need to set `NEBIUS_CXCLI_REF` before each run. Set it only when you want to override the baked workflow default, and leave it in place until you want a different ref.
   - `bootstrap-ci` creates the GitHub Environment and syncs Environment Secrets. It does not create GitHub repo/org variables; `NEBIUS_CXCLI_REF` remains an optional manual override.
 - `discover <target_path>`
   - Returns changed deployment instances for CI matrix generation.
@@ -628,10 +638,13 @@ Terraform runtime auth behavior:
 
 Generated workflow CLI ref:
 
-- The generated customer workflow sets `NEBIUS_CXCLI_REF` and installs `nebius-cxcli` from that git ref.
-- `bootstrap-ci` does not create the optional `NEBIUS_CXCLI_REF` GitHub repo/org variable; create that override manually only when you want to supersede the generated default ref.
+- The generated customer workflow installs `nebius-cxcli` from the ref resolved into its `NEBIUS_CXCLI_REF` workflow env.
+- `bootstrap-ci --cli-ref <branch|tag|sha>` changes the default ref written into the workflow YAML.
+- That ref points to the `nebius-cxcli` source in `nebius-ps-services`, not to the checked-out branch of the customer target repo.
+- Example: `nebius-cxcli bootstrap-ci /path/to/config.yaml --cli-ref nebius-cxcli-v0.1.0`
+- `bootstrap-ci` does not create the optional `NEBIUS_CXCLI_REF` GitHub repo/org variable; create that override manually only when you want to supersede the generated default ref without regenerating the workflow.
 - `NEBIUS_CXCLI_REF: main` means the workflow installs the latest code from the repository main branch on each run. That is appropriate during active development before a release is cut.
-- To pin the generated workflow up front, run `bootstrap-ci --cli-ref <branch|tag|sha>`.
+- Customers do not need to set `NEBIUS_CXCLI_REF` before every workflow run. It is a persistent GitHub variable override, not a per-run input.
 - To override the generated default later without editing the workflow YAML, create a GitHub repo/org variable `NEBIUS_CXCLI_REF`, for example:
 
 ```yaml

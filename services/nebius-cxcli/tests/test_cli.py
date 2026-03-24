@@ -661,6 +661,9 @@ def test_bootstrap_ci_no_auth_writes_workflow_in_repo_root(tmp_path: Path) -> No
     assert "Restore generated Terraform inputs" in content
     assert 'generated manifest is missing render.terraform_tfvars' in content
     assert 'print(f"discovery={json.dumps(payload, separators=(\',\', \':\'))}")' in content
+    assert "Install Nebius CLI" not in content
+    assert "curl -sSL https://storage.eu-north1.nebius.cloud/cli/install.sh | bash" not in content
+    assert "NEBIUS_API_ENDPOINT" not in content
     assert "Inventory outputs" not in content
     assert "Email inventory" not in content
     assert f"NEBIUS_CXCLI_REF: ${{{{ vars.NEBIUS_CXCLI_REF || '{cli_module.default_cli_ref()}' }}}}" in content
