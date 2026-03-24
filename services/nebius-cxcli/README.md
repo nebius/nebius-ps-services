@@ -471,6 +471,7 @@ Use the release flow in three steps:
 3. From a clean, synced `main`, create and push the release tag with `./publish-release.sh --publish X.Y.Z`.
 
 The publish step creates the annotated tag `nebius-cxcli-vX.Y.Z`. That tag triggers the repository workflow at `.github/workflows/nebius-cxcli-release.yml`, which reruns the same local `make all` verification contract, verifies that the wheel version matches the tag, verifies that the bundled fallback `component_sources.yaml` is present inside the wheel, and publishes the GitHub Release from the tagged commit.
+Those post-`make all` workflow checks use the repo `.venv/bin/python` created by that contract so `nebius_cxcli.release_catalog` imports the editable service package reliably under GitHub Actions.
 
 In source/editable checkouts, runtime version resolution prefers live `setuptools-scm` git state over a generated `_version.py` cache. The local `./publish-release.sh --publish X.Y.Z` flow also verifies that the tagged source checkout resolves `nebius-cxcli.__version__ == X.Y.Z` before it pushes the release tag.
 

@@ -125,7 +125,7 @@ jobs:
             exit 1
           fi
 
-          python -m nebius_cxcli.release_catalog verify-wheel \
+          .venv/bin/python -m nebius_cxcli.release_catalog verify-wheel \
             --wheel "${asset}" \
             --release-ref "${RELEASE_REF}"
 
@@ -133,12 +133,12 @@ jobs:
           catalog_asset="${release_dir}/component_sources.yaml"
           rm -rf "${release_dir}"
           mkdir -p "${release_dir}"
-          python -m nebius_cxcli.release_catalog render \
+          .venv/bin/python -m nebius_cxcli.release_catalog render \
             --input component_sources.release.yaml \
             --output "${catalog_asset}" \
             --release-ref "${RELEASE_REF}"
 
-          python -m nebius_cxcli.release_catalog verify-catalog \
+          .venv/bin/python -m nebius_cxcli.release_catalog verify-catalog \
             --catalog "${catalog_asset}" \
             --release-ref "${RELEASE_REF}"
 
