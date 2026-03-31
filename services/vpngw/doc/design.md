@@ -1828,13 +1828,13 @@ nebius-vpngw apply --local-config-file test.config.yaml
 - `publish-release.sh` is the local helper for this service.
 - `vpngw-ci.yml` is reserved for pull requests and manual CI runs.
 - `vpngw-release.yml` is the dedicated tag-driven release workflow for `nebius-vpngw-v*`.
-- Source/editable checkouts resolve runtime version from live `setuptools-scm` git state instead of trusting a generated `_version.py` cache; wheel builds keep only the package-local `_version.py` fallback used outside live SCM contexts.
+- Source/editable checkouts resolve runtime version from live SCM state instead of trusting a generated `_version.py` cache: they use `setuptools-scm` when available and fall back to `git describe` when it is not. Wheel builds keep only the package-local `_version.py` fallback used outside live SCM contexts.
 
 Release sequence:
 
-1. Run `./publish-release.sh --prep X.Y.Z` on your working branch to update `CHANGELOG.md`, commit it, and push the branch. If the branch has no upstream yet, the script sets `origin/<current-branch>` automatically on that first push.
+1. Run `./publish-release.sh --prep X.Y.Z` on your working branch to update `CHANGELOG.md`, commit it, and push the branch. If the branch has no upstream yet, the script sets `origin/<current-branch>` automatically on that first push. It also fails before editing anything if the target tag already exists locally or on `origin`.
 2. Merge the release preparation PR into `main`.
-3. Run `./publish-release.sh --publish X.Y.Z` from a clean, synced `main`; the script verifies that the tagged source checkout resolves `nebius_vpngw.__version__ == X.Y.Z` before it pushes the tag. Its clean-worktree check includes untracked files, and it fails locally if the target changelog section is empty.
+3. Run `./publish-release.sh --publish X.Y.Z` from a clean, synced `main`; the script verifies that the tagged source checkout resolves `nebius_vpngw.__version__ == X.Y.Z` before it pushes the tag. That verification works even when `setuptools-scm` is not installed in the current interpreter because the source checkout can derive the tagged version directly from Git metadata. Its clean-worktree check includes untracked files, and it fails locally if the target changelog section is empty.
 4. The pushed tag triggers `vpngw-release.yml`, which checks out the tagged commit from `services/vpngw`, runs lint/tests, builds the wheel, verifies the artifact version, and creates the GitHub Release.
 
 The local publish script does not build or upload release artifacts itself. Its job is only to create and push the annotated service tag.

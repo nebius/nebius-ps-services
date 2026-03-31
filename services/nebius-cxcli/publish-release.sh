@@ -50,6 +50,7 @@ show_usage() {
   printf '%b\n' "  ${S_YELLOW}--prep${S_RESET}     Update ${CHANGELOG_FILE}, commit it, and push current branch."
   printf '%b\n' "                 First push auto-sets origin/<current-branch> as upstream when needed."
   printf '%b\n' "                 Clean-worktree check is strict and includes untracked files."
+  printf '%b\n' "                 Fails if tag ${TAG_PREFIX}-vX.Y.Z already exists locally or on origin."
   printf '%b\n' "  ${S_YELLOW}--publish${S_RESET}  Create and push tag ${TAG_PREFIX}-vX.Y.Z."
   printf '%b\n' "                 Fails locally if the target release section is missing or empty."
   printf '\n'
@@ -280,6 +281,7 @@ prep_release() {
 
   ensure_clean_worktree
   ensure_named_branch "${branch}"
+  ensure_tag_absent "${tag}"
   log_note "Updating ${CHANGELOG_FILE} for ${tag}..."
   update_changelog "${tag}"
 

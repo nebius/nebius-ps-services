@@ -494,12 +494,13 @@ Use the release flow in three steps:
 
 `--prep` requires a strictly clean worktree, including untracked files, so the release-prep commit stays isolated.
 On a brand-new local release branch, `--prep` now pushes with `git push --set-upstream origin <branch>` automatically, so you do not need to publish the branch manually before the prep step succeeds.
+`--prep` also fails before editing `CHANGELOG.md` if the target tag already exists locally or on `origin`, so duplicate release-prep runs for an already-published version stop immediately.
 `--publish` fails locally before tagging if the target changelog section is missing or empty.
 
 The publish step creates the annotated tag `nebius-cxcli-vX.Y.Z`. That tag triggers the repository workflow at `.github/workflows/nebius-cxcli-release.yml`, which reruns the same local `make all` verification contract, verifies that the wheel version matches the tag, verifies that the bundled fallback `component_sources.yaml` is present inside the wheel, and publishes the GitHub Release from the tagged commit.
 Those post-`make all` workflow checks use the repo `.venv/bin/python` created by that contract so `nebius_cxcli.release_catalog` imports the editable service package reliably under GitHub Actions.
 
-In source/editable checkouts, runtime version resolution prefers live `setuptools-scm` git state over a generated `_version.py` cache. The local `./publish-release.sh --publish X.Y.Z` flow also verifies that the tagged source checkout resolves `nebius-cxcli.__version__ == X.Y.Z` before it pushes the release tag.
+In source/editable checkouts, runtime version resolution prefers live SCM state over a generated `_version.py` cache: it uses `setuptools-scm` when available and falls back to `git describe` when it is not. The local `./publish-release.sh --publish X.Y.Z` flow also verifies that the tagged source checkout resolves `nebius-cxcli.__version__ == X.Y.Z` before it pushes the release tag.
 
 Release assets for `nebius-cxcli` now include:
 

@@ -6,6 +6,14 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Changed `publish-release.sh --prep` to fail before editing `CHANGELOG.md` if
+  the target tag already exists locally or on `origin`, so duplicate release
+  preparation for an already-published version stops immediately.
+- Fixed source-checkout runtime version fallback for local release tagging when
+  `setuptools-scm` is not installed: `nebius-cxcli.__version__` now derives
+  from `git describe` before consulting a generated `_version.py`, so
+  `publish-release.sh --publish` no longer rejects a fresh exact tag because of
+  a stale local dev-version cache.
 - Hardened `publish-release.sh` so `--prep` now requires a strictly clean worktree, including untracked files, and first-time pushes from a new local release branch automatically set `origin/<branch>` as upstream instead of failing with Git's "no upstream branch" error; `--publish` now fails before tagging if the target changelog section is missing or empty.
 - Made `render` transactional: rerenders now build the replacement bundle under a hidden sibling staging directory and swap it into `generated/` only after the new Terraform/Flux/inventory bundle plus generated manifest are complete, so failed rerenders leave the current bundle intact.
 - Clarified docs/help that rerender is now a transactional replace action rather than an eager reset, and documented the Flux-safe workflow: rerender locally, then commit/push one final watched-path snapshot instead of unbootstrapping Flux or publishing intermediate manifest-deletion commits.

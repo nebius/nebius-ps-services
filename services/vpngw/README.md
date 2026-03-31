@@ -1745,7 +1745,7 @@ python -m ruff check src --fix
 
 ## Release & Versioning
 
-- Versions are derived from annotated Git tags (`nebius-vpngw-vMAJOR.MINOR.PATCH`) via `setuptools-scm`; no manual edits to `pyproject.toml` are needed. Installed packages use published package metadata, source/editable checkouts prefer live SCM state, and wheel builds keep a package-local `_version.py` only as a fallback for metadata-free environments.
+- Versions are derived from annotated Git tags (`nebius-vpngw-vMAJOR.MINOR.PATCH`) via `setuptools-scm`; no manual edits to `pyproject.toml` are needed. Installed packages use published package metadata, source/editable checkouts prefer live SCM state, and wheel builds keep a package-local `_version.py` only as a fallback for metadata-free environments. When `setuptools-scm` is not installed in a source checkout, runtime version resolution falls back to `git describe` before it consults any generated `_version.py` cache.
 - Local developer builds should reuse the prepared project virtualenv (`python -m build --wheel --no-isolation` or `make build`) so the output stays stable and avoids transient isolated-build toolchain warnings.
 - Semantic Versioning policy:
   - **MAJOR:** breaking changes (CLI flags removed/changed, behavior changes that could break scripts).
@@ -1780,9 +1780,11 @@ Notes:
 
 - `publish-release.sh --publish` only creates and pushes the annotated tag. It does not build or publish artifacts locally.
 - `--publish` is intended to run only from a clean local `main` that is up to date with `origin/main`. The clean-worktree check is strict and includes untracked files.
+- `--publish` does not require `setuptools-scm` to be installed in your current interpreter; the local tag verification can derive the source-checkout version directly from Git metadata.
 - `publish-release.sh --prep` pushes the current branch, and if that branch has no upstream yet it automatically sets `origin/<current-branch>` as upstream on the first push.
+- `--prep` now also fails before editing `CHANGELOG.md` if the target tag already exists locally or on `origin`, so you do not prepare a duplicate release version.
 - `--publish` now fails locally if the target release section exists but is empty, so you do not push a tag that the release workflow would reject later.
-- `--prep` is idempotent. You can run it multiple times for the same tag; it keeps `## [Unreleased]` empty and merges any new Unreleased entries into the target tag section without duplication.
+- `--prep` is idempotent while the target tag does not already exist. You can run it multiple times for the same unreleased version; it keeps `## [Unreleased]` empty and merges any new Unreleased entries into the target tag section without duplication.
 - The script accepts either `X.Y.Z` or `nebius-vpngw-vX.Y.Z`.
 
 ### Optional: build a single-file binary (PyInstaller)

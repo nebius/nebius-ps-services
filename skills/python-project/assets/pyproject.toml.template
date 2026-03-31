@@ -57,9 +57,13 @@ include = ["{{package_name}}*"]
 [tool.setuptools_scm]
 version_scheme = "python-simplified-semver"
 local_scheme = "no-local-version"
-write_to = "src/{{package_name}}/_version.py"
+version_file = "src/{{package_name}}/_version.py"
 tag_regex = "^{{project_slug}}-v(?P<version>\\d+\\.\\d+\\.\\d+)$"
+fallback_version = "0+unknown"
 search_parent_directories = true
+
+[tool.setuptools_scm.scm.git]
+describe_command = "git describe --dirty --tags --long --abbrev=40 --match {{project_slug}}-v*"
 
 [tool.ruff]
 target-version = "py311"
