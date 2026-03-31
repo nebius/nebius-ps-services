@@ -39,7 +39,7 @@ jobs:
       - name: Verify service with local make contract
         env:
           RELEASE_REF: ${{ github.sha }}
-          NEBIUS_CXCLI_BUILD_COMPONENT_SOURCES_FILE: component_sources.release.yaml
+          NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE: portable
         run: |
           set -euo pipefail
           make all
@@ -47,6 +47,7 @@ jobs:
       - name: Verify bundled component sources in wheel
         env:
           RELEASE_REF: ${{ github.sha }}
+          NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE: portable
         run: |
           set -euo pipefail
           wheel="$(find dist -maxdepth 1 -name '*.whl' | sort | head -n 1)"

@@ -75,7 +75,7 @@ def test_wizard_prompts_required_tf_variables_only_by_default(
                     "project_id": "project-1",
                     "region_id": "us-central1",
                 },
-                "notifications": {"inventory_markdown": True, "email": None},
+                "notifications": {"email_enabled": True, "email": None},
             },
             "infra": {
                 "components": [
@@ -177,7 +177,7 @@ def test_wizard_prompts_dependent_fields_when_enabled_toggle_is_true(
                     "project_id": "project-1",
                     "region_id": "us-central1",
                 },
-                "notifications": {"inventory_markdown": True, "email": None},
+                "notifications": {"email_enabled": True, "email": None},
             },
             "infra": {
                 "components": [

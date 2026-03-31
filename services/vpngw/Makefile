@@ -41,7 +41,7 @@ coverage: $(VENV_STAMP)
 
 build: $(VENV_STAMP)
 	rm -rf build dist
-	$(VENV_PYTHON) -m build --wheel
+	$(VENV_PYTHON) -m build --wheel --no-isolation
 
 check: lint test-unit
 

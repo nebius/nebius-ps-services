@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import shutil
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
+from .component_sources import SourceProfile
 from .flux_render import render_flux
-from .infra_render import RenderProfile, render_terraform_artifacts
+from .infra_render import render_terraform_artifacts
 from .inventory_ops import write_inventory
 from .paths import InstancePaths
 
@@ -19,31 +21,68 @@ class RenderResult:
     files_written: list[Path]
 
 
-def _preserved_flux_bootstrap_dir(paths: InstancePaths) -> Path:
-    return paths.flux_dir / "flux-system"
-
-
 def reset_generated_bundle(paths: InstancePaths) -> None:
-    """Remove the previously generated bundle while preserving bootstrap-owned Flux state."""
-    preserved_source = _preserved_flux_bootstrap_dir(paths)
-    temporary_root: Path | None = None
-    preserved_copy: Path | None = None
-    if preserved_source.exists():
-        temporary_root = Path(
-            tempfile.mkdtemp(prefix=".nebius-cxcli-preserve-", dir=str(paths.project_dir))
+    """Remove the previously generated bundle completely."""
+    if paths.generated_dir.exists():
+        shutil.rmtree(paths.generated_dir)
+
+
+def staged_generated_paths(paths: InstancePaths) -> InstancePaths:
+    """Create a sibling staging directory for a transactional generated/ replacement."""
+    staging_dir = Path(
+        tempfile.mkdtemp(
+            prefix=".generated-staging-",
+            dir=paths.project_dir,
         )
-        preserved_copy = temporary_root / "flux-system"
-        shutil.move(str(preserved_source), str(preserved_copy))
+    ).resolve()
+    return replace(
+        paths,
+        generated_dir=staging_dir,
+        infra_dir=staging_dir / "infra",
+        flux_dir=staging_dir / "flux",
+        inventory_dir=staging_dir / "inventory",
+    )
+
+
+def promote_staged_generated_paths(
+    staged_paths: InstancePaths,
+    final_paths: InstancePaths,
+) -> None:
+    """Swap a fully rendered staged bundle into the canonical generated/ path."""
+    backup_dir: Path | None = None
     try:
-        if paths.generated_dir.exists():
-            shutil.rmtree(paths.generated_dir)
-        if preserved_copy and preserved_copy.exists():
-            restore_parent = _preserved_flux_bootstrap_dir(paths).parent
-            restore_parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(preserved_copy), str(_preserved_flux_bootstrap_dir(paths)))
+        if final_paths.generated_dir.exists():
+            backup_dir = final_paths.project_dir / f".generated-backup-{uuid4().hex}"
+            final_paths.generated_dir.rename(backup_dir)
+        staged_paths.generated_dir.rename(final_paths.generated_dir)
+    except Exception:
+        if backup_dir is not None and backup_dir.exists() and not final_paths.generated_dir.exists():
+            backup_dir.rename(final_paths.generated_dir)
+        raise
     finally:
-        if temporary_root and temporary_root.exists():
-            shutil.rmtree(temporary_root, ignore_errors=True)
+        if staged_paths.generated_dir.exists():
+            shutil.rmtree(staged_paths.generated_dir, ignore_errors=True)
+    if backup_dir is not None and backup_dir.exists():
+        shutil.rmtree(backup_dir)
+
+
+def _render_instance_to_paths(
+    config: Any,
+    paths: InstancePaths,
+    *,
+    component_output_values: dict[str, Any] | None = None,
+    source_profile: SourceProfile = SourceProfile.PORTABLE,
+) -> RenderResult:
+    """Render Terraform and Flux artifacts into the provided target paths."""
+    paths.infra_dir.mkdir(parents=True, exist_ok=True)
+    paths.flux_dir.mkdir(parents=True, exist_ok=True)
+    paths.inventory_dir.mkdir(parents=True, exist_ok=True)
+
+    written: list[Path] = []
+    written.extend(render_terraform_artifacts(config, paths, source_profile=source_profile))
+    written.extend(render_flux(config, paths, component_output_values=component_output_values))
+    write_inventory(config, paths)
+    return RenderResult(files_written=sorted(written))
 
 
 def render_instance(
@@ -51,16 +90,24 @@ def render_instance(
     paths: InstancePaths,
     *,
     component_output_values: dict[str, Any] | None = None,
-    render_profile: RenderProfile = RenderProfile.PORTABLE,
+    source_profile: SourceProfile = SourceProfile.PORTABLE,
 ) -> RenderResult:
-    """Render Terraform and Flux artifacts for one validated config."""
-    reset_generated_bundle(paths)
-    paths.infra_dir.mkdir(parents=True, exist_ok=True)
-    paths.flux_dir.mkdir(parents=True, exist_ok=True)
-    paths.inventory_dir.mkdir(parents=True, exist_ok=True)
-
-    written: list[Path] = []
-    written.extend(render_terraform_artifacts(config, paths, render_profile=render_profile))
-    written.extend(render_flux(config, paths, component_output_values=component_output_values))
-    write_inventory(config, paths)
-    return RenderResult(files_written=sorted(written))
+    """Render Terraform and Flux artifacts transactionally for one validated config."""
+    staged_paths = staged_generated_paths(paths)
+    try:
+        staged_result = _render_instance_to_paths(
+            config,
+            staged_paths,
+            component_output_values=component_output_values,
+            source_profile=source_profile,
+        )
+        promote_staged_generated_paths(staged_paths, paths)
+    except Exception:
+        reset_generated_bundle(staged_paths)
+        raise
+    return RenderResult(
+        files_written=sorted(
+            paths.generated_dir / item.relative_to(staged_paths.generated_dir)
+            for item in staged_result.files_written
+        )
+    )

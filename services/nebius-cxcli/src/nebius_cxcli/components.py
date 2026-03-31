@@ -14,6 +14,7 @@ from .component_sources import (
     ComponentInputBinding,
     ComponentOutput,
     Handoff,
+    SourceProfile,
     load_component_sources,
     reset_component_sources_cache,
 )
@@ -34,6 +35,7 @@ class ComponentEntry:
     enabled_path: tuple[str, ...] | None = None
     engine_type: str = "registry"
     source: str | None = None
+    metadata_source: str | None = None
     version: str | None = None
     depends_on: tuple[str, ...] = ()
     dependency_match_names: tuple[str, ...] = ()
@@ -88,11 +90,13 @@ def _compose_chart_source(*, repo: str | None, chart_name: str) -> str:
     return f"{normalized_repo}/{normalized_chart}"
 
 
-@lru_cache(maxsize=1)
-def _infra_component_entries() -> tuple[ComponentEntry, ...]:
+@lru_cache(maxsize=2)
+def _infra_component_entries(
+    source_profile: SourceProfile | None = None,
+) -> tuple[ComponentEntry, ...]:
     entries: list[ComponentEntry] = []
     entry_ids: set[str] = set()
-    sources = load_component_sources()
+    sources = load_component_sources(source_profile=source_profile)
     for module in sources.tf_modules:
         component_id = _normalize_entry_id(module.module)
         if not component_id or component_id in entry_ids:
@@ -112,6 +116,7 @@ def _infra_component_entries() -> tuple[ComponentEntry, ...]:
                 origin="custom",
                 engine_type="terraform_module",
                 source=module.source,
+                metadata_source=module.metadata_source,
                 version=module.version,
                 group=module.group,
                 defaults=module.defaults,
@@ -169,11 +174,13 @@ def _entry_from_helm_chart(
     )
 
 
-@lru_cache(maxsize=1)
-def _app_component_entries() -> tuple[ComponentEntry, ...]:
+@lru_cache(maxsize=2)
+def _app_component_entries(
+    source_profile: SourceProfile | None = None,
+) -> tuple[ComponentEntry, ...]:
     entries: list[ComponentEntry] = []
     entry_ids: set[str] = set()
-    sources = load_component_sources()
+    sources = load_component_sources(source_profile=source_profile)
 
     # Primary source: explicit chart entries in component_sources.yaml.
     for chart in sources.helm_charts:
@@ -204,22 +211,42 @@ def _app_component_entries() -> tuple[ComponentEntry, ...]:
     return tuple(entries)
 
 
-def component_entries(scope: ComponentScope) -> tuple[ComponentEntry, ...]:
+def component_entries(
+    scope: ComponentScope,
+    *,
+    source_profile: SourceProfile | None = None,
+) -> tuple[ComponentEntry, ...]:
     if scope == "infra":
-        return _infra_component_entries()
-    return _app_component_entries()
+        return _infra_component_entries(source_profile)
+    return _app_component_entries(source_profile)
 
 
-def component_lookup(scope: ComponentScope) -> dict[str, ComponentEntry]:
-    return {entry.id: entry for entry in component_entries(scope)}
+def component_lookup(
+    scope: ComponentScope,
+    *,
+    source_profile: SourceProfile | None = None,
+) -> dict[str, ComponentEntry]:
+    return {entry.id: entry for entry in component_entries(scope, source_profile=source_profile)}
 
 
-def default_component_ids(scope: ComponentScope) -> list[str]:
-    return [entry.id for entry in component_entries(scope) if entry.default_enabled]
+def default_component_ids(
+    scope: ComponentScope,
+    *,
+    source_profile: SourceProfile | None = None,
+) -> list[str]:
+    return [
+        entry.id
+        for entry in component_entries(scope, source_profile=source_profile)
+        if entry.default_enabled
+    ]
 
 
-def all_component_ids(scope: ComponentScope) -> list[str]:
-    return [entry.id for entry in component_entries(scope)]
+def all_component_ids(
+    scope: ComponentScope,
+    *,
+    source_profile: SourceProfile | None = None,
+) -> list[str]:
+    return [entry.id for entry in component_entries(scope, source_profile=source_profile)]
 
 
 def reset_component_entry_cache() -> None:

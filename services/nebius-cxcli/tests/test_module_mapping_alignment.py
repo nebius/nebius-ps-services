@@ -9,14 +9,15 @@ import yaml
 import nebius_cxcli.component_sources as component_sources
 from nebius_cxcli.component_sources import (
     ComponentOutput,
+    SourceProfile,
     reset_component_sources_cache,
     resolve_component_sources_file,
     set_component_sources_file_override,
+    set_component_sources_profile_override,
 )
 from nebius_cxcli.components import component_entries, reset_component_entry_cache
 from nebius_cxcli.config_loader import load_config
 from nebius_cxcli.config_template import starter_config_yaml
-from nebius_cxcli.infra_render import RenderProfile
 from nebius_cxcli.paths import resolve_instance_paths, validate_path_alignment
 from nebius_cxcli.render import render_instance
 from nebius_cxcli.runtime_introspection import ModuleVariable, reset_runtime_introspection_cache
@@ -50,19 +51,11 @@ def _stub_catalog_output_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def _set_local_catalog_override() -> None:
+def _set_catalog_profile(profile: SourceProfile) -> None:
     set_component_sources_file_override(
         Path(__file__).resolve().parents[1] / "component_sources.yaml"
     )
-    reset_component_sources_cache()
-    reset_runtime_introspection_cache()
-    reset_component_entry_cache()
-
-
-def _set_portable_catalog_override() -> None:
-    set_component_sources_file_override(
-        Path(__file__).resolve().parents[1] / "component_sources.release.yaml"
-    )
+    set_component_sources_profile_override(profile)
     reset_component_sources_cache()
     reset_runtime_introspection_cache()
     reset_component_entry_cache()
@@ -107,7 +100,7 @@ def _payload_with_mk8s() -> dict:
 
 
 def test_render_tfvars_are_backed_by_declared_variables(tmp_path: Path) -> None:
-    _set_local_catalog_override()
+    _set_catalog_profile(SourceProfile.LOCAL)
     reset_component_entry_cache()
     config_path = _instance_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -117,7 +110,7 @@ def test_render_tfvars_are_backed_by_declared_variables(tmp_path: Path) -> None:
     config = load_config(config_path)
     paths = resolve_instance_paths(config_path)
     validate_path_alignment(config, paths)
-    render_instance(config, paths, render_profile=RenderProfile.LOCAL_DEV)
+    render_instance(config, paths, source_profile=SourceProfile.LOCAL)
 
     main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
     providers_tf = (paths.infra_dir / "providers.tf").read_text(encoding="utf-8")
@@ -136,7 +129,7 @@ def test_render_tfvars_are_backed_by_declared_variables(tmp_path: Path) -> None:
 def test_render_uses_resolved_local_path_for_local_module_sources(
     tmp_path: Path,
 ) -> None:
-    _set_local_catalog_override()
+    _set_catalog_profile(SourceProfile.LOCAL)
     reset_component_entry_cache()
     config_path = _instance_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -147,7 +140,7 @@ def test_render_uses_resolved_local_path_for_local_module_sources(
     config = load_config(config_path)
     paths = resolve_instance_paths(config_path)
     validate_path_alignment(config, paths)
-    render_instance(config, paths, render_profile=RenderProfile.LOCAL_DEV)
+    render_instance(config, paths, source_profile=SourceProfile.LOCAL)
 
     main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
     expected_mk8s_source = (
@@ -157,7 +150,7 @@ def test_render_uses_resolved_local_path_for_local_module_sources(
 
 
 def test_render_rejects_version_for_local_module_sources(tmp_path: Path) -> None:
-    _set_local_catalog_override()
+    _set_catalog_profile(SourceProfile.LOCAL)
     reset_component_entry_cache()
     config_path = _instance_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -177,14 +170,14 @@ def test_render_rejects_version_for_local_module_sources(tmp_path: Path) -> None
     validate_path_alignment(config, paths)
 
     with pytest.raises(ValueError, match="resolves to a local directory"):
-        render_instance(config, paths)
+        render_instance(config, paths, source_profile=SourceProfile.LOCAL)
 
 
 def test_render_prefers_active_catalog_source_over_stale_config_source(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _set_portable_catalog_override()
+    _set_catalog_profile(SourceProfile.PORTABLE)
     config_path = _instance_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     payload = _payload_with_mk8s()
@@ -223,7 +216,7 @@ def test_render_prefers_active_catalog_source_over_stale_config_source(
     config = load_config(config_path)
     paths = resolve_instance_paths(config_path)
     validate_path_alignment(config, paths)
-    render_instance(config, paths, render_profile=RenderProfile.PORTABLE)
+    render_instance(config, paths, source_profile=SourceProfile.PORTABLE)
 
     main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
     assert (

@@ -27,7 +27,7 @@ def build_generated_manifest(
     paths: InstancePaths,
     handoffs: Sequence[Mapping[str, Any]],
     required_component_outputs: Sequence[Mapping[str, Any]],
-    render_profile: str | None = None,
+    source_profile: str | None = None,
     module_sources: Sequence[Mapping[str, Any]] = (),
     terraform_tfvars: Mapping[str, Any] | None = None,
     flux_version: str | None = None,
@@ -58,8 +58,7 @@ def build_generated_manifest(
             "terraform_version": str(terraform_version or "").strip(),
         },
         "render": {
-            "profile": str(render_profile or "").strip(),
-            "portable": str(render_profile or "").strip() == "portable",
+            "source_profile": str(source_profile or "").strip(),
             "module_sources": [dict(item) for item in module_sources],
             "terraform_tfvars": dict(terraform_tfvars or {}),
         },
@@ -75,13 +74,14 @@ def manifest_path_for_generated_dir(generated_dir: Path) -> Path:
     return generated_dir / GENERATED_MANIFEST_FILENAME
 
 
-def write_generated_manifest(
+def write_generated_manifest_to_path(
+    path: Path,
     *,
     config: Any,
     paths: InstancePaths,
     handoffs: Sequence[Mapping[str, Any]],
     required_component_outputs: Sequence[Mapping[str, Any]],
-    render_profile: str | None = None,
+    source_profile: str | None = None,
     module_sources: Sequence[Mapping[str, Any]] = (),
     terraform_tfvars: Mapping[str, Any] | None = None,
     flux_version: str | None = None,
@@ -92,16 +92,41 @@ def write_generated_manifest(
         paths=paths,
         handoffs=handoffs,
         required_component_outputs=required_component_outputs,
-        render_profile=render_profile,
+        source_profile=source_profile,
         module_sources=module_sources,
         terraform_tfvars=terraform_tfvars,
         flux_version=flux_version,
         terraform_version=terraform_version,
     )
-    path = manifest_path_for_generated_dir(paths.generated_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return path
+
+
+def write_generated_manifest(
+    *,
+    config: Any,
+    paths: InstancePaths,
+    handoffs: Sequence[Mapping[str, Any]],
+    required_component_outputs: Sequence[Mapping[str, Any]],
+    source_profile: str | None = None,
+    module_sources: Sequence[Mapping[str, Any]] = (),
+    terraform_tfvars: Mapping[str, Any] | None = None,
+    flux_version: str | None = None,
+    terraform_version: str | None = None,
+) -> Path:
+    return write_generated_manifest_to_path(
+        manifest_path_for_generated_dir(paths.generated_dir),
+        config=config,
+        paths=paths,
+        handoffs=handoffs,
+        required_component_outputs=required_component_outputs,
+        source_profile=source_profile,
+        module_sources=module_sources,
+        terraform_tfvars=terraform_tfvars,
+        flux_version=flux_version,
+        terraform_version=terraform_version,
+    )
 
 
 def load_generated_manifest(generated_dir: Path) -> dict[str, Any]:

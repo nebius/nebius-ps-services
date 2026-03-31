@@ -10,16 +10,20 @@ import nebius_cxcli.component_sources as component_sources
 from nebius_cxcli.cli import _validate_component_sources_registry
 from nebius_cxcli.component_sources import (
     ComponentOutput,
+    SourceProfile,
     load_component_sources,
     reset_component_sources_cache,
     resolve_component_sources_file,
+    resolve_component_sources_profile,
     set_component_sources_file_override,
+    set_component_sources_profile_override,
 )
 from nebius_cxcli.runtime_introspection import reset_runtime_introspection_cache
 
 
 def _reset_sources_state() -> None:
     set_component_sources_file_override(None)
+    set_component_sources_profile_override(None)
     reset_component_sources_cache()
     reset_runtime_introspection_cache()
 
@@ -30,6 +34,12 @@ def setup_function() -> None:
 
 def teardown_function() -> None:
     _reset_sources_state()
+
+
+@pytest.fixture(autouse=True)
+def _clear_component_source_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NEBIUS_CXCLI_COMPONENT_SOURCES_FILE", raising=False)
+    monkeypatch.delenv("NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE", raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -60,7 +70,12 @@ def _stub_catalog_output_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def _write_sources_file(path: Path, *, module_name: str) -> None:
+def _write_sources_file(
+    path: Path,
+    *,
+    module_name: str,
+    local_source: str | None = None,
+) -> None:
     path.write_text(
         yaml.safe_dump(
             {
@@ -76,7 +91,15 @@ def _write_sources_file(path: Path, *, module_name: str) -> None:
                     "tf_modules": [
                         {
                             "module": module_name,
-                            "source": f"platform-infra/modules/{module_name}",
+                            "portable_source": (
+                                "git::https://github.com/example/infra.git//modules/"
+                                f"{module_name}?ref=v1.2.3"
+                            ),
+                            "local_source": (
+                                f"platform-infra/modules/{module_name}"
+                                if local_source is None
+                                else local_source
+                            ),
                             "description": f"{module_name} module",
                             "enable": True,
                         }
@@ -102,7 +125,7 @@ def _write_sources_file(path: Path, *, module_name: str) -> None:
 
 
 def _normalized_catalog_signature(path: Path) -> dict[str, object]:
-    loaded = load_component_sources(explicit=path)
+    loaded = load_component_sources(explicit=path, source_profile=SourceProfile.PORTABLE)
     return {
         "cli": asdict(loaded.cli),
         "shared": loaded.shared,
@@ -110,7 +133,7 @@ def _normalized_catalog_signature(path: Path) -> dict[str, object]:
             {
                 key: value
                 for key, value in asdict(module).items()
-                if key != "source"
+                if key not in {"source", "portable_source", "local_source", "metadata_source"}
             }
             for module in loaded.tf_modules
         ],
@@ -169,6 +192,19 @@ def test_component_sources_resolution_precedence(monkeypatch, tmp_path: Path) ->
     assert resolve_component_sources_file() == default_file
 
 
+def test_component_sources_profile_resolution_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
+    set_component_sources_profile_override(None)
+
+    assert resolve_component_sources_profile() == SourceProfile.PORTABLE
+
+    monkeypatch.setenv("NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE", "local")
+    assert resolve_component_sources_profile() == SourceProfile.LOCAL
+
+    set_component_sources_profile_override(SourceProfile.PORTABLE)
+    assert resolve_component_sources_profile() == SourceProfile.PORTABLE
+    assert resolve_component_sources_profile(explicit=SourceProfile.LOCAL) == SourceProfile.LOCAL
+
+
 def test_load_component_sources_reads_tf_modules_and_helm_entries(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     sources_file = tmp_path / "component-sources.yaml"
@@ -193,7 +229,11 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(monkeypatch, t
                     "tf_modules": [
                         {
                             "module": "wireguard-jumphost",
-                            "source": "platform-infra/modules/wireguard-jumphost",
+                            "portable_source": (
+                                "git::https://github.com/example/infra.git//modules/"
+                                "wireguard-jumphost?ref=v1.2.3"
+                            ),
+                            "local_source": "platform-infra/modules/wireguard-jumphost",
                             "version": "1.2.3",
                             "group": "Network",
                             "enable": True,
@@ -246,7 +286,19 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(monkeypatch, t
     assert loaded.cli.flux.version == "v2.8.0"
     assert loaded.cli.terraform.version == "1.14.1"
     assert loaded.tf_modules[0].module == "wireguard-jumphost"
-    assert loaded.tf_modules[0].source == "platform-infra/modules/wireguard-jumphost"
+    assert (
+        loaded.tf_modules[0].source
+        == "git::https://github.com/example/infra.git//modules/wireguard-jumphost?ref=v1.2.3"
+    )
+    assert (
+        loaded.tf_modules[0].portable_source
+        == "git::https://github.com/example/infra.git//modules/wireguard-jumphost?ref=v1.2.3"
+    )
+    assert loaded.tf_modules[0].local_source == "platform-infra/modules/wireguard-jumphost"
+    assert (
+        loaded.tf_modules[0].metadata_source
+        == "git::https://github.com/example/infra.git//modules/wireguard-jumphost?ref=v1.2.3"
+    )
     assert loaded.tf_modules[0].version == "1.2.3"
     assert loaded.tf_modules[0].group == "Network"
     assert loaded.tf_modules[0].enable is True
@@ -276,6 +328,33 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(monkeypatch, t
     assert loaded.helm_charts[0].defaults[0].value == 2
 
 
+def test_load_component_sources_rejects_release_name_alias_for_helm_chart(tmp_path: Path) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            {
+                "infra": {"tf_modules": []},
+                "apps": {
+                    "helm_charts": [
+                        {
+                            "name": "gateway-helm",
+                            "repo": "oci://docker.io/envoyproxy/gateway-helm",
+                            "version": "1.4.2",
+                            "namespace": "envoy-gateway-system",
+                            "release-name": "envoy-gateway",
+                        }
+                    ]
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="unsupported field\\(s\\): release-name"):
+        load_component_sources(explicit=sources_file)
+
+
 def test_load_component_sources_falls_back_to_bundled_default(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     missing_default = tmp_path / "missing-default.yaml"
@@ -303,23 +382,18 @@ def test_load_component_sources_falls_back_to_bundled_default(monkeypatch, tmp_p
     assert loaded.tf_modules[0].module == "bundled-mod"
 
 
-def test_load_component_sources_falls_back_to_repo_release_catalog_when_bundled_missing(
+def test_load_component_sources_falls_back_to_repo_default_catalog_when_bundled_missing(
     monkeypatch, tmp_path: Path
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    missing_default = tmp_path / "missing-default.yaml"
+    default_file = tmp_path / "component_sources.yaml"
     missing_user = tmp_path / "missing-user.yaml"
     missing_global = tmp_path / "missing-global.yaml"
     missing_prefix = tmp_path / "missing-prefix"
-    release_file = tmp_path / "component_sources.release.yaml"
 
-    monkeypatch.setattr("nebius_cxcli.component_sources.DEFAULT_COMPONENT_SOURCES_FILE", missing_default)
+    monkeypatch.setattr("nebius_cxcli.component_sources.DEFAULT_COMPONENT_SOURCES_FILE", default_file)
     monkeypatch.setattr("nebius_cxcli.component_sources.USER_COMPONENT_SOURCES_FILE", missing_user)
     monkeypatch.setattr("nebius_cxcli.component_sources.GLOBAL_COMPONENT_SOURCES_FILE", missing_global)
-    monkeypatch.setattr(
-        "nebius_cxcli.component_sources.CANONICAL_PORTABLE_COMPONENT_SOURCES_FILE",
-        release_file,
-    )
     monkeypatch.setattr(
         "nebius_cxcli.component_sources.importlib_resources.files",
         lambda _package: missing_prefix,
@@ -327,7 +401,7 @@ def test_load_component_sources_falls_back_to_repo_release_catalog_when_bundled_
     monkeypatch.setattr("nebius_cxcli.component_sources.sys.prefix", str(missing_prefix))
     monkeypatch.delenv("NEBIUS_CXCLI_COMPONENT_SOURCES_FILE", raising=False)
 
-    _write_sources_file(release_file, module_name="portable-mod")
+    _write_sources_file(default_file, module_name="portable-mod")
     set_component_sources_file_override(None)
     reset_component_sources_cache()
 
@@ -345,9 +419,9 @@ def test_bundled_mk8s_outputs_preserve_sensitive_metadata() -> None:
     assert output_by_name["cluster_ca_certificate"].sensitive is True
 
 
-def test_release_catalog_uses_portable_git_module_sources() -> None:
+def test_default_profile_uses_portable_git_module_sources() -> None:
     loaded = load_component_sources(
-        explicit=Path(__file__).resolve().parents[1] / "component_sources.release.yaml"
+        explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml"
     )
     mk8s = next(item for item in loaded.tf_modules if item.module == "mk8s")
     assert (
@@ -356,22 +430,63 @@ def test_release_catalog_uses_portable_git_module_sources() -> None:
     )
 
 
-def test_checked_in_local_and_portable_catalogs_match_except_tf_module_sources() -> None:
-    project_root = Path(__file__).resolve().parents[1]
-    local_signature = _normalized_catalog_signature(project_root / "component_sources.yaml")
-    portable_signature = _normalized_catalog_signature(project_root / "component_sources.release.yaml")
+def test_local_profile_uses_local_source_when_available() -> None:
+    loaded = load_component_sources(
+        explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml",
+        source_profile=SourceProfile.LOCAL,
+    )
+    mk8s = next(item for item in loaded.tf_modules if item.module == "mk8s")
+    assert mk8s.source == "../../platform-infra/modules/mk8s"
+    assert mk8s.metadata_source == str(
+        (Path(__file__).resolve().parents[3] / "platform-infra/modules/mk8s").resolve()
+    )
 
-    assert portable_signature == local_signature
+
+def test_local_profile_falls_back_to_portable_source_when_local_source_is_missing(
+    tmp_path: Path,
+) -> None:
+    catalog = tmp_path / "component_sources.yaml"
+    _write_sources_file(catalog, module_name="mk8s", local_source="")
+
+    loaded = load_component_sources(explicit=catalog, source_profile=SourceProfile.LOCAL)
+    assert (
+        loaded.tf_modules[0].source
+        == "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3"
+    )
+    assert (
+        loaded.tf_modules[0].metadata_source
+        == "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3"
+    )
+
+
+def test_portable_profile_prefers_resolved_local_source_for_module_metadata(
+    tmp_path: Path,
+) -> None:
+    catalog = tmp_path / "component_sources.yaml"
+    module_dir = tmp_path / "platform-infra" / "modules" / "mk8s"
+    module_dir.mkdir(parents=True, exist_ok=True)
+    _write_sources_file(
+        catalog,
+        module_name="mk8s",
+        local_source="platform-infra/modules/mk8s",
+    )
+
+    loaded = load_component_sources(explicit=catalog, source_profile=SourceProfile.PORTABLE)
+
+    assert (
+        loaded.tf_modules[0].source
+        == "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3"
+    )
+    assert loaded.tf_modules[0].metadata_source == str(module_dir.resolve())
 
 
 def test_shipped_catalogs_do_not_embed_jump_host_public_key_defaults() -> None:
-    for filename in ("component_sources.yaml", "component_sources.release.yaml"):
-        loaded = load_component_sources(explicit=Path(__file__).resolve().parents[1] / filename)
-        for module_id in ("wireguard-jumphost", "ssh-jumphost"):
-            module = next(item for item in loaded.tf_modules if item.module == module_id)
-            default_targets = {default.target_path for default in module.defaults}
-            assert "inputs.ssh_user_name" in default_targets
-            assert "inputs.ssh_public_key" not in default_targets
+    loaded = load_component_sources(explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml")
+    for module_id in ("wireguard-jumphost", "ssh-jumphost"):
+        module = next(item for item in loaded.tf_modules if item.module == module_id)
+        default_targets = {default.target_path for default in module.defaults}
+        assert "inputs.ssh_user_name" in default_targets
+        assert "inputs.ssh_public_key" not in default_targets
 
 
 def test_load_component_sources_explicit_missing_file_raises(tmp_path: Path) -> None:
@@ -397,7 +512,11 @@ def test_load_component_sources_rejects_unsupported_config_bindings_field(
                     "tf_modules": [
                         {
                             "module": "wireguard-jumphost",
-                            "source": "platform-infra/modules/wireguard-jumphost",
+                            "portable_source": (
+                                "git::https://github.com/example/infra.git//modules/"
+                                "wireguard-jumphost?ref=v1.2.3"
+                            ),
+                            "local_source": "platform-infra/modules/wireguard-jumphost",
                             "config_bindings": {
                                 "inputs.ssh_user_name": "shared.admin_ssh.user_name",
                             },
@@ -494,7 +613,8 @@ def test_validate_sources_resolves_relative_local_module_path_from_component_sou
                     "tf_modules": [
                         {
                             "module": "demo-module",
-                            "source": "./modules/demo-module",
+                            "portable_source": "git::https://github.com/example/infra.git//modules/demo-module?ref=v1.2.3",
+                            "local_source": "./modules/demo-module",
                             "enable": True,
                         }
                     ]
@@ -510,6 +630,7 @@ def test_validate_sources_resolves_relative_local_module_path_from_component_sou
     elsewhere.mkdir(parents=True, exist_ok=True)
     monkeypatch.chdir(elsewhere)
     set_component_sources_file_override(sources_file)
+    set_component_sources_profile_override(SourceProfile.LOCAL)
     reset_component_sources_cache()
 
     resolved_path, issues, warnings = _validate_component_sources_registry()
@@ -533,7 +654,8 @@ def test_validate_sources_accepts_absolute_local_module_path(monkeypatch, tmp_pa
                     "tf_modules": [
                         {
                             "module": "demo-module",
-                            "source": str(module_dir),
+                            "portable_source": "git::https://github.com/example/infra.git//modules/demo-module?ref=v1.2.3",
+                            "local_source": str(module_dir),
                             "enable": True,
                         }
                     ]
@@ -547,6 +669,7 @@ def test_validate_sources_accepts_absolute_local_module_path(monkeypatch, tmp_pa
 
     monkeypatch.chdir(tmp_path)
     set_component_sources_file_override(sources_file)
+    set_component_sources_profile_override(SourceProfile.LOCAL)
     reset_component_sources_cache()
 
     resolved_path, issues, warnings = _validate_component_sources_registry()
@@ -567,7 +690,7 @@ def test_validate_sources_rejects_https_git_repo_module_source_without_git_prefi
                     "tf_modules": [
                         {
                             "module": "demo-module",
-                            "source": "https://github.com/example/platform-modules.git//modules/demo?ref=v1.2.3",
+                            "portable_source": "https://github.com/example/platform-modules.git//modules/demo?ref=v1.2.3",
                             "enable": True,
                         }
                     ]
@@ -601,7 +724,7 @@ def test_validate_sources_rejects_registry_style_module_source(
                     "tf_modules": [
                         {
                             "module": "demo-module",
-                            "source": "app.terraform.io/example/network/nebius",
+                            "portable_source": "app.terraform.io/example/network/nebius",
                             "enable": True,
                         }
                     ]

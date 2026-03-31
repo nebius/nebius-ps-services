@@ -29,14 +29,16 @@ def test_components_discovered_from_source_file(monkeypatch, tmp_path: Path) -> 
                     "tf_modules": [
                         {
                             "module": "mk8s",
-                            "source": "platform-infra/modules/mk8s",
+                            "portable_source": "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3",
+                            "local_source": "platform-infra/modules/mk8s",
                             "description": "Managed Kubernetes",
                             "group": "Compute",
                             "enable": True,
                         },
                         {
                             "module": "wireguard-jumphost",
-                            "source": "platform-infra/modules/wireguard-jumphost",
+                            "portable_source": "git::https://github.com/example/infra.git//modules/wireguard-jumphost?ref=v1.2.3",
+                            "local_source": "platform-infra/modules/wireguard-jumphost",
                             "description": "WireGuard module",
                             "group": "Network",
                             "enable": False,

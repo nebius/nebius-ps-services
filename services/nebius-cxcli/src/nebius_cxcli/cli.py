@@ -21,7 +21,7 @@ import urllib.request
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import ExitStack, suppress
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
@@ -31,7 +31,14 @@ import typer
 import yaml
 from rich.console import Console
 from rich.markup import escape
-from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 
 from . import __version__, native_logs
 from .component_defaults import (
@@ -43,10 +50,13 @@ from .component_defaults import (
     shared_default_input_sources,
 )
 from .component_sources import (
+    SourceProfile,
     component_output_root_name,
     load_component_sources,
     resolve_component_sources_file,
+    resolve_component_sources_profile,
     set_component_sources_file_override,
+    set_component_sources_profile_override,
 )
 from .component_wiring import (
     _UNRESOLVED,
@@ -69,6 +79,16 @@ from .config_loader import load_config
 from .config_template import starter_config_yaml
 from .deployment_status import deployment_status_reporting
 from .discover_ops import discover_configs
+from .email_settings import (
+    EmailSettings,
+    disable_email_settings,
+    email_environment_variables,
+    email_runtime_settings,
+    email_secret_values,
+    load_email_settings,
+    resolve_email_config_file,
+    write_email_settings,
+)
 from .flux_ops import (
     ensure_flux,
     flux_bootstrap_resources_installed,
@@ -81,17 +101,22 @@ from .flux_ops import (
 from .flux_render import render_flux
 from .generated_manifest import (
     load_generated_manifest,
+    manifest_path_for_generated_dir,
     runtime_config_from_manifest,
     terraform_tfvars_from_manifest,
     write_generated_manifest,
+    write_generated_manifest_to_path,
 )
 from .github_secrets import (
     build_github_environment_name,
+    delete_environment_secret,
+    delete_environment_variable,
     detect_github_repo_slug,
     ensure_github_environment,
     environment_secrets_presence,
     read_github_token,
     upsert_environment_secrets,
+    upsert_environment_variables,
 )
 from .helm_client import HelmChartReference, HelmClient
 from .iam_bootstrap import (
@@ -99,7 +124,6 @@ from .iam_bootstrap import (
     bootstrap_ci_service_account,
 )
 from .infra_render import (
-    RenderProfile,
     is_portable_module_source,
     render_terraform_artifacts,
     rendered_module_sources,
@@ -107,7 +131,7 @@ from .infra_render import (
 from .inventory_ops import write_inventory
 from .managed_tools import FLUX_VERSION_ENV, TERRAFORM_VERSION_ENV
 from .mk8s_preflight import validate_mk8s_network_preflight
-from .notify_ops import send_inventory_email
+from .notify_ops import InventoryEmailResult, send_inventory_email
 from .paths import (
     InstancePaths,
     resolve_generated_paths,
@@ -126,7 +150,7 @@ from .provider_options import (
     ProviderOptionLookup,
     TenantProjectValidationResult,
 )
-from .render import reset_generated_bundle
+from .render import promote_staged_generated_paths, reset_generated_bundle, staged_generated_paths
 from .runtime_config import read_path_with_catalog, to_plain_data
 from .runtime_introspection import (
     helm_chart_default_values,
@@ -191,13 +215,42 @@ _BENIGN_KUBECTL_OUTPUT_MARKERS = (
     "missing the kubectl.kubernetes.io/last-applied-configuration annotation",
     "The missing annotation will be patched automatically.",
 )
+_DEPLOYMENTS_ROOT_ARGUMENT_HELP = (
+    "Deployments root directory. Pass the folder that contains or will contain "
+    "instances/<client>--<tenant>/<project>/config.yaml; any existing directory works."
+)
+_CONFIG_YAML_ARGUMENT_HELP = (
+    "Path to instance config.yaml under the deployments root "
+    "(instances/<client>--<tenant>/<project>/config.yaml)."
+)
+_GENERATED_PATH_ARGUMENT_HELP = (
+    "Path to generated/, one of its subdirectories, or a file under generated/."
+)
+_GENERATED_INFRA_ARGUMENT_HELP = "Path to generated/ or generated/infra."
+_GENERATED_FLUX_ARGUMENT_HELP = "Path to generated/ or generated/flux."
+_GENERATED_INVENTORY_ARGUMENT_HELP = "Path to generated/ or generated/inventory."
+_COMPONENT_SOURCES_ARGUMENT_HELP = (
+    "Optional explicit component_sources.yaml path. "
+    "When omitted, validate-sources uses the normal component source resolution order."
+)
 app = typer.Typer(
     add_completion=False,
-    help="Nebius artifact generator and deployer: render from config.yaml, then deploy generated artifacts.",
+    help=(
+        "Nebius artifact generator and deployer. Target guide: create uses a "
+        "deployments root directory, discover uses a deployment-scope directory, "
+        "validate/render/bootstrap-ci use config.yaml, "
+        "validate-generated/deploy/terraform/flux/inventory/email use generated/, "
+        "validate-sources accepts optional component_sources.yaml, and "
+        "auth has no positional path."
+    ),
 )
-terraform_app = typer.Typer(help="Run infra-only Terraform operations against generated artifacts")
-flux_app = typer.Typer(help="Apply or bootstrap Flux using generated artifacts")
-inventory_app = typer.Typer(help="Refresh local inventory artifacts from generated bundle metadata")
+terraform_app = typer.Typer(
+    help="Run infra-only Terraform operations against generated/ or generated/infra."
+)
+flux_app = typer.Typer(help="Apply or bootstrap Flux using generated/ or generated/flux.")
+inventory_app = typer.Typer(
+    help="Refresh local inventory artifacts from generated/ or generated/inventory."
+)
 
 app.add_typer(terraform_app, name="terraform")
 app.add_typer(flux_app, name="flux")
@@ -244,10 +297,24 @@ def main_callback(
             ),
         ),
     ] = None,
+    source_profile: Annotated[
+        SourceProfile | None,
+        typer.Option(
+            "--source-profile",
+            help=(
+                "Global optional override for the active component source profile. "
+                "Defaults to portable. portable always uses portable_source. "
+                "local prefers local_source and falls back to portable_source when "
+                "local_source is unset."
+            ),
+            case_sensitive=False,
+        ),
+    ] = None,
 ) -> None:
     _ = version
     try:
         set_component_sources_file_override(component_sources_file)
+        set_component_sources_profile_override(source_profile)
     except ValueError as exc:
         _exit_with_error(RuntimeError(str(exc)))
 
@@ -259,9 +326,16 @@ def _load_context(config_path: Path) -> tuple:
     return config, paths
 
 
-def _load_runtime_context(config_path: Path) -> tuple:
+def _load_runtime_context(
+    config_path: Path,
+    *,
+    chart_meta_cache: _ChartMetaCache | None = None,
+) -> tuple:
     config, paths = _load_context(config_path)
-    _validate_active_component_sources(config)
+    if chart_meta_cache is None:
+        _validate_active_component_sources(config)
+    else:
+        _validate_active_component_sources(config, chart_meta_cache=chart_meta_cache)
     return config, paths
 
 
@@ -306,8 +380,7 @@ def _render_overwrite_warning(paths: InstancePaths) -> str | None:
     return (
         "Render will overwrite existing generated artifacts under "
         f"{paths.generated_dir}. Keep using `config.yaml` as the original render contract, "
-        "but treat the generated files as the deployable customer artifacts. "
-        "Bootstrap-owned `generated/flux/flux-system` is preserved."
+        "but treat the generated files as the deployable customer artifacts."
     )
 
 
@@ -339,6 +412,70 @@ def _exit_with_error(exc: Exception) -> None:
     raise typer.Exit(code=1) from exc
 
 
+@dataclass(frozen=True)
+class _ValidationPhase:
+    key: str
+    label: str
+
+
+@dataclass
+class _ValidationWorkCache:
+    chart_meta_cache: _ChartMetaCache = field(default_factory=dict)
+
+
+class _ValidationProgress:
+    def __init__(self, *, title: str, phases: Sequence[_ValidationPhase]) -> None:
+        self._title = title
+        self._phases = tuple(phases)
+        self._phase_by_key = {phase.key: phase for phase in self._phases}
+        self._progress: Progress | None = None
+        self._task_id: int | None = None
+
+    def __enter__(self) -> _ValidationProgress:
+        if _console_is_terminal():
+            self._progress = Progress(
+                SpinnerColumn(),
+                TextColumn("[bold cyan]{task.description}"),
+                BarColumn(),
+                MofNCompleteColumn(),
+                TimeElapsedColumn(),
+                console=console,
+                transient=False,
+            )
+            self._progress.__enter__()
+            self._task_id = self._progress.add_task(
+                self._title,
+                total=max(len(self._phases), 1),
+            )
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        if self._progress is not None:
+            if exc_type is None and self._task_id is not None:
+                self._progress.update(
+                    self._task_id,
+                    description=f"{self._title} completed",
+                    completed=max(len(self._phases), 1),
+                    total=max(len(self._phases), 1),
+                )
+            self._progress.__exit__(exc_type, exc, tb)
+            self._progress = None
+            self._task_id = None
+
+    def run(self, phase_key: str, fn: Callable[[], Any]) -> Any:
+        phase = self._phase_by_key[phase_key]
+        if self._progress is None:
+            console.print(f"[cyan]{self._title}:[/cyan] {phase.label}")
+        else:
+            assert self._task_id is not None
+            self._progress.update(self._task_id, description=f"{self._title}: {phase.label}")
+        result = fn()
+        if self._progress is not None:
+            assert self._task_id is not None
+            self._progress.advance(self._task_id, 1)
+        return result
+
+
 def _configure_quiet_native_logs() -> None:
     """Reduce noisy native gRPC/absl logs while keeping warnings/errors visible."""
     for env_name, env_value in native_logs.QUIET_NATIVE_LOG_ENV_DEFAULTS.items():
@@ -361,6 +498,16 @@ def _effective_catalog_component_source(
     if entry is not None and str(entry.source or "").strip():
         return str(entry.source).strip()
     return str(row.get("source", "")).strip()
+
+
+def _entry_module_metadata_source(
+    entry: ComponentEntry | None,
+    *,
+    fallback_source: str = "",
+) -> str:
+    if entry is not None and str(entry.metadata_source or "").strip():
+        return str(entry.metadata_source).strip()
+    return str(fallback_source).strip()
 
 
 def _effective_catalog_component_version(
@@ -421,12 +568,13 @@ def _require_git_root(start: Path) -> Path:
 def _validate_deployments_root_target(path: Path) -> None:
     if not path.exists():
         raise RuntimeError(
-            f"Deployments root does not exist: {path}. "
-            "Create an empty folder and pass that path to create/discover. "
+            f"Target directory does not exist: {path}. "
+            "Create an empty folder and pass that path to create, or pass an existing "
+            "deployment-scope directory to discover. "
             "For CI workflow generation, use a path inside the customer git repository."
         )
     if not path.is_dir():
-        raise RuntimeError(f"Deployments root must be a directory: {path}")
+        raise RuntimeError(f"Target directory must be a directory: {path}")
 
 
 def _value_or_prompt(
@@ -1287,9 +1435,13 @@ def _required_leaf_names_for_entry(entry: ComponentEntry) -> set[str]:
             )
         return required_names
     if entry.origin == "custom":
+        metadata_source = _entry_module_metadata_source(
+            entry,
+            fallback_source=str(entry.source or ""),
+        )
         return {
             _normalize_leaf_name(name)
-            for name in module_required_variables(str(entry.source or ""))
+            for name in module_required_variables(metadata_source)
         }
     return set()
 
@@ -1297,7 +1449,7 @@ def _required_leaf_names_for_entry(entry: ComponentEntry) -> set[str]:
 def _module_variable_specs_for_entry(entry: ComponentEntry) -> dict[str, Any]:
     if entry.scope != "infra" or entry.origin != "custom":
         return {}
-    source = str(entry.source or "").strip()
+    source = _entry_module_metadata_source(entry, fallback_source=str(entry.source or ""))
     if not source:
         return {}
     return {_normalize_leaf_name(item.name): item for item in module_variables(source)}
@@ -1995,7 +2147,7 @@ class _AppChartDependencyAdjustment:
 
 
 _ChartRef = tuple[str, str, str]  # (chart_name_or_ref, chart_repo, version)
-_ChartMetaCache = dict[_ChartRef, tuple[str | None, set[str], str | None]]
+_ChartMetaCache = dict[_ChartRef, tuple[str | None, str | None, set[str], str | None]]
 
 
 def _app_component_chart_ref_from_payload(
@@ -2060,7 +2212,7 @@ def _helm_chart_metadata(
     chart_repo: str,
     chart_version: str,
     cache: _ChartMetaCache,
-) -> tuple[str | None, set[str], str | None]:
+) -> tuple[str | None, str | None, set[str], str | None]:
     cache_key: _ChartRef = (chart_name_or_ref, chart_repo, chart_version)
     cached = cache.get(cache_key)
     if cached is not None:
@@ -2076,16 +2228,17 @@ def _helm_chart_metadata(
             )
         )
     except Exception as exc:
-        value = (None, set(), str(exc))
+        value = (None, None, set(), str(exc))
         cache[cache_key] = value
         return value
 
     if not isinstance(chart_payload, Mapping):
-        value = (None, set(), "chart metadata is not a mapping")
+        value = (None, None, set(), "chart metadata is not a mapping")
         cache[cache_key] = value
         return value
 
     chart_name = str(chart_payload.get("name", "")).strip().lower() or None
+    resolved_version = str(chart_payload.get("version", "")).strip() or None
     dependency_names: set[str] = set()
     raw_dependencies = chart_payload.get("dependencies", [])
     if isinstance(raw_dependencies, list):
@@ -2099,9 +2252,29 @@ def _helm_chart_metadata(
             if dependency_alias:
                 dependency_names.add(dependency_alias)
 
-    value = (chart_name, dependency_names, None)
+    value = (chart_name, resolved_version, dependency_names, None)
     cache[cache_key] = value
     return value
+
+
+def _normalized_chart_metadata(
+    value: tuple[Any, ...],
+) -> tuple[str | None, str | None, set[str], str | None]:
+    if len(value) == 4:
+        chart_name, resolved_version, dependency_names, error = value
+    elif len(value) == 3:
+        chart_name, dependency_names, error = value
+        resolved_version = None
+    else:
+        raise ValueError("chart metadata result must contain 3 or 4 fields")
+
+    normalized_name = str(chart_name).strip().lower() or None if chart_name is not None else None
+    normalized_version = str(resolved_version).strip() or None if resolved_version is not None else None
+    normalized_dependencies = {
+        str(item).strip().lower() for item in (dependency_names or set()) if str(item).strip()
+    }
+    normalized_error = str(error).strip() or None if error is not None else None
+    return normalized_name, normalized_version, normalized_dependencies, normalized_error
 
 
 def _helm_chart_dependency_names(
@@ -2111,11 +2284,13 @@ def _helm_chart_dependency_names(
     chart_version: str,
     cache: _ChartMetaCache,
 ) -> tuple[set[str], str | None]:
-    _chart_name, dependency_names, error = _helm_chart_metadata(
-        chart_name_or_ref=chart_name_or_ref,
-        chart_repo=chart_repo,
-        chart_version=chart_version,
-        cache=cache,
+    _chart_name, _resolved_version, dependency_names, error = _normalized_chart_metadata(
+        _helm_chart_metadata(
+            chart_name_or_ref=chart_name_or_ref,
+            chart_repo=chart_repo,
+            chart_version=chart_version,
+            cache=cache,
+        )
     )
     return dependency_names, error
 
@@ -2144,11 +2319,13 @@ def _app_component_match_names(
 
     chart_ref = _app_component_chart_ref_from_payload(payload, entry)
     if include_live_chart_name and cache is not None and chart_ref is not None:
-        chart_name, _deps, _error = _helm_chart_metadata(
-            chart_name_or_ref=chart_ref[0],
-            chart_repo=chart_ref[1],
-            chart_version=chart_ref[2],
-            cache=cache,
+        chart_name, _resolved_version, _deps, _error = _normalized_chart_metadata(
+            _helm_chart_metadata(
+                chart_name_or_ref=chart_ref[0],
+                chart_repo=chart_ref[1],
+                chart_version=chart_ref[2],
+                cache=cache,
+            )
         )
         if chart_name:
             names.add(chart_name)
@@ -2339,7 +2516,11 @@ def _enabled_component_ids(config: Any, *, scope: ComponentScope) -> set[str]:
     return {str(row["id"]) for row in _dynamic_enabled_app_chart_rows(payload)}
 
 
-def _validate_component_dependencies(config: Any) -> list[str]:
+def _validate_component_dependencies(
+    config: Any,
+    *,
+    chart_meta_cache: _ChartMetaCache | None = None,
+) -> list[str]:
     issues: list[str] = []
     payload = to_plain_data(config)
     if not isinstance(payload, dict):
@@ -2390,7 +2571,7 @@ def _validate_component_dependencies(config: Any) -> list[str]:
                     group=group,
                 )
             )
-        chart_cache: _ChartMetaCache = {}
+        chart_cache: _ChartMetaCache = chart_meta_cache if chart_meta_cache is not None else {}
         resolved_apps, app_adjustments, _ = _resolve_apps_chart_dependencies(
             payload=payload,
             selected_apps=selected_apps,
@@ -2461,8 +2642,11 @@ def _validate_provider_field(
             f"Available options include: {preview}"
         )
 
-
-def _validate_enabled_chart_sources(config: Any) -> list[str]:
+def _validate_enabled_chart_sources(
+    config: Any,
+    *,
+    chart_meta_cache: _ChartMetaCache | None = None,
+) -> list[str]:
     issues: list[str] = []
     payload = to_plain_data(config)
     if not isinstance(payload, dict):
@@ -2472,11 +2656,20 @@ def _validate_enabled_chart_sources(config: Any) -> list[str]:
         chart_id = str(chart_row["id"])
         chart_repo = str(chart_row.get("repo", "")).strip()
         chart_version = str(chart_row.get("version", "")).strip()
-        for issue in _helm_chart_validation_issues(
-            chart_name=chart_id,
-            chart_repo=chart_repo,
-            chart_version=chart_version,
-        ):
+        if chart_meta_cache is None:
+            issues_for_chart = _helm_chart_validation_issues(
+                chart_name=chart_id,
+                chart_repo=chart_repo,
+                chart_version=chart_version,
+            )
+        else:
+            issues_for_chart = _resolve_helm_chart_validation_issues(
+                chart_name=chart_id,
+                chart_repo=chart_repo,
+                chart_version=chart_version,
+                chart_meta_cache=chart_meta_cache,
+            )
+        for issue in issues_for_chart:
             issues.append(f"apps.charts[{chart_id}] {issue}")
     return issues
 
@@ -2544,6 +2737,7 @@ def _versions_match(expected: str, resolved: str) -> bool:
     return _normalized_version_token(expected) == _normalized_version_token(resolved)
 
 
+@lru_cache(maxsize=64)
 def _fetch_helm_repo_index(repo: str) -> tuple[dict[str, Any] | None, str | None]:
     normalized_repo = repo.strip().rstrip("/")
     index_url = f"{normalized_repo}/index.yaml"
@@ -2567,12 +2761,12 @@ def _fetch_helm_repo_index(repo: str) -> tuple[dict[str, Any] | None, str | None
     return payload, None
 
 
-@lru_cache(maxsize=64)
-def _helm_chart_validation_issues(
+def _resolve_helm_chart_validation_issues(
     *,
     chart_name: str,
     chart_repo: str,
     chart_version: str,
+    chart_meta_cache: _ChartMetaCache | None = None,
 ) -> tuple[str, ...]:
     issues: list[str] = []
     chart_id = chart_name.strip()
@@ -2635,29 +2829,24 @@ def _helm_chart_validation_issues(
     if issues:
         return tuple(issues)
 
-    try:
-        helm_client = HelmClient()
-    except Exception as exc:
-        return (
-            f"requires helm for source validation ({source_display}): {str(exc).strip() or 'helm unavailable'}",
+    metadata_cache = chart_meta_cache if chart_meta_cache is not None else {}
+    resolved_name, resolved_version, _dependency_names, error = _normalized_chart_metadata(
+        _helm_chart_metadata(
+            chart_name_or_ref=chart_id,
+            chart_repo=repo,
+            chart_version=version,
+            cache=metadata_cache,
         )
+    )
+    if error:
+        missing_helm = "helm not found in PATH" in error
+        if missing_helm:
+            return (f"requires helm for source validation ({source_display}): {error}",)
+        return (f"could not be resolved by helm ({source_display}): {error}",)
 
-    try:
-        chart_meta = helm_client.show_chart(
-            reference=HelmChartReference(
-                chart_name=chart_id,
-                chart_repo=repo,
-                chart_version=version,
-            )
-        )
-    except Exception as exc:
-        return (f"could not be resolved by helm ({source_display}): {exc}",)
-
-    resolved_name = str(chart_meta.get("name", "")).strip().lower()
     if resolved_name and resolved_name != chart_id.lower():
         issues.append(f"resolved chart name '{resolved_name}' does not match '{chart_id}'")
 
-    resolved_version = str(chart_meta.get("version", "")).strip()
     if version and resolved_version and not _versions_match(version, resolved_version):
         issues.append(
             f"resolved chart version '{resolved_version}' does not match configured version '{version}'"
@@ -2666,12 +2855,28 @@ def _helm_chart_validation_issues(
     return tuple(issues)
 
 
+@lru_cache(maxsize=64)
+def _helm_chart_validation_issues(
+    *,
+    chart_name: str,
+    chart_repo: str,
+    chart_version: str,
+) -> tuple[str, ...]:
+    return _resolve_helm_chart_validation_issues(
+        chart_name=chart_name,
+        chart_repo=chart_repo,
+        chart_version=chart_version,
+    )
+
+
 def _validate_component_sources_registry(
     *,
+    explicit: Path | None = None,
     progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> tuple[Path, list[str], list[str]]:
-    source_path = resolve_component_sources_file()
-    sources = load_component_sources()
+    source_path = resolve_component_sources_file(explicit=explicit)
+    sources = load_component_sources(explicit=explicit)
+    chart_meta_cache: _ChartMetaCache = {}
     issues: list[str] = []
     warnings: list[str] = []
     total_items = len(sources.tf_modules) + len(sources.helm_charts)
@@ -2749,10 +2954,11 @@ def _validate_component_sources_registry(
             duplicate_ids.add(chart_id)
         else:
             declared_entries[chart_id] = ("apps", chart)
-        for issue in _helm_chart_validation_issues(
+        for issue in _resolve_helm_chart_validation_issues(
             chart_name=chart_name,
             chart_repo=repo,
             chart_version=version,
+            chart_meta_cache=chart_meta_cache,
         ):
             issues.append(f"{chart_label} {issue}")
 
@@ -2776,11 +2982,17 @@ def _validate_component_sources_registry(
                     )
         else:
             module_source = str(source_entry.source or "").strip()
-            declared_module_outputs = set(module_output_names(module_source)) if module_source else set()
+            metadata_source = _entry_module_metadata_source(
+                None,
+                fallback_source=str(getattr(source_entry, "metadata_source", "") or module_source),
+            )
+            declared_module_outputs = (
+                set(module_output_names(metadata_source)) if metadata_source else set()
+            )
             declared_module_input_names = {
-                _normalize_leaf_name(name) for name in module_variable_names(module_source)
-            } if module_source else set()
-            is_local_like_source = bool(module_source) and not module_source.lower().startswith(
+                _normalize_leaf_name(name) for name in module_variable_names(metadata_source)
+            } if metadata_source else set()
+            is_local_like_source = bool(metadata_source) and not metadata_source.lower().startswith(
                 ("git::", "http://", "https://", "oci://")
             )
             for output in source_entry.outputs:
@@ -3071,6 +3283,7 @@ def _required_enabled_infra_field_issues(
             source = str(entry.source if entry is not None else "").strip()
         if not source:
             continue
+        inspection_source = _entry_module_metadata_source(entry, fallback_source=source)
 
         if entry is not None and entry.defaults:
             resolved_row = resolve_component_defaults(
@@ -3084,7 +3297,9 @@ def _required_enabled_infra_field_issues(
             if not isinstance(inputs, Mapping):
                 inputs = {}
 
-        required_leaf_names = {_normalize_leaf_name(name) for name in module_required_variables(source)}
+        required_leaf_names = {
+            _normalize_leaf_name(name) for name in module_required_variables(inspection_source)
+        }
         if not required_leaf_names:
             continue
         binding_by_leaf = shared_default_input_sources(entry) if entry is not None else {}
@@ -3195,10 +3410,7 @@ def _dynamic_enabled_app_chart_rows(payload: dict[str, Any]) -> list[dict[str, A
                 "repo": str(item.get("repo", "")).strip(),
                 "version": str(item.get("version", "")).strip(),
                 "namespace": str(item.get("namespace", "")).strip(),
-                "release-name": str(
-                    item.get("release-name", item.get("release_name", chart_id))
-                ).strip()
-                or chart_id,
+                "release-name": str(item.get("release-name", chart_id)).strip() or chart_id,
                 "values": dict(item.get("values", {})) if isinstance(item.get("values"), Mapping) else {},
             }
         )
@@ -3229,8 +3441,11 @@ def _enabled_custom_module_source_issues(
         entry = entry_by_id.get(component_id)
         if entry is None:
             continue
-        declared_outputs = set(module_output_names(source))
-        is_local_like_source = not source.lower().startswith(("git::", "http://", "https://", "oci://"))
+        inspection_source = _entry_module_metadata_source(entry, fallback_source=source)
+        declared_outputs = set(module_output_names(inspection_source))
+        is_local_like_source = not inspection_source.lower().startswith(
+            ("git::", "http://", "https://", "oci://")
+        )
         for output in entry.outputs:
             if output.kind != "terraform_output":
                 continue
@@ -3347,7 +3562,11 @@ def _active_handoff_issues(payload: dict[str, Any]) -> list[str]:
     return issues
 
 
-def _validate_active_component_sources(config: Any) -> None:
+def _validate_active_component_sources(
+    config: Any,
+    *,
+    chart_meta_cache: _ChartMetaCache | None = None,
+) -> None:
     payload = to_plain_data(config)
     if not isinstance(payload, dict):
         raise RuntimeError("Runtime config payload must be a mapping")
@@ -3357,7 +3576,7 @@ def _validate_active_component_sources(config: Any) -> None:
     issues.extend(_enabled_custom_module_source_issues(payload=payload, infra_entries=infra_entries))
     issues.extend(_active_component_input_binding_issues(payload))
     issues.extend(_active_handoff_issues(payload))
-    issues.extend(_validate_enabled_chart_sources(config))
+    issues.extend(_validate_enabled_chart_sources(config, chart_meta_cache=chart_meta_cache))
     if issues:
         raise RuntimeError("Active component source validation failed:\n  - " + "\n  - ".join(issues))
 
@@ -3423,13 +3642,15 @@ def _enabled_custom_module_input_schema_issues(
         if not isinstance(inputs, Mapping):
             continue
         source = str(row.get("source", "")).strip()
+        entry = entry_by_id.get(component_id)
         if not source:
-            source = str(entry_by_id.get(component_id).source if component_id in entry_by_id else "").strip()
-        if not source:
+            source = str(entry.source if entry is not None else "").strip()
+        inspection_source = _entry_module_metadata_source(entry, fallback_source=source)
+        if not inspection_source:
             continue
         declared_leaf_names = {
             _normalize_leaf_name(name)
-            for name in module_variable_names(source)
+            for name in module_variable_names(inspection_source)
         }
         if not declared_leaf_names:
             continue
@@ -3503,7 +3724,12 @@ def _placeholder_value_issues(payload: dict[str, Any]) -> list[str]:
     return issues
 
 
-def _validate_strict_config(config: Any) -> None:
+def _validate_strict_config(
+    config: Any,
+    *,
+    chart_meta_cache: _ChartMetaCache | None = None,
+    include_common_checks: bool = True,
+) -> None:
     """Validate deployment-readiness constraints via runtime/provider checks."""
     issues: list[str] = []
     payload = to_plain_data(config)
@@ -3511,12 +3737,13 @@ def _validate_strict_config(config: Any) -> None:
         raise RuntimeError("Runtime config payload must be a mapping")
 
     infra_entries = component_entries("infra")
-    issues.extend(_validate_component_dependencies(config))
+    if include_common_checks:
+        issues.extend(_validate_component_dependencies(config, chart_meta_cache=chart_meta_cache))
+        issues.extend(_active_component_input_binding_issues(payload))
+        issues.extend(_active_handoff_issues(payload))
+        issues.extend(_enabled_custom_module_source_issues(payload=payload, infra_entries=infra_entries))
     issues.extend(_required_enabled_infra_field_issues(payload=payload, infra_entries=infra_entries))
     issues.extend(_binding_conflict_issues(payload))
-    issues.extend(_active_component_input_binding_issues(payload))
-    issues.extend(_active_handoff_issues(payload))
-    issues.extend(_enabled_custom_module_source_issues(payload=payload, infra_entries=infra_entries))
     issues.extend(_enabled_custom_module_input_schema_issues(payload=payload, infra_entries=infra_entries))
     issues.extend(_enabled_provider_schema_match_issues(payload=payload, infra_entries=infra_entries))
     issues.extend(_placeholder_value_issues(payload))
@@ -3541,7 +3768,8 @@ def _validate_strict_config(config: Any) -> None:
                 issues=issues,
             )
 
-    issues.extend(_validate_enabled_chart_sources(config))
+    if include_common_checks:
+        issues.extend(_validate_enabled_chart_sources(config, chart_meta_cache=chart_meta_cache))
 
     if issues:
         raise RuntimeError("Strict validation failed:\n  - " + "\n  - ".join(issues))
@@ -4107,21 +4335,35 @@ def _ensure_terraform_backend_ready(config: Any, *, auto_auth_bootstrap: bool) -
         )
 
 
+def _cleanup_render_terraform_workdir(infra_dir: Path) -> None:
+    terraform_dir = infra_dir / ".terraform"
+    if terraform_dir.exists():
+        shutil.rmtree(terraform_dir, ignore_errors=True)
+    for path in (
+        infra_dir / "terraform.tfstate",
+        infra_dir / "terraform.tfstate.backup",
+        infra_dir / ".terraform.tfstate.lock.info",
+    ):
+        with suppress(FileNotFoundError):
+            path.unlink()
+
+
 def _try_generate_terraform_lock_file(
     config: Any,
     paths: InstancePaths,
 ) -> bool:
     try:
-        # Render performs create-if-missing runtime auth bootstrap for lockfile generation
-        # and can use the managed Terraform binary when Terraform is not already in PATH.
-        _ensure_terraform_backend_ready(config, auto_auth_bootstrap=True)
-        terraform_init(paths.infra_dir, extra_env=_terraform_runtime_env(config))
+        # Render keeps lockfile generation backendless so the canonical generated bundle
+        # does not retain local Terraform workdir state.
+        terraform_init(paths.infra_dir, backend=False)
     except Exception as exc:
         console.print(
             "[yellow]WARNING:[/yellow] "
             f"Unable to generate Terraform lock file at {paths.infra_dir / '.terraform.lock.hcl'}: {exc}"
         )
         return False
+    finally:
+        _cleanup_render_terraform_workdir(paths.infra_dir)
     return (paths.infra_dir / ".terraform.lock.hcl").exists()
 
 
@@ -4136,65 +4378,52 @@ def _first_non_empty_line(text: str) -> str | None:
 def _rendered_module_source_payload(
     config: Any,
     *,
-    render_profile: RenderProfile,
+    source_profile: SourceProfile,
 ) -> list[dict[str, Any]]:
     return [
         {
             "component_id": item.component_id,
             "module_name": item.module_name,
             "source": item.source,
-            "portable": item.portable,
         }
-        for item in rendered_module_sources(config, render_profile=render_profile)
+        for item in rendered_module_sources(config, source_profile=source_profile)
     ]
 
 
-def _generated_bundle_module_sources(
-    paths: InstancePaths,
-    manifest: Mapping[str, Any],
-) -> list[dict[str, str]]:
+def _generated_bundle_module_sources(manifest: Mapping[str, Any]) -> list[dict[str, str]]:
     render = manifest.get("render")
-    if isinstance(render, Mapping):
-        raw_sources = render.get("module_sources")
-        if isinstance(raw_sources, Sequence):
-            collected: list[dict[str, str]] = []
-            for item in raw_sources:
-                if not isinstance(item, Mapping):
-                    continue
-                source = str(item.get("source", "")).strip()
-                if not source:
-                    continue
-                collected.append(
-                    {
-                        "component_id": str(item.get("component_id", "")).strip(),
-                        "module_name": str(item.get("module_name", "")).strip(),
-                        "source": source,
-                    }
-                )
-            if collected:
-                return collected
+    if not isinstance(render, Mapping):
+        raise ValueError("Generated manifest is missing render metadata")
 
-    main_tf = paths.infra_dir / "main.tf"
-    if not main_tf.exists():
-        return []
+    raw_sources = render.get("module_sources")
+    if not isinstance(raw_sources, Sequence) or isinstance(raw_sources, (str, bytes)):
+        raise ValueError(
+            "Generated manifest is missing render.module_sources metadata. "
+            "Rerun `nebius-cxcli render <config.yaml>` with the current CLI."
+        )
 
-    pattern = re.compile(r'^\s*source\s*=\s*"([^"]+)"', re.MULTILINE)
-    return [
-        {
-            "component_id": "",
-            "module_name": "",
-            "source": match.group(1).strip(),
-        }
-        for match in pattern.finditer(main_tf.read_text(encoding="utf-8"))
-        if match.group(1).strip()
-    ]
+    collected: list[dict[str, str]] = []
+    for item in raw_sources:
+        if not isinstance(item, Mapping):
+            continue
+        source = str(item.get("source", "")).strip()
+        if not source:
+            continue
+        collected.append(
+            {
+                "component_id": str(item.get("component_id", "")).strip(),
+                "module_name": str(item.get("module_name", "")).strip(),
+                "source": source,
+            }
+        )
+    return collected
 
 
 def _validate_generated_bundle_portability(
     paths: InstancePaths,
     manifest: Mapping[str, Any],
 ) -> None:
-    module_sources = _generated_bundle_module_sources(paths, manifest)
+    module_sources = _generated_bundle_module_sources(manifest)
     non_portable = [
         item
         for item in module_sources
@@ -4213,7 +4442,7 @@ def _validate_generated_bundle_portability(
     )
     raise RuntimeError(
         "Generated bundle is not portable; local Terraform module sources are present: "
-        f"{formatted}. Rerender with --render-profile portable before committing or using CI."
+        f"{formatted}. Rerender with --source-profile portable before committing or using CI."
     )
 
 
@@ -4221,7 +4450,9 @@ def _write_generated_runtime_manifest(
     config: Any,
     paths: InstancePaths,
     *,
-    render_profile: RenderProfile,
+    source_profile: SourceProfile,
+    output_path: Path | None = None,
+    manifest_paths: InstancePaths | None = None,
 ) -> Path:
     sources = load_component_sources()
     tfvars_path = paths.infra_dir / "terraform.auto.tfvars.json"
@@ -4233,17 +4464,20 @@ def _write_generated_runtime_manifest(
     terraform_tfvars = json.loads(tfvars_path.read_text(encoding="utf-8"))
     if not isinstance(terraform_tfvars, Mapping):
         raise RuntimeError(f"Rendered Terraform inputs file must contain a JSON object: {tfvars_path}")
-    return write_generated_manifest(
+    write_kwargs = dict(
         config=config,
-        paths=paths,
+        paths=manifest_paths or paths,
         handoffs=_enabled_cluster_handoffs(config),
         required_component_outputs=_required_runtime_component_output_specs(config),
-        render_profile=render_profile.value,
-        module_sources=_rendered_module_source_payload(config, render_profile=render_profile),
+        source_profile=source_profile.value,
+        module_sources=_rendered_module_source_payload(config, source_profile=source_profile),
         terraform_tfvars=terraform_tfvars,
         flux_version=sources.cli.flux.version,
         terraform_version=sources.cli.terraform.version,
     )
+    if output_path is None:
+        return write_generated_manifest(**write_kwargs)
+    return write_generated_manifest_to_path(output_path, **write_kwargs)
 
 
 def _active_chart_count(config: Any) -> int:
@@ -5183,18 +5417,18 @@ def _resolve_github_repo_slug(
     return detect_github_repo_slug(repo_root)
 
 
-def _preflight_bootstrap_ci_auth(
+def _resolve_bootstrap_ci_github_target(
     *,
     github_repo: str | None,
     github_token_env: str,
     repo_root: Path,
-) -> str:
+) -> tuple[str, str]:
     repo_slug = _resolve_github_repo_slug(explicit_repo_slug=github_repo, repo_root=repo_root)
     github_token = read_github_token(preferred_env=github_token_env)
     if github_token:
-        return repo_slug
+        return repo_slug, github_token
     raise RuntimeError(
-        "Automatic CI auth bootstrap requires a GitHub token. "
+        "GitHub bootstrap reconciliation requires a GitHub token. "
         f"No token found in ${github_token_env}, $GH_TOKEN, or $GITHUB_TOKEN."
     )
 
@@ -5213,6 +5447,84 @@ def _sync_github_ci_secrets(
         token=github_token,
         environment_name=github_environment,
         secrets=payload,
+    )
+
+
+def _load_local_email_settings(*, config_path: Path | None = None) -> EmailSettings:
+    return load_email_settings(explicit=config_path)
+
+
+@dataclass(frozen=True)
+class GitHubEmailSyncResult:
+    updated_vars: list[str]
+    updated_secrets: list[str]
+    removed_vars: list[str]
+    removed_secrets: list[str]
+
+
+def _sync_github_email_settings(
+    *,
+    repo_slug: str,
+    github_environment: str,
+    github_token: str,
+    settings: EmailSettings,
+) -> GitHubEmailSyncResult:
+    ensure_github_environment(
+        repo_slug=repo_slug,
+        token=github_token,
+        environment_name=github_environment,
+    )
+    managed_vars = ("SMTP_HOST", "SMTP_PORT", "SMTP_STARTTLS", "SMTP_FROM")
+    managed_secrets = ("SMTP_USERNAME", "SMTP_PASSWORD")
+    desired_vars = email_environment_variables(settings) if settings.enabled else {}
+    desired_secrets = email_secret_values(settings) if settings.enabled else {}
+    updated_vars = (
+        upsert_environment_variables(
+            repo_slug=repo_slug,
+            token=github_token,
+            environment_name=github_environment,
+            variables=desired_vars,
+        )
+        if desired_vars
+        else []
+    )
+    updated_secrets = (
+        upsert_environment_secrets(
+            repo_slug=repo_slug,
+            token=github_token,
+            environment_name=github_environment,
+            secrets=desired_secrets,
+        )
+        if desired_secrets
+        else []
+    )
+    removed_vars = [
+        name
+        for name in managed_vars
+        if name not in desired_vars
+        and delete_environment_variable(
+            repo_slug=repo_slug,
+            token=github_token,
+            environment_name=github_environment,
+            variable_name=name,
+        )
+    ]
+    removed_secrets = [
+        name
+        for name in managed_secrets
+        if name not in desired_secrets
+        and delete_environment_secret(
+            repo_slug=repo_slug,
+            token=github_token,
+            environment_name=github_environment,
+            secret_name=name,
+        )
+    ]
+    return GitHubEmailSyncResult(
+        updated_vars=updated_vars,
+        updated_secrets=updated_secrets,
+        removed_vars=removed_vars,
+        removed_secrets=removed_secrets,
     )
 
 
@@ -5377,6 +5689,7 @@ _DEPLOYMENTS_GITIGNORE_LINES: tuple[str, ...] = (
     "instances/*/*/generated/infra/*.tfstate.*",
     "instances/*/*/generated/infra/.terraform.tfstate.lock.info",
     "instances/*/*/generated/infra/crash.log",
+    "instances/*/*/generated/infra/crash.*.log",
     "instances/*/*/generated/infra/*.tfplan",
     "instances/*/*/generated/infra/plan.out",
     "instances/*/*/generated/infra/terraform.auto.tfvars.json",
@@ -5599,7 +5912,7 @@ def _filter_runtime_payload_for_selected_components(
                 row["version"] = str(entry.version)
             if not str(row.get("namespace", "")).strip():
                 row["namespace"] = str(entry.default_namespace or "").strip() or entry.id
-            if not str(row.get("release-name", row.get("release_name", ""))).strip():
+            if not str(row.get("release-name", "")).strip():
                 row["release-name"] = str(entry.default_release_name or "").strip() or entry.id
             if "group" not in row or not str(row.get("group", "")).strip():
                 raw_group = str(entry.group or "").strip().lower()
@@ -5644,16 +5957,13 @@ def _seed_infra_project_scope_defaults(
         source = _effective_catalog_component_source(row=item, entry=entry)
         if not source:
             continue
-        leaf_names = {_normalize_leaf_name(name) for name in module_variable_names(source)}
+        inspection_source = _entry_module_metadata_source(entry, fallback_source=source)
+        leaf_names = {_normalize_leaf_name(name) for name in module_variable_names(inspection_source)}
         if not leaf_names:
             continue
-        if "parent_id" in leaf_names and all(
-            alias not in inputs for alias in ("parent_id", "parent-id")
-        ):
+        if "parent_id" in leaf_names and "parent_id" not in inputs:
             inputs["parent_id"] = project_id
-        if "project_id" in leaf_names and all(
-            alias not in inputs for alias in ("project_id", "project-id")
-        ):
+        if "project_id" in leaf_names and "project_id" not in inputs:
             inputs["project_id"] = project_id
 
 
@@ -5784,14 +6094,16 @@ def _scaffold_instance(
     )
 
 
-@app.command("create")
+@app.command(
+    "create",
+    short_help="Use DEPLOYMENTS_ROOT to create or reconcile config.yaml plus generated/ skeleton.",
+)
 def create_command(
     target_path: Annotated[
         Path,
         typer.Argument(
-            help=(
-                "Deployments root folder path. Any existing directory works."
-            )
+            metavar="DEPLOYMENTS_ROOT",
+            help=_DEPLOYMENTS_ROOT_ARGUMENT_HELP,
         ),
     ],
     client_name: Annotated[
@@ -5890,7 +6202,7 @@ def create_command(
         ),
     ] = False,
 ) -> None:
-    """Create or reconcile one instance config via provider-driven component wizard (scaffold only)."""
+    """Create or reconcile one instance from a deployments root directory."""
     try:
         base_path = target_path.resolve()
         _validate_deployments_root_target(base_path)
@@ -6157,12 +6469,19 @@ def create_command(
         _exit_with_error(exc)
 
 
-@app.command("bootstrap-ci")
+@app.command(
+    "bootstrap-ci",
+    short_help="Use CONFIG_YAML to reconcile the customer GitHub workflow, email settings, and optional CI auth.",
+)
 def bootstrap_ci_command(
     config_path: Annotated[
         Path,
         typer.Argument(
-            help="Path to instance config.yaml inside the target customer git repository"
+            metavar="CONFIG_YAML",
+            help=(
+                "Path to instance config.yaml inside the target customer git repository. "
+                "The file must already exist inside that repo checkout."
+            ),
         ),
     ],
     auth_bootstrap: Annotated[
@@ -6170,8 +6489,8 @@ def bootstrap_ci_command(
         typer.Option(
             "--auth-bootstrap/--no-auth-bootstrap",
             help=(
-                "Full CI bootstrap: ensure Nebius CI service account + keys and sync GitHub environment secrets "
-                "(enabled by default)"
+                "Ensure Nebius CI service account + keys and sync GitHub environment auth secrets "
+                "(enabled by default). Email settings are reconciled from local `email --setup` on every run."
             ),
         ),
     ] = True,
@@ -6181,9 +6500,8 @@ def bootstrap_ci_command(
             "--github-repo",
             help=(
                 "Optional override for the target GitHub repository slug '<owner>/<repo>' "
-                "used for auth bootstrap and environment secret sync. Normally auto-detected "
-                "from the target repository origin remote; valid only when "
-                "--auth-bootstrap is enabled."
+                "used for workflow bootstrap reconciliation, email setting sync, and optional Nebius auth bootstrap. "
+                "Normally auto-detected from the target repository origin remote."
             ),
         ),
     ] = None,
@@ -6192,9 +6510,8 @@ def bootstrap_ci_command(
         typer.Option(
             "--github-token-env",
             help=(
-                "Environment variable name holding the GitHub token used for auth bootstrap "
-                "and environment secret sync (falls back to GH_TOKEN/GITHUB_TOKEN; valid only "
-                "when --auth-bootstrap is enabled)."
+                "Environment variable name holding the GitHub token used for GitHub workflow/environment reconciliation, "
+                "email setting sync, and optional auth bootstrap (falls back to GH_TOKEN/GITHUB_TOKEN)."
             ),
         ),
     ] = "GH_TOKEN",
@@ -6210,13 +6527,8 @@ def bootstrap_ci_command(
         ),
     ] = None,
 ) -> None:
-    """Generate or reconcile the CLI-managed customer GitHub workflow and optionally bootstrap CI auth."""
+    """Generate or reconcile the CLI-managed customer GitHub workflow and environment settings for one instance config.yaml."""
     try:
-        if not auth_bootstrap and (github_repo is not None or github_token_env != "GH_TOKEN"):
-            raise RuntimeError(
-                "--github-repo and --github-token-env are valid only when --auth-bootstrap is enabled."
-            )
-
         config, paths = _load_context(config_path)
         resolved_cli_ref = str(cli_ref or "").strip() or default_cli_ref()
         repo_root = _require_git_root(paths.deployments_dir)
@@ -6224,16 +6536,18 @@ def bootstrap_ci_command(
             client_name=str(config.client_info.client_name),
             project_id=str(config.client_info.nebius.project_id),
         )
-        resolved_github_repo: str | None = None
-        if auth_bootstrap:
-            resolved_github_repo = _preflight_bootstrap_ci_auth(
-                github_repo=github_repo,
-                github_token_env=github_token_env,
-                repo_root=repo_root,
-            )
+        resolved_github_repo, github_token = _resolve_bootstrap_ci_github_target(
+            github_repo=github_repo,
+            github_token_env=github_token_env,
+            repo_root=repo_root,
+        )
+        email_settings = _load_local_email_settings()
         workflow = _ensure_ci_workflow_for_deployments_root(
             deployments_root=paths.deployments_dir,
             cli_ref=resolved_cli_ref,
+        )
+        gitignore_result = _ensure_deployments_gitignore(
+            deployments_root=paths.deployments_dir,
         )
 
         if auth_bootstrap:
@@ -6252,6 +6566,12 @@ def bootstrap_ci_command(
                 endpoint=None,
                 sdk_config_file=None,
             )
+        email_sync = _sync_github_email_settings(
+            repo_slug=resolved_github_repo,
+            github_environment=github_environment,
+            github_token=github_token,
+            settings=email_settings,
+        )
 
         console.print(f"Repository root: {workflow.repo_root}")
         if resolved_github_repo:
@@ -6263,18 +6583,55 @@ def bootstrap_ci_command(
                 console.print(f"Created: {workflow.workflow_file}")
         else:
             console.print(f"Workflow already aligned: {workflow.workflow_file}")
+        if gitignore_result.path is not None:
+            if gitignore_result.wrote:
+                console.print(f"Ensured deployments .gitignore: {gitignore_result.path}")
+            else:
+                console.print(f"Deployments .gitignore up-to-date: {gitignore_result.path}")
         console.print(f"GitHub environment: {github_environment}")
         console.print(f"Workflow CLI ref: {resolved_cli_ref}")
+        if email_settings.enabled:
+            console.print(
+                "Email settings synced: "
+                f"{len(email_sync.updated_vars)} environment variable(s), "
+                f"{len(email_sync.updated_secrets)} secret(s)"
+            )
+            if email_sync.removed_vars or email_sync.removed_secrets:
+                console.print(
+                    "Removed stale email settings: "
+                    f"{len(email_sync.removed_vars)} environment variable(s), "
+                    f"{len(email_sync.removed_secrets)} secret(s)"
+                )
+        else:
+            if email_sync.removed_vars or email_sync.removed_secrets:
+                console.print(
+                    "Local email settings are disabled; cleared GitHub email settings: "
+                    f"{len(email_sync.removed_vars)} environment variable(s), "
+                    f"{len(email_sync.removed_secrets)} secret(s)"
+                )
+            else:
+                console.print(
+                    "Local email settings are disabled and GitHub email settings are already absent."
+                )
         if not auth_bootstrap:
-            console.print("Skipped CI auth bootstrap/secrets sync.")
+            console.print("Skipped Nebius CI auth bootstrap/secrets sync.")
         console.print("CI bootstrap completed.")
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 
 
-@app.command("validate")
+@app.command(
+    "validate",
+    short_help="Use CONFIG_YAML to validate runtime config, sources, and provider/chart wiring.",
+)
 def validate_command(
-    config_path: Annotated[Path, typer.Argument(help="Path to instance config.yaml")],
+    config_path: Annotated[
+        Path,
+        typer.Argument(
+            metavar="CONFIG_YAML",
+            help=_CONFIG_YAML_ARGUMENT_HELP,
+        ),
+    ],
     strict: Annotated[
         bool,
         typer.Option(
@@ -6282,28 +6639,60 @@ def validate_command(
             help="Enable deployment-readiness checks (reject starter placeholders)",
         ),
     ] = False,
-    render_profile: Annotated[
-        RenderProfile,
-        typer.Option(
-            "--render-profile",
-            help=(
-                "Render contract to validate against: portable rejects bundles that would depend "
-                "on local Terraform module paths, local-dev allows checked-out module paths."
-            ),
-            case_sensitive=False,
-        ),
-    ] = RenderProfile.PORTABLE,
 ) -> None:
-    """Validate config.yaml with runtime source + provider/chart checks."""
+    """Validate one instance config.yaml with runtime source and provider/chart checks."""
     try:
-        config, _ = _load_runtime_context(config_path)
-        dependency_issues = _validate_component_dependencies(config)
-        if dependency_issues:
-            raise RuntimeError("Runtime validation failed:\n  - " + "\n  - ".join(dependency_issues))
+        phase_defs = [
+            _ValidationPhase("load-config", "Load config and component catalog"),
+            _ValidationPhase("active-sources", "Validate active component sources"),
+            _ValidationPhase("dependencies", "Validate component dependencies"),
+            _ValidationPhase("module-schema", "Validate Terraform module inputs"),
+        ]
         if strict:
-            _validate_strict_config(config)
-            validate_mk8s_network_preflight(config)
-        rendered_module_sources(config, render_profile=render_profile)
+            phase_defs.extend(
+                [
+                    _ValidationPhase("strict-readiness", "Validate strict deployment readiness"),
+                    _ValidationPhase("mk8s-preflight", "Validate MK8s network preflight"),
+                ]
+            )
+
+        validation_cache = _ValidationWorkCache()
+        resolved_source_profile = resolve_component_sources_profile()
+        with _ValidationProgress(title="Runtime validation", phases=phase_defs) as progress:
+            config, _ = progress.run("load-config", lambda: _load_context(config_path))
+            progress.run(
+                "active-sources",
+                lambda: _validate_active_component_sources(
+                    config,
+                    chart_meta_cache=validation_cache.chart_meta_cache,
+                ),
+            )
+            dependency_issues = progress.run(
+                "dependencies",
+                lambda: _validate_component_dependencies(
+                    config,
+                    chart_meta_cache=validation_cache.chart_meta_cache,
+                ),
+            )
+            if dependency_issues:
+                raise RuntimeError(
+                    "Runtime validation failed:\n  - " + "\n  - ".join(dependency_issues)
+                )
+            progress.run(
+                "module-schema",
+                lambda: rendered_module_sources(config, source_profile=resolved_source_profile),
+            )
+            if strict:
+                progress.run(
+                    "strict-readiness",
+                    lambda: _validate_strict_config(
+                        config,
+                        chart_meta_cache=validation_cache.chart_meta_cache,
+                        include_common_checks=False,
+                    ),
+                )
+                progress.run("mk8s-preflight", lambda: validate_mk8s_network_preflight(config))
+
         if strict:
             console.print(f"[green]Valid (strict):[/green] {config_path}")
             return
@@ -6312,11 +6701,17 @@ def validate_command(
         _exit_with_error(exc)
 
 
-@app.command("validate-generated")
+@app.command(
+    "validate-generated",
+    short_help="Use GENERATED_PATH to validate an existing rendered bundle without rerendering.",
+)
 def validate_generated_command(
     generated_path: Annotated[
         Path,
-        typer.Argument(help="Path to generated/ or one of its subdirectories"),
+        typer.Argument(
+            metavar="GENERATED_PATH",
+            help=_GENERATED_PATH_ARGUMENT_HELP,
+        ),
     ],
     auto_auth_bootstrap: Annotated[
         bool,
@@ -6331,30 +6726,60 @@ def validate_generated_command(
             "--portable",
             help=(
                 "Require the generated bundle to be portable by rejecting local Terraform module "
-                "sources in generated/infra/main.tf or the generated manifest."
+                "sources recorded in the generated manifest."
             ),
         ),
     ] = False,
 ) -> None:
-    """Validate an existing generated artifact bundle without rerendering it."""
+    """Validate an existing generated/ bundle or subpath without rerendering it."""
     try:
         config, paths, _manifest = _load_generated_context(generated_path)
-        if not paths.infra_dir.exists():
-            raise RuntimeError(f"Rendered infra directory does not exist: {paths.infra_dir}")
-        _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
-        terraform_validate(paths.infra_dir, extra_env=_terraform_runtime_env(config))
+        phase_defs = [
+            _ValidationPhase("backend", "Prepare Terraform backend auth"),
+            _ValidationPhase("terraform", "Validate generated Terraform bundle"),
+        ]
         if _active_chart_count(config) > 0:
-            if not shutil.which("kubectl"):
-                raise RuntimeError("kubectl is required for `validate-generated` but was not found in PATH")
-            subprocess.run(
-                ["kubectl", "kustomize", str(paths.flux_dir)],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
+            phase_defs.append(_ValidationPhase("flux", "Validate rendered Flux manifests"))
         if portable:
-            _validate_generated_bundle_portability(paths, _manifest)
+            phase_defs.append(_ValidationPhase("portable", "Validate generated bundle portability"))
+
+        with _ValidationProgress(title="Generated artifact validation", phases=phase_defs) as progress:
+            if not paths.infra_dir.exists():
+                raise RuntimeError(f"Rendered infra directory does not exist: {paths.infra_dir}")
+            progress.run(
+                "backend",
+                lambda: _ensure_terraform_backend_ready(
+                    config,
+                    auto_auth_bootstrap=auto_auth_bootstrap,
+                ),
+            )
+            progress.run(
+                "terraform",
+                lambda: terraform_validate(
+                    paths.infra_dir,
+                    extra_env=_terraform_runtime_env(config),
+                ),
+            )
+            if _active_chart_count(config) > 0:
+                def _validate_flux_manifests() -> None:
+                    if not shutil.which("kubectl"):
+                        raise RuntimeError(
+                            "kubectl is required for `validate-generated` but was not found in PATH"
+                        )
+                    subprocess.run(
+                        ["kubectl", "kustomize", str(paths.flux_dir)],
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                    )
+
+                progress.run("flux", _validate_flux_manifests)
+            if portable:
+                progress.run(
+                    "portable",
+                    lambda: _validate_generated_bundle_portability(paths, _manifest),
+                )
         console.print(f"[green]Valid generated artifacts:[/green] {paths.generated_dir}")
     except subprocess.CalledProcessError as exc:  # pragma: no cover - CLI surface
         detail = _first_non_empty_line(exc.stderr or exc.stdout or "")
@@ -6363,11 +6788,22 @@ def validate_generated_command(
         _exit_with_error(exc)
 
 
-@app.command("validate-sources")
-def validate_sources_command() -> None:
+@app.command(
+    "validate-sources",
+    short_help="Validate component_sources.yaml from an explicit path or the normal resolution order.",
+)
+def validate_sources_command(
+    component_sources_path: Annotated[
+        Path | None,
+        typer.Argument(
+            metavar="COMPONENT_SOURCES_YAML",
+            help=_COMPONENT_SOURCES_ARGUMENT_HELP,
+        ),
+    ] = None,
+) -> None:
     """Validate component_sources.yaml (Terraform module paths and Helm chart refs)."""
     try:
-        sources = load_component_sources()
+        sources = load_component_sources(explicit=component_sources_path)
         progress_items: list[tuple[str, str]] = []
         for module in sources.tf_modules:
             module_id = module.module.strip().lower() or "?"
@@ -6436,6 +6872,7 @@ def validate_sources_command() -> None:
                 )
 
             source_path, issues, warnings = _validate_component_sources_registry(
+                explicit=component_sources_path,
                 progress_callback=_progress_update
             )
         for warning in warnings:
@@ -6450,7 +6887,13 @@ def validate_sources_command() -> None:
         _exit_with_error(exc)
 
 
-@app.command("auth")
+@app.command(
+    "auth",
+    short_help=(
+        "Manage runtime auth profile actions; use --instance-config CONFIG_YAML or "
+        "--project-id, or omit both for global --validate-profile."
+    ),
+)
 def auth_command(
     project_id: Annotated[
         str | None,
@@ -6517,7 +6960,10 @@ def auth_command(
         bool,
         typer.Option(
             "--validate-profile",
-            help="Validate local runtime auth cache and Nebius auth key visibility",
+            help=(
+                "Validate local runtime auth cache and Nebius auth key visibility. "
+                "When no project/config target is provided, validates all cached profiles."
+            ),
         ),
     ] = False,
     create: Annotated[
@@ -6542,7 +6988,7 @@ def auth_command(
         ),
     ] = False,
 ) -> None:
-    """Manage runtime auth profile and optional CI environment-secret sync."""
+    """Manage runtime auth profiles, optionally scoped by config.yaml/project ID or across all cached profiles for validate-only runs."""
     try:
         if not bootstrap_ci and (github_repo is not None or github_token_env != "GH_TOKEN"):
             raise RuntimeError(
@@ -6686,9 +7132,18 @@ def auth_command(
         _exit_with_error(exc)
 
 
-@app.command("render")
+@app.command(
+    "render",
+    short_help="Use CONFIG_YAML to render and transactionally replace generated/ artifacts.",
+)
 def render_command(
-    config_path: Annotated[Path, typer.Argument(help="Path to instance config.yaml")],
+    config_path: Annotated[
+        Path,
+        typer.Argument(
+            metavar="CONFIG_YAML",
+            help=_CONFIG_YAML_ARGUMENT_HELP,
+        ),
+    ],
     force: Annotated[
         bool,
         typer.Option(
@@ -6696,49 +7151,59 @@ def render_command(
             help="Overwrite an existing generated bundle without interactive confirmation.",
         ),
     ] = False,
-    render_profile: Annotated[
-        RenderProfile,
-        typer.Option(
-            "--render-profile",
-            help=(
-                "Generated artifact profile: portable emits Git/registry Terraform module sources "
-                "safe for CI and other machines, local-dev preserves resolved local module paths."
-            ),
-            case_sensitive=False,
-        ),
-    ] = RenderProfile.PORTABLE,
 ) -> None:
-    """Render and overwrite generated artifacts from config.yaml, prompting before a reset unless --force is provided."""
+    """Render and transactionally replace generated artifacts from one instance config.yaml, prompting before overwrite unless --force is provided."""
     try:
         config, paths = _load_runtime_context(config_path)
+        resolved_source_profile = resolve_component_sources_profile()
         if not _confirm_render_overwrite(paths, force=force):
             console.print(
                 "[yellow]Render cancelled[/yellow]; existing generated artifacts were left untouched."
             )
             raise typer.Exit(code=0)
-        reset_generated_bundle(paths)
         gitignore_result = _ensure_deployments_gitignore(
             deployments_root=paths.deployments_dir,
         )
-        paths.infra_dir.mkdir(parents=True, exist_ok=True)
-        paths.flux_dir.mkdir(parents=True, exist_ok=True)
-        paths.inventory_dir.mkdir(parents=True, exist_ok=True)
-        written: list[Path] = []
-        written.extend(render_terraform_artifacts(config, paths, render_profile=render_profile))
         component_output_values = _runtime_component_output_values(config, paths)
-        written.extend(render_flux(config, paths, component_output_values=component_output_values))
-        write_inventory(config, paths)
-        manifest_path = _write_generated_runtime_manifest(
-            config,
-            paths,
-            render_profile=render_profile,
-        )
+        staged_paths = staged_generated_paths(paths)
+        try:
+            staged_paths.infra_dir.mkdir(parents=True, exist_ok=True)
+            staged_paths.flux_dir.mkdir(parents=True, exist_ok=True)
+            staged_paths.inventory_dir.mkdir(parents=True, exist_ok=True)
+            written: list[Path] = []
+            written.extend(
+                render_terraform_artifacts(
+                    config,
+                    staged_paths,
+                    source_profile=resolved_source_profile,
+                )
+            )
+            written.extend(
+                render_flux(
+                    config,
+                    staged_paths,
+                    component_output_values=component_output_values,
+                )
+            )
+            write_inventory(config, staged_paths)
+            _write_generated_runtime_manifest(
+                config,
+                staged_paths,
+                source_profile=resolved_source_profile,
+                output_path=manifest_path_for_generated_dir(staged_paths.generated_dir),
+                manifest_paths=paths,
+            )
+            promote_staged_generated_paths(staged_paths, paths)
+        except Exception:
+            reset_generated_bundle(staged_paths)
+            raise
+        manifest_path = manifest_path_for_generated_dir(paths.generated_dir)
         lock_generated = _try_generate_terraform_lock_file(config, paths)
         console.print(f"Rendered {len(sorted(written))} file(s) under {paths.generated_dir}")
-        console.print(f"Render profile: {render_profile.value}")
-        if render_profile == RenderProfile.LOCAL_DEV:
+        console.print(f"Source profile: {resolved_source_profile.value}")
+        if resolved_source_profile == SourceProfile.LOCAL:
             console.print(
-                "[yellow]WARNING:[/yellow] local-dev render profile may embed local Terraform "
+                "[yellow]WARNING:[/yellow] local source profile may embed local Terraform "
                 "module paths; do not commit or use these generated artifacts in CI."
             )
         console.print(f"Generated deployment manifest: {manifest_path}")
@@ -6804,12 +7269,16 @@ def mk8s_token_command(
         _exit_with_error(exc)
 
 
-@app.command("deploy")
+@app.command(
+    "deploy",
+    short_help="Use GENERATED_PATH to deploy locally from an existing rendered bundle.",
+)
 def deploy_command(
     generated_path: Annotated[
         Path,
         typer.Argument(
-            help="Path to generated/, generated/infra, generated/flux, or a file under generated/"
+            metavar="GENERATED_PATH",
+            help=_GENERATED_PATH_ARGUMENT_HELP,
         ),
     ],
     auto_auth_bootstrap: Annotated[
@@ -6822,11 +7291,12 @@ def deploy_command(
         ),
     ] = True,
 ) -> None:
-    """Deploy an existing generated artifact bundle locally.
+    """Deploy an existing generated artifact bundle locally from generated/ or a subpath.
 
     This command runs Terraform apply, refresh inventory, and applies Flux
-    from the committed generated bundle only. It does not create or update
-    GitHub workflows, environments, or CI secrets; use
+    from the committed generated bundle only. It does not run `flux bootstrap`
+    or configure GitOps sync, and it does not create or update GitHub
+    workflows, environments, or CI secrets; use
     `nebius-cxcli bootstrap-ci <config.yaml>` explicitly for that.
     """
     try:
@@ -6842,11 +7312,17 @@ def deploy_command(
         _exit_with_error(exc)
 
 
-@terraform_app.command("plan")
+@terraform_app.command(
+    "plan",
+    short_help="Use GENERATED_PATH to run Terraform plan from generated/infra.",
+)
 def terraform_plan_command(
     generated_path: Annotated[
         Path,
-        typer.Argument(help="Path to generated/ or generated/infra"),
+        typer.Argument(
+            metavar="GENERATED_PATH",
+            help=_GENERATED_INFRA_ARGUMENT_HELP,
+        ),
     ],
     auto_auth_bootstrap: Annotated[
         bool,
@@ -6856,7 +7332,7 @@ def terraform_plan_command(
         ),
     ] = True,
 ) -> None:
-    """Run terraform init and plan against an existing generated infra bundle; auto-download Terraform if missing."""
+    """Run Terraform plan against an existing generated/infra bundle."""
     try:
         config, paths, _manifest = _load_generated_context(generated_path)
         _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
@@ -6868,11 +7344,17 @@ def terraform_plan_command(
         _exit_with_error(exc)
 
 
-@terraform_app.command("apply")
+@terraform_app.command(
+    "apply",
+    short_help="Use GENERATED_PATH to run Terraform apply from generated/infra.",
+)
 def terraform_apply_command(
     generated_path: Annotated[
         Path,
-        typer.Argument(help="Path to generated/ or generated/infra"),
+        typer.Argument(
+            metavar="GENERATED_PATH",
+            help=_GENERATED_INFRA_ARGUMENT_HELP,
+        ),
     ],
     auto_auth_bootstrap: Annotated[
         bool,
@@ -6882,7 +7364,7 @@ def terraform_apply_command(
         ),
     ] = True,
 ) -> None:
-    """Refresh inventory, then run convergent terraform apply against existing generated infra; auto-download Terraform if missing."""
+    """Refresh inventory, then run Terraform apply against an existing generated/infra bundle."""
     try:
         config, paths, _manifest = _load_generated_context(generated_path)
         _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
@@ -6896,11 +7378,17 @@ def terraform_apply_command(
         _exit_with_error(exc)
 
 
-@terraform_app.command("unlock")
+@terraform_app.command(
+    "unlock",
+    short_help="Use GENERATED_PATH to inspect or clear a Terraform lock in generated/infra.",
+)
 def terraform_unlock_command(
     generated_path: Annotated[
         Path,
-        typer.Argument(help="Path to generated/ or generated/infra"),
+        typer.Argument(
+            metavar="GENERATED_PATH",
+            help=_GENERATED_INFRA_ARGUMENT_HELP,
+        ),
     ],
     auto_auth_bootstrap: Annotated[
         bool,
@@ -6920,7 +7408,7 @@ def terraform_unlock_command(
         ),
     ] = False,
 ) -> None:
-    """Clear a stale remote Terraform state lock for an existing generated infra bundle; auto-download Terraform if missing."""
+    """Clear a stale remote Terraform state lock for an existing generated/infra bundle."""
     try:
         config, paths, _manifest = _load_generated_context(generated_path)
         lock_info = _unlock_terraform_state_lock(
@@ -6947,11 +7435,17 @@ def terraform_unlock_command(
         _exit_with_error(exc)
 
 
-@flux_app.command("bootstrap")
+@flux_app.command(
+    "bootstrap",
+    short_help="Use GENERATED_PATH to bootstrap or reconcile Flux from generated/flux.",
+)
 def flux_bootstrap_command(
     generated_path: Annotated[
         Path,
-        typer.Argument(help="Path to generated/ or generated/flux"),
+        typer.Argument(
+            metavar="GENERATED_PATH",
+            help=_GENERATED_FLUX_ARGUMENT_HELP,
+        ),
     ],
     auto_auth_bootstrap: Annotated[
         bool,
@@ -6961,7 +7455,7 @@ def flux_bootstrap_command(
         ),
     ] = False,
 ) -> None:
-    """Refresh inventory, then bootstrap or reconcile Flux against an existing generated flux bundle; auto-download Flux CLI if missing."""
+    """Refresh inventory, then bootstrap or reconcile Flux from an existing generated/flux bundle."""
     try:
         config, paths, manifest = _load_generated_context(generated_path)
         requires_cluster_handoff = bool(
@@ -6996,11 +7490,17 @@ def flux_bootstrap_command(
         _exit_with_error(exc)
 
 
-@flux_app.command("apply")
+@flux_app.command(
+    "apply",
+    short_help="Use GENERATED_PATH to apply Flux directly from generated/flux.",
+)
 def flux_apply_command(
     generated_path: Annotated[
         Path,
-        typer.Argument(help="Path to generated/ or generated/flux"),
+        typer.Argument(
+            metavar="GENERATED_PATH",
+            help=_GENERATED_FLUX_ARGUMENT_HELP,
+        ),
     ],
     auto_auth_bootstrap: Annotated[
         bool,
@@ -7010,7 +7510,7 @@ def flux_apply_command(
         ),
     ] = True,
 ) -> None:
-    """Refresh inventory (including apps artifacts) and apply an existing generated flux bundle directly for idempotent day-2 runs."""
+    """Refresh inventory and apply an existing generated/flux bundle directly."""
     try:
         config, paths, manifest = _load_generated_context(generated_path)
         if _active_chart_count(config) == 0:
@@ -7034,15 +7534,20 @@ def flux_apply_command(
         _exit_with_error(exc)
 
 
-@app.command("discover")
+@app.command(
+    "discover",
+    short_help="Use DEPLOYMENT_SCOPE to emit changed-instance discovery JSON for CI.",
+)
 def discover_command(
     target_path: Annotated[
         Path,
         typer.Argument(
+            metavar="DEPLOYMENT_SCOPE",
             help=(
-                "Deployments root folder path. Works with any existing directory; "
-                "uses git change detection for changed config.yaml and generated/** paths when target "
-                "path is inside a git repository, otherwise scans all config.yaml files."
+                "Path to the deployments root or any narrower directory under it, including a single "
+                "instance directory or generated/. When inside a git repository, discover uses git "
+                "change detection for changed config.yaml and generated/** paths under that scope; "
+                "otherwise it scans all config.yaml files under the scope."
             )
         ),
     ],
@@ -7051,7 +7556,7 @@ def discover_command(
         typer.Option("--all", help="Include all config.yaml files instead of changed only"),
     ] = False,
 ) -> None:
-    """Print discover JSON payload for changed deployment instances in this run."""
+    """Print discovery JSON for changed instances under a deployment scope directory."""
     try:
         base_path = target_path.resolve()
         _validate_deployments_root_target(base_path)
@@ -7072,11 +7577,17 @@ def discover_command(
         _exit_with_error(exc)
 
 
-@inventory_app.command("write")
+@inventory_app.command(
+    "write",
+    short_help="Use GENERATED_PATH to refresh generated/inventory artifacts.",
+)
 def inventory_write_command(
     generated_path: Annotated[
         Path,
-        typer.Argument(help="Path to generated/ or generated/inventory"),
+        typer.Argument(
+            metavar="GENERATED_PATH",
+            help=_GENERATED_INVENTORY_ARGUMENT_HELP,
+        ),
     ],
 ) -> None:
     """Refresh local non-sensitive inventory artifacts."""
@@ -7088,21 +7599,109 @@ def inventory_write_command(
         _exit_with_error(exc)
 
 
-@app.command("email")
+def _interactive_email_settings_setup(*, config_path: Path | None) -> tuple[EmailSettings, Path]:
+    resolved_path = resolve_email_config_file(explicit=config_path)
+    current = load_email_settings(explicit=config_path)
+    host = typer.prompt(
+        "SMTP host (blank disables local email config)",
+        default=current.host,
+        show_default=bool(current.host),
+    ).strip()
+    if not host:
+        disable_email_settings(explicit=config_path)
+        return EmailSettings(), resolved_path
+
+    port_text = typer.prompt("SMTP port", default=str(current.port)).strip()
+    try:
+        port = int(port_text)
+    except ValueError as exc:
+        raise RuntimeError("SMTP port must be a positive integer.") from exc
+    if port <= 0:
+        raise RuntimeError("SMTP port must be a positive integer.")
+
+    starttls = typer.confirm("Use STARTTLS?", default=current.starttls)
+    from_addr = typer.prompt(
+        "SMTP from address (blank uses username or noreply@localhost)",
+        default=current.from_addr,
+        show_default=bool(current.from_addr),
+    ).strip()
+    username = typer.prompt(
+        "SMTP username (blank disables SMTP auth)",
+        default=current.username,
+        show_default=bool(current.username),
+    ).strip()
+    password = ""
+    if username:
+        password = typer.prompt(
+            "SMTP password (blank keeps existing password)",
+            default="",
+            hide_input=True,
+            show_default=False,
+        ).strip()
+        if not password:
+            password = current.password
+        if not password:
+            raise RuntimeError("SMTP password is required when SMTP username is set.")
+    settings = EmailSettings(
+        host=host,
+        port=port,
+        starttls=starttls,
+        from_addr=from_addr,
+        username=username,
+        password=password,
+    )
+    write_email_settings(settings, explicit=config_path)
+    return settings, resolved_path
+
+
+@app.command(
+    "email",
+    short_help="Use GENERATED_PATH to send inventory email, or omit it with --setup.",
+)
 def email_command(
     generated_path: Annotated[
-        Path,
-        typer.Argument(help="Path to generated/ or generated/inventory"),
-    ],
+        Path | None,
+        typer.Argument(
+            metavar="GENERATED_PATH",
+            help=(
+                f"{_GENERATED_INVENTORY_ARGUMENT_HELP} "
+                "Omit the path only when using --setup."
+            ),
+        ),
+    ] = None,
+    setup: Annotated[
+        bool,
+        typer.Option(
+            "--setup",
+            help="Interactively create, update, or remove local email settings under ~/.config/nebius-cxcli/",
+        ),
+    ] = False,
 ) -> None:
-    """Send inventory markdown via SMTP to client_info.notifications.email."""
+    """Send inventory email from a generated/ bundle, or manage local SMTP settings in ~/.config/nebius-cxcli/email.yaml with --setup."""
     try:
-        config, paths, _manifest = _load_generated_context(generated_path)
-        sent = send_inventory_email(config, paths)
-        if sent:
-            console.print("Inventory email sent")
+        if setup:
+            settings, written_path = _interactive_email_settings_setup(config_path=None)
+            if settings.enabled:
+                console.print(f"Configured local email settings: {written_path}")
+            else:
+                console.print(f"Removed local email settings: {written_path}")
+            if generated_path is None:
+                return
+        if generated_path is None:
+            raise RuntimeError("generated_path is required unless --setup is used.")
+        config_obj, paths, _manifest = _load_generated_context(generated_path)
+        settings = load_email_settings()
+        result: InventoryEmailResult = send_inventory_email(
+            config_obj,
+            paths,
+            smtp_settings=email_runtime_settings(settings),
+        )
+        if result.sent:
+            console.print(result.message)
+        elif result.reason in {"smtp_unconfigured", "recipient_missing"}:
+            console.print(f"[yellow]WARNING:[/yellow] {result.message}")
         else:
-            console.print("client_info.notifications.email not configured; nothing sent")
+            console.print(result.message)
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 

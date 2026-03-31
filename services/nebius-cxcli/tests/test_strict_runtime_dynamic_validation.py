@@ -7,8 +7,10 @@ import yaml
 
 from nebius_cxcli.cli import _validate_enabled_chart_sources, _validate_strict_config
 from nebius_cxcli.component_sources import (
+    SourceProfile,
     reset_component_sources_cache,
     set_component_sources_file_override,
+    set_component_sources_profile_override,
 )
 from nebius_cxcli.components import component_entries, reset_component_entry_cache
 from nebius_cxcli.config_loader import load_config
@@ -17,8 +19,10 @@ from nebius_cxcli.runtime_introspection import reset_runtime_introspection_cache
 
 
 @pytest.fixture(autouse=True)
-def _reset_component_cache() -> None:
+def _reset_component_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE", raising=False)
     set_component_sources_file_override(None)
+    set_component_sources_profile_override(SourceProfile.LOCAL)
     reset_component_sources_cache()
     reset_runtime_introspection_cache()
     reset_component_entry_cache()

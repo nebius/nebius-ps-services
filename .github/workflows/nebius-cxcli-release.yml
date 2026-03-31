@@ -17,6 +17,7 @@ env:
   TAG_PREFIX: nebius-cxcli
   MAIN_BRANCH: main
   ASSET_GLOB: "dist/*.whl"
+  NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE: portable
 
 jobs:
   release:
@@ -83,7 +84,6 @@ jobs:
         env:
           RELEASE_REF: ${{ steps.version.outputs.tag }}
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
-          NEBIUS_CXCLI_BUILD_COMPONENT_SOURCES_FILE: component_sources.release.yaml
           SETUPTOOLS_SCM_PRETEND_VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
@@ -134,7 +134,7 @@ jobs:
           rm -rf "${release_dir}"
           mkdir -p "${release_dir}"
           .venv/bin/python -m nebius_cxcli.release_catalog render \
-            --input component_sources.release.yaml \
+            --input component_sources.yaml \
             --output "${catalog_asset}" \
             --release-ref "${RELEASE_REF}"
 

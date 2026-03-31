@@ -67,7 +67,7 @@ def _validate_client_info(payload: Mapping[str, Any]) -> None:
     notifications = client_info.get("notifications")
     if not isinstance(notifications, Mapping):
         raise ValueError("client_info.notifications must be a mapping")
-    supported_notification_keys = {"inventory_markdown", "email"}
+    supported_notification_keys = {"email_enabled", "email"}
     unknown_notification_keys = sorted(
         str(key) for key in notifications if str(key) not in supported_notification_keys
     )
@@ -76,9 +76,9 @@ def _validate_client_info(payload: Mapping[str, Any]) -> None:
             "client_info.notifications has unsupported field(s): "
             + ", ".join(unknown_notification_keys)
         )
-    inventory_markdown = notifications.get("inventory_markdown")
-    if not isinstance(inventory_markdown, bool):
-        raise ValueError("client_info.notifications.inventory_markdown must be true or false")
+    email_enabled = notifications.get("email_enabled")
+    if not isinstance(email_enabled, bool):
+        raise ValueError("client_info.notifications.email_enabled must be true or false")
     email = notifications.get("email")
     if email is not None and not isinstance(email, str):
         raise ValueError("client_info.notifications.email must be a string or null")
@@ -202,7 +202,6 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
                 "version",
                 "namespace",
                 "release-name",
-                "release_name",
                 "values",
             }
         )
@@ -241,7 +240,7 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
             value = raw_chart.get(key)
             if value is not None and not isinstance(value, str):
                 raise ValueError(f"apps.charts[{index}].{key} must be a string when set")
-        release_name = raw_chart.get("release-name", raw_chart.get("release_name"))
+        release_name = raw_chart.get("release-name")
         if release_name is not None and not isinstance(release_name, str):
             raise ValueError(f"apps.charts[{index}].release-name must be a string when set")
         if not isinstance(raw_chart.get("values"), Mapping):

@@ -12,27 +12,66 @@ import yaml
 from typer.testing import CliRunner
 
 import nebius_cxcli.cli as cli
+import nebius_cxcli.component_sources as component_sources
 import nebius_cxcli.flux_ops as flux_ops
 from nebius_cxcli.component_sources import (
+    ComponentOutput,
+    SourceProfile,
     reset_component_sources_cache,
     set_component_sources_file_override,
+    set_component_sources_profile_override,
 )
-from nebius_cxcli.infra_render import RenderProfile
+from nebius_cxcli.email_settings import EmailSettings
 from nebius_cxcli.managed_tools import FLUX_VERSION_ENV, TERRAFORM_VERSION_ENV
+from nebius_cxcli.paths import InstancePaths
 
 runner = CliRunner()
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+
+@pytest.fixture(autouse=True)
+def _reset_component_sources_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NEBIUS_CXCLI_COMPONENT_SOURCES_FILE", raising=False)
+    monkeypatch.delenv("NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE", raising=False)
+    monkeypatch.setattr(
+        component_sources,
+        "_discover_terraform_outputs",
+        lambda _source: (
+            ComponentOutput(
+                name="cluster_id",
+                kind="terraform_output",
+                source_path="cluster_id",
+                sensitive=False,
+            ),
+            ComponentOutput(
+                name="cluster_ca_certificate",
+                kind="terraform_output",
+                source_path="cluster_ca_certificate",
+                sensitive=True,
+            ),
+            ComponentOutput(
+                name="instance_id",
+                kind="terraform_output",
+                source_path="instance_id",
+                sensitive=False,
+            ),
+        ),
+    )
+    set_component_sources_file_override(None)
+    set_component_sources_profile_override(None)
+    reset_component_sources_cache()
 
 
 def _plain_output(text: str) -> str:
     return _ANSI_ESCAPE_RE.sub("", text)
 
 
-def _fake_paths(tmp_path: Path) -> SimpleNamespace:
-    return SimpleNamespace(
+def _fake_paths(tmp_path: Path) -> InstancePaths:
+    return InstancePaths(
         config_path=tmp_path / "instances" / "client-a--tenant-123" / "project-456" / "config.yaml",
         repo_root=tmp_path,
         deployments_dir=tmp_path / "deployments",
+        project_dir=tmp_path,
         generated_dir=tmp_path / "generated",
         infra_dir=tmp_path / "generated" / "infra",
         flux_dir=tmp_path / "generated" / "flux",
@@ -43,75 +82,138 @@ def _fake_paths(tmp_path: Path) -> SimpleNamespace:
     )
 
 
+def test_render_overwrite_warning_never_mentions_flux_system(tmp_path: Path) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_paths.generated_dir.mkdir(parents=True, exist_ok=True)
+    (fake_paths.generated_dir / "dummy.txt").write_text("data\n", encoding="utf-8")
+
+    warning_without_bootstrap = cli._render_overwrite_warning(fake_paths)
+
+    assert warning_without_bootstrap is not None
+    assert "Render will overwrite existing generated artifacts under" in warning_without_bootstrap
+    assert "generated/flux/flux-system" not in warning_without_bootstrap
+
+    bootstrap_dir = fake_paths.flux_dir / "flux-system"
+    bootstrap_dir.mkdir(parents=True, exist_ok=True)
+    (bootstrap_dir / "gotk-sync.yaml").write_text("apiVersion: v1\nkind: ConfigMap\n", encoding="utf-8")
+
+    warning_with_bootstrap = cli._render_overwrite_warning(fake_paths)
+
+    assert warning_with_bootstrap is not None
+    assert "generated/flux/flux-system" not in warning_with_bootstrap
+
+
 def test_validate_command_non_strict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
-    monkeypatch.setattr(cli, "_load_runtime_context", lambda _path: (object(), object()))
-    monkeypatch.setattr(cli, "_validate_component_dependencies", lambda _cfg: [])
+    monkeypatch.setattr(cli, "_load_context", lambda _path: (object(), object()))
+    monkeypatch.setattr(
+        cli,
+        "_validate_active_component_sources",
+        lambda _cfg, *, chart_meta_cache=None: None,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_validate_component_dependencies",
+        lambda _cfg, *, chart_meta_cache=None: [],
+    )
     monkeypatch.setattr(
         cli,
         "rendered_module_sources",
-        lambda config, *, render_profile: (
-            captured.update({"config": config, "render_profile": render_profile}) or ()
+        lambda config, *, source_profile: (
+            captured.update({"config": config, "source_profile": source_profile}) or ()
         ),
     )
 
     result = runner.invoke(cli.app, ["validate", str(tmp_path / "config.yaml")])
 
     assert result.exit_code == 0, result.output
-    assert "Valid:" in _plain_output(result.output)
-    assert captured["render_profile"] == RenderProfile.PORTABLE
+    output = _plain_output(result.output)
+    assert "Runtime validation:" in output
+    assert "Load config and component catalog" in output
+    assert "Validate active component sources" in output
+    assert "Validate component dependencies" in output
+    assert "Validate Terraform module inputs" in output
+    assert "Valid:" in output
+    assert captured["source_profile"] == SourceProfile.PORTABLE
 
 
 def test_validate_command_strict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     strict_called: dict[str, bool] = {"called": False}
     captured: dict[str, object] = {}
 
-    monkeypatch.setattr(cli, "_load_runtime_context", lambda _path: (object(), object()))
-    monkeypatch.setattr(cli, "_validate_component_dependencies", lambda _cfg: [])
+    monkeypatch.setattr(cli, "_load_context", lambda _path: (object(), object()))
+    monkeypatch.setattr(
+        cli,
+        "_validate_active_component_sources",
+        lambda _cfg, *, chart_meta_cache=None: None,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_validate_component_dependencies",
+        lambda _cfg, *, chart_meta_cache=None: [],
+    )
     monkeypatch.setattr(cli, "validate_mk8s_network_preflight", lambda _cfg: None)
     monkeypatch.setattr(
         cli,
         "rendered_module_sources",
-        lambda config, *, render_profile: (
-            captured.update({"config": config, "render_profile": render_profile}) or ()
+        lambda config, *, source_profile: (
+            captured.update({"config": config, "source_profile": source_profile}) or ()
         ),
     )
 
-    def _fake_strict(_cfg: object) -> None:
+    def _fake_strict(
+        _cfg: object,
+        *,
+        chart_meta_cache: object | None = None,
+        include_common_checks: bool = True,
+    ) -> None:
         strict_called["called"] = True
+        assert include_common_checks is False
 
     monkeypatch.setattr(cli, "_validate_strict_config", _fake_strict)
 
     result = runner.invoke(cli.app, ["validate", "--strict", str(tmp_path / "config.yaml")])
 
     assert result.exit_code == 0, result.output
-    assert "Valid (strict):" in _plain_output(result.output)
+    output = _plain_output(result.output)
+    assert "Validate strict deployment readiness" in output
+    assert "Validate MK8s network preflight" in output
+    assert "Valid (strict):" in output
     assert strict_called["called"] is True
-    assert captured["render_profile"] == RenderProfile.PORTABLE
+    assert captured["source_profile"] == SourceProfile.PORTABLE
 
 
-def test_validate_command_accepts_local_dev_render_profile(
+def test_validate_command_accepts_local_source_profile(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     captured: dict[str, object] = {}
 
-    monkeypatch.setattr(cli, "_load_runtime_context", lambda _path: (object(), object()))
-    monkeypatch.setattr(cli, "_validate_component_dependencies", lambda _cfg: [])
+    monkeypatch.setattr(cli, "_load_context", lambda _path: (object(), object()))
+    monkeypatch.setattr(
+        cli,
+        "_validate_active_component_sources",
+        lambda _cfg, *, chart_meta_cache=None: None,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_validate_component_dependencies",
+        lambda _cfg, *, chart_meta_cache=None: [],
+    )
     monkeypatch.setattr(
         cli,
         "rendered_module_sources",
-        lambda config, *, render_profile: (
-            captured.update({"config": config, "render_profile": render_profile}) or ()
+        lambda config, *, source_profile: (
+            captured.update({"config": config, "source_profile": source_profile}) or ()
         ),
     )
 
     result = runner.invoke(
         cli.app,
-        ["validate", "--render-profile", "local-dev", str(tmp_path / "config.yaml")],
+        ["--source-profile", "local", "validate", str(tmp_path / "config.yaml")],
     )
 
     assert result.exit_code == 0, result.output
-    assert captured["render_profile"] == RenderProfile.LOCAL_DEV
+    assert captured["source_profile"] == SourceProfile.LOCAL
 
 
 def test_load_generated_context_exports_manifest_tool_versions(
@@ -151,6 +253,46 @@ def test_load_generated_context_exports_manifest_tool_versions(
     }
 
 
+def test_try_generate_terraform_lock_file_uses_backendless_init_and_cleans_workdir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
+    captured: dict[str, object] = {}
+
+    def _fail_backend_ready(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("render lock generation must not bootstrap backend auth")
+
+    def _fake_terraform_init(
+        infra_dir: Path,
+        *,
+        extra_env: dict[str, str] | None = None,
+        backend: bool = True,
+    ) -> None:
+        captured["infra_dir"] = infra_dir
+        captured["extra_env"] = extra_env
+        captured["backend"] = backend
+        (infra_dir / ".terraform").mkdir(parents=True, exist_ok=True)
+        (infra_dir / ".terraform" / "terraform.tfstate").write_text("transient", encoding="utf-8")
+        (infra_dir / "terraform.tfstate").write_text("state", encoding="utf-8")
+        (infra_dir / ".terraform.tfstate.lock.info").write_text("lock", encoding="utf-8")
+        (infra_dir / ".terraform.lock.hcl").write_text("provider-lock", encoding="utf-8")
+
+    monkeypatch.setattr(cli, "_ensure_terraform_backend_ready", _fail_backend_ready)
+    monkeypatch.setattr(cli, "terraform_init", _fake_terraform_init)
+
+    assert cli._try_generate_terraform_lock_file("cfg", fake_paths) is True
+    assert captured == {
+        "infra_dir": fake_paths.infra_dir,
+        "extra_env": None,
+        "backend": False,
+    }
+    assert not (fake_paths.infra_dir / ".terraform").exists()
+    assert not (fake_paths.infra_dir / "terraform.tfstate").exists()
+    assert not (fake_paths.infra_dir / ".terraform.tfstate.lock.info").exists()
+    assert (fake_paths.infra_dir / ".terraform.lock.hcl").exists()
+
+
 def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fake_paths = _fake_paths(tmp_path)
     calls: dict[str, object] = {}
@@ -159,12 +301,12 @@ def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.Mon
     monkeypatch.setattr(
         cli,
         "render_terraform_artifacts",
-        lambda config, paths, *, render_profile: (
+        lambda config, paths, *, source_profile: (
             calls.update(
                 {
                     "terraform_config": config,
                     "terraform_paths": paths,
-                    "terraform_profile": render_profile,
+                    "terraform_profile": source_profile,
                 }
             )
             or [tmp_path / "a.tf"]
@@ -214,12 +356,13 @@ def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.Mon
     monkeypatch.setattr(
         cli,
         "_write_generated_runtime_manifest",
-        lambda config, paths, *, render_profile: (
+        lambda config, paths, *, source_profile, **kwargs: (
             calls.update(
                 {
                     "manifest_config": config,
                     "manifest_paths": paths,
-                    "manifest_profile": render_profile,
+                    "manifest_profile": source_profile,
+                    "manifest_kwargs": kwargs,
                 }
             )
             or paths.generated_dir / "nebius-cxcli-manifest.json"
@@ -230,26 +373,31 @@ def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.Mon
 
     assert result.exit_code == 0, result.output
     assert "Rendered 2 file(s)" in _plain_output(result.output)
-    assert calls == {
-        "terraform_config": "cfg",
-        "terraform_paths": fake_paths,
-        "terraform_profile": RenderProfile.PORTABLE,
-        "outputs_config": "cfg",
-        "outputs_paths": fake_paths,
-        "flux_config": "cfg",
-        "flux_paths": fake_paths,
-        "flux_outputs": {},
-        "inventory_config": "cfg",
-        "inventory_paths": fake_paths,
-        "manifest_config": "cfg",
-        "manifest_paths": fake_paths,
-        "manifest_profile": RenderProfile.PORTABLE,
-        "lock_config": "cfg",
-        "lock_paths": fake_paths,
-    }
+    assert calls["terraform_config"] == "cfg"
+    assert calls["terraform_profile"] == SourceProfile.PORTABLE
+    assert calls["outputs_config"] == "cfg"
+    assert calls["outputs_paths"] == fake_paths
+    assert calls["flux_config"] == "cfg"
+    assert calls["flux_outputs"] == {}
+    assert calls["inventory_config"] == "cfg"
+    assert calls["manifest_config"] == "cfg"
+    assert calls["manifest_profile"] == SourceProfile.PORTABLE
+    assert calls["lock_config"] == "cfg"
+    assert calls["lock_paths"] == fake_paths
+
+    staged_paths = calls["terraform_paths"]
+    assert isinstance(staged_paths, InstancePaths)
+    assert staged_paths.generated_dir.name.startswith(".generated-staging-")
+    assert calls["flux_paths"] == staged_paths
+    assert calls["inventory_paths"] == staged_paths
+    assert calls["manifest_paths"] == staged_paths
+    assert calls["manifest_kwargs"]["manifest_paths"] == fake_paths
+    assert calls["manifest_kwargs"]["output_path"] == (
+        staged_paths.generated_dir / "nebius-cxcli-manifest.json"
+    )
 
 
-def test_render_command_accepts_local_dev_render_profile(
+def test_render_command_accepts_local_source_profile(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
@@ -266,8 +414,8 @@ def test_render_command_accepts_local_dev_render_profile(
     monkeypatch.setattr(
         cli,
         "render_terraform_artifacts",
-        lambda config, paths, *, render_profile: (
-            calls.update({"render_profile": render_profile}) or [tmp_path / "a.tf"]
+        lambda config, paths, *, source_profile: (
+            calls.update({"source_profile": source_profile}) or [tmp_path / "a.tf"]
         ),
     )
     monkeypatch.setattr(cli, "_runtime_component_output_values", lambda config, paths: {})
@@ -276,20 +424,20 @@ def test_render_command_accepts_local_dev_render_profile(
     monkeypatch.setattr(
         cli,
         "_write_generated_runtime_manifest",
-        lambda config, paths, *, render_profile: paths.generated_dir / "manifest.json",
+        lambda config, paths, *, source_profile, **kwargs: paths.generated_dir / "manifest.json",
     )
     monkeypatch.setattr(cli, "_try_generate_terraform_lock_file", lambda config, paths: False)
 
     result = runner.invoke(
         cli.app,
-        ["render", "--render-profile", "local-dev", str(tmp_path / "config.yaml")],
+        ["--source-profile", "local", "render", str(tmp_path / "config.yaml")],
     )
 
     assert result.exit_code == 0, result.output
-    assert calls["render_profile"] == RenderProfile.LOCAL_DEV
-    assert "Render profile: local-dev" in _plain_output(result.output)
+    assert calls["source_profile"] == SourceProfile.LOCAL
+    assert "Source profile: local" in _plain_output(result.output)
     output = _plain_output(result.output)
-    assert "local-dev render profile may embed local Terraform" in output
+    assert "local source profile may embed local Terraform" in output
     assert "generated artifacts in CI" in output
 
 
@@ -324,6 +472,31 @@ def test_validate_generated_command_portable_checks_module_sources(
     assert captured["paths"] == fake_paths
 
 
+def test_validate_generated_command_requires_manifest_module_sources_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        cli,
+        "_load_generated_context",
+        lambda _path: ("cfg", fake_paths, {"render": {}}),
+    )
+    monkeypatch.setattr(cli, "_ensure_terraform_backend_ready", lambda config, *, auto_auth_bootstrap: None)
+    monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _config: {})
+    monkeypatch.setattr(cli, "terraform_validate", lambda infra_dir, *, extra_env=None: None)
+    monkeypatch.setattr(cli, "_active_chart_count", lambda _config: 0)
+
+    result = runner.invoke(
+        cli.app,
+        ["validate-generated", "--portable", str(tmp_path / "generated")],
+    )
+
+    assert result.exit_code != 0
+    assert "render.module_sources" in _plain_output(result.output)
+
+
 def test_validate_sources_command_reports_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sources = SimpleNamespace(
         tf_modules=[SimpleNamespace(module="mk8s")],
@@ -331,11 +504,11 @@ def test_validate_sources_command_reports_success(tmp_path: Path, monkeypatch: p
     )
     sources_file = tmp_path / "component_sources.yaml"
 
-    monkeypatch.setattr(cli, "load_component_sources", lambda: sources)
+    monkeypatch.setattr(cli, "load_component_sources", lambda explicit=None: sources)
     monkeypatch.setattr(
         cli,
         "_validate_component_sources_registry",
-        lambda progress_callback=None: (sources_file, [], []),
+        lambda explicit=None, progress_callback=None: (sources_file, [], []),
     )
 
     result = runner.invoke(cli.app, ["validate-sources"])
@@ -353,11 +526,11 @@ def test_validate_sources_command_reports_warnings_and_fails_on_issues(
     sources = SimpleNamespace(tf_modules=[], helm_charts=[])
     sources_file = tmp_path / "component_sources.yaml"
 
-    monkeypatch.setattr(cli, "load_component_sources", lambda: sources)
+    monkeypatch.setattr(cli, "load_component_sources", lambda explicit=None: sources)
     monkeypatch.setattr(
         cli,
         "_validate_component_sources_registry",
-        lambda progress_callback=None: (
+        lambda explicit=None, progress_callback=None: (
             sources_file,
             ["module source './broken-module' does not resolve to an existing directory"],
             ["missing variables.tf"],
@@ -373,6 +546,43 @@ def test_validate_sources_command_reports_warnings_and_fails_on_issues(
     assert "Component sources validation failed for" in output
     assert str(sources_file) in normalized_output
     assert "module source './broken-module' does not resolve to an existing directory" in output
+
+
+def test_validate_sources_command_accepts_positional_component_sources_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sources = SimpleNamespace(
+        tf_modules=[SimpleNamespace(module="mk8s")],
+        helm_charts=[],
+    )
+    sources_file = tmp_path / "component_sources.yaml"
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        cli,
+        "load_component_sources",
+        lambda explicit=None: (
+            captured.__setitem__("load_explicit", explicit),
+            sources,
+        )[1],
+    )
+    monkeypatch.setattr(
+        cli,
+        "_validate_component_sources_registry",
+        lambda explicit=None, progress_callback=None: (
+            captured.__setitem__("validate_explicit", explicit),
+            sources_file,
+            [],
+            [],
+        )[1:],
+    )
+
+    result = runner.invoke(cli.app, ["validate-sources", str(sources_file)])
+
+    assert result.exit_code == 0, result.output
+    assert captured["load_explicit"] == sources_file
+    assert captured["validate_explicit"] == sources_file
 
 
 def test_render_command_requires_force_in_noninteractive_overwrite(
@@ -492,6 +702,37 @@ def test_render_command_decline_is_clean_cancel_not_error(
     assert "Render cancelled" in _plain_output(result.output)
     assert "ERROR:" not in _plain_output(result.output)
     assert calls["rendered"] is False
+
+
+def test_render_command_preserves_existing_generated_bundle_when_rerender_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_paths.generated_dir.mkdir(parents=True, exist_ok=True)
+    preserved = fake_paths.generated_dir / "existing.txt"
+    preserved.write_text("keep-me\n", encoding="utf-8")
+
+    monkeypatch.setattr(cli, "_load_runtime_context", lambda _path: ("cfg", fake_paths))
+    monkeypatch.setattr(cli, "_can_prompt_for_render_overwrite", lambda: False)
+    monkeypatch.setattr(cli, "_runtime_component_output_values", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        cli,
+        "render_terraform_artifacts",
+        lambda *_args, **_kwargs: [(_args[1].infra_dir / "main.tf")],
+    )
+    monkeypatch.setattr(
+        cli,
+        "render_flux",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    result = runner.invoke(cli.app, ["render", "--force", str(tmp_path / "config.yaml")])
+
+    assert result.exit_code == 1, result.output
+    assert "boom" in _plain_output(result.output)
+    assert preserved.read_text(encoding="utf-8") == "keep-me\n"
+    assert not any(fake_paths.project_dir.glob(".generated-staging-*"))
 
 
 def test_deploy_command_passes_auto_auth_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2472,13 +2713,63 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     flux_apply_help = " ".join(_plain_output(flux_apply_result.output).split()).lower()
     flux_bootstrap_help = " ".join(_plain_output(flux_bootstrap_result.output).split()).lower()
 
-    assert "prompting before a reset unless --force is provided" in render_help
+    assert "prompting before overwrite unless --force is provided" in render_help
     assert "generated artifact bundle" in deploy_help
+    assert "does not run `flux bootstrap`" in deploy_help
     assert "does not create or update github workflows" in deploy_help
     assert "refresh inventory" in deploy_help
     assert "refresh inventory" in tf_apply_help
     assert "refresh inventory" in flux_apply_help
     assert "refresh inventory" in flux_bootstrap_help
+
+
+def test_help_text_maps_commands_to_target_types() -> None:
+    result = runner.invoke(cli.app, ["--help"])
+
+    assert result.exit_code == 0, result.output
+    plain_output = _plain_output(result.output)
+    output = " ".join(plain_output.split())
+
+    assert "Target guide:" in plain_output
+    assert "create uses a deployments root directory" in output
+    assert "discover uses a deployment-scope directory" in output
+    assert "validate/render/bootstrap-ci use config.yaml" in output
+    assert "validate-generated/deploy/terraform/flux/inventory/email use generated/" in output
+    assert "validate-sources accepts optional component_sources.yaml" in output
+    assert "auth has no positional path" in output
+    assert "bootstrap-ci Use CONFIG_YAML" in output
+    assert "deploy Use GENERATED_PATH" in output
+
+
+def test_command_help_usage_labels_positional_target_types() -> None:
+    create_result = runner.invoke(cli.app, ["create", "--help"])
+    discover_result = runner.invoke(cli.app, ["discover", "--help"])
+    validate_result = runner.invoke(cli.app, ["validate", "--help"])
+    deploy_result = runner.invoke(cli.app, ["deploy", "--help"])
+    email_result = runner.invoke(cli.app, ["email", "--help"])
+
+    assert create_result.exit_code == 0, create_result.output
+    assert discover_result.exit_code == 0, discover_result.output
+    assert validate_result.exit_code == 0, validate_result.output
+    assert deploy_result.exit_code == 0, deploy_result.output
+    assert email_result.exit_code == 0, email_result.output
+
+    create_help = _plain_output(create_result.output)
+    discover_help = _plain_output(discover_result.output)
+    validate_help = _plain_output(validate_result.output)
+    deploy_help = _plain_output(deploy_result.output)
+    email_help = _plain_output(email_result.output)
+    normalized_email_help = " ".join(email_help.split())
+
+    assert "create [OPTIONS] DEPLOYMENTS_ROOT" in create_help
+    assert "discover [OPTIONS] DEPLOYMENT_SCOPE" in discover_help
+    assert "generated/" in discover_help
+    assert "narrower directory under it" in discover_help
+    assert "validate [OPTIONS] CONFIG_YAML" in validate_help
+    assert "deploy [OPTIONS] GENERATED_PATH" in deploy_help
+    assert "email [OPTIONS] [GENERATED_PATH]" in email_help
+    assert "Omit the path" in normalized_email_help
+    assert "only when using --setup." in normalized_email_help
 
 
 def test_bootstrap_ci_help_reflects_reconcile_first_contract() -> None:
@@ -2502,9 +2793,11 @@ def test_auth_help_reflects_sdk_auth_contract() -> None:
 
     assert result.exit_code == 0, result.output
     plain_output = _plain_output(result.output)
+    normalized_output = " ".join(plain_output.split())
 
     assert "Nebius SDK config profile name" in plain_output
     assert "Optional path to Nebius SDK config file" in plain_output
+    assert "across all cached profiles for validate-only runs" in normalized_output
     assert "Nebius CLI profile name used by Nebius SDK" not in plain_output
     assert "Nebius SDK/CLI config file" not in plain_output
 
@@ -2548,23 +2841,102 @@ def test_inventory_commands_invoke_inventory_ops(tmp_path: Path, monkeypatch: py
 
 def test_email_command_handles_sent_and_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fake_paths = _fake_paths(tmp_path)
+    captured: dict[str, object] = {}
     monkeypatch.setattr(
         cli,
         "_load_generated_context",
         lambda _path: ("cfg", fake_paths, {"schema": "nebius-cxcli-generated/v1"}),
     )
+    monkeypatch.setattr(
+        cli,
+        "load_email_settings",
+        lambda *, explicit=None: EmailSettings(
+            host="smtp.example.com",
+            port=2525,
+            starttls=True,
+            from_addr="deployments@example.com",
+        ),
+    )
 
-    monkeypatch.setattr(cli, "send_inventory_email", lambda _cfg, _paths: True)
+    monkeypatch.setattr(
+        cli,
+        "send_inventory_email",
+        lambda _cfg, _paths, *, smtp_settings=None: (
+            captured.update({"smtp_settings": smtp_settings})
+            or cli.InventoryEmailResult(sent=True, reason="sent", message="Inventory email sent")
+        ),
+    )
     sent_result = runner.invoke(cli.app, ["email", str(tmp_path / "generated")])
     assert sent_result.exit_code == 0, sent_result.output
     assert "Inventory email sent" in _plain_output(sent_result.output)
+    assert captured["smtp_settings"] == {
+        "host": "smtp.example.com",
+        "port": 2525,
+        "starttls": True,
+        "from": "deployments@example.com",
+    }
 
-    monkeypatch.setattr(cli, "send_inventory_email", lambda _cfg, _paths: False)
+    monkeypatch.setattr(
+        cli,
+        "send_inventory_email",
+        lambda _cfg, _paths, *, smtp_settings=None: cli.InventoryEmailResult(
+            sent=False,
+            reason="disabled",
+            message="Inventory email disabled (`client_info.notifications.email_enabled=false`); nothing sent.",
+        ),
+    )
     noop_result = runner.invoke(cli.app, ["email", str(tmp_path / "generated")])
     assert noop_result.exit_code == 0, noop_result.output
-    assert "client_info.notifications.email not configured; nothing sent" in _plain_output(
-        noop_result.output
+    assert "Inventory email disabled" in _plain_output(noop_result.output)
+
+    monkeypatch.setattr(
+        cli,
+        "send_inventory_email",
+        lambda _cfg, _paths, *, smtp_settings=None: cli.InventoryEmailResult(
+            sent=False,
+            reason="smtp_unconfigured",
+            message="Inventory email enabled but SMTP is not configured. nothing sent.",
+        ),
     )
+    warning_result = runner.invoke(cli.app, ["email", str(tmp_path / "generated")])
+    assert warning_result.exit_code == 0, warning_result.output
+    assert "WARNING:" in _plain_output(warning_result.output)
+    assert "SMTP is not configured" in _plain_output(warning_result.output)
+
+
+def test_email_command_setup_without_generated_path_succeeds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "_interactive_email_settings_setup",
+        lambda *, config_path=None: (
+            EmailSettings(host="smtp.example.com", port=587),
+            tmp_path / "email.yaml",
+        ),
+    )
+
+    result = runner.invoke(cli.app, ["email", "--setup"])
+
+    assert result.exit_code == 0, result.output
+    assert "Configured local email settings:" in _plain_output(result.output)
+
+
+def test_email_command_requires_generated_path_without_setup() -> None:
+    result = runner.invoke(cli.app, ["email"])
+
+    assert result.exit_code == 1, result.output
+    assert "generated_path is required unless --setup is used." in _plain_output(result.output)
+
+
+def test_email_help_describes_local_setup_flags() -> None:
+    result = runner.invoke(cli.app, ["email", "--help"])
+
+    assert result.exit_code == 0, result.output
+    plain_output = _plain_output(result.output)
+    assert "--setup" in plain_output
+    assert "~/.config/nebius-cxcli/email.yaml" in plain_output
 
 
 def test_top_level_help_has_single_auth_command_surface() -> None:
@@ -2583,7 +2955,7 @@ def test_render_command_fails_before_render_when_active_source_validation_fails(
     monkeypatch.setattr(
         cli,
         "_validate_active_component_sources",
-        lambda _cfg: (_ for _ in ()).throw(RuntimeError("broken source")),
+        lambda _cfg, *, chart_meta_cache=None: (_ for _ in ()).throw(RuntimeError("broken source")),
     )
     monkeypatch.setattr(
         cli,
@@ -2599,6 +2971,7 @@ def test_render_command_fails_before_render_when_active_source_validation_fails(
 
 def test_validate_active_component_sources_uses_active_catalog_not_config_source_override(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module_dir = tmp_path / "mk8s-module"
     module_dir.mkdir(parents=True, exist_ok=True)
@@ -2628,7 +3001,27 @@ def test_validate_active_component_sources_uses_active_catalog_not_config_source
         "apps": {"charts": []},
     }
 
+    captured: list[str] = []
+    monkeypatch.setattr(
+        cli,
+        "module_source_validation_issues",
+        lambda source: captured.append(source) or (),
+    )
+    monkeypatch.setattr(
+        cli,
+        "module_output_names",
+        lambda _source: ("cluster_id", "cluster_ca_certificate", "instance_id"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_validate_enabled_chart_sources",
+        lambda _config, *, chart_meta_cache=None: [],
+    )
+
     cli._validate_active_component_sources(payload)
+    assert captured == [
+        "git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mk8s?ref=main"
+    ]
 
 
 def test_top_level_help_describes_global_component_sources_override() -> None:
@@ -2637,11 +3030,15 @@ def test_top_level_help_describes_global_component_sources_override() -> None:
     assert result.exit_code == 0, result.output
     output = _plain_output(result.output)
     assert "--component-sources-file" in output
-    assert "Global optional override for the" in output
-    assert "component sources file. Use this to" in output
-    assert "point nebius-cxcli at a different" in output
-    assert "component_sources.yaml path. When" in output
-    assert "'component_sources.yaml' from the" in output
+    assert "Global optional override" in output
+    assert "component sources" in output
+    assert "component_sources.yaml" in output
+    assert "cwd -> env ->" in output
+    assert "--source-profile" in output
+    assert "Defaults" in output
+    assert "to portable." in output
+    assert "portable_source" in output
+    assert "local_source" in output
 
 
 def test_auth_help_has_no_subcommand_layer() -> None:
@@ -2680,8 +3077,8 @@ def test_bootstrap_ci_command_with_auth_passes_github_flags(
     monkeypatch.setattr(cli, "_require_git_root", lambda _path: tmp_path)
     monkeypatch.setattr(
         cli,
-        "_preflight_bootstrap_ci_auth",
-        lambda *, github_repo, github_token_env, repo_root: github_repo or "owner/repo",
+        "_resolve_bootstrap_ci_github_target",
+        lambda *, github_repo, github_token_env, repo_root: (github_repo or "owner/repo", "token-123"),
     )
     monkeypatch.setattr(
         cli,
@@ -2693,6 +3090,16 @@ def test_bootstrap_ci_command_with_auth_passes_github_flags(
         captured.update(kwargs)
 
     monkeypatch.setattr(cli, "_auto_bootstrap_ci_auth_and_secrets", _fake_auto_bootstrap)
+    monkeypatch.setattr(
+        cli,
+        "_sync_github_email_settings",
+        lambda *, repo_slug, github_environment, github_token, settings: cli.GitHubEmailSyncResult(
+            updated_vars=[],
+            updated_secrets=[],
+            removed_vars=[],
+            removed_secrets=[],
+        ),
+    )
 
     result = runner.invoke(
         cli.app,
@@ -2834,6 +3241,38 @@ def test_auth_validate_profile_ok(monkeypatch: pytest.MonkeyPatch) -> None:
         cli.app,
         ["auth", "--project-id", "project-123", "--client-name", "client-a", "--validate-profile"],
     )
+
+    assert result.exit_code == 0, result.output
+    output = _plain_output(result.output)
+    assert "Project ID: project-123" in output
+    assert "Profile status: OK" in output
+
+
+def test_auth_validate_profile_without_target_discovers_all_cached_profiles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = cli.RuntimeAuthProfileStatus(
+        project_id="project-123",
+        client_name="client-a",
+        cache_dir=Path("/tmp/nebius-cxcli/client-a-project-123"),
+        metadata_file=Path("/tmp/nebius-cxcli/client-a-project-123/runtime-auth.json"),
+        metadata_exists=True,
+        service_account_id="sa-123",
+        auth_public_key_id="auth-key-123",
+        private_key_file=Path("/tmp/nebius-cxcli/client-a-project-123/auth-private.pem"),
+        private_key_exists=True,
+        cloud_public_key_exists=True,
+        cloud_check_error=None,
+        issues=(),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_discover_runtime_auth_profiles",
+        lambda: [("client-a", "project-123")],
+    )
+    monkeypatch.setattr(cli, "_runtime_auth_profile_status", lambda **_kwargs: status)
+
+    result = runner.invoke(cli.app, ["auth", "--validate-profile"])
 
     assert result.exit_code == 0, result.output
     output = _plain_output(result.output)

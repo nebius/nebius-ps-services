@@ -86,6 +86,21 @@ def test_schema_rejects_invalid_chart_group_token(tmp_path: Path) -> None:
     assert "group must use lowercase letters, digits, and hyphens" in str(exc_info.value)
 
 
+def test_schema_rejects_release_name_alias_in_app_chart(tmp_path: Path) -> None:
+    payload = _dynamic_payload()
+    charts = payload["apps"]["charts"]
+    assert isinstance(charts, list)
+    release_name = charts[0].pop("release-name")
+    charts[0]["release_name"] = release_name
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc_info:
+        load_config(config_path)
+    assert "apps.charts[0] has unsupported field(s): release_name" in str(exc_info.value)
+
+
 def test_schema_rejects_unknown_root_key(tmp_path: Path) -> None:
     payload = _dynamic_payload()
     payload["unknown"] = True

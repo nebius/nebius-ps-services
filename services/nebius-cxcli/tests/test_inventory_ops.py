@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import yaml
@@ -93,17 +92,14 @@ def test_write_inventory_handles_dynamic_component_model(tmp_path: Path) -> None
 
     artifacts = write_inventory(config, paths)
     assert artifacts.markdown.exists()
-    assert artifacts.apps_json.exists()
-    assert artifacts.mk8s_json is not None
-    assert artifacts.mk8s_json.exists()
-    assert artifacts.postgresql_json is None
+    assert not (paths.inventory_dir / "apps.json").exists()
+    assert not (paths.inventory_dir / "mk8s.json").exists()
     assert not (paths.inventory_dir / "postgresql.json").exists()
-    assert artifacts.sfs_json is None
     assert not (paths.inventory_dir / "sfs.json").exists()
-
-    apps_payload = json.loads(artifacts.apps_json.read_text(encoding="utf-8"))
-    assert apps_payload["n8n"]["enabled"] is True
-    assert apps_payload["n8n"]["hostname"] == "n8n.example.com"
+    markdown = artifacts.markdown.read_text(encoding="utf-8")
+    assert "## Components\n\n- MK8s:" in markdown
+    assert "## Apps\n\n- Envoy Gateway:" in markdown
+    assert "- n8n: `True` (n8n.example.com)" in markdown
 
 
 def test_write_inventory_removes_stale_disabled_component_files(tmp_path: Path) -> None:
@@ -120,12 +116,20 @@ def test_write_inventory_removes_stale_disabled_component_files(tmp_path: Path) 
     paths.inventory_dir.mkdir(parents=True, exist_ok=True)
     stale_pg = paths.inventory_dir / "postgresql.json"
     stale_sfs = paths.inventory_dir / "sfs.json"
+    stale_apps = paths.inventory_dir / "apps.json"
+    stale_infra = paths.inventory_dir / "infra.json"
+    stale_mk8s = paths.inventory_dir / "mk8s.json"
     stale_pg.write_text("{\"enabled\": true}\n", encoding="utf-8")
     stale_sfs.write_text("{\"enabled\": true}\n", encoding="utf-8")
+    stale_apps.write_text("{\"enabled\": true}\n", encoding="utf-8")
+    stale_infra.write_text("{\"enabled\": true}\n", encoding="utf-8")
+    stale_mk8s.write_text("{\"enabled\": true}\n", encoding="utf-8")
 
     artifacts = write_inventory(config, paths)
 
-    assert artifacts.postgresql_json is None
-    assert artifacts.sfs_json is None
+    assert artifacts.markdown.exists()
     assert not stale_pg.exists()
     assert not stale_sfs.exists()
+    assert not stale_apps.exists()
+    assert not stale_infra.exists()
+    assert not stale_mk8s.exists()

@@ -1771,12 +1771,14 @@ During recreation:
 ### Agent Development
 
 1. Modify agent code in `src/nebius_vpngw/agent/`
-2. Rebuild wheel: `python -m build --wheel`
+2. Rebuild wheel: `python -m build --wheel --no-isolation`
 3. Deploy: `nebius-vpngw apply` (uploads new wheel automatically)
 
 Agent is installed on remote VMs, not in local virtualenv.
-For pipx/release installs, `apply` uses a local wheel (current directory or `./dist`);
-it does not rebuild from source.
+For pipx/release installs, `apply` first uses `VPNGW_AGENT_WHEEL` or a local wheel
+(`./dist` or current directory), then falls back to the original wheel URL/file
+recorded in `direct_url.json`; it does not require a source checkout or
+`python -m build`.
 
 ### Testing Changes
 
@@ -1795,8 +1797,10 @@ nebius-vpngw apply --local-config-file test.config.yaml
 
 ```bash
 # Update pyproject.toml version constraints
+# For transitive security advisories, add an explicit floor in [project].dependencies
+uv lock
 # Rebuild wheel (cleans old ones automatically)
-python -m build --wheel
+python -m build --wheel --no-isolation
 
 # Deploy with new dependencies
 nebius-vpngw apply --local-config-file test.config.yaml
@@ -1807,7 +1811,7 @@ nebius-vpngw apply --local-config-file test.config.yaml
 - `publish-release.sh` is the local helper for this service.
 - `vpngw-ci.yml` is reserved for pull requests and manual CI runs.
 - `vpngw-release.yml` is the dedicated tag-driven release workflow for `nebius-vpngw-v*`.
-- Source/editable checkouts resolve runtime version from live `setuptools-scm` git state instead of trusting a generated `_version.py` cache.
+- Source/editable checkouts resolve runtime version from live `setuptools-scm` git state instead of trusting a generated `_version.py` cache; wheel builds keep only the package-local `_version.py` fallback used outside live SCM contexts.
 
 Release sequence:
 

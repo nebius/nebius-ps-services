@@ -18,19 +18,9 @@ def _service_root() -> Path | None:
     return None
 
 
-def _repo_root() -> Path | None:
+def _version_from_source_tree() -> str | None:
     service_root = _service_root()
     if service_root is None:
-        return None
-    repo_root = service_root.parents[1]
-    if (repo_root / ".git").exists():
-        return repo_root
-    return None
-
-
-def _version_from_source_tree() -> str | None:
-    repo_root = _repo_root()
-    if repo_root is None:
         return None
     try:
         from setuptools_scm import get_version
@@ -38,12 +28,13 @@ def _version_from_source_tree() -> str | None:
         return None
     try:
         return get_version(
-            root=str(repo_root),
+            root=str(service_root),
+            search_parent_directories=True,
             version_scheme="python-simplified-semver",
             local_scheme="no-local-version",
             tag_regex=_TAG_REGEX,
-            git_describe_command=_GIT_DESCRIBE_COMMAND,
             fallback_version=_UNKNOWN_VERSION,
+            scm={"git": {"describe_command": _GIT_DESCRIBE_COMMAND}},
         )
     except Exception:
         return None
@@ -74,4 +65,3 @@ def resolve_runtime_version() -> str:
         if resolved:
             return resolved
     return _UNKNOWN_VERSION
-

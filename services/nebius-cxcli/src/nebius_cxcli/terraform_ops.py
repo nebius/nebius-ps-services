@@ -362,12 +362,20 @@ def _stream_json_events(
     )
 
 
-def terraform_init(infra_dir: Path, *, extra_env: dict[str, str] | None = None) -> None:
+def terraform_init(
+    infra_dir: Path,
+    *,
+    extra_env: dict[str, str] | None = None,
+    backend: bool = True,
+) -> None:
     """Run terraform init in the rendered infra directory."""
     terraform_bin = _require_terraform()
     if not infra_dir.exists():
         raise RuntimeError(f"Rendered infra directory does not exist: {infra_dir}")
-    _run([terraform_bin, "init", "-input=false"], cwd=infra_dir, timeout=300, extra_env=extra_env)
+    cmd = [terraform_bin, "init", "-input=false"]
+    if not backend:
+        cmd.append("-backend=false")
+    _run(cmd, cwd=infra_dir, timeout=300, extra_env=extra_env)
 
 
 def terraform_plan(

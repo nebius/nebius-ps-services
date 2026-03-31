@@ -160,3 +160,44 @@ def test_discover_generated_change_maps_back_to_instance_config(
             }
         ]
     }
+
+
+def test_discover_generated_scope_tracks_config_change_for_same_instance(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo_root = tmp_path / "repo"
+    config_path = (
+        repo_root
+        / "deployments"
+        / "instances"
+        / "client-a--tenant-123"
+        / "project-456"
+        / "config.yaml"
+    )
+    generated_dir = config_path.parent / "generated"
+    generated_dir.mkdir(parents=True, exist_ok=True)
+    config_path.write_text("version: v1\n", encoding="utf-8")
+    _git_init_and_commit(repo_root)
+
+    monkeypatch.chdir(repo_root)
+    monkeypatch.setattr(
+        "nebius_cxcli.discover_ops._changed_files",
+        lambda *, cwd: ["deployments/instances/client-a--tenant-123/project-456/config.yaml"],
+    )
+    payload = discover_configs(
+        deployments_dir=str(generated_dir),
+        include_all=False,
+        repo_root=repo_root,
+    )
+
+    assert payload == {
+        "include": [
+            {
+                "config": "deployments/instances/client-a--tenant-123/project-456/config.yaml",
+                "generated": "deployments/instances/client-a--tenant-123/project-456/generated",
+                "config_changed": True,
+                "generated_changed": False,
+                "github_environment": "client-a-project-456",
+            }
+        ]
+    }

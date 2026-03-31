@@ -6,7 +6,9 @@ import copy
 import os
 import re
 import sys
+from contextlib import suppress
 from dataclasses import dataclass
+from enum import StrEnum
 from functools import lru_cache
 from importlib import resources as importlib_resources
 from pathlib import Path
@@ -15,17 +17,21 @@ from typing import Any
 import yaml
 
 DEFAULT_COMPONENT_SOURCES_FILE = (Path(__file__).resolve().parents[2] / "component_sources.yaml").resolve()
-CANONICAL_PORTABLE_COMPONENT_SOURCES_FILE = (
-    Path(__file__).resolve().parents[2] / "component_sources.release.yaml"
-).resolve()
 USER_COMPONENT_SOURCES_FILE = (Path.home() / ".config" / "nebius-cxcli" / "component_sources.yaml").resolve()
 GLOBAL_COMPONENT_SOURCES_FILE = Path("/etc/nebius-cxcli/component_sources.yaml")
 BUNDLED_COMPONENT_SOURCES_FILENAME = "component_sources.yaml"
 COMPONENT_SOURCES_FILE_ENV = "NEBIUS_CXCLI_COMPONENT_SOURCES_FILE"
+COMPONENT_SOURCES_PROFILE_ENV = "NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE"
 DEFAULT_FLUX_VERSION = "v2.8.0"
 DEFAULT_TERRAFORM_VERSION = "1.14.1"
 
 _CLI_COMPONENT_SOURCES_FILE_OVERRIDE: Path | None = None
+_CLI_COMPONENT_SOURCES_PROFILE_OVERRIDE: SourceProfile | None = None
+
+
+class SourceProfile(StrEnum):
+    PORTABLE = "portable"
+    LOCAL = "local"
 
 
 @dataclass(frozen=True)
@@ -91,6 +97,9 @@ def component_output_root_name(component_id: str, output_name: str) -> str:
 class TFModuleSource:
     module: str
     source: str
+    portable_source: str
+    local_source: str | None = None
+    metadata_source: str | None = None
     description: str | None = None
     version: str | None = None
     enable: bool = False
@@ -139,6 +148,45 @@ def set_component_sources_file_override(path: Path | None) -> None:
 def get_component_sources_file_override() -> Path | None:
     """Return process-level CLI override path when set, otherwise ``None``."""
     return _CLI_COMPONENT_SOURCES_FILE_OVERRIDE
+
+
+def set_component_sources_profile_override(profile: SourceProfile | None) -> None:
+    """Set process-level CLI override for the active component source profile."""
+    global _CLI_COMPONENT_SOURCES_PROFILE_OVERRIDE
+    _CLI_COMPONENT_SOURCES_PROFILE_OVERRIDE = profile
+
+
+def get_component_sources_profile_override() -> SourceProfile | None:
+    """Return the process-level CLI source profile override when set."""
+    return _CLI_COMPONENT_SOURCES_PROFILE_OVERRIDE
+
+
+def resolve_component_sources_profile(*, explicit: SourceProfile | None = None) -> SourceProfile:
+    """Resolve the active component source profile.
+
+    Precedence:
+    1. explicit caller-provided value
+    2. process-level CLI override (`set_component_sources_profile_override`)
+    3. environment variable (`NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE`)
+    4. default `portable`
+    """
+    if explicit is not None:
+        return explicit
+
+    if _CLI_COMPONENT_SOURCES_PROFILE_OVERRIDE is not None:
+        return _CLI_COMPONENT_SOURCES_PROFILE_OVERRIDE
+
+    env_value = os.environ.get(COMPONENT_SOURCES_PROFILE_ENV, "").strip().lower()
+    if env_value:
+        try:
+            return SourceProfile(env_value)
+        except ValueError as exc:
+            allowed = ", ".join(item.value for item in SourceProfile)
+            raise ValueError(
+                f"{COMPONENT_SOURCES_PROFILE_ENV} must be one of: {allowed}"
+            ) from exc
+
+    return SourceProfile.PORTABLE
 
 
 def resolve_component_sources_file(*, explicit: Path | None = None) -> Path:
@@ -193,6 +241,62 @@ def resolve_component_sources_file(*, explicit: Path | None = None) -> Path:
 
 def _as_text(value: Any) -> str:
     return str(value).strip() if value is not None else ""
+
+
+def _resolve_existing_local_module_source(source: str, *, source_root: Path | None = None) -> str | None:
+    token = str(source).strip()
+    if not token or token.startswith(("git::", "http://", "https://", "oci://")):
+        return None
+
+    candidate = Path(token).expanduser()
+    if candidate.is_absolute():
+        if candidate.exists() and candidate.is_dir():
+            return str(candidate.resolve())
+        return None
+
+    roots: list[Path] = []
+    if source_root is not None:
+        roots.append(source_root)
+    else:
+        with suppress(ValueError):
+            roots.append(resolve_component_sources_file().parent)
+    roots.extend(
+        [
+            Path.cwd(),
+            Path(__file__).resolve().parents[1],
+            Path(__file__).resolve().parents[2],
+            Path(__file__).resolve().parents[3],
+        ]
+    )
+    for root in roots:
+        resolved = (root / token).resolve()
+        if resolved.exists() and resolved.is_dir():
+            return str(resolved)
+    return None
+
+
+def _metadata_module_source(
+    *,
+    portable_source: str,
+    local_source: str | None,
+    resolved_source: str,
+    source_root: Path | None = None,
+) -> str:
+    resolved_local_source = _resolve_existing_local_module_source(
+        str(local_source or ""),
+        source_root=source_root,
+    )
+    if resolved_local_source:
+        return resolved_local_source
+
+    resolved_active_source = _resolve_existing_local_module_source(
+        resolved_source,
+        source_root=source_root,
+    )
+    if resolved_active_source:
+        return resolved_active_source
+
+    return portable_source or resolved_source
 
 
 def _parse_shared_values(raw: Any) -> dict[str, Any]:
@@ -534,7 +638,28 @@ def _parse_handoff(raw: Any) -> Handoff | None:
     )
 
 
-def _parse_sources_payload(payload: Any) -> ComponentSources:
+def _resolved_module_source(
+    *,
+    module_name: str,
+    portable_source: str,
+    local_source: str | None,
+    source_profile: SourceProfile,
+) -> str:
+    if not portable_source:
+        raise ValueError(
+            f"infra.tf_modules[{module_name}] portable_source is required"
+        )
+    if source_profile == SourceProfile.LOCAL and str(local_source or "").strip():
+        return str(local_source).strip()
+    return portable_source
+
+
+def _parse_sources_payload(
+    payload: Any,
+    *,
+    source_profile: SourceProfile,
+    source_root: Path | None = None,
+) -> ComponentSources:
     if not isinstance(payload, dict):
         raise ValueError("component_sources root must be a mapping")
     supported_root_keys = {"cli", "shared", "infra", "apps"}
@@ -564,12 +689,14 @@ def _parse_sources_payload(payload: Any) -> ComponentSources:
         if not isinstance(raw, dict):
             continue
         module_name = _as_text(raw.get("module")).lower()
-        source = _as_text(raw.get("source"))
-        if not module_name or not source:
+        portable_source = _as_text(raw.get("portable_source"))
+        local_source = _as_text(raw.get("local_source")) or None
+        if not module_name:
             continue
         supported_module_keys = {
             "module",
-            "source",
+            "portable_source",
+            "local_source",
             "description",
             "version",
             "enable",
@@ -585,6 +712,18 @@ def _parse_sources_payload(payload: Any) -> ComponentSources:
                 f"infra.tf_modules[{module_name}] has unsupported field(s): "
                 + ", ".join(unknown_module_keys)
             )
+        source = _resolved_module_source(
+            module_name=module_name,
+            portable_source=portable_source,
+            local_source=local_source,
+            source_profile=source_profile,
+        )
+        metadata_source = _metadata_module_source(
+            portable_source=portable_source,
+            local_source=local_source,
+            resolved_source=source,
+            source_root=source_root,
+        )
         description = _as_text(raw.get("description")) or None
         version = _as_text(raw.get("version")) or None
         enable = bool(raw.get("enable", False))
@@ -597,7 +736,7 @@ def _parse_sources_payload(payload: Any) -> ComponentSources:
             raw.get("outputs"),
             field_label=f"infra.tf_modules[{module_name}]",
             scope="infra",
-            module_source=source,
+            module_source=metadata_source,
         )
         input_bindings = _parse_component_input_bindings(raw.get("input"))
         handoff = _parse_handoff(raw.get("handoff"))
@@ -605,6 +744,9 @@ def _parse_sources_payload(payload: Any) -> ComponentSources:
             TFModuleSource(
                 module=module_name,
                 source=source,
+                portable_source=portable_source,
+                local_source=local_source,
+                metadata_source=metadata_source,
                 description=description,
                 version=version,
                 enable=enable,
@@ -629,7 +771,6 @@ def _parse_sources_payload(payload: Any) -> ComponentSources:
             "repo",
             "version",
             "namespace",
-            "release-name",
             "releasename",
             "enable",
             "description",
@@ -647,7 +788,7 @@ def _parse_sources_payload(payload: Any) -> ComponentSources:
         repo = repo_raw or None
         version = _as_text(raw.get("version")) or None
         namespace = _as_text(raw.get("namespace")) or None
-        release_name = _as_text(raw.get("release-name") or raw.get("releasename")) or None
+        release_name = _as_text(raw.get("releasename")) or None
         enable = bool(raw.get("enable", False))
         description = _as_text(raw.get("description")) or None
         group = _as_text(raw.get("group")) or None
@@ -685,10 +826,14 @@ def _parse_sources_payload(payload: Any) -> ComponentSources:
     )
 
 
-def _load_sources_from_path(path: Path) -> ComponentSources:
+def _load_sources_from_path(path: Path, *, source_profile: SourceProfile) -> ComponentSources:
     with path.open("r", encoding="utf-8") as handle:
         payload = yaml.safe_load(handle) or {}
-    return _parse_sources_payload(payload)
+    return _parse_sources_payload(
+        payload,
+        source_profile=source_profile,
+        source_root=path.parent,
+    )
 
 
 def _load_cli_settings_from_path(path: Path) -> CliSettings:
@@ -699,11 +844,11 @@ def _load_cli_settings_from_path(path: Path) -> CliSettings:
     return _parse_cli_settings(payload.get("cli"))
 
 
-def _load_bundled_component_sources() -> ComponentSources:
+def _load_bundled_component_sources(*, source_profile: SourceProfile) -> ComponentSources:
     resource = importlib_resources.files("nebius_cxcli").joinpath(BUNDLED_COMPONENT_SOURCES_FILENAME)
     try:
         payload = yaml.safe_load(resource.read_text(encoding="utf-8")) or {}
-        return _parse_sources_payload(payload)
+        return _parse_sources_payload(payload, source_profile=source_profile)
     except FileNotFoundError:
         pass
     except OSError:
@@ -711,13 +856,10 @@ def _load_bundled_component_sources() -> ComponentSources:
 
     prefix_candidate = Path(sys.prefix) / "nebius_cxcli" / BUNDLED_COMPONENT_SOURCES_FILENAME
     if prefix_candidate.exists() and prefix_candidate.is_file():
-        return _load_sources_from_path(prefix_candidate)
+        return _load_sources_from_path(prefix_candidate, source_profile=source_profile)
 
-    if (
-        CANONICAL_PORTABLE_COMPONENT_SOURCES_FILE.exists()
-        and CANONICAL_PORTABLE_COMPONENT_SOURCES_FILE.is_file()
-    ):
-        return _load_sources_from_path(CANONICAL_PORTABLE_COMPONENT_SOURCES_FILE)
+    if DEFAULT_COMPONENT_SOURCES_FILE.exists() and DEFAULT_COMPONENT_SOURCES_FILE.is_file():
+        return _load_sources_from_path(DEFAULT_COMPONENT_SOURCES_FILE, source_profile=source_profile)
 
     raise FileNotFoundError(
         "Bundled component sources file is missing from the installed package layout."
@@ -740,25 +882,22 @@ def _load_bundled_cli_settings() -> CliSettings:
     if prefix_candidate.exists() and prefix_candidate.is_file():
         return _load_cli_settings_from_path(prefix_candidate)
 
-    if (
-        CANONICAL_PORTABLE_COMPONENT_SOURCES_FILE.exists()
-        and CANONICAL_PORTABLE_COMPONENT_SOURCES_FILE.is_file()
-    ):
-        return _load_cli_settings_from_path(CANONICAL_PORTABLE_COMPONENT_SOURCES_FILE)
+    if DEFAULT_COMPONENT_SOURCES_FILE.exists() and DEFAULT_COMPONENT_SOURCES_FILE.is_file():
+        return _load_cli_settings_from_path(DEFAULT_COMPONENT_SOURCES_FILE)
 
     raise FileNotFoundError(
         "Bundled component sources file is missing from the installed package layout."
     )
 
 
-@lru_cache(maxsize=8)
-def _load_sources_cached(path_text: str) -> ComponentSources:
-    return _load_sources_from_path(Path(path_text))
+@lru_cache(maxsize=16)
+def _load_sources_cached(path_text: str, profile_value: str) -> ComponentSources:
+    return _load_sources_from_path(Path(path_text), source_profile=SourceProfile(profile_value))
 
 
-@lru_cache(maxsize=1)
-def _load_bundled_sources_cached() -> ComponentSources:
-    return _load_bundled_component_sources()
+@lru_cache(maxsize=2)
+def _load_bundled_sources_cached(profile_value: str) -> ComponentSources:
+    return _load_bundled_component_sources(source_profile=SourceProfile(profile_value))
 
 
 @lru_cache(maxsize=8)
@@ -779,14 +918,19 @@ def _can_use_bundled_default(*, explicit: Path | None) -> bool:
     return not bool(os.environ.get(COMPONENT_SOURCES_FILE_ENV, "").strip())
 
 
-def load_component_sources(*, explicit: Path | None = None) -> ComponentSources:
+def load_component_sources(
+    *,
+    explicit: Path | None = None,
+    source_profile: SourceProfile | None = None,
+) -> ComponentSources:
+    resolved_profile = resolve_component_sources_profile(explicit=source_profile)
     try:
         path = resolve_component_sources_file(explicit=explicit)
     except ValueError:
         if _can_use_bundled_default(explicit=explicit):
-            return _load_bundled_sources_cached()
+            return _load_bundled_sources_cached(resolved_profile.value)
         raise
-    return _load_sources_cached(str(path))
+    return _load_sources_cached(str(path), resolved_profile.value)
 
 
 def load_cli_settings(*, explicit: Path | None = None) -> CliSettings:

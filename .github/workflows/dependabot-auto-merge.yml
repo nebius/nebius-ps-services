@@ -21,6 +21,11 @@ jobs:
     name: dependabot-auto-merge
     if: github.actor == 'dependabot[bot]' && github.event.pull_request.draft == false
     runs-on: ubuntu-latest
+    environment: dependabot-automerge
+    env:
+      DEPENDABOT_AUTOMERGE_APP_ID: ${{ secrets.DEPENDABOT_AUTOMERGE_APP_ID }}
+      DEPENDABOT_AUTOMERGE_APP_PRIVATE_KEY: ${{ secrets.DEPENDABOT_AUTOMERGE_APP_PRIVATE_KEY }}
+      DEPENDABOT_AUTOMERGE_TOKEN: ${{ secrets.DEPENDABOT_AUTOMERGE_TOKEN }}
     steps:
       - name: Fetch Dependabot metadata
         id: metadata
@@ -28,10 +33,19 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Evaluate update type
+      - name: Create automerge app token
+        id: automerge_token
+        if: env.DEPENDABOT_AUTOMERGE_APP_ID != '' && env.DEPENDABOT_AUTOMERGE_APP_PRIVATE_KEY != ''
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ env.DEPENDABOT_AUTOMERGE_APP_ID }}
+          private-key: ${{ env.DEPENDABOT_AUTOMERGE_APP_PRIVATE_KEY }}
+
+      - name: Evaluate automerge eligibility
         id: eligibility
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AUTOMERGE_TOKEN: ${{ steps.automerge_token.outputs.token || env.DEPENDABOT_AUTOMERGE_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
@@ -47,8 +61,19 @@ jobs:
               [[ "${path}" =~ ^\.github/actions/.+/action\.ya?ml$ ]]
           }
 
+          is_allowed_update_type() {
+            local update_type="$1"
+            [[ "${update_type}" == "version-update:semver-major" ]] || \
+            [[ "${update_type}" == "version-update:semver-patch" ]] || \
+              [[ "${update_type}" == "version-update:semver-minor" ]]
+          }
+
           if [[ "${HEAD_REF}" != dependabot/github_actions/* ]]; then
             reason="Dependabot PR is not from the github-actions ecosystem (${HEAD_REF})."
+          elif [[ -z "${AUTOMERGE_TOKEN}" ]]; then
+            reason="No automerge credential is configured. Set GitHub App secrets DEPENDABOT_AUTOMERGE_APP_ID and DEPENDABOT_AUTOMERGE_APP_PRIVATE_KEY, or set DEPENDABOT_AUTOMERGE_TOKEN."
+          elif ! is_allowed_update_type "${update_type}"; then
+            reason="Dependabot update type '${update_type}' is not eligible for automerge."
           else
             mapfile -t files < <(gh pr view "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json files --jq '.files[].path')
             if [[ "${#files[@]}" -eq 0 ]]; then
@@ -75,14 +100,14 @@ jobs:
       - name: Auto-approve Dependabot update
         if: steps.eligibility.outputs.eligible == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.automerge_token.outputs.token || env.DEPENDABOT_AUTOMERGE_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: gh pr review --approve "${PR_URL}"
 
       - name: Enable auto-merge
         if: steps.eligibility.outputs.eligible == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.automerge_token.outputs.token || env.DEPENDABOT_AUTOMERGE_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: gh pr merge --auto --squash "${PR_URL}"
 
