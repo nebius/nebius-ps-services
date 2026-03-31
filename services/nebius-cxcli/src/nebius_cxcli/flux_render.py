@@ -36,13 +36,6 @@ def _write_text(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def _bootstrap_flux_resource(paths: InstancePaths) -> str | None:
-    bootstrap_kustomization = paths.flux_dir / "flux-system" / "kustomization.yaml"
-    if bootstrap_kustomization.exists():
-        return "./flux-system"
-    return None
-
-
 def _helm_repository_doc(name: str, url: str, *, repo_type: str = "default") -> dict[str, Any]:
     spec: dict[str, Any] = {"interval": "30m", "url": url}
     if repo_type == "oci":
@@ -276,9 +269,7 @@ def _configured_app_release_specs(
                     raise ValueError(
                         f"apps.charts[{entry_id}].namespace is required for enabled chart '{entry_id}'"
                     )
-                release_name = str(
-                    chart_node.get("release-name", chart_node.get("release_name", entry_id))
-                ).strip() or entry_id
+                release_name = str(chart_node.get("release-name", entry_id)).strip() or entry_id
                 repo_name_default = f"helm-{_file_slug(entry_id)}"
                 repo_name = repo_name_default
                 interval = "5m"
@@ -458,11 +449,7 @@ def render_flux(
     kustomization_doc = {
         "apiVersion": "kustomize.config.k8s.io/v1beta1",
         "kind": "Kustomization",
-        "resources": (
-            [bootstrap_resource, *state.resources]
-            if (bootstrap_resource := _bootstrap_flux_resource(paths))
-            else state.resources
-        ),
+        "resources": state.resources,
     }
     kustomization_path = paths.flux_dir / "kustomization.yaml"
     _write_text(kustomization_path, yaml.safe_dump(kustomization_doc, sort_keys=False))

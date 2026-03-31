@@ -39,11 +39,10 @@ Use this sequence for first-time deployment. It is optimized for end users and k
 
 Download the latest wheel from [Releases](https://github.com/nebius/nebius-ps-services/releases) and install with `pipx`.
 
-Example for `v0.4.9`:
+Example for `v0.5.4`:
 
 ```bash
-wget https://github.com/nebius/nebius-ps-services/releases/download/nebius-vpngw-v0.4.9/nebius_vpngw-0.4.9-py3-none-any.whl
-pipx install ./nebius_vpngw-0.4.9-py3-none-any.whl
+pipx install https://github.com/nebius/nebius-ps-services/releases/download/nebius-vpngw-v0.5.4/nebius_vpngw-0.5.4-py3-none-any.whl
 ```
 
 Verify:
@@ -52,6 +51,10 @@ Verify:
 nebius-vpngw --version
 nebius-vpngw --help
 ```
+
+For wheel-based installs, `apply` reuses the original release wheel URL or local wheel file recorded
+by pip when it deploys the agent to gateway VMs. End users do not need a source checkout or
+`python -m build`.
 
 ### 2. Create a starter config
 
@@ -154,7 +157,17 @@ For advanced setup, continue with [Configuration](#configuration), [Commands](#c
   - If your distro has no pipx package: `python3 -m pip install --user pipx && python3 -m pipx ensurepath`
   - If pip blocks with "externally managed environment" (PEP 668), rerun with `--break-system-packages` only if you accept the risk:
     `python3 -m pip install --user pipx --break-system-packages && python3 -m pipx ensurepath`
-- Download the latest `nebius_vpngw-<version>-py3-none-any.whl` from this repository’s GitHub Release assets (version comes from the Git tag).
+- Use the latest `nebius_vpngw-<version>-py3-none-any.whl` from this repository’s GitHub
+  Release assets (version comes from the Git tag).
+  - Recommended: install directly from the release URL:
+
+    ```bash
+    pipx install <release-wheel-url>
+    ```
+
+    `apply` can reuse that original URL later to deploy the VM agent.
+
+  - Alternative: download the wheel first and install from the local file.
   - macOS/Linux (wget):
 
     ```bash
@@ -183,6 +196,12 @@ exec $SHELL
 ```
 
 - Upgrade when a new tag is released (release wheels, not PyPI):
+
+  ```bash
+  pipx install --force <release-wheel-url>
+  ```
+
+  Or, if you downloaded the wheel locally:
 
   ```bash
   pipx install --force ./nebius_vpngw-<version>-py3-none-any.whl
@@ -1647,11 +1666,13 @@ vim src/nebius_vpngw/agent/main.py
 **Rebuild and deploy:**
 
 ```bash
-python -m build --wheel
+python -m build --wheel --no-isolation
 nebius-vpngw apply --local-config-file <file>
 ```
 
-Agent wheel uploaded automatically to VMs.
+Source/editable installs rebuild and upload the fresh wheel automatically. Wheel-based release/pipx
+installs reuse the original wheel URL/file metadata (or `VPNGW_AGENT_WHEEL`) instead of rebuilding
+from source.
 
 ### Testing Changes
 
@@ -1683,16 +1704,21 @@ nebius-vpngw status --local-config-file test.config.yaml
 ```toml
 [project]
 dependencies = [
+  "Pygments>=2.20.0,<3.0.0",  # explicit floor for transitive security advisories
   "pydantic>=2.12.0,<3.0.0",
   # ...
 ]
 ```
 
-**Refresh your editable install and rebuild when needed:**
+If a security advisory lands on a transitive package such as `Pygments`, add the floor to
+`[project].dependencies` so release wheels and editable installs both carry the constraint.
+
+**Refresh the lockfile, editable install, and build when needed:**
 
 ```bash
+uv lock
 pip install -e ".[dev]"
-python -m build --wheel
+python -m build --wheel --no-isolation
 ```
 
 ### linting the codes
@@ -1703,7 +1729,8 @@ python -m ruff check src --fix
 
 ## Release & Versioning
 
-- Versions are derived from annotated Git tags (`nebius-vpngw-vMAJOR.MINOR.PATCH`) via `setuptools-scm`; no manual edits to `pyproject.toml` are needed. Installed packages use published package metadata, while source/editable checkouts prefer live SCM state over a generated `_version.py` cache.
+- Versions are derived from annotated Git tags (`nebius-vpngw-vMAJOR.MINOR.PATCH`) via `setuptools-scm`; no manual edits to `pyproject.toml` are needed. Installed packages use published package metadata, source/editable checkouts prefer live SCM state, and wheel builds keep a package-local `_version.py` only as a fallback for metadata-free environments.
+- Local developer builds should reuse the prepared project virtualenv (`python -m build --wheel --no-isolation` or `make build`) so the output stays stable and avoids transient isolated-build toolchain warnings.
 - Semantic Versioning policy:
   - **MAJOR:** breaking changes (CLI flags removed/changed, behavior changes that could break scripts).
   - **MINOR:** backward-compatible features (new options, new Nebius resources supported).

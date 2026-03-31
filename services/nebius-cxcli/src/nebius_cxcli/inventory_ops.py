@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,11 +14,6 @@ from .runtime_config import to_plain_data
 
 @dataclass(frozen=True)
 class InventoryArtifacts:
-    infra_json: Path
-    mk8s_json: Path | None
-    postgresql_json: Path | None
-    sfs_json: Path | None
-    apps_json: Path
     markdown: Path
 
 
@@ -220,53 +214,18 @@ def _build_payload(config: Any, paths: InstancePaths) -> dict[str, dict]:
         },
     }
 
-
-def _write_json(path: Path, payload: Mapping[str, Any]) -> Path:
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return path
-
-
-def _write_optional_json(path: Path, payload: Mapping[str, Any], *, enabled: bool) -> Path | None:
-    if not enabled:
-        path.unlink(missing_ok=True)
-        return None
-    return _write_json(path, payload)
-
-
 def write_inventory(config: Any, paths: InstancePaths) -> InventoryArtifacts:
     """Write non-sensitive inventory artifacts to disk."""
     payload = _build_payload(config, paths)
     paths.inventory_dir.mkdir(parents=True, exist_ok=True)
-
-    infra_path = paths.inventory_dir / "infra.json"
-    mk8s_path = paths.inventory_dir / "mk8s.json"
-    pg_path = paths.inventory_dir / "postgresql.json"
-    sfs_path = paths.inventory_dir / "sfs.json"
-    apps_path = paths.inventory_dir / "apps.json"
-
-    _write_json(
-        infra_path,
-        payload["infra"],
-    )
-    mk8s_artifact = _write_optional_json(
-        mk8s_path,
-        payload["mk8s"],
-        enabled=bool(payload["infra"]["mk8s_enabled"]),
-    )
-    pg_artifact = _write_optional_json(
-        pg_path,
-        payload["postgresql"],
-        enabled=bool(payload["postgresql"]["enabled"]),
-    )
-    sfs_artifact = _write_optional_json(
-        sfs_path,
-        payload["sfs"],
-        enabled=bool(payload["sfs"]["enabled"]),
-    )
-    _write_json(
-        apps_path,
-        payload["apps"],
-    )
+    for stale_path in (
+        paths.inventory_dir / "infra.json",
+        paths.inventory_dir / "mk8s.json",
+        paths.inventory_dir / "postgresql.json",
+        paths.inventory_dir / "sfs.json",
+        paths.inventory_dir / "apps.json",
+    ):
+        stale_path.unlink(missing_ok=True)
 
     payload_data = to_plain_data(config)
     client_info = _mapping(payload_data if isinstance(payload_data, dict) else {})
@@ -286,12 +245,14 @@ def write_inventory(config: Any, paths: InstancePaths) -> InventoryArtifacts:
         f"- Region: `{payload['infra']['region']}`",
         "",
         "## Components",
+        "",
         f"- MK8s: `{payload['infra']['mk8s_enabled']}`",
         f"- Managed PostgreSQL: `{payload['postgresql']['enabled']}`",
         f"- SFS: `{payload['sfs']['enabled']}`",
         f"- WireGuard Jump Host: `{payload['infra']['wireguard_enabled']}`",
         "",
         "## Apps",
+        "",
         f"- Envoy Gateway: `{payload['apps']['envoy_gateway']}`",
         f"- cert-manager: `{payload['apps']['cert_manager']}`",
         f"- ExternalDNS: `{payload['apps']['external_dns']}`",
@@ -301,11 +262,4 @@ def write_inventory(config: Any, paths: InstancePaths) -> InventoryArtifacts:
     ]
     markdown_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    return InventoryArtifacts(
-        infra_json=infra_path,
-        mk8s_json=mk8s_artifact,
-        postgresql_json=pg_artifact,
-        sfs_json=sfs_artifact,
-        apps_json=apps_path,
-        markdown=markdown_path,
-    )
+    return InventoryArtifacts(markdown=markdown_path)

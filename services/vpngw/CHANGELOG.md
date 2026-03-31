@@ -14,6 +14,21 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Pinned `Pygments>=2.20.0,<3.0.0` directly in project metadata and refreshed
+  `uv.lock` so runtime installs, dev/test environments, and generated wheel
+  metadata no longer permit the vulnerable transitive version.
+- Fixed `apply` agent deployment for wheel-based installs: when a fresh local build is unavailable,
+  SSH push now falls back to the originally installed wheel recorded in pip
+  `direct_url.json` (including direct GitHub release URLs and local wheel files)
+  instead of requiring `python -m build`.
+- Cleaned up version packaging/runtime wiring: source checkouts now pass the
+  non-deprecated nested `scm.git.describe_command` config to `setuptools-scm`,
+  and wheel builds now use a package-local `version_file` so release artifacts
+  no longer include a duplicate repo-relative `_version.py`.
+- Changed the local developer `make build`/`make all` path to reuse the prepared
+  project virtualenv (`python -m build --wheel --no-isolation`), which avoids
+  noisy isolated-build `vcs_versioning` warnings while keeping local artifacts
+  deterministic.
 - Fixed runtime version resolution for source/editable checkouts so `nebius-vpngw` now prefers live `setuptools-scm` git state over a generated `_version.py` cache, and `publish-release.sh --publish` now verifies local runtime version/tag alignment before pushing the release tag.
 - Clarified BFD documentation and comments: support is now described as vendor/platform specific, the template/README no longer imply generic cloud-VPN support, and the misleading GCP HA VPN BFD note was removed.
 - Added concise Nebius Managed Kubernetes routing guidance covering `gateway.local_prefixes`, Pod-vs-ClusterIP expectations, and the common Cilium routing/masquerade defaults operators should account for over VPN.
@@ -22,6 +37,7 @@ All notable changes to this project are tracked here. This changelog follows
 
 - Tightened multi-connection validation and template guidance: tunnel names must now be globally unique, APIPA tunnel ranges and BGP inner IPs must be unique per gateway instance, and the generated config/docs now clarify the supported multi-site active/passive workflow.
 - Improved `status` for multi-connection gateways: `Carrying Traffic` is now computed per connection, and live FRR multipath across overlapping prefixes is surfaced as an `ECMP Warning` that names the prefix and the active tunnels carrying it.
+
 ## [nebius-vpngw-v0.5.3] - 2026-03-10
 
 - Made the output path optional for `create-from-peer-config`; when omitted, the generated config now defaults to `./nebius-vpngw.config.yaml`.

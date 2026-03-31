@@ -11,7 +11,8 @@ shared:
 infra:
   tf_modules:
     - module: mk8s
-      source: ../../platform-infra/modules/mk8s
+      portable_source: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mk8s?ref=main
+      local_source: ../../platform-infra/modules/mk8s
       description: Managed Kubernetes baseline cluster module
       group: Compute
       enable: true
@@ -27,35 +28,40 @@ infra:
         cluster_id: cluster_id
         access: access
     - module: managed-postgresql
-      source: ../../platform-infra/modules/managed-postgresql
+      portable_source: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/managed-postgresql?ref=main
+      local_source: ../../platform-infra/modules/managed-postgresql
       description: Managed PostgreSQL database module
       group: Storage
       enable: false
       outputs:
         tf_outputs: true
     - module: sfs
-      source: ../../platform-infra/modules/sfs
+      portable_source: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/sfs?ref=main
+      local_source: ../../platform-infra/modules/sfs
       description: Shared filesystem and CSI integration module
       group: Storage
       enable: false
       outputs:
         tf_outputs: true
     - module: object-storage
-      source: ../../platform-infra/modules/object-storage
+      portable_source: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/object-storage?ref=main
+      local_source: ../../platform-infra/modules/object-storage
       description: Object storage buckets module
       group: Storage
       enable: false
       outputs:
         tf_outputs: true
     - module: mysterybox
-      source: ../../platform-infra/modules/mysterybox
+      portable_source: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mysterybox?ref=main
+      local_source: ../../platform-infra/modules/mysterybox
       description: MysteryBox secrets module
       group: Security
       enable: false
       outputs:
         tf_outputs: true
     - module: wireguard-jumphost
-      source: ../../platform-infra/modules/wireguard-jumphost
+      portable_source: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/wireguard-jumphost?ref=main
+      local_source: ../../platform-infra/modules/wireguard-jumphost
       description: WireGuard jump host module
       group: Network
       enable: false
@@ -64,7 +70,8 @@ infra:
       defaults:
         inputs.ssh_user_name: shared.admin_ssh.user_name
     - module: ssh-jumphost
-      source: ../../platform-infra/modules/ssh-jumphost
+      portable_source: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/ssh-jumphost?ref=main
+      local_source: ../../platform-infra/modules/ssh-jumphost
       description: SSH-only hardened jump host module
       group: Security
       enable: false

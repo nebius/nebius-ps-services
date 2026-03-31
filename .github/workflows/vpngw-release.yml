@@ -104,7 +104,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf build dist
-          python -m build --wheel
+          python -m build --wheel --no-isolation
 
       - name: Resolve and verify artifact
         if: steps.state.outputs.release_exists == 'false'

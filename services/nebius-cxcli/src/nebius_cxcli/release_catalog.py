@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import re
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -11,8 +10,16 @@ from typing import Any
 import yaml
 
 REPO_PREFIX = "git::https://github.com/nebius/nebius-ps-services.git//"
-LOCAL_PATH_PATTERN = re.compile(r"^(?:\.\.?/|/|[A-Za-z]:[\\/])")
 BUNDLED_COMPONENT_SOURCES_SUFFIX = "nebius_cxcli/component_sources.yaml"
+
+
+def _looks_like_local_path(source: str) -> bool:
+    value = str(source).strip()
+    if not value:
+        return False
+    if value.startswith(("./", "../", "/", "~")):
+        return True
+    return len(value) >= 3 and value[1] == ":" and value[2] in ("\\", "/")
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -42,9 +49,10 @@ def render_release_catalog(
     payload = _load_yaml(input_path)
     modules = _infra_modules(payload, subject=str(input_path))
     for module in modules:
-        source = str(module.get("source", "")).strip()
+        source = str(module.get("portable_source", "")).strip()
         if source.startswith(REPO_PREFIX):
-            module["source"] = source.replace("?ref=main", f"?ref={release_ref}")
+            module["portable_source"] = source.replace("?ref=main", f"?ref={release_ref}")
+        module.pop("local_source", None)
     output_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
 
@@ -56,11 +64,11 @@ def _validate_module_sources(
 ) -> None:
     bad_sources: list[str] = []
     for module in modules:
-        source = str(module.get("source", "")).strip()
+        source = str(module.get("portable_source", "")).strip()
         if not source:
             bad_sources.append("<empty>")
             continue
-        if LOCAL_PATH_PATTERN.match(source):
+        if _looks_like_local_path(source):
             bad_sources.append(source)
             continue
         if source.startswith(REPO_PREFIX):
@@ -69,6 +77,10 @@ def _validate_module_sources(
             continue
         if "?ref=main" in source:
             bad_sources.append(source)
+            continue
+        local_source = str(module.get("local_source", "")).strip()
+        if local_source:
+            bad_sources.append(f"local_source={local_source}")
     if bad_sources:
         raise ValueError(
             f"{subject} contains non-portable or incorrectly pinned module sources: "

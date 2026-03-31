@@ -26,7 +26,12 @@ def _load_setup_module(monkeypatch) -> ModuleType:
     return module
 
 
-def _write_catalog(path: Path, source: str) -> None:
+def _write_catalog(
+    path: Path,
+    portable_source: str,
+    *,
+    local_source: str | None = "../../platform-infra/modules/mk8s",
+) -> None:
     path.write_text(
         yaml.safe_dump(
             {
@@ -34,7 +39,8 @@ def _write_catalog(path: Path, source: str) -> None:
                     "tf_modules": [
                         {
                             "module": "mk8s",
-                            "source": source,
+                            "portable_source": portable_source,
+                            "local_source": local_source,
                         }
                     ]
                 }
@@ -48,12 +54,10 @@ def _write_catalog(path: Path, source: str) -> None:
 def test_select_bundled_component_sources_prefers_portable_staged_catalog(monkeypatch, tmp_path: Path) -> None:
     module = _load_setup_module(monkeypatch)
     staged = tmp_path / "component_sources.yaml"
-    release = tmp_path / "component_sources.release.yaml"
     _write_catalog(
         staged,
         "git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mk8s?ref=main",
     )
-    _write_catalog(release, "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3")
 
     selected = module._select_bundled_component_sources(tmp_path)
 
@@ -64,7 +68,7 @@ def test_render_bundled_component_sources_rewrites_ref_from_build_env(
     monkeypatch, tmp_path: Path
 ) -> None:
     module = _load_setup_module(monkeypatch)
-    catalog = tmp_path / "component_sources.release.yaml"
+    catalog = tmp_path / "component_sources.yaml"
     _write_catalog(
         catalog,
         "git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mk8s?ref=main",
@@ -73,14 +77,17 @@ def test_render_bundled_component_sources_rewrites_ref_from_build_env(
 
     rendered = yaml.safe_load(module._render_bundled_component_sources(catalog))
 
-    assert rendered["infra"]["tf_modules"][0]["source"].endswith("?ref=feature/test-portable-catalog")
+    assert rendered["infra"]["tf_modules"][0]["portable_source"].endswith(
+        "?ref=feature/test-portable-catalog"
+    )
+    assert "local_source" not in rendered["infra"]["tf_modules"][0]
 
 
 def test_render_bundled_component_sources_prefers_release_ref_over_cli_ref(
     monkeypatch, tmp_path: Path
 ) -> None:
     module = _load_setup_module(monkeypatch)
-    catalog = tmp_path / "component_sources.release.yaml"
+    catalog = tmp_path / "component_sources.yaml"
     _write_catalog(
         catalog,
         "git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mk8s?ref=main",
@@ -90,24 +97,19 @@ def test_render_bundled_component_sources_prefers_release_ref_over_cli_ref(
 
     rendered = yaml.safe_load(module._render_bundled_component_sources(catalog))
 
-    assert rendered["infra"]["tf_modules"][0]["source"].endswith("?ref=deadbeefcafebabe")
+    assert rendered["infra"]["tf_modules"][0]["portable_source"].endswith("?ref=deadbeefcafebabe")
 
 
-def test_select_bundled_component_sources_falls_back_when_root_catalog_is_local_path(
+def test_select_bundled_component_sources_uses_root_catalog_by_default(
     monkeypatch, tmp_path: Path
 ) -> None:
     module = _load_setup_module(monkeypatch)
     staged = tmp_path / "component_sources.yaml"
-    release = tmp_path / "component_sources.release.yaml"
-    _write_catalog(staged, "../../platform-infra/modules/mk8s")
-    _write_catalog(
-        release,
-        "git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mk8s?ref=main",
-    )
+    _write_catalog(staged, "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3")
 
     selected = module._select_bundled_component_sources(tmp_path)
 
-    assert selected == release
+    assert selected == staged
 
 
 def test_select_bundled_component_sources_honors_explicit_build_override(

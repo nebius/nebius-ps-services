@@ -110,7 +110,28 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                   python-version: ${{{{ env.NEBIUS_CXCLI_PYTHON_VERSION }}}}
                   cache: pip
 
-              - uses: azure/setup-kubectl@v4
+              - name: Install kubectl
+                run: |
+                  set -euo pipefail
+                  version="$(curl -fsSL https://dl.k8s.io/release/stable.txt)"
+                  os="$(uname | tr '[:upper:]' '[:lower:]')"
+                  arch="$(uname -m)"
+                  case "${{arch}}" in
+                    x86_64|amd64) arch=amd64 ;;
+                    aarch64|arm64) arch=arm64 ;;
+                    *)
+                      echo "Unsupported kubectl architecture: ${{arch}}"
+                      exit 1
+                      ;;
+                  esac
+                  tmpdir="$(mktemp -d)"
+                  trap 'rm -rf "${{tmpdir}}"' EXIT
+                  curl -fsSLo "${{tmpdir}}/kubectl" "https://dl.k8s.io/release/${{version}}/bin/${{os}}/${{arch}}/kubectl"
+                  curl -fsSLo "${{tmpdir}}/kubectl.sha256" "https://dl.k8s.io/release/${{version}}/bin/${{os}}/${{arch}}/kubectl.sha256"
+                  (cd "${{tmpdir}}" && echo "$(cat kubectl.sha256)  kubectl" | sha256sum --check)
+                  install -m 0755 "${{tmpdir}}/kubectl" "${{HOME}}/.local/bin/kubectl"
+                  echo "${{HOME}}/.local/bin" >> "$GITHUB_PATH"
+                  kubectl version --client=true
 
               - name: Install nebius-cxcli
                 run: |
@@ -146,29 +167,6 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                 run: |
                   set -euo pipefail
                   nebius-cxcli validate-generated --portable "${{{{ matrix.generated }}}}"
-
-              - name: Restore generated Terraform inputs
-                run: |
-                  set -euo pipefail
-                  python - <<'PY'
-                  import json
-                  from pathlib import Path
-
-                  bundle = Path("${{{{ matrix.generated }}}}")
-                  manifest_path = bundle / "nebius-cxcli-manifest.json"
-                  manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-                  payload = ((manifest.get("render") or {{}}).get("terraform_tfvars"))
-                  if not isinstance(payload, dict):
-                      raise SystemExit(
-                          f"generated manifest is missing render.terraform_tfvars: {{manifest_path}}"
-                      )
-                  tfvars_path = bundle / "infra" / "terraform.auto.tfvars.json"
-                  tfvars_path.write_text(
-                      json.dumps(payload, indent=2, sort_keys=True) + "\\n",
-                      encoding="utf-8",
-                  )
-                  print(tfvars_path)
-                  PY
 
               - name: Terraform plan
                 env:
@@ -197,7 +195,28 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                   python-version: ${{{{ env.NEBIUS_CXCLI_PYTHON_VERSION }}}}
                   cache: pip
 
-              - uses: azure/setup-kubectl@v4
+              - name: Install kubectl
+                run: |
+                  set -euo pipefail
+                  version="$(curl -fsSL https://dl.k8s.io/release/stable.txt)"
+                  os="$(uname | tr '[:upper:]' '[:lower:]')"
+                  arch="$(uname -m)"
+                  case "${{arch}}" in
+                    x86_64|amd64) arch=amd64 ;;
+                    aarch64|arm64) arch=arm64 ;;
+                    *)
+                      echo "Unsupported kubectl architecture: ${{arch}}"
+                      exit 1
+                      ;;
+                  esac
+                  tmpdir="$(mktemp -d)"
+                  trap 'rm -rf "${{tmpdir}}"' EXIT
+                  curl -fsSLo "${{tmpdir}}/kubectl" "https://dl.k8s.io/release/${{version}}/bin/${{os}}/${{arch}}/kubectl"
+                  curl -fsSLo "${{tmpdir}}/kubectl.sha256" "https://dl.k8s.io/release/${{version}}/bin/${{os}}/${{arch}}/kubectl.sha256"
+                  (cd "${{tmpdir}}" && echo "$(cat kubectl.sha256)  kubectl" | sha256sum --check)
+                  install -m 0755 "${{tmpdir}}/kubectl" "${{HOME}}/.local/bin/kubectl"
+                  echo "${{HOME}}/.local/bin" >> "$GITHUB_PATH"
+                  kubectl version --client=true
 
               - name: Install nebius-cxcli
                 run: |
@@ -234,29 +253,6 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                   set -euo pipefail
                   nebius-cxcli validate-generated --portable "${{{{ matrix.generated }}}}"
 
-              - name: Restore generated Terraform inputs
-                run: |
-                  set -euo pipefail
-                  python - <<'PY'
-                  import json
-                  from pathlib import Path
-
-                  bundle = Path("${{{{ matrix.generated }}}}")
-                  manifest_path = bundle / "nebius-cxcli-manifest.json"
-                  manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-                  payload = ((manifest.get("render") or {{}}).get("terraform_tfvars"))
-                  if not isinstance(payload, dict):
-                      raise SystemExit(
-                          f"generated manifest is missing render.terraform_tfvars: {{manifest_path}}"
-                      )
-                  tfvars_path = bundle / "infra" / "terraform.auto.tfvars.json"
-                  tfvars_path.write_text(
-                      json.dumps(payload, indent=2, sort_keys=True) + "\\n",
-                      encoding="utf-8",
-                  )
-                  print(tfvars_path)
-                  PY
-
               - name: Terraform apply
                 env:
                   NEBIUS_SA_ID: ${{{{ secrets.NEBIUS_SA_ID }}}}
@@ -276,6 +272,18 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                 run: |
                   set -euo pipefail
                   nebius-cxcli flux bootstrap "${{{{ matrix.generated }}}}"
+
+              - name: Send inventory email
+                env:
+                  SMTP_HOST: ${{{{ vars.SMTP_HOST }}}}
+                  SMTP_PORT: ${{{{ vars.SMTP_PORT }}}}
+                  SMTP_STARTTLS: ${{{{ vars.SMTP_STARTTLS }}}}
+                  SMTP_FROM: ${{{{ vars.SMTP_FROM }}}}
+                  SMTP_USERNAME: ${{{{ secrets.SMTP_USERNAME }}}}
+                  SMTP_PASSWORD: ${{{{ secrets.SMTP_PASSWORD }}}}
+                run: |
+                  set -euo pipefail
+                  nebius-cxcli email "${{{{ matrix.generated }}}}"
         """
         ).strip()
         + "\n"

@@ -110,10 +110,7 @@ def to_runtime_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
                     "repo": str(item.get("repo", "")).strip(),
                     "version": str(item.get("version", "")).strip(),
                     "namespace": str(item.get("namespace", "")).strip(),
-                    "release_name": str(
-                        item.get("release-name", item.get("release_name", chart_id))
-                    ).strip()
-                    or chart_id,
+                    "release_name": str(item.get("release-name", chart_id)).strip() or chart_id,
                     **_deep_copy(dict(values)),
                 }
     return runtime

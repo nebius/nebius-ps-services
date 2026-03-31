@@ -27,7 +27,7 @@ def _config(*, client_name: str = "client-a", project_id: str = "project-456", r
                     "project_id": project_id,
                     "region_id": region,
                 },
-                "notifications": {"inventory_markdown": True, "email": None},
+                "notifications": {"email_enabled": True, "email": None},
             },
             "infra": {"components": []},
             "apps": {"charts": []},

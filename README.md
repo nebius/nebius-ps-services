@@ -23,6 +23,17 @@ These tools are built for **production-readiness**, **scalability**, and **perfo
 
 ---
 
+## Dependency Automation
+
+The repository uses Dependabot for dependency update pull requests.
+
+- GitHub Actions major, minor, and patch update pull requests may be created by `.github/dependabot.yml`.
+- GitHub Actions minor and patch updates are grouped for simpler review.
+- The companion auto-merge workflow is responsible for deciding which eligible Dependabot pull requests may be auto-approved and auto-merged.
+- GitHub Actions updates, including majors, may be auto-merged only when the pull request is Dependabot-authored, scoped to workflow automation files, and processed with the dedicated `dependabot-automerge` environment credential.
+
+---
+
 ## 🪪 License
 
 Copyright 2025 Nebius B.V.

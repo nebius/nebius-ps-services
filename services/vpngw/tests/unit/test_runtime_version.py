@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
 from nebius_vpngw import runtime_version
 
 
@@ -34,3 +38,19 @@ def test_resolve_runtime_version_uses_unknown_fallback(monkeypatch) -> None:
 
     assert runtime_version.resolve_runtime_version() == "0.0.0"
 
+
+def test_version_from_source_tree_uses_nested_scm_describe_command(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_get_version(**kwargs):
+        captured.update(kwargs)
+        return "0.5.5.dev10"
+
+    monkeypatch.setattr(runtime_version, "_service_root", lambda: Path("/tmp/repo/services/vpngw"))
+    monkeypatch.setitem(sys.modules, "setuptools_scm", SimpleNamespace(get_version=fake_get_version))
+
+    assert runtime_version._version_from_source_tree() == "0.5.5.dev10"
+    assert captured["root"] == "/tmp/repo/services/vpngw"
+    assert captured["search_parent_directories"] is True
+    assert captured["scm"] == {"git": {"describe_command": runtime_version._GIT_DESCRIBE_COMMAND}}
+    assert "git_describe_command" not in captured

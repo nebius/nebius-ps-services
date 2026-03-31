@@ -8,6 +8,7 @@ from nebius_cxcli.terraform_ops import (
     _terraform_failure_text_from_events,
     _translate_terraform_failure,
     terraform_apply,
+    terraform_init,
     terraform_plan,
     terraform_validate,
 )
@@ -181,6 +182,22 @@ def test_run_forwards_successful_stdout_and_stderr(
     captured = capsys.readouterr()
     assert captured.out == "plan ok\n"
     assert captured.err == "warning\n"
+
+
+def test_terraform_init_can_disable_backend(tmp_path: Path, monkeypatch) -> None:
+    calls: list[tuple[str, object]] = []
+    infra_dir = tmp_path / "infra"
+    infra_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr("nebius_cxcli.terraform_ops._require_terraform", lambda: "terraform")
+    monkeypatch.setattr(
+        "nebius_cxcli.terraform_ops._run",
+        lambda cmd, *, cwd, timeout, extra_env=None: calls.append(("run", tuple(cmd))),
+    )
+
+    terraform_init(infra_dir, backend=False)
+
+    assert calls == [("run", ("terraform", "init", "-input=false", "-backend=false"))]
 
 
 def test_terraform_validate_can_skip_init(monkeypatch) -> None:

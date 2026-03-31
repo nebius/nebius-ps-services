@@ -180,6 +180,37 @@ def environment_secrets_presence(
     }
 
 
+def environment_variable_exists(
+    *,
+    repo_slug: str,
+    token: str,
+    environment_name: str,
+    variable_name: str,
+) -> bool:
+    encoded_environment = quote(environment_name, safe="")
+    encoded_name = quote(variable_name, safe="")
+    path = f"/repos/{repo_slug}/environments/{encoded_environment}/variables/{encoded_name}"
+    return _secret_exists(path=path, token=token)
+
+
+def environment_variables_presence(
+    *,
+    repo_slug: str,
+    token: str,
+    environment_name: str,
+    names: list[str],
+) -> dict[str, bool]:
+    return {
+        name: environment_variable_exists(
+            repo_slug=repo_slug,
+            token=token,
+            environment_name=environment_name,
+            variable_name=name,
+        )
+        for name in names
+    }
+
+
 def _encrypt_secret_value(secret_value: str, public_key_b64: str) -> str:
     try:
         from nacl import encoding, public
@@ -263,6 +294,30 @@ def upsert_environment_secret(
     )
 
 
+def delete_environment_secret(
+    *,
+    repo_slug: str,
+    token: str,
+    environment_name: str,
+    secret_name: str,
+) -> bool:
+    if not environment_secret_exists(
+        repo_slug=repo_slug,
+        token=token,
+        environment_name=environment_name,
+        secret_name=secret_name,
+    ):
+        return False
+    encoded_environment = quote(environment_name, safe="")
+    encoded_name = quote(secret_name, safe="")
+    _github_request(
+        method="DELETE",
+        path=f"/repos/{repo_slug}/environments/{encoded_environment}/secrets/{encoded_name}",
+        token=token,
+    )
+    return True
+
+
 def upsert_environment_secrets(
     *,
     repo_slug: str,
@@ -284,13 +339,96 @@ def upsert_environment_secrets(
     return updated
 
 
+def upsert_environment_variable(
+    *,
+    repo_slug: str,
+    token: str,
+    environment_name: str,
+    variable_name: str,
+    variable_value: str,
+) -> None:
+    encoded_environment = quote(environment_name, safe="")
+    encoded_name = quote(variable_name, safe="")
+    payload = {"name": variable_name, "value": variable_value}
+    if environment_variable_exists(
+        repo_slug=repo_slug,
+        token=token,
+        environment_name=environment_name,
+        variable_name=variable_name,
+    ):
+        _github_request(
+            method="PATCH",
+            path=f"/repos/{repo_slug}/environments/{encoded_environment}/variables/{encoded_name}",
+            token=token,
+            payload=payload,
+        )
+        return
+    _github_request(
+        method="POST",
+        path=f"/repos/{repo_slug}/environments/{encoded_environment}/variables",
+        token=token,
+        payload=payload,
+    )
+
+
+def delete_environment_variable(
+    *,
+    repo_slug: str,
+    token: str,
+    environment_name: str,
+    variable_name: str,
+) -> bool:
+    if not environment_variable_exists(
+        repo_slug=repo_slug,
+        token=token,
+        environment_name=environment_name,
+        variable_name=variable_name,
+    ):
+        return False
+    encoded_environment = quote(environment_name, safe="")
+    encoded_name = quote(variable_name, safe="")
+    _github_request(
+        method="DELETE",
+        path=f"/repos/{repo_slug}/environments/{encoded_environment}/variables/{encoded_name}",
+        token=token,
+    )
+    return True
+
+
+def upsert_environment_variables(
+    *,
+    repo_slug: str,
+    token: str,
+    environment_name: str,
+    variables: dict[str, str],
+) -> list[str]:
+    ensure_github_environment(repo_slug=repo_slug, token=token, environment_name=environment_name)
+    updated: list[str] = []
+    for variable_name, variable_value in variables.items():
+        upsert_environment_variable(
+            repo_slug=repo_slug,
+            token=token,
+            environment_name=environment_name,
+            variable_name=variable_name,
+            variable_value=variable_value,
+        )
+        updated.append(variable_name)
+    return updated
+
+
 __all__ = [
     "build_github_environment_name",
+    "delete_environment_secret",
+    "delete_environment_variable",
     "detect_github_repo_slug",
     "ensure_github_environment",
     "environment_secrets_presence",
+    "environment_variable_exists",
+    "environment_variables_presence",
     "read_github_token",
     "repo_secrets_presence",
     "upsert_environment_secrets",
+    "upsert_environment_variable",
+    "upsert_environment_variables",
     "upsert_repo_secrets",
 ]

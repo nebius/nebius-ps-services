@@ -16,8 +16,10 @@ from nebius_cxcli.component_sources import (
     ComponentOutput,
     reset_component_sources_cache,
     set_component_sources_file_override,
+    set_component_sources_profile_override,
 )
 from nebius_cxcli.components import component_entries, reset_component_entry_cache
+from nebius_cxcli.email_settings import EmailSettings
 
 runner = CliRunner()
 
@@ -25,6 +27,7 @@ runner = CliRunner()
 @pytest.fixture(autouse=True)
 def _reset_runtime_state(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("NEBIUS_CXCLI_COMPONENT_SOURCES_FILE", raising=False)
+    monkeypatch.delenv("NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE", raising=False)
     monkeypatch.setattr(
         "nebius_cxcli.cli._validate_tenant_project_ids_or_prompt",
         lambda **kwargs: (kwargs["tenant_id"], kwargs["project_id"]),
@@ -50,6 +53,9 @@ def _reset_runtime_state(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("nebius_cxcli.cli.module_variables", lambda _source: ())
     monkeypatch.setattr("nebius_cxcli.cli.module_variable_names", lambda _source: ())
     monkeypatch.setattr("nebius_cxcli.cli.module_required_variables", lambda _source: ())
+    monkeypatch.setattr("nebius_cxcli.infra_render.module_variables", lambda _source: ())
+    monkeypatch.setattr("nebius_cxcli.cli._try_generate_terraform_lock_file", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr("nebius_cxcli.cli._validate_active_component_sources", lambda _cfg: None)
     monkeypatch.setattr("nebius_cxcli.cli.helm_chart_default_values", lambda **_kwargs: {})
     monkeypatch.setattr(
         "nebius_cxcli.cli._helm_chart_metadata",
@@ -61,6 +67,7 @@ def _reset_runtime_state(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr("nebius_cxcli.cli._with_infra_provider_groups", lambda entries: entries)
     set_component_sources_file_override(None)
+    set_component_sources_profile_override(None)
     reset_component_sources_cache()
     reset_component_entry_cache()
 
@@ -72,6 +79,34 @@ def _git_init(repo_root: Path) -> None:
         cwd=repo_root,
         capture_output=True,
         text=True,
+    )
+
+
+def _mock_bootstrap_ci_github_sync(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    repo_slug: str = "owner/repo",
+    github_token: str = "token-123",
+    email_sync_result: cli_module.GitHubEmailSyncResult | None = None,
+) -> None:
+    monkeypatch.setattr(
+        cli_module,
+        "_resolve_bootstrap_ci_github_target",
+        lambda *, github_repo, github_token_env, repo_root: (github_repo or repo_slug, github_token),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_sync_github_email_settings",
+        lambda *, repo_slug, github_environment, github_token, settings: (
+            email_sync_result
+            if email_sync_result is not None
+            else cli_module.GitHubEmailSyncResult(
+                updated_vars=[],
+                updated_secrets=[],
+                removed_vars=[],
+                removed_secrets=[],
+            )
+        ),
     )
 
 
@@ -137,7 +172,8 @@ def _apps_enabled_map(payload: dict) -> dict[str, bool]:
 def test_create_target_path_help_mentions_any_existing_directory() -> None:
     result = runner.invoke(app, ["create", "--help"])
     assert result.exit_code == 0
-    assert "Deployments root folder path." in result.output
+    assert "DEPLOYMENTS_ROOT" in result.output
+    assert "Deployments root directory." in result.output
     assert "--env" not in result.output
     assert "Environment (dev|stage|prod)" not in result.output
 
@@ -171,6 +207,7 @@ def test_create_writes_deployments_gitignore_when_target_is_in_git_repo(tmp_path
     assert "instances/*/*/generated/" not in content.splitlines()
     assert "instances/*/*/config.yaml" not in content
     assert "instances/*/*/generated/infra/.terraform/" in content
+    assert "instances/*/*/generated/infra/crash.*.log" in content
     assert "instances/*/*/generated/infra/terraform.auto.tfvars.json" in content
 
     second = _create_non_interactive(deployments_root)
@@ -214,6 +251,7 @@ def test_render_recreates_deployments_gitignore_in_git_repo(tmp_path: Path) -> N
     assert "instances/*/*/generated/" not in content.splitlines()
     assert "instances/*/*/config.yaml" not in content
     assert "instances/*/*/generated/infra/.terraform/" in content
+    assert "instances/*/*/generated/infra/crash.*.log" in content
     assert "instances/*/*/generated/infra/terraform.auto.tfvars.json" in content
 
 
@@ -403,7 +441,8 @@ def test_create_seeds_component_source_defaults_into_config(tmp_path: Path) -> N
                     "tf_modules": [
                         {
                             "module": "demo-module",
-                            "source": str(module_dir),
+                            "portable_source": "git::https://github.com/example/infra.git//modules/demo-module?ref=v1.2.3",
+                            "local_source": str(module_dir),
                             "enable": True,
                             "defaults": {
                                 "inputs.cluster_name": "demo-cluster",
@@ -440,6 +479,8 @@ def test_create_seeds_component_source_defaults_into_config(tmp_path: Path) -> N
         [
             "--component-sources-file",
             str(sources_file),
+            "--source-profile",
+            "local",
             "create",
             str(deployments_root),
             "--no-interactive",
@@ -624,7 +665,9 @@ def test_create_dependency_resolution_uses_existing_chart_overrides(
     assert "https://example.invalid/custom-charts" in called_repos
 
 
-def test_bootstrap_ci_no_auth_writes_workflow_in_repo_root(tmp_path: Path) -> None:
+def test_bootstrap_ci_no_auth_writes_workflow_in_repo_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     repo_root = tmp_path / "customer-repo"
     repo_root.mkdir(parents=True, exist_ok=True)
     _git_init(repo_root)
@@ -634,6 +677,7 @@ def test_bootstrap_ci_no_auth_writes_workflow_in_repo_root(tmp_path: Path) -> No
 
     create_result = _create_non_interactive(deployments_root)
     assert create_result.exit_code == 0, create_result.output
+    _mock_bootstrap_ci_github_sync(monkeypatch)
 
     config_path = _instance_config_path(deployments_root)
     bootstrap = runner.invoke(app, ["bootstrap-ci", str(config_path), "--no-auth-bootstrap"])
@@ -648,6 +692,11 @@ def test_bootstrap_ci_no_auth_writes_workflow_in_repo_root(tmp_path: Path) -> No
     assert "cache: pip" in content
     assert "has_changes" in content
     assert 'NEBIUS_CXCLI_PYTHON_VERSION: "3.12"' in content
+    assert "Install kubectl" in content
+    assert "https://dl.k8s.io/release/stable.txt" in content
+    assert 'echo "${HOME}/.local/bin" >> "$GITHUB_PATH"' in content
+    assert "kubectl version --client=true" in content
+    assert "azure/setup-kubectl@v4" not in content
     assert 'echo "NEBIUS_SA_ID=${NEBIUS_SA_ID}"' in content
     assert 'echo "NEBIUS_AUTH_PUBLIC_KEY_ID=${NEBIUS_AUTH_PUBLIC_KEY_ID}"' in content
     assert 'echo "NEBIUS_AUTH_PRIVATE_KEY_FILE=${KEY_PATH}"' in content
@@ -658,18 +707,26 @@ def test_bootstrap_ci_no_auth_writes_workflow_in_repo_root(tmp_path: Path) -> No
     assert '**/customer/deployments-root/**/config.yaml' not in content
     assert "Validate source contract changes" not in content
     assert 'nebius-cxcli validate-generated --portable "${{ matrix.generated }}"' in content
-    assert "Restore generated Terraform inputs" in content
-    assert 'generated manifest is missing render.terraform_tfvars' in content
+    assert "Restore generated Terraform inputs" not in content
+    assert 'generated manifest is missing render.terraform_tfvars' not in content
     assert 'print(f"discovery={json.dumps(payload, separators=(\',\', \':\'))}")' in content
     assert "Install Nebius CLI" not in content
     assert "curl -sSL https://storage.eu-north1.nebius.cloud/cli/install.sh | bash" not in content
     assert "NEBIUS_API_ENDPOINT" not in content
     assert "Inventory outputs" not in content
-    assert "Email inventory" not in content
+    assert "Bootstrap/reconcile Flux" in content
+    assert 'nebius-cxcli flux bootstrap "${{ matrix.generated }}"' in content
+    assert 'nebius-cxcli deploy "${{ matrix.generated }}"' not in content
+    assert "Send inventory email" in content
+    assert "vars.SMTP_HOST != ''" not in content
+    assert "SMTP_HOST: ${{ vars.SMTP_HOST }}" in content
+    assert "SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}" in content
     assert f"NEBIUS_CXCLI_REF: ${{{{ vars.NEBIUS_CXCLI_REF || '{cli_module.default_cli_ref()}' }}}}" in content
 
 
-def test_bootstrap_ci_no_auth_is_idempotent_without_force(tmp_path: Path) -> None:
+def test_bootstrap_ci_no_auth_is_idempotent_without_force(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     repo_root = tmp_path / "customer-repo"
     repo_root.mkdir(parents=True, exist_ok=True)
     _git_init(repo_root)
@@ -678,6 +735,7 @@ def test_bootstrap_ci_no_auth_is_idempotent_without_force(tmp_path: Path) -> Non
     deployments_root.mkdir(parents=True, exist_ok=True)
     create_result = _create_non_interactive(deployments_root)
     assert create_result.exit_code == 0, create_result.output
+    _mock_bootstrap_ci_github_sync(monkeypatch)
 
     config_path = _instance_config_path(deployments_root)
     first = runner.invoke(app, ["bootstrap-ci", str(config_path), "--no-auth-bootstrap"])
@@ -687,10 +745,12 @@ def test_bootstrap_ci_no_auth_is_idempotent_without_force(tmp_path: Path) -> Non
     second = runner.invoke(app, ["bootstrap-ci", str(config_path), "--no-auth-bootstrap"])
     assert second.exit_code == 0, second.output
     assert "Workflow already aligned:" in second.output
-    assert "Skipped CI auth bootstrap/secrets sync." in second.output
+    assert "Skipped Nebius CI auth bootstrap/secrets sync." in second.output
 
 
-def test_bootstrap_ci_no_auth_reconciles_workflow_drift_automatically(tmp_path: Path) -> None:
+def test_bootstrap_ci_no_auth_reconciles_workflow_drift_automatically(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     repo_root = tmp_path / "customer-repo"
     repo_root.mkdir(parents=True, exist_ok=True)
     _git_init(repo_root)
@@ -699,6 +759,7 @@ def test_bootstrap_ci_no_auth_reconciles_workflow_drift_automatically(tmp_path: 
     deployments_root.mkdir(parents=True, exist_ok=True)
     create_result = _create_non_interactive(deployments_root)
     assert create_result.exit_code == 0, create_result.output
+    _mock_bootstrap_ci_github_sync(monkeypatch)
 
     config_path = _instance_config_path(deployments_root)
     first = runner.invoke(app, ["bootstrap-ci", str(config_path), "--no-auth-bootstrap"])
@@ -715,7 +776,9 @@ def test_bootstrap_ci_no_auth_reconciles_workflow_drift_automatically(tmp_path: 
     assert "name: Drifted Customer Workflow" not in content
 
 
-def test_bootstrap_ci_cli_ref_overrides_generated_workflow_pin(tmp_path: Path) -> None:
+def test_bootstrap_ci_recreates_deployments_gitignore_in_git_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     repo_root = tmp_path / "customer-repo"
     repo_root.mkdir(parents=True, exist_ok=True)
     _git_init(repo_root)
@@ -725,6 +788,37 @@ def test_bootstrap_ci_cli_ref_overrides_generated_workflow_pin(tmp_path: Path) -
 
     create_result = _create_non_interactive(deployments_root)
     assert create_result.exit_code == 0, create_result.output
+    _mock_bootstrap_ci_github_sync(monkeypatch)
+
+    gitignore_path = deployments_root / ".gitignore"
+    gitignore_path.unlink()
+    assert not gitignore_path.exists()
+
+    config_path = _instance_config_path(deployments_root)
+    bootstrap = runner.invoke(app, ["bootstrap-ci", str(config_path), "--no-auth-bootstrap"])
+    assert bootstrap.exit_code == 0, bootstrap.output
+    assert "Ensured deployments .gitignore:" in bootstrap.output
+    assert gitignore_path.exists()
+
+    content = gitignore_path.read_text(encoding="utf-8")
+    assert "instances/*/*/generated/infra/.terraform/" in content
+    assert "instances/*/*/generated/infra/crash.*.log" in content
+    assert "instances/*/*/generated/infra/terraform.auto.tfvars.json" in content
+
+
+def test_bootstrap_ci_cli_ref_overrides_generated_workflow_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path / "customer-repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    _git_init(repo_root)
+
+    deployments_root = repo_root / "customer" / "deployments-root"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    create_result = _create_non_interactive(deployments_root)
+    assert create_result.exit_code == 0, create_result.output
+    _mock_bootstrap_ci_github_sync(monkeypatch)
 
     config_path = _instance_config_path(deployments_root)
     bootstrap = runner.invoke(
@@ -762,6 +856,7 @@ def test_bootstrap_ci_no_auth_uses_release_tag_default_for_stable_version(
     assert create_result.exit_code == 0, create_result.output
 
     monkeypatch.setattr(templates_module, "__version__", "1.2.3")
+    _mock_bootstrap_ci_github_sync(monkeypatch)
 
     config_path = _instance_config_path(deployments_root)
     bootstrap = runner.invoke(app, ["bootstrap-ci", str(config_path), "--no-auth-bootstrap"])
@@ -785,14 +880,13 @@ def test_bootstrap_ci_auth_bootstrap_fails_before_writing_workflow_when_repo_unr
     create_result = _create_non_interactive(deployments_root)
     assert create_result.exit_code == 0, create_result.output
 
-    monkeypatch.setenv("GH_TOKEN", "token-123")
-
     config_path = _instance_config_path(deployments_root)
     bootstrap = runner.invoke(app, ["bootstrap-ci", str(config_path)])
     assert bootstrap.exit_code == 1, bootstrap.output
     assert "Failed to resolve git origin remote under" in bootstrap.output
     assert "Set --github-repo" in bootstrap.output
-    assert "owner/repo explicitly." in bootstrap.output
+    assert "owner/repo" in bootstrap.output
+    assert "explicitly." in bootstrap.output
 
     workflow = repo_root / ".github" / "workflows" / "nebius-deployments.yml"
     assert not workflow.exists()
@@ -811,7 +905,7 @@ def test_bootstrap_ci_auth_bootstrap_accepts_explicit_github_repo_override(
     create_result = _create_non_interactive(deployments_root)
     assert create_result.exit_code == 0, create_result.output
 
-    monkeypatch.setenv("GH_TOKEN", "token-123")
+    _mock_bootstrap_ci_github_sync(monkeypatch)
     monkeypatch.setattr(cli_module, "_auto_bootstrap_ci_auth_and_secrets", lambda **_kwargs: None)
 
     config_path = _instance_config_path(deployments_root)
@@ -831,7 +925,9 @@ def test_bootstrap_ci_auth_bootstrap_accepts_explicit_github_repo_override(
     assert workflow.exists()
 
 
-def test_bootstrap_ci_rejects_github_flags_when_no_auth(tmp_path: Path) -> None:
+def test_bootstrap_ci_accepts_github_flags_when_no_auth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     repo_root = tmp_path / "customer-repo"
     repo_root.mkdir(parents=True, exist_ok=True)
     _git_init(repo_root)
@@ -840,6 +936,36 @@ def test_bootstrap_ci_rejects_github_flags_when_no_auth(tmp_path: Path) -> None:
     deployments_root.mkdir(parents=True, exist_ok=True)
     create_result = _create_non_interactive(deployments_root)
     assert create_result.exit_code == 0, create_result.output
+    _mock_bootstrap_ci_github_sync(monkeypatch)
+
+    config_path = _instance_config_path(deployments_root)
+    result = runner.invoke(
+        app,
+        [
+            "bootstrap-ci",
+            str(config_path),
+            "--no-auth-bootstrap",
+            "--github-repo",
+            "owner/repo",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "GitHub repository: owner/repo" in result.output
+
+
+def test_bootstrap_ci_no_auth_requires_github_token_for_email_reconcile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path / "customer-repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    _git_init(repo_root)
+
+    deployments_root = repo_root / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    create_result = _create_non_interactive(deployments_root)
+    assert create_result.exit_code == 0, create_result.output
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
 
     config_path = _instance_config_path(deployments_root)
     result = runner.invoke(
@@ -853,7 +979,234 @@ def test_bootstrap_ci_rejects_github_flags_when_no_auth(tmp_path: Path) -> None:
         ],
     )
     assert result.exit_code == 1
-    assert "--github-repo and --github-token-env are valid only when --auth-bootstrap" in result.output
+    assert "GitHub bootstrap reconciliation requires a GitHub token." in result.output
+
+
+def test_bootstrap_ci_auth_bootstrap_syncs_local_email_settings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path / "customer-repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    _git_init(repo_root)
+
+    deployments_root = repo_root / "customer" / "deployments-root"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    create_result = _create_non_interactive(deployments_root)
+    assert create_result.exit_code == 0, create_result.output
+
+    _mock_bootstrap_ci_github_sync(monkeypatch, github_token="token-123")
+    monkeypatch.setattr(cli_module, "_auto_bootstrap_ci_auth_and_secrets", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        cli_module,
+        "_load_local_email_settings",
+        lambda *args, **kwargs: EmailSettings(
+            host="smtp.example.com",
+            port=587,
+            starttls=True,
+            from_addr="deployments@example.com",
+            username="mailer",
+            password="secret",
+        ),
+    )
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        cli_module,
+        "_sync_github_email_settings",
+        lambda *, repo_slug, github_environment, github_token, settings: (
+            captured.update(
+                {
+                    "repo_slug": repo_slug,
+                    "github_environment": github_environment,
+                    "github_token": github_token,
+                    "settings": settings,
+                }
+            )
+            or cli_module.GitHubEmailSyncResult(
+                updated_vars=["SMTP_HOST", "SMTP_PORT", "SMTP_STARTTLS", "SMTP_FROM"],
+                updated_secrets=["SMTP_USERNAME", "SMTP_PASSWORD"],
+                removed_vars=[],
+                removed_secrets=[],
+            )
+        ),
+    )
+
+    config_path = _instance_config_path(deployments_root)
+    result = runner.invoke(
+        app,
+        [
+            "bootstrap-ci",
+            str(config_path),
+            "--github-repo",
+            "owner/repo",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Email settings synced: 4 environment variable(s), 2 secret(s)" in result.output
+    assert captured["repo_slug"] == "owner/repo"
+    assert captured["github_environment"] == "client-a-project-456"
+    assert captured["github_token"] == "token-123"
+    assert captured["settings"] == EmailSettings(
+        host="smtp.example.com",
+        port=587,
+        starttls=True,
+        from_addr="deployments@example.com",
+        username="mailer",
+        password="secret",
+    )
+
+
+def test_bootstrap_ci_no_auth_reports_skipped_email_sync_when_local_email_enabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path / "customer-repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    _git_init(repo_root)
+
+    deployments_root = repo_root / "customer" / "deployments-root"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    create_result = _create_non_interactive(deployments_root)
+    assert create_result.exit_code == 0, create_result.output
+    _mock_bootstrap_ci_github_sync(
+        monkeypatch,
+        email_sync_result=cli_module.GitHubEmailSyncResult(
+            updated_vars=["SMTP_HOST", "SMTP_PORT", "SMTP_STARTTLS"],
+            updated_secrets=[],
+            removed_vars=[],
+            removed_secrets=[],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "_load_local_email_settings",
+        lambda *args, **kwargs: EmailSettings(host="smtp.example.com", port=587),
+    )
+
+    config_path = _instance_config_path(deployments_root)
+    result = runner.invoke(app, ["bootstrap-ci", str(config_path), "--no-auth-bootstrap"])
+
+    assert result.exit_code == 0, result.output
+    assert "Email settings synced: 3 environment variable(s), 0 secret(s)" in result.output
+    assert "Skipped Nebius CI auth bootstrap/secrets sync." in result.output
+
+
+def test_bootstrap_ci_clears_github_email_settings_when_local_email_disabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path / "customer-repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    _git_init(repo_root)
+
+    deployments_root = repo_root / "customer" / "deployments-root"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    create_result = _create_non_interactive(deployments_root)
+    assert create_result.exit_code == 0, create_result.output
+
+    _mock_bootstrap_ci_github_sync(
+        monkeypatch,
+        email_sync_result=cli_module.GitHubEmailSyncResult(
+            updated_vars=[],
+            updated_secrets=[],
+            removed_vars=["SMTP_HOST", "SMTP_PORT", "SMTP_STARTTLS", "SMTP_FROM"],
+            removed_secrets=["SMTP_USERNAME", "SMTP_PASSWORD"],
+        ),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_load_local_email_settings",
+        lambda *args, **kwargs: EmailSettings(),
+    )
+
+    config_path = _instance_config_path(deployments_root)
+    result = runner.invoke(app, ["bootstrap-ci", str(config_path), "--no-auth-bootstrap"])
+
+    assert result.exit_code == 0, result.output
+    assert (
+        "cleared GitHub email settings: 4 environment variable(s), 2 secret(s)"
+        in " ".join(result.output.split())
+    )
+
+
+def test_sync_github_email_settings_reconciles_upserts_and_deletes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    deleted_vars: list[str] = []
+    deleted_secrets: list[str] = []
+
+    monkeypatch.setattr(
+        cli_module,
+        "ensure_github_environment",
+        lambda *, repo_slug, token, environment_name: captured.update(
+            {
+                "ensure": (repo_slug, token, environment_name),
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "upsert_environment_variables",
+        lambda *, repo_slug, token, environment_name, variables: (
+            captured.update({"vars": variables}) or list(variables)
+        ),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "upsert_environment_secrets",
+        lambda *, repo_slug, token, environment_name, secrets: (
+            captured.update({"secrets": secrets}) or list(secrets)
+        ),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "delete_environment_variable",
+        lambda *, repo_slug, token, environment_name, variable_name: (
+            deleted_vars.append(variable_name) or True
+        ),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "delete_environment_secret",
+        lambda *, repo_slug, token, environment_name, secret_name: (
+            deleted_secrets.append(secret_name) or True
+        ),
+    )
+
+    result = cli_module._sync_github_email_settings(
+        repo_slug="owner/repo",
+        github_environment="client-a-project-456",
+        github_token="gh-token",
+        settings=EmailSettings(
+            host="smtp.example.com",
+            port=587,
+            starttls=True,
+            from_addr="",
+            username="mailer",
+            password="secret",
+        ),
+    )
+
+    assert result == cli_module.GitHubEmailSyncResult(
+        updated_vars=["SMTP_HOST", "SMTP_PORT", "SMTP_STARTTLS"],
+        updated_secrets=["SMTP_USERNAME", "SMTP_PASSWORD"],
+        removed_vars=["SMTP_FROM"],
+        removed_secrets=[],
+    )
+    assert captured["vars"] == {
+        "SMTP_HOST": "smtp.example.com",
+        "SMTP_PORT": "587",
+        "SMTP_STARTTLS": "true",
+    }
+    assert captured["secrets"] == {
+        "SMTP_USERNAME": "mailer",
+        "SMTP_PASSWORD": "secret",
+    }
+    assert deleted_vars == ["SMTP_FROM"]
+    assert deleted_secrets == []
 
 
 def test_auth_rejects_github_flags_when_no_bootstrap_ci() -> None:
@@ -917,6 +1270,40 @@ def test_discover_in_git_repo_outputs_repo_relative_paths(tmp_path: Path) -> Non
     config_path.write_text("version: v1\n", encoding="utf-8")
 
     result = runner.invoke(app, ["discover", str(deployments_root), "--all"])
+    assert result.exit_code == 0, result.output
+
+    payload = json.loads(result.stdout)
+    assert payload == {
+        "include": [
+            {
+                "config": "deployments/instances/client-a--tenant-123/project-456/config.yaml",
+                "generated": "deployments/instances/client-a--tenant-123/project-456/generated",
+                "config_changed": False,
+                "generated_changed": False,
+                "github_environment": "client-a-project-456",
+            }
+        ]
+    }
+
+
+def test_discover_accepts_generated_subdirectory_scope(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    _git_init(repo_root)
+
+    deployments_root = repo_root / "deployments"
+    generated_dir = (
+        deployments_root
+        / "instances"
+        / "client-a--tenant-123"
+        / "project-456"
+        / "generated"
+    )
+    config_path = generated_dir.parent / "config.yaml"
+    generated_dir.mkdir(parents=True, exist_ok=True)
+    config_path.write_text("version: v1\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["discover", str(generated_dir), "--all"])
     assert result.exit_code == 0, result.output
 
     payload = json.loads(result.stdout)

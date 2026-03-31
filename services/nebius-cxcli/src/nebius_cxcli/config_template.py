@@ -131,7 +131,7 @@ def _starter_payload(
                 "region_id": region_id,
             },
             "notifications": {
-                "inventory_markdown": True,
+                "email_enabled": True,
                 "email": email,
             },
         },

@@ -8,15 +8,16 @@ import yaml
 import nebius_cxcli.component_sources as component_sources
 from nebius_cxcli.component_sources import (
     ComponentOutput,
+    SourceProfile,
     load_component_sources,
     reset_component_sources_cache,
     set_component_sources_file_override,
+    set_component_sources_profile_override,
 )
 from nebius_cxcli.components import component_entries, reset_component_entry_cache
 from nebius_cxcli.config_loader import load_config
 from nebius_cxcli.config_model import to_dynamic_payload
 from nebius_cxcli.config_template import starter_config_yaml
-from nebius_cxcli.infra_render import RenderProfile
 from nebius_cxcli.paths import resolve_instance_paths, validate_path_alignment
 from nebius_cxcli.render import render_instance
 from nebius_cxcli.runtime_introspection import ModuleVariable, reset_runtime_introspection_cache
@@ -25,6 +26,7 @@ from nebius_cxcli.terraform_provider import build_provider_module_name
 
 def _reset_catalog_override() -> None:
     set_component_sources_file_override(None)
+    set_component_sources_profile_override(None)
     reset_component_sources_cache()
     reset_runtime_introspection_cache()
     reset_component_entry_cache()
@@ -32,7 +34,7 @@ def _reset_catalog_override() -> None:
 
 def setup_function() -> None:
     _reset_catalog_override()
-    _set_catalog_override(_local_catalog_path())
+    _set_catalog_override(_local_catalog_path(), source_profile=SourceProfile.LOCAL)
 
 
 def teardown_function() -> None:
@@ -108,8 +110,9 @@ def _infra_component_row(payload: dict, component_id: str) -> dict:
     raise KeyError(component_id)
 
 
-def _set_catalog_override(path: Path) -> None:
+def _set_catalog_override(path: Path, *, source_profile: SourceProfile = SourceProfile.PORTABLE) -> None:
     set_component_sources_file_override(path)
+    set_component_sources_profile_override(source_profile)
     reset_component_sources_cache()
     reset_runtime_introspection_cache()
     reset_component_entry_cache()
@@ -142,7 +145,7 @@ def _catalog_with_shared_admin_ssh(
 def test_render_creates_source_only_module_and_flux_outputs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _set_catalog_override(_local_catalog_path())
+    _set_catalog_override(_local_catalog_path(), source_profile=SourceProfile.PORTABLE)
     reset_component_entry_cache()
     config_path = _instance_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -180,7 +183,7 @@ def test_render_creates_source_only_module_and_flux_outputs(
     paths = resolve_instance_paths(config_path)
     validate_path_alignment(config, paths)
 
-    result = render_instance(config, paths, render_profile=RenderProfile.PORTABLE)
+    result = render_instance(config, paths, source_profile=SourceProfile.PORTABLE)
     assert len(result.files_written) >= 5
 
     versions_tf = (paths.infra_dir / "versions.tf").read_text(encoding="utf-8")
@@ -200,7 +203,8 @@ def test_render_creates_source_only_module_and_flux_outputs(
     assert 'module "mk8s" {' in main_tf
     assert 'module "custom-' not in main_tf
     portable_catalog = load_component_sources(
-        explicit=Path(__file__).resolve().parents[1] / "component_sources.release.yaml"
+        explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml",
+        source_profile=SourceProfile.PORTABLE,
     )
     mk8s_source = next(
         item.source for item in portable_catalog.tf_modules if item.module == "mk8s"
@@ -253,7 +257,7 @@ def test_render_emits_dynamic_provider_resource_blocks(tmp_path: Path) -> None:
     paths = resolve_instance_paths(config_path)
     validate_path_alignment(config, paths)
 
-    render_instance(config, paths, render_profile=RenderProfile.LOCAL_DEV)
+    render_instance(config, paths, source_profile=SourceProfile.LOCAL)
 
     main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
     assert 'resource "nebius_vpc_v1_network" "runtime_network"' in main_tf
@@ -287,7 +291,7 @@ def test_render_dynamic_chart_shape_writes_flux_manifests(tmp_path: Path) -> Non
     paths = resolve_instance_paths(config_path)
     validate_path_alignment(config, paths)
 
-    render_instance(config, paths, render_profile=RenderProfile.LOCAL_DEV)
+    render_instance(config, paths, source_profile=SourceProfile.LOCAL)
 
     repo_sources = paths.flux_dir / "helm-repositories.yaml"
     release = paths.flux_dir / "helmrelease-workloads-runtime-app.yaml"
@@ -299,10 +303,10 @@ def test_render_dynamic_chart_shape_writes_flux_manifests(tmp_path: Path) -> Non
     assert release_doc["spec"]["chart"]["spec"]["chart"] == "runtime-app"
 
 
-def test_render_instance_resets_generated_bundle_preserves_flux_bootstrap_and_removes_stale_files(
+def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     tmp_path: Path,
 ) -> None:
-    _set_catalog_override(_local_catalog_path())
+    _set_catalog_override(_local_catalog_path(), source_profile=SourceProfile.LOCAL)
     reset_component_entry_cache()
     config_path = _instance_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -340,19 +344,57 @@ def test_render_instance_resets_generated_bundle_preserves_flux_bootstrap_and_re
     stale_inventory.write_text("{}\n", encoding="utf-8")
     stale_top_level.write_text("obsolete\n", encoding="utf-8")
 
-    render_instance(config, paths, render_profile=RenderProfile.LOCAL_DEV)
+    render_instance(config, paths, source_profile=SourceProfile.LOCAL)
 
     assert not stale_tf.exists()
     assert not stale_flux_file.exists()
     assert not stale_inventory.exists()
     assert not stale_top_level.exists()
-    assert bootstrap_sync.exists()
-    assert bootstrap_components.exists()
-    assert bootstrap_kustomization.exists()
+    assert not bootstrap_sync.exists()
+    assert not bootstrap_components.exists()
+    assert not bootstrap_kustomization.exists()
     assert (paths.infra_dir / "main.tf").exists()
     kustomization_doc = yaml.safe_load((paths.flux_dir / "kustomization.yaml").read_text(encoding="utf-8"))
-    assert "./flux-system" in kustomization_doc["resources"]
+    assert "./flux-system" not in kustomization_doc["resources"]
     assert (paths.inventory_dir / "inventory.md").exists()
+
+
+def test_render_instance_preserves_existing_generated_bundle_when_rerender_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = _instance_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps={"n8n"})
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_instance_paths(config_path)
+    validate_path_alignment(config, paths)
+
+    paths.generated_dir.mkdir(parents=True, exist_ok=True)
+    preserved = paths.generated_dir / "preserved.txt"
+    preserved.write_text("keep-me\n", encoding="utf-8")
+
+    def _fake_render_terraform_artifacts(*_args, **_kwargs):
+        target_paths = _args[1]
+        written = target_paths.infra_dir / "main.tf"
+        written.parent.mkdir(parents=True, exist_ok=True)
+        written.write_text("terraform {}\n", encoding="utf-8")
+        return [written]
+
+    monkeypatch.setattr("nebius_cxcli.render.render_terraform_artifacts", _fake_render_terraform_artifacts)
+    monkeypatch.setattr(
+        "nebius_cxcli.render.render_flux",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        render_instance(config, paths, source_profile=SourceProfile.LOCAL)
+
+    assert preserved.read_text(encoding="utf-8") == "keep-me\n"
+    assert not any(paths.project_dir.glob(".generated-staging-*"))
 
 
 def test_render_dynamic_oci_chart_writes_flux_oci_repository(tmp_path: Path) -> None:
@@ -381,7 +423,7 @@ def test_render_dynamic_oci_chart_writes_flux_oci_repository(tmp_path: Path) -> 
     paths = resolve_instance_paths(config_path)
     validate_path_alignment(config, paths)
 
-    render_instance(config, paths, render_profile=RenderProfile.LOCAL_DEV)
+    render_instance(config, paths, source_profile=SourceProfile.LOCAL)
 
     repo_sources = paths.flux_dir / "helm-repositories.yaml"
     namespace_manifest = paths.flux_dir / "namespace-envoy-gateway-system.yaml"
@@ -437,7 +479,7 @@ def test_render_removes_stale_legacy_nested_flux_layout(tmp_path: Path) -> None:
     # Simulate stale legacy layout from previous versions.
     (paths.flux_dir / "apps").mkdir(parents=True, exist_ok=True)
 
-    render_instance(config, paths, render_profile=RenderProfile.LOCAL_DEV)
+    render_instance(config, paths, source_profile=SourceProfile.LOCAL)
 
     assert not (paths.flux_dir / "apps").exists()
     assert (paths.flux_dir / "kustomization.yaml").exists()
@@ -463,14 +505,17 @@ def test_render_rejects_unknown_custom_module_input(tmp_path: Path) -> None:
     validate_path_alignment(config, paths)
 
     with pytest.raises(ValueError, match="input 'ssh_public_key' is not declared by module"):
-        render_instance(config, paths, render_profile=RenderProfile.LOCAL_DEV)
+        render_instance(config, paths, source_profile=SourceProfile.LOCAL)
 
 
 def test_render_uses_shared_admin_ssh_username_binding_for_wireguard_jumphost(
     tmp_path: Path,
 ) -> None:
     reset_component_entry_cache()
-    _set_catalog_override(_catalog_with_shared_admin_ssh(tmp_path, user_name="adminuser"))
+    _set_catalog_override(
+        _catalog_with_shared_admin_ssh(tmp_path, user_name="adminuser"),
+        source_profile=SourceProfile.LOCAL,
+    )
     config_path = _instance_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -488,7 +533,7 @@ def test_render_uses_shared_admin_ssh_username_binding_for_wireguard_jumphost(
     paths = resolve_instance_paths(config_path)
     validate_path_alignment(config, paths)
 
-    render_instance(config, paths, render_profile=RenderProfile.LOCAL_DEV)
+    render_instance(config, paths, source_profile=SourceProfile.LOCAL)
 
     main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
     tfvars = (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
@@ -530,7 +575,7 @@ def test_render_uses_shared_defaults_for_app_chart_values(tmp_path: Path, monkey
         ),
         encoding="utf-8",
     )
-    _set_catalog_override(sources_file)
+    _set_catalog_override(sources_file, source_profile=SourceProfile.LOCAL)
     monkeypatch.chdir(tmp_path)
 
     config_path = _instance_config_path(tmp_path)
@@ -544,7 +589,7 @@ def test_render_uses_shared_defaults_for_app_chart_values(tmp_path: Path, monkey
                 "project_id": "project-456",
                 "region_id": "eu-north1",
             },
-            "notifications": {"inventory_markdown": True, "email": "ops@example.com"},
+            "notifications": {"email_enabled": True, "email": "ops@example.com"},
         },
         "infra": {"components": []},
         "apps": {
@@ -568,7 +613,7 @@ def test_render_uses_shared_defaults_for_app_chart_values(tmp_path: Path, monkey
     paths = resolve_instance_paths(config_path)
     validate_path_alignment(config, paths)
 
-    render_instance(config, paths, render_profile=RenderProfile.LOCAL_DEV)
+    render_instance(config, paths, source_profile=SourceProfile.LOCAL)
 
     release_doc = yaml.safe_load(
         (paths.flux_dir / "helmrelease-workloads-demo-app.yaml").read_text(encoding="utf-8")
@@ -596,12 +641,14 @@ def test_render_supports_infra_input_binding_from_component_output(
                     "tf_modules": [
                         {
                             "module": "producer",
-                            "source": str(producer_dir),
+                            "portable_source": "git::https://github.com/example/infra.git//modules/producer?ref=v1.2.3",
+                            "local_source": str(producer_dir),
                             "outputs": {"tf_outputs": True},
                         },
                         {
                             "module": "consumer",
-                            "source": str(consumer_dir),
+                            "portable_source": "git::https://github.com/example/infra.git//modules/consumer?ref=v1.2.3",
+                            "local_source": str(consumer_dir),
                             "input": {"inputs.upstream_id": "producer.instance_id"},
                         },
                     ]
@@ -612,7 +659,7 @@ def test_render_supports_infra_input_binding_from_component_output(
         ),
         encoding="utf-8",
     )
-    _set_catalog_override(sources_file)
+    _set_catalog_override(sources_file, source_profile=SourceProfile.LOCAL)
     monkeypatch.chdir(tmp_path)
 
     config_path = _instance_config_path(tmp_path)
@@ -626,7 +673,7 @@ def test_render_supports_infra_input_binding_from_component_output(
                 "project_id": "project-456",
                 "region_id": "eu-north1",
             },
-            "notifications": {"inventory_markdown": True, "email": "ops@example.com"},
+            "notifications": {"email_enabled": True, "email": "ops@example.com"},
         },
         "infra": {
             "components": [
@@ -642,7 +689,7 @@ def test_render_supports_infra_input_binding_from_component_output(
     paths = resolve_instance_paths(config_path)
     validate_path_alignment(config, paths)
 
-    render_instance(config, paths, render_profile=RenderProfile.LOCAL_DEV)
+    render_instance(config, paths, source_profile=SourceProfile.LOCAL)
 
     main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
     outputs_tf = (paths.infra_dir / "outputs.tf").read_text(encoding="utf-8")
@@ -668,7 +715,8 @@ def test_render_supports_app_input_binding_from_component_output_with_runtime_va
                     "tf_modules": [
                         {
                             "module": "mk8s",
-                            "source": str(mk8s_dir),
+                            "portable_source": "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3",
+                            "local_source": str(mk8s_dir),
                             "outputs": {
                                 "tf_outputs": True,
                                 "static": {"access": "external"},
@@ -696,7 +744,7 @@ def test_render_supports_app_input_binding_from_component_output_with_runtime_va
         ),
         encoding="utf-8",
     )
-    _set_catalog_override(sources_file)
+    _set_catalog_override(sources_file, source_profile=SourceProfile.LOCAL)
     monkeypatch.chdir(tmp_path)
 
     config_path = _instance_config_path(tmp_path)
@@ -710,7 +758,7 @@ def test_render_supports_app_input_binding_from_component_output_with_runtime_va
                 "project_id": "project-456",
                 "region_id": "eu-north1",
             },
-            "notifications": {"inventory_markdown": True, "email": "ops@example.com"},
+            "notifications": {"email_enabled": True, "email": "ops@example.com"},
         },
         "infra": {
             "components": [
@@ -742,7 +790,7 @@ def test_render_supports_app_input_binding_from_component_output_with_runtime_va
         config,
         paths,
         component_output_values={"mk8s.cluster_id": "cluster-u123"},
-        render_profile=RenderProfile.LOCAL_DEV,
+        source_profile=SourceProfile.LOCAL,
     )
 
     release_doc = yaml.safe_load(
@@ -771,7 +819,8 @@ def test_render_uses_component_source_defaults_when_config_omits_values(
                     "tf_modules": [
                         {
                             "module": "demo-module",
-                            "source": str(module_dir),
+                            "portable_source": "git::https://github.com/example/infra.git//modules/demo-module?ref=v1.2.3",
+                            "local_source": str(module_dir),
                             "defaults": {
                                 "inputs.cluster_name": "demo-cluster",
                                 "inputs.cpu_nodes_count": 3,
@@ -799,7 +848,7 @@ def test_render_uses_component_source_defaults_when_config_omits_values(
         ),
         encoding="utf-8",
     )
-    _set_catalog_override(sources_file)
+    _set_catalog_override(sources_file, source_profile=SourceProfile.LOCAL)
     monkeypatch.chdir(tmp_path)
 
     config_path = _instance_config_path(tmp_path)
@@ -813,7 +862,7 @@ def test_render_uses_component_source_defaults_when_config_omits_values(
                 "project_id": "project-456",
                 "region_id": "eu-north1",
             },
-            "notifications": {"inventory_markdown": True, "email": "ops@example.com"},
+            "notifications": {"email_enabled": True, "email": "ops@example.com"},
         },
         "infra": {
             "components": [
@@ -841,7 +890,7 @@ def test_render_uses_component_source_defaults_when_config_omits_values(
     paths = resolve_instance_paths(config_path)
     validate_path_alignment(config, paths)
 
-    render_instance(config, paths, render_profile=RenderProfile.LOCAL_DEV)
+    render_instance(config, paths, source_profile=SourceProfile.LOCAL)
 
     tfvars = (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
     assert '"demo_module_cluster_name": "demo-cluster"' in tfvars

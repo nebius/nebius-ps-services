@@ -14,6 +14,7 @@ from nebius_cxcli.generated_manifest import (
     runtime_config_from_manifest,
     terraform_tfvars_from_manifest,
     write_generated_manifest,
+    write_generated_manifest_to_path,
 )
 from nebius_cxcli.paths import InstancePaths
 
@@ -68,6 +69,7 @@ def test_build_generated_manifest_uses_repo_relative_paths(tmp_path: Path) -> No
         paths=paths,
         handoffs=[{"component_id": "mk8s", "access": "external"}],
         required_component_outputs=[{"component_id": "mk8s", "output_name": "cluster_id"}],
+        source_profile="portable",
         terraform_tfvars={"mk8s_cluster_name": "clust1"},
         flux_version="v2.8.0",
         terraform_version="1.14.1",
@@ -91,6 +93,8 @@ def test_build_generated_manifest_uses_repo_relative_paths(tmp_path: Path) -> No
     assert manifest["deploy"]["required_component_outputs"] == [
         {"component_id": "mk8s", "output_name": "cluster_id"}
     ]
+    assert manifest["render"]["source_profile"] == "portable"
+    assert "portable" not in manifest["render"]
     assert manifest["render"]["terraform_tfvars"] == {"mk8s_cluster_name": "clust1"}
 
 
@@ -122,6 +126,27 @@ def test_write_load_and_runtime_config_round_trip(tmp_path: Path) -> None:
         "flux_version": "v2.8.0",
         "terraform_version": "1.14.1",
     }
+
+
+def test_write_generated_manifest_to_path_uses_explicit_output_path(tmp_path: Path) -> None:
+    paths = _instance_paths(tmp_path)
+    explicit_path = tmp_path / "staging" / GENERATED_MANIFEST_FILENAME
+
+    written_path = write_generated_manifest_to_path(
+        explicit_path,
+        config=_runtime_payload(),
+        paths=paths,
+        handoffs=[{"component_id": "mk8s"}],
+        required_component_outputs=[{"component_id": "mk8s", "output_name": "cluster_id"}],
+        terraform_tfvars={"mk8s_cluster_name": "clust1"},
+        flux_version="v2.8.0",
+        terraform_version="1.14.1",
+    )
+
+    assert written_path == explicit_path
+    assert json.loads(explicit_path.read_text(encoding="utf-8"))["paths"]["generated_dir"] == (
+        "deployments/instances/client-a--tenant-123/project-456/generated"
+    )
 
 
 def test_load_generated_manifest_rejects_missing_manifest(tmp_path: Path) -> None:

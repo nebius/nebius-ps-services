@@ -7,10 +7,13 @@ import nebius_cxcli.github_secrets as github_secrets
 from nebius_cxcli.github_secrets import (
     _repo_slug_from_remote_url,
     build_github_environment_name,
+    delete_environment_secret,
+    delete_environment_variable,
     detect_github_repo_slug,
     ensure_github_environment,
     read_github_token,
     upsert_environment_secrets,
+    upsert_environment_variables,
 )
 
 
@@ -169,3 +172,156 @@ def test_upsert_environment_secrets_ensures_environment_then_upserts_each_secret
             },
         ),
     ]
+
+
+def test_upsert_environment_variables_ensures_environment_then_upserts_each_variable(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    monkeypatch.setattr(
+        github_secrets,
+        "ensure_github_environment",
+        lambda *, repo_slug, token, environment_name: calls.append(
+            (
+                "ensure",
+                {
+                    "repo_slug": repo_slug,
+                    "token": token,
+                    "environment_name": environment_name,
+                },
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        github_secrets,
+        "upsert_environment_variable",
+        lambda *, repo_slug, token, environment_name, variable_name, variable_value: calls.append(
+            (
+                "variable",
+                {
+                    "repo_slug": repo_slug,
+                    "token": token,
+                    "environment_name": environment_name,
+                    "variable_name": variable_name,
+                    "variable_value": variable_value,
+                },
+            )
+        ),
+    )
+
+    updated = upsert_environment_variables(
+        repo_slug="owner/repo",
+        token="gh-token",
+        environment_name="client-a-project-123",
+        variables={
+            "SMTP_HOST": "smtp.example.com",
+            "SMTP_PORT": "587",
+        },
+    )
+
+    assert updated == ["SMTP_HOST", "SMTP_PORT"]
+    assert calls == [
+        (
+            "ensure",
+            {
+                "repo_slug": "owner/repo",
+                "token": "gh-token",
+                "environment_name": "client-a-project-123",
+            },
+        ),
+        (
+            "variable",
+            {
+                "repo_slug": "owner/repo",
+                "token": "gh-token",
+                "environment_name": "client-a-project-123",
+                "variable_name": "SMTP_HOST",
+                "variable_value": "smtp.example.com",
+            },
+        ),
+        (
+            "variable",
+            {
+                "repo_slug": "owner/repo",
+                "token": "gh-token",
+                "environment_name": "client-a-project-123",
+                "variable_name": "SMTP_PORT",
+                "variable_value": "587",
+            },
+        ),
+    ]
+
+
+def test_delete_environment_variable_deletes_when_present(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        github_secrets,
+        "environment_variable_exists",
+        lambda *, repo_slug, token, environment_name, variable_name: True,
+    )
+    monkeypatch.setattr(
+        github_secrets,
+        "_github_request",
+        lambda *, method, path, token, payload=None: captured.update(
+            {
+                "method": method,
+                "path": path,
+                "token": token,
+                "payload": payload,
+            }
+        ),
+    )
+
+    deleted = delete_environment_variable(
+        repo_slug="owner/repo",
+        token="gh-token",
+        environment_name="client-a-project-123",
+        variable_name="SMTP_HOST",
+    )
+
+    assert deleted is True
+    assert captured == {
+        "method": "DELETE",
+        "path": f"/repos/owner/repo/environments/{quote('client-a-project-123', safe='')}/variables/SMTP_HOST",
+        "token": "gh-token",
+        "payload": None,
+    }
+
+
+def test_delete_environment_secret_deletes_when_present(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        github_secrets,
+        "environment_secret_exists",
+        lambda *, repo_slug, token, environment_name, secret_name: True,
+    )
+    monkeypatch.setattr(
+        github_secrets,
+        "_github_request",
+        lambda *, method, path, token, payload=None: captured.update(
+            {
+                "method": method,
+                "path": path,
+                "token": token,
+                "payload": payload,
+            }
+        ),
+    )
+
+    deleted = delete_environment_secret(
+        repo_slug="owner/repo",
+        token="gh-token",
+        environment_name="client-a-project-123",
+        secret_name="SMTP_PASSWORD",
+    )
+
+    assert deleted is True
+    assert captured == {
+        "method": "DELETE",
+        "path": f"/repos/owner/repo/environments/{quote('client-a-project-123', safe='')}/secrets/SMTP_PASSWORD",
+        "token": "gh-token",
+        "payload": None,
+    }

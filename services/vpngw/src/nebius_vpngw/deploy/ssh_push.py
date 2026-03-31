@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 from importlib import metadata
 from pathlib import Path
+from urllib.parse import unquote, urlparse
+from urllib.request import url2pathname, urlopen
 
 from ..config_loader import InstanceResolvedConfig
 
@@ -22,6 +27,7 @@ class SSHPush:
         # Lazy import to avoid hard dependency when running dry-run
         self._paramiko = None
         self._wheel_path = None
+        self._temp_wheel_dir: Path | None = None
 
     def _ensure_paramiko(self):
         if self._paramiko is None:
@@ -67,6 +73,72 @@ class SSHPush:
             return None
         return sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)[0]
 
+    def _download_install_wheel(self, wheel_url: str, wheel_name: str) -> Path | None:
+        if self._temp_wheel_dir is None:
+            self._temp_wheel_dir = Path(tempfile.mkdtemp(prefix="nebius-vpngw-wheel-"))
+
+        target_path = self._temp_wheel_dir / wheel_name
+        if target_path.exists():
+            return target_path
+
+        print("[SSHPush] Downloading the originally installed release wheel...")
+        try:
+            with urlopen(wheel_url, timeout=60) as response, target_path.open("wb") as target:
+                shutil.copyfileobj(response, target)
+        except Exception as e:
+            if target_path.exists():
+                target_path.unlink()
+            print(f"[SSHPush] WARNING: Failed to download the original install wheel: {e}")
+            return None
+        return target_path
+
+    def _wheel_from_install_metadata(self) -> Path | None:
+        try:
+            distribution = metadata.distribution("nebius-vpngw")
+        except metadata.PackageNotFoundError:
+            return None
+
+        direct_url_raw = distribution.read_text("direct_url.json")
+        if not direct_url_raw:
+            return None
+
+        try:
+            direct_url = json.loads(direct_url_raw)
+        except json.JSONDecodeError:
+            print("[SSHPush] WARNING: Could not parse direct_url.json for installed package")
+            return None
+
+        wheel_url = direct_url.get("url")
+        if not isinstance(wheel_url, str) or not wheel_url:
+            return None
+
+        parsed_url = urlparse(wheel_url)
+        wheel_name = Path(unquote(parsed_url.path)).name
+        if not wheel_name.endswith(".whl"):
+            return None
+
+        if parsed_url.scheme == "file":
+            local_path_str = url2pathname(unquote(parsed_url.path))
+            if parsed_url.netloc:
+                local_path_str = f"//{parsed_url.netloc}{local_path_str}"
+            local_path = Path(local_path_str)
+            if local_path.is_file():
+                print(f"[SSHPush] Reusing install wheel from local file: {local_path.name}")
+                return local_path
+            print(
+                "[SSHPush] WARNING: The original install wheel is no longer present at the "
+                "recorded file path"
+            )
+            return None
+
+        if parsed_url.scheme in {"http", "https"}:
+            downloaded_wheel = self._download_install_wheel(wheel_url, wheel_name)
+            if downloaded_wheel:
+                print(f"[SSHPush] Reusing install wheel from original URL: {downloaded_wheel.name}")
+            return downloaded_wheel
+
+        return None
+
     def _build_wheel(self) -> Path | None:
         """Build the nebius-vpngw wheel package if not already built."""
         if self._wheel_path and self._wheel_path.exists():
@@ -90,9 +162,14 @@ class SSHPush:
                 self._wheel_path = local_wheel
                 print(f"[SSHPush] Using local wheel: {self._wheel_path.name}")
                 return self._wheel_path
+            install_wheel = self._wheel_from_install_metadata()
+            if install_wheel:
+                self._wheel_path = install_wheel
+                print(f"[SSHPush] Using install wheel: {self._wheel_path.name}")
+                return self._wheel_path
             print(
                 "[SSHPush] WARNING: No local wheel found. "
-                "Download the release wheel and set VPNGW_AGENT_WHEEL, "
+                "Set VPNGW_AGENT_WHEEL, keep the original release URL/file accessible, "
                 "or run apply from a directory containing the wheel (or ./dist)."
             )
             return None
@@ -135,6 +212,17 @@ class SSHPush:
             self._wheel_path = wheel
             print(f"[SSHPush] Using wheel: {self._wheel_path.name}")
             return self._wheel_path
+
+        install_wheel = self._wheel_from_install_metadata()
+        if install_wheel:
+            print(
+                "[SSHPush] WARNING: Fresh build unavailable; falling back to the originally "
+                "installed wheel. Local source changes will not be deployed."
+            )
+            self._wheel_path = install_wheel
+            print(f"[SSHPush] Using fallback wheel: {self._wheel_path.name}")
+            return self._wheel_path
+
         if dist_dir.exists():
             print("[SSHPush] No wheel found in dist/ after build attempt")
         else:

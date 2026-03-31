@@ -6,12 +6,8 @@ import json
 import os
 import re
 from dataclasses import dataclass
-from enum import StrEnum
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
-
-import yaml
 
 from .component_defaults import (
     resolve_component_defaults,
@@ -19,9 +15,9 @@ from .component_defaults import (
     shared_default_conflicts,
 )
 from .component_sources import (
-    CANONICAL_PORTABLE_COMPONENT_SOURCES_FILE,
     ComponentOutput,
     Handoff,
+    SourceProfile,
     component_output_root_name,
 )
 from .component_wiring import (
@@ -50,12 +46,6 @@ _PROVIDER_VAR_SA_ID = "nebius_service_account_id"
 _PROVIDER_VAR_AUTH_PUBLIC_KEY_ID = "nebius_auth_public_key_id"
 _PROVIDER_VAR_AUTH_PRIVATE_KEY_FILE = "nebius_auth_private_key_file"
 _PROVIDER_VAR_CREDENTIALS_FILE = "nebius_service_account_credentials_file"
-
-
-class RenderProfile(StrEnum):
-    PORTABLE = "portable"
-    LOCAL_DEV = "local-dev"
-
 
 @dataclass(frozen=True)
 class _VariableBinding:
@@ -88,7 +78,6 @@ class RenderedModuleSource:
     component_id: str
     module_name: str
     source: str
-    portable: bool
 
 
 def _ensure_parent(path: Path) -> None:
@@ -233,7 +222,11 @@ def _effective_component_version(*, row: dict[str, Any], entry: ComponentEntry |
     return str(row.get("version", "")).strip()
 
 
-def _dynamic_provider_component_rows(payload: dict[str, Any]) -> tuple[dict[str, Any], ...]:
+def _dynamic_provider_component_rows(
+    payload: dict[str, Any],
+    *,
+    source_profile: SourceProfile,
+) -> tuple[dict[str, Any], ...]:
     infra = payload.get("infra")
     if not isinstance(infra, dict):
         return ()
@@ -242,7 +235,9 @@ def _dynamic_provider_component_rows(payload: dict[str, Any]) -> tuple[dict[str,
         return ()
 
     rows: list[dict[str, Any]] = []
-    entry_by_id = {entry.id: entry for entry in component_entries("infra")}
+    entry_by_id = {
+        entry.id: entry for entry in component_entries("infra", source_profile=source_profile)
+    }
     for item in components:
         if not isinstance(item, dict):
             continue
@@ -306,13 +301,19 @@ def _render_dynamic_provider_resource_block(
     return "\n".join(lines)
 
 
-def _provider_resource_blocks(config: Any) -> tuple[str, ...]:
+def _provider_resource_blocks(
+    config: Any,
+    *,
+    source_profile: SourceProfile,
+) -> tuple[str, ...]:
     payload = to_plain_data(config)
     if not isinstance(payload, dict):
         return ()
 
-    entry_by_id = {entry.id: entry for entry in component_entries("infra")}
-    rows = _dynamic_provider_component_rows(payload)
+    entry_by_id = {
+        entry.id: entry for entry in component_entries("infra", source_profile=source_profile)
+    }
+    rows = _dynamic_provider_component_rows(payload, source_profile=source_profile)
     blocks: list[str] = []
     for row in rows:
         component_id = str(row["id"])
@@ -405,45 +406,15 @@ def is_portable_module_source(module_source: str) -> bool:
     return not _source_uses_local_path(module_source)
 
 
-@lru_cache(maxsize=1)
-def _portable_module_source_overrides() -> dict[str, str]:
-    if (
-        not CANONICAL_PORTABLE_COMPONENT_SOURCES_FILE.exists()
-        or not CANONICAL_PORTABLE_COMPONENT_SOURCES_FILE.is_file()
-    ):
-        return {}
-
-    payload = yaml.safe_load(
-        CANONICAL_PORTABLE_COMPONENT_SOURCES_FILE.read_text(encoding="utf-8")
-    ) or {}
-    if not isinstance(payload, dict):
-        return {}
-
-    modules = (((payload or {}).get("infra") or {}).get("tf_modules") or [])
-    if not isinstance(modules, list):
-        return {}
-
-    overrides: dict[str, str] = {}
-    for raw in modules:
-        if not isinstance(raw, dict):
-            continue
-        component_id = str(raw.get("module", "")).strip().lower()
-        source = str(raw.get("source", "")).strip()
-        if not component_id or not source:
-            continue
-        overrides[component_id] = source
-    return overrides
-
-
-def _module_source_for_render_profile(
+def _module_source_for_profile(
     *,
     component_id: str,
     module_source: str,
     module_version: str | None,
-    render_profile: RenderProfile,
+    source_profile: SourceProfile,
 ) -> str:
     source = module_source.strip()
-    if render_profile == RenderProfile.LOCAL_DEV or not _source_uses_local_path(source):
+    if source_profile == SourceProfile.LOCAL or not _source_uses_local_path(source):
         return source
     if module_version:
         raise ValueError(
@@ -453,18 +424,11 @@ def _module_source_for_render_profile(
             "a pinned remote ref."
         )
 
-    override = _portable_module_source_overrides().get(component_id)
-    if not override:
-        raise ValueError(
-            f"infra component '{component_id}' resolves to local module source '{module_source}', "
-            f"but render profile '{render_profile.value}' requires a portable Git or registry source. "
-            "Point the active catalog at a portable source or rerun with --render-profile local-dev."
-        )
-    if not is_portable_module_source(override):
-        raise ValueError(
-            f"Portable source override for infra component '{component_id}' is still local: '{override}'"
-        )
-    return override
+    raise ValueError(
+        f"infra component '{component_id}' resolves to local module source '{module_source}', "
+        f"but source profile '{source_profile.value}' requires a portable Git or registry source. "
+        "Set portable_source in component_sources.yaml or rerun with --source-profile local."
+    )
 
 
 def _canonical_module_source(
@@ -535,7 +499,7 @@ def _variable_type_expr(*, type_hint: str | None, value: Any) -> str:
 def _build_module_plans(
     config: Any,
     *,
-    render_profile: RenderProfile = RenderProfile.PORTABLE,
+    source_profile: SourceProfile = SourceProfile.PORTABLE,
 ) -> tuple[_ModulePlan, ...]:
     payload = to_plain_data(config)
     if not isinstance(payload, dict):
@@ -545,9 +509,15 @@ def _build_module_plans(
     used_module_names: set[str] = set()
     used_variable_names: set[str] = set()
 
-    infra_entry_by_id = {entry.id: entry for entry in component_entries("infra")}
+    infra_entry_by_id = {
+        entry.id: entry for entry in component_entries("infra", source_profile=source_profile)
+    }
     all_entry_by_id = {
-        entry.id: entry for entry in (*component_entries("infra"), *component_entries("apps"))
+        entry.id: entry
+        for entry in (
+            *component_entries("infra", source_profile=source_profile),
+            *component_entries("apps", source_profile=source_profile),
+        )
     }
     infra = payload.get("infra")
     if not isinstance(infra, dict):
@@ -629,9 +599,12 @@ def _build_module_plans(
             raise ValueError(
                 f"infra component '{component_id}' is enabled for module rendering but has no source"
             )
+        metadata_module_source = (
+            str(entry.metadata_source or "").strip() if entry is not None else ""
+        ) or module_source_raw
         declared_argument_names = {
             str(spec.name).strip().lower().replace("-", "_")
-            for spec in module_variables(module_source_raw)
+            for spec in module_variables(metadata_module_source)
             if str(spec.name).strip()
         }
         if declared_argument_names:
@@ -643,11 +616,11 @@ def _build_module_plans(
                         f"infra component '{component_id}' input '{raw_arg_name}' "
                         f"is not declared by module '{module_source_raw}'"
                     )
-        selected_module_source = _module_source_for_render_profile(
+        selected_module_source = _module_source_for_profile(
             component_id=component_id,
             module_source=module_source_raw,
             module_version=module_version,
-            render_profile=render_profile,
+            source_profile=source_profile,
         )
         module_source = _canonical_module_source(
             module_source=selected_module_source,
@@ -663,7 +636,7 @@ def _build_module_plans(
                 "module_source": module_source,
                 "module_version": module_version,
                 "module_inputs": module_inputs,
-                "type_hints": _module_type_hints(module_source_raw),
+                "type_hints": _module_type_hints(metadata_module_source),
             }
         )
         module_name_by_component_id[component_id] = module_name
@@ -814,16 +787,15 @@ def _render_module_block(plan: _ModulePlan) -> str:
 def rendered_module_sources(
     config: Any,
     *,
-    render_profile: RenderProfile = RenderProfile.PORTABLE,
+    source_profile: SourceProfile = SourceProfile.PORTABLE,
 ) -> tuple[RenderedModuleSource, ...]:
     return tuple(
         RenderedModuleSource(
             component_id=plan.component_id,
             module_name=plan.module_name,
             source=plan.module_source,
-            portable=is_portable_module_source(plan.module_source),
         )
-        for plan in _build_module_plans(config, render_profile=render_profile)
+        for plan in _build_module_plans(config, source_profile=source_profile)
     )
 
 
@@ -993,15 +965,15 @@ def render_terraform_artifacts(
     config: Any,
     paths: InstancePaths,
     *,
-    render_profile: RenderProfile = RenderProfile.PORTABLE,
+    source_profile: SourceProfile = SourceProfile.PORTABLE,
 ) -> list[Path]:
     """Render deterministic Terraform root-module artifacts for one validated config."""
     written: list[Path] = []
 
     backend_settings = backend_settings_from_config(config)
-    module_plans = _build_module_plans(config, render_profile=render_profile)
+    module_plans = _build_module_plans(config, source_profile=source_profile)
     module_blocks = tuple(_render_module_block(plan) for plan in module_plans)
-    provider_resource_blocks = _provider_resource_blocks(config)
+    provider_resource_blocks = _provider_resource_blocks(config, source_profile=source_profile)
     tfvars_payload = {
         **_provider_static_tfvars(config),
         **_render_tfvars_json(module_plans),
