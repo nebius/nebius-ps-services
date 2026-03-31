@@ -950,9 +950,21 @@ Use the CLI to force traffic onto the passive tunnel by shutting down the active
 # If exactly two tunnels exist, auto-select the passive tunnel
 nebius-vpngw failover --local-config-file <file>
 
-# If more than two tunnels exist, specify the passive tunnel explicitly
-nebius-vpngw failover --tunnel-failover <passive-tunnel-name> --local-config-file <file>
+# If more than two tunnels exist, pass the passive tunnel name explicitly
+nebius-vpngw failover <passive-tunnel-name> --local-config-file <file>
 ```
+
+The CLI resolves the selected tunnel back to its owning connection and
+`gateway_instance_index`, then applies the BGP neighbor change only on that
+gateway VM.
+
+Tunnel names are required to be globally unique across the full config, so the
+operator commands can safely target a tunnel by name without also requiring the
+connection name.
+
+Configured active/passive roles remain declarative. `failover` is an operational
+override that preserves the configured roles and lets `failback` restore the
+configured steady state without rewriting YAML.
 
 **Restore active tunnel:**
 
@@ -974,22 +986,23 @@ Three route management commands with distinct purposes:
 nebius-vpngw add-routes-local --local-config-file <file>
 ```
 
-Creates VPC route table entries for remote networks pointing to gateway VMs.
+Creates VPC route table entries for remote networks and selects the next-hop
+from the gateway VM that owns each connection.
 
 **Implementation Details:**
 
-- **BGP mode**: Queries BGP-learned routes from gateway VMs via SSH (`vtysh -c 'show bgp ipv4 unicast json'`)
+- **BGP mode**: Queries BGP-learned routes from the gateway VM(s) that own the target connection via SSH (`vtysh -c 'show bgp ipv4 unicast json'`)
   - Filters by `remote_prefixes` whitelist if configured
   - Filters out locally originated routes (next-hop 0.0.0.0)
   - Filters out overlapping local networks (from `gateway.local_prefixes`)
 - **Static mode**: Uses `remote_prefixes` from YAML configuration
 - Finds workload subnets whose effective CIDRs match `gateway.local_prefixes`
-- Resolves gateway VM private IP allocation via Compute API
+- Resolves private IP allocations per gateway VM via Compute API
 - Creates/reuses custom route tables for matching subnets
   - If subnet uses default route table: Creates custom RT and copies existing routes
   - Warns user about route table separation
 - Includes inherited parent-network subnets (`use_network_pools=true`) when their effective/status CIDRs overlap `gateway.local_prefixes`
-- Creates route entries: destination = remote prefix, next-hop = gateway private IP
+- Creates route entries: destination = remote prefix, next-hop = the owning gateway VM's private IP
 - Implements idempotency (skips existing routes)
 - Reconciles stale FRR/BGP advertisement state before reporting so `list-routes-local` and `add-routes-local` reflect the current YAML
 
@@ -1467,7 +1480,7 @@ nebius-vpngw status --local-config-file <file>
 - Service health (agent, strongSwan, FRR)
 - Routing table health (table 220, APIPA routes over XFRM interfaces, orphaned routes)
 
-For multi-connection configs, the `Carrying Traffic` indicator is computed per connection so each connection shows its own preferred active tunnel. When FRR reports live multipath for the same prefix across different active connections, `status` prints an `ECMP Warning` section that names the overlapping prefix and the active tunnel names carrying it.
+For multi-connection configs, traffic state is computed per connection so each connection shows its own current path. `status` reports configured role separately from current traffic state and prints a `Traffic Override` section when runtime behavior differs from the configured active/passive preference. When FRR reports live multipath for the same prefix across different active connections, `status` also prints an `ECMP Warning` section that names the overlapping prefix and the active tunnel names carrying it.
 
 ### Tunnel Status
 
@@ -1647,6 +1660,10 @@ nebius-vpngw restart-tunnel all
 nebius-vpngw restart-tunnel all --local-config-file my-config.yaml
 ```
 
+For multi-VM topologies, `restart-tunnel <name>` targets only the gateway VM(s)
+that own the named tunnel. `restart-tunnel all` still iterates over every
+gateway VM that has at least one enabled tunnel.
+
 **What it does:**
 
 1. Loads deployment plan to get gateway VM IPs
@@ -1815,9 +1832,9 @@ nebius-vpngw apply --local-config-file test.config.yaml
 
 Release sequence:
 
-1. Run `./publish-release.sh --prep X.Y.Z` on your working branch to update `CHANGELOG.md`, commit it, and push the branch.
+1. Run `./publish-release.sh --prep X.Y.Z` on your working branch to update `CHANGELOG.md`, commit it, and push the branch. If the branch has no upstream yet, the script sets `origin/<current-branch>` automatically on that first push.
 2. Merge the release preparation PR into `main`.
-3. Run `./publish-release.sh --publish X.Y.Z` from a clean, synced `main`; the script verifies that the tagged source checkout resolves `nebius_vpngw.__version__ == X.Y.Z` before it pushes the tag.
+3. Run `./publish-release.sh --publish X.Y.Z` from a clean, synced `main`; the script verifies that the tagged source checkout resolves `nebius_vpngw.__version__ == X.Y.Z` before it pushes the tag. Its clean-worktree check includes untracked files, and it fails locally if the target changelog section is empty.
 4. The pushed tag triggers `vpngw-release.yml`, which checks out the tagged commit from `services/vpngw`, runs lint/tests, builds the wheel, verifies the artifact version, and creates the GitHub Release.
 
 The local publish script does not build or upload release artifacts itself. Its job is only to create and push the annotated service tag.

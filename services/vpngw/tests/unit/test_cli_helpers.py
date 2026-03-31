@@ -8,9 +8,12 @@ import yaml
 from typer.testing import CliRunner
 
 from nebius_vpngw.cli import (
+    _detect_connection_role_overrides,
     _detect_cross_connection_ecmp_warnings,
     _external_ips_assigned,
     _format_ecmp_warning_lines,
+    _format_role_override_lines,
+    _format_traffic_state,
     _registered_command_name,
     _select_carrying_tunnel_for_connection,
     _should_prompt_add_routes_after_apply,
@@ -287,6 +290,99 @@ def test_select_carrying_tunnel_is_scoped_per_connection() -> None:
     )
 
 
+def test_format_traffic_state_distinguishes_active_path_standby_and_admin_down() -> None:
+    tunnel_bgp_map = {
+        "nebius-vpn-gw-0": {
+            "conn-active": "169.254.10.2",
+            "conn-passive": "169.254.11.2",
+        }
+    }
+    tunnel_statuses = {
+        "conn-active": "ESTABLISHED",
+        "conn-passive": "ESTABLISHED",
+    }
+    bgp_states = {
+        "169.254.10.2": "Idle (Admin)",
+        "169.254.11.2": "Established",
+    }
+
+    assert (
+        _format_traffic_state(
+            "nebius-vpn-gw-0",
+            "conn-passive",
+            "conn-passive",
+            tunnel_statuses,
+            bgp_states,
+            tunnel_bgp_map,
+        )
+        == "[green]active path[/green]"
+    )
+    assert (
+        _format_traffic_state(
+            "nebius-vpn-gw-0",
+            "conn-active",
+            "conn-passive",
+            tunnel_statuses,
+            bgp_states,
+            tunnel_bgp_map,
+        )
+        == "[red]admin down[/red]"
+    )
+
+
+def test_detect_connection_role_overrides_reports_manual_failover() -> None:
+    tunnel_bgp_map = {
+        "nebius-vpn-gw-0": {
+            "conn-active": "169.254.10.2",
+            "conn-passive": "169.254.11.2",
+        }
+    }
+    tunnel_role_map = {
+        "nebius-vpn-gw-0": {
+            "conn-active": "active",
+            "conn-passive": "passive",
+        }
+    }
+    tunnel_connection_map = {
+        "nebius-vpn-gw-0": {
+            "conn-active": "gcp-ha-vpn",
+            "conn-passive": "gcp-ha-vpn",
+        }
+    }
+    tunnel_statuses = {
+        "conn-active": "ESTABLISHED",
+        "conn-passive": "ESTABLISHED",
+    }
+    bgp_states = {
+        "169.254.10.2": "Idle (Admin)",
+        "169.254.11.2": "Established",
+    }
+
+    overrides = _detect_connection_role_overrides(
+        "nebius-vpn-gw-0",
+        ["conn-active", "conn-passive"],
+        tunnel_statuses,
+        bgp_states,
+        tunnel_bgp_map,
+        tunnel_role_map,
+        tunnel_connection_map,
+    )
+
+    assert overrides == [
+        {
+            "connection": "gcp-ha-vpn",
+            "configured_active_tunnel": "conn-active",
+            "selected_tunnel": "conn-passive",
+            "reason": "manual failover",
+            "detail": "configured active tunnel BGP is administratively down",
+        }
+    ]
+
+    warning_lines = _format_role_override_lines({"nebius-vpn-gw-0": overrides})
+    assert "Configured roles remain unchanged by design." in warning_lines[1]
+    assert "Current traffic path: conn-passive" in "\n".join(warning_lines)
+
+
 def test_detect_cross_connection_ecmp_warnings_for_active_paths() -> None:
     routes = {
         "10.10.0.0/24": [
@@ -407,7 +503,18 @@ def test_restart_tunnel_uses_inline_remote_python_and_shows_real_failure_output(
         "gateway_group": {
             "instance_count": 1,
             "vm_spec": {},
-        }
+        },
+        "connections": [
+            {
+                "name": "site-a",
+                "tunnels": [
+                    {
+                        "name": "tunnel-1",
+                        "gateway_instance_index": 0,
+                    }
+                ],
+            }
+        ],
     }
     plan = ResolvedDeploymentPlan(
         gateway_group=GatewayGroupSpec(
@@ -534,6 +641,148 @@ def test_restart_tunnel_full_reset_also_bounces_matching_bgp_neighbor(tmp_path: 
     assert "Successfully reset tunnel 'tunnel-1'" in result.stdout
 
 
+def test_restart_tunnel_targets_only_owning_gateway_instance(tmp_path: Path) -> None:
+    config_path = tmp_path / "restart-multivm.config.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+
+    local_cfg = {
+        "gateway": {"local_asn": 65010},
+        "defaults": {"routing": {"mode": RoutingMode.BGP}},
+        "gateway_group": {
+            "name": "nebius-vpn-gw",
+            "instance_count": 2,
+            "vm_spec": {},
+        },
+        "connections": [
+            {
+                "name": "site-a",
+                "routing_mode": RoutingMode.BGP,
+                "tunnels": [
+                    {
+                        "name": "site-a-active",
+                        "gateway_instance_index": 0,
+                        "inner_remote_ip": "169.254.10.2",
+                    }
+                ],
+            },
+            {
+                "name": "site-b",
+                "routing_mode": RoutingMode.BGP,
+                "tunnels": [
+                    {
+                        "name": "site-b-active",
+                        "gateway_instance_index": 1,
+                        "inner_remote_ip": "169.254.20.2",
+                    }
+                ],
+            },
+        ],
+    }
+    plan = ResolvedDeploymentPlan(
+        gateway_group=GatewayGroupSpec(
+            name="nebius-vpn-gw",
+            instance_count=2,
+            region="eu-west1",
+            external_ips=[],
+            vm_spec={},
+        ),
+        per_instance=[
+            InstanceResolvedConfig(
+                instance_index=0,
+                hostname="nebius-vpn-gw-0",
+                external_ip="203.0.113.10",
+                config_yaml="gateway: {}\n",
+            ),
+            InstanceResolvedConfig(
+                instance_index=1,
+                hostname="nebius-vpn-gw-1",
+                external_ip="203.0.113.20",
+                config_yaml="gateway: {}\n",
+            ),
+        ],
+    )
+    recorded_cmds: list[list[str]] = []
+
+    def fake_run(cmd, capture_output, text, timeout, input=None):
+        recorded_cmds.append(cmd)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with (
+        patch("nebius_vpngw.cli._resolve_local_config", return_value=config_path),
+        patch("nebius_vpngw.cli.load_local_config", return_value=local_cfg),
+        patch("nebius_vpngw.cli.merge_with_peer_configs", return_value=plan),
+        patch("subprocess.run", side_effect=fake_run),
+        patch("nebius_vpngw.cli.time.sleep", return_value=None),
+    ):
+        result = CliRunner().invoke(
+            app,
+            ["restart-tunnel", "site-b-active", "--local-config-file", str(config_path)],
+        )
+
+    assert result.exit_code == 0
+    assert all("203.0.113.20" in cmd[-2] for cmd in recorded_cmds)
+    assert all("203.0.113.10" not in part for cmd in recorded_cmds for part in cmd)
+    assert "Connecting to nebius-vpn-gw-1 (203.0.113.20)" in result.stdout
+    assert "Connecting to nebius-vpn-gw-0" not in result.stdout
+
+
+def test_restart_tunnel_fails_fast_when_tunnel_name_is_unknown(tmp_path: Path) -> None:
+    config_path = tmp_path / "restart-unknown.config.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+
+    local_cfg = {
+        "gateway_group": {
+            "name": "nebius-vpn-gw",
+            "instance_count": 1,
+            "vm_spec": {},
+        },
+        "connections": [
+            {
+                "name": "site-a",
+                "routing_mode": RoutingMode.BGP,
+                "tunnels": [
+                    {
+                        "name": "site-a-active",
+                        "gateway_instance_index": 0,
+                    }
+                ],
+            }
+        ],
+    }
+    plan = ResolvedDeploymentPlan(
+        gateway_group=GatewayGroupSpec(
+            name="nebius-vpn-gw",
+            instance_count=1,
+            region="eu-west1",
+            external_ips=[],
+            vm_spec={},
+        ),
+        per_instance=[
+            InstanceResolvedConfig(
+                instance_index=0,
+                hostname="nebius-vpn-gw-0",
+                external_ip="203.0.113.10",
+                config_yaml="gateway: {}\n",
+            )
+        ],
+    )
+
+    with (
+        patch("nebius_vpngw.cli._resolve_local_config", return_value=config_path),
+        patch("nebius_vpngw.cli.load_local_config", return_value=local_cfg),
+        patch("nebius_vpngw.cli.merge_with_peer_configs", return_value=plan),
+        patch("subprocess.run") as run_mock,
+    ):
+        result = CliRunner().invoke(
+            app,
+            ["restart-tunnel", "missing-tunnel", "--local-config-file", str(config_path)],
+        )
+
+    assert result.exit_code == 1
+    assert "Tunnel 'missing-tunnel' not found." in result.stdout
+    run_mock.assert_not_called()
+
+
 def test_failover_accepts_enum_routing_modes(tmp_path: Path) -> None:
     config_path = tmp_path / "failover.config.yaml"
     config_path.write_text("version: 1\n", encoding="utf-8")
@@ -614,6 +863,119 @@ def test_failover_accepts_enum_routing_modes(tmp_path: Path) -> None:
     assert "Failover confirmed" in result.stdout
 
 
+def test_failover_targets_selected_passive_tunnel_instance_in_multivm_config(tmp_path: Path) -> None:
+    config_path = tmp_path / "failover-multivm.config.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+
+    local_cfg = {
+        "gateway": {"local_asn": 65010},
+        "defaults": {"routing": {"mode": RoutingMode.BGP}},
+        "gateway_group": {
+            "name": "nebius-vpn-gw",
+            "instance_count": 2,
+            "vm_spec": {},
+        },
+        "connections": [
+            {
+                "name": "site-a",
+                "routing_mode": RoutingMode.BGP,
+                "tunnels": [
+                    {
+                        "name": "site-a-active",
+                        "ha_role": HARole.ACTIVE,
+                        "gateway_instance_index": 0,
+                        "inner_remote_ip": "169.254.10.2",
+                    },
+                    {
+                        "name": "site-a-passive",
+                        "ha_role": HARole.PASSIVE,
+                        "gateway_instance_index": 0,
+                        "inner_remote_ip": "169.254.11.2",
+                    },
+                ],
+            },
+            {
+                "name": "site-b",
+                "routing_mode": RoutingMode.BGP,
+                "tunnels": [
+                    {
+                        "name": "site-b-active",
+                        "ha_role": HARole.ACTIVE,
+                        "gateway_instance_index": 1,
+                        "inner_remote_ip": "169.254.20.2",
+                    },
+                    {
+                        "name": "site-b-passive",
+                        "ha_role": HARole.PASSIVE,
+                        "gateway_instance_index": 1,
+                        "inner_remote_ip": "169.254.21.2",
+                    },
+                ],
+            },
+        ],
+    }
+    plan = ResolvedDeploymentPlan(
+        gateway_group=GatewayGroupSpec(
+            name="nebius-vpn-gw",
+            instance_count=2,
+            region="eu-west1",
+            external_ips=[],
+            vm_spec={},
+        ),
+        per_instance=[
+            InstanceResolvedConfig(
+                instance_index=0,
+                hostname="nebius-vpn-gw-0",
+                external_ip="203.0.113.10",
+                config_yaml="gateway: {}\n",
+            ),
+            InstanceResolvedConfig(
+                instance_index=1,
+                hostname="nebius-vpn-gw-1",
+                external_ip="203.0.113.20",
+                config_yaml="gateway: {}\n",
+            ),
+        ],
+    )
+    recorded_cmds: list[list[str]] = []
+
+    def fake_run(cmd, capture_output, text, timeout):
+        recorded_cmds.append(cmd)
+        if "show bgp ipv4 unicast summary json" in cmd[-1]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout='{"ipv4Unicast":{"peers":{"169.254.20.2":{"state":"Idle"},"169.254.21.2":{"state":"Established"}}}}',
+                stderr="",
+            )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with (
+        patch("nebius_vpngw.cli._resolve_local_config", return_value=config_path),
+        patch("nebius_vpngw.cli.load_local_config", return_value=local_cfg),
+        patch("nebius_vpngw.cli.merge_with_peer_configs", return_value=plan),
+        patch("subprocess.run", side_effect=fake_run),
+    ):
+        result = CliRunner().invoke(
+            app,
+            [
+                "failover",
+                "site-b-passive",
+                "--local-config-file",
+                str(config_path),
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert "Failing over connection 'site-b'" in result.stdout
+    assert "site-b-active" in result.stdout
+    assert "site-b-passive" in result.stdout
+    assert all("203.0.113.20" in cmd[-2] for cmd in recorded_cmds)
+    assert recorded_cmds[0][-1] == (
+        "sudo vtysh -c 'configure terminal' -c 'router bgp 65010' "
+        "-c 'neighbor 169.254.20.2 shutdown'"
+    )
+
+
 def test_failback_accepts_enum_routing_modes(tmp_path: Path) -> None:
     config_path = tmp_path / "failback.config.yaml"
     config_path.write_text("version: 1\n", encoding="utf-8")
@@ -690,3 +1052,114 @@ def test_failback_accepts_enum_routing_modes(tmp_path: Path) -> None:
         "-c 'no neighbor 169.254.10.2 shutdown'"
     )
     assert "Failback confirmed" in result.stdout
+
+
+def test_failback_targets_selected_active_tunnel_instance_in_multivm_config(tmp_path: Path) -> None:
+    config_path = tmp_path / "failback-multivm.config.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+
+    local_cfg = {
+        "gateway": {"local_asn": 65010},
+        "defaults": {"routing": {"mode": RoutingMode.BGP}},
+        "gateway_group": {
+            "name": "nebius-vpn-gw",
+            "instance_count": 2,
+            "vm_spec": {},
+        },
+        "connections": [
+            {
+                "name": "site-a",
+                "routing_mode": RoutingMode.BGP,
+                "tunnels": [
+                    {
+                        "name": "site-a-active",
+                        "ha_role": HARole.ACTIVE,
+                        "gateway_instance_index": 0,
+                        "inner_remote_ip": "169.254.10.2",
+                    },
+                    {
+                        "name": "site-a-passive",
+                        "ha_role": HARole.PASSIVE,
+                        "gateway_instance_index": 0,
+                        "inner_remote_ip": "169.254.11.2",
+                    },
+                ],
+            },
+            {
+                "name": "site-b",
+                "routing_mode": RoutingMode.BGP,
+                "tunnels": [
+                    {
+                        "name": "site-b-active",
+                        "ha_role": HARole.ACTIVE,
+                        "gateway_instance_index": 1,
+                        "inner_remote_ip": "169.254.20.2",
+                    },
+                    {
+                        "name": "site-b-passive",
+                        "ha_role": HARole.PASSIVE,
+                        "gateway_instance_index": 1,
+                        "inner_remote_ip": "169.254.21.2",
+                    },
+                ],
+            },
+        ],
+    }
+    plan = ResolvedDeploymentPlan(
+        gateway_group=GatewayGroupSpec(
+            name="nebius-vpn-gw",
+            instance_count=2,
+            region="eu-west1",
+            external_ips=[],
+            vm_spec={},
+        ),
+        per_instance=[
+            InstanceResolvedConfig(
+                instance_index=0,
+                hostname="nebius-vpn-gw-0",
+                external_ip="203.0.113.10",
+                config_yaml="gateway: {}\n",
+            ),
+            InstanceResolvedConfig(
+                instance_index=1,
+                hostname="nebius-vpn-gw-1",
+                external_ip="203.0.113.20",
+                config_yaml="gateway: {}\n",
+            ),
+        ],
+    )
+    recorded_cmds: list[list[str]] = []
+
+    def fake_run(cmd, capture_output, text, timeout):
+        recorded_cmds.append(cmd)
+        if "show bgp ipv4 unicast summary json" in cmd[-1]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout='{"ipv4Unicast":{"peers":{"169.254.20.2":{"state":"Established"},"169.254.21.2":{"state":"Idle"}}}}',
+                stderr="",
+            )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with (
+        patch("nebius_vpngw.cli._resolve_local_config", return_value=config_path),
+        patch("nebius_vpngw.cli.load_local_config", return_value=local_cfg),
+        patch("nebius_vpngw.cli.merge_with_peer_configs", return_value=plan),
+        patch("subprocess.run", side_effect=fake_run),
+    ):
+        result = CliRunner().invoke(
+            app,
+            [
+                "failback",
+                "site-b-active",
+                "--local-config-file",
+                str(config_path),
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert "restore site-b-active" in result.stdout
+    assert all("203.0.113.20" in cmd[-2] for cmd in recorded_cmds)
+    assert recorded_cmds[0][-1] == (
+        "sudo vtysh -c 'configure terminal' -c 'router bgp 65010' "
+        "-c 'no neighbor 169.254.20.2 shutdown'"
+    )

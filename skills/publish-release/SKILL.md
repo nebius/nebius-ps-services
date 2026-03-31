@@ -50,13 +50,17 @@ Generate exactly these artifacts in the target project:
 5. Confirm release flow docs in project README:
    - `./publish-release.sh --prep X.Y.Z`
    - `./publish-release.sh --publish X.Y.Z`
+   - note that `--prep` auto-sets `origin/<branch>` as upstream on the first push from a new local release branch
+   - note that the clean-worktree check is strict and includes untracked files
+   - note that `--publish` fails locally if the target release section is empty
 
 ## Guardrails
 
 - Do not edit changelog directly on `main`.
-- `--prep` should start from a clean worktree so the changelog commit is isolated.
+- `--prep` should start from a strictly clean worktree, including untracked files, so the changelog commit is isolated.
+- `--prep` should push the current branch, and if no upstream exists yet, set `origin/<branch>` as upstream instead of failing with Git's default "no upstream branch" error.
 - `--publish` only creates/pushes tag; no content edits.
-- `--publish` must fail if `CHANGELOG.md` does not already contain the target tag heading.
+- `--publish` must fail if `CHANGELOG.md` does not already contain the target tag heading, or if that release section exists but is empty.
 - Release workflow must build from tag commit, not floating branch refs.
 - Resolve the tagged commit explicitly instead of assuming `GITHUB_SHA` is the release commit.
 - Verify built artifact version equals release tag version.

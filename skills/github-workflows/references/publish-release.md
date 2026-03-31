@@ -19,10 +19,10 @@ Use this reference for tag-driven GitHub Releases that publish built artifacts.
 
 If the project also ships `publish-release.sh`, keep it aligned with the workflow:
 
-- `--prep` should require a clean worktree.
-- `--prep` updates only `CHANGELOG.md` and commits it.
+- `--prep` should require a strictly clean worktree, including untracked files.
+- `--prep` updates only `CHANGELOG.md`, commits it, and should auto-set `origin/<branch>` as upstream on the first push from a new local release branch.
 - `--publish` should only create and push the annotated tag.
-- `--publish` should fail fast if `CHANGELOG.md` does not already contain the tag heading.
+- `--publish` should fail fast if `CHANGELOG.md` does not already contain the tag heading, or if that release section exists but is empty.
 - The helper should enforce the release branch policy unless the user explicitly overrides it.
 
 ## Repo examples

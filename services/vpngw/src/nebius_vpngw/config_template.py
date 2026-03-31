@@ -120,7 +120,7 @@ connections:
   # Add one connection block per peer site.
   # For a second site, copy this block and change:
   # - connection.name
-  # - tunnel names
+  # - tunnel names (must stay globally unique across all connections)
   # - remote_public_ip values
   # - APIPA inner_cidr / inner_local_ip / inner_remote_ip values
   - name: "gcp-site-1"

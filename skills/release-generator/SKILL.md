@@ -1,16 +1,25 @@
 ---
 name: release-generator
-description: "Provide neutral guidance and templates for automating release workflows with release.sh, including changelog prep, tagging, publishing GitHub releases, and verifying artifacts."
+description: "Use only when the user explicitly asks for manual release publishing with a local release.sh shell script and no CI workflow; otherwise prefer publish-release for the default tag-driven GitHub Release workflow."
 ---
 
 # Release Generator
 
 ## Overview
 
-Use this skill to guide a generic release workflow with the bundled
-`scripts/release.sh` template, including changelog prep, tag and publish, and
-release verification. Treat scripts as references unless the user explicitly
-asks to execute them.
+Use this skill only for a manual release workflow with the bundled
+`scripts/release.sh` template when the user explicitly asks for shell-script
+release handling without a CI workflow. For the default repo pattern, use the
+`publish-release` skill instead. Treat scripts as references unless the user
+explicitly asks to execute them.
+
+## Routing Rule
+
+- Default choice: use `publish-release` for tag-driven GitHub Releases with a
+  CI workflow.
+- Use `release-generator` only when the user explicitly requests manual release
+  prep/publish with `release.sh` and explicitly does not want a CI release
+  workflow.
 
 ## Prerequisites
 
@@ -33,14 +42,16 @@ vMAJOR.MINOR.PATCH
 
 ## Prepare a Release
 
-Use on a working branch to update `CHANGELOG.md`, commit, and push.
+Use on a working branch to update `CHANGELOG.md`, commit only that changelog
+change, and push.
 
 ```bash
 ./release.sh --prep vX.Y.Z
 ```
 
 Note: `--prep` is idempotent and keeps `## [Unreleased]` clean while merging
-new entries into the target tag section.
+new entries into the target tag section. On a brand-new local release branch,
+the first `--prep` push auto-sets `origin/<branch>` as upstream.
 
 ## Publish a Release
 
