@@ -186,6 +186,139 @@ def _select_carrying_tunnel_for_connection(
     return None
 
 
+def _bgp_state_for_tunnel(
+    hostname: str,
+    tunnel_name: str,
+    bgp_states: dict[str, str],
+    tunnel_bgp_map: dict[str, dict[str, str]],
+) -> str:
+    peer_ip = tunnel_bgp_map.get(hostname, {}).get(tunnel_name)
+    if not peer_ip:
+        return ""
+    return str(bgp_states.get(peer_ip, "")).strip()
+
+
+def _format_traffic_state(
+    hostname: str,
+    tunnel_name: str,
+    carrying_tunnel: str | None,
+    tunnel_statuses: dict[str, str],
+    bgp_states: dict[str, str],
+    tunnel_bgp_map: dict[str, dict[str, str]],
+) -> str:
+    if carrying_tunnel == tunnel_name:
+        return "[green]active path[/green]"
+
+    bgp_state = _bgp_state_for_tunnel(hostname, tunnel_name, bgp_states, tunnel_bgp_map).lower()
+    ipsec_state = str(tunnel_statuses.get(tunnel_name, "")).strip().upper()
+
+    if "admin" in bgp_state:
+        return "[red]admin down[/red]"
+    if bgp_state == "established" or ipsec_state == "ESTABLISHED":
+        return "[dim]standby[/dim]"
+    if ipsec_state == "CONNECTING":
+        return "[yellow]recovering[/yellow]"
+    return "[red]down[/red]"
+
+
+def _detect_connection_role_overrides(
+    hostname: str,
+    tunnel_names: list[str],
+    tunnel_statuses: dict[str, str],
+    bgp_states: dict[str, str],
+    tunnel_bgp_map: dict[str, dict[str, str]],
+    tunnel_role_map: dict[str, dict[str, str]],
+    tunnel_connection_map: dict[str, dict[str, str]],
+) -> list[dict[str, str]]:
+    overrides: list[dict[str, str]] = []
+    connection_names = sorted(
+        {
+            connection_name
+            for tunnel_name in tunnel_names
+            if (connection_name := tunnel_connection_map.get(hostname, {}).get(tunnel_name))
+        }
+    )
+
+    for connection_name in connection_names:
+        carrying_tunnel = _select_carrying_tunnel_for_connection(
+            hostname,
+            connection_name,
+            tunnel_names,
+            tunnel_statuses,
+            bgp_states,
+            tunnel_bgp_map,
+            tunnel_role_map,
+            tunnel_connection_map,
+        )
+        if not carrying_tunnel:
+            continue
+
+        configured_active = next(
+            (
+                tunnel_name
+                for tunnel_name in tunnel_names
+                if tunnel_connection_map.get(hostname, {}).get(tunnel_name) == connection_name
+                and _normalize_role_value(tunnel_role_map.get(hostname, {}).get(tunnel_name))
+                == "active"
+            ),
+            None,
+        )
+        if not configured_active or carrying_tunnel == configured_active:
+            continue
+
+        active_bgp_state = _bgp_state_for_tunnel(
+            hostname, configured_active, bgp_states, tunnel_bgp_map
+        )
+        active_ipsec_state = str(tunnel_statuses.get(configured_active, "")).strip().upper()
+
+        if "admin" in active_bgp_state.lower():
+            reason = "manual failover"
+            detail = "configured active tunnel BGP is administratively down"
+        elif active_bgp_state and active_bgp_state.lower() != "established":
+            reason = "failover active"
+            detail = f"configured active tunnel BGP is {active_bgp_state}"
+        elif active_ipsec_state and active_ipsec_state != "ESTABLISHED":
+            reason = "failover active"
+            detail = f"configured active tunnel IPsec is {active_ipsec_state.lower()}"
+        else:
+            reason = "runtime override"
+            detail = "runtime traffic selection differs from configured preference"
+
+        overrides.append(
+            {
+                "connection": connection_name,
+                "configured_active_tunnel": configured_active,
+                "selected_tunnel": carrying_tunnel,
+                "reason": reason,
+                "detail": detail,
+            }
+        )
+
+    return overrides
+
+
+def _format_role_override_lines(
+    overrides_by_vm: dict[str, list[dict[str, str]]],
+) -> list[str]:
+    lines = [
+        "Traffic is currently using a tunnel that differs from the configured active/passive preference.",
+        "Configured roles remain unchanged by design. Manual failover is an operational override; run failback to restore steady state.",
+    ]
+
+    for hostname, overrides in sorted(overrides_by_vm.items()):
+        lines.append("")
+        lines.append(f"Gateway VM: {hostname}")
+        for override in overrides:
+            lines.append(f"  Connection: {override['connection']}")
+            lines.append(
+                f"    Configured active tunnel: {override['configured_active_tunnel']}"
+            )
+            lines.append(f"    Current traffic path: {override['selected_tunnel']}")
+            lines.append(f"    Reason: {override['reason']} ({override['detail']})")
+
+    return lines
+
+
 def _detect_cross_connection_ecmp_warnings(
     routes: dict[str, t.Any],
     peer_connection_map: dict[str, str],
@@ -1746,10 +1879,10 @@ def status(
     # Create status table
     table = Table(title="VPN Gateway Status", show_header=True, header_style="bold cyan")
     table.add_column("Tunnel", style="white")
-    table.add_column("Role", style="white")
-    table.add_column("Carrying Traffic", style="white")
+    table.add_column("Configured Role", style="white")
+    table.add_column("Traffic State", style="white")
     table.add_column("Gateway VM", style="white")
-    table.add_column("Status", style="white")
+    table.add_column("IPsec", style="white")
     table.add_column("BGP", style="white")
     table.add_column("Peer IP", style="white")
     table.add_column("Encryption", style="white")
@@ -1764,6 +1897,7 @@ def status(
     peer_tunnel_map: dict[str, dict[str, str]] = {}
     peer_role_map: dict[str, dict[str, str]] = {}
     ecmp_warnings_by_vm: dict[str, list[dict[str, t.Any]]] = {}
+    role_overrides_by_vm: dict[str, list[dict[str, str]]] = {}
 
     def _normalize_mode(value: t.Any) -> str:
         if hasattr(value, "value"):
@@ -1835,13 +1969,6 @@ def status(
             label = state.split()[0].capitalize()
             return f"[red]Down ({label})[/red]"
         return f"[red]{state}[/red]"
-
-    def format_carrying(tunnel_name: str, carrying_tunnel: str | None) -> str:
-        if not carrying_tunnel:
-            return "-"
-        if tunnel_name == carrying_tunnel:
-            return "[green]yes[/green]"
-        return "[dim]no[/dim]"
 
     def _uptime_seconds(text: str) -> int | None:
         value_text = text.strip().lower()
@@ -2195,6 +2322,15 @@ def status(
 
                 if tunnel_statuses:
                     carrying_by_connection: dict[str, str | None] = {}
+                    role_overrides_by_vm[inst_cfg.hostname] = _detect_connection_role_overrides(
+                        inst_cfg.hostname,
+                        tunnel_order,
+                        tunnel_statuses,
+                        bgp_states,
+                        tunnel_bgp_map,
+                        tunnel_role_map,
+                        tunnel_connection_map,
+                    )
                     for tunnel_name in tunnel_order:
                         status_text = tunnel_statuses[tunnel_name]
                         if status_text == "ESTABLISHED":
@@ -2233,8 +2369,13 @@ def status(
                                 tunnel_role_map,
                                 tunnel_connection_map,
                             )
-                        carrying_display = format_carrying(
-                            tunnel_name, carrying_by_connection[cache_key]
+                        traffic_state_display = _format_traffic_state(
+                            inst_cfg.hostname,
+                            tunnel_name,
+                            carrying_by_connection[cache_key],
+                            tunnel_statuses,
+                            bgp_states,
+                            tunnel_bgp_map,
                         )
                         enc_algos = tunnel_encryption.get(tunnel_name) or []
                         if not enc_algos:
@@ -2248,7 +2389,7 @@ def status(
                         table.add_row(
                             tunnel_name,
                             role,
-                            carrying_display,
+                            traffic_state_display,
                             inst_cfg.hostname,
                             status_display,
                             bgp_display,
@@ -2362,6 +2503,15 @@ def status(
                     name: str(info.get("status", "")).upper() for name, info in tunnels.items()
                 }
                 carrying_by_connection: dict[str, str | None] = {}
+                role_overrides_by_vm[inst_cfg.hostname] = _detect_connection_role_overrides(
+                    inst_cfg.hostname,
+                    list(tunnels.keys()),
+                    tunnel_statuses,
+                    bgp_states,
+                    tunnel_bgp_map,
+                    tunnel_role_map,
+                    tunnel_connection_map,
+                )
                 for tunnel_name, info in tunnels.items():
                     status_text = info["status"]
                     if status_text == "ESTABLISHED":
@@ -2387,8 +2537,13 @@ def status(
                             tunnel_role_map,
                             tunnel_connection_map,
                         )
-                    carrying_display = format_carrying(
-                        tunnel_name, carrying_by_connection[cache_key]
+                    traffic_state_display = _format_traffic_state(
+                        inst_cfg.hostname,
+                        tunnel_name,
+                        carrying_by_connection[cache_key],
+                        tunnel_statuses,
+                        bgp_states,
+                        tunnel_bgp_map,
                     )
 
                     if peer_cfg_ip and peer_cfg_ip in bgp_uptime:
@@ -2397,7 +2552,7 @@ def status(
                     table.add_row(
                         tunnel_name,
                         info.get("role", "-"),
-                        carrying_display,
+                        traffic_state_display,
                         inst_cfg.hostname,
                         status_display,
                         bgp_display,
@@ -2463,6 +2618,18 @@ def status(
             )
 
     console.print(table)
+
+    active_role_overrides = {
+        hostname: overrides for hostname, overrides in role_overrides_by_vm.items() if overrides
+    }
+    if active_role_overrides:
+        console.print(
+            Panel.fit(
+                "\n".join(_format_role_override_lines(active_role_overrides)),
+                title="[yellow]Traffic Override[/yellow]",
+                border_style="yellow",
+            )
+        )
 
     # Show service health
     console.print("\n[bold]Checking system services...[/bold]")
@@ -3480,17 +3647,21 @@ def restart_tunnel(
             (local_cfg.get("defaults", {}).get("routing", {}) or {}).get("mode")
         )
         tunnel_bgp_map: dict[str, dict[str, str]] = {}
+        tunnels_by_host: dict[str, set[str]] = {}
         restart_all = tunnel_name.lower() == "all"
 
         for conn in local_cfg.get("connections") or []:
             conn_mode = _normalize_config_value(conn.get("routing_mode"), defaults_mode)
             for tun in conn.get("tunnels") or []:
+                if _normalize_config_value(tun.get("ha_role"), "active") == "disable":
+                    continue
                 try:
                     inst_idx = int(tun.get("gateway_instance_index", 0) or 0)
                 except Exception:
                     inst_idx = 0
                 hostname = f"{plan.gateway_group.name}-{inst_idx}"
                 current_tunnel_name = str(tun.get("name") or f"tunnel{inst_idx}")
+                tunnels_by_host.setdefault(hostname, set()).add(current_tunnel_name)
                 if not restart_all and current_tunnel_name != tunnel_name:
                     continue
                 if conn_mode != "bgp":
@@ -3499,9 +3670,37 @@ def restart_tunnel(
                 if peer_ip:
                     tunnel_bgp_map.setdefault(hostname, {})[current_tunnel_name] = str(peer_ip)
 
-        success_count = 0
+        target_instances = [
+            inst for inst in plan.per_instance if tunnels_by_host.get(inst.hostname)
+        ]
+        if restart_all:
+            if not target_instances:
+                print("[red]No enabled tunnels found in config.[/red]")
+                raise typer.Exit(code=1)
+        else:
+            target_instances = [
+                inst
+                for inst in target_instances
+                if tunnel_name in tunnels_by_host.get(inst.hostname, set())
+            ]
+            if not target_instances:
+                available = sorted(
+                    tunnel
+                    for tunnels in tunnels_by_host.values()
+                    for tunnel in tunnels
+                )
+                if available:
+                    print(
+                        f"[red]Tunnel '{tunnel_name}' not found. Available: {', '.join(available)}[/red]"
+                    )
+                else:
+                    print("[red]No enabled tunnels found in config.[/red]")
+                raise typer.Exit(code=1)
 
-        for inst in plan.per_instance:
+        success_count = 0
+        attempted_instances = 0
+
+        for inst in target_instances:
             hostname = inst.hostname
             external_ip = inst.external_ip
 
@@ -3509,6 +3708,7 @@ def restart_tunnel(
                 print(f"[yellow]⚠️  No external IP for {hostname}, skipping[/yellow]")
                 continue
 
+            attempted_instances += 1
             print(f"\n[dim]Connecting to {hostname} ({external_ip})...[/dim]")
 
             # Build SSH command
@@ -3604,9 +3804,13 @@ def restart_tunnel(
                 print(f"[red]✗ Error connecting to {hostname}: {e}[/red]")
 
         print()
-        if success_count == instance_count:
+        target_count = attempted_instances
+        if target_count == 0:
+            print("[red]✗ No target gateway instances had reachable external IPs[/red]")
+            raise typer.Exit(code=1)
+        if success_count == target_count:
             print(
-                f"[green]✓ Successfully reset {action_desc} on all {instance_count} gateway(s)[/green]"
+                f"[green]✓ Successfully reset {action_desc} on all {target_count} targeted gateway(s)[/green]"
             )
             print(
                 "[dim]IPsec and matching BGP sessions should re-establish within 10-15 seconds. "
@@ -3614,7 +3818,7 @@ def restart_tunnel(
             )
         elif success_count > 0:
             print(
-                f"[yellow]⚠️  Partial success: reset on {success_count}/{instance_count} gateway(s)[/yellow]"
+                f"[yellow]⚠️  Partial success: reset on {success_count}/{target_count} targeted gateway(s)[/yellow]"
             )
             raise typer.Exit(code=1)
         else:
@@ -3633,9 +3837,8 @@ def restart_tunnel(
 
 @app.command(name="failover")
 def tunnel_failover(
-    tunnel_name: str | None = typer.Option(
+    tunnel_name: str | None = typer.Argument(
         None,
-        "--tunnel-failover",
         help=(
             "Passive tunnel name to fail over to. Required when more than two enabled tunnels "
             "exist in the config."
@@ -3711,7 +3914,8 @@ def tunnel_failover(
         else:
             if len(enabled_tunnels) != 2:
                 print(
-                    "[red]Multiple tunnels found. Use --tunnel-failover <tunnel-name> to select a passive tunnel.[/red]"
+                    "[red]Multiple tunnels found. Pass the passive tunnel name as an argument: "
+                    "nebius-vpngw failover <passive-tunnel-name> --local-config-file <file>[/red]"
                 )
                 raise typer.Exit(code=1)
             passives = [t for t in enabled_tunnels if t.get("ha_role") == "passive"]
@@ -3880,6 +4084,10 @@ def tunnel_failover(
                 f"{target.get('name')} BGP={passive_state} "
                 f"(elapsed {elapsed:.1f}s)"
             )
+            print(
+                "[dim]Configured active/passive roles in YAML are unchanged by design. "
+                "Use 'nebius-vpngw status' to view configured role separately from current traffic state.[/dim]"
+            )
         else:
             print(
                 "[yellow]⚠ Failover triggered but not confirmed within timeout.[/yellow] "
@@ -3901,9 +4109,8 @@ def tunnel_failover(
 
 @app.command(name="failback")
 def tunnel_failback(
-    tunnel_name: str | None = typer.Option(
+    tunnel_name: str | None = typer.Argument(
         None,
-        "--tunnel-failback",
         help=(
             "Active tunnel name to restore. Required when multiple active tunnels exist in the "
             "config."
@@ -3978,7 +4185,8 @@ def tunnel_failback(
         else:
             if len(active_tunnels) != 1:
                 print(
-                    "[red]Multiple active tunnels found. Use --tunnel-failback <tunnel-name> to select one.[/red]"
+                    "[red]Multiple active tunnels found. Pass the active tunnel name as an argument: "
+                    "nebius-vpngw failback <active-tunnel-name> --local-config-file <file>[/red]"
                 )
                 raise typer.Exit(code=1)
             target = active_tunnels[0]
@@ -4109,6 +4317,10 @@ def tunnel_failback(
             print(
                 "[green]✓ Failback confirmed.[/green] "
                 f"{target.get('name')} BGP={active_state} (elapsed {elapsed:.1f}s)"
+            )
+            print(
+                "[dim]Configured active/passive roles in YAML are unchanged by design. "
+                "Traffic should now return to the configured active tunnel.[/dim]"
             )
         else:
             print(

@@ -72,9 +72,9 @@ class RouteManager:
             alloc_to_ip[alloc.metadata.id] = ip_str
         return nets, alloc_to_ip
 
-    def _find_gateway_private_allocation(
-        self, vpc_channel, compute_channel, plan: ResolvedDeploymentPlan
-    ) -> str | None:
+    def _find_gateway_private_allocations_by_index(
+        self, compute_channel, plan: ResolvedDeploymentPlan
+    ) -> dict[int, str]:
         import ipaddress
 
         from nebius.api.nebius.compute.v1 import (
@@ -82,8 +82,8 @@ class RouteManager:
             instance_service_pb2_grpc,
         )
 
-        # Collect target instance names from the plan
-        target_names = {inst.hostname for inst in plan.iter_instance_configs()}
+        host_to_index = {inst.hostname: inst.instance_index for inst in plan.iter_instance_configs()}
+        allocations_by_index: dict[int, str] = {}
 
         # List instances in the project and find the private (static) IP allocation
         # With the VM manager refactoring, private IPs now use static allocations
@@ -92,17 +92,95 @@ class RouteManager:
             instance_service_pb2.ListInstancesRequest(parent_id=self.project_id or "")
         )
         for inst in ilist.items:
-            if inst.metadata.name in target_names:
-                for ni in inst.status.network_interfaces:
-                    # Check if this network interface has a private IP with a static allocation
-                    if ni.ip_address and ni.ip_address.allocation_id:
-                        # Extract the IP address string (without CIDR notation)
-                        ip_str = ni.ip_address.address.split("/")[0]
-                        # Verify it's a private IP
-                        if ipaddress.ip_address(ip_str).is_private:
-                            return ni.ip_address.allocation_id
+            instance_index = host_to_index.get(inst.metadata.name)
+            if instance_index is None:
+                continue
+            for ni in inst.status.network_interfaces:
+                # Check if this network interface has a private IP with a static allocation
+                if ni.ip_address and ni.ip_address.allocation_id:
+                    # Extract the IP address string (without CIDR notation)
+                    ip_str = ni.ip_address.address.split("/")[0]
+                    # Verify it's a private IP
+                    if ipaddress.ip_address(ip_str).is_private:
+                        allocations_by_index[instance_index] = ni.ip_address.allocation_id
+                        break
 
-        return None
+        return allocations_by_index
+
+    def _connection_instance_indices(self, conn: dict) -> list[int]:
+        indices: set[int] = set()
+        for tunnel in conn.get("tunnels") or []:
+            if self._normalize_value(tunnel.get("ha_role") or "active") == "disable":
+                continue
+            try:
+                indices.add(int(tunnel.get("gateway_instance_index", 0) or 0))
+            except (TypeError, ValueError):
+                continue
+        return sorted(indices)
+
+    def _collect_remote_prefix_targets(
+        self,
+        plan: ResolvedDeploymentPlan,
+        local_cfg: dict,
+        allocations_by_index: dict[int, str],
+    ) -> dict[str, str]:
+        defaults_mode = self._normalize_value(
+            (local_cfg.get("defaults", {}).get("routing", {}) or {}).get("mode")
+        ) or "bgp"
+
+        prefix_targets: dict[str, str] = {}
+        prefix_source_labels: dict[str, set[str]] = {}
+        conflict_sources: dict[str, set[str]] = {}
+
+        for conn in local_cfg.get("connections") or []:
+            conn_name = str(conn.get("name") or "unnamed")
+            mode = self._normalize_value(conn.get("routing_mode") or defaults_mode)
+            instance_indices = self._connection_instance_indices(conn)
+
+            if not instance_indices:
+                continue
+            if len(instance_indices) != 1:
+                raise ValueError(
+                    f"Connection '{conn_name}' spans multiple gateway VMs "
+                    f"({instance_indices}). add-routes-local requires one owning "
+                    "gateway_instance_index per connection so each remote prefix has "
+                    "an unambiguous next-hop."
+                )
+
+            instance_index = instance_indices[0]
+            alloc_id = allocations_by_index.get(instance_index)
+            if not alloc_id:
+                raise ValueError(
+                    f"Could not resolve the private IP allocation for connection "
+                    f"'{conn_name}' on gateway_instance_index={instance_index}."
+                )
+
+            if mode == "bgp":
+                conn_prefixes = self._get_bgp_learned_routes(plan, conn, local_cfg)
+            else:
+                conn_prefixes = list(conn.get("remote_prefixes") or [])
+
+            source_label = f"{conn_name}@vm{instance_index}"
+            for prefix in conn_prefixes:
+                prefix_source_labels.setdefault(prefix, set()).add(source_label)
+                previous_alloc = prefix_targets.get(prefix)
+                if previous_alloc and previous_alloc != alloc_id:
+                    conflict_sources.setdefault(prefix, set()).update(prefix_source_labels.get(prefix, set()))
+                    continue
+                prefix_targets[prefix] = alloc_id
+
+        if conflict_sources:
+            details = "; ".join(
+                f"{prefix} via {', '.join(sources)}"
+                for prefix, sources in sorted((pfx, sorted(srcs)) for pfx, srcs in conflict_sources.items())
+            )
+            raise ValueError(
+                "The same remote prefix is present on more than one gateway VM. "
+                "add-routes-local cannot choose a single next-hop. Resolve the "
+                f"overlap first: {details}"
+            )
+
+        return prefix_targets
 
     @staticmethod
     def _gateway_subnet_name(local_cfg: dict) -> str:
@@ -887,29 +965,22 @@ class RouteManager:
             print("[yellow]No gateway.local_prefixes; cannot determine relevant subnets.[/yellow]")
             return
 
-        # Determine routing mode and collect remote prefixes
-        defaults_mode = self._normalize_value(
-            (local_cfg.get("defaults", {}).get("routing", {}) or {}).get("mode")
-        ) or "bgp"
+        allocations_by_index: dict[int, str] = {}
+        if compute_channel:
+            allocations_by_index = self._find_gateway_private_allocations_by_index(compute_channel, plan)
+        if not allocations_by_index:
+            print(
+                "[yellow]Could not resolve private gateway allocations; cannot create routes.[/yellow]"
+            )
+            return
 
-        # Collect remote prefixes based on routing mode
-        remote_prefixes: list[str] = []
+        try:
+            prefix_targets = self._collect_remote_prefix_targets(plan, local_cfg, allocations_by_index)
+        except ValueError as e:
+            print(f"[red]{e}[/red]")
+            return
 
-        for conn in local_cfg.get("connections") or []:
-            mode = self._normalize_value(conn.get("routing_mode") or defaults_mode)
-
-            if mode == "bgp":
-                # For BGP mode: query learned routes from FRR
-                bgp_prefixes = self._get_bgp_learned_routes(plan, conn, local_cfg)
-                if bgp_prefixes:
-                    remote_prefixes.extend(bgp_prefixes)
-            else:
-                # For static mode: use configured remote_prefixes
-                rp = conn.get("remote_prefixes") or []
-                if rp:
-                    remote_prefixes.extend(rp)
-
-        if not remote_prefixes:
+        if not prefix_targets:
             print(
                 "[yellow]No remote prefixes found (BGP: no learned routes; Static: no configured remote_prefixes)[/yellow]"
             )
@@ -920,8 +991,8 @@ class RouteManager:
             ipaddress.ip_network(p)
             for p in (local_cfg.get("gateway", {}).get("local_prefixes") or [])
         ]
-        filtered_prefixes = []
-        for pfx in remote_prefixes:
+        filtered_prefix_targets: dict[str, str] = {}
+        for pfx, alloc_id in prefix_targets.items():
             try:
                 pfx_net = ipaddress.ip_network(pfx)
                 # Skip if this prefix overlaps with any local prefix
@@ -929,29 +1000,19 @@ class RouteManager:
                 if is_local:
                     print(f"[dim]Skipping {pfx} (overlaps with local_prefixes)[/dim]")
                     continue
-                filtered_prefixes.append(pfx)
+                filtered_prefix_targets[str(pfx_net)] = alloc_id
             except Exception:
                 continue
 
-        remote_prefixes = sorted(set(filtered_prefixes))
+        prefix_targets = dict(sorted(filtered_prefix_targets.items()))
 
-        if not remote_prefixes:
+        if not prefix_targets:
             print(
                 "[yellow]No remote prefixes to add (all learned routes are local networks)[/yellow]"
             )
             return
 
-        print(f"[cyan]Found {len(remote_prefixes)} remote prefix(es) to add as VPC routes[/cyan]")
-
-        # Map gateway external IP to allocation id
-        alloc_id = None
-        if compute_channel:
-            alloc_id = self._find_gateway_private_allocation(channel, compute_channel, plan)
-        if not alloc_id:
-            print(
-                "[yellow]Could not resolve private allocation_id for gateway; cannot create routes.[/yellow]"
-            )
-            return
+        print(f"[cyan]Found {len(prefix_targets)} remote prefix(es) to add as VPC routes[/cyan]")
 
         sstub = subnet_service_pb2_grpc.SubnetServiceStub(channel)
         rtstub = route_table_service_pb2_grpc.RouteTableServiceStub(channel)
@@ -1144,7 +1205,7 @@ class RouteManager:
                 existing_route_cidrs = set()
 
             # Add routes for each remote prefix (skip if already exists)
-            for pfx in remote_prefixes:
+            for pfx, alloc_id in prefix_targets.items():
                 if pfx in existing_route_cidrs:
                     print(f"[blue]Route {pfx} already exists on {rt_id}; skipping[/blue]")
                     continue
@@ -1196,8 +1257,12 @@ class RouteManager:
 
         learned_prefixes = []
 
-        # Query each gateway VM
+        target_instance_indices = set(self._connection_instance_indices(conn))
+
+        # Query only the gateway VM(s) that own this connection
         for inst_cfg in plan.iter_instance_configs():
+            if target_instance_indices and inst_cfg.instance_index not in target_instance_indices:
+                continue
             hostname = inst_cfg.hostname
             external_ip = inst_cfg.external_ip
 

@@ -95,9 +95,11 @@ normalize_tag() {
 }
 
 ensure_clean_worktree() {
-  if ! git diff --quiet || ! git diff --cached --quiet; then
+  local status_output=""
+  status_output="$(git status --short --untracked-files=normal)"
+  if [[ -n "${status_output}" ]]; then
     log_error "Working tree is not clean."
-    git status --short
+    printf '%s\n' "${status_output}" >&2
     exit 1
   fi
 }
@@ -161,9 +163,26 @@ patterns = [
     re.compile(rf"^##\s+\[?{re.escape(tag)}\]?(?:\s+-.*)?$"),
     re.compile(rf"^##\s+\[?{re.escape(version)}\]?(?:\s+-.*)?$"),
 ]
+any_heading = re.compile(r"^##\s+")
 
-if not any(any(pattern.match(line.strip()) for pattern in patterns) for line in lines):
+capture = False
+notes = []
+for line in lines:
+    stripped = line.strip()
+    if not capture and any(pattern.match(stripped) for pattern in patterns):
+        capture = True
+        continue
+    if capture and any_heading.match(stripped):
+        break
+    if capture:
+        notes.append(line)
+
+if not capture:
     print(f"Missing changelog section for {tag} in {changelog_path}", file=sys.stderr)
+    sys.exit(1)
+
+if not "\n".join(notes).strip():
+    print(f"Changelog section for {tag} is empty in {changelog_path}", file=sys.stderr)
     sys.exit(1)
 PY
 }

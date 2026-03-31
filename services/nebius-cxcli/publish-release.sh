@@ -49,7 +49,9 @@ show_usage() {
   printf '%b\n' "${S_BOLD}Modes:${S_RESET}"
   printf '%b\n' "  ${S_YELLOW}--prep${S_RESET}     Update ${CHANGELOG_FILE}, commit it, and push current branch."
   printf '%b\n' "                 First push auto-sets origin/<current-branch> as upstream when needed."
+  printf '%b\n' "                 Clean-worktree check is strict and includes untracked files."
   printf '%b\n' "  ${S_YELLOW}--publish${S_RESET}  Create and push tag ${TAG_PREFIX}-vX.Y.Z."
+  printf '%b\n' "                 Fails locally if the target release section is missing or empty."
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Options:${S_RESET}"
@@ -95,9 +97,11 @@ normalize_tag() {
 }
 
 ensure_clean_worktree() {
-  if ! git diff --quiet || ! git diff --cached --quiet; then
+  local status_output=""
+  status_output="$(git status --short --untracked-files=all)"
+  if [[ -n "${status_output}" ]]; then
     log_error "Working tree is not clean."
-    git status --short
+    printf '%s\n' "${status_output}" >&2
     exit 1
   fi
 }
@@ -146,7 +150,7 @@ ensure_branch_synced() {
   fi
 }
 
-ensure_release_heading_present() {
+ensure_release_section_ready() {
   local tag="$1"
 
   python3 - "${tag}" "${CHANGELOG_FILE}" <<'PY'
@@ -162,8 +166,24 @@ patterns = [
     re.compile(rf"^##\s+\[?{re.escape(version)}\]?(?:\s+-.*)?$"),
 ]
 
-if not any(any(pattern.match(line.strip()) for pattern in patterns) for line in lines):
+release_idx = None
+for idx, line in enumerate(lines):
+    if any(pattern.match(line.strip()) for pattern in patterns):
+        release_idx = idx
+        break
+
+if release_idx is None:
     print(f"Missing changelog section for {tag} in {changelog_path}", file=sys.stderr)
+    sys.exit(1)
+
+content_lines = []
+for line in lines[release_idx + 1 :]:
+    if line.startswith("## "):
+        break
+    content_lines.append(line)
+
+if not "\n".join(content_lines).strip():
+    print(f"Release changelog section for {tag} in {changelog_path} is empty", file=sys.stderr)
     sys.exit(1)
 PY
 }
@@ -320,7 +340,7 @@ PY
 
 create_and_push_tag() {
   local tag="$1"
-  ensure_release_heading_present "${tag}"
+  ensure_release_section_ready "${tag}"
   ensure_tag_absent "${tag}"
   git tag -a "${tag}" -m "Release ${tag}"
   verify_runtime_version_matches_tag "${tag}"

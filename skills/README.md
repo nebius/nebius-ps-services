@@ -22,7 +22,8 @@ hardening.
 
 `publish-release` scaffolds the local release helper script and changelog flow,
 including first-push upstream setup for new local release branches during
-`--prep`.
+`--prep`, strict clean-worktree checks that include untracked files, and local
+publish blocking when the target release section is empty.
 
 `release-generator` is the manual-only fallback for projects where the user
 explicitly wants release prep/publish driven by a local `release.sh` script and

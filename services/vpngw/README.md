@@ -119,8 +119,8 @@ For example, if you want to test connectivity with `ping`, create an ingress fir
 ### 8. Optional: manual failover/failback (BGP active/passive)
 
 ```bash
-nebius-vpngw failover --tunnel-failover tunnel-2 --local-config-file my-vpn.config.yaml
-nebius-vpngw failback --tunnel-failback tunnel-1 --local-config-file my-vpn.config.yaml
+nebius-vpngw failover tunnel-2 --local-config-file my-vpn.config.yaml
+nebius-vpngw failback tunnel-1 --local-config-file my-vpn.config.yaml
 ```
 
 This is useful for planned maintenance, peer changes, or operational testing.
@@ -629,9 +629,9 @@ Safe to rerun. Matching subnet, route table, VM, and allocation state is reused.
 nebius-vpngw status --local-config-file <file>
 ```
 
-Shows tunnel status (including active/passive role), carrying-traffic indicator, BGP sessions, service health, routing validation.
+Shows tunnel status, configured active/passive role, current traffic state, BGP sessions, service health, and routing validation.
 
-For multi-connection configs, `Carrying Traffic` is evaluated per connection, not once for the whole VM. If live BGP multipath is detected for the same prefix across different active connections, `status` prints an `ECMP Warning` panel that lists the overlapping prefix and the active tunnel names currently carrying it.
+For multi-connection configs, traffic state is evaluated per connection, not once for the whole VM. `status` shows the configured role separately from the current traffic path, and prints a `Traffic Override` panel when runtime behavior differs from the configured active/passive preference. If live BGP multipath is detected for the same prefix across different active connections, `status` also prints an `ECMP Warning` panel that lists the overlapping prefix and the active tunnel names currently carrying it.
 
 **Manage routes:**
 
@@ -681,15 +681,29 @@ nebius-vpngw restart-tunnel all --local-config-file <file>
 
 # Manual failover to passive tunnel
 # - If exactly two tunnels exist, passive is auto-selected
-# - If more than two tunnels exist, specify the passive tunnel
+# - If more than two tunnels exist, pass the passive tunnel name
 nebius-vpngw failover --local-config-file <file>
-nebius-vpngw failover --tunnel-failover gcp-ha-tunnel-2 --local-config-file <file>
+nebius-vpngw failover gcp-ha-tunnel-2 --local-config-file <file>
 
 # Manual failback to restore the active tunnel (does not disable passive)
-# - If multiple active tunnels exist, specify the active tunnel
+# - If multiple active tunnels exist, pass the active tunnel name
 nebius-vpngw failback --local-config-file <file>
-nebius-vpngw failback --tunnel-failback gcp-ha-tunnel-1 --local-config-file <file>
+nebius-vpngw failback gcp-ha-tunnel-1 --local-config-file <file>
 ```
+
+`restart-tunnel <name>` only targets the gateway VM(s) that own that tunnel in the
+resolved deployment plan. `failover` and `failback` also operate on the owning
+connection/instance only, so they remain safe to use in multi-VM and
+multi-connection topologies.
+
+`failover` is an operational override. It administratively shuts down the
+configured active tunnel's BGP neighbor to move traffic to the passive tunnel,
+but it does not rewrite YAML or swap configured roles. `failback` clears that
+override and restores traffic to the configured active tunnel.
+
+Tunnel names must be globally unique across the full config. The schema enforces
+that, and these operator commands rely on it so you do not need to pass a
+connection name alongside the tunnel name.
 
 **When to use:**
 
@@ -1006,7 +1020,9 @@ Add routes to VPC route table (Nebius → Remote):
 nebius-vpngw add-routes-local --local-config-file <file>
 ```
 
-Creates routes for `connection.remote_prefixes` pointing to gateway VMs.
+Creates routes for remote prefixes and selects the next-hop from the gateway VM
+that owns each connection. In single-VM topologies all routes point to the same
+VM; in pinned multi-VM topologies each site's prefixes point to that site's VM.
 
 List routes in VPC:
 
@@ -1763,7 +1779,9 @@ Bump **PATCH** for fixes only.
 Notes:
 
 - `publish-release.sh --publish` only creates and pushes the annotated tag. It does not build or publish artifacts locally.
-- `--publish` is intended to run only from a clean local `main` that is up to date with `origin/main`.
+- `--publish` is intended to run only from a clean local `main` that is up to date with `origin/main`. The clean-worktree check is strict and includes untracked files.
+- `publish-release.sh --prep` pushes the current branch, and if that branch has no upstream yet it automatically sets `origin/<current-branch>` as upstream on the first push.
+- `--publish` now fails locally if the target release section exists but is empty, so you do not push a tag that the release workflow would reject later.
 - `--prep` is idempotent. You can run it multiple times for the same tag; it keeps `## [Unreleased]` empty and merges any new Unreleased entries into the target tag section without duplication.
 - The script accepts either `X.Y.Z` or `nebius-vpngw-vX.Y.Z`.
 
