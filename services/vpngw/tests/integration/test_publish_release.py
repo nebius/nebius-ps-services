@@ -83,6 +83,32 @@ def test_prep_sets_upstream_on_first_push(tmp_path: Path) -> None:
     assert "## [Unreleased]\n\n## [nebius-vpngw-v0.1.0]" in changelog
 
 
+def test_prep_preserves_blank_lines_around_release_sections(tmp_path: Path) -> None:
+    repo, _remote = _init_repo(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            # Changelog
+
+            ## [Unreleased]
+
+            - Prepare release `v0.1.0`.
+
+            ## [nebius-vpngw-v0.0.9] - 2026-03-01
+
+            - Previous release.
+            """
+        ),
+    )
+
+    result = _run(["./publish-release.sh", "--prep", "0.1.0", "--no-push"], cwd=repo, check=False)
+
+    assert result.returncode == 0, result.stderr
+    updated = (repo / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert "## [Unreleased]\n\n## [nebius-vpngw-v0.1.0] - " in updated
+    assert "- Prepare release `v0.1.0`.\n\n## [nebius-vpngw-v0.0.9]" in updated
+
+
 def test_prep_fails_when_untracked_files_exist(tmp_path: Path) -> None:
     repo, _remote = _init_repo(
         tmp_path,

@@ -13,6 +13,8 @@ All notable changes to this project are tracked here. This changelog follows
   `./publish-release.sh --publish X.Y.Z` on clean synced `__MAIN_BRANCH__`.
 - The prep step fails before editing `CHANGELOG.md` if the target tag already
   exists locally or on `origin`.
+- The prep step preserves a blank line between dated release sections when it
+  moves `Unreleased` into the new heading.
 - The publish step verifies that the tagged source checkout resolves the
   package runtime version to `X.Y.Z` before the tag is pushed.
 - Release section format:

@@ -23,6 +23,7 @@ If the project also ships `publish-release.sh`, keep it aligned with the workflo
 - `--prep` should require a strictly clean worktree, including untracked files.
 - `--prep` updates only `CHANGELOG.md`, commits it, and should auto-set `origin/<branch>` as upstream on the first push from a new local release branch.
 - `--prep` should fail before editing anything if the target tag already exists locally or on `origin`.
+- `--prep` should preserve a blank line before the next `##` release heading when it rewrites `CHANGELOG.md`.
 - `--publish` should only create and push the annotated tag.
 - `--publish` should verify the tagged source checkout resolves the package runtime version to the exact tag version before the push, and that check should not depend on `setuptools-scm` being installed in the release shell.
 - `--publish` should fail fast if `CHANGELOG.md` does not already contain the tag heading, or if that release section exists but is empty.

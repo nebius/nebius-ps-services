@@ -54,6 +54,7 @@ Generate exactly these artifacts in the target project:
    - `./publish-release.sh --publish X.Y.Z`
    - note that `--prep` auto-sets `origin/<branch>` as upstream on the first push from a new local release branch
    - note that `--prep` fails before editing `CHANGELOG.md` if the target tag already exists locally or on `origin`
+   - note that `--prep` preserves markdownlint-safe blank lines between dated release sections when it rolls `Unreleased` forward
    - note that the clean-worktree check is strict and includes untracked files
    - note that `--publish` fails locally if the target release section is empty
    - note that `--publish` verifies the tagged source checkout resolves the package runtime version to `X.Y.Z` before pushing the tag
@@ -64,6 +65,7 @@ Generate exactly these artifacts in the target project:
 - `--prep` should start from a strictly clean worktree, including untracked files, so the changelog commit is isolated.
 - `--prep` should push the current branch, and if no upstream exists yet, set `origin/<branch>` as upstream instead of failing with Git's default "no upstream branch" error.
 - `--prep` should fail before editing `CHANGELOG.md` if the target tag already exists locally or on `origin`.
+- `--prep` should preserve a blank line before the next `##` release heading when it rewrites `CHANGELOG.md`, so the file stays markdownlint-safe.
 - `--publish` only creates/pushes tag; no content edits.
 - `--publish` must fail if `CHANGELOG.md` does not already contain the target tag heading, or if that release section exists but is empty.
 - `--publish` should verify `PYTHONPATH=src python` resolves `<package_import_name>.__version__ == X.Y.Z` before the tag push, and that check should work even when `setuptools-scm` is not installed in the release shell.

@@ -24,8 +24,9 @@ hardening.
 including first-push upstream setup for new local release branches during
 `--prep`, strict clean-worktree checks that include untracked files, duplicate
 tag blocking before changelog edits, local publish blocking when the target
-release section is empty, and source-checkout runtime-version verification
-before the tag push.
+release section is empty, markdownlint-safe blank-line preservation between
+release sections, and source-checkout runtime-version verification before the
+tag push.
 
 `release-generator` is the manual-only fallback for projects where the user
 explicitly wants release prep/publish driven by a local `release.sh` script and
