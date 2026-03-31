@@ -36,7 +36,7 @@ jobs:
       - name: Create automerge app token
         id: automerge_token
         if: env.DEPENDABOT_AUTOMERGE_APP_ID != '' && env.DEPENDABOT_AUTOMERGE_APP_PRIVATE_KEY != ''
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ env.DEPENDABOT_AUTOMERGE_APP_ID }}
           private-key: ${{ env.DEPENDABOT_AUTOMERGE_APP_PRIVATE_KEY }}
