@@ -14,11 +14,11 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [nebius-vpngw-v0.5.5] - 2026-03-31
+
 - Fixed `publish-release.sh --prep` changelog formatting so moving
   `Unreleased` notes into a dated release section preserves a blank line before
   the next `##` heading, keeping the file markdownlint-safe in editors.
-
-## [nebius-vpngw-v0.5.5] - 2026-03-31
 
 - Changed `publish-release.sh --prep` to fail before editing `CHANGELOG.md` if
   the target tag already exists locally or on `origin`, so duplicate release
