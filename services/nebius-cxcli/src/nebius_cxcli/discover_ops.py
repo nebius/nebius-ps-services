@@ -96,10 +96,31 @@ def _to_repo_relative(path: Path, *, repo_root: Path) -> str:
         return _normalize(str(path))
 
 
-def _scan_all_configs(*, deployment_path: Path, repo_root: Path) -> set[str]:
+def _instance_config_relative(config_path: Path, *, repo_root: Path) -> str | None:
+    relative = _to_repo_relative(config_path, repo_root=repo_root)
+    if _infer_client_project_from_path(relative) is None:
+        return None
+    return relative
+
+
+def _scan_scope_configs(*, deployment_path: Path, repo_root: Path) -> set[str]:
     candidates: set[str] = set()
-    for config_file in deployment_path.glob("instances/*/*/config.yaml"):
-        candidates.add(_to_repo_relative(config_file, repo_root=repo_root))
+
+    current = deployment_path
+    while True:
+        candidate = current / "config.yaml"
+        if candidate.is_file():
+            relative = _instance_config_relative(candidate, repo_root=repo_root)
+            if relative is not None:
+                candidates.add(relative)
+        if current == repo_root or current.parent == current:
+            break
+        current = current.parent
+
+    for config_file in deployment_path.rglob("config.yaml"):
+        relative = _instance_config_relative(config_file, repo_root=repo_root)
+        if relative is not None:
+            candidates.add(relative)
     return candidates
 
 
@@ -168,7 +189,7 @@ def discover_configs(
     deployments_dir: str,
     include_all: bool = False,
     repo_root: Path | None = None,
-) -> dict[str, list[dict[str, object]]]:
+    ) -> dict[str, list[dict[str, object]]]:
     """Build discover payload for changed or known deployment instances in this run."""
     deployment_path = Path(deployments_dir)
     if repo_root is not None:
@@ -181,15 +202,12 @@ def discover_configs(
     if not deployment_path.is_absolute():
         deployment_path = root / deployment_path
     deployment_path = deployment_path.resolve()
-    try:
-        deployment_root = _normalize(str(deployment_path.relative_to(root)))
-    except ValueError:
-        deployment_root = _normalize(str(deployment_path))
+    scope_configs = _scan_scope_configs(deployment_path=deployment_path, repo_root=root)
 
     candidates: dict[str, dict[str, object]] = {}
 
     if include_all:
-        for config_relative in _scan_all_configs(deployment_path=deployment_path, repo_root=root):
+        for config_relative in scope_configs:
             candidates[config_relative] = {
                 "config": config_relative,
                 "generated": _generated_relative_for_config(config_relative),
@@ -199,7 +217,7 @@ def discover_configs(
     else:
         changed_files = _changed_files(cwd=root)
         if changed_files is None:
-            for config_relative in _scan_all_configs(deployment_path=deployment_path, repo_root=root):
+            for config_relative in scope_configs:
                 candidates[config_relative] = {
                     "config": config_relative,
                     "generated": _generated_relative_for_config(config_relative),
@@ -209,11 +227,8 @@ def discover_configs(
         else:
             for changed in changed_files:
                 normalized = _normalize(changed)
-                marker = f"/{deployment_root}/"
-                if marker not in f"/{normalized}/":
-                    continue
                 config_relative = _config_relative_from_changed(normalized)
-                if not config_relative:
+                if not config_relative or config_relative not in scope_configs:
                     continue
                 candidate = candidates.setdefault(
                     config_relative,

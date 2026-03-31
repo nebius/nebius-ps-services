@@ -421,6 +421,7 @@ The command boundary is intentional:
 - `discover <deployment-scope-dir>`
   - Returns deployment-instance discovery payload for CI.
   - Accepts the deployments root or any narrower directory under it, including one instance directory or `generated/`.
+  - Scope filtering remains instance-aware for both `--all` and changed-only mode, so a scoped `generated/` directory still maps back to that instance `config.yaml`.
 - `terraform plan <generated-path>`
   - Infra-only plan from the generated Terraform bundle.
   - `--auto-auth-bootstrap/--no-auto-auth-bootstrap` controls runtime auth creation (default enabled).

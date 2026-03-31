@@ -616,6 +616,7 @@ nebius-cxcli auth --instance-config /path/to/config.yaml --validate-profile
 - `discover <deployment-scope-dir>`
   - Returns changed deployment instances for CI matrix generation.
   - Accepts the deployments root or any narrower directory under it, including one instance directory or `generated/`.
+  - Scope filtering is instance-aware: both `--all` and normal changed-file discovery still resolve the matching instance when the scope is an instance subdirectory such as `generated/`.
 - `validate-generated <generated-path>`
   - Validates an existing rendered bundle from `generated/`, one of its subdirectories, or a file under that tree.
 - `terraform plan <generated-path>`
