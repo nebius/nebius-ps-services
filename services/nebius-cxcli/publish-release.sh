@@ -48,6 +48,7 @@ show_usage() {
 
   printf '%b\n' "${S_BOLD}Modes:${S_RESET}"
   printf '%b\n' "  ${S_YELLOW}--prep${S_RESET}     Update ${CHANGELOG_FILE}, commit it, and push current branch."
+  printf '%b\n' "                 First push auto-sets origin/<current-branch> as upstream when needed."
   printf '%b\n' "  ${S_YELLOW}--publish${S_RESET}  Create and push tag ${TAG_PREFIX}-vX.Y.Z."
   printf '\n'
 
@@ -99,6 +100,32 @@ ensure_clean_worktree() {
     git status --short
     exit 1
   fi
+}
+
+ensure_named_branch() {
+  local branch="$1"
+  if [[ -z "${branch}" || "${branch}" == "HEAD" ]]; then
+    log_error "This operation must run from a local branch, not a detached HEAD."
+    exit 1
+  fi
+}
+
+branch_has_upstream() {
+  local branch="$1"
+  git rev-parse --abbrev-ref --symbolic-full-name "${branch}@{upstream}" >/dev/null 2>&1
+}
+
+push_current_branch() {
+  local branch="$1"
+  ensure_named_branch "${branch}"
+
+  if branch_has_upstream "${branch}"; then
+    git push
+    return 0
+  fi
+
+  log_note "No upstream configured for ${branch}; pushing to origin and setting upstream..."
+  git push --set-upstream origin "${branch}"
 }
 
 ensure_branch_synced() {
@@ -229,8 +256,10 @@ PY
 prep_release() {
   local tag="$1"
   local do_push="$2"
+  local branch="$3"
 
   ensure_clean_worktree
+  ensure_named_branch "${branch}"
   log_note "Updating ${CHANGELOG_FILE} for ${tag}..."
   update_changelog "${tag}"
 
@@ -244,7 +273,7 @@ prep_release() {
 
   if [[ "${do_push}" -eq 1 ]]; then
     log_note "Pushing current branch..."
-    git push
+    push_current_branch "${branch}"
     log_success "Branch pushed."
   fi
 }
@@ -370,7 +399,7 @@ main() {
 
   case "${mode}" in
     prep)
-      prep_release "${tag}" "$(( 1 - no_push ))"
+      prep_release "${tag}" "$(( 1 - no_push ))" "${branch}"
       ;;
     publish)
       ensure_clean_worktree

@@ -20,6 +20,14 @@ This folder contains multiple ready-to-use Codex skills for developers.
 for PR/merge CI, release publication, container image publishing, and workflow
 hardening.
 
+`publish-release` scaffolds the local release helper script and changelog flow,
+including first-push upstream setup for new local release branches during
+`--prep`.
+
+`release-generator` is the manual-only fallback for projects where the user
+explicitly wants release prep/publish driven by a local `release.sh` script and
+no CI workflow. Otherwise prefer `publish-release`.
+
 ## Skills Installer
 
 Script helper to install Codex skills into `~/.agents/skills`.

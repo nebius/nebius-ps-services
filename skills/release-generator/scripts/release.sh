@@ -29,6 +29,9 @@ ${b}Usage:${r}
   ${g}./release.sh${r} ${c}--publish ${tag_example}${r}  # main only, clean, up-to-date; tag/build/release
   ${g}./release.sh${r} ${c}--verify ${tag_example}${r}   # verify an existing release asset only
 
+${b}Notes:${r}
+  first ${c}--prep${r} push on a new branch auto-sets origin/<branch> as upstream
+
 ${b}Options:${r}
   ${c}--force-retag${r}                          # allow deleting/recreating existing tag (publish only)
 
@@ -44,6 +47,39 @@ EOF
 die() {
   echo "ERROR: $*" >&2
   exit 1
+}
+
+ensure_named_branch() {
+  local branch="$1"
+  if [[ -z "${branch}" || "${branch}" == "HEAD" ]]; then
+    die "This operation must run from a local branch, not a detached HEAD"
+  fi
+}
+
+ensure_clean_worktree() {
+  if ! git diff --quiet || ! git diff --cached --quiet; then
+    echo "ERROR: working tree is not clean." >&2
+    git status --porcelain
+    exit 1
+  fi
+}
+
+branch_has_upstream() {
+  local branch="$1"
+  git rev-parse --abbrev-ref --symbolic-full-name "${branch}@{upstream}" >/dev/null 2>&1
+}
+
+push_current_branch() {
+  local branch="$1"
+  ensure_named_branch "${branch}"
+
+  if branch_has_upstream "${branch}"; then
+    git push
+    return 0
+  fi
+
+  echo "==> No upstream configured for ${branch}; pushing to origin and setting upstream..."
+  git push --set-upstream origin "${branch}"
 }
 
 extract_version_from_tag() {
@@ -229,18 +265,24 @@ PY
 
 prep_release() {
   local tag="$1"
+  local branch
+  branch="$(git rev-parse --abbrev-ref HEAD)"
+
+  ensure_clean_worktree
+  ensure_named_branch "${branch}"
+
   echo "==> Updating CHANGELOG.md..."
   update_changelog "${tag}"
 
-  git add -A
-  if git diff --cached --quiet; then
-    echo "No staged changes. Skipping commit."
+  git add CHANGELOG.md
+  if git diff --cached --quiet -- CHANGELOG.md; then
+    echo "No changelog changes to commit."
   else
-    git commit -m "Prepare release ${tag}"
+    git commit -m "Prepare release ${tag}" -- CHANGELOG.md
   fi
 
   echo "==> Pushing current branch..."
-  git push
+  push_current_branch "${branch}"
 
   echo "==> Done. Open a PR when ready."
 }
@@ -256,13 +298,7 @@ require_main_clean() {
     exit 1
   fi
 
-  if ! git diff --quiet || ! git diff --cached --quiet; then
-    echo "ERROR: working tree is not clean."
-    git status --porcelain
-    echo "Stash or commit changes, then retry:"
-    echo "  git stash -a"
-    exit 1
-  fi
+  ensure_clean_worktree
 
   git fetch origin
   local local_commit remote_commit
