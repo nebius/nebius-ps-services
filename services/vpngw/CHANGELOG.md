@@ -14,6 +14,10 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Added regression coverage proving `publish-release.sh --prep` remains
+  idempotent for unreleased versions: reruns for the same version now stay
+  no-op once `Unreleased` is empty and the tag has not been created.
+
 ## [nebius-vpngw-v0.5.5] - 2026-03-31
 
 - Fixed `publish-release.sh --prep` changelog formatting so moving

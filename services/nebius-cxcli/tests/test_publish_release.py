@@ -56,6 +56,76 @@ def test_publish_release_prep_preserves_blank_lines_around_release_sections(
     assert "- Prepare release `v0.1.3`.\n\n## [nebius-cxcli-v0.1.0]" in updated
 
 
+def test_publish_release_prep_is_idempotent_while_tag_is_unreleased(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+
+    script_dst = repo_root / "publish-release.sh"
+    shutil.copy2(SCRIPT_SOURCE, script_dst)
+    script_dst.chmod(0o755)
+
+    changelog = repo_root / "CHANGELOG.md"
+    changelog.write_text(
+        "# Changelog\n\n"
+        "## [Unreleased]\n\n"
+        "- Prepare release `v0.1.3`.\n\n"
+        "## [nebius-cxcli-v0.1.2] - 2026-03-20\n\n"
+        "- Previous release.\n",
+        encoding="utf-8",
+    )
+
+    _run(["git", "init", "-q"], cwd=repo_root)
+    _run(["git", "config", "user.name", "Test User"], cwd=repo_root)
+    _run(["git", "config", "user.email", "test@example.com"], cwd=repo_root)
+    _run(["git", "add", "CHANGELOG.md", "publish-release.sh"], cwd=repo_root)
+    _run(["git", "commit", "-qm", "init"], cwd=repo_root)
+
+    env = os.environ.copy()
+    env["NO_COLOR"] = "1"
+    first = subprocess.run(
+        ["bash", "publish-release.sh", "--prep", "0.1.3", "--no-push"],
+        cwd=repo_root,
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert first.returncode == 0, first.stderr
+
+    changelog_after_first = changelog.read_text(encoding="utf-8")
+    head_after_first = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    second = subprocess.run(
+        ["bash", "publish-release.sh", "--prep", "0.1.3", "--no-push"],
+        cwd=repo_root,
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert second.returncode == 0, second.stderr
+    assert "No changelog changes to commit." in second.stdout
+    assert changelog.read_text(encoding="utf-8") == changelog_after_first
+    assert (
+        subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        == head_after_first
+    )
+
+
 def test_publish_release_prep_sets_upstream_for_new_release_branch(
     tmp_path: Path,
 ) -> None:

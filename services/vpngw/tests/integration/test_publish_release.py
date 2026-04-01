@@ -109,6 +109,37 @@ def test_prep_preserves_blank_lines_around_release_sections(tmp_path: Path) -> N
     assert "- Prepare release `v0.1.0`.\n\n## [nebius-vpngw-v0.0.9]" in updated
 
 
+def test_prep_is_idempotent_while_tag_is_unreleased(tmp_path: Path) -> None:
+    repo, _remote = _init_repo(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            # Changelog
+
+            ## [Unreleased]
+
+            - Prepare release `v0.1.0`.
+
+            ## [nebius-vpngw-v0.0.9] - 2026-03-01
+
+            - Previous release.
+            """
+        ),
+    )
+
+    first = _run(["./publish-release.sh", "--prep", "0.1.0", "--no-push"], cwd=repo, check=False)
+    assert first.returncode == 0, first.stderr
+
+    changelog_after_first = (repo / "CHANGELOG.md").read_text(encoding="utf-8")
+    head_after_first = _run(["git", "rev-parse", "HEAD"], cwd=repo).stdout.strip()
+
+    second = _run(["./publish-release.sh", "--prep", "0.1.0", "--no-push"], cwd=repo, check=False)
+    assert second.returncode == 0, second.stderr
+    assert "No changelog changes to commit." in second.stdout
+    assert (repo / "CHANGELOG.md").read_text(encoding="utf-8") == changelog_after_first
+    assert _run(["git", "rev-parse", "HEAD"], cwd=repo).stdout.strip() == head_after_first
+
+
 def test_prep_fails_when_untracked_files_exist(tmp_path: Path) -> None:
     repo, _remote = _init_repo(
         tmp_path,

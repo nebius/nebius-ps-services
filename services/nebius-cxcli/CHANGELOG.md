@@ -6,6 +6,9 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Added regression coverage proving `publish-release.sh --prep` remains
+  idempotent for unreleased versions: reruns for the same version now stay
+  no-op once `Unreleased` is empty and the tag has not been created.
 - Changed `publish-release.sh --prep` to fail before editing `CHANGELOG.md` if
   the target tag already exists locally or on `origin`, so duplicate release
   preparation for an already-published version stops immediately.

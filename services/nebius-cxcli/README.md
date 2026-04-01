@@ -495,6 +495,7 @@ Use the release flow in three steps:
 `--prep` requires a strictly clean worktree, including untracked files, so the release-prep commit stays isolated.
 On a brand-new local release branch, `--prep` now pushes with `git push --set-upstream origin <branch>` automatically, so you do not need to publish the branch manually before the prep step succeeds.
 `--prep` also fails before editing `CHANGELOG.md` if the target tag already exists locally or on `origin`, so duplicate release-prep runs for an already-published version stop immediately.
+`--prep` is idempotent while the target tag does not already exist. You can run it multiple times for the same unreleased version; once `## [Unreleased]` is empty, reruns leave `CHANGELOG.md` and `HEAD` unchanged.
 `--publish` fails locally before tagging if the target changelog section is missing or empty.
 
 The publish step creates the annotated tag `nebius-cxcli-vX.Y.Z`. That tag triggers the repository workflow at `.github/workflows/nebius-cxcli-release.yml`, which reruns the same local `make all` verification contract, verifies that the wheel version matches the tag, verifies that the bundled fallback `component_sources.yaml` is present inside the wheel, and publishes the GitHub Release from the tagged commit.
