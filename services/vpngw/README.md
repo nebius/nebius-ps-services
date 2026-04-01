@@ -37,19 +37,27 @@ Use this sequence for first-time deployment. It is optimized for end users and k
 
 ### 1. Install the CLI from a release wheel
 
-Download the latest wheel from [Releases](https://github.com/nebius/nebius-ps-services/releases) and install with `pipx`.
+Run this from a clean shell, not inside an activated Python virtual environment.
 
-Example for `v0.5.4`:
+Install directly from the GitHub release wheel URL:
 
 ```bash
-pipx install https://github.com/nebius/nebius-ps-services/releases/download/nebius-vpngw-v0.5.4/nebius_vpngw-0.5.4-py3-none-any.whl
+pipx install https://github.com/nebius/nebius-ps-services/releases/download/nebius-vpngw-vX.Y.Z/nebius_vpngw-X.Y.Z-py3-none-any.whl
+```
+
+To replace an existing install with a clean `pipx` venv:
+
+```bash
+pipx uninstall nebius-vpngw
+pipx install https://github.com/nebius/nebius-ps-services/releases/download/nebius-vpngw-vX.Y.Z/nebius_vpngw-X.Y.Z-py3-none-any.whl
 ```
 
 Verify:
 
 ```bash
+which nebius-vpngw
+pipx list
 nebius-vpngw --version
-nebius-vpngw --help
 ```
 
 For wheel-based installs, `apply` reuses the original release wheel URL or local wheel file recorded
@@ -159,35 +167,29 @@ For advanced setup, continue with [Configuration](#configuration), [Commands](#c
     `python3 -m pip install --user pipx --break-system-packages && python3 -m pipx ensurepath`
 - Use the latest `nebius_vpngw-<version>-py3-none-any.whl` from this repository’s GitHub
   Release assets (version comes from the Git tag).
-  - Recommended: install directly from the release URL:
+- Run install commands from a clean shell, not inside an activated Python virtual environment.
+- Recommended: install directly from the release URL:
 
-    ```bash
-    pipx install <release-wheel-url>
-    ```
+  ```bash
+  pipx install <release-wheel-url>
+  ```
 
-    `apply` can reuse that original URL later to deploy the VM agent.
+  `apply` can reuse that original URL later to deploy the VM agent.
 
-  - Alternative: download the wheel first and install from the local file.
-  - macOS/Linux (wget):
+- To replace an existing install with a clean `pipx` venv:
 
-    ```bash
-    mkdir -p nebius-vpngw-release
-    cd nebius-vpngw-release
-    wget <release-wheel-url>
-    ```
+  ```bash
+  pipx uninstall nebius-vpngw
+  pipx install <release-wheel-url>
+  ```
 
-  - Windows:
-    - Download the latest wheel from the GitHub Releases page and copy it into `nebius-vpngw-release`:
-      - `https://github.com/nebius/nebius-ps-services/releases`
-    - Create a folder and copy the file there.
-
-- Install with pipx:
+- Alternative: download the wheel first and install from the local file:
 
   ```bash
   pipx install ./nebius_vpngw-<version>-py3-none-any.whl
   ```
 
-If pipx reports that its bin dir is not on PATH (e.g., `~/.local/bin`), run:
+- If pipx reports that its bin dir is not on PATH (e.g., `~/.local/bin`), run:
 
 ```bash
 pipx ensurepath
@@ -195,19 +197,13 @@ pipx ensurepath
 exec $SHELL
 ```
 
-- Upgrade when a new tag is released (release wheels, not PyPI):
+- Verify:
 
   ```bash
-  pipx install --force <release-wheel-url>
+  which nebius-vpngw
+  pipx list
+  nebius-vpngw --version
   ```
-
-  Or, if you downloaded the wheel locally:
-
-  ```bash
-  pipx install --force ./nebius_vpngw-<version>-py3-none-any.whl
-  ```
-
-- Verify: `nebius-vpngw --version`.
 
 ### Developers (editable install)
 
