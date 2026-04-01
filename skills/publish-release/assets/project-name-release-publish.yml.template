@@ -15,6 +15,7 @@ concurrency:
 env:
   APP_DIR: __APP_DIR__
   TAG_PREFIX: __PROJECT_TAG_PREFIX__
+  PACKAGE_IMPORT_NAME: __PACKAGE_IMPORT_NAME__
   MAIN_BRANCH: __MAIN_BRANCH__
   ASSET_GLOB: "__ASSET_GLOB__"
 
@@ -76,6 +77,34 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "__PYTHON_VERSION__"
+
+      - name: Verify source-checkout runtime version
+        if: steps.state.outputs.release_exists == 'false'
+        env:
+          EXPECTED_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if ! resolved_version="$(
+            PYTHONPATH=src python - "${EXPECTED_VERSION}" "${PACKAGE_IMPORT_NAME}" <<'PY'
+          import importlib
+          import sys
+
+          expected = sys.argv[1]
+          module_name = sys.argv[2]
+          package = importlib.import_module(module_name)
+          resolved = getattr(package, "__version__", "")
+
+          if resolved != expected:
+              print(resolved, end="")
+              raise SystemExit(1)
+
+          print(resolved, end="")
+          PY
+          )"; then
+            echo "::error::Source checkout resolved runtime version '${resolved_version:-unknown}' instead of '${EXPECTED_VERSION}'"
+            exit 1
+          fi
+          echo "Verified source-checkout runtime version ${resolved_version}."
 
       - name: Install dependencies
         if: steps.state.outputs.release_exists == 'false'

@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
 
 TAG_PREFIX="__PROJECT_TAG_PREFIX__"
+PACKAGE_IMPORT_NAME="__PACKAGE_IMPORT_NAME__"
 MAIN_BRANCH="__MAIN_BRANCH__"
 CHANGELOG_FILE="CHANGELOG.md"
 
@@ -49,6 +50,7 @@ show_usage() {
   printf '%b\n' "${S_BOLD}Modes:${S_RESET}"
   printf '%b\n' "  ${S_YELLOW}--prep${S_RESET}     Update ${CHANGELOG_FILE}, commit it, and push current branch."
   printf '%b\n' "                 First push auto-sets origin/<current-branch> as upstream when needed."
+  printf '%b\n' "                 Fails if tag ${TAG_PREFIX}-vX.Y.Z already exists locally or on origin."
   printf '%b\n' "  ${S_YELLOW}--publish${S_RESET}  Create and push tag ${TAG_PREFIX}-vX.Y.Z."
   printf '\n'
 
@@ -224,8 +226,8 @@ for i, h in enumerate(headers):
 def normalize_content(content: str) -> str:
     stripped = content.strip("\n")
     if not stripped.strip():
-        return "\n"
-    return "\n\n" + stripped + "\n"
+        return "\n\n"
+    return "\n\n" + stripped + "\n\n"
 
 def merge_content(new_part: str, existing: str) -> str:
     parts = []
@@ -234,8 +236,8 @@ def merge_content(new_part: str, existing: str) -> str:
     if existing.strip():
         parts.append(existing.strip("\n"))
     if not parts:
-        return "\n"
-    return "\n\n" + "\n\n".join(parts) + "\n"
+        return "\n\n"
+    return "\n\n" + "\n\n".join(parts) + "\n\n"
 
 unreleased_idx = None
 tag_idx = None
@@ -279,6 +281,7 @@ prep_release() {
 
   ensure_clean_worktree
   ensure_named_branch "${branch}"
+  ensure_tag_absent "${tag}"
   log_note "Updating ${CHANGELOG_FILE} for ${tag}..."
   update_changelog "${tag}"
 
@@ -309,11 +312,42 @@ ensure_tag_absent() {
   fi
 }
 
+verify_runtime_version_matches_tag() {
+  local tag="$1"
+  local expected_version="${tag##*-v}"
+  local resolved_version=""
+
+  log_note "Verifying runtime version resolves to ${expected_version} on the local tag..."
+  if ! resolved_version="$(
+    PYTHONPATH="${SCRIPT_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}" python3 - "${expected_version}" "${PACKAGE_IMPORT_NAME}" <<'PY'
+import importlib
+import sys
+
+expected = sys.argv[1]
+module_name = sys.argv[2]
+package = importlib.import_module(module_name)
+resolved = getattr(package, "__version__", "")
+
+if resolved != expected:
+    print(resolved, end="")
+    raise SystemExit(1)
+
+print(resolved, end="")
+PY
+  )"; then
+    log_error \
+      "Runtime version mismatch after tagging. Source checkout resolved to '${resolved_version:-unknown}' instead of '${expected_version}'."
+    exit 1
+  fi
+  log_success "Runtime version resolved to ${resolved_version}."
+}
+
 create_and_push_tag() {
   local tag="$1"
   ensure_release_heading_present "${tag}"
   ensure_tag_absent "${tag}"
   git tag -a "${tag}" -m "Release ${tag}"
+  verify_runtime_version_matches_tag "${tag}"
   git push origin "refs/tags/${tag}"
   log_success "Tag pushed: ${tag}"
   log_success "Release workflow will run from this tag push."

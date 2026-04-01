@@ -24,6 +24,9 @@ Scaffold production-grade Python repositories with conservative, reusable defaul
 - `pyproject.toml` with PEP 621 metadata.
 - `setuptools` + `setuptools-scm` for build/versioning.
 - `src/` package layout.
+- If the package exposes `__version__`, a runtime resolver that prefers live
+  SCM state in source checkouts and falls back to metadata/generated version
+  files for installed artifacts.
 - `ruff` for linting/formatting checks.
 - `pytest` for tests.
 - Split test layout:
@@ -111,6 +114,10 @@ Add these when selected:
 Default to `setuptools-scm` with SemVer tags:
 
 - Tag format: `<project>-vMAJOR.MINOR.PATCH`
+- If the package exports `__version__`, do not import the generated
+  `_version.py` file directly from `__init__.py` for source/editable checkouts.
+  Prefer a `runtime_version.py` helper that tries live SCM state first, then
+  package metadata, then the generated version file.
 - Generated runtime version file: `src/<package>/_version.py`
 - Do not manually edit the version in `pyproject.toml` when SCM versioning is enabled.
 

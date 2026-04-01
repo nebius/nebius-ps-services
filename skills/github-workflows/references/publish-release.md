@@ -8,6 +8,7 @@ Use this reference for tag-driven GitHub Releases that publish built artifacts.
 - Check out full git history.
 - Resolve the tagged commit explicitly with `git rev-list -n 1 <tag>`.
 - Verify that tagged commit belongs to the intended release branch.
+- Verify the tagged source checkout resolves the package runtime version to the tag version before project dependencies are installed.
 - Rebuild the artifact from the tagged commit.
 - Verify the built artifact version matches the tag version.
 - Generate release notes from `CHANGELOG.md`.
@@ -21,7 +22,10 @@ If the project also ships `publish-release.sh`, keep it aligned with the workflo
 
 - `--prep` should require a strictly clean worktree, including untracked files.
 - `--prep` updates only `CHANGELOG.md`, commits it, and should auto-set `origin/<branch>` as upstream on the first push from a new local release branch.
+- `--prep` should fail before editing anything if the target tag already exists locally or on `origin`.
+- `--prep` should preserve a blank line before the next `##` release heading when it rewrites `CHANGELOG.md`.
 - `--publish` should only create and push the annotated tag.
+- `--publish` should verify the tagged source checkout resolves the package runtime version to the exact tag version before the push, and that check should not depend on `setuptools-scm` being installed in the release shell.
 - `--publish` should fail fast if `CHANGELOG.md` does not already contain the tag heading, or if that release section exists but is empty.
 - The helper should enforce the release branch policy unless the user explicitly overrides it.
 

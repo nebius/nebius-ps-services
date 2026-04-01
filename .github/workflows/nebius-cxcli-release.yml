@@ -15,6 +15,7 @@ concurrency:
 env:
   APP_DIR: services/nebius-cxcli
   TAG_PREFIX: nebius-cxcli
+  PACKAGE_IMPORT_NAME: nebius_cxcli
   MAIN_BRANCH: main
   ASSET_GLOB: "dist/*.whl"
   NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE: portable
@@ -78,6 +79,34 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+
+      - name: Verify source-checkout runtime version
+        if: steps.state.outputs.release_exists == 'false'
+        env:
+          EXPECTED_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if ! resolved_version="$(
+            PYTHONPATH=src python - "${EXPECTED_VERSION}" "${PACKAGE_IMPORT_NAME}" <<'PY'
+          import importlib
+          import sys
+
+          expected = sys.argv[1]
+          module_name = sys.argv[2]
+          package = importlib.import_module(module_name)
+          resolved = getattr(package, "__version__", "")
+
+          if resolved != expected:
+              print(resolved, end="")
+              raise SystemExit(1)
+
+          print(resolved, end="")
+          PY
+          )"; then
+            echo "::error::Source checkout resolved runtime version '${resolved_version:-unknown}' instead of '${EXPECTED_VERSION}'"
+            exit 1
+          fi
+          echo "Verified source-checkout runtime version ${resolved_version}."
 
       - name: Verify service with local make contract
         if: steps.state.outputs.release_exists == 'false'

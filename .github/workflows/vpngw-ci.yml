@@ -67,6 +67,8 @@ jobs:
         run: python -m pytest -n auto tests/unit
       - name: CLI integration smoke tests
         run: python -m pytest -n auto tests/integration/test_cli_commands.py
+      - name: Release helper regressions
+        run: python -m pytest tests/integration/test_publish_release.py
 
   build:
     if: github.event_name != 'workflow_dispatch'

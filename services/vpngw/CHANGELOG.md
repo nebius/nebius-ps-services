@@ -16,6 +16,23 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [nebius-vpngw-v0.5.5] - 2026-03-31
 
+- Added regression coverage proving `publish-release.sh --prep` remains
+  idempotent for unreleased versions: reruns for the same version now stay
+  no-op once `Unreleased` is empty and the tag has not been created.
+
+- Fixed `publish-release.sh --prep` changelog formatting so moving
+  `Unreleased` notes into a dated release section preserves a blank line before
+  the next `##` heading, keeping the file markdownlint-safe in editors.
+
+- Changed `publish-release.sh --prep` to fail before editing `CHANGELOG.md` if
+  the target tag already exists locally or on `origin`, so duplicate release
+  preparation for an already-published version stops immediately.
+- Fixed source-checkout runtime version fallback for release tagging without
+  `setuptools-scm` installed: `nebius_vpngw.__version__` now derives from
+  `git describe` before consulting a generated `_version.py`, so
+  `publish-release.sh --publish` no longer rejects a fresh exact tag because of
+  a stale local dev-version cache.
+
 - Fixed `add-routes-local` for pinned multi-VM topologies: remote prefixes are
   now routed through the gateway VM that owns each connection, and BGP route
   discovery is scoped to the owning VM(s) instead of querying every gateway VM.
@@ -58,6 +75,7 @@ All notable changes to this project are tracked here. This changelog follows
 - Fixed runtime version resolution for source/editable checkouts so `nebius-vpngw` now prefers live `setuptools-scm` git state over a generated `_version.py` cache, and `publish-release.sh --publish` now verifies local runtime version/tag alignment before pushing the release tag.
 - Clarified BFD documentation and comments: support is now described as vendor/platform specific, the template/README no longer imply generic cloud-VPN support, and the misleading GCP HA VPN BFD note was removed.
 - Added concise Nebius Managed Kubernetes routing guidance covering `gateway.local_prefixes`, Pod-vs-ClusterIP expectations, and the common Cilium routing/masquerade defaults operators should account for over VPN.
+
 ## [nebius-vpngw-v0.5.4] - 2026-03-16
 
 - Tightened multi-connection validation and template guidance: tunnel names must now be globally unique, APIPA tunnel ranges and BGP inner IPs must be unique per gateway instance, and the generated config/docs now clarify the supported multi-site active/passive workflow.

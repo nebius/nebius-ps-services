@@ -39,6 +39,9 @@ Apply repository-native GitHub Actions patterns instead of inventing one-off wor
    - Keep action major pins current with repo standards.
    - Keep shell steps fail-fast with `set -euo pipefail`.
    - Validate manual inputs before privileged or destructive steps.
+   - For release workflows, collect the package import name as well as the tag
+     prefix so the workflow can verify the source-checkout runtime version
+     before dependency installation.
 
 5. Validate locally when possible.
    - YAML parse the workflow.
