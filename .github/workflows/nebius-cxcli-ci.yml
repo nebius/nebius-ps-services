@@ -4,12 +4,14 @@ on:
   pull_request:
     paths:
       - "services/nebius-cxcli/**"
+      - "platform-infra/modules/**"
       - ".github/workflows/nebius-cxcli-ci.yml"
       - ".github/workflows/nebius-cxcli-release.yml"
   push:
     branches: [main]
     paths:
       - "services/nebius-cxcli/**"
+      - "platform-infra/modules/**"
       - ".github/workflows/nebius-cxcli-ci.yml"
       - ".github/workflows/nebius-cxcli-release.yml"
   workflow_dispatch:
@@ -36,6 +38,22 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+      - name: Validate workflow YAML
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+
+          repo_root = Path.cwd().resolve().parents[1]
+          workflow_dir = repo_root / ".github" / "workflows"
+          for name in ("nebius-cxcli-ci.yml", "nebius-cxcli-release.yml"):
+              workflow_path = workflow_dir / name
+              loaded = yaml.load(workflow_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+              if not isinstance(loaded, dict):
+                  raise SystemExit(f"{workflow_path} did not parse as a mapping")
+              print(f"Validated {workflow_path}")
+          PY
       - name: Verify service with local make contract
         env:
           RELEASE_REF: ${{ github.sha }}
@@ -43,6 +61,13 @@ jobs:
         run: |
           set -euo pipefail
           make all
+
+      - name: Validate active component sources catalog
+        env:
+          NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE: portable
+        run: |
+          set -euo pipefail
+          .venv/bin/python -m nebius_cxcli validate-sources component_sources.yaml
 
       - name: Verify bundled component sources in wheel
         env:

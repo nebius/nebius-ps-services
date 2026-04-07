@@ -738,6 +738,7 @@ class VMSpec(BaseModel):
     ssh_private_key_path: str | None = Field(
         default=None, description="Path to SSH private key file"
     )
+
     @field_validator("num_nics")
     @classmethod
     def validate_num_nics(cls, v: int) -> int:
@@ -919,18 +920,14 @@ class VPNGatewayConfig(BaseModel):
                 )
 
         duplicates = {
-            name: locations
-            for name, locations in locations_by_name.items()
-            if len(locations) > 1
+            name: locations for name, locations in locations_by_name.items() if len(locations) > 1
         }
         if duplicates:
             details = "; ".join(
-                f"{name}: {', '.join(locations)}"
-                for name, locations in sorted(duplicates.items())
+                f"{name}: {', '.join(locations)}" for name, locations in sorted(duplicates.items())
             )
             raise ValueError(
-                "Tunnel names must be globally unique across all connections. "
-                f"Conflicts: {details}"
+                f"Tunnel names must be globally unique across all connections. Conflicts: {details}"
             )
         return self
 
@@ -952,9 +949,7 @@ class VPNGatewayConfig(BaseModel):
                     )
 
             conflicts = {
-                key: locations
-                for key, locations in locations_by_key.items()
-                if len(locations) > 1
+                key: locations for key, locations in locations_by_key.items() if len(locations) > 1
             }
             if conflicts:
                 details = "; ".join(
@@ -1076,12 +1071,10 @@ class VPNGatewayConfig(BaseModel):
         }
         if duplicates:
             details = "; ".join(
-                f"{ip}: {', '.join(locations)}"
-                for ip, locations in sorted(duplicates.items())
+                f"{ip}: {', '.join(locations)}" for ip, locations in sorted(duplicates.items())
             )
             raise ValueError(
-                "gateway_group.external_ips entries must be globally unique. "
-                f"Conflicts: {details}"
+                f"gateway_group.external_ips entries must be globally unique. Conflicts: {details}"
             )
 
         return self

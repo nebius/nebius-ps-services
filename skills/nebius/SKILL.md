@@ -46,6 +46,12 @@ Implement Nebius IAM/Object Storage and VPC networking workflows with reusable S
 - Never print or commit private keys, tokens, or access key secrets.
 - Use Nebius role IDs like `editor`, not `roles/editor`.
 - Upload Nebius auth public keys in PEM format.
+- Prefer the current SDK auth order from `nebius/pysdk` README:
+  - credentials file
+  - service-account private key env/config
+  - `NEBIUS_IAM_TOKEN`
+  - Nebius CLI token via `nebius iam get-access-token`
+  - CLI config/profile (`Config()`)
 - Wait for stateful Nebius resources to become ready before dependent actions.
 - Treat `use_network_pools=true` as inherited allocation mode, not subnet CIDR ownership.
 - Do not treat `status.ipv4_private_cidrs` as the only ownership signal for subnet automation.

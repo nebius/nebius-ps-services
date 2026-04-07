@@ -69,7 +69,7 @@ locals {
     : try(local.cpu_overrides.fixed_node_count, var.cpu_nodes_count)
   )
   cpu_node_group_enabled = (
-    var.cpu_nodes_count > 0 ||
+    coalesce(local.cpu_fixed_node_count, 0) > 0 ||
     local.cpu_autoscaling != null
   )
 

@@ -12,6 +12,12 @@ This repository provides a curated set of **Terraform modules** and **Helm chart
 This repo includes reusable, field-tested infrastructure components that simplify and accelerate AI/ML deployment workflows.
 These tools are built for **production-readiness**, **scalability**, and **performance optimization** on the Nebius platform.
 
+The repository also includes reusable developer tooling under `skills/`,
+including the `attach-ubuntu` Codex skill for launching an Ubuntu test
+container, bootstrapping project build dependencies into a container-specific
+virtual environment, preserving Git metadata for subprojects, and attaching VS
+Code to it on macOS with Docker Desktop.
+
 ---
 
 ## 🔧 Use Cases

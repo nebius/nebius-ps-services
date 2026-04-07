@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from nebius_cxcli.notify_ops import InventoryEmailResult, send_inventory_email
-from nebius_cxcli.paths import InstancePaths
+from nebius_cxcli.paths import ProjectPaths
 
 
 class FakeSMTP:
@@ -34,11 +34,13 @@ class FakeSMTP:
         self.messages.append(message)
 
 
-def _instance_paths(tmp_path: Path) -> InstancePaths:
+def _project_paths(tmp_path: Path) -> ProjectPaths:
     repo_root = tmp_path / "repo"
-    generated_dir = repo_root / "deployments" / "instances" / "client-a--tenant-123" / "project-456" / "generated"
+    generated_dir = (
+        repo_root / "deployments" / "projects" / "client-a--tenant-123" / "project-456" / "generated"
+    )
     project_dir = generated_dir.parent
-    return InstancePaths(
+    return ProjectPaths(
         config_path=project_dir / "config.yaml",
         repo_root=repo_root,
         deployments_dir=repo_root / "deployments",
@@ -63,7 +65,7 @@ def _config(*, email: str | None = "ops@example.com", project_id: str = "project
 
 
 def test_send_inventory_email_returns_false_when_email_not_configured(tmp_path: Path) -> None:
-    paths = _instance_paths(tmp_path)
+    paths = _project_paths(tmp_path)
 
     assert send_inventory_email(_config(email=None), paths) == InventoryEmailResult(
         sent=False,
@@ -73,7 +75,7 @@ def test_send_inventory_email_returns_false_when_email_not_configured(tmp_path: 
 
 
 def test_send_inventory_email_returns_false_when_email_notifications_disabled(tmp_path: Path) -> None:
-    paths = _instance_paths(tmp_path)
+    paths = _project_paths(tmp_path)
     config = _config()
     config.client_info.notifications.email_enabled = False
 
@@ -85,7 +87,7 @@ def test_send_inventory_email_returns_false_when_email_notifications_disabled(tm
 
 
 def test_send_inventory_email_warns_when_smtp_host_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    paths = _instance_paths(tmp_path)
+    paths = _project_paths(tmp_path)
     monkeypatch.delenv("SMTP_HOST", raising=False)
 
     assert send_inventory_email(_config(), paths) == InventoryEmailResult(
@@ -103,7 +105,7 @@ def test_send_inventory_email_uses_local_smtp_settings_when_env_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    paths = _instance_paths(tmp_path)
+    paths = _project_paths(tmp_path)
     paths.inventory_dir.mkdir(parents=True, exist_ok=True)
     (paths.inventory_dir / "inventory.md").write_text("# Inventory\n\nBody\n", encoding="utf-8")
 
@@ -146,7 +148,7 @@ def test_send_inventory_email_uses_inventory_markdown_and_smtp_login(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    paths = _instance_paths(tmp_path)
+    paths = _project_paths(tmp_path)
     paths.inventory_dir.mkdir(parents=True, exist_ok=True)
     (paths.inventory_dir / "inventory.md").write_text("# Inventory\n\nBody\n", encoding="utf-8")
 
@@ -188,7 +190,7 @@ def test_send_inventory_email_requires_inventory_markdown_body(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    paths = _instance_paths(tmp_path)
+    paths = _project_paths(tmp_path)
 
     monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
     paths.inventory_dir.mkdir(parents=True, exist_ok=True)
@@ -201,7 +203,7 @@ def test_send_inventory_email_masks_project_and_tenant_ids_in_body(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    paths = _instance_paths(tmp_path)
+    paths = _project_paths(tmp_path)
     paths.inventory_dir.mkdir(parents=True, exist_ok=True)
     (paths.inventory_dir / "inventory.md").write_text(
         "# Inventory: project-456\n\n- Tenant: `tenant-123`\n- Project: `project-456`\n",

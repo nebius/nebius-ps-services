@@ -1,4 +1,4 @@
-"""CI-oriented helpers for discovering changed deployment instances."""
+"""CI-oriented helpers for discovering changed deployment projects."""
 
 from __future__ import annotations
 
@@ -96,7 +96,7 @@ def _to_repo_relative(path: Path, *, repo_root: Path) -> str:
         return _normalize(str(path))
 
 
-def _instance_config_relative(config_path: Path, *, repo_root: Path) -> str | None:
+def _project_config_relative(config_path: Path, *, repo_root: Path) -> str | None:
     relative = _to_repo_relative(config_path, repo_root=repo_root)
     if _infer_client_project_from_path(relative) is None:
         return None
@@ -110,7 +110,7 @@ def _scan_scope_configs(*, deployment_path: Path, repo_root: Path) -> set[str]:
     while True:
         candidate = current / "config.yaml"
         if candidate.is_file():
-            relative = _instance_config_relative(candidate, repo_root=repo_root)
+            relative = _project_config_relative(candidate, repo_root=repo_root)
             if relative is not None:
                 candidates.add(relative)
         if current == repo_root or current.parent == current:
@@ -118,7 +118,7 @@ def _scan_scope_configs(*, deployment_path: Path, repo_root: Path) -> set[str]:
         current = current.parent
 
     for config_file in deployment_path.rglob("config.yaml"):
-        relative = _instance_config_relative(config_file, repo_root=repo_root)
+        relative = _project_config_relative(config_file, repo_root=repo_root)
         if relative is not None:
             candidates.add(relative)
     return candidates
@@ -133,7 +133,7 @@ def _infer_client_project_from_path(config_relative: str) -> tuple[str, str] | N
     parts = [token for token in _normalize(config_relative).split("/") if token]
     if len(parts) < 4 or parts[-1] != "config.yaml":
         return None
-    if parts[-4] != "instances":
+    if parts[-4] != "projects":
         return None
     client_tenant = parts[-3]
     project_id = parts[-2]
@@ -171,14 +171,14 @@ def _config_relative_from_changed(path: str) -> str | None:
     parts = [token for token in normalized.split("/") if token]
     if len(parts) < 4:
         return None
-    if normalized.endswith("config.yaml") and parts[-4] == "instances":
+    if normalized.endswith("config.yaml") and parts[-4] == "projects":
         return normalized
     if "generated" not in parts:
         return None
     generated_index = parts.index("generated")
     if generated_index < 3:
         return None
-    if parts[generated_index - 3] != "instances":
+    if parts[generated_index - 3] != "projects":
         return None
     prefix = parts[:generated_index]
     return "/".join([*prefix, "config.yaml"])
@@ -190,7 +190,7 @@ def discover_configs(
     include_all: bool = False,
     repo_root: Path | None = None,
     ) -> dict[str, list[dict[str, object]]]:
-    """Build discover payload for changed or known deployment instances in this run."""
+    """Build discover payload for changed or known deployment projects in this run."""
     deployment_path = Path(deployments_dir)
     if repo_root is not None:
         root = repo_root.resolve()

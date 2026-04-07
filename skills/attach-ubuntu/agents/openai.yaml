@@ -1,0 +1,4 @@
+interface:
+  display_name: "Attach Ubuntu"
+  short_description: "Launch an Ubuntu test container and attach VS Code"
+  default_prompt: "Use $attach-ubuntu to create or improve a Bash workflow that launches an Ubuntu Docker container for the current project, mounts it at /workdir, and opens it in a new VS Code Dev Containers window."

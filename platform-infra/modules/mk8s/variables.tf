@@ -83,16 +83,19 @@ variable "kube_network_service_cidrs" {
 }
 
 variable "cpu_nodes_count" {
-  description = "Fixed node count for CPU node group."
+  description = "Fixed node count for CPU node group. Set explicitly in callers that want the baseline CPU node pool."
   type        = number
-  default     = 2
-  nullable    = false
+  default     = null
+  nullable    = true
   validation {
     condition = (
-      floor(var.cpu_nodes_count) == var.cpu_nodes_count &&
-      var.cpu_nodes_count >= 0
+      var.cpu_nodes_count == null ||
+      (
+        floor(var.cpu_nodes_count) == var.cpu_nodes_count &&
+        var.cpu_nodes_count >= 0
+      )
     )
-    error_message = "cpu_nodes_count must be an integer >= 0."
+    error_message = "cpu_nodes_count must be null or an integer >= 0."
   }
 }
 

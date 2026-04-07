@@ -113,6 +113,18 @@ def managed_default_payload_paths(
     return result
 
 
+def shared_default_payload_paths(
+    component_path: tuple[str | int, ...],
+    entry: ComponentEntry,
+) -> set[tuple[str | int, ...]]:
+    result: set[tuple[str | int, ...]] = set()
+    for target_path in shared_default_target_paths(entry):
+        segments = _split_path(target_path)
+        if segments:
+            result.add(component_path + tuple(segments))
+    return result
+
+
 def shared_default_conflicts(
     component_node: Mapping[str, Any],
     entry: ComponentEntry,
@@ -169,6 +181,7 @@ __all__ = [
     "read_component_path",
     "resolve_component_defaults",
     "set_component_path",
+    "shared_default_payload_paths",
     "shared_default_conflicts",
     "shared_default_input_sources",
     "shared_default_target_paths",

@@ -114,6 +114,15 @@ module "wireguard_jump_host" {
   - reuse: set `create_public_ip_allocation = false` and provide
     `public_ip_allocation_id`
 
+## nebius-cxcli usage
+
+- `nebius-cxcli component add` prompts this module through
+  `infra.components[].inputs`.
+- `clients` is optional, but when used it should be entered as a YAML/JSON list
+  in the wizard or edited directly in `config.yaml`.
+- `ssh_user_name` now follows the same Linux username validation used by the
+  SSH jump-host module and the shared CLI SSH defaults.
+
 ## Outputs summary
 
 - `instance_id`

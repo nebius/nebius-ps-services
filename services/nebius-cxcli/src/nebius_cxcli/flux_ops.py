@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -18,9 +19,10 @@ from rich.markup import escape
 
 from .github_secrets import detect_github_repo_slug
 from .managed_tools import FLUX_RELEASES_URL, configured_flux_version, resolve_flux_binary
-from .paths import InstancePaths
+from .paths import ProjectPaths
 
 FLUX_NAMESPACE = "flux-system"
+CLUSTER_HANDOFF_ACCESS_ENV = "NEBIUS_CXCLI_CLUSTER_HANDOFF_ACCESS"
 FLUX_CORE_DEPLOYMENTS = (
     "source-controller",
     "kustomize-controller",
@@ -139,6 +141,22 @@ def _first_non_empty_line(text: str) -> str | None:
         if line:
             return line
     return None
+
+
+def cluster_handoff_reachability_guidance(
+    *,
+    extra_env: dict[str, str] | None,
+    action: str,
+) -> str:
+    access = str((extra_env or {}).get(CLUSTER_HANDOFF_ACCESS_ENV, "")).strip().lower()
+    if access != "internal":
+        return ""
+    return (
+        f"The selected cluster handoff for {action} uses a private MK8s control-plane endpoint. "
+        "The machine running `nebius-cxcli` must already have network reachability to that private endpoint. "
+        "Provide a private network path such as a VPN, routed private network, SSH or WireGuard tunnel, "
+        "a subnet router, or run the command from an environment that already has Nebius private-network access."
+    )
 
 
 def _kustomization_resource_files(flux_dir: Path) -> list[Path]:
@@ -354,7 +372,7 @@ def _flux_status_block(
 
 
 def wait_for_rendered_flux_resources(
-    paths: InstancePaths,
+    paths: ProjectPaths,
     *,
     extra_env: dict[str, str] | None = None,
     timeout_seconds: int = 600,
@@ -428,6 +446,80 @@ def wait_for_rendered_flux_resources(
         + " ".join(events_cmd)
         + "`."
     )
+
+
+def delete_rendered_flux(
+    paths: ProjectPaths,
+    *,
+    extra_env: dict[str, str] | None = None,
+) -> None:
+    """Delete rendered Flux manifests in local destroy mode."""
+    _require_binary("kubectl")
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
+    cluster_check = subprocess.run(
+        ["kubectl", "cluster-info"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if cluster_check.returncode != 0:
+        detail = _first_non_empty_line(cluster_check.stderr or cluster_check.stdout or "")
+        message = "kubectl could not reach the target Kubernetes cluster for local destroy"
+        if detail:
+            message = f"{message}: {detail}"
+        guidance = cluster_handoff_reachability_guidance(
+            extra_env=extra_env,
+            action="local destroy",
+        )
+        if guidance:
+            message = f"{message}\n{guidance}"
+        raise RuntimeError(message)
+
+    with tempfile.TemporaryDirectory(prefix="nebius-cxcli-kubectl-delete-") as cache_dir:
+        cache_path = Path(cache_dir)
+        completed = subprocess.run(
+            [
+                "kubectl",
+                "--cache-dir",
+                str(cache_path),
+                "delete",
+                "-k",
+                str(paths.flux_dir),
+                "--ignore-not-found=true",
+                "--wait=true",
+                "--timeout=15m",
+            ],
+            env=env,
+            timeout=1800,
+            capture_output=True,
+            text=True,
+        )
+        stdout = _filter_benign_kubectl_output(completed.stdout or "")
+        stderr = _filter_benign_kubectl_output(completed.stderr or "")
+        if stdout:
+            sys.stdout.write(stdout + ("\n" if not stdout.endswith("\n") else ""))
+        if stderr:
+            sys.stderr.write(stderr + ("\n" if not stderr.endswith("\n") else ""))
+        if completed.returncode != 0:
+            raise subprocess.CalledProcessError(
+                completed.returncode,
+                [
+                    "kubectl",
+                    "--cache-dir",
+                    str(cache_path),
+                    "delete",
+                    "-k",
+                    str(paths.flux_dir),
+                    "--ignore-not-found=true",
+                    "--wait=true",
+                    "--timeout=15m",
+                ],
+                output=stdout,
+                stderr=stderr,
+            )
 
 
 def flux_controllers_installed(*, extra_env: dict[str, str] | None = None) -> bool:
@@ -703,7 +795,7 @@ def install_flux_controllers(*, extra_env: dict[str, str] | None = None) -> str:
 
 
 def wait_for_flux_resource_apis(
-    paths: InstancePaths,
+    paths: ProjectPaths,
     *,
     extra_env: dict[str, str] | None = None,
     cache_dir: Path | None = None,
@@ -770,7 +862,7 @@ def _resolve_owner_repo(repo_root: Path) -> tuple[str, str]:
     return owner, repo
 
 
-def ensure_flux(paths: InstancePaths, *, extra_env: dict[str, str] | None = None) -> str:
+def ensure_flux(paths: ProjectPaths, *, extra_env: dict[str, str] | None = None) -> str:
     """Bootstrap Flux once, then reconcile idempotently on subsequent runs."""
     _require_binary("kubectl")
     wait_for_flux_namespace_ready(extra_env=extra_env)

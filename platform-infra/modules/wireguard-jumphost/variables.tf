@@ -58,8 +58,11 @@ variable "ssh_user_name" {
   default     = "ubuntu"
   nullable    = false
   validation {
-    condition     = length(trimspace(var.ssh_user_name)) > 0
-    error_message = "ssh_user_name cannot be empty."
+    condition = (
+      length(trimspace(var.ssh_user_name)) > 0 &&
+      can(regex("^[a-z_][a-z0-9_-]{0,31}$", var.ssh_user_name))
+    )
+    error_message = "ssh_user_name must match Linux username format (for example ubuntu, admin_user)."
   }
 }
 

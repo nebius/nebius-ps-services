@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import yaml
 
 from .component_defaults import resolve_component_defaults
+from .component_instances import INSTANCE_ID_FIELD
 
 if TYPE_CHECKING:
     from .components import ComponentEntry
@@ -121,6 +122,7 @@ def _starter_payload(
     infra_entries: tuple[ComponentEntry, ...] | None,
     app_entries: tuple[ComponentEntry, ...] | None,
 ) -> dict[str, object]:
+    normalized_email = str(email).strip() if email is not None else ""
     payload: dict[str, object] = {
         "version": CONFIG_VERSION,
         "client_info": {
@@ -131,8 +133,8 @@ def _starter_payload(
                 "region_id": region_id,
             },
             "notifications": {
-                "email_enabled": True,
-                "email": email,
+                "email_enabled": bool(normalized_email),
+                "email": normalized_email or None,
             },
         },
         "infra": {
@@ -151,6 +153,7 @@ def _starter_payload(
     for entry in infra_entries or ():
         component_row: dict[str, object] = {
             "id": entry.id,
+            INSTANCE_ID_FIELD: entry.id,
             "enabled": bool(entry.default_enabled),
             "inputs": {},
         }
@@ -180,6 +183,7 @@ def _starter_payload(
         chart_repo = _canonical_chart_repo(chart_repo=chart_repo, chart_name=chart_name)
         chart_row: dict[str, object] = {
             "id": entry.id,
+            INSTANCE_ID_FIELD: entry.id,
             "group": _normalize_app_group(entry.group),
             "enabled": bool(entry.default_enabled),
             "repo": chart_repo,
@@ -214,7 +218,7 @@ def starter_config_yaml(
     infra_entries: tuple[ComponentEntry, ...] | None = None,
     app_entries: tuple[ComponentEntry, ...] | None = None,
 ) -> str:
-    """Render a starter instance config.yaml with source-driven component defaults."""
+    """Render a starter project config.yaml with source-driven component defaults."""
     payload = _starter_payload(
         client_name=client_name,
         tenant_id=tenant_id,

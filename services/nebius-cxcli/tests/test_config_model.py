@@ -106,6 +106,35 @@ def test_to_runtime_payload_round_trip_keeps_enabled_flags() -> None:
     assert back["apps"]["workloads"]["n8n"]["enabled"] is False
 
 
+def test_to_runtime_payload_keeps_multiple_instances_distinct() -> None:
+    dynamic = to_dynamic_payload(_starter_runtime_payload())
+    components = dynamic["infra"]["components"]
+    assert isinstance(components, list)
+    components.extend(
+        [
+            {
+                "id": "managed-postgresql",
+                "instance_id": "managed-postgresql",
+                "enabled": True,
+                "inputs": {"name": "primary"},
+            },
+            {
+                "id": "managed-postgresql",
+                "instance_id": "managed-postgresql-2",
+                "enabled": True,
+                "inputs": {"name": "analytics"},
+            },
+        ]
+    )
+
+    back = to_runtime_payload(dynamic)
+
+    assert back["infra"]["managed_postgresql"]["enabled"] is True
+    assert back["infra"]["managed_postgresql"]["name"] == "primary"
+    assert back["infra"]["managed_postgresql_2"]["enabled"] is True
+    assert back["infra"]["managed_postgresql_2"]["name"] == "analytics"
+
+
 def test_load_config_accepts_dynamic_payload_with_extra_chart(tmp_path: Path) -> None:
     dynamic = to_dynamic_payload(_starter_runtime_payload())
     charts = dynamic["apps"]["charts"]
@@ -156,7 +185,7 @@ def test_create_writes_runtime_shape_with_selected_components(tmp_path: Path) ->
     )
     assert result.exit_code == 0, result.output
 
-    config_path = deployments_root / "instances" / "client-a--tenant-123" / "project-456" / "config.yaml"
+    config_path = deployments_root / "projects" / "client-a--tenant-123" / "project-456" / "config.yaml"
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
     assert isinstance(payload, dict)

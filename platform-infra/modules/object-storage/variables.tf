@@ -1,5 +1,5 @@
 variable "parent_id" {
-  description = "Nebius project ID where buckets are created."
+  description = "Nebius project ID where the bucket is created."
   type        = string
   nullable    = false
   validation {
@@ -8,55 +8,51 @@ variable "parent_id" {
   }
 }
 
-variable "buckets" {
-  description = <<-EOT
-    Map of object-storage bucket definitions keyed by logical ID (for example
-    "state", "inventory", "artifacts"). Each entry controls bucket name and
-    policies.
-  EOT
-  type = map(object({
-    name                 = string
-    versioning_policy    = optional(string, "DISABLED")
-    object_audit_logging = optional(string, "NONE")
-    protect_from_destroy = optional(bool, false)
-    labels               = optional(map(string), {})
-  }))
-  default  = {}
-  nullable = false
+variable "name" {
+  description = "Nebius Object Storage bucket name."
+  type        = string
+  nullable    = false
 
   validation {
-    condition     = length(var.buckets) > 0
-    error_message = "buckets must contain at least one bucket definition."
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]{1,61}[a-z0-9])?$", var.name))
+    error_message = "name must use lowercase letters, digits, and hyphens."
   }
+}
+
+variable "versioning_policy" {
+  description = "Bucket versioning policy."
+  type        = string
+  default     = "DISABLED"
+  nullable    = false
 
   validation {
-    condition = length(distinct([
-      for bucket in values(var.buckets) : bucket.name
-    ])) == length(values(var.buckets))
-    error_message = "bucket names must be unique across buckets map entries."
-  }
-
-  validation {
-    condition = alltrue([
-      for bucket in values(var.buckets) :
-      can(regex("^[a-z0-9]([a-z0-9-]{1,61}[a-z0-9])?$", bucket.name))
-    ])
-    error_message = "each bucket.name must use lowercase letters, digits, and hyphens."
-  }
-
-  validation {
-    condition = alltrue([
-      for bucket in values(var.buckets) :
-      contains(["DISABLED", "ENABLED", "SUSPENDED"], bucket.versioning_policy)
-    ])
+    condition     = contains(["DISABLED", "ENABLED", "SUSPENDED"], var.versioning_policy)
     error_message = "versioning_policy must be one of: DISABLED, ENABLED, SUSPENDED."
   }
+}
+
+variable "object_audit_logging" {
+  description = "Bucket object audit logging policy."
+  type        = string
+  default     = "NONE"
+  nullable    = false
 
   validation {
-    condition = alltrue([
-      for bucket in values(var.buckets) :
-      contains(["NONE", "MUTATE_ONLY", "ALL"], bucket.object_audit_logging)
-    ])
+    condition     = contains(["NONE", "MUTATE_ONLY", "ALL"], var.object_audit_logging)
     error_message = "object_audit_logging must be one of: NONE, MUTATE_ONLY, ALL."
   }
+}
+
+variable "protect_from_destroy" {
+  description = "When true, add Terraform prevent_destroy lifecycle protection."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+variable "labels" {
+  description = "Optional Nebius bucket labels."
+  type        = map(string)
+  default     = {}
+  nullable    = false
 }

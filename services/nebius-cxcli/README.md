@@ -1,6 +1,6 @@
 # nebius-cxcli
 
-`nebius-cxcli` is the Nebius customer experience CLI and an end-to-end automation workflow generator. From one per-instance `config.yaml`, it renders a deployable customer artifact bundle: Terraform, Flux, inventory, and CI workflow artifacts.
+`nebius-cxcli` is the Nebius customer experience CLI and an end-to-end automation workflow generator. From one per-project `config.yaml`, it renders a deployable customer artifact bundle: Terraform, Flux, inventory, and CI workflow artifacts.
 
 After render, deployment should operate on the generated bundle. `config.yaml` remains the original render/reset contract, not the day-2 deployment surface.
 
@@ -9,7 +9,15 @@ The current implementation is provider-driven and source-configured for Nebius e
 - Infra components come from Terraform module sources.
 - App components come from Helm chart sources.
 - Runtime options and dependency checks use live provider/chart metadata where available.
-- Canonical instance model is dynamic: `infra.components[]` and `apps.charts[]`.
+- Canonical project config model is dynamic: `infra.components[]` and `apps.charts[]`.
+
+Architecture rationale:
+
+- `config.yaml` is the operator-facing orchestration contract, while Terraform modules and Helm charts are the provisioning contracts.
+- Terraform modules are used for infra because they provide desired-state planning, apply/destroy behavior, state/locking, reusable variable/output interfaces, and portable generated artifacts; the Nebius SDK is used for dynamic discovery, validation, status polling, and guard rails rather than replacing Terraform as the reconciler.
+- Helm charts are used for apps because they preserve the native app deployment contract and keep workloads cluster-agnostic while Flux/Helm remain the runtime owners of app reconciliation.
+- Component UX follows a progressive-enhancement model: generic Terraform modules and Helm charts should work with zero extra mapping, convention-friendly fields get better dynamic UX automatically, and optional `wizard_fields` metadata is reserved for advanced integration or ambiguous cases.
+- Terraform output aliases and `handoff` aliases are treated as a stable interface once the CLI, generated manifests, deploy/bootstrap flows, or app bindings consume them. Renaming or changing one is a breaking contract change, not an internal refactor.
 
 ## Table of Contents
 
@@ -28,16 +36,28 @@ The current implementation is provider-driven and source-configured for Nebius e
 
 ## Features
 
-- `config.yaml` is the canonical render/reset contract per instance.
+- `config.yaml` is the canonical render/reset contract per project.
 - `generated/` is the deploy contract for customer repositories.
 - Source-driven component model from `component_sources.yaml`.
-- `create` scaffolds or reconciles instance config idempotently.
+- `create` scaffolds or reconciles project config idempotently.
+- Re-running `create` against an existing project stays in reconcile/update mode by default; interactive runs now warn and ask for confirmation before continuing, while `--force` remains the explicit reset path.
+- Interactive `create` now also prints an early notice when the deployments root already contains project configs, then asks whether to continue before it starts prompting for project identity.
+- When interactive `create` finds exactly one existing project config in the deployments root and no explicit identity flags were passed, it offers that config's `client_name`, `tenant_id`, and `project_id` as prompt defaults.
 - `create` writes dynamic component state (`infra.components[]`, `apps.charts[]`).
 - `create` keeps only selected components/charts in `config.yaml` (unselected entries are omitted).
+- `component list`, `component add`, and `component remove` are the day-2 config-editing surface for both infra modules and app charts in existing projects.
+- `component_sources.yaml` defines reusable component types; `config.yaml` stores enabled component instances with unique `instance_id` values, so the same type can be added more than once.
+- `component add` preserves existing values, resolves app chart dependencies, and only prompts for newly added component instance fields.
+- Live Helm chart default values are treated as prompt-time defaults only. `config.yaml` stores explicit chart overrides, not the chart's full default values tree.
+- `component add` validates `component_sources.yaml` by default and supports `--no-validate-sources` when you explicitly want to skip that preflight.
+- `component add` also validates the existing `tenant_id`/`project_id` scope before provider-backed wizard fields run, so Nebius-backed dynamic options fail clearly instead of silently degrading.
+- `component remove` blocks changes that would leave unresolved component bindings or dependency breakage in `config.yaml`.
 - `create` validates `component_sources.yaml` by default (`--no-validate-sources` to skip).
+- `create` also runs the non-strict `validate` pass against the resulting `config.yaml` by default (`--no-validate-config` to skip).
 - `create`, `render`, and `bootstrap-ci` auto-manage a deployments-root `.gitignore` block when target path is inside a git repo (keeps `config.yaml` and deployable generated artifacts versioned while ignoring Terraform transient/runtime files and generated tfvars).
 - App dependency resolution from Helm `Chart.yaml` metadata.
 - Interactive wizard supports `q` to stop optional phases/field prompting.
+- `create` and `component add` still save the edited `config.yaml` when the wizard is stopped with `q`; they warn only when required fields are still missing and stay quiet when only optional fields remain at defaults.
 - `create` validates `tenant_id`/`project_id` against Nebius IAM APIs before continuing.
 - Infra field options are resolved dynamically from Nebius APIs where supported.
 - Flux output is flat under `generated/flux` (no `apps/` or `sources/` subdirectories).
@@ -47,10 +67,10 @@ The current implementation is provider-driven and source-configured for Nebius e
 - Rerender still recreates the managed generated bundle from a clean layout and removes stale or legacy content under `generated/`, including an old `generated/flux/flux-system` subtree.
 - `render` warns before overwriting existing generated artifacts, so rerendering is still an explicit replace action driven from the original `config.yaml` contract.
 - Generated-bundle CLI commands recreate ignored `generated/infra/terraform.auto.tfvars.json` from the committed manifest before Terraform runs, so deployable repos and generated workflows do not need to version that sensitive duplicate file.
-- `deploy`, `terraform plan/apply/unlock`, `flux apply/bootstrap`, `inventory write`, and `email` all operate on an existing generated bundle instead of reading `config.yaml`.
-- `terraform apply`, `flux apply`, and `deploy` are designed for sequential idempotent reruns against the same generated bundle.
+- `deploy`, `destroy`, `terraform plan/apply/destroy/unlock`, `flux apply/bootstrap/destroy`, `inventory write`, and `email` all operate on an existing generated bundle instead of reading `config.yaml`.
+- `terraform apply`, `terraform destroy`, `flux apply`, `flux destroy`, `deploy`, and `destroy` are designed for sequential reruns against the same generated bundle; destroy commands remain explicitly destructive and require confirmation or `--yes`.
 - `bootstrap-ci` generates or reconciles the customer CI workflow, always reconciles GitHub email settings from local `email --setup`, and optionally bootstraps/syncs Nebius CI auth secrets.
-- `discover` outputs deployment-instance discovery JSON with `config`, `generated`, `config_changed`, `generated_changed`, and `github_environment`.
+- `discover` outputs deployment-project discovery JSON with `config`, `generated`, `config_changed`, `generated_changed`, and `github_environment`.
 
 ## Runtime Metadata
 
@@ -62,8 +82,10 @@ Schema:
 
 - `cli.flux.version`: Flux controller install version used by local `deploy` when controllers are missing and by managed `flux bootstrap` CLI download
 - `cli.terraform.version`: Terraform CLI version used by the managed Terraform download path
-- `infra.tf_modules[]`: `module`, required `portable_source`, optional `local_source`, `version`, `group`, `enable`, optional `defaults`, optional `outputs`, optional `input`, optional `handoff`
-- `apps.helm_charts[]`: `name`, `repo`, `version`, `namespace`, `releasename`, `group`, `enable`, optional `defaults`, optional `outputs`, optional `input`
+- `infra.tf_modules[]`: `module`, required `portable_source`, optional `local_source`, `version`, `group`, `enable`, optional `wizard_fields`, optional `defaults`, optional `outputs`, optional `input`, optional `handoff`
+- `apps.helm_charts[]`: `name`, `repo`, `version`, `namespace`, `releasename`, `group`, `enable`, optional `wizard_fields`, optional `defaults`, optional `outputs`, optional `input`
+
+`wizard_fields` is optional catalog metadata for advanced wizard behavior. Most modules should rely on Terraform variable or Helm values introspection alone; use `wizard_fields` only when you need to disambiguate provider-backed choices or add an explicit override beyond naming conventions.
 
 Source profile selection:
 
@@ -91,7 +113,10 @@ Source requirements enforced by `validate-sources`:
   - The active local filesystem source must resolve to an existing directory.
   - Directory must contain at least one `*.tf` file.
   - Every module source is install-checked with `terraform init -backend=false` during validation, so broken remote refs, missing auth, and nested module source failures fail fast.
-  - Missing `main.tf` or `variables.tf` is reported as warning (wizard field discovery depends on variables).
+  - `validate-sources` also runs fast CLI-contract checks against the resolved module directory:
+    - fails when `versions.tf` is missing `required_version` or `required_providers`
+    - fails when child modules configure backend or provider blocks
+    - warns when canonical files such as `main.tf`, `variables.tf`, `outputs.tf`, `README.md`, or runnable `examples/` roots are missing
   - Supported Terraform module source formats are only:
     - relative local path
     - absolute local path
@@ -110,6 +135,10 @@ Source requirements enforced by `validate-sources`:
   - OCI format: `repo` must be direct OCI chart ref (`oci://.../<chart-name>`), basename must match chart `name`, and configured version must be a semantic version tag.
   - GitHub tree format: `repo` may point at a chart directory in git (`https://github.com/<owner>/<repo>/tree/<ref>/<chart-path>`). Helm validates the chart from that path directly.
   - Helm chart sources are fail-fast validated with `helm show chart`; missing Helm, unreachable repos, bad refs, missing charts, and version mismatches are hard failures.
+  - `validate-sources` also materializes the resolved chart and checks the CLI-facing chart contract:
+    - fails when `Chart.yaml`, `values.yaml`, or `templates/` are missing
+    - fails when `Chart.yaml` is missing `apiVersion`, `name`, or `version`
+    - warns when the chart is not on canonical Helm v2 metadata or when `README.md` is missing
 
 Resolution precedence:
 
@@ -160,10 +189,12 @@ infra:
     - module: mk8s
       portable_source: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mk8s?ref=main
       local_source: ../../platform-infra/modules/mk8s
+      defaults:
+        inputs.cpu_nodes_count: 2
       outputs:
         tf_outputs: true
-        static:
-          access: external
+        config:
+          access: inputs.mk8s_cluster_public_endpoint
       handoff:
         cluster_id: cluster_id
         access: access
@@ -237,7 +268,7 @@ Do not declare `shared` in `config.yaml`; shared values are catalog-only and con
 `handoff` is an infra-to-runtime orchestration contract.  
 It is declared once on the Terraform module source entry, not on every Helm chart.  
 `handoff.cluster_id` must reference a declared Terraform-backed `outputs` alias.  
-`handoff.access` must reference a declared config/static `outputs` alias that resolves to `external` or `internal`.  
+`handoff.access` must reference a declared config/static `outputs` alias that resolves to either an explicit access token (`external`/`internal`, `public`/`private`) or a boolean public-endpoint flag.  
 Generic exported values do not replace `handoff`; local deploy/bootstrap still needs an explicit runtime contract for kubeconfig setup.  
 When enabled charts are deployed, the CLI uses that contract to read the rendered Terraform root output and prepare kubeconfig before Flux/kubectl work starts.
 
@@ -252,12 +283,13 @@ Runtime config shape:
 
 - `client_info`: `client_name`, `nebius.{tenant_id,project_id,region_id}`, `notifications.{email_enabled,email}`
 - `client_info.notifications.email_enabled` is the single per-client gate for inventory email delivery across local runs and CI. Keep it `true` when this client should receive inventory email, and set it to `false` when this specific client should not receive mail.
+- In `create`, leaving the optional notifications email blank writes `client_info.notifications.email_enabled: false` and `client_info.notifications.email: null`.
 - `client_info` does not include legacy `env` or `cluster_name` fields.
 - `infra.components[]`: `id`, `enabled`, `inputs`
 - `apps.charts[]`: `id`, `group`, `enabled`, `repo`, `version`, `namespace`, `release-name`, `values`
-- Source catalogs use `releasename`; instance `config.yaml` uses `release-name`. Aliases such as `release-name` in `component_sources.yaml` or `release_name` in `config.yaml` are not supported.
+- Source catalogs use `releasename`; project `config.yaml` uses `release-name`. Aliases such as `release-name` in `component_sources.yaml` or `release_name` in `config.yaml` are not supported.
 - Static nested component configs (`infra.<component>.enabled`, `apps.<group>.<chart>.enabled`) are not supported.
-- Canonical instance path: `<deployments-root>/instances/<client-name>--<tenant-id>/<project-id>/config.yaml`
+- Canonical project path: `<deployments-root>/projects/<client-name>--<tenant-id>/<project-id>/config.yaml`
 
 Infra module source selection comes from the active `component_sources.yaml`. `config.yaml` does not need to pin `infra.components[].source` or `infra.components[].version`.
 New starter configs omit those fields entirely.
@@ -275,7 +307,7 @@ Inventory render output:
 - `generated/nebius-cxcli-manifest.json`
 - `generated/inventory/inventory.md`
 - `inventory.md` is the human-readable inventory and the email body source for `nebius-cxcli email`.
-- `render`, `deploy`, `terraform apply`, `flux apply`, `flux bootstrap`, and `inventory write` refresh inventory artifacts for the active instance instead of leaving the starter placeholder behind.
+- `render`, `deploy`, `terraform apply`, `flux apply`, `flux bootstrap`, and `inventory write` refresh inventory artifacts for the active project instead of leaving the starter placeholder behind.
 - Those refreshes also delete stale legacy inventory JSON files so the directory reflects the current generated contract.
 
 Terraform render output (canonical):
@@ -299,13 +331,25 @@ Terraform render output (canonical):
 Wizard field behavior:
 
 - Infra input field names are discovered dynamically from Terraform module variables (required and optional).
-- Wizard prompts required Terraform variables first (plus existing optional values and dependency-enabled option sets).
-- Prompt labels include Terraform input type hints (for example `string`, `number`, `bool`) and `required` markers.
+- Interactive `create` and `component add` offer all discoverable required and optional component fields for newly selected components.
+- Required fields are prompted first, are labeled `required`, and must receive a valid value before the wizard advances unless the operator stops the wizard with `q`.
+- Optional fields are labeled `optional`; pressing Enter keeps the current/default value and leaves the field unset in `config.yaml` when the value is still only a virtual default.
+- Prompt labels include Terraform input type hints (for example `string`, `number`, `bool`) plus `required` or `optional`.
+- Collection/object Terraform inputs (`list(...)`, `map(...)`, `object(...)`, `tuple(...)`) are entered as YAML/JSON values in the wizard instead of being flattened into string-only prompts.
+- Terraform module defaults and Helm chart defaults can be shown as prompt defaults without being copied into `config.yaml`; they remain virtual until the operator explicitly overrides them.
+- Literal defaults from `component_sources.yaml` are still shown in the wizard as editable current values instead of being hidden once pre-seeded into the component block.
+- Empty optional YAML/JSON defaults such as `{}` and `[]` are rendered as blank-input prompts with explicit “blank keeps current empty map/list” guidance instead of awkward literal default tokens.
+- Multiline Terraform defaults discovered from module `variables.tf` files, including map/object defaults, are parsed as full values in wizard mode instead of being truncated to the first line.
 - Source-backed infra `inputs.parent_id`/`inputs.project_id` default to `client_info.nebius.project_id` when those variables exist.
 - `component_sources.yaml` can declare top-level `shared` values and shared-derived `defaults` so components read shared values from the active source catalog instead of duplicating them under component `inputs` or chart `values`.
-- The bundled `mk8s` catalog entry defaults `inputs.mk8s_cluster_public_endpoint: true` because its handoff contract is `access: external`; that keeps local `deploy`/Flux handoff aligned with public-endpoint selection for external access.
+- The bundled `mk8s` catalog entry defaults `inputs.mk8s_cluster_public_endpoint: true`, and the handoff contract now resolves access dynamically from that input. If you switch the control plane to private-only, local app operations still work, but only from a machine that already has private network reachability to the MK8s API endpoint.
 - The bundled `mk8s` catalog entry also defaults `inputs.kube_network_service_cidrs: ["/20"]`. Nebius treats an omitted MK8s service CIDR as `["/16"]`; on a single-pool `/16` subnet that can consume the whole pool and leave no address space for control-plane allocations, which looks like a long `PROVISIONING` stall.
+- The bundled `mk8s` catalog entry also defaults `inputs.cpu_nodes_count: 2`. That keeps the baseline cluster footprint explicit in `config.yaml` and editable in the wizard instead of relying on a hidden Terraform module default for CPU node-group size.
+- Fields behind a sibling `<prefix>_enabled` toggle, such as MK8s GPU settings behind `gpu_enabled`, stay hidden until that toggle is true.
 - Provider-backed option lists are inferred by field patterns and resolved live from Nebius APIs when available.
+- If live provider choices are unavailable for a field, the CLI prints a field-specific warning immediately before that prompt and explains whether the next manual-input prompt is required or can be skipped with Enter.
+- Optional provider-backed fields now accept blank/skip answers as “leave unset” without revalidating that blank value against the live option list.
+- Helm chart default values discovered from the live chart are not copied into `config.yaml`; the app wizard can show them as prompt defaults, but only explicit overrides are written back.
 - Current built-in provider option sources include:
   - `mk8s_compatible_platforms` (for mk8s platform fields)
   - `compute_platforms`
@@ -346,7 +390,7 @@ infra:
 ```
 
 With that default, `wireguard-jumphost` receives `ssh_user_name` from the active `component_sources.yaml` `shared.admin_ssh.user_name` value during validation/render.  
-`ssh_public_key` is intentionally per-instance input and should be stored only in the private instance `config.yaml`, not in the shipped source catalog.  
+`ssh_public_key` is intentionally per-project input and should be stored only in the private project `config.yaml`, not in the shipped source catalog.  
 Do not duplicate shared-derived default targets under `infra.components[].inputs` or `apps.charts[].values`; strict validation rejects explicit values for catalog-managed targets.
 
 Catalog defaults example:
@@ -387,8 +431,8 @@ infra:
       local_source: ../../platform-infra/modules/mk8s
       outputs:
         tf_outputs: true
-        static:
-          access: external
+        config:
+          access: inputs.mk8s_cluster_public_endpoint
 
 apps:
   helm_charts:
@@ -420,20 +464,26 @@ Resolution model:
 ## Recommended Workflow
 
 1. `nebius-cxcli create <deployments-root>`
-2. Edit the generated instance `config.yaml` with real values.
-3. `nebius-cxcli validate --strict <config.yaml>`
-4. `nebius-cxcli render <config.yaml>`
-5. Commit the instance `config.yaml` and the deployable `generated/` bundle to the customer private repo.
-6. Deploy from the generated bundle:
+2. Optional day-2 config edits on the existing project:
+   - `nebius-cxcli component list <config.yaml>`
+   - `nebius-cxcli component add <config.yaml>`
+   - `nebius-cxcli component remove <config.yaml>`
+3. Edit the project `config.yaml` with real values.
+4. Optional extra readiness gate: `nebius-cxcli validate --strict <config.yaml>`
+5. `nebius-cxcli render <config.yaml>`
+6. Commit the project `config.yaml` and the deployable `generated/` bundle to the customer private repo.
+7. Deploy from the generated bundle:
    - `nebius-cxcli deploy <generated-dir>`
    - `nebius-cxcli terraform apply <generated-dir>`
    - `nebius-cxcli flux apply <generated-dir>`
    - CI workflow deploys from `generated/`, not from `config.yaml`
-7. Optional CI setup:
+8. Optional CI setup:
    - `nebius-cxcli bootstrap-ci <config.yaml>`
    - The generated customer workflow watches `generated/**` only. Editing `config.yaml` in the customer repo does not trigger CI deploys; rerendering from `config.yaml` is a manual replace action.
 
-`create` is idempotent by default. Re-running the same instance identity reconciles selections and preserves existing values. Use `create --force` only when you want reset/overwrite behavior.
+`create` is idempotent by default. Re-running the same project identity reconciles selections and preserves existing values. Use `create --force` only when you want reset/overwrite behavior.
+
+`create` is the bootstrap path from the deployments root because it owns project identity (`client_name`, `tenant_id`, `project_id`, `region_id`) and initial scaffold creation. Once `config.yaml` already exists, use `component list/add/remove` against that file for day-2 component selection changes. Those commands keep the current identity and existing values intact, and `render` remains the full reconcile step back into `generated/`.
 
 In the customer private repo, keep both:
 
@@ -444,7 +494,7 @@ Rerendering from `config.yaml` is still supported, but it is a manual replace ac
 
 For Flux/GitOps, the important safety boundary is Git history, not the local render directory swap. The recommended workflow is: rerender locally, validate/review the new `generated/` diff, then commit and push one final snapshot of the watched path. Do not push an intermediate commit that removes manifests from the watched Git path, and do not routinely unbootstrap/rebootstrap Flux just to replace rendered artifacts.
 
-Sensitive per-instance values such as jump-host SSH public keys belong in the private instance `config.yaml`, not in the shipped public `component_sources.yaml`.
+Sensitive per-project values such as jump-host SSH public keys belong in the private project `config.yaml`, not in the shipped public `component_sources.yaml`.
 
 Local `deploy`/`flux bootstrap` behavior when apps + a handoff-enabled cluster component are enabled:
 
@@ -456,7 +506,10 @@ Local `deploy`/`flux bootstrap` behavior when apps + a handoff-enabled cluster c
 - Remote state lock failures are called out separately: the CLI explains that Terraform never acquired the backend lock, so the run created nothing, and points at the stale `.tflock` object metadata when Terraform provides it.
 - When Nebius MK8s node-group status reports `ERROR` events, the merged status block includes those alerts. Known transient bootstrap warnings such as waiting for ProviderID registration or temporary `Ready=False` node conditions are shown as notes instead of alerts while the node group is still provisioning.
 - After apply, `deploy` reads the rendered Terraform output declared by `handoff.cluster_id` and configures a temporary kubeconfig before applying Flux manifests.
+- `handoff.access` is config-driven for the bundled `mk8s` component, so the CLI automatically selects the public or private control-plane endpoint based on `inputs.mk8s_cluster_public_endpoint` instead of assuming public access.
 - On non-CI local runs, that same cluster handoff also updates the user kubeconfig at `~/.kube/config` with a `nebius-cxcli` exec-based credential entry, so `kubectl` can be used against the target cluster after `deploy`, `flux apply`, or `flux bootstrap` without installing a separate Nebius CLI.
+- `destroy` and `flux destroy` still use the same MK8s handoff contract for temporary cluster access when app resources must be removed first, but they do not persist or switch the user's local `~/.kube/config`.
+- When the selected handoff endpoint is private, `deploy`, `flux apply`, `flux bootstrap`, `destroy`, and `flux destroy` require the current machine to already have a private network path to the MK8s API. The CLI does not hardcode or auto-provision that path; customer environments can satisfy it with VPNs, routed private networks, subnet routers, SSH/WireGuard tunnels, or by running the command from an in-network runner.
 - Before `deploy`, `flux apply`, or `flux bootstrap` starts Flux work against a handed-off MK8s cluster, the CLI first checks Kubernetes node readiness and only waits when the nodes are not `Ready` yet. When the cluster is already healthy, it proceeds to Flux work immediately instead of presenting that probe as a wait.
 - Once the cluster handoff is ready, the local Flux phase now keeps one continuous spinner alive and updates its message through cluster reachability, Flux API discovery, rendered manifest apply, and the final rendered-resource readiness wait so the command does not go visually idle between phases.
 - In non-interactive logs such as GitHub Actions, those same phase updates fall back to stable printed lines instead of transient spinner frames, so CI logs remain readable and do not depend on TTY animation support.
@@ -479,7 +532,8 @@ Local `deploy`/`flux bootstrap` behavior when apps + a handoff-enabled cluster c
 - `flux bootstrap` only takes the reconcile path when the cluster already has both Flux controllers and the bootstrap Git objects `GitRepository/flux-system` plus `Kustomization/flux-system`. If controllers exist but those bootstrap objects do not, the CLI runs a real `flux bootstrap github ...` instead of a reconcile that would fail.
 - `flux bootstrap` is the GitOps path. It expects the rendered manifests to be committed and pushed to the watched GitHub repo/path before or immediately after bootstrap. If you want an immediate local cluster apply without depending on Git content yet, use `flux apply`.
 - Local kubeconfig persistence can be disabled explicitly with `NEBIUS_CXCLI_PERSIST_LOCAL_KUBECONFIG=false`. In CI it is skipped automatically.
-- `deploy` requires `kubectl`. It also requires `nebius` CLI when the generated bundle includes enabled charts and a `handoff`-enabled infra component.
+- `deploy`, `destroy`, `flux apply`, and `flux destroy` require `kubectl` when they operate on rendered app resources.
+- Nebius API/runtime auth interactions use the Nebius SDK. A standalone `nebius` CLI install is not required.
 - `flux bootstrap` still needs network access to GitHub releases when the managed Flux CLI download path is used.
 - The managed Terraform download path needs network access to HashiCorp releases when Terraform is not already in `PATH`.
 - If your Nebius SDK config already has auth, `deploy` can reuse that SDK config. Otherwise rerun with runtime auth material available, for example `--auto-auth-bootstrap`.
@@ -498,7 +552,7 @@ On a brand-new local release branch, `--prep` now pushes with `git push --set-up
 `--prep` is idempotent while the target tag does not already exist. You can run it multiple times for the same unreleased version; once `## [Unreleased]` is empty, reruns leave `CHANGELOG.md` and `HEAD` unchanged.
 `--publish` fails locally before tagging if the target changelog section is missing or empty.
 
-The publish step creates the annotated tag `nebius-cxcli-vX.Y.Z`. That tag triggers the repository workflow at `.github/workflows/nebius-cxcli-release.yml`, which reruns the same local `make all` verification contract, verifies that the wheel version matches the tag, verifies that the bundled fallback `component_sources.yaml` is present inside the wheel, and publishes the GitHub Release from the tagged commit.
+The publish step creates the annotated tag `nebius-cxcli-vX.Y.Z`. That tag triggers the repository workflow at `.github/workflows/nebius-cxcli-release.yml`, which reruns the same local `make all` verification contract, runs `validate-sources component_sources.yaml` against the real portable catalog, verifies that the wheel version matches the tag, verifies that the bundled fallback `component_sources.yaml` is present inside the wheel, and publishes the GitHub Release from the tagged commit.
 Those post-`make all` workflow checks use the repo `.venv/bin/python` created by that contract so `nebius_cxcli.release_catalog` imports the editable service package reliably under GitHub Actions.
 
 In source/editable checkouts, runtime version resolution prefers live SCM state over a generated `_version.py` cache: it uses `setuptools-scm` when available and falls back to `git describe` when it is not. The local `./publish-release.sh --publish X.Y.Z` flow also verifies that the tagged source checkout resolves `nebius-cxcli.__version__ == X.Y.Z` before it pushes the release tag.
@@ -509,6 +563,15 @@ Release assets for `nebius-cxcli` now include:
 - the raw release catalog as a direct editable download, with its Terraform Git module refs pinned to the published release tag
 
 ## Commands
+
+Idempotency guide:
+
+- Read-only commands are safe to repeat: `validate-sources`, `validate`, `validate-generated`, `discover`, `terraform plan`, and `auth --validate-profile`.
+- Reconcile/apply commands are sequentially idempotent or convergent for the same target: `create` (default mode), `render`, `deploy`, `terraform apply`, `flux apply`, `flux bootstrap`, `inventory write`, `bootstrap-ci`, `auth --create`, and `auth --bootstrap-ci`.
+- Destructive commands are sequentially convergent for the same target but intentionally remove resources: `destroy`, `terraform destroy`, and `flux destroy`. They require confirmation or `--yes`.
+- Explicit additive or side-effecting commands are intentionally not idempotent: `component add` creates another component instance on repeat, `auth --recreate` rotates auth material, and `email` sends another message on each run.
+- `create --force` and `render --force` are still deterministic with the same inputs, but they are explicit overwrite/reset modes rather than the safer default reconcile flow.
+- `terraform unlock` is operationally safe to repeat: once the lock is cleared, reruns report that no lock is present.
 
 Global options:
 
@@ -526,10 +589,10 @@ nebius-cxcli render /path/to/config.yaml
 ```
 
 - `validate-sources`
-  - Validates the active `component_sources.yaml` catalog: Terraform module sources, Helm chart sources, and catalog contract shape.
+  - Validates the active `component_sources.yaml` catalog: Terraform module sources, Helm chart sources, catalog contract shape, and fast source-structure checks for CLI-friendly Terraform modules and Helm charts.
   - Accepts an optional positional catalog path, for example `nebius-cxcli validate-sources ./component_sources.yaml`.
 - `validate <config.yaml>`
-  - Validates the instance contract and runtime shape without the stricter deployment-readiness checks.
+  - Validates the project config contract and runtime shape without the stricter deployment-readiness checks.
   - Runs phased validation with visible progress: config/catalog load, active source checks, dependency checks, then Terraform module input/schema checks.
   - Defaults to the global source profile `portable`, so validation fails when the requested render contract would rely on non-portable local Terraform module paths.
 - `validate --strict <config.yaml>`
@@ -550,8 +613,11 @@ nebius-cxcli render /path/to/config.yaml
 ```bash
 nebius-cxcli validate-generated /path/to/generated
 nebius-cxcli deploy /path/to/generated
+nebius-cxcli destroy /path/to/generated --yes
 nebius-cxcli terraform apply /path/to/generated
+nebius-cxcli terraform destroy /path/to/generated --yes
 nebius-cxcli flux apply /path/to/generated
+nebius-cxcli flux destroy /path/to/generated --yes
 nebius-cxcli flux bootstrap /path/to/generated
 ```
 
@@ -561,13 +627,28 @@ nebius-cxcli flux bootstrap /path/to/generated
   - Add `--portable` in CI or pre-commit checks to reject generated Terraform bundles that still embed local filesystem module paths.
   - Uses the generated bundle as the deploy contract; it does not need the original render machine's local module paths.
 - `deploy <generated-dir>`
-  - Full local deploy from the generated bundle: Terraform apply first, then inventory refresh for both infra and apps artifacts, then Flux apply. If GitOps bootstrap is not configured yet, the CLI warns and prints the follow-up `flux bootstrap` command.
+  - Full local reconcile from the generated bundle: Terraform apply first, then inventory refresh for both infra and apps artifacts, then Flux apply. If GitOps bootstrap is not configured yet, the CLI warns and prints the follow-up `flux bootstrap` command.
+  - `deploy` is idempotent in the Terraform/Flux sense: rerunning the same generated bundle converges to no-op, but it is not a create-only path. Existing managed infrastructure or workloads can be updated when the generated bundle differs from live state.
+  - Use `nebius-cxcli terraform plan <generated-dir>` first when you need a non-mutating preview of the next reconcile.
+  - Nebius API status polling for infra is catalog-driven per Terraform module. The generated manifest snapshots enabled module watcher specs, and `deploy`/`terraform apply` fall back to the active catalog when older generated bundles do not have that metadata yet.
+  - Each watcher resolves its `parent_id` and `resource_name` from the enabled component row in `config.yaml`, using the catalog's `status.parent_input` and `status.name_input` paths. For example, `mk8s` reads `inputs.parent_id` plus `inputs.cluster_name`, `managed-postgresql` reads `inputs.parent_id` plus `inputs.name`, and `object-storage` reads `inputs.parent_id` plus `inputs.name`.
+  - Status output now reads Nebius service-native response fields for MSP PostgreSQL, SFS, and object-storage watchers, so in-progress resources are reported instead of being shown as "not visible yet".
   - `deploy` does not run `flux bootstrap`; use `flux bootstrap` itself or the generated CI apply workflow when you want GitOps bootstrap/reconcile.
   - `deploy` does not run `bootstrap-ci` automatically, even when the bundle lives inside a git repository. GitHub workflow/environment bootstrap stays an explicit generator-side step.
+- `destroy <generated-dir>`
+  - Full local teardown from the generated bundle: delete rendered Flux resources from the target cluster first when apps are enabled, then run Terraform destroy against the rendered infra bundle.
+  - `destroy` is the destructive inverse of `deploy`. It operates only on the existing generated bundle, does not rerender from `config.yaml`, and does not uninstall Flux controllers or mutate GitHub CI/bootstrap state.
+  - Rendered app teardown is best-effort. If deleting the rendered Flux resources fails, the CLI warns and still continues with Terraform destroy because the rendered infra bundle is the authoritative teardown path.
+  - The command requires explicit confirmation in interactive mode and `--yes` in non-interactive mode.
+  - If you only want the infra teardown, use `terraform destroy`. If you only want the rendered app teardown, use `flux destroy`.
 - `terraform apply <generated-dir>`
   - Infra-only apply from the generated Terraform bundle. Safe to rerun sequentially for convergence, and does not depend on resolving the original source catalog's module paths.
+- `terraform destroy <generated-dir>`
+  - Infra-only destroy from the generated Terraform bundle. Destructive by intent, requires confirmation or `--yes`, and reuses the same generated-bundle runtime auth/backend/status machinery as `terraform apply`.
 - `flux apply <generated-dir>`
   - Apps-only direct apply from the generated Flux bundle. Safe to rerun sequentially for day-2 reconciliation. If GitOps bootstrap is not configured yet, the CLI warns and prints the follow-up `flux bootstrap` command.
+- `flux destroy <generated-dir>`
+  - Apps-only direct delete from the generated Flux bundle using the same rendered manifests that `flux apply` manages. Destructive by intent and requires confirmation or `--yes`.
 - `flux bootstrap <generated-dir>`
   - GitOps bootstrap/reconcile path from the generated Flux bundle. Use this when the cluster should watch the Git repo/path with Flux.
   - Normal day-2 updates should replace `generated/` locally, then commit and push one final watched-path snapshot. Do not unbootstrap/rebootstrap Flux just to roll out a new rendered bundle.
@@ -575,26 +656,58 @@ nebius-cxcli flux bootstrap /path/to/generated
 ### Supporting Commands
 
 ```bash
+nebius-cxcli component list /path/to/config.yaml
+nebius-cxcli component add /path/to/config.yaml
+nebius-cxcli component remove /path/to/config.yaml
 nebius-cxcli create /path/to/deployments-root
 nebius-cxcli bootstrap-ci /path/to/config.yaml
 nebius-cxcli discover /path/to/deployments-root
 nebius-cxcli terraform plan /path/to/generated
+nebius-cxcli terraform destroy /path/to/generated --yes
 nebius-cxcli terraform unlock /path/to/generated
+nebius-cxcli flux destroy /path/to/generated --yes
 nebius-cxcli inventory write /path/to/generated
+nebius-cxcli destroy /path/to/generated --yes
 nebius-cxcli email /path/to/generated
-nebius-cxcli auth --instance-config /path/to/config.yaml --validate-profile
+nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
 ```
 
 - Positional target quick map:
   - `create`: pass the deployments root directory.
-  - `discover`: pass the deployments root or any narrower directory under it, including one instance directory or `generated/`.
-  - `validate`, `render`, `bootstrap-ci`: pass the instance `config.yaml`.
-  - `validate-generated`, `deploy`, `terraform *`, `flux *`, `inventory write`, `email`: pass `generated/`, one of its subdirectories, or a file under that tree as accepted by the command.
+  - `discover`: pass the deployments root or any narrower directory under it, including one project directory or `generated/`.
+  - `component`, `validate`, `render`, `bootstrap-ci`: pass the project `config.yaml`.
+  - `validate-generated`, `deploy`, `destroy`, `terraform *`, `flux *`, `inventory write`, `email`: pass `generated/`, one of its subdirectories, or a file under that tree as accepted by the command.
   - `validate-sources`: optional explicit `component_sources.yaml` path.
-  - `auth`: no positional path; use `--instance-config <config.yaml>` or `--project-id`, or omit both with `--validate-profile` to inspect all cached profiles.
+  - `auth`: no positional path; use `--project-config <config.yaml>` or `--project-id`, or omit both with `--validate-profile` to inspect all cached profiles.
 
+- `component list <config.yaml>`
+  - Shows enabled and available catalog entries for the current project, split between infra modules and app charts.
+  - Read-only inspection command for deciding the next add/remove action against the current `config.yaml`.
+- `component add <config.yaml>`
+  - Adds source-defined infra module rows or app chart rows to an existing project config without recreating the project scaffold.
+  - Catalog entries are reusable component types. Each add creates a new enabled component instance with its own `instance_id`, so you can add `mk8s`, `managed-postgresql`, `object-storage`, or app charts multiple times in one project.
+  - Interactive mode prompts separately for infra and apps, confirms the selection, auto-resolves app chart dependencies, and then runs the field wizard only for the newly added components.
+  - That field wizard offers all discoverable required and optional fields for each new component, including editable literal catalog defaults. Required fields must be filled before advancing; optional blanks stay implicit when they still match module/chart defaults.
+  - Source validation runs by default, mirroring `create`. Use `--no-validate-sources` only when you intentionally want to skip catalog preflight.
+  - The command revalidates the existing Nebius tenant/project scope before provider-backed field prompts, so missing SDK credentials or inaccessible scope are surfaced as explicit errors.
+  - Complex Terraform inputs such as `allowed_cidrs`, `clients`, `secrets`, and `mk8s_*_overrides` are edited as YAML/JSON values in the wizard.
+  - Non-interactive mode accepts component ids directly, for example `nebius-cxcli component add /path/to/config.yaml managed-postgresql object-storage gateway-helm --no-interactive`.
+  - Repeating the same component id adds another instance. You can also request an explicit instance id with `<component-id>@<instance-id>`, for example `object-storage@logs-bucket`.
+  - `object-storage` now represents one bucket per enabled module instance and requires `inputs.name`.
+  - Existing component values are preserved. After the edit, run `validate` and `render` again.
+- `component remove <config.yaml>`
+  - Removes enabled infra module rows or app chart rows from an existing config.
+  - Interactive mode prompts separately for infra and apps and asks for confirmation before editing.
+  - When multiple instances of the same component type are enabled, remove by exact `instance_id` or `<component-id>@<instance-id>`.
+  - The command fails fast when the removal would leave unresolved app dependencies or component input bindings.
 - `create <deployments-root>`
-  - Scaffolds or reconciles the instance `config.yaml` and generated-folder skeleton.
+  - Scaffolds or reconciles the project `config.yaml` and generated-folder skeleton.
+  - In interactive mode, `create` prints an early notice when the deployments root already contains project configs and offers a stop/continue prompt before any project-identity prompts appear. Both that early guard and the later exact-project reconcile confirmation now default to continue.
+  - If exactly one existing project config is present and no explicit `--client-name` / `--tenant-id` / `--project-id` flags were supplied, interactive `create` offers those identity values as the prompt defaults.
+  - When the target project config already exists, interactive `create` warns and asks for confirmation before reconcile/update continues.
+  - After writing the resulting `config.yaml`, `create` runs the same non-strict runtime validation as `validate` by default. Use `--no-validate-config` only when you intentionally want to skip that post-write check.
+  - In interactive mode, `q` can stop the wizard at any point. The command still writes the current project config and warns only when required fields remain unresolved.
+  - For selected components, the field wizard offers all discoverable required and optional fields, including editable literal catalog defaults. Required blanks are rejected immediately; optional blanks keep defaults implicit when possible.
 - `bootstrap-ci <config.yaml>`
   - Generates or reconciles the customer GitHub Actions workflow, always reconciles GitHub email settings from local `email --setup`, and optionally bootstraps/syncs the required Nebius CI auth secrets. The generated workflow watches and deploys only `generated/**`.
   - The workflow file is CLI-managed. Re-running `bootstrap-ci` automatically reconciles `.github/workflows/nebius-deployments.yml` to the latest generated contract and is idempotent when no drift exists.
@@ -620,15 +733,21 @@ nebius-cxcli auth --instance-config /path/to/config.yaml --validate-profile
   - Customers do not need to set `NEBIUS_CXCLI_REF` before each run. Set it only when you want to override the baked workflow default, and leave it in place until you want a different ref.
   - `bootstrap-ci` creates the GitHub Environment, reconciles SMTP settings on every run, and with `--auth-bootstrap` also syncs Nebius CI auth secrets. It does not create GitHub repo/org variables; `NEBIUS_CXCLI_REF` remains an optional manual override.
 - `discover <deployment-scope-dir>`
-  - Returns changed deployment instances for CI matrix generation.
-  - Accepts the deployments root or any narrower directory under it, including one instance directory or `generated/`.
-  - Scope filtering is instance-aware: both `--all` and normal changed-file discovery still resolve the matching instance when the scope is an instance subdirectory such as `generated/`.
+  - Returns changed deployment projects for CI matrix generation.
+  - Accepts the deployments root or any narrower directory under it, including one project directory or `generated/`.
+  - Scope filtering is project-aware: both `--all` and normal changed-file discovery still resolve the matching project when the scope is a project subdirectory such as `generated/`.
 - `validate-generated <generated-path>`
   - Validates an existing rendered bundle from `generated/`, one of its subdirectories, or a file under that tree.
 - `terraform plan <generated-path>`
   - Infra-only plan from the generated Terraform bundle.
+- `terraform destroy <generated-path>`
+  - Destroys the generated Terraform bundle in place after an explicit confirmation or `--yes`.
 - `terraform unlock <generated-path>`
   - Inspects and clears a stale remote Terraform state lock for the generated infra bundle.
+- `flux destroy <generated-path>`
+  - Deletes the rendered Flux resources from the target cluster after an explicit confirmation or `--yes`.
+- `destroy <generated-path>`
+  - Deletes rendered apps first and then destroys the rendered infra bundle after an explicit confirmation or `--yes`.
 - `inventory write <generated-path>`
   - Refreshes local non-sensitive inventory files from the generated bundle.
 - `email [generated-path]`
@@ -645,6 +764,10 @@ nebius-cxcli auth --instance-config /path/to/config.yaml --validate-profile
 
 Common command flags:
 
+- `component add`:
+  `--no-interactive`, `--validate-sources/--no-validate-sources`
+- `component remove`:
+  `--no-interactive`
 - `create`:
   `--client-name`, `--tenant-id`, `--project-id`, `--region-id`, `--email`, `--infra`, `--app`, `--app-namespace`, `--app-releasename`, `--validate-sources/--no-validate-sources`, `--no-interactive`, `--force`
 - `bootstrap-ci`:
@@ -654,14 +777,17 @@ Common command flags:
 - `validate-generated`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--portable`
 - `render`: `--force`
 - `deploy`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`
+- `destroy`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--yes`
 - `discover`: `--all`
 - `terraform plan`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`
 - `terraform apply`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`
+- `terraform destroy`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--yes`
 - `terraform unlock`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--force`
 - `flux apply`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`
+- `flux destroy`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--yes`
 - `flux bootstrap`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`
 - `auth`:
-  `--project-id`, `--instance-config`, `--client-name`, `--profile`, `--endpoint`, `--sdk-config-file`, `--github-repo`, `--github-token-env`, `--validate-profile`, `--create`, `--recreate`, `--bootstrap-ci`
+  `--project-id`, `--project-config`, `--client-name`, `--profile`, `--endpoint`, `--sdk-config-file`, `--github-repo`, `--github-token-env`, `--validate-profile`, `--create`, `--recreate`, `--bootstrap-ci`
 
 ## Auth Workflow
 
@@ -688,7 +814,7 @@ Terraform runtime auth behavior:
     - metadata file exists under `~/.config/nebius-cxcli/<client_name>-<project-id>/runtime-auth.json`
     - private key file exists locally
     - configured `auth_public_key_id` is still readable from Nebius IAM
-  - When `--project-id` and `--instance-config` are both omitted, validates every cached runtime auth profile under `~/.config/nebius-cxcli/`.
+  - When `--project-id` and `--project-config` are both omitted, validates every cached runtime auth profile under `~/.config/nebius-cxcli/`.
 - `--bootstrap-ci`:
   - Syncs local runtime auth profile secrets to GitHub environment secrets.
   - GitHub environment name is `<client_name>-<project_id>`.
@@ -726,6 +852,19 @@ This keeps repeated runs safe by default while still allowing explicit rotation.
 # Interactive create (default wizard mode)
 nebius-cxcli create /path/to/deployments-root
 
+# Day-2 config edits against an existing project
+nebius-cxcli component list /path/to/config.yaml
+
+# Interactive add of a new Terraform-module-backed infra component
+nebius-cxcli component add /path/to/config.yaml
+
+# Non-interactive add/remove
+nebius-cxcli component add /path/to/config.yaml managed-postgresql --no-interactive
+nebius-cxcli component add /path/to/config.yaml managed-postgresql object-storage@logs-bucket --no-interactive
+nebius-cxcli component add /path/to/config.yaml gateway-helm --no-interactive
+nebius-cxcli component remove /path/to/config.yaml managed-postgresql@managed-postgresql-2 --no-interactive
+nebius-cxcli component remove /path/to/config.yaml gateway-helm --no-interactive
+
 # Non-interactive create/reconcile
 nebius-cxcli create /path/to/deployments-root \
   --client-name client-a \
@@ -752,9 +891,13 @@ nebius-cxcli validate-generated --portable /path/to/generated
 # Local deploy from generated artifacts
 nebius-cxcli deploy /path/to/generated
 
+# Local destroy from generated artifacts
+nebius-cxcli destroy /path/to/generated --yes
+
 # Infra only
 nebius-cxcli terraform plan /path/to/generated
 nebius-cxcli terraform apply /path/to/generated
+nebius-cxcli terraform destroy /path/to/generated --yes
 
 # Safe to rerun sequentially after artifact changes or partial failures
 nebius-cxcli terraform apply /path/to/generated
@@ -765,6 +908,7 @@ nebius-cxcli terraform apply /path/to/generated
 
 # Apps only: direct local apply to the target cluster
 nebius-cxcli flux apply /path/to/generated
+nebius-cxcli flux destroy /path/to/generated --yes
 
 # Safe to rerun sequentially for day-2 chart reconciliation
 nebius-cxcli flux apply /path/to/generated
@@ -786,10 +930,10 @@ nebius-cxcli auth --project-id project-123 --client-name client-a --create
 nebius-cxcli auth --project-id project-123 --client-name client-a --recreate
 
 # Validate runtime auth profile
-nebius-cxcli auth --instance-config /path/to/config.yaml --validate-profile
+nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
 
 # Sync local auth profile to GitHub environment secrets
-nebius-cxcli auth --instance-config /path/to/config.yaml --bootstrap-ci --github-repo owner/repo
+nebius-cxcli auth --project-config /path/to/config.yaml --bootstrap-ci --github-repo owner/repo
 ```
 
 ## Development
@@ -827,7 +971,7 @@ Runtime plugin env knobs:
 
 - Keep deployment repositories private.
 - Never commit credentials or secret values.
-- The shipped catalogs avoid tenant/admin-specific key material. Per-instance SSH public keys belong in the private deployment repo `config.yaml`.
+- The shipped catalogs avoid tenant/admin-specific key material. Project-scoped SSH public keys belong in the private deployment repo `config.yaml`.
 - `config.yaml` is the canonical render/reset contract and should be versioned in the private deployment repo.
 - `generated/` is the deploy contract and should also be versioned, except for ignored runtime/transient files.
 - Managed deployments `.gitignore` keeps generated Terraform runtime files and generated tfvars out of git, but does not ignore `config.yaml` or deployable generated manifests.

@@ -6,6 +6,11 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+from .component_instances import (
+    INSTANCE_ID_PATTERN,
+    component_instance_id,
+    component_type_id,
+)
 from .components import ComponentScope, component_entries, component_lookup, parse_dependency_ref
 from .runtime_config import read_path_with_catalog
 from .runtime_plugin_validation import run_runtime_validation_plugins
@@ -147,28 +152,46 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
         raise ValueError("apps.charts must be a list in dynamic config mode")
 
     app_lookup = component_lookup("apps")
-    seen_infra_ids: set[str] = set()
+    seen_infra_instance_ids: set[str] = set()
+    seen_global_instance_ids: set[str] = set()
     for index, raw_component in enumerate(infra_components):
         if not isinstance(raw_component, Mapping):
             raise ValueError(f"infra.components[{index}] must be a mapping")
         unknown_keys = sorted(
-            str(key) for key in raw_component if str(key) not in {"id", "enabled", "source", "version", "inputs"}
+            str(key)
+            for key in raw_component
+            if str(key) not in {"id", "instance_id", "enabled", "source", "version", "inputs"}
         )
         if unknown_keys:
             raise ValueError(
                 f"infra.components[{index}] has unsupported field(s): {', '.join(unknown_keys)}"
             )
 
-        component_id = _as_text(raw_component.get("id")).lower()
+        component_id = component_type_id(raw_component)
         if not component_id:
             raise ValueError(f"infra.components[{index}].id is required")
         if not _ID_PATTERN.fullmatch(component_id):
             raise ValueError(
                 f"infra.components[{index}].id must use lowercase letters, digits, and hyphens"
             )
-        if component_id in seen_infra_ids:
-            raise ValueError(f"infra.components[{index}].id '{component_id}' is duplicated")
-        seen_infra_ids.add(component_id)
+        raw_instance_id = _as_text(raw_component.get("instance_id")).lower()
+        if raw_instance_id and not INSTANCE_ID_PATTERN.fullmatch(raw_instance_id):
+            raise ValueError(
+                f"infra.components[{index}].instance_id must use lowercase letters, digits, and hyphens"
+            )
+        instance_id = component_instance_id(raw_component)
+        if not instance_id:
+            raise ValueError(f"infra.components[{index}].instance_id could not be derived")
+        if instance_id in seen_infra_instance_ids:
+            raise ValueError(
+                f"infra.components[{index}].instance_id '{instance_id}' is duplicated"
+            )
+        if instance_id in seen_global_instance_ids:
+            raise ValueError(
+                f"component instance_id '{instance_id}' is duplicated across infra/apps"
+            )
+        seen_infra_instance_ids.add(instance_id)
+        seen_global_instance_ids.add(instance_id)
 
         if not isinstance(raw_component.get("enabled"), bool):
             raise ValueError(f"infra.components[{index}].enabled must be true or false")
@@ -186,7 +209,7 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
                 "set module source at infra.components[].source and module vars directly under infra.components[].inputs"
             )
 
-    seen_app_ids: set[str] = set()
+    seen_app_instance_ids: set[str] = set()
     for index, raw_chart in enumerate(apps_charts):
         if not isinstance(raw_chart, Mapping):
             raise ValueError(f"apps.charts[{index}] must be a mapping")
@@ -196,6 +219,7 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
             if str(key)
             not in {
                 "id",
+                "instance_id",
                 "group",
                 "enabled",
                 "repo",
@@ -210,16 +234,31 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
                 f"apps.charts[{index}] has unsupported field(s): {', '.join(unknown_keys)}"
             )
 
-        chart_id = _as_text(raw_chart.get("id")).lower()
+        chart_id = component_type_id(raw_chart)
         if not chart_id:
             raise ValueError(f"apps.charts[{index}].id is required")
         if not _ID_PATTERN.fullmatch(chart_id):
             raise ValueError(
                 f"apps.charts[{index}].id must use lowercase letters, digits, and hyphens"
             )
-        if chart_id in seen_app_ids:
-            raise ValueError(f"apps.charts[{index}].id '{chart_id}' is duplicated")
-        seen_app_ids.add(chart_id)
+        raw_instance_id = _as_text(raw_chart.get("instance_id")).lower()
+        if raw_instance_id and not INSTANCE_ID_PATTERN.fullmatch(raw_instance_id):
+            raise ValueError(
+                f"apps.charts[{index}].instance_id must use lowercase letters, digits, and hyphens"
+            )
+        instance_id = component_instance_id(raw_chart)
+        if not instance_id:
+            raise ValueError(f"apps.charts[{index}].instance_id could not be derived")
+        if instance_id in seen_app_instance_ids:
+            raise ValueError(
+                f"apps.charts[{index}].instance_id '{instance_id}' is duplicated"
+            )
+        if instance_id in seen_global_instance_ids:
+            raise ValueError(
+                f"component instance_id '{instance_id}' is duplicated across infra/apps"
+            )
+        seen_app_instance_ids.add(instance_id)
+        seen_global_instance_ids.add(instance_id)
 
         entry = app_lookup.get(chart_id)
 

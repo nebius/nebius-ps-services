@@ -81,9 +81,7 @@ def validate_mk8s_network_preflight(config: Any) -> None:
     if not isinstance(components, list):
         return
 
-    mk8s_entry = component_lookup("infra").get("mk8s")
-    if mk8s_entry is None:
-        return
+    entry_by_id = component_lookup("infra")
 
     project_id = _as_text(payload.get("client_info", {}).get("nebius", {}).get("project_id"))
     sdk = None
@@ -91,7 +89,9 @@ def validate_mk8s_network_preflight(config: Any) -> None:
         for item in components:
             if not isinstance(item, Mapping) or not bool(item.get("enabled", False)):
                 continue
-            if _as_text(item.get("id")).lower() != "mk8s":
+            component_id = _as_text(item.get("id")).lower()
+            mk8s_entry = entry_by_id.get(component_id)
+            if mk8s_entry is None or getattr(mk8s_entry, "handoff", None) is None:
                 continue
 
             resolved = resolve_component_defaults(

@@ -350,7 +350,9 @@ def build_config_from_peer_files(base_cfg: dict, peer_files: list[Path]) -> dict
         for index, spec in enumerate(merged_specs)
     ]
 
-    routing_modes = {str(conn.get("routing_mode")) for conn in cfg["connections"] if conn.get("routing_mode")}
+    routing_modes = {
+        str(conn.get("routing_mode")) for conn in cfg["connections"] if conn.get("routing_mode")
+    }
     if len(routing_modes) == 1:
         defaults = cfg.get("defaults") or {}
         routing = defaults.get("routing") or {}

@@ -14,6 +14,7 @@ from .component_defaults import (
     set_component_path,
     shared_default_conflicts,
 )
+from .component_instances import component_instance_id, component_instance_label, component_type_id
 from .component_sources import (
     ComponentOutput,
     Handoff,
@@ -22,13 +23,13 @@ from .component_sources import (
 )
 from .component_wiring import (
     _UNRESOLVED,
-    component_output_ref,
     input_binding_conflicts,
     output_lookup,
     resolve_static_component_output,
+    resolved_component_row,
 )
 from .components import ComponentEntry, component_entries
-from .paths import InstancePaths
+from .paths import ProjectPaths
 from .provider_components import provider_resource_name_for_component
 from .runtime_config import to_plain_data
 from .runtime_introspection import module_variables, resolve_module_source_path
@@ -65,6 +66,7 @@ class _HclExpression:
 @dataclass(frozen=True)
 class _ModulePlan:
     component_id: str
+    instance_id: str
     module_name: str
     module_source: str
     module_version: str | None
@@ -76,6 +78,7 @@ class _ModulePlan:
 @dataclass(frozen=True)
 class RenderedModuleSource:
     component_id: str
+    instance_id: str
     module_name: str
     source: str
 
@@ -527,15 +530,19 @@ def _build_module_plans(
         return ()
 
     prepared_rows: list[dict[str, Any]] = []
-    module_name_by_component_id: dict[str, str] = {}
+    module_name_by_instance_id: dict[str, str] = {}
     for item in components:
         if not isinstance(item, dict):
             continue
         if not bool(item.get("enabled", False)):
             continue
-        component_id = str(item.get("id", "")).strip().lower()
+        component_id = component_type_id(item)
         if not component_id:
             continue
+        instance_id = component_instance_id(item)
+        if not instance_id:
+            continue
+        component_label = component_instance_label(component_id, instance_id)
         entry = infra_entry_by_id.get(component_id)
         resolved_item = dict(item)
         if entry is not None and entry.defaults:
@@ -551,7 +558,7 @@ def _build_module_plans(
             if conflicts:
                 target_path, source_path = conflicts[0]
                 raise ValueError(
-                    f"infra component '{component_id}' field '{target_path}' is managed by shared default "
+                    f"infra component '{component_label}' field '{target_path}' is managed by shared default "
                     f"'{source_path}' and must not be set explicitly"
                 )
         inputs = resolved_item.get("inputs", {})
@@ -581,9 +588,9 @@ def _build_module_plans(
         }
         default_source = str(entry.source).strip() if entry and entry.source else ""
         default_version = str(entry.version).strip() if entry and entry.version else ""
-        raw_module_name = str(inputs.get("module_name") or component_id).strip()
+        raw_module_name = str(inputs.get("module_name") or instance_id).strip()
         module_name_base = _safe_hcl_identifier(
-            raw_module_name or component_id,
+            raw_module_name or instance_id,
             fallback_prefix="module",
         )
         module_name = module_name_base
@@ -597,7 +604,7 @@ def _build_module_plans(
         module_version = version or default_version or None
         if not module_source_raw:
             raise ValueError(
-                f"infra component '{component_id}' is enabled for module rendering but has no source"
+                f"infra component '{component_label}' is enabled for module rendering but has no source"
             )
         metadata_module_source = (
             str(entry.metadata_source or "").strip() if entry is not None else ""
@@ -613,11 +620,11 @@ def _build_module_plans(
                 normalized_argument_name = argument_name.lower()
                 if normalized_argument_name not in declared_argument_names:
                     raise ValueError(
-                        f"infra component '{component_id}' input '{raw_arg_name}' "
+                        f"infra component '{component_label}' input '{raw_arg_name}' "
                         f"is not declared by module '{module_source_raw}'"
                     )
         selected_module_source = _module_source_for_profile(
-            component_id=component_id,
+            component_id=instance_id,
             module_source=module_source_raw,
             module_version=module_version,
             source_profile=source_profile,
@@ -630,6 +637,7 @@ def _build_module_plans(
         prepared_rows.append(
             {
                 "component_id": component_id,
+                "instance_id": instance_id,
                 "entry": entry,
                 "resolved_item": resolved_item,
                 "module_name": module_name,
@@ -639,10 +647,12 @@ def _build_module_plans(
                 "type_hints": _module_type_hints(metadata_module_source),
             }
         )
-        module_name_by_component_id[component_id] = module_name
+        module_name_by_instance_id[instance_id] = module_name
 
     for prepared in prepared_rows:
         component_id = str(prepared["component_id"])
+        instance_id = str(prepared["instance_id"])
+        component_label = component_instance_label(component_id, instance_id)
         entry = prepared["entry"]
         resolved_item = prepared["resolved_item"]
         module_name = str(prepared["module_name"])
@@ -656,25 +666,21 @@ def _build_module_plans(
             if conflicts:
                 target_path, source_ref = conflicts[0]
                 raise ValueError(
-                    f"infra component '{component_id}' field '{target_path}' is managed by component input "
+                    f"infra component '{component_label}' field '{target_path}' is managed by component input "
                     f"binding '{source_ref}' and must not be set explicitly"
                 )
             for binding in entry.input_bindings:
                 source_entry = all_entry_by_id.get(binding.source_component_id)
-                source_ref = component_output_ref(
-                    binding.source_component_id,
-                    binding.source_output_name,
-                )
                 if source_entry is None:
                     raise ValueError(
-                        f"infra component '{component_id}' input binding '{binding.target_path}' references "
+                        f"infra component '{component_label}' input binding '{binding.target_path}' references "
                         f"unknown component '{binding.source_component_id}'"
                     )
                 source_output = output_lookup(source_entry).get(binding.source_output_name)
                 if source_output is None:
                     raise ValueError(
-                        f"infra component '{component_id}' input binding '{binding.target_path}' references "
-                        f"undeclared output '{source_ref}'"
+                        f"infra component '{component_label}' input binding '{binding.target_path}' references "
+                        f"undeclared output '{binding.source_component_id}.{binding.source_output_name}'"
                     )
 
                 static_value = resolve_static_component_output(
@@ -688,18 +694,25 @@ def _build_module_plans(
 
                 if source_output.kind != "terraform_output":
                     raise ValueError(
-                        f"infra component '{component_id}' input binding '{binding.target_path}' could not "
-                        f"resolve output '{source_ref}' from the current config payload"
+                        f"infra component '{component_label}' input binding '{binding.target_path}' could not "
+                        f"resolve output '{binding.source_component_id}.{binding.source_output_name}' "
+                        "from the current config payload"
                     )
                 if source_entry.scope != "infra":
                     raise ValueError(
-                        f"infra component '{component_id}' input binding '{binding.target_path}' references "
-                        f"Terraform output '{source_ref}' from non-infra component '{binding.source_component_id}'"
+                        f"infra component '{component_label}' input binding '{binding.target_path}' references "
+                        f"Terraform output '{binding.source_component_id}.{binding.source_output_name}' "
+                        f"from non-infra component '{binding.source_component_id}'"
                     )
-                source_module_name = module_name_by_component_id.get(binding.source_component_id)
+                _resolved_source_entry, resolved_source_row = resolved_component_row(
+                    payload,
+                    component_id=binding.source_component_id,
+                )
+                source_instance_id = component_instance_id(resolved_source_row) if resolved_source_row else ""
+                source_module_name = module_name_by_instance_id.get(source_instance_id)
                 if not source_module_name:
                     raise ValueError(
-                        f"infra component '{component_id}' input binding '{binding.target_path}' requires "
+                        f"infra component '{component_label}' input binding '{binding.target_path}' requires "
                         f"enabled infra component '{binding.source_component_id}'"
                     )
                 set_component_path(
@@ -713,7 +726,7 @@ def _build_module_plans(
             argument_name = str(raw_arg_name).strip().replace("-", "_")
             if not _is_hcl_identifier(argument_name):
                 raise ValueError(
-                    f"infra component '{component_id}' input '{raw_arg_name}' is not a valid Terraform argument name"
+                    f"infra component '{component_label}' input '{raw_arg_name}' is not a valid Terraform argument name"
                 )
             arg_key = argument_name.lower().replace("-", "_")
             value = module_inputs[raw_arg_name]
@@ -724,7 +737,7 @@ def _build_module_plans(
                         variable_name=None,
                         type_expr=None,
                         value=None,
-                        description=f"{component_id} module argument '{argument_name}'",
+                        description=f"{component_label} module argument '{argument_name}'",
                         expression=_hcl_value(value, indent=4),
                     )
                 )
@@ -749,13 +762,14 @@ def _build_module_plans(
                     variable_name=variable_name,
                     type_expr=type_expr,
                     value=value,
-                    description=f"{component_id} module argument '{argument_name}'",
+                    description=f"{component_label} module argument '{argument_name}'",
                 )
             )
 
         plans.append(
             _ModulePlan(
                 component_id=component_id,
+                instance_id=instance_id,
                 module_name=module_name,
                 module_source=module_source,
                 module_version=module_version,
@@ -792,6 +806,7 @@ def rendered_module_sources(
     return tuple(
         RenderedModuleSource(
             component_id=plan.component_id,
+            instance_id=plan.instance_id,
             module_name=plan.module_name,
             source=plan.module_source,
         )
@@ -891,8 +906,8 @@ def _render_tfvars_json(plans: tuple[_ModulePlan, ...]) -> dict[str, Any]:
 
 def _handoff_output_name(plan: _ModulePlan) -> str:
     return component_output_root_name(
-        plan.component_id,
-        plan.handoff.cluster_id_output_name,
+        plan.instance_id,
+        plan.handoff.cluster_id.value,
     )
 
 
@@ -903,16 +918,19 @@ def _render_outputs_tf(plans: tuple[_ModulePlan, ...]) -> str:
         for output in plan.outputs:
             if output.kind != "terraform_output":
                 continue
-            description = f"Exported output '{output.name}' from component '{plan.component_id}'"
+            description = (
+                f"Exported output '{output.name}' from component "
+                f"'{component_instance_label(plan.component_id, plan.instance_id)}'"
+            )
             if (
                 plan.handoff is not None
-                and output.name == plan.handoff.cluster_id_output_name
+                and output.name == plan.handoff.cluster_id.value
             ):
                 description = "Cluster ID used for kubeconfig handoff during deploy/bootstrap flows"
             blocks.append(
                 "\n".join(
                     [
-                        f'output "{component_output_root_name(plan.component_id, output.name)}" {{',
+                        f'output "{component_output_root_name(plan.instance_id, output.name)}" {{',
                         f"  description = {json.dumps(description)}",
                         f"  value       = module.{plan.module_name}.{output.source_path}",
                         *(
@@ -924,10 +942,10 @@ def _render_outputs_tf(plans: tuple[_ModulePlan, ...]) -> str:
                     ]
                 )
             )
-        if plan.handoff is not None and plan.handoff.cluster_id_output_name not in output_by_name:
+        if plan.handoff is not None and plan.handoff.cluster_id.value not in output_by_name:
             raise ValueError(
-                f"infra component '{plan.component_id}' handoff.cluster_id "
-                f"'{plan.handoff.cluster_id_output_name}' is not declared under outputs"
+                f"infra component '{component_instance_label(plan.component_id, plan.instance_id)}' handoff.cluster_id "
+                f"'{plan.handoff.cluster_id.value}' is not declared under outputs"
             )
     if not blocks:
         return "# No Terraform outputs were generated\n"
@@ -963,7 +981,7 @@ def _provider_static_tfvars(config: Any) -> dict[str, Any]:
 
 def render_terraform_artifacts(
     config: Any,
-    paths: InstancePaths,
+    paths: ProjectPaths,
     *,
     source_profile: SourceProfile = SourceProfile.PORTABLE,
 ) -> list[Path]:

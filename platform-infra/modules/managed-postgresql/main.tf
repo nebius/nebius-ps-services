@@ -1,5 +1,5 @@
 resource "random_password" "bootstrap" {
-  count = var.enabled && var.bootstrap_user_password == null ? 1 : 0
+  count = var.bootstrap_user_password == null ? 1 : 0
 
   length  = 24
   special = false
@@ -8,8 +8,6 @@ resource "random_password" "bootstrap" {
 }
 
 resource "nebius_msp_postgresql_v1alpha1_cluster" "this" {
-  count = var.enabled ? 1 : 0
-
   parent_id  = var.parent_id
   network_id = var.network_id
   name       = var.name
@@ -41,7 +39,7 @@ resource "nebius_msp_postgresql_v1alpha1_cluster" "this" {
   lifecycle {
     precondition {
       condition     = length(trimspace(var.name)) > 0
-      error_message = "name must be set when managed-postgresql is enabled."
+      error_message = "name must be non-empty."
     }
   }
 }

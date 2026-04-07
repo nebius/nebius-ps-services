@@ -339,6 +339,7 @@ class TunnelHealthMonitor:
 
         try:
             if shutil.which("swanctl"):
+
                 def _command_output(result: subprocess.CompletedProcess[str]) -> str:
                     return (result.stderr or result.stdout or "").strip()
 
@@ -427,9 +428,7 @@ class TunnelHealthMonitor:
                             f"(attempt {attempt}/3): {output}"
                         )
                     if attempt < 3:
-                        print(
-                            f"[TunnelMonitor] ⚠ Retrying tunnel initiate for {tunnel_name} in 3s"
-                        )
+                        print(f"[TunnelMonitor] ⚠ Retrying tunnel initiate for {tunnel_name} in 3s")
                         time.sleep(3)
 
                 return False

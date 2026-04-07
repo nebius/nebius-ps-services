@@ -71,11 +71,15 @@ def test_prep_sets_upstream_on_first_push(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert (
-        _run(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], cwd=repo).stdout.strip()
+        _run(
+            ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], cwd=repo
+        ).stdout.strip()
         == "origin/release-0.1.0"
     )
     assert (
-        _run(["git", "--git-dir", str(remote), "branch", "--list", "release-0.1.0"], cwd=repo).stdout.strip()
+        _run(
+            ["git", "--git-dir", str(remote), "branch", "--list", "release-0.1.0"], cwd=repo
+        ).stdout.strip()
         == "release-0.1.0"
     )
     changelog = (repo / "CHANGELOG.md").read_text(encoding="utf-8")
@@ -186,7 +190,9 @@ def test_prep_fails_when_remote_tag_already_exists(tmp_path: Path) -> None:
     assert "Remote tag already exists on origin: nebius-vpngw-v0.1.0" in result.stderr
     assert "## [nebius-vpngw-v0.1.0]" not in (repo / "CHANGELOG.md").read_text(encoding="utf-8")
     assert (
-        _run(["git", "--git-dir", str(remote), "tag", "--list", "nebius-vpngw-v0.1.0"], cwd=repo).stdout.strip()
+        _run(
+            ["git", "--git-dir", str(remote), "tag", "--list", "nebius-vpngw-v0.1.0"], cwd=repo
+        ).stdout.strip()
         == "nebius-vpngw-v0.1.0"
     )
 
@@ -211,7 +217,9 @@ def test_publish_fails_when_release_section_is_empty(tmp_path: Path) -> None:
     assert "Changelog section for nebius-vpngw-v0.1.0 is empty" in result.stderr
     assert _run(["git", "tag", "--list", "nebius-vpngw-v0.1.0"], cwd=repo).stdout.strip() == ""
     assert (
-        _run(["git", "--git-dir", str(remote), "tag", "--list", "nebius-vpngw-v0.1.0"], cwd=repo).stdout.strip()
+        _run(
+            ["git", "--git-dir", str(remote), "tag", "--list", "nebius-vpngw-v0.1.0"], cwd=repo
+        ).stdout.strip()
         == ""
     )
 
@@ -246,8 +254,12 @@ def test_publish_uses_git_version_when_setuptools_scm_is_unavailable(tmp_path: P
         encoding="utf-8",
     )
     (repo / "pyproject.toml").write_text("[project]\nname = 'nebius-vpngw'\n", encoding="utf-8")
-    (package_dir / "_version.py").write_text('__version__ = version = "0.1.1.dev3"\n', encoding="utf-8")
-    (repo / "setuptools_scm.py").write_text('raise ImportError("blocked for test")\n', encoding="utf-8")
+    (package_dir / "_version.py").write_text(
+        '__version__ = version = "0.1.1.dev3"\n', encoding="utf-8"
+    )
+    (repo / "setuptools_scm.py").write_text(
+        'raise ImportError("blocked for test")\n', encoding="utf-8"
+    )
 
     _run(["git", "init"], cwd=repo)
     _run(["git", "config", "user.name", "tester"], cwd=repo)
@@ -262,8 +274,13 @@ def test_publish_uses_git_version_when_setuptools_scm_is_unavailable(tmp_path: P
 
     assert result.returncode == 0, result.stderr
     assert "Runtime version resolved to 0.1.0." in result.stdout
-    assert _run(["git", "tag", "--list", "nebius-vpngw-v0.1.0"], cwd=repo).stdout.strip() == "nebius-vpngw-v0.1.0"
     assert (
-        _run(["git", "--git-dir", str(remote), "tag", "--list", "nebius-vpngw-v0.1.0"], cwd=repo).stdout.strip()
+        _run(["git", "tag", "--list", "nebius-vpngw-v0.1.0"], cwd=repo).stdout.strip()
+        == "nebius-vpngw-v0.1.0"
+    )
+    assert (
+        _run(
+            ["git", "--git-dir", str(remote), "tag", "--list", "nebius-vpngw-v0.1.0"], cwd=repo
+        ).stdout.strip()
         == "nebius-vpngw-v0.1.0"
     )

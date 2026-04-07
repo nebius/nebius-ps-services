@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from email.message import EmailMessage
 from typing import Any
 
-from .paths import InstancePaths
+from .paths import ProjectPaths
 
 
 @dataclass(frozen=True)
@@ -79,7 +79,7 @@ def _mask_identifier(value: str) -> str:
 
 def send_inventory_email(
     config: Any,
-    paths: InstancePaths,
+    paths: ProjectPaths,
     *,
     smtp_settings: Mapping[str, Any] | None = None,
 ) -> InventoryEmailResult:
@@ -126,7 +126,7 @@ def send_inventory_email(
     project_id = (
         str(config.client_info.nebius.project_id or "").strip()
         or paths.path_project_id
-        or paths.instance_slug
+        or f"{paths.client_tenant_slug}/{paths.path_project_id}"
     )
     tenant_id = str(config.client_info.nebius.tenant_id or "").strip() or paths.path_tenant_id
     masked_project_id = _mask_identifier(project_id)

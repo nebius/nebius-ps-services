@@ -1,10 +1,3 @@
-variable "enabled" {
-  description = "Create managed PostgreSQL cluster."
-  type        = bool
-  default     = false
-  nullable    = false
-}
-
 variable "parent_id" {
   description = "Nebius project ID where PostgreSQL cluster is created."
   type        = string
@@ -28,8 +21,11 @@ variable "network_id" {
 variable "name" {
   description = "Managed PostgreSQL cluster name."
   type        = string
-  default     = ""
   nullable    = false
+  validation {
+    condition     = length(trimspace(var.name)) > 0
+    error_message = "name cannot be empty."
+  }
 }
 
 variable "tier" {

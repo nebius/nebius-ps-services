@@ -34,6 +34,17 @@ def test_components_discovered_from_source_file(monkeypatch, tmp_path: Path) -> 
                             "description": "Managed Kubernetes",
                             "group": "Compute",
                             "enable": True,
+                            "wizard_fields": {
+                                "inputs.gpu_nodes_platform": {
+                                    "sources": [
+                                        {
+                                            "source": "provider",
+                                            "provider": "mk8s_compatible_platforms",
+                                            "args": {"platform_prefix": "gpu-"},
+                                        }
+                                    ]
+                                }
+                            },
                         },
                         {
                             "module": "wireguard-jumphost",
@@ -74,6 +85,17 @@ def test_components_discovered_from_source_file(monkeypatch, tmp_path: Path) -> 
     assert infra["mk8s"].engine_type == "terraform_module"
     assert infra["mk8s"].group == "Compute"
     assert infra["mk8s"].default_enabled is True
+    assert infra["mk8s"].wizard_fields == {
+        "inputs.gpu_nodes_platform": {
+            "sources": [
+                {
+                    "source": "provider",
+                    "provider": "mk8s_compatible_platforms",
+                    "args": {"platform_prefix": "gpu-"},
+                }
+            ]
+        }
+    }
 
     apps = {entry.id: entry for entry in component_entries("apps")}
     assert "n8n" in apps

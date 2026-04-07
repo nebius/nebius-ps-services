@@ -1,11 +1,11 @@
 # object-storage module
 
-Reusable Terraform module that creates Nebius Object Storage buckets from a
-generic input map.
+Reusable Terraform module that creates one Nebius Object Storage bucket per
+module instance.
 
 ## What this module does
 
-- Creates one or more buckets from `buckets` map entries.
+- Creates one bucket from a simple scalar input contract.
 - Lets each bucket define:
   - `name`
   - `versioning_policy`
@@ -31,22 +31,13 @@ module "object_storage" {
   source = "./platform-infra/modules/object-storage"
 
   parent_id = "project-xxxxxxxx"
-  buckets = {
-    state = {
-      name                 = "tfstate-customer-123"
-      versioning_policy    = "ENABLED"
-      object_audit_logging = "ALL"
-      protect_from_destroy = true
-      labels = {
-        purpose = "terraform-state"
-      }
-    }
-    inventory = {
-      name                 = "inventory-customer-123"
-      versioning_policy    = "DISABLED"
-      object_audit_logging = "NONE"
-      protect_from_destroy = false
-    }
+  name      = "tfstate-customer-123"
+
+  versioning_policy    = "ENABLED"
+  object_audit_logging = "ALL"
+  protect_from_destroy = true
+  labels = {
+    purpose = "terraform-state"
   }
 }
 ```
@@ -58,14 +49,11 @@ module "object_storage" {
   source = "git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/object-storage?ref=v0.1.0"
 
   parent_id = "project-xxxxxxxx"
-  buckets = {
-    artifacts = {
-      name                 = "artifacts-customer-123"
-      versioning_policy    = "ENABLED"
-      object_audit_logging = "MUTATE_ONLY"
-      protect_from_destroy = true
-    }
-  }
+  name      = "artifacts-customer-123"
+
+  versioning_policy    = "ENABLED"
+  object_audit_logging = "MUTATE_ONLY"
+  protect_from_destroy = true
 }
 ```
 
@@ -77,14 +65,11 @@ module "object_storage" {
   version = "~> 0.1"
 
   parent_id = "project-xxxxxxxx"
-  buckets = {
-    logs = {
-      name                 = "logs-customer-123"
-      versioning_policy    = "ENABLED"
-      object_audit_logging = "ALL"
-      protect_from_destroy = true
-    }
-  }
+  name      = "logs-customer-123"
+
+  versioning_policy    = "ENABLED"
+  object_audit_logging = "ALL"
+  protect_from_destroy = true
 }
 ```
 
@@ -96,17 +81,24 @@ module "object_storage" {
 
 - Required:
   - `parent_id`
-  - `buckets` (non-empty map)
-- Bucket-level defaults:
+  - `name`
+- Optional:
   - `versioning_policy = "DISABLED"`
   - `object_audit_logging = "NONE"`
   - `protect_from_destroy = false`
   - `labels = {}`
 
+## nebius-cxcli usage
+
+- `nebius-cxcli` treats this module as one bucket per enabled component row.
+- `inputs.name` is required and must be unique for the target Nebius bucket.
+- `labels` can be provided as a YAML/JSON mapping in the wizard or edited
+  directly in `config.yaml`.
+
 ## Outputs summary
 
-- `bucket_ids` (map)
-- `bucket_names` (map)
+- `bucket_id`
+- `bucket_name`
 
 ## Validation commands
 

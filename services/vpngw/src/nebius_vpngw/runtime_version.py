@@ -49,7 +49,7 @@ def _version_from_setuptools_scm(service_root: Path) -> str | None:
         return get_version(
             root=str(service_root),
             search_parent_directories=True,
-            version_scheme="python-simplified-semver",
+            version_scheme="semver-pep440",
             local_scheme="no-local-version",
             tag_regex=_TAG_REGEX,
             fallback_version=_UNKNOWN_VERSION,

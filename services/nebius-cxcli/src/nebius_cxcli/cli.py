@@ -25,7 +25,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 import typer
 import yaml
@@ -44,10 +44,20 @@ from . import __version__, native_logs
 from .component_defaults import (
     default_target_paths,
     literal_default_input_leaf_names,
-    managed_default_payload_paths,
     resolve_component_defaults,
+    shared_default_payload_paths,
     shared_default_conflicts,
     shared_default_input_sources,
+)
+from .component_instances import (
+    INSTANCE_ID_FIELD,
+    INSTANCE_ID_PATTERN,
+    component_instance_id,
+    component_instance_label,
+    component_type_id,
+    ensure_component_instance_id,
+    next_component_instance_id,
+    normalize_component_token,
 )
 from .component_sources import (
     SourceProfile,
@@ -66,7 +76,9 @@ from .component_wiring import (
     input_binding_leaf_names,
     managed_input_binding_payload_paths,
     output_lookup,
+    resolve_handoff_field_value,
     resolve_static_component_output,
+    resolved_component_row,
 )
 from .components import (
     COMPONENT_ID_PATTERN,
@@ -90,6 +102,9 @@ from .email_settings import (
     write_email_settings,
 )
 from .flux_ops import (
+    CLUSTER_HANDOFF_ACCESS_ENV,
+    cluster_handoff_reachability_guidance,
+    delete_rendered_flux,
     ensure_flux,
     flux_bootstrap_resources_installed,
     flux_controllers_installed,
@@ -118,7 +133,7 @@ from .github_secrets import (
     upsert_environment_secrets,
     upsert_environment_variables,
 )
-from .helm_client import HelmChartReference, HelmClient
+from .helm_client import HelmChartReference, HelmClient, chart_cli_contract_findings
 from .iam_bootstrap import (
     auth_public_key_exists,
     bootstrap_ci_service_account,
@@ -133,9 +148,9 @@ from .managed_tools import FLUX_VERSION_ENV, TERRAFORM_VERSION_ENV
 from .mk8s_preflight import validate_mk8s_network_preflight
 from .notify_ops import InventoryEmailResult, send_inventory_email
 from .paths import (
-    InstancePaths,
+    ProjectPaths,
     resolve_generated_paths,
-    resolve_instance_paths,
+    resolve_project_paths,
     validate_path_alignment,
 )
 from .provider_components import (
@@ -154,7 +169,7 @@ from .render import promote_staged_generated_paths, reset_generated_bundle, stag
 from .runtime_config import read_path_with_catalog, to_plain_data
 from .runtime_introspection import (
     helm_chart_default_values,
-    merge_chart_defaults_with_overrides,
+    module_cli_contract_findings,
     module_output_names,
     module_required_variables,
     module_source_validation_issues,
@@ -171,6 +186,7 @@ from .terraform_backend import (
 )
 from .terraform_ops import (
     terraform_apply,
+    terraform_destroy,
     terraform_force_unlock,
     terraform_init,
     terraform_output_json,
@@ -217,11 +233,11 @@ _BENIGN_KUBECTL_OUTPUT_MARKERS = (
 )
 _DEPLOYMENTS_ROOT_ARGUMENT_HELP = (
     "Deployments root directory. Pass the folder that contains or will contain "
-    "instances/<client>--<tenant>/<project>/config.yaml; any existing directory works."
+    "projects/<client>--<tenant>/<project>/config.yaml; any existing directory works."
 )
 _CONFIG_YAML_ARGUMENT_HELP = (
-    "Path to instance config.yaml under the deployments root "
-    "(instances/<client>--<tenant>/<project>/config.yaml)."
+    "Path to project config.yaml under the deployments root "
+    "(projects/<client>--<tenant>/<project>/config.yaml)."
 )
 _GENERATED_PATH_ARGUMENT_HELP = (
     "Path to generated/, one of its subdirectories, or a file under generated/."
@@ -238,20 +254,29 @@ app = typer.Typer(
     help=(
         "Nebius artifact generator and deployer. Target guide: create uses a "
         "deployments root directory, discover uses a deployment-scope directory, "
-        "validate/render/bootstrap-ci use config.yaml, "
-        "validate-generated/deploy/terraform/flux/inventory/email use generated/, "
+        "component/validate/render/bootstrap-ci use config.yaml, "
+        "validate-generated/deploy/destroy/terraform/flux/inventory/email use generated/, "
         "validate-sources accepts optional component_sources.yaml, and "
         "auth has no positional path."
     ),
 )
+component_app = typer.Typer(
+    help=(
+        "Inspect or edit reusable source-driven infra/app component types as "
+        "enabled component instances in an existing config.yaml."
+    )
+)
 terraform_app = typer.Typer(
     help="Run infra-only Terraform operations against generated/ or generated/infra."
 )
-flux_app = typer.Typer(help="Apply or bootstrap Flux using generated/ or generated/flux.")
+flux_app = typer.Typer(
+    help="Apply, bootstrap, or destroy Flux resources using generated/ or generated/flux."
+)
 inventory_app = typer.Typer(
     help="Refresh local inventory artifacts from generated/ or generated/inventory."
 )
 
+app.add_typer(component_app, name="component")
 app.add_typer(terraform_app, name="terraform")
 app.add_typer(flux_app, name="flux")
 app.add_typer(inventory_app, name="inventory")
@@ -321,7 +346,7 @@ def main_callback(
 
 def _load_context(config_path: Path) -> tuple:
     config = load_config(config_path)
-    paths = resolve_instance_paths(config_path)
+    paths = resolve_project_paths(config_path)
     validate_path_alignment(config, paths)
     return config, paths
 
@@ -361,7 +386,7 @@ def _apply_generated_tool_version_overrides(manifest: Mapping[str, Any]) -> None
 
 
 def _materialize_generated_terraform_tfvars(
-    paths: InstancePaths,
+    paths: ProjectPaths,
     manifest: Mapping[str, Any],
 ) -> Path:
     payload = terraform_tfvars_from_manifest(manifest)
@@ -371,7 +396,7 @@ def _materialize_generated_terraform_tfvars(
     return tfvars_path
 
 
-def _render_overwrite_warning(paths: InstancePaths) -> str | None:
+def _render_overwrite_warning(paths: ProjectPaths) -> str | None:
     if not paths.generated_dir.exists():
         return None
     existing_files = sorted(path for path in paths.generated_dir.rglob("*") if path.is_file())
@@ -388,7 +413,7 @@ def _can_prompt_for_render_overwrite() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def _confirm_render_overwrite(paths: InstancePaths, *, force: bool) -> bool:
+def _confirm_render_overwrite(paths: ProjectPaths, *, force: bool) -> bool:
     overwrite_warning = _render_overwrite_warning(paths)
     if not overwrite_warning:
         return True
@@ -407,8 +432,30 @@ def _confirm_render_overwrite(paths: InstancePaths, *, force: bool) -> bool:
     )
 
 
+def _confirm_generated_destroy(
+    paths: ProjectPaths,
+    *,
+    yes: bool,
+    action_label: str,
+    prompt_text: str,
+    warning_text: str,
+) -> bool:
+    console.print(f"[yellow]WARNING:[/yellow] {warning_text} {paths.generated_dir}.")
+    if yes:
+        return True
+    if not _can_prompt_for_render_overwrite():
+        raise RuntimeError(
+            f"{action_label} is destructive in a non-interactive session. Re-run with `--yes` to confirm."
+        )
+    return typer.confirm(
+        prompt_text,
+        default=False,
+        show_default=True,
+    )
+
+
 def _exit_with_error(exc: Exception) -> None:
-    console.print(f"[red]ERROR:[/red] {exc}")
+    console.print(f"[red]ERROR:[/red] {escape(str(exc))}")
     raise typer.Exit(code=1) from exc
 
 
@@ -476,6 +523,69 @@ class _ValidationProgress:
         return result
 
 
+def _run_runtime_validation(
+    *,
+    config_path: Path,
+    strict: bool,
+    title: str = "Runtime validation",
+) -> None:
+    phase_defs = [
+        _ValidationPhase("load-config", "Load config and component catalog"),
+        _ValidationPhase("active-sources", "Validate active component sources"),
+        _ValidationPhase("dependencies", "Validate component dependencies"),
+        _ValidationPhase("module-schema", "Validate Terraform module inputs"),
+    ]
+    if strict:
+        phase_defs.extend(
+            [
+                _ValidationPhase("strict-readiness", "Validate strict deployment readiness"),
+                _ValidationPhase("mk8s-preflight", "Validate MK8s network preflight"),
+            ]
+        )
+
+    validation_cache = _ValidationWorkCache()
+    resolved_source_profile = resolve_component_sources_profile()
+    with _ValidationProgress(title=title, phases=phase_defs) as progress:
+        config, _ = progress.run("load-config", lambda: _load_context(config_path))
+        progress.run(
+            "active-sources",
+            lambda: _validate_active_component_sources(
+                config,
+                chart_meta_cache=validation_cache.chart_meta_cache,
+            ),
+        )
+        dependency_issues = progress.run(
+            "dependencies",
+            lambda: _validate_component_dependencies(
+                config,
+                chart_meta_cache=validation_cache.chart_meta_cache,
+            ),
+        )
+        if dependency_issues:
+            raise RuntimeError(
+                "Runtime validation failed:\n  - " + "\n  - ".join(dependency_issues)
+            )
+        progress.run(
+            "module-schema",
+            lambda: rendered_module_sources(config, source_profile=resolved_source_profile),
+        )
+        if strict:
+            progress.run(
+                "strict-readiness",
+                lambda: _validate_strict_config(
+                    config,
+                    chart_meta_cache=validation_cache.chart_meta_cache,
+                    include_common_checks=False,
+                ),
+            )
+            progress.run("mk8s-preflight", lambda: validate_mk8s_network_preflight(config))
+
+    if strict:
+        console.print(f"[green]Valid (strict):[/green] {config_path}")
+        return
+    console.print(f"[green]Valid:[/green] {config_path}")
+
+
 def _configure_quiet_native_logs() -> None:
     """Reduce noisy native gRPC/absl logs while keeping warnings/errors visible."""
     for env_name, env_value in native_logs.QUIET_NATIVE_LOG_ENV_DEFAULTS.items():
@@ -521,6 +631,95 @@ def _effective_catalog_component_version(
 def _resolve_deployments_root(base_path: Path) -> Path:
     """Treat user-provided target path as the deployments root."""
     return base_path.resolve()
+
+
+@dataclass(frozen=True)
+class _ExistingProjectCreateDefaults:
+    config_path: Path
+    client_name: str
+    tenant_id: str
+    project_id: str
+    region_id: str | None
+    email: str | None
+
+
+def _existing_project_config_paths(deployments_root: Path) -> tuple[Path, ...]:
+    projects_dir = deployments_root / "projects"
+    if not projects_dir.is_dir():
+        return ()
+    return tuple(sorted(path.resolve() for path in projects_dir.glob("*/*/config.yaml")))
+
+
+def _deployments_root_has_existing_project_configs(deployments_root: Path) -> bool:
+    return bool(_existing_project_config_paths(deployments_root))
+
+
+def _single_existing_project_create_defaults(
+    deployments_root: Path,
+) -> _ExistingProjectCreateDefaults | None:
+    config_paths = _existing_project_config_paths(deployments_root)
+    if len(config_paths) != 1:
+        return None
+
+    config_path = config_paths[0]
+    try:
+        project_paths = resolve_project_paths(
+            config_path,
+            deployments_dir_hint=str(deployments_root),
+        )
+    except Exception:
+        return None
+
+    region_id: str | None = None
+    email: str | None = None
+    try:
+        payload = _load_config_payload(config_path)
+        _, _, _, payload_region_id, payload_email = _identity_values_from_payload(payload)
+        region_id = payload_region_id or None
+        email = payload_email
+    except Exception:
+        pass
+
+    return _ExistingProjectCreateDefaults(
+        config_path=config_path,
+        client_name=project_paths.path_client_name,
+        tenant_id=project_paths.path_tenant_id,
+        project_id=project_paths.path_project_id,
+        region_id=region_id,
+        email=email,
+    )
+
+
+def _print_existing_projects_notice(
+    *,
+    deployments_root: Path,
+    prompt_defaults: _ExistingProjectCreateDefaults | None = None,
+) -> None:
+    console.print(
+        "[yellow]Existing project configs detected under this deployments root.[/yellow] "
+        f"{deployments_root}"
+    )
+    if prompt_defaults is not None:
+        console.print(
+            "[dim]Exactly one existing project config was found. "
+            "Its project identity will be offered as the prompt defaults:[/dim] "
+            f"[bold]{prompt_defaults.config_path}[/bold]"
+        )
+    console.print(
+        "[dim]This is not a net-new deployments root. After project identity is entered, "
+        "`create` will confirm before reconciling an existing project config.[/dim]"
+    )
+
+
+def _confirm_existing_deployments_root_continue(*, deployments_root: Path) -> bool:
+    console.print(
+        "[yellow]Existing deployments root detected.[/yellow] "
+        f"`create` can reconcile an existing project config or create another project under {deployments_root}."
+    )
+    return _wizard_continue_phase(
+        "Continue and enter project identity?",
+        default=True,
+    )
 
 
 def _relative_deployments_dir_for_ci(repo_root: Path, deployments_root: Path) -> str:
@@ -578,11 +777,22 @@ def _validate_deployments_root_target(path: Path) -> None:
 
 
 def _value_or_prompt(
-    value: str | None, *, option_name: str, prompt_text: str, interactive: bool
+    value: str | None,
+    *,
+    option_name: str,
+    prompt_text: str,
+    interactive: bool,
+    default_value: str | None = None,
 ) -> str:
     if value:
         return value
     if interactive:
+        normalized_default = _non_empty_text(default_value) or None
+        if normalized_default is not None:
+            prompted = typer.prompt(prompt_text, default=normalized_default).strip()
+            if prompted:
+                return prompted
+            return normalized_default
         prompted = typer.prompt(prompt_text).strip()
         if prompted:
             return prompted
@@ -594,7 +804,10 @@ def _optional_email_or_prompt(value: str | None, *, interactive: bool) -> str | 
         return value
     if not interactive:
         return None
-    prompted = typer.prompt("Notifications email (optional)", default="").strip()
+    prompted = typer.prompt(
+        "Notifications email (optional; leave blank to keep email disabled)",
+        default="",
+    ).strip()
     return prompted or None
 
 
@@ -678,6 +891,20 @@ def _region_or_prompt(value: str | None, *, interactive: bool) -> str:
     return DEFAULT_REGION_ID
 
 
+def _confirm_existing_project_reconcile(*, config_path: Path) -> bool:
+    console.print(
+        "[yellow]Existing project config detected.[/yellow] "
+        f"Re-running `create` will reconcile and may update [bold]{config_path}[/bold]."
+    )
+    console.print(
+        "[dim]Use --force only when you want to reset the project config from the current create inputs.[/dim]"
+    )
+    return _wizard_continue_phase(
+        "Continue with create reconcile mode?",
+        default=True,
+    )
+
+
 def _is_tty_session() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
@@ -704,6 +931,487 @@ def _split_multi_value_tokens(raw_values: list[str] | None) -> list[str]:
             if token:
                 tokens.append(token)
     return tokens
+
+
+def _load_config_payload(config_path: Path) -> dict[str, Any]:
+    with config_path.open("r", encoding="utf-8") as handle:
+        payload = yaml.safe_load(handle) or {}
+    if not isinstance(payload, dict):
+        raise RuntimeError("config.yaml root must be a mapping")
+    return payload
+
+
+def _validate_component_sources_or_raise() -> None:
+    with console.status("[cyan]Validating component_sources.yaml...[/cyan]"):
+        source_path, source_issues, source_warnings = _validate_component_sources_registry()
+    for warning in source_warnings:
+        console.print(f"[yellow]Source validation warning:[/yellow] {warning}")
+    if source_issues:
+        raise RuntimeError(
+            f"Component sources validation failed for {source_path}:\n  - "
+            + "\n  - ".join(source_issues)
+        )
+
+
+def _identity_values_from_payload(
+    payload: Mapping[str, Any],
+) -> tuple[str, str, str, str, str | None]:
+    client_info = payload.get("client_info")
+    if not isinstance(client_info, Mapping):
+        raise RuntimeError("config.yaml is missing client_info")
+    nebius = client_info.get("nebius")
+    if not isinstance(nebius, Mapping):
+        raise RuntimeError("config.yaml is missing client_info.nebius")
+    notifications = client_info.get("notifications")
+    if not isinstance(notifications, Mapping):
+        raise RuntimeError("config.yaml is missing client_info.notifications")
+    return (
+        _non_empty_text(client_info.get("client_name")),
+        _non_empty_text(nebius.get("tenant_id")),
+        _non_empty_text(nebius.get("project_id")),
+        _non_empty_text(nebius.get("region_id")),
+        str(notifications.get("email")).strip() if notifications.get("email") is not None else None,
+    )
+
+
+def _dependency_seed_payload(
+    *,
+    client_name: str,
+    tenant_id: str,
+    project_id: str,
+    region_id: str,
+    email: str | None,
+    selected_infra: set[str],
+    selected_apps: set[str],
+    infra_entries: tuple[ComponentEntry, ...],
+    app_entries: tuple[ComponentEntry, ...],
+    existing_payload: dict[str, Any] | None,
+    merge_existing: bool,
+) -> dict[str, Any] | None:
+    if not selected_apps:
+        return None
+    dependency_seed_yaml = starter_config_yaml(
+        client_name=client_name,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        region_id=region_id,
+        email=email,
+        selected_infra=selected_infra,
+        selected_apps=selected_apps,
+        infra_entries=infra_entries,
+        app_entries=app_entries,
+    )
+    parsed_seed_payload = yaml.safe_load(dependency_seed_yaml) or {}
+    if not isinstance(parsed_seed_payload, dict):
+        return None
+    if merge_existing and existing_payload is not None:
+        parsed_seed_payload = _deep_merge_payload(parsed_seed_payload, existing_payload)
+        parsed_seed_payload = _filter_runtime_payload_for_selected_components(
+            payload=parsed_seed_payload,
+            selected_infra=selected_infra,
+            selected_apps=selected_apps,
+            infra_entries=infra_entries,
+            app_entries=app_entries,
+        )
+    return parsed_seed_payload
+
+
+def _reconciled_component_payload(
+    *,
+    client_name: str,
+    tenant_id: str,
+    project_id: str,
+    region_id: str,
+    email: str | None,
+    selected_infra: set[str],
+    selected_apps: set[str],
+    infra_entries: tuple[ComponentEntry, ...],
+    app_entries: tuple[ComponentEntry, ...],
+    existing_payload: dict[str, Any] | None,
+    merge_existing: bool,
+    app_namespace_overrides: dict[str, str] | None = None,
+    app_releasename_overrides: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    starter_yaml = starter_config_yaml(
+        client_name=client_name,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        region_id=region_id,
+        email=email,
+        selected_infra=selected_infra,
+        selected_apps=selected_apps,
+        infra_entries=infra_entries,
+        app_entries=app_entries,
+    )
+    starter_payload = yaml.safe_load(starter_yaml) or {}
+    if not isinstance(starter_payload, dict):
+        raise RuntimeError("Generated starter config payload must be a mapping")
+    if merge_existing and existing_payload is not None:
+        starter_payload = _deep_merge_payload(starter_payload, existing_payload)
+    starter_payload = _filter_runtime_payload_for_selected_components(
+        payload=starter_payload,
+        selected_infra=selected_infra,
+        selected_apps=selected_apps,
+        infra_entries=infra_entries,
+        app_entries=app_entries,
+    )
+    _apply_app_release_overrides(
+        payload=starter_payload,
+        selected_apps=selected_apps,
+        namespace_overrides=app_namespace_overrides or {},
+        release_name_overrides=app_releasename_overrides or {},
+    )
+    _seed_infra_project_scope_defaults(
+        payload=starter_payload,
+        infra_entries=infra_entries,
+    )
+    return starter_payload
+
+
+def _component_selector_scope_label(scope: ComponentScope) -> str:
+    return "INFRA" if scope == "infra" else "APPS"
+
+
+def _prompt_component_scope_selection(
+    *,
+    action: str,
+    scope: ComponentScope,
+    entries: tuple[ComponentEntry, ...],
+) -> set[str]:
+    if not entries:
+        console.print(
+            f"{_component_selector_scope_label(scope)} components available to {action}: (none)"
+        )
+        return set()
+    selected = _prompt_component_with_checkboxes(
+        scope=scope,
+        entries=entries,
+        defaults=set(),
+    )
+    return {token for token in selected if token}
+
+
+def _prompt_component_instance_selection(
+    *,
+    action: str,
+    scope: ComponentScope,
+    specs: tuple[tuple[ComponentEntry, dict[str, Any]], ...],
+) -> set[str]:
+    if not specs:
+        console.print(
+            f"{_component_selector_scope_label(scope)} component instances available to {action}: (none)"
+        )
+        return set()
+
+    if _is_tty_session():
+        try:
+            import questionary
+        except Exception as exc:
+            install_hint = f"{sys.executable} -m pip install questionary"
+            console.print(
+                "[yellow]Interactive checkbox UI unavailable:[/yellow] "
+                f"{exc}. Falling back to text prompt. "
+                f"Install it with: {install_hint}"
+            )
+        else:
+            _configure_questionary_checkbox_symbols()
+            selected = questionary.checkbox(
+                f"Select {scope} component instances",
+                choices=[
+                    questionary.Choice(
+                        title=(
+                            f"{_component_instance_selector_label(entry, instance_id=str(row['instance_id']))}"
+                            f"  ({entry.description})"
+                        ),
+                        value=str(row["instance_id"]),
+                        checked=False,
+                    )
+                    for entry, row in specs
+                ],
+                instruction="Use arrows and space to toggle; press Enter to confirm.",
+                qmark="",
+            ).ask()
+            if selected is None:
+                raise typer.Abort()
+            return {str(item).strip().lower() for item in selected if str(item).strip()}
+
+    console.print(f"\n{scope.upper()} component instances:")
+    for index, (entry, row) in enumerate(specs, start=1):
+        instance_id = str(row["instance_id"])
+        label = _component_instance_selector_label(entry, instance_id=instance_id)
+        console.print(f"  [ ] [{index}] {label:<36} {entry.description}")
+    raw = typer.prompt(
+        f"Select {scope} component instances to {action} (comma-separated ids or indexes)",
+        default="",
+    ).strip()
+    tokens = _split_multi_value_tokens([raw])
+    if not tokens:
+        return set()
+    selected: set[str] = set()
+    by_index = {str(index): str(row["instance_id"]) for index, (_entry, row) in enumerate(specs, start=1)}
+    by_instance = {str(row["instance_id"]): str(row["instance_id"]) for _entry, row in specs}
+    for token in tokens:
+        if token in by_index:
+            selected.add(by_index[token])
+            continue
+        normalized = normalize_component_token(token)
+        if normalized in by_instance:
+            selected.add(by_instance[normalized])
+            continue
+        raise RuntimeError(
+            f"Unknown {scope} component instance '{token}'. Choose a listed instance id or index."
+        )
+    return selected
+
+
+@dataclass(frozen=True)
+class _ComponentAddTarget:
+    scope: ComponentScope
+    component_id: str
+    requested_instance_id: str | None = None
+
+
+@dataclass(frozen=True)
+class _ComponentRemoveTarget:
+    scope: ComponentScope
+    component_id: str
+    instance_id: str
+
+
+def _resolve_component_targets(
+    *,
+    action: str,
+    tokens: list[str],
+    infra_entries: tuple[ComponentEntry, ...],
+    app_entries: tuple[ComponentEntry, ...],
+    existing_infra: set[str],
+    existing_apps: set[str],
+) -> tuple[set[str], set[str], tuple[str, ...]]:
+    infra_lookup = {entry.id: entry for entry in infra_entries}
+    app_lookup = {entry.id: entry for entry in app_entries}
+    lookup = {**infra_lookup, **app_lookup}
+    eligible_ids = (
+        {entry.id for entry in infra_entries if entry.id not in existing_infra}
+        | {entry.id for entry in app_entries if entry.id not in existing_apps}
+        if action == "add"
+        else {entry.id for entry in infra_entries if entry.id in existing_infra}
+        | {entry.id for entry in app_entries if entry.id in existing_apps}
+    )
+
+    normalized = [token.strip().lower() for token in tokens if token.strip()]
+    if len(normalized) == 1:
+        if normalized[0] == "none":
+            return set(), set(), ()
+        if normalized[0] == "all":
+            return (
+                {entry_id for entry_id in eligible_ids if entry_id in infra_lookup},
+                {entry_id for entry_id in eligible_ids if entry_id in app_lookup},
+                (),
+            )
+
+    resolved_infra: set[str] = set()
+    resolved_apps: set[str] = set()
+    skipped: list[str] = []
+    for token in normalized:
+        scope: ComponentScope | None = None
+        component_id = token
+        if ":" in token:
+            scope_raw, component_raw = token.split(":", maxsplit=1)
+            scope = cast(ComponentScope, scope_raw)
+            if scope not in {"infra", "apps"}:
+                raise RuntimeError(
+                    f"Invalid component selector '{token}'. Use '<component-id>' or 'infra:<id>' / 'apps:<id>'."
+                )
+            component_id = component_raw.strip().lower()
+
+        entry = lookup.get(component_id)
+        if entry is None:
+            available = ", ".join(sorted(lookup))
+            raise RuntimeError(
+                f"Unknown component id '{component_id}'. Available ids: {available}"
+            )
+        if scope is not None and entry.scope != scope:
+            raise RuntimeError(
+                f"Component selector '{token}' targets scope '{scope}', but '{component_id}' is declared under '{entry.scope}'."
+            )
+        currently_selected = (
+            component_id in existing_infra if entry.scope == "infra" else component_id in existing_apps
+        )
+        if action == "add" and currently_selected:
+            skipped.append(component_id)
+            continue
+        if action == "remove" and not currently_selected:
+            skipped.append(component_id)
+            continue
+        if entry.scope == "infra":
+            resolved_infra.add(component_id)
+        else:
+            resolved_apps.add(component_id)
+    return resolved_infra, resolved_apps, tuple(sorted(set(skipped)))
+
+
+def _parse_scoped_component_selector(token: str) -> tuple[ComponentScope | None, str]:
+    normalized = token.strip().lower()
+    if ":" not in normalized:
+        return None, normalized
+    scope_raw, body = normalized.split(":", maxsplit=1)
+    scope = cast(ComponentScope, scope_raw)
+    if scope not in {"infra", "apps"}:
+        raise RuntimeError(
+            f"Invalid component selector '{token}'. Use '<component-id>' or 'infra:<id>' / 'apps:<id>'."
+        )
+    return scope, body.strip()
+
+
+def _resolve_component_add_targets(
+    *,
+    tokens: list[str],
+    infra_entries: tuple[ComponentEntry, ...],
+    app_entries: tuple[ComponentEntry, ...],
+) -> list[_ComponentAddTarget]:
+    infra_lookup = {entry.id: entry for entry in infra_entries}
+    app_lookup = {entry.id: entry for entry in app_entries}
+    lookup = {**infra_lookup, **app_lookup}
+
+    normalized = [token.strip() for token in tokens if token.strip()]
+    if len(normalized) == 1:
+        keyword = normalized[0].lower()
+        if keyword == "none":
+            return []
+        if keyword == "all":
+            return [
+                *(_ComponentAddTarget(scope="infra", component_id=entry.id) for entry in infra_entries),
+                *(_ComponentAddTarget(scope="apps", component_id=entry.id) for entry in app_entries),
+            ]
+
+    targets: list[_ComponentAddTarget] = []
+    for token in normalized:
+        scope, body = _parse_scoped_component_selector(token)
+        component_raw, separator, instance_raw = body.partition("@")
+        component_id = normalize_component_token(component_raw)
+        if not component_id:
+            raise RuntimeError(f"Invalid component selector '{token}'. Component id is required.")
+        entry = lookup.get(component_id)
+        if entry is None:
+            available = ", ".join(sorted(lookup))
+            raise RuntimeError(
+                f"Unknown component id '{component_id}'. Available ids: {available}"
+            )
+        if scope is not None and entry.scope != scope:
+            raise RuntimeError(
+                f"Component selector '{token}' targets scope '{scope}', but '{component_id}' is declared under '{entry.scope}'."
+            )
+        requested_instance_id = normalize_component_token(instance_raw) if separator else ""
+        if requested_instance_id and not INSTANCE_ID_PATTERN.fullmatch(requested_instance_id):
+            raise RuntimeError(
+                f"Invalid instance id '{instance_raw}'. Expected lowercase letters, digits, and hyphens."
+            )
+        targets.append(
+            _ComponentAddTarget(
+                scope=entry.scope,
+                component_id=component_id,
+                requested_instance_id=requested_instance_id or None,
+            )
+        )
+    return targets
+
+
+def _resolve_component_remove_targets(
+    *,
+    tokens: list[str],
+    payload: dict[str, Any],
+    infra_entries: tuple[ComponentEntry, ...],
+    app_entries: tuple[ComponentEntry, ...],
+) -> tuple[list[_ComponentRemoveTarget], tuple[str, ...]]:
+    enabled_specs = [
+        *_enabled_component_instance_specs(payload, scope="infra", entries=infra_entries),
+        *_enabled_component_instance_specs(payload, scope="apps", entries=app_entries),
+    ]
+    by_instance: dict[str, _ComponentRemoveTarget] = {}
+    by_scope_and_type: dict[tuple[ComponentScope, str], list[_ComponentRemoveTarget]] = {}
+    for entry, row in enabled_specs:
+        instance_id = str(row["instance_id"])
+        target = _ComponentRemoveTarget(
+            scope=entry.scope,
+            component_id=entry.id,
+            instance_id=instance_id,
+        )
+        by_instance[instance_id] = target
+        by_scope_and_type.setdefault((entry.scope, entry.id), []).append(target)
+
+    normalized = [token.strip() for token in tokens if token.strip()]
+    if len(normalized) == 1:
+        keyword = normalized[0].lower()
+        if keyword == "none":
+            return [], ()
+        if keyword == "all":
+            return list(by_instance.values()), ()
+
+    skipped: list[str] = []
+    selected: list[_ComponentRemoveTarget] = []
+    seen_instances: set[str] = set()
+    for token in normalized:
+        scope, body = _parse_scoped_component_selector(token)
+        component_raw, separator, instance_raw = body.partition("@")
+        if separator:
+            component_id = normalize_component_token(component_raw)
+            instance_id = normalize_component_token(instance_raw)
+            if not component_id or not instance_id:
+                raise RuntimeError(
+                    f"Invalid component selector '{token}'. Use '<instance-id>' or '<component-id>@<instance-id>'."
+                )
+            candidate = by_instance.get(instance_id)
+            if candidate is None or candidate.component_id != component_id or (
+                scope is not None and candidate.scope != scope
+            ):
+                skipped.append(token)
+                continue
+            if candidate.instance_id not in seen_instances:
+                seen_instances.add(candidate.instance_id)
+                selected.append(candidate)
+            continue
+
+        normalized_token = normalize_component_token(body)
+        if not normalized_token:
+            raise RuntimeError(f"Invalid component selector '{token}'.")
+        candidate_lists = [
+            specs
+            for (candidate_scope, candidate_component_id), specs in by_scope_and_type.items()
+            if candidate_component_id == normalized_token and (scope is None or candidate_scope == scope)
+        ]
+        flattened = [item for specs in candidate_lists for item in specs]
+        if len(flattened) > 1:
+            available = ", ".join(sorted(item.instance_id for item in flattened))
+            raise RuntimeError(
+                f"Component selector '{token}' matches multiple enabled instances. "
+                f"Use an instance id or '<component-id>@<instance-id>'. Available instances: {available}"
+            )
+        if len(flattened) == 1:
+            only = flattened[0]
+            if only.instance_id not in seen_instances:
+                seen_instances.add(only.instance_id)
+                selected.append(only)
+            continue
+
+        candidate = by_instance.get(normalized_token)
+        if candidate is not None and (scope is None or candidate.scope == scope):
+            if candidate.instance_id not in seen_instances:
+                seen_instances.add(candidate.instance_id)
+                selected.append(candidate)
+            continue
+        skipped.append(token)
+    return selected, tuple(sorted(set(skipped)))
+
+
+def _runtime_required_input_leaf_names(entry: ComponentEntry) -> set[str]:
+    if entry.scope != "infra" or not entry.source:
+        return set()
+    from .runtime_introspection import module_required_variables
+
+    try:
+        return set(module_required_variables(entry.source))
+    except Exception:
+        return set()
 
 
 def _parse_component_value_overrides(
@@ -833,6 +1541,129 @@ def _component_selector_label(entry: ComponentEntry, *, scope: ComponentScope) -
     if entry.group:
         return f"{entry.group} >> {base}"
     return base
+
+
+def _component_instance_selector_label(
+    entry: ComponentEntry,
+    *,
+    instance_id: str,
+) -> str:
+    base = _component_selector_label(entry, scope=entry.scope)
+    if instance_id == entry.id:
+        return base
+    return f"{base} @ {instance_id}"
+
+
+def _scope_rows(payload: dict[str, Any], *, scope: ComponentScope) -> list[dict[str, Any]]:
+    if scope == "infra":
+        infra_node = payload.setdefault("infra", {})
+        if not isinstance(infra_node, dict):
+            raise RuntimeError("config payload infra section must be a mapping")
+        rows = infra_node.setdefault("components", [])
+    else:
+        apps_node = payload.setdefault("apps", {})
+        if not isinstance(apps_node, dict):
+            raise RuntimeError("config payload apps section must be a mapping")
+        rows = apps_node.setdefault("charts", [])
+    if not isinstance(rows, list):
+        raise RuntimeError(f"config payload {scope} rows must be a list")
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        component_id = component_type_id(item)
+        if not component_id:
+            continue
+        ensure_component_instance_id(item, default_component_id=component_id)
+    return rows
+
+
+def _append_component_instance_row(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    requested_instance_id: str | None = None,
+) -> dict[str, Any]:
+    rows = _scope_rows(payload, scope=entry.scope)
+    instance_id = next_component_instance_id(
+        component_id=entry.id,
+        rows=rows,
+        requested_instance_id=requested_instance_id,
+    )
+    if entry.scope == "infra":
+        row: dict[str, Any] = {
+            "id": entry.id,
+            INSTANCE_ID_FIELD: instance_id,
+            "enabled": True,
+            "inputs": {},
+        }
+    else:
+        chart_repo = str(entry.chart_repo or "").strip()
+        chart_name = str(entry.chart_name or "").strip()
+        if not chart_name:
+            chart_repo, chart_name = _chart_source_parts(entry)
+        if not chart_name:
+            chart_name = entry.id
+        chart_repo = _canonical_app_chart_repo(chart_repo=chart_repo, chart_name=chart_name)
+        namespace = str(entry.default_namespace or "").strip() or entry.id
+        default_release_name = str(entry.default_release_name or "").strip()
+        release_name = instance_id if instance_id != entry.id else (default_release_name or instance_id)
+        raw_group = str(entry.group or "").strip().lower()
+        group = re.sub(r"[^a-z0-9]+", "-", raw_group).strip("-") or "workloads"
+        row = {
+            "id": entry.id,
+            INSTANCE_ID_FIELD: instance_id,
+            "group": group,
+            "enabled": True,
+            "repo": str(chart_repo or ""),
+            "version": str(entry.version or ""),
+            "namespace": namespace,
+            "release-name": release_name,
+            "values": {},
+        }
+    if entry.defaults:
+        row = resolve_component_defaults(
+            component_node=row,
+            entry=entry,
+            preserve_existing_literal=True,
+            include_shared=False,
+        )
+    rows.append(row)
+    return row
+
+
+def _remove_component_instance_row(
+    *,
+    payload: dict[str, Any],
+    scope: ComponentScope,
+    instance_id: str,
+) -> dict[str, Any] | None:
+    rows = _scope_rows(payload, scope=scope)
+    target = normalize_component_token(instance_id)
+    for index, row in enumerate(rows):
+        if component_instance_id(row) != target:
+            continue
+        return rows.pop(index)
+    return None
+
+
+def _enabled_component_instance_specs(
+    payload: dict[str, Any],
+    *,
+    scope: ComponentScope,
+    entries: tuple[ComponentEntry, ...],
+) -> list[tuple[ComponentEntry, dict[str, Any]]]:
+    entry_lookup = {entry.id: entry for entry in entries}
+    rows = (
+        _dynamic_enabled_infra_component_rows(payload)
+        if scope == "infra"
+        else _dynamic_enabled_app_chart_rows(payload)
+    )
+    specs: list[tuple[ComponentEntry, dict[str, Any]]] = []
+    for row in rows:
+        entry = entry_lookup.get(str(row["id"]))
+        if entry is not None:
+            specs.append((entry, row))
+    return specs
 
 
 def _with_infra_provider_groups(
@@ -1004,6 +1835,20 @@ def _get_payload_value(payload: object, path: PayloadPath) -> object:
     return current
 
 
+def _payload_path_exists(payload: object, path: PayloadPath) -> bool:
+    current = payload
+    for segment in path:
+        if isinstance(segment, int):
+            if not isinstance(current, list) or segment < 0 or segment >= len(current):
+                return False
+            current = current[segment]
+            continue
+        if not isinstance(current, dict) or segment not in current:
+            return False
+        current = current[segment]
+    return True
+
+
 def _set_payload_value(payload: object, path: PayloadPath, value: object) -> None:
     if not path:
         raise RuntimeError("Cannot set payload root directly")
@@ -1029,6 +1874,93 @@ def _set_payload_value(payload: object, path: PayloadPath, value: object) -> Non
     current[last] = value
 
 
+def _set_payload_value_creating_containers(payload: object, path: PayloadPath, value: object) -> None:
+    if not path:
+        raise RuntimeError("Cannot set payload root directly")
+    current = payload
+    for index, segment in enumerate(path[:-1]):
+        next_segment = path[index + 1]
+        expected_container: object = [] if isinstance(next_segment, int) else {}
+        if isinstance(segment, int):
+            if not isinstance(current, list):
+                raise RuntimeError(f"Expected list while traversing payload at {path}")
+            while len(current) <= segment:
+                current.append(copy.deepcopy(expected_container))
+            next_value = current[segment]
+            if isinstance(next_segment, int):
+                if not isinstance(next_value, list):
+                    next_value = []
+                    current[segment] = next_value
+            else:
+                if not isinstance(next_value, dict):
+                    next_value = {}
+                    current[segment] = next_value
+            current = next_value
+            continue
+
+        if not isinstance(current, dict):
+            raise RuntimeError(f"Expected mapping while traversing payload at {path}")
+        next_value = current.get(segment)
+        if isinstance(next_segment, int):
+            if not isinstance(next_value, list):
+                next_value = []
+                current[segment] = next_value
+        else:
+            if not isinstance(next_value, dict):
+                next_value = {}
+                current[segment] = next_value
+        current = next_value
+
+    last = path[-1]
+    if isinstance(last, int):
+        if not isinstance(current, list):
+            raise RuntimeError(f"Expected list while setting payload at {path}")
+        while len(current) <= last:
+            current.append(None)
+        current[last] = value
+        return
+    if not isinstance(current, dict):
+        raise RuntimeError(f"Expected mapping while setting payload at {path}")
+    current[last] = value
+
+
+def _delete_payload_value(payload: object, path: PayloadPath) -> None:
+    if not path:
+        raise RuntimeError("Cannot delete payload root directly")
+
+    def _delete(current: object, remaining: PayloadPath) -> bool:
+        segment = remaining[0]
+        if len(remaining) == 1:
+            if isinstance(segment, int):
+                if not isinstance(current, list) or segment < 0 or segment >= len(current):
+                    return False
+                current.pop(segment)
+                return len(current) == 0
+            if not isinstance(current, dict) or segment not in current:
+                return False
+            current.pop(segment, None)
+            return len(current) == 0
+
+        if isinstance(segment, int):
+            if not isinstance(current, list) or segment < 0 or segment >= len(current):
+                return False
+            child = current[segment]
+            child_empty = _delete(child, remaining[1:])
+            if child_empty and segment < len(current):
+                current.pop(segment)
+            return len(current) == 0
+
+        if not isinstance(current, dict) or segment not in current:
+            return False
+        child = current[segment]
+        child_empty = _delete(child, remaining[1:])
+        if child_empty and segment in current:
+            current.pop(segment, None)
+        return len(current) == 0
+
+    _delete(payload, path)
+
+
 def _collect_scalar_leaf_paths(node: object, *, prefix: PayloadPath = ()) -> list[PayloadPath]:
     if isinstance(node, dict):
         leaf_paths: list[PayloadPath] = []
@@ -1039,6 +1971,24 @@ def _collect_scalar_leaf_paths(node: object, *, prefix: PayloadPath = ()) -> lis
         leaf_paths: list[PayloadPath] = []
         for index, value in enumerate(node):
             leaf_paths.extend(_collect_scalar_leaf_paths(value, prefix=prefix + (index,)))
+        return leaf_paths
+    return [prefix]
+
+
+def _collect_promptable_leaf_paths(node: object, *, prefix: PayloadPath = ()) -> list[PayloadPath]:
+    if isinstance(node, dict):
+        if not node:
+            return [prefix]
+        leaf_paths: list[PayloadPath] = []
+        for key, value in node.items():
+            leaf_paths.extend(_collect_promptable_leaf_paths(value, prefix=prefix + (key,)))
+        return leaf_paths
+    if isinstance(node, list):
+        if not node:
+            return [prefix]
+        leaf_paths: list[PayloadPath] = []
+        for index, value in enumerate(node):
+            leaf_paths.extend(_collect_promptable_leaf_paths(value, prefix=prefix + (index,)))
         return leaf_paths
     return [prefix]
 
@@ -1094,35 +2044,64 @@ def _read_payload_field(payload: dict[str, Any], field_path: str) -> Any:
     return read_path_with_catalog(payload, field_path)
 
 
-def _dynamic_infra_component_path(payload: dict[str, Any], component_id: str) -> PayloadPath | None:
+def _component_instance_path_label(scope: ComponentScope, component_id: str, instance_id: str) -> str:
+    label = component_instance_label(component_id, instance_id)
+    if scope == "infra":
+        return f"infra.components[{label}]"
+    return f"apps.charts[{label}]"
+
+
+def _dynamic_infra_component_path(
+    payload: dict[str, Any],
+    component_id: str,
+    *,
+    instance_id: str | None = None,
+) -> PayloadPath | None:
     infra_node = payload.get("infra")
     if not isinstance(infra_node, Mapping):
         return None
     components = infra_node.get("components")
     if not isinstance(components, list):
         return None
-    target = component_id.strip().lower()
+    target = normalize_component_token(component_id)
+    target_instance = normalize_component_token(instance_id)
     for index, item in enumerate(components):
         if not isinstance(item, Mapping):
             continue
-        current_id = str(item.get("id", "")).strip().lower()
+        current_id = component_type_id(item)
+        current_instance = component_instance_id(item)
+        if target_instance:
+            if current_instance == target_instance and current_id == target:
+                return ("infra", "components", index)
+            continue
         if current_id == target:
             return ("infra", "components", index)
     return None
 
 
-def _dynamic_app_chart_path(payload: dict[str, Any], chart_id: str) -> PayloadPath | None:
+def _dynamic_app_chart_path(
+    payload: dict[str, Any],
+    chart_id: str,
+    *,
+    instance_id: str | None = None,
+) -> PayloadPath | None:
     apps_node = payload.get("apps")
     if not isinstance(apps_node, Mapping):
         return None
     charts = apps_node.get("charts")
     if not isinstance(charts, list):
         return None
-    target = chart_id.strip().lower()
+    target = normalize_component_token(chart_id)
+    target_instance = normalize_component_token(instance_id)
     for index, item in enumerate(charts):
         if not isinstance(item, Mapping):
             continue
-        current_id = str(item.get("id", "")).strip().lower()
+        current_id = component_type_id(item)
+        current_instance = component_instance_id(item)
+        if target_instance:
+            if current_instance == target_instance and current_id == target:
+                return ("apps", "charts", index)
+            continue
         if current_id == target:
             return ("apps", "charts", index)
     return None
@@ -1205,11 +2184,14 @@ def _infer_infra_provider_field_spec(
             or ".gpu-" in full_path_label
         )
         prefix = "gpu-" if is_gpu_path else "cpu-"
-        provider = "mk8s_compatible_platforms" if entry.id == "mk8s" else "compute_platforms"
+        provider = "compute_platforms"
         source: dict[str, Any] = {"source": "provider", "provider": provider}
         if prefix:
             source["args"] = {"platform_prefix": prefix}
         return {"sources": [source]}
+
+    if normalized_leaf.endswith(("driver_preset", "drivers_preset")):
+        return None
 
     if leaf in {"preset"} or leaf.endswith(("_preset", "-preset")):
         platform_path = ""
@@ -1251,6 +2233,11 @@ def _resolve_wizard_field_spec(
             if isinstance(relative_spec, dict):
                 return relative_spec
 
+        for relative in _relative_wizard_field_paths(entry=entry, full_path_label=full_path_label):
+            relative_spec = entry.wizard_fields.get(relative)
+            if isinstance(relative_spec, dict):
+                return relative_spec
+
     if entry.scope == "infra":
         return _infer_infra_provider_field_spec(entry=entry, full_path_label=full_path_label)
     return None
@@ -1287,6 +2274,34 @@ def _resolve_dynamic_field_choices(
     spec = _resolve_wizard_field_spec(entry=entry, full_path_label=full_path_label)
     if spec is None:
         return []
+
+    # New flat `options` format: {from: <provider>, filter: <regex>}
+    options = spec.get("options") if isinstance(spec, dict) else None
+    if isinstance(options, dict):
+        provider = str(options.get("from", "")).strip()
+        if not provider or provider_lookup is None:
+            return []
+        filter_pattern = str(options.get("filter", "")).strip()
+        args: dict[str, Any] = {}
+        if filter_pattern:
+            args["_filter"] = filter_pattern
+        provider_choices = provider_lookup.resolve(
+            provider=provider,
+            args=args,
+            payload=payload,
+            field_path=full_path_label,
+        )
+        if filter_pattern:
+            import re as _re
+
+            try:
+                compiled = _re.compile(filter_pattern)
+                provider_choices = tuple(c for c in provider_choices if compiled.search(c.value))
+            except _re.error:
+                pass
+        return list(provider_choices)
+
+    # Legacy `sources` array format
     sources = spec.get("sources")
     if not isinstance(sources, list):
         return []
@@ -1301,8 +2316,8 @@ def _resolve_dynamic_field_choices(
             provider = str(source.get("provider", "")).strip()
             if not provider or provider_lookup is None:
                 continue
-            args = source.get("args")
-            resolved_args = dict(args) if isinstance(args, dict) else {}
+            source_args = source.get("args")
+            resolved_args = dict(source_args) if isinstance(source_args, dict) else {}
             provider_choices = provider_lookup.resolve(
                 provider=provider,
                 args=resolved_args,
@@ -1346,6 +2361,18 @@ def _provider_source_specs_for_field(
     spec = _resolve_wizard_field_spec(entry=entry, full_path_label=full_path_label)
     if spec is None:
         return ()
+
+    # New flat `options` format
+    options = spec.get("options") if isinstance(spec, dict) else None
+    if isinstance(options, dict):
+        provider = str(options.get("from", "")).strip()
+        if not provider:
+            return ()
+        filter_pattern = str(options.get("filter", "")).strip()
+        args: dict[str, Any] = {"_filter": filter_pattern} if filter_pattern else {}
+        return ((provider, args),)
+
+    # Legacy `sources` array format
     sources = spec.get("sources")
     if not isinstance(sources, list):
         return ()
@@ -1360,12 +2387,12 @@ def _provider_source_specs_for_field(
         if not provider:
             continue
         args_raw = source.get("args")
-        args = dict(args_raw) if isinstance(args_raw, dict) else {}
-        key = (provider, json.dumps(args, sort_keys=True))
+        source_args = dict(args_raw) if isinstance(args_raw, dict) else {}
+        key = (provider, json.dumps(source_args, sort_keys=True))
         if key in seen:
             continue
         seen.add(key)
-        provider_specs.append((provider, args))
+        provider_specs.append((provider, source_args))
     return tuple(provider_specs)
 
 
@@ -1395,10 +2422,48 @@ def _provider_allowed_values_for_field(
     return allowed, providers
 
 
-def _declared_wizard_field_labels(entry: ComponentEntry) -> list[str]:
+def _relative_wizard_field_paths(
+    *,
+    entry: ComponentEntry,
+    full_path_label: str,
+) -> tuple[str, ...]:
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    def _remember(value: str) -> None:
+        token = value.strip()
+        if not token or token in seen:
+            return
+        seen.add(token)
+        candidates.append(token)
+
+    if entry.scope == "infra":
+        dynamic_match = re.match(r"^infra\.components(?:\[[0-9]+\]|\.[^.]+)\.(.+)$", full_path_label)
+        if dynamic_match:
+            relative = dynamic_match.group(1)
+            _remember(relative)
+            if relative.startswith("inputs."):
+                _remember(relative[len("inputs.") :])
+    elif entry.scope == "apps":
+        dynamic_match = re.match(r"^apps\.charts(?:\[[0-9]+\]|\.[^.]+)\.(.+)$", full_path_label)
+        if dynamic_match:
+            relative = dynamic_match.group(1)
+            _remember(relative)
+            if relative.startswith("values."):
+                _remember(relative[len("values.") :])
+
+    return tuple(candidates)
+
+
+def _declared_wizard_field_labels(
+    entry: ComponentEntry,
+    *,
+    component_path: PayloadPath | None = None,
+) -> list[str]:
     labels: list[str] = []
     seen: set[str] = set()
     absolute_roots = {"version", "client_info", "infra", "apps"}
+    component_path_label = _format_payload_path(component_path) if component_path is not None else ""
     prefix = f"{entry.config_path}."
     for raw in entry.wizard_fields:
         key = raw.strip()
@@ -1406,6 +2471,8 @@ def _declared_wizard_field_labels(entry: ComponentEntry) -> list[str]:
             continue
         if key.startswith(prefix) or key == entry.config_path or key.split(".", 1)[0] in absolute_roots:
             full_label = key
+        elif component_path_label:
+            full_label = f"{component_path_label}.{key}"
         else:
             full_label = f"{entry.config_path}.{key}"
         if full_label in seen:
@@ -1422,8 +2489,9 @@ def _normalize_leaf_name(token: str) -> str:
 def _required_leaf_names_for_entry(entry: ComponentEntry) -> set[str]:
     if entry.scope != "infra":
         return set()
+    required_names = set(_runtime_required_input_leaf_names(entry))
     if entry.origin == "provider":
-        required_names = {
+        required_names |= {
             _normalize_leaf_name(name)
             for name in required_provider_leaf_names_for_component(entry.id)
         }
@@ -1439,11 +2507,12 @@ def _required_leaf_names_for_entry(entry: ComponentEntry) -> set[str]:
             entry,
             fallback_source=str(entry.source or ""),
         )
-        return {
+        required_names |= {
             _normalize_leaf_name(name)
             for name in module_required_variables(metadata_source)
         }
-    return set()
+        return required_names
+    return required_names
 
 
 def _module_variable_specs_for_entry(entry: ComponentEntry) -> dict[str, Any]:
@@ -1473,6 +2542,70 @@ def _short_type_hint(type_hint: str | None) -> str | None:
         if normalized.startswith(token):
             return normalized
     return normalized
+
+
+def _complex_type_kind(type_hint: str | None) -> str | None:
+    hint = _short_type_hint(type_hint)
+    if hint is None:
+        return None
+    if hint.startswith(("list(", "set(", "tuple(")):
+        return "sequence"
+    if hint.startswith(("map(", "object(")):
+        return "mapping"
+    return None
+
+
+def _is_complex_type_hint(type_hint: str | None) -> bool:
+    return _complex_type_kind(type_hint) is not None
+
+
+def _empty_value_for_type_hint(type_hint: str | None) -> object | None:
+    kind = _complex_type_kind(type_hint)
+    if kind == "sequence":
+        return []
+    if kind == "mapping":
+        return {}
+    return None
+
+
+def _serialize_complex_prompt_default(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value)
+    return str(value).strip()
+
+
+def _empty_complex_value_label(value: object, *, type_hint: str | None) -> str | None:
+    kind = _complex_type_kind(type_hint)
+    if kind == "mapping" and isinstance(value, dict) and not value:
+        return "empty map {}"
+    if kind == "sequence" and isinstance(value, list) and not value:
+        return "empty list []"
+    return None
+
+
+def _parse_complex_prompt_value(raw: str, *, type_hint: str | None) -> object:
+    kind = _complex_type_kind(type_hint)
+    parsed = yaml.safe_load(raw)
+    if kind == "sequence":
+        if not isinstance(parsed, list):
+            raise ValueError("Expected a YAML/JSON list value.")
+        return parsed
+    if kind == "mapping":
+        if not isinstance(parsed, dict):
+            raise ValueError("Expected a YAML/JSON mapping value.")
+        return parsed
+    return parsed
+
+
+def _has_required_complex_content(value: object, *, type_hint: str | None) -> bool:
+    kind = _complex_type_kind(type_hint)
+    if kind == "sequence":
+        return isinstance(value, list) and bool(value)
+    if kind == "mapping":
+        return isinstance(value, dict) and bool(value)
+    return value is not None
 
 
 def _coerce_raw_value_from_type_hint(raw: str, type_hint: str | None) -> object:
@@ -1507,56 +2640,120 @@ def _prompt_label_with_type(
     short_type = _short_type_hint(type_hint)
     if short_type:
         tags.append(short_type)
-    if required:
-        tags.append("required")
+    tags.append("required" if required else "optional")
     if not tags:
         return path_label
     return f"{path_label} [{', '.join(tags)}]"
 
 
-def _prompt_path_sort_key(path: PayloadPath, *, required_leaf_names: set[str]) -> tuple[int, str]:
+def _has_required_prompt_value(value: object, *, type_hint: str | None) -> bool:
+    if _is_complex_type_hint(type_hint):
+        return _has_required_complex_content(value, type_hint=type_hint)
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    return True
+
+
+def _provider_fallback_warning(
+    *,
+    field_path_label: str,
+    provider_names: str,
+    required: bool,
+    provider_lookup: ProviderOptionLookup | None,
+) -> str:
+    warning = (
+        "[yellow]Dynamic provider options unavailable[/yellow] for "
+        f"'{field_path_label}' via provider source(s): {escape(provider_names)}."
+    )
+    if provider_lookup is not None:
+        last_error = provider_lookup.last_error()
+        if last_error:
+            warning += f" {escape(last_error)}"
+    if required:
+        warning += " The next prompt is manual input only, and this required field must be entered manually."
+        return warning
+    warning += (
+        " The next prompt is manual input only. "
+        "Press Enter there to keep the current value or leave the optional field unset."
+    )
+    return warning
+
+
+def _prompt_path_sort_key(path: PayloadPath, *, required_leaf_names: set[str]) -> tuple[int, int, str]:
     leaf = path[-1] if path else ""
     leaf_name = _normalize_leaf_name(str(leaf)) if isinstance(leaf, str) else ""
     required_rank = 0 if leaf_name and leaf_name in required_leaf_names else 1
-    return required_rank, _format_payload_path(path)
+    toggle_rank = 0 if leaf_name.endswith("_enabled") else 1
+    return required_rank, toggle_rank, _format_payload_path(path)
 
 
-def _hydrate_app_component_values_from_chart_defaults(
+def _app_chart_default_values(
     *,
     payload: dict[str, Any],
     entry: ComponentEntry,
-) -> None:
+    instance_id: str | None = None,
+) -> dict[str, Any]:
     if entry.scope != "apps" or entry.origin != "helm":
-        return
-    component_path = _dynamic_component_path(payload, entry)
+        return {}
+    component_path = (
+        _dynamic_app_chart_path(payload, entry.id, instance_id=instance_id)
+        if instance_id is not None
+        else _dynamic_component_path(payload, entry)
+    )
     if component_path is None:
-        return
+        return {}
     component_node = _get_payload_value(payload, component_path)
     if not isinstance(component_node, Mapping):
-        return
+        return {}
     chart_name = str(component_node.get("id", "")).strip() or entry.id
     chart_repo = str(component_node.get("repo", "")).strip()
     chart_version = str(component_node.get("version", "")).strip()
     if not chart_name:
-        return
+        return {}
 
     defaults = helm_chart_default_values(
         chart_name_or_ref=chart_name,
         chart_repo=chart_repo,
         chart_version=chart_version,
     )
-    if not defaults:
-        return
+    return defaults if isinstance(defaults, dict) else {}
 
-    chart_values_path = component_path + ("values",)
-    current_values = _get_payload_value(payload, chart_values_path)
-    if not isinstance(current_values, dict):
-        current_values = {}
-    merged_values = merge_chart_defaults_with_overrides(
-        chart_defaults=defaults,
-        current_values=current_values,
-    )
-    _set_payload_value(payload, chart_values_path, merged_values)
+
+def _prune_redundant_app_chart_default_values(
+    *,
+    payload: dict[str, Any],
+    app_entries: tuple[ComponentEntry, ...],
+) -> None:
+    entry_lookup = {entry.id: entry for entry in app_entries}
+    for row in _dynamic_enabled_app_chart_rows(payload):
+        chart_id = str(row["id"])
+        instance_id = str(row["instance_id"])
+        entry = entry_lookup.get(chart_id)
+        if entry is None:
+            continue
+        component_path = _dynamic_app_chart_path(payload, chart_id, instance_id=instance_id)
+        if component_path is None:
+            continue
+        chart_defaults = _app_chart_default_values(
+            payload=payload,
+            entry=entry,
+            instance_id=instance_id,
+        )
+        if not chart_defaults:
+            continue
+        values_path = component_path + ("values",)
+        if not _payload_path_exists(payload, values_path):
+            continue
+        for relative_path in _collect_scalar_leaf_paths(chart_defaults):
+            full_path = values_path + relative_path
+            if not _payload_path_exists(payload, full_path):
+                continue
+            explicit_value = _get_payload_value(payload, full_path)
+            default_value = _get_payload_value(chart_defaults, relative_path)
+            if explicit_value == default_value:
+                _delete_payload_value(payload, full_path)
 
 
 def _chart_source_parts(entry: ComponentEntry) -> tuple[str | None, str | None]:
@@ -1585,8 +2782,15 @@ def _seed_component_prompt_fields(
     payload: dict[str, Any],
     entry: ComponentEntry,
     required_leaf_names: set[str],
+    instance_id: str | None = None,
 ) -> None:
-    component_path = _dynamic_component_path(payload, entry)
+    component_path = (
+        _dynamic_infra_component_path(payload, entry.id, instance_id=instance_id)
+        if entry.scope == "infra" and instance_id is not None
+        else _dynamic_app_chart_path(payload, entry.id, instance_id=instance_id)
+        if entry.scope == "apps" and instance_id is not None
+        else _dynamic_component_path(payload, entry)
+    )
     if component_path is None:
         return
     component_node = _get_payload_value(payload, component_path)
@@ -1625,9 +2829,6 @@ def _seed_component_prompt_fields(
         if not isinstance(inputs_node, dict):
             inputs_node = {}
             component_node["inputs"] = inputs_node
-        for leaf_name in sorted(required_leaf_names):
-            key = leaf_name.replace("-", "_")
-            inputs_node.setdefault(key, "")
         return
 
     scalar_paths = _collect_scalar_leaf_paths(component_node)
@@ -1661,7 +2862,7 @@ def _prompt_choice_override(
     default_value = str(current).strip() if current is not None else ""
     option_values = [choice.value for choice in choices]
     prompt_default = default_value if default_value in option_values else (
-        option_values[0] if option_values else ""
+        option_values[0] if required and option_values else ""
     )
     if _is_tty_session():
         try:
@@ -1670,16 +2871,23 @@ def _prompt_choice_override(
             rendered_choices = [
                 questionary.Choice(title=choice.label, value=choice.value) for choice in choices
             ]
+            if not required and not prompt_default:
+                rendered_choices.insert(
+                    0,
+                    questionary.Choice(title="<skip / keep unset>", value="__skip__"),
+                )
             rendered_choices.append(questionary.Choice(title="<manual input>", value="__manual__"))
             selected = questionary.select(
                 rendered_label,
                 choices=rendered_choices,
                 instruction="Select one option (or choose manual input).",
-                default=prompt_default or None,
+                default="__skip__" if not required and not prompt_default else (prompt_default or None),
                 qmark="",
             ).ask()
             if selected is None:
                 return current, True
+            if selected == "__skip__":
+                return current, False
             if selected != "__manual__":
                 return str(selected).strip(), False
         except (KeyboardInterrupt, EOFError, typer.Abort):
@@ -1700,7 +2908,9 @@ def _prompt_choice_override(
         if raw == WIZARD_EXIT_TOKEN:
             return current, True
         if not raw:
-            return (prompt_default or current), False
+            if prompt_default:
+                return prompt_default, False
+            return current, False
         if raw.isdigit():
             index = int(raw)
             if 1 <= index <= len(choices):
@@ -1734,6 +2944,45 @@ def _prompt_scalar_override(
         required=required,
     )
     prompt_suffix = f"{rendered_label} (enter {WIZARD_EXIT_TOKEN} to stop wizard)"
+    if _is_complex_type_hint(type_hint) or isinstance(current, (dict, list)):
+        default_value = _serialize_complex_prompt_default(current)
+        prompt_suffix = (
+            f"{prompt_suffix}; enter YAML/JSON and use compact one-line values for interactive editing"
+        )
+        blank_hint = _empty_complex_value_label(current, type_hint=type_hint)
+        blank_keep_text = (
+            f"blank keeps current {blank_hint}"
+            if blank_hint is not None and not required
+            else "blank keeps current"
+        )
+        prompt_default = "" if blank_hint is not None and not required else default_value
+        while True:
+            try:
+                raw = typer.prompt(
+                    f"{prompt_suffix} ({blank_keep_text})",
+                    default=prompt_default,
+                ).strip()
+            except (KeyboardInterrupt, EOFError, typer.Abort):
+                return current, True
+            if raw == WIZARD_EXIT_TOKEN:
+                return current, True
+            if not raw:
+                if required and not _has_required_prompt_value(current, type_hint=type_hint):
+                    console.print("[red]Invalid value[/red]. This field is required.")
+                    continue
+                return current, False
+            try:
+                coerced = _parse_complex_prompt_value(raw, type_hint=type_hint)
+            except ValueError as exc:
+                console.print(f"[red]Invalid value[/red]. {exc}")
+                continue
+            if required and not _has_required_prompt_value(coerced, type_hint=type_hint):
+                console.print(
+                    "[red]Invalid value[/red]. "
+                    "This field is required and cannot be an empty YAML/JSON collection."
+                )
+                continue
+            return coerced, False
     while True:
         if isinstance(current, bool):
             try:
@@ -1786,11 +3035,17 @@ def _prompt_scalar_override(
             if raw == WIZARD_EXIT_TOKEN:
                 return current, True
             if not raw:
+                if required:
+                    console.print("[red]Invalid value[/red]. This field is required.")
+                    continue
                 return None, False
             try:
                 coerced = _coerce_raw_value_from_type_hint(raw, type_hint)
             except ValueError as exc:
                 console.print(f"[red]Invalid value[/red]. {exc}")
+                continue
+            if required and not _has_required_prompt_value(coerced, type_hint=type_hint):
+                console.print("[red]Invalid value[/red]. This field is required.")
                 continue
             return coerced, False
 
@@ -1804,6 +3059,9 @@ def _prompt_scalar_override(
             coerced = _coerce_raw_value_from_type_hint(raw, type_hint)
         except ValueError as exc:
             console.print(f"[red]Invalid value[/red]. {exc}")
+            continue
+        if required and not _has_required_prompt_value(coerced, type_hint=type_hint):
+            console.print("[red]Invalid value[/red]. This field is required.")
             continue
         return coerced, False
 
@@ -1821,29 +3079,48 @@ def _run_component_field_wizard(
     if not isinstance(payload, dict):
         raise RuntimeError("Generated config template is not a YAML mapping")
 
-    selected_components: list[ComponentEntry] = []
-    selected_components.extend(entry for entry in infra_entries if entry.id in selected_infra)
-    selected_components.extend(entry for entry in app_entries if entry.id in selected_apps)
+    selected_components: list[tuple[ComponentEntry, str]] = []
+    infra_lookup = {entry.id: entry for entry in infra_entries}
+    for row in _dynamic_enabled_infra_component_rows(payload):
+        instance_id = str(row["instance_id"])
+        if instance_id not in selected_infra:
+            continue
+        entry = infra_lookup.get(str(row["id"]))
+        if entry is not None:
+            selected_components.append((entry, instance_id))
+    app_lookup = {entry.id: entry for entry in app_entries}
+    for row in _dynamic_enabled_app_chart_rows(payload):
+        instance_id = str(row["instance_id"])
+        if instance_id not in selected_apps:
+            continue
+        entry = app_lookup.get(str(row["id"]))
+        if entry is not None:
+            selected_components.append((entry, instance_id))
 
     warned_provider_fallbacks: set[str] = set()
     provider_allowed_cache: dict[str, tuple[set[str], tuple[str, ...]]] = {}
-    for entry in selected_components:
+    for entry, instance_id in selected_components:
+        component_label = component_instance_label(entry.id, instance_id)
         if not _wizard_continue_phase(
-            f"Configure '{entry.id}' component fields now?",
+            f"Configure '{component_label}' component fields now?",
             default=True,
         ):
             return yaml.safe_dump(payload, sort_keys=False), False
 
-        _hydrate_app_component_values_from_chart_defaults(payload=payload, entry=entry)
         required_leaf_names = _required_leaf_names_for_entry(entry)
         required_leaf_names -= set(shared_default_input_sources(entry))
         _seed_component_prompt_fields(
             payload=payload,
             entry=entry,
             required_leaf_names=required_leaf_names,
+            instance_id=instance_id,
         )
 
-        component_path = _dynamic_component_path(payload, entry)
+        component_path = (
+            _dynamic_infra_component_path(payload, entry.id, instance_id=instance_id)
+            if entry.scope == "infra"
+            else _dynamic_app_chart_path(payload, entry.id, instance_id=instance_id)
+        )
         if component_path is not None and entry.defaults:
             component_node = _get_payload_value(payload, component_path)
             resolved_component_node = resolve_component_defaults(
@@ -1854,13 +3131,13 @@ def _run_component_field_wizard(
             )
             _set_payload_value(payload, component_path, resolved_component_node)
         bound_prompt_paths = (
-            managed_default_payload_paths(component_path, entry) if component_path is not None else set()
+            shared_default_payload_paths(component_path, entry) if component_path is not None else set()
         )
         if component_path is not None:
             bound_prompt_paths |= managed_input_binding_payload_paths(component_path, entry)
 
         declared_prompt_paths: list[PayloadPath] = []
-        for full_path_label in _declared_wizard_field_labels(entry):
+        for full_path_label in _declared_wizard_field_labels(entry, component_path=component_path):
             resolved_declared = _resolve_payload_path(payload, full_path_label)
             if resolved_declared is None:
                 console.print(
@@ -1878,6 +3155,7 @@ def _run_component_field_wizard(
         seen_prompt_labels: set[str] = set()
         field_type_hints: dict[str, str | None] = {}
         required_prompt_labels: set[str] = set()
+        virtual_prompt_defaults: dict[PayloadPath, object] = {}
         for path in declared_prompt_paths:
             label = _format_payload_path(path)
             if label in seen_prompt_labels:
@@ -1900,6 +3178,19 @@ def _run_component_field_wizard(
                     default_project_scope_id = _non_empty_text(
                         _read_payload_field(payload, "client_info.nebius.project_id")
                     )
+                    dependent_prefixes = tuple(
+                        sorted(
+                            {
+                                leaf_name[: -len("_enabled")]
+                                for leaf_name, spec in module_specs_by_leaf.items()
+                                if _short_type_hint(spec.type_hint) == "bool"
+                                and leaf_name.endswith("_enabled")
+                                and leaf_name[: -len("_enabled")]
+                            },
+                            key=len,
+                            reverse=True,
+                        )
+                    )
 
                     def _seed_input_value(
                         leaf_name: str,
@@ -1914,13 +3205,8 @@ def _run_component_field_wizard(
                             return
                         if leaf_name in {"parent_id", "project_id"} and default_project_scope_id:
                             module_inputs[leaf_name] = default_project_scope_id
-                            return
-                        spec = module_specs_by_leaf.get(leaf_name)
-                        if spec is not None and spec.has_default:
-                            module_inputs[leaf_name] = copy.deepcopy(spec.default)
-                            return
                         if required_only:
-                            module_inputs[leaf_name] = ""
+                            return
 
                     for leaf_name in sorted(required_leaf_names):
                         _seed_input_value(leaf_name, required_only=True)
@@ -1943,9 +3229,32 @@ def _run_component_field_wizard(
                                 resolved.add(prefix)
                         return resolved
 
+                    def _dependent_prefix(
+                        leaf_name: str,
+                        *,
+                        dependent_prefixes: tuple[str, ...] = dependent_prefixes,
+                    ) -> str | None:
+                        normalized_leaf = _normalize_leaf_name(leaf_name)
+                        for prefix in dependent_prefixes:
+                            if normalized_leaf == f"{prefix}_enabled":
+                                return None
+                            if normalized_leaf.startswith(f"{prefix}_"):
+                                return prefix
+                        return None
+
+                    def _field_is_enabled(
+                        leaf_name: str,
+                        *,
+                        module_inputs: dict[str, Any] = module_inputs,
+                    ) -> bool:
+                        dependency_prefix = _dependent_prefix(leaf_name)
+                        if dependency_prefix is None:
+                            return True
+                        return dependency_prefix in _enabled_prefixes(module_inputs=module_inputs)
+
                     def _append_field_prompt(
                         leaf_name: str,
-                        spec: Any,
+                        spec: Any | None,
                         *,
                         required: bool,
                         bound_prompt_paths: set[PayloadPath] = bound_prompt_paths,
@@ -1971,61 +3280,69 @@ def _run_component_field_wizard(
                         label = _format_payload_path(full_path)
                         seen_prompt_labels.add(label)
                         prompt_paths.append(full_path)
-                        field_type_hints[label] = spec.type_hint
+                        field_type_hints[label] = None if spec is None else spec.type_hint
                         if required:
                             required_prompt_labels.add(label)
+
+                    def _queue_module_field_prompt(
+                        leaf_name: str,
+                        spec: Any | None,
+                        *,
+                        required: bool,
+                        module_inputs: dict[str, Any] = module_inputs,
+                        module_inputs_path: PayloadPath = module_inputs_path,
+                        virtual_prompt_defaults: dict[PayloadPath, object] = virtual_prompt_defaults,
+                    ) -> None:
+                        full_path = module_inputs_path + (leaf_name,)
+                        current_value = _resolve_mapping_segment(module_inputs, leaf_name)
+                        if (
+                            current_value is None
+                            and spec is not None
+                            and spec.has_default
+                            and full_path not in virtual_prompt_defaults
+                        ):
+                            virtual_prompt_defaults[full_path] = copy.deepcopy(spec.default)
+                        if not _field_is_enabled(leaf_name, module_inputs=module_inputs):
+                            return
+                        _seed_input_value(
+                            leaf_name,
+                            required_only=spec.required if spec is not None else required,
+                        )
+                        _append_field_prompt(leaf_name, spec, required=required)
 
                     for leaf_name, spec in sorted(
                         module_specs_by_leaf.items(),
                         key=lambda item: (0 if item[1].required else 1, item[0]),
                     ):
-                        current_value = _resolve_mapping_segment(module_inputs, leaf_name)
-                        has_current = not (
-                            current_value is None
-                            or (isinstance(current_value, str) and not current_value.strip())
+                        _queue_module_field_prompt(
+                            leaf_name,
+                            spec,
+                            required=spec.required or leaf_name in required_leaf_names,
                         )
-                        include_optional_by_dependency = any(
-                            leaf_name.startswith(f"{prefix}_")
-                            and leaf_name != f"{prefix}_enabled"
-                            for prefix in _enabled_prefixes()
-                        )
-                        is_toggle = (
-                            _short_type_hint(spec.type_hint) == "bool"
-                            and leaf_name.endswith("_enabled")
-                        )
-                        should_prompt = (
-                            spec.required
-                            or has_current
-                            or include_optional_by_dependency
-                            or is_toggle
-                        )
-                        if not should_prompt:
-                            continue
-                        _seed_input_value(leaf_name, required_only=spec.required)
-                        _append_field_prompt(leaf_name, spec, required=spec.required)
 
-                    def _expand_dependency_fields_for_enabled_prefixes(
-                        module_specs_by_leaf: dict[str, Any] = module_specs_by_leaf,
-                    ) -> None:
-                        prefixes = _enabled_prefixes()
-                        if not prefixes:
-                            return
+                    for leaf_name in sorted(required_leaf_names):
+                        if leaf_name in module_specs_by_leaf:
+                            continue
+                        _queue_module_field_prompt(leaf_name, None, required=True)
+
+                    def _expand_module_dependency_prompts() -> None:
                         for leaf_name, spec in sorted(
                             module_specs_by_leaf.items(),
-                            key=lambda item: item[0],
+                            key=lambda item: (0 if item[1].required else 1, item[0]),
                         ):
-                            if spec.required:
+                            _queue_module_field_prompt(
+                                leaf_name,
+                                spec,
+                                required=spec.required or leaf_name in required_leaf_names,
+                            )
+                        for leaf_name in sorted(required_leaf_names):
+                            if leaf_name in module_specs_by_leaf:
                                 continue
-                            if not any(
-                                leaf_name.startswith(f"{prefix}_")
-                                and leaf_name != f"{prefix}_enabled"
-                                for prefix in prefixes
-                            ):
-                                continue
-                            _seed_input_value(leaf_name, required_only=False)
-                            _append_field_prompt(leaf_name, spec, required=False)
+                            _queue_module_field_prompt(leaf_name, None, required=True)
 
-                    module_dependency_expander = _expand_dependency_fields_for_enabled_prefixes
+                    module_dependency_expander = (
+                        _expand_module_dependency_prompts if dependent_prefixes else None
+                    )
             elif entry.scope == "apps" and entry.origin == "helm":
                 # App wizard prompts are Helm values-driven.
                 for key in ("namespace", "release-name"):
@@ -2045,11 +3362,30 @@ def _run_component_field_wizard(
                     _get_payload_value(payload, values_path) if values_path is not None else None
                 )
                 if values_path is not None and isinstance(values_node, dict):
-                    for relative_path in _collect_scalar_leaf_paths(values_node):
+                    for relative_path in _collect_promptable_leaf_paths(values_node):
                         full_path = values_path + relative_path
                         if full_path in bound_prompt_paths:
                             continue
                         label = _format_payload_path(full_path)
+                        if label in seen_prompt_labels:
+                            continue
+                        seen_prompt_labels.add(label)
+                        prompt_paths.append(full_path)
+                chart_default_values = _app_chart_default_values(
+                    payload=payload,
+                    entry=entry,
+                    instance_id=instance_id,
+                )
+                if isinstance(chart_default_values, dict):
+                    for relative_path in _collect_promptable_leaf_paths(chart_default_values):
+                        full_path = values_path + relative_path
+                        if full_path in bound_prompt_paths:
+                            continue
+                        label = _format_payload_path(full_path)
+                        if full_path not in virtual_prompt_defaults:
+                            virtual_prompt_defaults[full_path] = copy.deepcopy(
+                                _get_payload_value(chart_default_values, relative_path)
+                            )
                         if label in seen_prompt_labels:
                             continue
                         seen_prompt_labels.add(label)
@@ -2075,7 +3411,11 @@ def _run_component_field_wizard(
             while prompt_index < len(prompt_paths):
                 full_path = prompt_paths[prompt_index]
                 prompt_index += 1
-                current = _get_payload_value(payload, full_path)
+                if _payload_path_exists(payload, full_path):
+                    current = _get_payload_value(payload, full_path)
+                else:
+                    current = copy.deepcopy(virtual_prompt_defaults.get(full_path))
+                path_existed_before_prompt = _payload_path_exists(payload, full_path)
                 full_path_label = _format_payload_path(full_path)
                 field_choices = _resolve_dynamic_field_choices(
                     payload=payload,
@@ -2097,10 +3437,13 @@ def _run_component_field_wizard(
                     provider_allowed_cache[full_path_label] = (allowed_provider_values, providers)
                 if not field_choices and providers and full_path_label not in warned_provider_fallbacks:
                     provider_names = ", ".join(providers)
-                    console.print(
-                        "[yellow]Dynamic provider options unavailable[/yellow] for "
-                        f"'{full_path_label}' via [{provider_names}]. Falling back to manual input."
+                    warning = _provider_fallback_warning(
+                        field_path_label=full_path_label,
+                        provider_names=provider_names,
+                        required=full_path_label in required_prompt_labels,
+                        provider_lookup=provider_lookup,
                     )
+                    console.print(warning)
                     warned_provider_fallbacks.add(full_path_label)
                 updated, should_stop = _prompt_scalar_override(
                     full_path_label,
@@ -2112,6 +3455,14 @@ def _run_component_field_wizard(
                 if should_stop:
                     return yaml.safe_dump(payload, sort_keys=False), False
                 while allowed_provider_values:
+                    if (
+                        full_path_label not in required_prompt_labels
+                        and not _has_required_prompt_value(
+                            updated,
+                            type_hint=field_type_hints.get(full_path_label),
+                        )
+                    ):
+                        break
                     updated_value = str(updated).strip()
                     if updated_value in allowed_provider_values:
                         break
@@ -2128,7 +3479,17 @@ def _run_component_field_wizard(
                     )
                     if should_stop:
                         return yaml.safe_dump(payload, sort_keys=False), False
-                _set_payload_value(payload, full_path, updated)
+                if full_path in virtual_prompt_defaults:
+                    default_value = virtual_prompt_defaults[full_path]
+                    if updated == default_value:
+                        if _payload_path_exists(payload, full_path):
+                            _delete_payload_value(payload, full_path)
+                    else:
+                        _set_payload_value_creating_containers(payload, full_path, updated)
+                elif not path_existed_before_prompt and updated is None:
+                    continue
+                else:
+                    _set_payload_value(payload, full_path, updated)
             if module_dependency_expander is None:
                 break
             before_expand = len(prompt_paths)
@@ -2516,16 +3877,12 @@ def _enabled_component_ids(config: Any, *, scope: ComponentScope) -> set[str]:
     return {str(row["id"]) for row in _dynamic_enabled_app_chart_rows(payload)}
 
 
-def _validate_component_dependencies(
-    config: Any,
+def _component_dependency_issues_from_payload(
+    payload: dict[str, Any],
     *,
     chart_meta_cache: _ChartMetaCache | None = None,
 ) -> list[str]:
     issues: list[str] = []
-    payload = to_plain_data(config)
-    if not isinstance(payload, dict):
-        return ["Runtime config payload must be a mapping"]
-
     selected_infra = {str(row["id"]) for row in _dynamic_enabled_infra_component_rows(payload)}
     selected_apps = {str(row["id"]) for row in _dynamic_enabled_app_chart_rows(payload)}
     selected_by_scope: dict[ComponentScope, set[str]] = {
@@ -2581,13 +3938,27 @@ def _validate_component_dependencies(
         )
         _ = resolved_apps
         for adjustment in app_adjustments:
-            issues.append(
-                "app chart dependency requires "
-                f"'apps:{adjustment.dependency_app_id}' when "
-                f"'apps:{adjustment.source_app_id}' is enabled "
-                f"(chart dependency: {adjustment.dependency_chart_name})"
-            )
+                issues.append(
+                    "app chart dependency requires "
+                    f"'apps:{adjustment.dependency_app_id}' when "
+                    f"'apps:{adjustment.source_app_id}' is enabled "
+                    f"(chart dependency: {adjustment.dependency_chart_name})"
+                )
     return issues
+
+
+def _validate_component_dependencies(
+    config: Any,
+    *,
+    chart_meta_cache: _ChartMetaCache | None = None,
+) -> list[str]:
+    payload = to_plain_data(config)
+    if not isinstance(payload, dict):
+        return ["Runtime config payload must be a mapping"]
+    return _component_dependency_issues_from_payload(
+        payload,
+        chart_meta_cache=chart_meta_cache,
+    )
 
 
 def _provider_allowed_values(
@@ -2654,6 +4025,7 @@ def _validate_enabled_chart_sources(
 
     for chart_row in _dynamic_enabled_app_chart_rows(payload):
         chart_id = str(chart_row["id"])
+        instance_id = str(chart_row["instance_id"])
         chart_repo = str(chart_row.get("repo", "")).strip()
         chart_version = str(chart_row.get("version", "")).strip()
         if chart_meta_cache is None:
@@ -2670,7 +4042,9 @@ def _validate_enabled_chart_sources(
                 chart_meta_cache=chart_meta_cache,
             )
         for issue in issues_for_chart:
-            issues.append(f"apps.charts[{chart_id}] {issue}")
+            issues.append(
+                f"{_component_instance_path_label('apps', chart_id, instance_id)} {issue}"
+            )
     return issues
 
 
@@ -2913,19 +4287,20 @@ def _validate_component_sources_registry(
         if not module_source:
             issues.append(f"infra.tf_modules[{module_id}] is missing source")
             continue
-        for issue in module_source_validation_issues(module_source):
+        source_issues = module_source_validation_issues(module_source)
+        for issue in source_issues:
             issues.append(f"infra.tf_modules[{module_id}] {issue}")
+        if not source_issues:
+            module_contract_issues, module_contract_warnings = module_cli_contract_findings(
+                module_source
+            )
+            for issue in module_contract_issues:
+                issues.append(f"infra.tf_modules[{module_id}] {issue}")
+            for warning in module_contract_warnings:
+                warnings.append(f"infra.tf_modules[{module_id}] {warning}")
         local_module_path = _resolve_local_module_source_path(module_source)
         if local_module_path is None:
             continue
-        if not (local_module_path / "main.tf").exists():
-            warnings.append(
-                f"infra.tf_modules[{module_id}] is missing main.tf in {local_module_path}"
-            )
-        if not (local_module_path / "variables.tf").exists():
-            warnings.append(
-                f"infra.tf_modules[{module_id}] is missing variables.tf in {local_module_path}"
-            )
         expected_from_folder = _normalize_component_token(local_module_path.name)
         if expected_from_folder and expected_from_folder != module_id:
             warnings.append(
@@ -2954,13 +4329,24 @@ def _validate_component_sources_registry(
             duplicate_ids.add(chart_id)
         else:
             declared_entries[chart_id] = ("apps", chart)
-        for issue in _resolve_helm_chart_validation_issues(
+        chart_source_issues = _resolve_helm_chart_validation_issues(
             chart_name=chart_name,
             chart_repo=repo,
             chart_version=version,
             chart_meta_cache=chart_meta_cache,
-        ):
+        )
+        for issue in chart_source_issues:
             issues.append(f"{chart_label} {issue}")
+        if not chart_source_issues:
+            chart_contract_issues, chart_contract_warnings = chart_cli_contract_findings(
+                chart_name=chart_name,
+                chart_repo=repo,
+                chart_version=version,
+            )
+            for issue in chart_contract_issues:
+                issues.append(f"{chart_label} {issue}")
+            for warning in chart_contract_warnings:
+                warnings.append(f"{chart_label} {warning}")
 
     for component_id in sorted(duplicate_ids):
         issues.append(
@@ -3089,37 +4475,43 @@ def _validate_component_sources_registry(
 
         handoff = getattr(source_entry, "handoff", None)
         if handoff is not None:
-            cluster_id_output = output_by_name.get(handoff.cluster_id_output_name)
+            cluster_id_output = output_by_name.get(handoff.cluster_id.value)
             if cluster_id_output is None:
                 issues.append(
                     f"{scope} component '{component_id}' handoff.cluster_id "
-                    f"'{handoff.cluster_id_output_name}' is not declared under outputs"
+                    f"'{handoff.cluster_id.value}' is not declared under outputs"
                 )
             elif cluster_id_output.kind != "terraform_output":
                 issues.append(
                     f"{scope} component '{component_id}' handoff.cluster_id "
-                    f"'{handoff.cluster_id_output_name}' must point to a Terraform-backed exported output alias"
+                    f"'{handoff.cluster_id.value}' must point to a Terraform-backed exported output alias"
                 )
 
-            access_output = output_by_name.get(handoff.access_output_name)
-            if access_output is None:
-                issues.append(
-                    f"{scope} component '{component_id}' handoff.access "
-                    f"'{handoff.access_output_name}' is not declared under outputs"
-                )
-            elif access_output.kind == "terraform_output":
-                issues.append(
-                    f"{scope} component '{component_id}' handoff.access "
-                    f"'{handoff.access_output_name}' must point to a config/static exported output alias"
-                )
-            elif access_output.kind == "static":
-                access_value = str(access_output.value or "").strip().lower()
-                if access_value not in {"external", "internal"}:
+            if handoff.access.kind == "config_path":
+                pass  # config_path access is resolved directly; no output alias needed
+            else:
+                access_output = output_by_name.get(handoff.access.value)
+                if access_output is None:
                     issues.append(
                         f"{scope} component '{component_id}' handoff.access "
-                        f"'{handoff.access_output_name}' resolves to invalid static value "
-                        f"'{access_output.value}'. Expected 'external' or 'internal'."
+                        f"'{handoff.access.value}' is not declared under outputs"
                     )
+                elif access_output.kind == "terraform_output":
+                    issues.append(
+                        f"{scope} component '{component_id}' handoff.access "
+                        f"'{handoff.access.value}' must point to a config/static exported output alias"
+                    )
+                elif access_output.kind == "static":
+                    try:
+                        _normalize_handoff_access_value(
+                            access_output.value,
+                            component_label=component_id,
+                            output_name=handoff.access.value,
+                        )
+                    except RuntimeError as exc:
+                        issues.append(
+                            str(exc)
+                        )
 
     if progress_callback is not None:
         progress_callback("done", total_items, total_items)
@@ -3174,6 +4566,7 @@ def _dynamic_provider_field_checks(
         if mode not in {"provider", "custom"}:
             continue
         component_id = str(row["id"])
+        instance_id = str(row["instance_id"])
         source = str(row.get("source", "")).strip() or None
         entry = entry_by_id.get(component_id)
         if entry is None:
@@ -3186,14 +4579,18 @@ def _dynamic_provider_field_checks(
             entry = ComponentEntry(
                 id=component_id,
                 scope="infra",
-                config_path=f"infra.components.{component_id}",
-                description=f"{entry_label} '{component_id}'",
+                config_path=f"infra.components.{instance_id}",
+                description=f"{entry_label} '{component_instance_label(component_id, instance_id)}'",
                 origin=entry_origin,
                 source=source,
             )
         elif mode == "custom" and source and str(entry.source or "").strip() != source:
             entry = replace(entry, origin="custom", source=source)
-        component_path = _dynamic_infra_component_path(payload, component_id)
+        component_path = _dynamic_infra_component_path(
+            payload,
+            component_id,
+            instance_id=instance_id,
+        )
         if component_path is None:
             continue
         if entry.defaults:
@@ -3236,6 +4633,8 @@ def _required_enabled_infra_field_issues(
     entry_by_id = {entry.id: entry for entry in infra_entries}
     for row in _dynamic_enabled_infra_component_rows(payload):
         component_id = str(row["id"])
+        instance_id = str(row["instance_id"])
+        component_path_label = _component_instance_path_label("infra", component_id, instance_id)
         mode = str(row.get("mode", "")).strip().lower()
         inputs = row.get("inputs", {})
         if not isinstance(inputs, Mapping):
@@ -3247,12 +4646,16 @@ def _required_enabled_infra_field_issues(
                 entry = ComponentEntry(
                     id=component_id,
                     scope="infra",
-                    config_path=f"infra.components.{component_id}",
-                    description=f"Runtime provider component '{component_id}'",
+                    config_path=f"infra.components.{instance_id}",
+                    description=f"Runtime provider component '{component_instance_label(component_id, instance_id)}'",
                     origin="provider",
                     source=None,
                 )
-            component_path = _dynamic_infra_component_path(payload, component_id)
+            component_path = _dynamic_infra_component_path(
+                payload,
+                component_id,
+                instance_id=instance_id,
+            )
             if component_path is None:
                 continue
             inputs_path = component_path + ("inputs",)
@@ -3300,6 +4703,8 @@ def _required_enabled_infra_field_issues(
         required_leaf_names = {
             _normalize_leaf_name(name) for name in module_required_variables(inspection_source)
         }
+        if entry is not None:
+            required_leaf_names |= _runtime_required_input_leaf_names(entry)
         if not required_leaf_names:
             continue
         binding_by_leaf = shared_default_input_sources(entry) if entry is not None else {}
@@ -3318,11 +4723,11 @@ def _required_enabled_infra_field_issues(
                     ):
                         continue
                     issues.append(
-                        f"{binding_source} is required for infra.components[{component_id}].inputs.{leaf_name}"
+                        f"{binding_source} is required for {component_path_label}.inputs.{leaf_name}"
                     )
                     continue
                 issues.append(
-                    f"infra.components[{component_id}].inputs.{leaf_name} is required"
+                    f"{component_path_label}.inputs.{leaf_name} is required"
                 )
             continue
         for leaf_name in sorted(required_leaf_names):
@@ -3336,14 +4741,40 @@ def _required_enabled_infra_field_issues(
                     ):
                         continue
                     issues.append(
-                        f"{binding_source} is required for infra.components[{component_id}].inputs.{leaf_name}"
+                        f"{binding_source} is required for {component_path_label}.inputs.{leaf_name}"
                     )
                     continue
             if value is None or (isinstance(value, str) and not value.strip()):
                 issues.append(
-                    f"infra.components[{component_id}].inputs.{leaf_name} is required"
+                    f"{component_path_label}.inputs.{leaf_name} is required"
                 )
     return issues
+
+
+def _wizard_followup_required_field_issues(
+    *,
+    payload: dict[str, Any],
+    infra_entries: tuple[ComponentEntry, ...],
+) -> list[str]:
+    return list(
+        dict.fromkeys(
+            _required_enabled_infra_field_issues(
+                payload=payload,
+                infra_entries=infra_entries,
+            )
+        )
+    )
+
+
+def _print_wizard_required_field_warning(issues: Sequence[str]) -> None:
+    if not issues:
+        return
+    console.print(
+        "[yellow]Wizard stopped before all required fields were filled.[/yellow] "
+        "Validate/render will fail until you set:"
+    )
+    for issue in issues:
+        console.print(f"  - {escape(issue)}")
 
 
 def _dynamic_enabled_infra_component_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -3360,8 +4791,11 @@ def _dynamic_enabled_infra_component_rows(payload: dict[str, Any]) -> list[dict[
             continue
         if not bool(item.get("enabled", False)):
             continue
-        component_id = str(item.get("id", "")).strip().lower()
+        component_id = component_type_id(item)
         if not component_id:
+            continue
+        instance_id = component_instance_id(item)
+        if not instance_id:
             continue
         inputs = dict(item.get("inputs", {})) if isinstance(item.get("inputs"), Mapping) else {}
         entry = entry_by_id.get(component_id)
@@ -3378,6 +4812,7 @@ def _dynamic_enabled_infra_component_rows(payload: dict[str, Any]) -> list[dict[
         rows.append(
             {
                 "id": component_id,
+                "instance_id": instance_id,
                 "mode": inferred_mode,
                 "source": source,
                 "version": version,
@@ -3400,17 +4835,21 @@ def _dynamic_enabled_app_chart_rows(payload: dict[str, Any]) -> list[dict[str, A
             continue
         if not bool(item.get("enabled", False)):
             continue
-        chart_id = str(item.get("id", "")).strip().lower()
+        chart_id = component_type_id(item)
         if not chart_id:
+            continue
+        instance_id = component_instance_id(item)
+        if not instance_id:
             continue
         rows.append(
             {
                 "id": chart_id,
+                "instance_id": instance_id,
                 "group": str(item.get("group", "")).strip().lower() or "workloads",
                 "repo": str(item.get("repo", "")).strip(),
                 "version": str(item.get("version", "")).strip(),
                 "namespace": str(item.get("namespace", "")).strip(),
-                "release-name": str(item.get("release-name", chart_id)).strip() or chart_id,
+                "release-name": str(item.get("release-name", instance_id)).strip() or instance_id,
                 "values": dict(item.get("values", {})) if isinstance(item.get("values"), Mapping) else {},
             }
         )
@@ -3428,16 +4867,18 @@ def _enabled_custom_module_source_issues(
         if row.get("mode") != "custom":
             continue
         component_id = str(row["id"])
+        instance_id = str(row["instance_id"])
+        component_label = _component_instance_path_label("infra", component_id, instance_id)
         source = str(row.get("source", "")).strip()
         if not source:
             source = str(entry_by_id.get(component_id).source if component_id in entry_by_id else "").strip()
         if not source:
             issues.append(
-                f"infra.components[{component_id}] is enabled but has no module source configured"
+                f"{component_label} is enabled but has no module source configured"
             )
             continue
         for issue in module_source_validation_issues(source):
-            issues.append(f"infra.components[{component_id}] {issue}")
+            issues.append(f"{component_label} {issue}")
         entry = entry_by_id.get(component_id)
         if entry is None:
             continue
@@ -3455,7 +4896,7 @@ def _enabled_custom_module_source_issues(
                 or (is_local_like_source and required_output not in declared_outputs)
             ):
                 issues.append(
-                    f"infra.components[{component_id}] module source '{source}' must expose output "
+                    f"{component_label} module source '{source}' must expose output "
                     f"'{required_output}' for declared component output '{output.name}'"
                 )
     return issues
@@ -3466,41 +4907,49 @@ def _active_component_input_binding_issues(payload: dict[str, Any]) -> list[str]
     all_entries = component_entry_lookup()
     active_rows: dict[str, dict[str, Any]] = {}
     for row in _dynamic_enabled_infra_component_rows(payload):
-        active_rows[str(row["id"])] = row
+        active_rows[str(row["instance_id"])] = row
     for row in _dynamic_enabled_app_chart_rows(payload):
-        active_rows[str(row["id"])] = row
+        active_rows[str(row["instance_id"])] = row
 
-    for component_id, row in active_rows.items():
+    for instance_id, row in active_rows.items():
+        component_id = str(row["id"])
         entry = all_entries.get(component_id)
         if entry is None or not entry.input_bindings:
             continue
+        component_path_label = _component_instance_path_label(entry.scope, component_id, instance_id)
         for target_path, source_ref in input_binding_conflicts(row, entry):
             issues.append(
-                f"{entry.scope}.components[{component_id}].{target_path} is managed by component input binding "
-                f"'{source_ref}' and must not be set explicitly"
-                if entry.scope == "infra"
-                else f"apps.charts[{component_id}].{target_path} is managed by component input binding "
+                f"{component_path_label}.{target_path} is managed by component input binding "
                 f"'{source_ref}' and must not be set explicitly"
             )
         for binding in entry.input_bindings:
             source_entry = all_entries.get(binding.source_component_id)
-            source_ref = component_output_ref(binding.source_component_id, binding.source_output_name)
             if source_entry is None:
                 issues.append(
-                    f"{entry.scope} component '{component_id}' input binding '{binding.target_path}' references "
+                    f"{entry.scope} component '{component_instance_label(component_id, instance_id)}' input binding '{binding.target_path}' references "
                     f"unknown component '{binding.source_component_id}'"
                 )
                 continue
-            if binding.source_component_id not in active_rows:
+            try:
+                _resolved_source_entry, resolved_source_row = resolved_component_row(
+                    payload,
+                    component_id=binding.source_component_id,
+                )
+            except ValueError as exc:
+                issues.append(str(exc))
+                continue
+            source_instance_id = component_instance_id(resolved_source_row) if resolved_source_row else ""
+            source_ref = component_output_ref(source_instance_id, binding.source_output_name)
+            if not source_instance_id or source_instance_id not in active_rows:
                 issues.append(
-                    f"{entry.scope} component '{component_id}' input binding '{binding.target_path}' requires "
+                    f"{entry.scope} component '{component_instance_label(component_id, instance_id)}' input binding '{binding.target_path}' requires "
                     f"enabled source component '{binding.source_component_id}'"
                 )
                 continue
             source_output = output_lookup(source_entry).get(binding.source_output_name)
             if source_output is None:
                 issues.append(
-                    f"{entry.scope} component '{component_id}' input binding '{binding.target_path}' references "
+                    f"{entry.scope} component '{component_instance_label(component_id, instance_id)}' input binding '{binding.target_path}' references "
                     f"undeclared output '{source_ref}'"
                 )
                 continue
@@ -3509,10 +4958,11 @@ def _active_component_input_binding_issues(payload: dict[str, Any]) -> list[str]
                     payload,
                     component_id=binding.source_component_id,
                     output_name=binding.source_output_name,
+                    instance_id=source_instance_id or None,
                 )
                 if static_value is _UNRESOLVED:
                     issues.append(
-                        f"{entry.scope} component '{component_id}' input binding '{binding.target_path}' could not "
+                        f"{entry.scope} component '{component_instance_label(component_id, instance_id)}' input binding '{binding.target_path}' could not "
                         f"resolve non-Terraform output '{source_ref}' from the active config/catalog"
                     )
     return issues
@@ -3523,41 +4973,55 @@ def _active_handoff_issues(payload: dict[str, Any]) -> list[str]:
     infra_entry_by_id = {entry.id: entry for entry in component_entries("infra")}
     for row in _dynamic_enabled_infra_component_rows(payload):
         component_id = str(row["id"])
+        instance_id = str(row["instance_id"])
+        component_label = component_instance_label(component_id, instance_id)
         entry = infra_entry_by_id.get(component_id)
         if entry is None or entry.handoff is None:
             continue
 
-        access_output = output_lookup(entry).get(entry.handoff.access_output_name)
-        if access_output is None:
-            issues.append(
-                f"infra component '{component_id}' handoff.access "
-                f"'{entry.handoff.access_output_name}' is not declared under outputs"
+        if entry.handoff.access.kind == "config_path":
+            access_value = resolve_handoff_field_value(
+                payload,
+                component_id=component_id,
+                handoff_field=entry.handoff.access,
+                instance_id=instance_id,
             )
-            continue
-        if access_output.kind == "terraform_output":
-            issues.append(
-                f"infra component '{component_id}' handoff.access "
-                f"'{entry.handoff.access_output_name}' must resolve from config/static output, not Terraform state"
+        else:
+            access_output = output_lookup(entry).get(entry.handoff.access.value)
+            if access_output is None:
+                issues.append(
+                    f"infra component '{component_label}' handoff.access "
+                    f"'{entry.handoff.access.value}' is not declared under outputs"
+                )
+                continue
+            if access_output.kind == "terraform_output":
+                issues.append(
+                    f"infra component '{component_label}' handoff.access "
+                    f"'{entry.handoff.access.value}' must resolve from config/static output, not Terraform state"
+                )
+                continue
+            access_value = resolve_static_component_output(
+                payload,
+                component_id=component_id,
+                output_name=entry.handoff.access.value,
+                instance_id=instance_id,
             )
-            continue
 
-        access_value = resolve_static_component_output(
-            payload,
-            component_id=component_id,
-            output_name=entry.handoff.access_output_name,
-        )
         if access_value is _UNRESOLVED:
             issues.append(
-                f"infra component '{component_id}' handoff.access "
-                f"'{entry.handoff.access_output_name}' could not be resolved from the active config/catalog"
+                f"infra component '{component_label}' handoff.access "
+                f"'{entry.handoff.access.value}' could not be resolved from the active config/catalog"
             )
             continue
-        normalized_access = str(access_value).strip().lower()
-        if normalized_access not in {"external", "internal"}:
+        try:
+            _normalize_handoff_access_value(
+                access_value,
+                component_label=component_label,
+                output_name=entry.handoff.access.value,
+            )
+        except RuntimeError as exc:
             issues.append(
-                f"infra component '{component_id}' handoff.access "
-                f"'{entry.handoff.access_output_name}' resolved to '{access_value}'. "
-                "Expected 'external' or 'internal'."
+                str(exc)
             )
     return issues
 
@@ -3587,34 +5051,38 @@ def _binding_conflict_issues(payload: dict[str, Any]) -> list[str]:
     infra_entry_by_id = {entry.id: entry for entry in component_entries("infra")}
     for row in _dynamic_enabled_infra_component_rows(payload):
         component_id = str(row["id"])
+        instance_id = str(row["instance_id"])
+        component_label = _component_instance_path_label("infra", component_id, instance_id)
         entry = infra_entry_by_id.get(component_id)
         if entry is None:
             continue
         for target_path, source_path in shared_default_conflicts(row, entry):
             issues.append(
-                f"infra.components[{component_id}].{target_path} is managed by shared default "
+                f"{component_label}.{target_path} is managed by shared default "
                 f"'{source_path}' and must not be set explicitly"
             )
         for target_path, source_ref in input_binding_conflicts(row, entry):
             issues.append(
-                f"infra.components[{component_id}].{target_path} is managed by component input binding "
+                f"{component_label}.{target_path} is managed by component input binding "
                 f"'{source_ref}' and must not be set explicitly"
             )
 
     app_entry_by_id = {entry.id: entry for entry in component_entries("apps")}
     for row in _dynamic_enabled_app_chart_rows(payload):
         chart_id = str(row["id"])
+        instance_id = str(row["instance_id"])
+        chart_label = _component_instance_path_label("apps", chart_id, instance_id)
         entry = app_entry_by_id.get(chart_id)
         if entry is None:
             continue
         for target_path, source_path in shared_default_conflicts(row, entry):
             issues.append(
-                f"apps.charts[{chart_id}].{target_path} is managed by shared default "
+                f"{chart_label}.{target_path} is managed by shared default "
                 f"'{source_path}' and must not be set explicitly"
             )
         for target_path, source_ref in input_binding_conflicts(row, entry):
             issues.append(
-                f"apps.charts[{chart_id}].{target_path} is managed by component input binding "
+                f"{chart_label}.{target_path} is managed by component input binding "
                 f"'{source_ref}' and must not be set explicitly"
             )
 
@@ -3638,6 +5106,8 @@ def _enabled_custom_module_input_schema_issues(
         if row.get("mode") != "custom":
             continue
         component_id = str(row["id"])
+        instance_id = str(row["instance_id"])
+        component_label = _component_instance_path_label("infra", component_id, instance_id)
         inputs = row.get("inputs", {})
         if not isinstance(inputs, Mapping):
             continue
@@ -3661,7 +5131,7 @@ def _enabled_custom_module_input_schema_issues(
                 continue
             if normalized_name not in declared_leaf_names:
                 issues.append(
-                    f"infra.components[{component_id}].inputs.{input_name} is not declared by module '{source}'"
+                    f"{component_label}.inputs.{input_name} is not declared by module '{source}'"
                 )
     return issues
 
@@ -3677,13 +5147,15 @@ def _enabled_provider_schema_match_issues(
         if row.get("mode") != "provider":
             continue
         component_id = str(row["id"])
-        if component_id in checked_dynamic:
+        instance_id = str(row["instance_id"])
+        if instance_id in checked_dynamic:
             continue
-        checked_dynamic.add(component_id)
+        checked_dynamic.add(instance_id)
         match_status = provider_component_match_status(component_id)
         if match_status is False:
             issues.append(
-                f"infra component '{component_id}' does not match any live Terraform provider resource"
+                f"infra component '{component_instance_label(component_id, instance_id)}' "
+                "does not match any live Terraform provider resource"
             )
         inputs = row.get("inputs", {})
         if isinstance(inputs, Mapping):
@@ -3694,7 +5166,8 @@ def _enabled_provider_schema_match_issues(
                 exists = provider_resource_exists(resource_type)
                 if exists is False:
                     issues.append(
-                        f"infra component '{component_id}' declares unknown provider resource_type '{resource_type}'"
+                        f"infra component '{component_instance_label(component_id, instance_id)}' "
+                        f"declares unknown provider resource_type '{resource_type}'"
                     )
     return issues
 
@@ -4128,12 +5601,12 @@ def _resolve_client_name_for_runtime_profile(
     *,
     project_id: str,
     client_name: str | None,
-    instance_config: Path | None,
+    project_config: Path | None,
 ) -> str:
-    if client_name or instance_config is not None:
+    if client_name or project_config is not None:
         return _resolve_client_name_for_auth_bootstrap(
             client_name=client_name,
-            instance_config=instance_config,
+            project_config=project_config,
         )
     matches = [name for name, pid in _discover_runtime_auth_profiles() if pid == project_id]
     unique = sorted(set(matches))
@@ -4142,10 +5615,10 @@ def _resolve_client_name_for_runtime_profile(
     if len(unique) > 1:
         raise RuntimeError(
             "Multiple runtime auth profiles exist for this project_id. "
-            "Provide --client-name (or --instance-config)."
+            "Provide --client-name (or --project-config)."
         )
     raise RuntimeError(
-        "Missing required option: --client-name (or provide --instance-config)"
+        "Missing required option: --client-name (or provide --project-config)"
     )
 
 
@@ -4350,7 +5823,7 @@ def _cleanup_render_terraform_workdir(infra_dir: Path) -> None:
 
 def _try_generate_terraform_lock_file(
     config: Any,
-    paths: InstancePaths,
+    paths: ProjectPaths,
 ) -> bool:
     try:
         # Render keeps lockfile generation backendless so the canonical generated bundle
@@ -4383,6 +5856,7 @@ def _rendered_module_source_payload(
     return [
         {
             "component_id": item.component_id,
+            "instance_id": item.instance_id,
             "module_name": item.module_name,
             "source": item.source,
         }
@@ -4412,6 +5886,7 @@ def _generated_bundle_module_sources(manifest: Mapping[str, Any]) -> list[dict[s
         collected.append(
             {
                 "component_id": str(item.get("component_id", "")).strip(),
+                "instance_id": str(item.get("instance_id", "")).strip(),
                 "module_name": str(item.get("module_name", "")).strip(),
                 "source": source,
             }
@@ -4420,7 +5895,7 @@ def _generated_bundle_module_sources(manifest: Mapping[str, Any]) -> list[dict[s
 
 
 def _validate_generated_bundle_portability(
-    paths: InstancePaths,
+    paths: ProjectPaths,
     manifest: Mapping[str, Any],
 ) -> None:
     module_sources = _generated_bundle_module_sources(manifest)
@@ -4434,8 +5909,8 @@ def _validate_generated_bundle_portability(
 
     formatted = ", ".join(
         (
-            f"{item['component_id']}={item['source']}"
-            if item.get("component_id")
+            f"{item.get('instance_id') or item['component_id']}={item['source']}"
+            if item.get("component_id") or item.get("instance_id")
             else item["source"]
         )
         for item in non_portable
@@ -4448,11 +5923,11 @@ def _validate_generated_bundle_portability(
 
 def _write_generated_runtime_manifest(
     config: Any,
-    paths: InstancePaths,
+    paths: ProjectPaths,
     *,
     source_profile: SourceProfile,
     output_path: Path | None = None,
-    manifest_paths: InstancePaths | None = None,
+    manifest_paths: ProjectPaths | None = None,
 ) -> Path:
     sources = load_component_sources()
     tfvars_path = paths.infra_dir / "terraform.auto.tfvars.json"
@@ -4469,6 +5944,7 @@ def _write_generated_runtime_manifest(
         paths=manifest_paths or paths,
         handoffs=_enabled_cluster_handoffs(config),
         required_component_outputs=_required_runtime_component_output_specs(config),
+        status_watchers=_enabled_status_watcher_specs(config),
         source_profile=source_profile.value,
         module_sources=_rendered_module_source_payload(config, source_profile=source_profile),
         terraform_tfvars=terraform_tfvars,
@@ -4510,7 +5986,7 @@ def _required_runtime_component_output_specs(config: Any) -> list[dict[str, str]
     for item in charts:
         if not isinstance(item, Mapping) or not bool(item.get("enabled", False)):
             continue
-        chart_id = str(item.get("id", "")).strip().lower()
+        chart_id = component_type_id(item)
         if not chart_id:
             continue
         entry = all_entries.get(chart_id)
@@ -4523,13 +5999,21 @@ def _required_runtime_component_output_specs(config: Any) -> list[dict[str, str]
             source_output = output_lookup(source_entry).get(binding.source_output_name)
             if source_output is None or source_output.kind != "terraform_output":
                 continue
-            source_ref = component_output_ref(binding.source_component_id, binding.source_output_name)
+            _source_entry, resolved_source_row = resolved_component_row(
+                payload,
+                component_id=binding.source_component_id,
+            )
+            source_instance_id = component_instance_id(resolved_source_row) if resolved_source_row else ""
+            if not source_instance_id:
+                continue
+            source_ref = component_output_ref(source_instance_id, binding.source_output_name)
             if source_ref in seen_refs:
                 continue
             seen_refs.add(source_ref)
             required.append(
                 {
                     "component_id": binding.source_component_id,
+                    "instance_id": source_instance_id,
                     "output_name": binding.source_output_name,
                     "source_ref": source_ref,
                 }
@@ -4539,7 +6023,7 @@ def _required_runtime_component_output_specs(config: Any) -> list[dict[str, str]
 
 def _runtime_component_output_values(
     config: Any,
-    paths: InstancePaths,
+    paths: ProjectPaths,
     *,
     required_specs: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
@@ -4558,12 +6042,11 @@ def _runtime_component_output_values(
             "outputs are not available yet. Run `deploy`, or rerun `render` after Terraform state exists. "
             f"Terraform output lookup failed: {exc}"
         ) from exc
-
     resolved: dict[str, Any] = {}
     missing: list[str] = []
     for spec in required:
         root_output_name = component_output_root_name(
-            spec["component_id"],
+            spec.get("instance_id", spec["component_id"]),
             spec["output_name"],
         )
         output_payload = terraform_outputs.get(root_output_name)
@@ -4600,6 +6083,10 @@ def _manifest_cluster_handoffs(manifest: Mapping[str, Any]) -> list[dict[str, st
         handoffs.append(
             {
                 "component_id": str(item.get("component_id", "")).strip().lower(),
+                "instance_id": (
+                    str(item.get("instance_id", "")).strip().lower()
+                    or str(item.get("component_id", "")).strip().lower()
+                ),
                 "cluster_id_output_name": str(item.get("cluster_id_output_name", "")).strip(),
                 "component_output_ref": str(item.get("component_output_ref", "")).strip(),
                 "access": str(item.get("access", "")).strip().lower(),
@@ -4622,11 +6109,56 @@ def _manifest_required_component_output_specs(manifest: Mapping[str, Any]) -> li
         specs.append(
             {
                 "component_id": str(item.get("component_id", "")).strip().lower(),
+                "instance_id": (
+                    str(item.get("instance_id", "")).strip().lower()
+                    or str(item.get("component_id", "")).strip().lower()
+                ),
                 "output_name": str(item.get("output_name", "")).strip(),
                 "source_ref": str(item.get("source_ref", "")).strip(),
             }
         )
-    return [item for item in specs if item["component_id"] and item["output_name"] and item["source_ref"]]
+    return [
+        item
+        for item in specs
+        if item["component_id"]
+        and item["instance_id"]
+        and item["output_name"]
+        and item["source_ref"]
+    ]
+
+
+def _manifest_status_watchers(manifest: Mapping[str, Any]) -> list[dict[str, str]]:
+    deploy_node = manifest.get("deploy")
+    if not isinstance(deploy_node, Mapping):
+        return []
+    raw_watchers = deploy_node.get("status_watchers")
+    if not isinstance(raw_watchers, list):
+        return []
+    watchers: list[dict[str, str]] = []
+    for item in raw_watchers:
+        if not isinstance(item, Mapping):
+            continue
+        watchers.append(
+            {
+                "component_id": str(item.get("component_id", "")).strip().lower(),
+                "instance_id": (
+                    str(item.get("instance_id", "")).strip().lower()
+                    or str(item.get("component_id", "")).strip().lower()
+                ),
+                "kind": str(item.get("kind", "")).strip().lower(),
+                "parent_id": str(item.get("parent_id", "")).strip(),
+                "resource_name": str(item.get("resource_name", "")).strip(),
+            }
+        )
+    return [
+        item
+        for item in watchers
+        if item["component_id"]
+        and item["instance_id"]
+        and item["kind"]
+        and item["parent_id"]
+        and item["resource_name"]
+    ]
 
 
 def _manifest_requires_flux_terraform_state(manifest: Mapping[str, Any]) -> bool:
@@ -4653,44 +6185,142 @@ def _enabled_cluster_handoffs(config: Any) -> list[dict[str, str]]:
             continue
         if not bool(item.get("enabled", False)):
             continue
-        component_id = str(item.get("id", "")).strip().lower()
+        component_id = component_type_id(item)
         if not component_id:
             continue
+        instance_id = component_instance_id(item)
+        if not instance_id:
+            continue
+        component_label = component_instance_label(component_id, instance_id)
         entry = entry_by_id.get(component_id)
         if entry is None or entry.handoff is None:
             continue
-        access_value = resolve_static_component_output(
+        access_value = resolve_handoff_field_value(
             payload,
             component_id=component_id,
-            output_name=entry.handoff.access_output_name,
+            handoff_field=entry.handoff.access,
+            instance_id=instance_id,
         )
         if access_value is _UNRESOLVED:
             raise RuntimeError(
-                f"infra component '{component_id}' handoff.access "
-                f"'{entry.handoff.access_output_name}' could not be resolved from the active config/catalog"
+                f"infra component '{component_label}' handoff.access "
+                f"'{entry.handoff.access.value}' could not be resolved from the active config/catalog"
             )
-        normalized_access = str(access_value).strip().lower()
-        if normalized_access not in {"external", "internal"}:
-            raise RuntimeError(
-                f"infra component '{component_id}' handoff.access "
-                f"'{entry.handoff.access_output_name}' resolved to '{access_value}'. "
-                "Expected 'external' or 'internal'."
-            )
+        normalized_access = _normalize_handoff_access_value(
+            access_value,
+            component_label=component_label,
+            output_name=entry.handoff.access.value,
+        )
         handoffs.append(
             {
                 "component_id": component_id,
+                "instance_id": instance_id,
                 "cluster_id_output_name": component_output_root_name(
-                    component_id,
-                    entry.handoff.cluster_id_output_name,
+                    instance_id,
+                    entry.handoff.cluster_id.value,
                 ),
                 "component_output_ref": component_output_ref(
-                    component_id,
-                    entry.handoff.cluster_id_output_name,
+                    instance_id,
+                    entry.handoff.cluster_id.value,
                 ),
                 "access": normalized_access,
             }
         )
     return handoffs
+
+
+def _resolve_mapping_path_text(node: Mapping[str, Any], path: str) -> str:
+    current: Any = node
+    for segment in str(path).split("."):
+        token = segment.strip()
+        if not token:
+            return ""
+        if not isinstance(current, Mapping):
+            return ""
+        current = _resolve_mapping_segment(current, token)
+        if current is None:
+            return ""
+    return str(current).strip() if current is not None else ""
+
+
+def _normalize_handoff_access_value(
+    access_value: Any,
+    *,
+    component_label: str,
+    output_name: str,
+) -> str:
+    if isinstance(access_value, bool):
+        return "external" if access_value else "internal"
+
+    normalized_access = str(access_value).strip().lower()
+    if normalized_access in {"external", "public"}:
+        return "external"
+    if normalized_access in {"internal", "private"}:
+        return "internal"
+    raise RuntimeError(
+        f"infra component '{component_label}' handoff.access "
+        f"'{output_name}' resolved to '{access_value}'. "
+        "Expected boolean public-endpoint state or one of: external, internal, public, private."
+    )
+
+
+def _private_cluster_handoff_note() -> str:
+    return (
+        "Using a private MK8s control-plane endpoint for cluster handoff. "
+        "Local app deploy/bootstrap/destroy requires this machine to already have a private network path "
+        "to the Nebius control-plane endpoint."
+    )
+
+
+def _config_uses_private_cluster_handoff(config: Any) -> bool:
+    with suppress(Exception):
+        for handoff in _enabled_cluster_handoffs(config):
+            if str(handoff.get("access", "")).strip().lower() == "internal":
+                return True
+    return False
+
+
+def _enabled_status_watcher_specs(config: Any) -> list[dict[str, str]]:
+    payload = to_plain_data(config)
+    if not isinstance(payload, dict):
+        return []
+    infra = payload.get("infra")
+    if not isinstance(infra, dict):
+        return []
+    components = infra.get("components")
+    if not isinstance(components, list):
+        return []
+    entry_by_id = {entry.id: entry for entry in component_entries("infra")}
+    watchers: list[dict[str, str]] = []
+    for item in components:
+        if not isinstance(item, Mapping) or not bool(item.get("enabled", False)):
+            continue
+        component_id = component_type_id(item)
+        if not component_id:
+            continue
+        instance_id = component_instance_id(item)
+        if not instance_id:
+            continue
+        entry = entry_by_id.get(component_id)
+        if entry is None or entry.status is None:
+            continue
+        inputs = item.get("inputs")
+        if not isinstance(inputs, Mapping):
+            continue
+        parent_id = _resolve_mapping_path_text(inputs, entry.status.parent_input)
+        resource_name = _resolve_mapping_path_text(inputs, entry.status.name_input)
+        if not parent_id or not resource_name:
+            continue
+        watchers.append(
+            {
+                "component_id": component_id,
+                "instance_id": instance_id,
+                "kind": entry.status.kind,
+                "parent_id": parent_id,
+                "resource_name": resource_name,
+            }
+        )
+    return watchers
 
 
 @dataclass(frozen=True)
@@ -4963,10 +6593,11 @@ def _persist_cluster_handoff_kubeconfig(
 
 def _prepare_cluster_handoff_kube_env(
     config: Any,
-    paths: InstancePaths,
+    paths: ProjectPaths,
     *,
     stack: ExitStack,
     handoffs: list[dict[str, str]] | None = None,
+    persist_local_kubeconfig: bool = True,
 ) -> dict[str, str] | None:
     if _active_chart_count(config) == 0:
         return None
@@ -4975,7 +6606,15 @@ def _prepare_cluster_handoff_kube_env(
     if not handoffs:
         return None
     if len(handoffs) > 1:
-        component_ids = ", ".join(sorted(handoff["component_id"] for handoff in handoffs))
+        component_ids = ", ".join(
+            sorted(
+                component_instance_label(
+                    handoff["component_id"],
+                    handoff.get("instance_id", handoff["component_id"]),
+                )
+                for handoff in handoffs
+            )
+        )
         raise RuntimeError(
             "Multiple handoff-capable infra components are enabled for this run: "
             f"{component_ids}. Enable only one cluster handoff source before running this command."
@@ -5002,14 +6641,20 @@ def _prepare_cluster_handoff_kube_env(
         cluster_id=cluster_id,
         access=handoff["access"],
     )
+    if handoff["access"] == "internal":
+        console.print(f"[yellow]NOTE:[/yellow] {_private_cluster_handoff_note()}")
     kube_root = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="nebius-cxcli-kube-")))
     kubeconfig_path = kube_root / "config"
     _write_kubeconfig_file(kubeconfig_path, spec)
-    _persist_cluster_handoff_kubeconfig(spec=spec)
-    return {"KUBECONFIG": str(kubeconfig_path)}
+    if persist_local_kubeconfig:
+        _persist_cluster_handoff_kubeconfig(spec=spec)
+    return {
+        "KUBECONFIG": str(kubeconfig_path),
+        CLUSTER_HANDOFF_ACCESS_ENV: str(handoff["access"]),
+    }
 
 
-def _apply_rendered_flux(paths: InstancePaths, *, extra_env: dict[str, str] | None = None) -> None:
+def _apply_rendered_flux(paths: ProjectPaths, *, extra_env: dict[str, str] | None = None) -> None:
     """Apply rendered Flux manifests in local deploy mode."""
     if not shutil.which("kubectl"):
         raise RuntimeError("kubectl is required for `deploy` but was not found in PATH")
@@ -5042,6 +6687,12 @@ def _apply_rendered_flux(paths: InstancePaths, *, extra_env: dict[str, str] | No
             message = "kubectl could not reach the target Kubernetes cluster for local deploy"
             if detail:
                 message = f"{message}: {detail}"
+            guidance = cluster_handoff_reachability_guidance(
+                extra_env=extra_env,
+                action="local deploy",
+            )
+            if guidance:
+                message = f"{message}\n{guidance}"
             raise RuntimeError(message)
 
         flux_installed = flux_controllers_installed(extra_env=extra_env) and flux_crds_installed(
@@ -5197,7 +6848,7 @@ def _wait_for_cluster_nodes_ready(
 
 def _deploy_generated_artifacts(
     config: Any,
-    paths: InstancePaths,
+    paths: ProjectPaths,
     manifest: Mapping[str, Any],
     *,
     auto_auth_bootstrap: bool,
@@ -5207,7 +6858,11 @@ def _deploy_generated_artifacts(
     runtime_env = _terraform_runtime_env(config)
     terraform_init(paths.infra_dir, extra_env=runtime_env)
     terraform_validate(paths.infra_dir, extra_env=runtime_env, initialize=False)
-    _run_terraform_apply_with_status(config, paths, initialize=False)
+    status_watchers = _manifest_status_watchers(manifest) or _enabled_status_watcher_specs(config)
+    apply_kwargs: dict[str, Any] = {"initialize": False}
+    if status_watchers:
+        apply_kwargs["status_watchers"] = status_watchers
+    _run_terraform_apply_with_status(config, paths, **apply_kwargs)
     write_inventory(config, paths)
     with ExitStack() as stack:
         kube_env = _prepare_cluster_handoff_kube_env(
@@ -5221,18 +6876,64 @@ def _deploy_generated_artifacts(
         _warn_if_flux_gitops_not_bootstrapped(config, paths, extra_env=kube_env)
 
 
+def _destroy_rendered_flux_bundle(
+    config: Any,
+    paths: ProjectPaths,
+    manifest: Mapping[str, Any],
+) -> None:
+    if _active_chart_count(config) == 0:
+        raise RuntimeError("No enabled apps charts are configured for this project.")
+    with ExitStack() as stack:
+        kube_env = _prepare_cluster_handoff_kube_env(
+            config,
+            paths,
+            stack=stack,
+            handoffs=_manifest_cluster_handoffs(manifest),
+            persist_local_kubeconfig=False,
+        )
+        delete_rendered_flux(paths, extra_env=kube_env)
+
+
+def _destroy_generated_artifacts(
+    config: Any,
+    paths: ProjectPaths,
+    manifest: Mapping[str, Any],
+    *,
+    auto_auth_bootstrap: bool,
+) -> None:
+    _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
+    if _active_chart_count(config) > 0:
+        try:
+            _destroy_rendered_flux_bundle(config, paths, manifest)
+        except Exception as exc:
+            console.print(
+                "[yellow]WARNING:[/yellow] "
+                "Rendered app teardown failed before infra destroy. "
+                "Continuing with Terraform destroy because the generated infra bundle "
+                f"remains the authoritative teardown path. Reason: {exc}"
+            )
+    status_watchers = _manifest_status_watchers(manifest) or _enabled_status_watcher_specs(config)
+    destroy_kwargs: dict[str, Any] = {"initialize": True}
+    if status_watchers:
+        destroy_kwargs["status_watchers"] = status_watchers
+    _run_terraform_destroy_with_status(config, paths, **destroy_kwargs)
+
+
 def _run_terraform_apply_with_status(
     config: Any,
-    paths: InstancePaths,
+    paths: ProjectPaths,
     *,
     initialize: bool = True,
+    status_watchers: list[dict[str, str]] | None = None,
 ) -> None:
     runtime_env = _terraform_runtime_env(config)
     validate_mk8s_network_preflight(config)
-    with deployment_status_reporting(
-        config,
-        emit=lambda message: console.print(message),
-    ) as reporter:
+    reporting_kwargs: dict[str, Any] = {
+        "emit": lambda message: console.print(message),
+    }
+    if status_watchers:
+        reporting_kwargs["status_watchers"] = status_watchers
+    with deployment_status_reporting(config, **reporting_kwargs) as reporter:
         try:
             terraform_apply(
                 paths.infra_dir,
@@ -5246,9 +6947,36 @@ def _run_terraform_apply_with_status(
             ) from exc
 
 
+def _run_terraform_destroy_with_status(
+    config: Any,
+    paths: ProjectPaths,
+    *,
+    initialize: bool = True,
+    status_watchers: list[dict[str, str]] | None = None,
+) -> None:
+    runtime_env = _terraform_runtime_env(config)
+    reporting_kwargs: dict[str, Any] = {
+        "emit": lambda message: console.print(message),
+    }
+    if status_watchers:
+        reporting_kwargs["status_watchers"] = status_watchers
+    with deployment_status_reporting(config, **reporting_kwargs) as reporter:
+        try:
+            terraform_destroy(
+                paths.infra_dir,
+                extra_env=runtime_env,
+                initialize=initialize,
+                event_callback=reporter.handle_terraform_event,
+            )
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"{exc}\n\nLast known destroy status:\n{reporter.snapshot()}"
+            ) from exc
+
+
 def _warn_if_flux_gitops_not_bootstrapped(
     config: Any,
-    paths: InstancePaths,
+    paths: ProjectPaths,
     *,
     extra_env: dict[str, str] | None,
 ) -> None:
@@ -5312,7 +7040,7 @@ def _active_local_terraform_processes() -> tuple[str, ...]:
 
 def _unlock_terraform_state_lock(
     config: Any,
-    paths: InstancePaths,
+    paths: ProjectPaths,
     *,
     auto_auth_bootstrap: bool,
     force: bool,
@@ -5351,30 +7079,30 @@ def _unlock_terraform_state_lock(
 
 
 def _resolve_project_id_for_auth_bootstrap(
-    *, project_id: str | None, instance_config: Path | None
+    *, project_id: str | None, project_config: Path | None
 ) -> str:
     if project_id:
         return project_id
-    if instance_config is None:
-        raise RuntimeError("Missing required option: --project-id (or provide --instance-config)")
-    config = load_config(instance_config.resolve())
+    if project_config is None:
+        raise RuntimeError("Missing required option: --project-id (or provide --project-config)")
+    config = load_config(project_config.resolve())
     return config.client_info.nebius.project_id
 
 
 def _resolve_client_name_for_auth_bootstrap(
     *,
     client_name: str | None,
-    instance_config: Path | None,
+    project_config: Path | None,
 ) -> str:
     if client_name:
         normalized = client_name.strip()
         if normalized:
             return normalized
-    if instance_config is None:
+    if project_config is None:
         raise RuntimeError(
-            "Missing required option: --client-name (or provide --instance-config)"
+            "Missing required option: --client-name (or provide --project-config)"
         )
-    config = load_config(instance_config.resolve())
+    config = load_config(project_config.resolve())
     return str(config.client_info.client_name).strip()
 
 
@@ -5683,18 +7411,18 @@ _DEPLOYMENTS_GITIGNORE_END = "# <<< nebius-cxcli managed ignores <<<"
 _DEPLOYMENTS_GITIGNORE_LINES: tuple[str, ...] = (
     _DEPLOYMENTS_GITIGNORE_BEGIN,
     "# Generated by `nebius-cxcli create`.",
-    "# Keep the canonical instance config versioned in a private repo; ignore generated Terraform runtime files.",
-    "instances/*/*/generated/infra/.terraform/",
-    "instances/*/*/generated/infra/*.tfstate",
-    "instances/*/*/generated/infra/*.tfstate.*",
-    "instances/*/*/generated/infra/.terraform.tfstate.lock.info",
-    "instances/*/*/generated/infra/crash.log",
-    "instances/*/*/generated/infra/crash.*.log",
-    "instances/*/*/generated/infra/*.tfplan",
-    "instances/*/*/generated/infra/plan.out",
-    "instances/*/*/generated/infra/terraform.auto.tfvars.json",
-    "instances/*/*/generated/infra/*.auto.tfvars",
-    "instances/*/*/generated/infra/*.auto.tfvars.json",
+    "# Keep the canonical project config versioned in a private repo; ignore generated Terraform runtime files.",
+    "projects/*/*/generated/infra/.terraform/",
+    "projects/*/*/generated/infra/*.tfstate",
+    "projects/*/*/generated/infra/*.tfstate.*",
+    "projects/*/*/generated/infra/.terraform.tfstate.lock.info",
+    "projects/*/*/generated/infra/crash.log",
+    "projects/*/*/generated/infra/crash.*.log",
+    "projects/*/*/generated/infra/*.tfplan",
+    "projects/*/*/generated/infra/plan.out",
+    "projects/*/*/generated/infra/terraform.auto.tfvars.json",
+    "projects/*/*/generated/infra/*.auto.tfvars",
+    "projects/*/*/generated/infra/*.auto.tfvars.json",
     _DEPLOYMENTS_GITIGNORE_END,
 )
 
@@ -5737,12 +7465,12 @@ def _ensure_customer_scaffold(
     base_path: Path,
 ) -> Path:
     deployments_root = _resolve_deployments_root(base_path)
-    deployments_path = deployments_root / "instances"
+    deployments_path = deployments_root / "projects"
     deployments_path.mkdir(parents=True, exist_ok=True)
     return deployments_root
 
 
-def _instance_config_path(
+def _project_config_path(
     *,
     deployments_root: Path,
     client_name: str,
@@ -5751,7 +7479,7 @@ def _instance_config_path(
 ) -> Path:
     return (
         deployments_root
-        / "instances"
+        / "projects"
         / f"{client_name}--{tenant_id}"
         / project_id
         / "config.yaml"
@@ -5793,7 +7521,7 @@ def _enabled_ids_from_runtime_payload(
                     continue
                 if not bool(item.get("enabled", False)):
                     continue
-                component_id = str(item.get("id", "")).strip().lower()
+                component_id = component_type_id(item)
                 if component_id in entry_ids:
                     selected.add(component_id)
 
@@ -5806,7 +7534,7 @@ def _enabled_ids_from_runtime_payload(
                     continue
                 if not bool(item.get("enabled", False)):
                     continue
-                chart_id = str(item.get("id", "")).strip().lower()
+                chart_id = component_type_id(item)
                 if chart_id in entry_ids:
                     selected.add(chart_id)
 
@@ -5830,50 +7558,56 @@ def _filter_runtime_payload_for_selected_components(
     infra_components = infra.get("components")
     if not isinstance(infra_components, list):
         infra_components = []
-    infra_by_id: dict[str, dict[str, Any]] = {}
+    existing_infra_rows: list[dict[str, Any]] = []
     for item in infra_components:
         if not isinstance(item, dict):
             continue
-        component_id = str(item.get("id", "")).strip().lower()
+        component_id = component_type_id(item)
         if not component_id:
             continue
-        infra_by_id[component_id] = item
+        row = dict(item)
+        ensure_component_instance_id(row, default_component_id=component_id)
+        existing_infra_rows.append(row)
     selected_infra_components: list[dict[str, Any]] = []
     for entry in infra_entries:
         if entry.id not in selected_infra:
             continue
-        row = infra_by_id.get(entry.id)
-        if row is None:
+        matched_rows = [row for row in existing_infra_rows if component_type_id(row) == entry.id]
+        if not matched_rows:
             row = {
                 "id": entry.id,
+                INSTANCE_ID_FIELD: entry.id,
                 "enabled": True,
                 "inputs": {},
             }
-            infra_by_id[entry.id] = row
+            matched_rows = [row]
         else:
-            if not isinstance(row.get("inputs"), Mapping):
-                row["inputs"] = {}
-            row["enabled"] = True
-        selected_infra_components.append(row)
+            for row in matched_rows:
+                if not isinstance(row.get("inputs"), Mapping):
+                    row["inputs"] = {}
+                row["enabled"] = True
+        selected_infra_components.extend(matched_rows)
     infra["components"] = selected_infra_components
 
     app_charts = apps.get("charts")
     if not isinstance(app_charts, list):
         app_charts = []
-    apps_by_id: dict[str, dict[str, Any]] = {}
+    existing_app_rows: list[dict[str, Any]] = []
     for item in app_charts:
         if not isinstance(item, dict):
             continue
-        chart_id = str(item.get("id", "")).strip().lower()
+        chart_id = component_type_id(item)
         if not chart_id:
             continue
-        apps_by_id[chart_id] = item
+        row = dict(item)
+        ensure_component_instance_id(row, default_component_id=chart_id)
+        existing_app_rows.append(row)
     selected_app_charts: list[dict[str, Any]] = []
     for entry in app_entries:
         if entry.id not in selected_apps:
             continue
-        row = apps_by_id.get(entry.id)
-        if row is None:
+        matched_rows = [row for row in existing_app_rows if component_type_id(row) == entry.id]
+        if not matched_rows:
             chart_repo = str(entry.chart_repo or "").strip() or None
             chart_name = str(entry.chart_name or "").strip() or None
             if not chart_name:
@@ -5890,6 +7624,7 @@ def _filter_runtime_payload_for_selected_components(
             group = re.sub(r"[^a-z0-9]+", "-", raw_group).strip("-") or "workloads"
             row = {
                 "id": entry.id,
+                INSTANCE_ID_FIELD: entry.id,
                 "group": group,
                 "enabled": True,
                 "repo": str(chart_repo or ""),
@@ -5898,32 +7633,54 @@ def _filter_runtime_payload_for_selected_components(
                 "release-name": release_name,
                 "values": {},
             }
-            apps_by_id[entry.id] = row
+            matched_rows = [row]
         else:
-            if not str(row.get("repo", "")).strip():
-                chart_repo = str(entry.chart_repo or "").strip()
-                chart_name = str(entry.chart_name or entry.id).strip()
-                if chart_repo:
-                    row["repo"] = _canonical_app_chart_repo(
-                        chart_repo=chart_repo,
-                        chart_name=chart_name,
+            for row in matched_rows:
+                if not str(row.get("repo", "")).strip():
+                    chart_repo = str(entry.chart_repo or "").strip()
+                    chart_name = str(entry.chart_name or entry.id).strip()
+                    if chart_repo:
+                        row["repo"] = _canonical_app_chart_repo(
+                            chart_repo=chart_repo,
+                            chart_name=chart_name,
+                        )
+                if not str(row.get("version", "")).strip() and entry.version:
+                    row["version"] = str(entry.version)
+                if not str(row.get("namespace", "")).strip():
+                    row["namespace"] = str(entry.default_namespace or "").strip() or entry.id
+                if not str(row.get("release-name", "")).strip():
+                    fallback_release_name = (
+                        str(entry.default_release_name or "").strip() or component_instance_id(row)
                     )
-            if not str(row.get("version", "")).strip() and entry.version:
-                row["version"] = str(entry.version)
-            if not str(row.get("namespace", "")).strip():
-                row["namespace"] = str(entry.default_namespace or "").strip() or entry.id
-            if not str(row.get("release-name", "")).strip():
-                row["release-name"] = str(entry.default_release_name or "").strip() or entry.id
-            if "group" not in row or not str(row.get("group", "")).strip():
-                raw_group = str(entry.group or "").strip().lower()
-                row["group"] = re.sub(r"[^a-z0-9]+", "-", raw_group).strip("-") or "workloads"
-            if not isinstance(row.get("values"), Mapping):
-                row["values"] = {}
-            row["enabled"] = True
-        selected_app_charts.append(row)
+                    row["release-name"] = fallback_release_name
+                if "group" not in row or not str(row.get("group", "")).strip():
+                    raw_group = str(entry.group or "").strip().lower()
+                    row["group"] = re.sub(r"[^a-z0-9]+", "-", raw_group).strip("-") or "workloads"
+                if not isinstance(row.get("values"), Mapping):
+                    row["values"] = {}
+                row["enabled"] = True
+        selected_app_charts.extend(matched_rows)
     apps["charts"] = selected_app_charts
 
     return runtime_payload
+
+
+def _selection_change_issues(payload: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+    issues.extend(_component_dependency_issues_from_payload(payload))
+    issues.extend(_active_component_input_binding_issues(payload))
+    return issues
+
+
+def _write_runtime_payload_config(config_path: Path, payload: dict[str, Any]) -> bool:
+    next_config_text = yaml.safe_dump(payload, sort_keys=False)
+    current_config_text = None
+    if config_path.exists():
+        current_config_text = config_path.read_text(encoding="utf-8")
+    if current_config_text == next_config_text:
+        return False
+    config_path.write_text(next_config_text, encoding="utf-8")
+    return True
 
 
 def _seed_infra_project_scope_defaults(
@@ -6035,7 +7792,7 @@ def _scaffold_instance(
     deployments_root = _ensure_customer_scaffold(
         base_path=base_path,
     )
-    instance_dir = deployments_root / "instances" / f"{client_name}--{tenant_id}" / project_id
+    instance_dir = deployments_root / "projects" / f"{client_name}--{tenant_id}" / project_id
     config_path = instance_dir / "config.yaml"
 
     (instance_dir / "generated" / "infra").mkdir(parents=True, exist_ok=True)
@@ -6068,14 +7825,11 @@ def _scaffold_instance(
             infra_entries=infra_entries,
             app_entries=app_entries,
         )
-        next_config_text = yaml.safe_dump(payload, sort_keys=False)
-        current_config_text = (
-            config_path.read_text(encoding="utf-8") if config_path.exists() else None
+        should_write = force or not config_path.exists() or (
+            config_path.read_text(encoding="utf-8") != yaml.safe_dump(payload, sort_keys=False)
         )
-        should_write = force or current_config_text != next_config_text
         if should_write:
-            config_path.write_text(next_config_text, encoding="utf-8")
-            wrote_config = True
+            wrote_config = _write_runtime_payload_config(config_path, payload)
 
     inventory_path = instance_dir / "generated" / "inventory" / "inventory.md"
     if not inventory_path.exists():
@@ -6085,7 +7839,7 @@ def _scaffold_instance(
         )
 
     config = load_config(config_path)
-    paths = resolve_instance_paths(config_path, deployments_dir_hint=str(deployments_root))
+    paths = resolve_project_paths(config_path, deployments_dir_hint=str(deployments_root))
     validate_path_alignment(config, paths)
     return BootstrapResult(
         deployments_root=deployments_root,
@@ -6181,6 +7935,16 @@ def create_command(
             ),
         ),
     ] = True,
+    validate_config: Annotated[
+        bool,
+        typer.Option(
+            "--validate-config/--no-validate-config",
+            help=(
+                "Run `validate` against the resulting config.yaml after create finishes "
+                "(enabled by default)."
+            ),
+        ),
+    ] = True,
     no_interactive: Annotated[
         bool,
         typer.Option(
@@ -6202,39 +7966,53 @@ def create_command(
         ),
     ] = False,
 ) -> None:
-    """Create or reconcile one instance from a deployments root directory."""
+    """Create or reconcile one project from a deployments root directory."""
     try:
         base_path = target_path.resolve()
         _validate_deployments_root_target(base_path)
-        if validate_sources:
-            with console.status("[cyan]Validating component_sources.yaml...[/cyan]"):
-                source_path, source_issues, source_warnings = _validate_component_sources_registry()
-            for warning in source_warnings:
-                console.print(f"[yellow]Source validation warning:[/yellow] {warning}")
-            if source_issues:
-                raise RuntimeError(
-                    f"Component sources validation failed for {source_path}:\n  - "
-                    + "\n  - ".join(source_issues)
-                )
-
+        deployments_root = _resolve_deployments_root(base_path)
         interactive_mode = not no_interactive
+        single_existing_defaults = (
+            _single_existing_project_create_defaults(deployments_root)
+            if interactive_mode
+            and not any(
+                value is not None and str(value).strip()
+                for value in (client_name, tenant_id, project_id)
+            )
+            else None
+        )
+        if interactive_mode and _deployments_root_has_existing_project_configs(deployments_root):
+            _print_existing_projects_notice(
+                deployments_root=deployments_root,
+                prompt_defaults=single_existing_defaults,
+            )
+            if not _confirm_existing_deployments_root_continue(
+                deployments_root=deployments_root
+            ):
+                console.print("No changes applied.")
+                return
+        if validate_sources:
+            _validate_component_sources_or_raise()
         resolved_client_name = _value_or_prompt(
             client_name,
             option_name="--client-name",
             prompt_text="Client name",
             interactive=interactive_mode,
+            default_value=single_existing_defaults.client_name if single_existing_defaults else None,
         )
         resolved_tenant_id = _value_or_prompt(
             tenant_id,
             option_name="--tenant-id",
             prompt_text="Tenant ID",
             interactive=interactive_mode,
+            default_value=single_existing_defaults.tenant_id if single_existing_defaults else None,
         )
         resolved_project_id = _value_or_prompt(
             project_id,
             option_name="--project-id",
             prompt_text="Project ID",
             interactive=interactive_mode,
+            default_value=single_existing_defaults.project_id if single_existing_defaults else None,
         )
         provider_lookup = ProviderOptionLookup()
         resolved_tenant_id, resolved_project_id = _validate_tenant_project_ids_or_prompt(
@@ -6243,11 +8021,8 @@ def create_command(
             interactive=interactive_mode,
             provider_lookup=provider_lookup,
         )
-        resolved_region_id = _region_or_prompt(region_id, interactive=interactive_mode)
-        resolved_email = _optional_email_or_prompt(email, interactive=interactive_mode)
 
-        deployments_root = _resolve_deployments_root(base_path)
-        existing_config_path = _instance_config_path(
+        existing_config_path = _project_config_path(
             deployments_root=deployments_root,
             client_name=resolved_client_name,
             tenant_id=resolved_tenant_id,
@@ -6261,6 +8036,35 @@ def create_command(
             if not isinstance(loaded_payload, dict):
                 raise RuntimeError("Existing config.yaml payload must be a mapping")
             existing_payload = loaded_payload
+            if interactive_mode and not force and not _confirm_existing_project_reconcile(
+                config_path=existing_config_path
+            ):
+                console.print("No changes applied.")
+                return
+
+        existing_identity_payload = (
+            existing_payload if isinstance(existing_payload, dict) and not force else {}
+        )
+        existing_region_id = _non_empty_text(
+            _read_payload_field(existing_identity_payload, "client_info.nebius.region_id")
+        )
+        existing_email_value = _read_payload_field(
+            existing_identity_payload,
+            "client_info.notifications.email",
+        )
+        existing_email = (
+            str(existing_email_value).strip()
+            if isinstance(existing_email_value, str)
+            else None
+        )
+        resolved_region_id = _region_or_prompt(
+            region_id or existing_region_id or None,
+            interactive=interactive_mode,
+        )
+        resolved_email = _optional_email_or_prompt(
+            email if email is not None else existing_email,
+            interactive=interactive_mode,
+        )
 
         infra_entries = _with_infra_provider_groups(component_entries("infra"))
         app_entries = component_entries("apps")
@@ -6281,11 +8085,6 @@ def create_command(
                 "Continue with optional wizard phases (component selection and fields)?",
                 default=True,
             )
-            if not optional_wizard_mode:
-                console.print(
-                    "[yellow]Wizard optional phases skipped.[/yellow] "
-                    "A starter config will be generated and you can continue editing config.yaml manually."
-                )
         selected_infra_raw = _resolve_component_ids(
             scope="infra",
             raw_values=infra_components_opt,
@@ -6309,31 +8108,19 @@ def create_command(
             option_name="--app-releasename",
         )
 
-        dependency_seed_payload: dict[str, Any] | None = None
-        if selected_apps_raw:
-            dependency_seed_yaml = starter_config_yaml(
-                client_name=resolved_client_name,
-                tenant_id=resolved_tenant_id,
-                project_id=resolved_project_id,
-                region_id=resolved_region_id,
-                email=resolved_email,
-                selected_infra=selected_infra_raw,
-                selected_apps=selected_apps_raw,
-                infra_entries=infra_entries,
-                app_entries=app_entries,
-            )
-            parsed_seed_payload = yaml.safe_load(dependency_seed_yaml) or {}
-            if isinstance(parsed_seed_payload, dict):
-                dependency_seed_payload = parsed_seed_payload
-        if dependency_seed_payload is not None and existing_payload is not None and not force:
-            dependency_seed_payload = _deep_merge_payload(dependency_seed_payload, existing_payload)
-            dependency_seed_payload = _filter_runtime_payload_for_selected_components(
-                payload=dependency_seed_payload,
-                selected_infra=selected_infra_raw,
-                selected_apps=selected_apps_raw,
-                infra_entries=infra_entries,
-                app_entries=app_entries,
-            )
+        dependency_seed_payload = _dependency_seed_payload(
+            client_name=resolved_client_name,
+            tenant_id=resolved_tenant_id,
+            project_id=resolved_project_id,
+            region_id=resolved_region_id,
+            email=resolved_email,
+            selected_infra=selected_infra_raw,
+            selected_apps=selected_apps_raw,
+            infra_entries=infra_entries,
+            app_entries=app_entries,
+            existing_payload=existing_payload,
+            merge_existing=existing_payload is not None and not force,
+        )
 
         dependency_resolution_started = time.monotonic()
         if selected_apps_raw:
@@ -6360,9 +8147,8 @@ def create_command(
                 f"{dependency_resolution_elapsed:.1f}s[/dim]"
             )
 
-        config_yaml_override: str | None = None
         wizard_completed = True
-        starter_yaml = starter_config_yaml(
+        starter_payload = _reconciled_component_payload(
             client_name=resolved_client_name,
             tenant_id=resolved_tenant_id,
             project_id=resolved_project_id,
@@ -6372,40 +8158,39 @@ def create_command(
             selected_apps=selected_apps,
             infra_entries=infra_entries,
             app_entries=app_entries,
+            existing_payload=existing_payload,
+            merge_existing=existing_payload is not None and not force,
+            app_namespace_overrides=app_namespace_overrides,
+            app_releasename_overrides=app_releasename_overrides,
         )
-        starter_payload = yaml.safe_load(starter_yaml) or {}
-        if not isinstance(starter_payload, dict):
-            raise RuntimeError("Generated starter config payload must be a mapping")
-        if existing_payload is not None and not force:
-            starter_payload = _deep_merge_payload(starter_payload, existing_payload)
-        starter_payload = _filter_runtime_payload_for_selected_components(
-            payload=starter_payload,
-            selected_infra=selected_infra,
-            selected_apps=selected_apps,
-            infra_entries=infra_entries,
-            app_entries=app_entries,
-        )
-        _apply_app_release_overrides(
-            payload=starter_payload,
-            selected_apps=selected_apps,
-            namespace_overrides=app_namespace_overrides,
-            release_name_overrides=app_releasename_overrides,
-        )
-        _seed_infra_project_scope_defaults(
-            payload=starter_payload,
-            infra_entries=infra_entries,
-        )
-        config_yaml_override = yaml.safe_dump(starter_payload, sort_keys=False)
+        final_payload = starter_payload
 
         if interactive_mode and optional_wizard_mode:
             config_yaml_override, wizard_completed = _run_component_field_wizard(
-                config_yaml=config_yaml_override,
+                config_yaml=yaml.safe_dump(final_payload, sort_keys=False),
                 selected_infra=selected_infra,
                 selected_apps=selected_apps,
                 infra_entries=infra_entries,
                 app_entries=app_entries,
                 provider_lookup=provider_lookup,
             )
+            parsed_override = yaml.safe_load(config_yaml_override) or {}
+            if not isinstance(parsed_override, dict):
+                raise RuntimeError("Updated config payload must be a mapping")
+            final_payload = parsed_override
+
+        create_required_field_issues = (
+            _wizard_followup_required_field_issues(
+                payload=final_payload,
+                infra_entries=infra_entries,
+            )
+            if interactive_mode and (not optional_wizard_mode or not wizard_completed)
+            else []
+        )
+        _prune_redundant_app_chart_default_values(
+            payload=final_payload,
+            app_entries=app_entries,
+        )
 
         result = _scaffold_instance(
             base_path=base_path,
@@ -6419,7 +8204,7 @@ def create_command(
             infra_entries=infra_entries,
             app_entries=app_entries,
             force=force,
-            config_yaml=config_yaml_override,
+            config_yaml=yaml.safe_dump(final_payload, sort_keys=False),
         )
         gitignore_result = _ensure_deployments_gitignore(
             deployments_root=result.deployments_root,
@@ -6438,6 +8223,12 @@ def create_command(
                 console.print(f"Created: {result.config_path}")
         else:
             console.print(f"Config up-to-date: {result.config_path}")
+        if validate_config:
+            _run_runtime_validation(
+                config_path=result.config_path,
+                strict=False,
+                title="Post-create validation",
+            )
         console.print(
             "Enabled infra components: "
             + (", ".join(sorted(selected_infra)) if selected_infra else "(none)")
@@ -6446,21 +8237,495 @@ def create_command(
             "Enabled apps components: "
             + (", ".join(sorted(selected_apps)) if selected_apps else "(none)")
         )
+        if _active_chart_count(final_payload) > 0 and _config_uses_private_cluster_handoff(final_payload):
+            console.print(f"[yellow]NOTE:[/yellow] {_private_cluster_handoff_note()}")
         console.print(f"Ensured generated skeleton: {result.config_path.parent / 'generated'}")
-        if interactive_mode and not wizard_completed:
-            console.print(
-                "[yellow]Wizard exited early.[/yellow] Remaining fields keep defaults. "
-                "Edit config.yaml manually before validate/render."
-            )
+        if interactive_mode and (not optional_wizard_mode or not wizard_completed):
+            _print_wizard_required_field_warning(create_required_field_issues)
         console.print(
-            "Next steps: run `nebius-cxcli validate <config.yaml>`, "
+            "Next steps: optionally run `nebius-cxcli validate --strict <config.yaml>`, "
             "`nebius-cxcli render <config.yaml>`, "
             "`nebius-cxcli bootstrap-ci <config.yaml>` (optional), then deploy from "
-            "`<instance>/generated` with `nebius-cxcli deploy <generated-dir>`."
+            "`<project>/generated` with `nebius-cxcli deploy <generated-dir>`."
         )
         console.print(
             "[yellow]Security warning:[/yellow] keep this customer repository private "
             "because the deployments root contains sensitive operational metadata."
+        )
+    except (KeyboardInterrupt, EOFError, typer.Abort):
+        console.print("[yellow]Cancelled by user[/yellow].")
+        raise typer.Exit(code=130) from None
+    except Exception as exc:  # pragma: no cover - CLI surface
+        _exit_with_error(exc)
+
+
+@component_app.command(
+    "list",
+    short_help="Use CONFIG_YAML to list enabled and available catalog components.",
+)
+def component_list_command(
+    config_path: Annotated[
+        Path,
+        typer.Argument(
+            metavar="CONFIG_YAML",
+            help=_CONFIG_YAML_ARGUMENT_HELP,
+        ),
+    ],
+) -> None:
+    """List enabled component instances and reusable catalog component types."""
+    try:
+        _config, _paths = _load_context(config_path)
+        payload = _load_config_payload(config_path.resolve())
+        infra_entries = _with_infra_provider_groups(component_entries("infra"))
+        app_entries = component_entries("apps")
+        enabled_infra_specs = _enabled_component_instance_specs(
+            payload,
+            scope="infra",
+            entries=infra_entries,
+        )
+        enabled_apps_specs = _enabled_component_instance_specs(
+            payload,
+            scope="apps",
+            entries=app_entries,
+        )
+
+        console.print(f"Config: {config_path.resolve()}")
+        console.print()
+
+        sections = (
+            ("Enabled infra component instances", enabled_infra_specs),
+            ("Enabled apps component instances", enabled_apps_specs),
+        )
+        for heading, specs in sections:
+            console.print(f"{heading}:")
+            if not specs:
+                console.print("  (none)")
+                console.print()
+            else:
+                for entry, row in specs:
+                    console.print(
+                        f"  {_component_instance_selector_label(entry, instance_id=str(row['instance_id']))}"
+                        f"  ({entry.description})"
+                    )
+                console.print()
+
+        available_sections = (
+            ("Available infra components", infra_entries),
+            ("Available apps components", app_entries),
+        )
+        for heading, entries in available_sections:
+            console.print(f"{heading}:")
+            if not entries:
+                console.print("  (none)")
+                console.print()
+                continue
+            for entry in entries:
+                console.print(
+                    f"  {_component_selector_label(entry, scope=entry.scope)}"
+                    f"  ({entry.description})"
+                )
+            console.print()
+    except Exception as exc:  # pragma: no cover - CLI surface
+        _exit_with_error(exc)
+
+
+@component_app.command(
+    "add",
+    short_help="Use CONFIG_YAML to add infra/app component instances to an existing config.",
+)
+def component_add_command(
+    config_path: Annotated[
+        Path,
+        typer.Argument(
+            metavar="CONFIG_YAML",
+            help=_CONFIG_YAML_ARGUMENT_HELP,
+        ),
+    ],
+    component_ids: Annotated[
+        list[str] | None,
+        typer.Argument(
+            metavar="[COMPONENT_ID]...",
+            help=(
+                "Optional infra module or app chart id(s) to add. When omitted, "
+                "component add prompts interactively using separate infra/apps selections. "
+                "Repeat a component id to add another instance, or use "
+                "'<component-id>@<instance-id>' to request an explicit instance id."
+            ),
+        ),
+    ] = None,
+    no_interactive: Annotated[
+        bool,
+        typer.Option(
+            "--no-interactive",
+            help="Disable interactive selection and field prompts.",
+        ),
+    ] = False,
+    validate_sources: Annotated[
+        bool,
+        typer.Option(
+            "--validate-sources/--no-validate-sources",
+            help=(
+                "Validate component_sources.yaml before component add runs "
+                "(enabled by default)."
+            ),
+        ),
+    ] = True,
+) -> None:
+    """Add infra/app component instances to an existing project config.yaml."""
+    try:
+        _config, _paths = _load_context(config_path)
+        if validate_sources:
+            _validate_component_sources_or_raise()
+        payload = _load_config_payload(config_path.resolve())
+        interactive_mode = not no_interactive
+        client_name, tenant_id, project_id, region_id, email = _identity_values_from_payload(payload)
+        provider_lookup = ProviderOptionLookup()
+        tenant_id, project_id = _validate_tenant_project_ids_or_prompt(
+            tenant_id=tenant_id,
+            project_id=project_id,
+            interactive=False,
+            provider_lookup=provider_lookup,
+        )
+
+        infra_entries = _with_infra_provider_groups(component_entries("infra"))
+        app_entries = component_entries("apps")
+        enabled_infra = _enabled_ids_from_runtime_payload(payload=payload, entries=infra_entries)
+        enabled_apps = _enabled_ids_from_runtime_payload(payload=payload, entries=app_entries)
+
+        raw_tokens = _split_multi_value_tokens(component_ids)
+        if not raw_tokens and interactive_mode:
+            requested_infra = _prompt_component_scope_selection(
+                action="add",
+                scope="infra",
+                entries=infra_entries,
+            )
+            requested_apps = _prompt_component_scope_selection(
+                action="add",
+                scope="apps",
+                entries=app_entries,
+            )
+            add_targets = [
+                *(_ComponentAddTarget(scope="infra", component_id=component_id) for component_id in sorted(requested_infra)),
+                *(_ComponentAddTarget(scope="apps", component_id=component_id) for component_id in sorted(requested_apps)),
+            ]
+        elif not raw_tokens and not interactive_mode:
+            raise RuntimeError(
+                "Specify at least one component id, or omit --no-interactive to choose components interactively."
+            )
+        else:
+            add_targets = _resolve_component_add_targets(
+                tokens=raw_tokens,
+                infra_entries=infra_entries,
+                app_entries=app_entries,
+            )
+
+        if not add_targets:
+            console.print("No components selected for add.")
+            return
+
+        requested_infra_types = {
+            target.component_id for target in add_targets if target.scope == "infra"
+        }
+        requested_apps_types = {
+            target.component_id for target in add_targets if target.scope == "apps"
+        }
+        selected_infra_raw = set(enabled_infra) | requested_infra_types
+        selected_apps_raw = set(enabled_apps) | requested_apps_types
+        dependency_seed_payload = _dependency_seed_payload(
+            client_name=client_name,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            region_id=region_id,
+            email=email,
+            selected_infra=selected_infra_raw,
+            selected_apps=selected_apps_raw,
+            infra_entries=infra_entries,
+            app_entries=app_entries,
+            existing_payload=payload,
+            merge_existing=True,
+        )
+        dependency_resolution_started = time.monotonic()
+        selected_infra, selected_apps = _normalize_component_dependencies(
+            selected_infra=selected_infra_raw,
+            selected_apps=selected_apps_raw,
+            infra_entries=infra_entries,
+            app_entries=app_entries,
+            payload_for_app_chart_deps=dependency_seed_payload,
+        )
+        dependency_resolution_elapsed = time.monotonic() - dependency_resolution_started
+        if dependency_resolution_elapsed >= 1:
+            console.print(
+                "[dim]App dependency resolution finished in "
+                f"{dependency_resolution_elapsed:.1f}s[/dim]"
+            )
+
+        auto_added_infra_types = (selected_infra - enabled_infra) - requested_infra_types
+        auto_added_apps_types = (selected_apps - enabled_apps) - requested_apps_types
+        add_targets.extend(
+            _ComponentAddTarget(scope="infra", component_id=component_id)
+            for component_id in sorted(auto_added_infra_types)
+        )
+        add_targets.extend(
+            _ComponentAddTarget(scope="apps", component_id=component_id)
+            for component_id in sorted(auto_added_apps_types)
+        )
+
+        if interactive_mode and not _wizard_continue_phase(
+            "Add selected components to config.yaml now?",
+            default=True,
+        ):
+            console.print("No component changes applied.")
+            return
+
+        next_payload = copy.deepcopy(payload)
+        _scope_rows(next_payload, scope="infra")
+        _scope_rows(next_payload, scope="apps")
+
+        added_infra_instances: list[str] = []
+        added_apps_instances: list[str] = []
+        added_infra_labels: list[str] = []
+        added_apps_labels: list[str] = []
+        infra_lookup = {entry.id: entry for entry in infra_entries}
+        app_lookup = {entry.id: entry for entry in app_entries}
+        for target in add_targets:
+            entry = (
+                infra_lookup.get(target.component_id)
+                if target.scope == "infra"
+                else app_lookup.get(target.component_id)
+            )
+            if entry is None:
+                raise RuntimeError(
+                    f"Component '{target.component_id}' is no longer available in the active catalog."
+                )
+            row = _append_component_instance_row(
+                payload=next_payload,
+                entry=entry,
+                requested_instance_id=target.requested_instance_id,
+            )
+            instance_id = component_instance_id(row)
+            if target.scope == "infra":
+                added_infra_instances.append(instance_id)
+                added_infra_labels.append(component_instance_label(entry.id, instance_id))
+            else:
+                added_apps_instances.append(instance_id)
+                added_apps_labels.append(component_instance_label(entry.id, instance_id))
+        _seed_infra_project_scope_defaults(
+            payload=next_payload,
+            infra_entries=infra_entries,
+        )
+        config_yaml_override = yaml.safe_dump(next_payload, sort_keys=False)
+        wizard_completed = True
+        if interactive_mode:
+            config_yaml_override, wizard_completed = _run_component_field_wizard(
+                config_yaml=config_yaml_override,
+                selected_infra=set(added_infra_instances),
+                selected_apps=set(added_apps_instances),
+                infra_entries=infra_entries,
+                app_entries=app_entries,
+                provider_lookup=provider_lookup,
+            )
+            parsed_override = yaml.safe_load(config_yaml_override) or {}
+            if not isinstance(parsed_override, dict):
+                raise RuntimeError("Updated config payload must be a mapping")
+            next_payload = parsed_override
+
+        add_required_field_issues = (
+            _wizard_followup_required_field_issues(
+                payload=next_payload,
+                infra_entries=infra_entries,
+            )
+            if interactive_mode and not wizard_completed
+            else []
+        )
+
+        selection_issues = _selection_change_issues(next_payload)
+        if selection_issues:
+            raise RuntimeError(
+                "Component add would leave config.yaml with unresolved dependencies:\n  - "
+                + "\n  - ".join(selection_issues)
+            )
+        _prune_redundant_app_chart_default_values(
+            payload=next_payload,
+            app_entries=app_entries,
+        )
+
+        wrote_config = _write_runtime_payload_config(config_path.resolve(), next_payload)
+        if wrote_config:
+            console.print(f"Updated: {config_path.resolve()}")
+        else:
+            console.print(f"Config up-to-date: {config_path.resolve()}")
+        console.print(
+            "Added infra components: "
+            + (", ".join(added_infra_labels) if added_infra_labels else "(none)")
+        )
+        console.print(
+            "Added apps components: "
+            + (", ".join(added_apps_labels) if added_apps_labels else "(none)")
+        )
+        if _active_chart_count(next_payload) > 0 and _config_uses_private_cluster_handoff(next_payload):
+            console.print(f"[yellow]NOTE:[/yellow] {_private_cluster_handoff_note()}")
+        if interactive_mode and not wizard_completed:
+            _print_wizard_required_field_warning(add_required_field_issues)
+        console.print(
+            "Next steps: run `nebius-cxcli validate <config.yaml>` and "
+            "`nebius-cxcli render <config.yaml>`."
+        )
+    except (KeyboardInterrupt, EOFError, typer.Abort):
+        console.print("[yellow]Cancelled by user[/yellow].")
+        raise typer.Exit(code=130) from None
+    except Exception as exc:  # pragma: no cover - CLI surface
+        _exit_with_error(exc)
+
+
+@component_app.command(
+    "remove",
+    short_help="Use CONFIG_YAML to remove enabled infra/app component instances from config.",
+)
+def component_remove_command(
+    config_path: Annotated[
+        Path,
+        typer.Argument(
+            metavar="CONFIG_YAML",
+            help=_CONFIG_YAML_ARGUMENT_HELP,
+        ),
+    ],
+    component_ids: Annotated[
+        list[str] | None,
+        typer.Argument(
+            metavar="[COMPONENT_ID]...",
+            help=(
+                "Optional infra module or app chart id(s) to remove. When omitted, "
+                "component remove prompts interactively using separate infra/apps selections. "
+                "If multiple instances of the same component type are enabled, pass the "
+                "instance id or '<component-id>@<instance-id>' to remove one exact instance."
+            ),
+        ),
+    ] = None,
+    no_interactive: Annotated[
+        bool,
+        typer.Option(
+            "--no-interactive",
+            help="Disable interactive selection and confirmation prompts.",
+        ),
+    ] = False,
+) -> None:
+    """Remove enabled infra/app component instances from an existing project config.yaml."""
+    try:
+        _config, _paths = _load_context(config_path)
+        payload = _load_config_payload(config_path.resolve())
+        interactive_mode = not no_interactive
+
+        infra_entries = _with_infra_provider_groups(component_entries("infra"))
+        app_entries = component_entries("apps")
+        enabled_infra_specs = _enabled_component_instance_specs(
+            payload,
+            scope="infra",
+            entries=infra_entries,
+        )
+        enabled_app_specs = _enabled_component_instance_specs(
+            payload,
+            scope="apps",
+            entries=app_entries,
+        )
+
+        raw_tokens = _split_multi_value_tokens(component_ids)
+        if not raw_tokens and interactive_mode:
+            requested_infra_instances = _prompt_component_instance_selection(
+                action="remove",
+                scope="infra",
+                specs=tuple(enabled_infra_specs),
+            )
+            requested_app_instances = _prompt_component_instance_selection(
+                action="remove",
+                scope="apps",
+                specs=tuple(enabled_app_specs),
+            )
+            remove_targets = [
+                *(
+                    _ComponentRemoveTarget(
+                        scope="infra",
+                        component_id=str(row["id"]),
+                        instance_id=str(row["instance_id"]),
+                    )
+                    for _entry, row in enabled_infra_specs
+                    if str(row["instance_id"]) in requested_infra_instances
+                ),
+                *(
+                    _ComponentRemoveTarget(
+                        scope="apps",
+                        component_id=str(row["id"]),
+                        instance_id=str(row["instance_id"]),
+                    )
+                    for _entry, row in enabled_app_specs
+                    if str(row["instance_id"]) in requested_app_instances
+                ),
+            ]
+        elif not raw_tokens and not interactive_mode:
+            raise RuntimeError(
+                "Specify at least one component id, or omit --no-interactive to choose components interactively."
+            )
+        else:
+            remove_targets, skipped = _resolve_component_remove_targets(
+                tokens=raw_tokens,
+                payload=payload,
+                infra_entries=infra_entries,
+                app_entries=app_entries,
+            )
+            for component_id in skipped:
+                console.print(
+                    f"[yellow]Skipped already-absent component:[/yellow] {component_id}"
+                )
+
+        if not remove_targets:
+            console.print("No components selected for remove.")
+            return
+
+        if interactive_mode and not _wizard_continue_phase(
+            "Remove selected components from config.yaml now?",
+            default=False,
+        ):
+            console.print("No component changes applied.")
+            return
+
+        next_payload = copy.deepcopy(payload)
+        removed_infra_labels: list[str] = []
+        removed_app_labels: list[str] = []
+        for target in remove_targets:
+            removed = _remove_component_instance_row(
+                payload=next_payload,
+                scope=target.scope,
+                instance_id=target.instance_id,
+            )
+            if removed is None:
+                continue
+            label = component_instance_label(target.component_id, target.instance_id)
+            if target.scope == "infra":
+                removed_infra_labels.append(label)
+            else:
+                removed_app_labels.append(label)
+        selection_issues = _selection_change_issues(next_payload)
+        if selection_issues:
+            raise RuntimeError(
+                "Component remove would leave config.yaml with unresolved dependencies:\n  - "
+                + "\n  - ".join(selection_issues)
+            )
+
+        wrote_config = _write_runtime_payload_config(config_path.resolve(), next_payload)
+        if wrote_config:
+            console.print(f"Updated: {config_path.resolve()}")
+        else:
+            console.print(f"Config up-to-date: {config_path.resolve()}")
+        console.print(
+            "Removed infra components: "
+            + (", ".join(removed_infra_labels) if removed_infra_labels else "(none)")
+        )
+        console.print(
+            "Removed apps components: "
+            + (", ".join(removed_app_labels) if removed_app_labels else "(none)")
+        )
+        console.print(
+            "Next steps: run `nebius-cxcli validate <config.yaml>` and "
+            "`nebius-cxcli render <config.yaml>`."
         )
     except (KeyboardInterrupt, EOFError, typer.Abort):
         console.print("[yellow]Cancelled by user[/yellow].")
@@ -6479,7 +8744,7 @@ def bootstrap_ci_command(
         typer.Argument(
             metavar="CONFIG_YAML",
             help=(
-                "Path to instance config.yaml inside the target customer git repository. "
+                "Path to project config.yaml inside the target customer git repository. "
                 "The file must already exist inside that repo checkout."
             ),
         ),
@@ -6527,7 +8792,7 @@ def bootstrap_ci_command(
         ),
     ] = None,
 ) -> None:
-    """Generate or reconcile the CLI-managed customer GitHub workflow and environment settings for one instance config.yaml."""
+    """Generate or reconcile the CLI-managed customer GitHub workflow and environment settings for one project config.yaml."""
     try:
         config, paths = _load_context(config_path)
         resolved_cli_ref = str(cli_ref or "").strip() or default_cli_ref()
@@ -6640,63 +8905,13 @@ def validate_command(
         ),
     ] = False,
 ) -> None:
-    """Validate one instance config.yaml with runtime source and provider/chart checks."""
+    """Validate one project config.yaml with runtime source and provider/chart checks."""
     try:
-        phase_defs = [
-            _ValidationPhase("load-config", "Load config and component catalog"),
-            _ValidationPhase("active-sources", "Validate active component sources"),
-            _ValidationPhase("dependencies", "Validate component dependencies"),
-            _ValidationPhase("module-schema", "Validate Terraform module inputs"),
-        ]
-        if strict:
-            phase_defs.extend(
-                [
-                    _ValidationPhase("strict-readiness", "Validate strict deployment readiness"),
-                    _ValidationPhase("mk8s-preflight", "Validate MK8s network preflight"),
-                ]
-            )
-
-        validation_cache = _ValidationWorkCache()
-        resolved_source_profile = resolve_component_sources_profile()
-        with _ValidationProgress(title="Runtime validation", phases=phase_defs) as progress:
-            config, _ = progress.run("load-config", lambda: _load_context(config_path))
-            progress.run(
-                "active-sources",
-                lambda: _validate_active_component_sources(
-                    config,
-                    chart_meta_cache=validation_cache.chart_meta_cache,
-                ),
-            )
-            dependency_issues = progress.run(
-                "dependencies",
-                lambda: _validate_component_dependencies(
-                    config,
-                    chart_meta_cache=validation_cache.chart_meta_cache,
-                ),
-            )
-            if dependency_issues:
-                raise RuntimeError(
-                    "Runtime validation failed:\n  - " + "\n  - ".join(dependency_issues)
-                )
-            progress.run(
-                "module-schema",
-                lambda: rendered_module_sources(config, source_profile=resolved_source_profile),
-            )
-            if strict:
-                progress.run(
-                    "strict-readiness",
-                    lambda: _validate_strict_config(
-                        config,
-                        chart_meta_cache=validation_cache.chart_meta_cache,
-                        include_common_checks=False,
-                    ),
-                )
-                progress.run("mk8s-preflight", lambda: validate_mk8s_network_preflight(config))
-
-        if strict:
-            console.print(f"[green]Valid (strict):[/green] {config_path}")
-            return
-        console.print(f"[green]Valid:[/green] {config_path}")
+        _run_runtime_validation(
+            config_path=config_path,
+            strict=strict,
+            title="Runtime validation",
+        )
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 
@@ -6790,7 +9005,7 @@ def validate_generated_command(
 
 @app.command(
     "validate-sources",
-    short_help="Validate component_sources.yaml from an explicit path or the normal resolution order.",
+    short_help="Validate component_sources.yaml plus resolved Terraform module and Helm chart source contracts.",
 )
 def validate_sources_command(
     component_sources_path: Annotated[
@@ -6801,7 +9016,7 @@ def validate_sources_command(
         ),
     ] = None,
 ) -> None:
-    """Validate component_sources.yaml (Terraform module paths and Helm chart refs)."""
+    """Validate component_sources.yaml plus resolved Terraform module and Helm chart source contracts."""
     try:
         sources = load_component_sources(explicit=component_sources_path)
         progress_items: list[tuple[str, str]] = []
@@ -6890,7 +9105,7 @@ def validate_sources_command(
 @app.command(
     "auth",
     short_help=(
-        "Manage runtime auth profile actions; use --instance-config CONFIG_YAML or "
+        "Manage runtime auth profile actions; use --project-config CONFIG_YAML or "
         "--project-id, or omit both for global --validate-profile."
     ),
 )
@@ -6901,14 +9116,14 @@ def auth_command(
             "--project-id",
             help=(
                 "Project ID used by runtime auth operations "
-                "(or provide --instance-config to resolve it)."
+                "(or provide --project-config to resolve it)."
             ),
         ),
     ] = None,
-    instance_config: Annotated[
+    project_config: Annotated[
         Path | None,
         typer.Option(
-            "--instance-config",
+            "--project-config",
             help="Optional config.yaml path used to resolve project_id and client_name",
         ),
     ] = None,
@@ -6919,7 +9134,7 @@ def auth_command(
             help=(
                 "Client name used for runtime auth cache path and --bootstrap-ci environment naming "
                 "(`<client_name>-<project_id>`). Required for --create/--recreate unless "
-                "--instance-config is provided, or when project_id maps to multiple cached profiles."
+                "--project-config is provided, or when project_id maps to multiple cached profiles."
             ),
         ),
     ] = None,
@@ -6944,7 +9159,7 @@ def auth_command(
             "--github-repo",
             help=(
                 "Optional override for the GitHub repository slug '<owner>/<repo>' used by "
-                "--bootstrap-ci. When omitted, resolves from --instance-config repo root or "
+                "--bootstrap-ci. When omitted, resolves from --project-config repo root or "
                 "the current git origin remote."
             ),
         ),
@@ -7007,7 +9222,7 @@ def auth_command(
             and not recreate
             and not bootstrap_ci
             and project_id is None
-            and instance_config is None
+            and project_config is None
         )
         resolved_sdk_config = sdk_config_file.resolve() if sdk_config_file else None
         material: RuntimeAuthCacheMaterial | None = None
@@ -7021,12 +9236,12 @@ def auth_command(
         else:
             resolved_project_id = _resolve_project_id_for_auth_bootstrap(
                 project_id=project_id,
-                instance_config=instance_config,
+                project_config=project_config,
             )
             resolved_client_name = _resolve_client_name_for_runtime_profile(
                 project_id=resolved_project_id,
                 client_name=client_name,
-                instance_config=instance_config,
+                project_config=project_config,
             )
             profile_targets = [(resolved_client_name, resolved_project_id)]
 
@@ -7066,8 +9281,8 @@ def auth_command(
                         "Run `nebius-cxcli auth --create --project-id <id> --client-name <name>` first."
                     )
                 repo_root_hint: Path | None = None
-                if instance_config is not None:
-                    repo_root_hint = _require_git_root(instance_config.resolve().parent)
+                if project_config is not None:
+                    repo_root_hint = _require_git_root(project_config.resolve().parent)
                 elif github_repo is None:
                     repo_root_hint = _require_git_root(Path.cwd())
                 synced_repo_slug, synced_environment_name, synced_secret_names = (
@@ -7152,7 +9367,7 @@ def render_command(
         ),
     ] = False,
 ) -> None:
-    """Render and transactionally replace generated artifacts from one instance config.yaml, prompting before overwrite unless --force is provided."""
+    """Render and transactionally replace generated artifacts from one project config.yaml, prompting before overwrite unless --force is provided."""
     try:
         config, paths = _load_runtime_context(config_path)
         resolved_source_profile = resolve_component_sources_profile()
@@ -7293,10 +9508,14 @@ def deploy_command(
 ) -> None:
     """Deploy an existing generated artifact bundle locally from generated/ or a subpath.
 
-    This command runs Terraform apply, refresh inventory, and applies Flux
-    from the committed generated bundle only. It does not run `flux bootstrap`
-    or configure GitOps sync, and it does not create or update GitHub
-    workflows, environments, or CI secrets; use
+    This command is a reconcile/apply path: Terraform apply runs first,
+    refresh inventory runs next, and then Flux converges the existing
+    generated bundle onto live infrastructure and workloads. Existing managed
+    resources may be updated when the bundle differs from live state. Use
+    `nebius-cxcli terraform plan <generated>` first when you need a
+    non-mutating preview. It does not run `flux bootstrap` or configure GitOps
+    sync, and it does not create or update GitHub workflows, environments, or
+    CI secrets; use
     `nebius-cxcli bootstrap-ci <config.yaml>` explicitly for that.
     """
     try:
@@ -7308,6 +9527,69 @@ def deploy_command(
             auto_auth_bootstrap=auto_auth_bootstrap,
         )
         console.print(f"Local deploy completed from {paths.generated_dir}")
+    except Exception as exc:  # pragma: no cover - CLI surface
+        _exit_with_error(exc)
+
+
+@app.command(
+    "destroy",
+    short_help="Use GENERATED_PATH to destroy apps first and then infra from an existing rendered bundle.",
+)
+def destroy_command(
+    generated_path: Annotated[
+        Path,
+        typer.Argument(
+            metavar="GENERATED_PATH",
+            help=_GENERATED_PATH_ARGUMENT_HELP,
+        ),
+    ],
+    auto_auth_bootstrap: Annotated[
+        bool,
+        typer.Option(
+            "--auto-auth-bootstrap/--no-auto-auth-bootstrap",
+            help=(
+                "Automatically bootstrap runtime auth material when required values are missing"
+            ),
+        ),
+    ] = True,
+    yes: Annotated[
+        bool,
+        typer.Option(
+            "--yes",
+            "-y",
+            help="Skip the destructive confirmation prompt.",
+        ),
+    ] = False,
+) -> None:
+    """Destroy an existing generated artifact bundle locally from generated/ or a subpath.
+
+    This command is the destructive inverse of `deploy`: it first deletes the
+    rendered Flux manifests from the target cluster when apps are enabled, and
+    then runs Terraform destroy against the rendered infra bundle. It does not
+    rerender from `config.yaml`, and it does not uninstall Flux controllers or
+    bootstrap GitHub/CI state.
+    """
+    try:
+        config, paths, manifest = _load_generated_context(generated_path)
+        if not _confirm_generated_destroy(
+            paths,
+            yes=yes,
+            action_label="Destroy",
+            prompt_text="Continue and destroy the rendered apps and infra?",
+            warning_text=(
+                "Destroy will delete the rendered app resources from the target cluster first and then "
+                "run Terraform destroy against the rendered infra bundle under"
+            ),
+        ):
+            console.print("No changes applied.")
+            return
+        _destroy_generated_artifacts(
+            config,
+            paths,
+            manifest,
+            auto_auth_bootstrap=auto_auth_bootstrap,
+        )
+        console.print(f"Local destroy completed from {paths.generated_dir}")
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 
@@ -7366,14 +9648,69 @@ def terraform_apply_command(
 ) -> None:
     """Refresh inventory, then run Terraform apply against an existing generated/infra bundle."""
     try:
-        config, paths, _manifest = _load_generated_context(generated_path)
+        config, paths, manifest = _load_generated_context(generated_path)
         _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
         paths.inventory_dir.mkdir(parents=True, exist_ok=True)
         write_inventory(config, paths)
         runtime_env = _terraform_runtime_env(config)
         terraform_init(paths.infra_dir, extra_env=runtime_env)
         terraform_validate(paths.infra_dir, extra_env=runtime_env, initialize=False)
-        _run_terraform_apply_with_status(config, paths, initialize=False)
+        status_watchers = _manifest_status_watchers(manifest) or _enabled_status_watcher_specs(config)
+        apply_kwargs: dict[str, Any] = {"initialize": False}
+        if status_watchers:
+            apply_kwargs["status_watchers"] = status_watchers
+        _run_terraform_apply_with_status(config, paths, **apply_kwargs)
+    except Exception as exc:  # pragma: no cover - CLI surface
+        _exit_with_error(exc)
+
+
+@terraform_app.command(
+    "destroy",
+    short_help="Use GENERATED_PATH to run Terraform destroy from generated/infra.",
+)
+def terraform_destroy_command(
+    generated_path: Annotated[
+        Path,
+        typer.Argument(
+            metavar="GENERATED_PATH",
+            help=_GENERATED_INFRA_ARGUMENT_HELP,
+        ),
+    ],
+    auto_auth_bootstrap: Annotated[
+        bool,
+        typer.Option(
+            "--auto-auth-bootstrap/--no-auto-auth-bootstrap",
+            help="Automatically bootstrap runtime auth when env vars are missing",
+        ),
+    ] = True,
+    yes: Annotated[
+        bool,
+        typer.Option(
+            "--yes",
+            "-y",
+            help="Skip the destructive confirmation prompt.",
+        ),
+    ] = False,
+) -> None:
+    """Run Terraform destroy against an existing generated/infra bundle."""
+    try:
+        config, paths, manifest = _load_generated_context(generated_path)
+        if not _confirm_generated_destroy(
+            paths,
+            yes=yes,
+            action_label="Terraform destroy",
+            prompt_text="Continue and destroy the rendered infra resources?",
+            warning_text="Terraform destroy will destroy the rendered infra resources under",
+        ):
+            console.print("No changes applied.")
+            return
+        _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
+        status_watchers = _manifest_status_watchers(manifest) or _enabled_status_watcher_specs(config)
+        destroy_kwargs: dict[str, Any] = {"initialize": True}
+        if status_watchers:
+            destroy_kwargs["status_watchers"] = status_watchers
+        _run_terraform_destroy_with_status(config, paths, **destroy_kwargs)
+        console.print(f"Terraform destroy completed from {paths.infra_dir}")
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 
@@ -7431,6 +9768,56 @@ def terraform_unlock_command(
             f"created={lock_info.created or '(unknown)'} "
             f"object={lock_info.bucket}/{lock_info.object_key}"
         )
+    except Exception as exc:  # pragma: no cover - CLI surface
+        _exit_with_error(exc)
+
+
+@flux_app.command(
+    "destroy",
+    short_help="Use GENERATED_PATH to delete rendered Flux resources from generated/flux.",
+)
+def flux_destroy_command(
+    generated_path: Annotated[
+        Path,
+        typer.Argument(
+            metavar="GENERATED_PATH",
+            help=_GENERATED_FLUX_ARGUMENT_HELP,
+        ),
+    ],
+    auto_auth_bootstrap: Annotated[
+        bool,
+        typer.Option(
+            "--auto-auth-bootstrap/--no-auto-auth-bootstrap",
+            help="Automatically bootstrap runtime auth when env vars are missing",
+        ),
+    ] = True,
+    yes: Annotated[
+        bool,
+        typer.Option(
+            "--yes",
+            "-y",
+            help="Skip the destructive confirmation prompt.",
+        ),
+    ] = False,
+) -> None:
+    """Delete rendered Flux resources directly from an existing generated/flux bundle."""
+    try:
+        config, paths, manifest = _load_generated_context(generated_path)
+        if _active_chart_count(config) == 0:
+            raise RuntimeError("No enabled apps charts are configured for this project.")
+        if not _confirm_generated_destroy(
+            paths,
+            yes=yes,
+            action_label="Flux destroy",
+            prompt_text="Continue and delete the rendered app resources from the target cluster?",
+            warning_text="Flux destroy will delete the rendered app resources declared under",
+        ):
+            console.print("No changes applied.")
+            return
+        if _manifest_requires_flux_terraform_state(manifest):
+            _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
+        _destroy_rendered_flux_bundle(config, paths, manifest)
+        console.print(f"Flux resources deleted from {paths.flux_dir}")
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 
@@ -7514,7 +9901,7 @@ def flux_apply_command(
     try:
         config, paths, manifest = _load_generated_context(generated_path)
         if _active_chart_count(config) == 0:
-            raise RuntimeError("No enabled apps charts are configured for this instance.")
+            raise RuntimeError("No enabled apps charts are configured for this project.")
         if _manifest_requires_flux_terraform_state(manifest):
             _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
         paths.inventory_dir.mkdir(parents=True, exist_ok=True)
@@ -7536,7 +9923,7 @@ def flux_apply_command(
 
 @app.command(
     "discover",
-    short_help="Use DEPLOYMENT_SCOPE to emit changed-instance discovery JSON for CI.",
+    short_help="Use DEPLOYMENT_SCOPE to emit changed-project discovery JSON for CI.",
 )
 def discover_command(
     target_path: Annotated[
@@ -7545,7 +9932,7 @@ def discover_command(
             metavar="DEPLOYMENT_SCOPE",
             help=(
                 "Path to the deployments root or any narrower directory under it, including a single "
-                "instance directory or generated/. When inside a git repository, discover uses git "
+                "project directory or generated/. When inside a git repository, discover uses git "
                 "change detection for changed config.yaml and generated/** paths under that scope; "
                 "otherwise it scans all config.yaml files under the scope."
             )
@@ -7556,7 +9943,7 @@ def discover_command(
         typer.Option("--all", help="Include all config.yaml files instead of changed only"),
     ] = False,
 ) -> None:
-    """Print discovery JSON for changed instances under a deployment scope directory."""
+    """Print discovery JSON for changed projects under a deployment scope directory."""
     try:
         base_path = target_path.resolve()
         _validate_deployments_root_target(base_path)

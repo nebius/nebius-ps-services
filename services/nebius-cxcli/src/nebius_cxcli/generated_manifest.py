@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from .paths import InstancePaths
+from .paths import ProjectPaths
 from .runtime_config import AttrDict, to_plain_data, wrap_runtime_config
 
 GENERATED_MANIFEST_FILENAME = "nebius-cxcli-manifest.json"
@@ -24,9 +24,10 @@ def _repo_relative_path(path: Path, *, root: Path) -> str:
 def build_generated_manifest(
     *,
     config: Any,
-    paths: InstancePaths,
+    paths: ProjectPaths,
     handoffs: Sequence[Mapping[str, Any]],
     required_component_outputs: Sequence[Mapping[str, Any]],
+    status_watchers: Sequence[Mapping[str, Any]] = (),
     source_profile: str | None = None,
     module_sources: Sequence[Mapping[str, Any]] = (),
     terraform_tfvars: Mapping[str, Any] | None = None,
@@ -42,7 +43,7 @@ def build_generated_manifest(
         "source_contract": {
             "config_path": _repo_relative_path(paths.config_path, root=paths.repo_root),
         },
-        "instance": {
+        "project": {
             "client_name": paths.path_client_name,
             "tenant_id": paths.path_tenant_id,
             "project_id": paths.path_project_id,
@@ -65,6 +66,7 @@ def build_generated_manifest(
         "deploy": {
             "handoffs": [dict(item) for item in handoffs],
             "required_component_outputs": [dict(item) for item in required_component_outputs],
+            "status_watchers": [dict(item) for item in status_watchers],
         },
         "runtime_config": dict(payload),
     }
@@ -78,9 +80,10 @@ def write_generated_manifest_to_path(
     path: Path,
     *,
     config: Any,
-    paths: InstancePaths,
+    paths: ProjectPaths,
     handoffs: Sequence[Mapping[str, Any]],
     required_component_outputs: Sequence[Mapping[str, Any]],
+    status_watchers: Sequence[Mapping[str, Any]] = (),
     source_profile: str | None = None,
     module_sources: Sequence[Mapping[str, Any]] = (),
     terraform_tfvars: Mapping[str, Any] | None = None,
@@ -92,6 +95,7 @@ def write_generated_manifest_to_path(
         paths=paths,
         handoffs=handoffs,
         required_component_outputs=required_component_outputs,
+        status_watchers=status_watchers,
         source_profile=source_profile,
         module_sources=module_sources,
         terraform_tfvars=terraform_tfvars,
@@ -106,9 +110,10 @@ def write_generated_manifest_to_path(
 def write_generated_manifest(
     *,
     config: Any,
-    paths: InstancePaths,
+    paths: ProjectPaths,
     handoffs: Sequence[Mapping[str, Any]],
     required_component_outputs: Sequence[Mapping[str, Any]],
+    status_watchers: Sequence[Mapping[str, Any]] = (),
     source_profile: str | None = None,
     module_sources: Sequence[Mapping[str, Any]] = (),
     terraform_tfvars: Mapping[str, Any] | None = None,
@@ -121,6 +126,7 @@ def write_generated_manifest(
         paths=paths,
         handoffs=handoffs,
         required_component_outputs=required_component_outputs,
+        status_watchers=status_watchers,
         source_profile=source_profile,
         module_sources=module_sources,
         terraform_tfvars=terraform_tfvars,

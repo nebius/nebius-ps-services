@@ -442,6 +442,34 @@ def terraform_apply(
     )
 
 
+def terraform_destroy(
+    infra_dir: Path,
+    *,
+    extra_env: dict[str, str] | None = None,
+    initialize: bool = True,
+    event_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> None:
+    """Run terraform destroy in the rendered infra directory."""
+    terraform_bin = _require_terraform()
+    if initialize:
+        terraform_init(infra_dir, extra_env=extra_env)
+    if event_callback is None:
+        _run(
+            [terraform_bin, "destroy", "-input=false", "-auto-approve", "-lock-timeout=5m"],
+            cwd=infra_dir,
+            timeout=7200,
+            extra_env=extra_env,
+        )
+        return
+    _stream_json_events(
+        [terraform_bin, "destroy", "-json", "-input=false", "-auto-approve", "-lock-timeout=5m"],
+        cwd=infra_dir,
+        timeout=7200,
+        extra_env=extra_env,
+        event_callback=event_callback,
+    )
+
+
 def terraform_force_unlock(
     infra_dir: Path,
     lock_id: str,

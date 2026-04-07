@@ -39,7 +39,7 @@ def init_nebius_sdk(
     config_file: Path | None = None,
     parent_id: str | None = None,
 ):
-    """Init SDK with robust IAM fallback: credentials_file -> SA key env -> CLI token -> CLI config."""
+    """Init SDK with robust IAM fallback: credentials file -> SA key env -> IAM token env/CLI -> CLI config."""
     from nebius.sdk import SDK
 
     endpoint_value = _as_text(endpoint) or _as_text(os.environ.get("NEBIUS_ENDPOINT")) or None

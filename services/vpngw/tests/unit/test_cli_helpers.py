@@ -449,9 +449,7 @@ def test_format_ecmp_warning_lines_groups_prefix_and_tunnels() -> None:
     assert "Gateway VM: nebius-vpn-gw-0" in warning_lines
     assert "  Overlapping prefix: 10.10.0.0/24" in warning_lines
     assert "  Active tunnels carrying this prefix:" in warning_lines
-    assert (
-        "    - nebius-204-12-170-147-tunnel-1 (connection: gcp-ha-vpn)" in warning_lines
-    )
+    assert "    - nebius-204-12-170-147-tunnel-1 (connection: gcp-ha-vpn)" in warning_lines
     assert "    - gcp-ha-vpn2-tunnel-1 (connection: gcp-ha-vpn2)" in warning_lines
 
 
@@ -483,6 +481,24 @@ def test_each_cli_command_help_renders() -> None:
         result = runner.invoke(app, [command_name, "--help"])
         assert result.exit_code == 0, command_name
         assert "Usage:" in result.stdout
+
+
+def test_route_and_operator_help_mentions_multi_connection_behavior() -> None:
+    runner = CliRunner()
+
+    list_remote_help = runner.invoke(app, ["list-routes-remote", "--help"])
+    failover_help = runner.invoke(app, ["failover", "--help"])
+    restart_help = runner.invoke(app, ["restart-tunnel", "--help"])
+
+    assert list_remote_help.exit_code == 0
+    assert "owning gateway VM" in list_remote_help.stdout
+    assert "selected connection" in list_remote_help.stdout
+
+    assert failover_help.exit_code == 0
+    assert "multi-connection topologies" in failover_help.stdout
+
+    assert restart_help.exit_code == 0
+    assert "only the owning gateway VM" in restart_help.stdout
 
 
 def test_build_ssh_base_cmd_suppresses_host_key_noise(tmp_path: Path) -> None:
@@ -863,7 +879,9 @@ def test_failover_accepts_enum_routing_modes(tmp_path: Path) -> None:
     assert "Failover confirmed" in result.stdout
 
 
-def test_failover_targets_selected_passive_tunnel_instance_in_multivm_config(tmp_path: Path) -> None:
+def test_failover_targets_selected_passive_tunnel_instance_in_multivm_config(
+    tmp_path: Path,
+) -> None:
     config_path = tmp_path / "failover-multivm.config.yaml"
     config_path.write_text("version: 1\n", encoding="utf-8")
 

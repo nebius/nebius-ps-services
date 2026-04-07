@@ -92,7 +92,7 @@ def test_strict_validation_requires_enabled_module_inputs(tmp_path: Path, monkey
         lambda _source: ("platform", "preset"),
     )
     monkeypatch.setattr("nebius_cxcli.cli.provider_component_match_status", lambda _id: None)
-    monkeypatch.setattr("nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config: [])
+    monkeypatch.setattr("nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: [])
 
     with pytest.raises(RuntimeError) as exc_info:
         _validate_strict_config(config)
@@ -120,7 +120,7 @@ def test_strict_validation_checks_dynamic_custom_component_source(
     config = load_config(config_path)
 
     monkeypatch.setattr("nebius_cxcli.cli.provider_component_match_status", lambda _id: None)
-    monkeypatch.setattr("nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config: [])
+    monkeypatch.setattr("nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: [])
 
     with pytest.raises(RuntimeError) as exc_info:
         _validate_strict_config(config)
@@ -148,6 +148,162 @@ def test_strict_validation_rejects_unknown_custom_module_inputs(tmp_path: Path) 
     assert "infra.components[mk8s].inputs.ssh_public_key is not declared by module" in str(
         exc_info.value
     )
+
+
+def test_strict_validation_requires_managed_postgresql_name_when_enabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _starter_payload(selected_infra={"managed-postgresql"}, selected_apps=set())
+    managed_pg = _infra_component_row(payload, "managed-postgresql")
+    managed_pg["inputs"] = {
+        "parent_id": "project-456",
+        "network_id": "vpcnetwork-123",
+    }
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    config = load_config(config_path)
+
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_required_variables",
+        lambda _source: ("parent_id", "network_id"),
+    )
+    monkeypatch.setattr("nebius_cxcli.cli.provider_component_match_status", lambda _id: None)
+    monkeypatch.setattr("nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: [])
+
+    with pytest.raises(RuntimeError) as exc_info:
+        _validate_strict_config(config)
+    assert "infra.components[managed-postgresql].inputs.name is required" in str(
+        exc_info.value
+    )
+
+
+def test_strict_validation_mk8s_cpu_shape_not_required_when_has_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """cpu_nodes_platform/cpu_nodes_preset have default="" in TF, so they are
+    not auto-detected as required.  Only truly required variables (no default,
+    nullable!=true) are enforced."""
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
+    mk8s = _infra_component_row(payload, "mk8s")
+    mk8s["inputs"] = {
+        "parent_id": "project-456",
+        "cluster_name": "demo-cluster",
+        "subnet_id": "subnet-123",
+    }
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    config = load_config(config_path)
+
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_required_variables",
+        lambda _source: ("parent_id", "cluster_name", "subnet_id"),
+    )
+    monkeypatch.setattr("nebius_cxcli.cli.provider_component_match_status", lambda _id: None)
+    monkeypatch.setattr("nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: [])
+
+    try:
+        _validate_strict_config(config)
+        message = ""
+    except RuntimeError as exc:
+        message = str(exc)
+    assert "cpu_nodes_platform is required" not in message
+    assert "cpu_nodes_preset is required" not in message
+
+
+def test_strict_validation_requires_object_storage_name_when_enabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _starter_payload(selected_infra={"object-storage"}, selected_apps=set())
+    object_storage = _infra_component_row(payload, "object-storage")
+    object_storage["inputs"] = {
+        "parent_id": "project-456",
+    }
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    config = load_config(config_path)
+
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_required_variables",
+        lambda _source: ("parent_id",),
+    )
+    monkeypatch.setattr("nebius_cxcli.cli.provider_component_match_status", lambda _id: None)
+    monkeypatch.setattr("nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: [])
+
+    with pytest.raises(RuntimeError) as exc_info:
+        _validate_strict_config(config)
+    assert "infra.components[object-storage].inputs.name is required" in str(
+        exc_info.value
+    )
+
+
+def test_strict_validation_ssh_jumphost_allowed_cidrs_not_required_when_has_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """allowed_cidrs has default=[] in TF, so it is not auto-detected as required."""
+    payload = _starter_payload(selected_infra={"ssh-jumphost"}, selected_apps=set())
+    jumphost = _infra_component_row(payload, "ssh-jumphost")
+    jumphost["inputs"] = {
+        "parent_id": "project-456",
+        "region": "eu-north1",
+        "subnet_id": "subnet-123",
+        "name": "ssh-jh",
+        "ssh_public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB8Yq7Rr0x2GdQ8gJ5Q40gF4yHahx7s6vH8kKf+demo",
+    }
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    config = load_config(config_path)
+
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_required_variables",
+        lambda _source: ("parent_id", "region", "subnet_id", "name", "ssh_public_key"),
+    )
+    monkeypatch.setattr("nebius_cxcli.cli.provider_component_match_status", lambda _id: None)
+    monkeypatch.setattr("nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: [])
+
+    try:
+        _validate_strict_config(config)
+        message = ""
+    except RuntimeError as exc:
+        message = str(exc)
+    assert "allowed_cidrs is required" not in message
+
+
+def test_strict_validation_mysterybox_secrets_not_required_when_has_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """secrets has default={} in TF, so it is not auto-detected as required."""
+    payload = _starter_payload(selected_infra={"mysterybox"}, selected_apps=set())
+    mysterybox = _infra_component_row(payload, "mysterybox")
+    mysterybox["inputs"] = {
+        "parent_id": "project-456",
+    }
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    config = load_config(config_path)
+
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_required_variables",
+        lambda _source: ("parent_id",),
+    )
+    monkeypatch.setattr("nebius_cxcli.cli.provider_component_match_status", lambda _id: None)
+    monkeypatch.setattr("nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: [])
+
+    try:
+        _validate_strict_config(config)
+        message = ""
+    except RuntimeError as exc:
+        message = str(exc)
+    assert "secrets is required" not in message
 
 
 def test_strict_validation_allows_explicit_ssh_public_key_for_jumphost(tmp_path: Path) -> None:

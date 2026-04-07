@@ -4,6 +4,7 @@ This folder contains multiple ready-to-use Codex skills for developers.
 
 ## Included Skills
 
+- `attach-ubuntu`
 - `gitignore`
 - `github-workflows`
 - `helmchart`
@@ -15,6 +16,14 @@ This folder contains multiple ready-to-use Codex skills for developers.
 - `release-generator`
 - `shell-scripting`
 - `terraform`
+
+`attach-ubuntu` launches or reuses a per-project `ubuntu:24.04` Docker
+container, bind-mounts the current folder at `/workdir`, preconfigures VS Code
+attached-container defaults, bootstraps base build tools plus project Python
+dependencies when `pyproject.toml` is present, mounts repo Git metadata for
+subproject versioning workflows, isolates dependencies in a container-only
+virtual environment so the host repo stays clean, and best-effort opens the
+project in a new Dev Containers window on macOS with Docker Desktop.
 
 `github-workflows` provides repo-aligned GitHub Actions assets and references
 for PR/merge CI, release publication, container image publishing, and workflow

@@ -237,6 +237,16 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(monkeypatch, t
                             "version": "1.2.3",
                             "group": "Network",
                             "enable": True,
+                            "wizard_fields": {
+                                "inputs.subnet_id": {
+                                    "sources": [
+                                        {
+                                            "source": "provider",
+                                            "provider": "project_subnets",
+                                        }
+                                    ]
+                                }
+                            },
                             "defaults": {
                                 "inputs.instance_count": 1,
                                 "inputs.ssh_user_name": "shared.admin_ssh.user_name",
@@ -252,6 +262,11 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(monkeypatch, t
                             "handoff": {
                                 "cluster_id": "cluster_id",
                                 "access": "access",
+                            },
+                            "status": {
+                                "kind": "nebius.compute.instance",
+                                "parent_input": "parent_id",
+                                "name_input": "name",
                             },
                         }
                     ]
@@ -302,6 +317,16 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(monkeypatch, t
     assert loaded.tf_modules[0].version == "1.2.3"
     assert loaded.tf_modules[0].group == "Network"
     assert loaded.tf_modules[0].enable is True
+    assert loaded.tf_modules[0].wizard_fields == {
+        "inputs.subnet_id": {
+            "sources": [
+                {
+                    "source": "provider",
+                    "provider": "project_subnets",
+                }
+            ]
+        }
+    }
     assert loaded.tf_modules[0].defaults[0].target_path == "inputs.instance_count"
     assert loaded.tf_modules[0].defaults[0].value == 1
     assert loaded.tf_modules[0].defaults[0].kind == "literal"
@@ -315,8 +340,12 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(monkeypatch, t
     assert loaded.tf_modules[0].outputs[1].kind == "static"
     assert loaded.tf_modules[0].outputs[1].value == "external"
     assert loaded.tf_modules[0].handoff is not None
-    assert loaded.tf_modules[0].handoff.cluster_id_output_name == "cluster_id"
-    assert loaded.tf_modules[0].handoff.access_output_name == "access"
+    assert loaded.tf_modules[0].handoff.cluster_id.value == "cluster_id"
+    assert loaded.tf_modules[0].handoff.access.value == "access"
+    assert loaded.tf_modules[0].status is not None
+    assert loaded.tf_modules[0].status.kind == "nebius.compute.instance"
+    assert loaded.tf_modules[0].status.parent_input == "parent_id"
+    assert loaded.tf_modules[0].status.name_input == "name"
 
     assert loaded.helm_charts[0].name == "gateway-helm"
     assert loaded.helm_charts[0].repo == "oci://docker.io/envoyproxy/gateway-helm"
@@ -352,6 +381,33 @@ def test_load_component_sources_rejects_release_name_alias_for_helm_chart(tmp_pa
     )
 
     with pytest.raises(ValueError, match="unsupported field\\(s\\): release-name"):
+        load_component_sources(explicit=sources_file)
+
+
+def test_load_component_sources_rejects_invalid_status_watcher_block(tmp_path: Path) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            {
+                "infra": {
+                    "tf_modules": [
+                        {
+                            "module": "managed-postgresql",
+                            "portable_source": "git::https://example.invalid/repo.git//managed-postgresql?ref=v1.0.0",
+                            "status": {
+                                "name_input": "name",
+                            },
+                        }
+                    ]
+                },
+                "apps": {"helm_charts": []},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="status.kind is required"):
         load_component_sources(explicit=sources_file)
 
 
@@ -417,6 +473,40 @@ def test_bundled_mk8s_outputs_preserve_sensitive_metadata() -> None:
     output_by_name = {output.name: output for output in mk8s.outputs}
     assert output_by_name["cluster_id"].sensitive is False
     assert output_by_name["cluster_ca_certificate"].sensitive is True
+
+
+def test_bundled_object_storage_declares_bucket_status_watcher() -> None:
+    loaded = load_component_sources(
+        explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml"
+    )
+    object_storage = next(item for item in loaded.tf_modules if item.module == "object-storage")
+
+    assert object_storage.status is not None
+    assert object_storage.status.kind == "nebius.storage.bucket"
+    assert object_storage.status.parent_input == "parent_id"
+    assert object_storage.status.name_input == "name"
+
+
+def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
+    loaded = load_component_sources(
+        explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml"
+    )
+    mk8s = next(item for item in loaded.tf_modules if item.module == "mk8s")
+
+    assert mk8s.wizard_fields == {
+        "inputs.cpu_nodes_platform": {
+            "options": {
+                "from": "mk8s_compatible_platforms",
+                "filter": "^cpu-",
+            }
+        },
+        "inputs.gpu_nodes_platform": {
+            "options": {
+                "from": "mk8s_compatible_platforms",
+                "filter": "^gpu-",
+            }
+        }
+    }
 
 
 def test_default_profile_uses_portable_git_module_sources() -> None:
@@ -604,6 +694,28 @@ def test_validate_sources_resolves_relative_local_module_path_from_component_sou
     module_dir.mkdir(parents=True, exist_ok=True)
     (module_dir / "main.tf").write_text('output "demo" { value = var.name }\n', encoding="utf-8")
     (module_dir / "variables.tf").write_text('variable "name" { type = string }\n', encoding="utf-8")
+    (module_dir / "outputs.tf").write_text('output "name" { value = var.name }\n', encoding="utf-8")
+    (module_dir / "versions.tf").write_text(
+        '\n'.join(
+            [
+                "terraform {",
+                '  required_version = ">= 1.10.0, < 2.0.0"',
+                "  required_providers {",
+                "    nebius = {",
+                '      source = "terraform-provider.storage.eu-north1.nebius.cloud/nebius/nebius"',
+                '      version = ">= 0.5.55, < 0.6.0"',
+                "    }",
+                "  }",
+                "}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (module_dir / "README.md").write_text("# demo-module\n", encoding="utf-8")
+    example_dir = module_dir / "examples" / "minimal"
+    example_dir.mkdir(parents=True, exist_ok=True)
+    (example_dir / "main.tf").write_text('module "demo" {}\n', encoding="utf-8")
 
     sources_file = catalog_dir / "component_sources.yaml"
     sources_file.write_text(
@@ -645,6 +757,28 @@ def test_validate_sources_accepts_absolute_local_module_path(monkeypatch, tmp_pa
     module_dir.mkdir(parents=True, exist_ok=True)
     (module_dir / "main.tf").write_text('output "demo" { value = var.name }\n', encoding="utf-8")
     (module_dir / "variables.tf").write_text('variable "name" { type = string }\n', encoding="utf-8")
+    (module_dir / "outputs.tf").write_text('output "name" { value = var.name }\n', encoding="utf-8")
+    (module_dir / "versions.tf").write_text(
+        '\n'.join(
+            [
+                "terraform {",
+                '  required_version = ">= 1.10.0, < 2.0.0"',
+                "  required_providers {",
+                "    nebius = {",
+                '      source = "terraform-provider.storage.eu-north1.nebius.cloud/nebius/nebius"',
+                '      version = ">= 0.5.55, < 0.6.0"',
+                "    }",
+                "  }",
+                "}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (module_dir / "README.md").write_text("# demo-module\n", encoding="utf-8")
+    example_dir = module_dir / "examples" / "minimal"
+    example_dir.mkdir(parents=True, exist_ok=True)
+    (example_dir / "main.tf").write_text('module "demo" {}\n', encoding="utf-8")
 
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
@@ -677,6 +811,104 @@ def test_validate_sources_accepts_absolute_local_module_path(monkeypatch, tmp_pa
     assert resolved_path == sources_file
     assert issues == []
     assert warnings == []
+
+
+def test_validate_sources_reports_module_contract_issues_for_missing_versions_and_provider_block(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    module_dir = tmp_path / "demo-module"
+    module_dir.mkdir(parents=True, exist_ok=True)
+    (module_dir / "main.tf").write_text(
+        '\n'.join(
+            [
+                'provider "nebius" {}',
+                'output "demo" {',
+                "  value = var.name",
+                "}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (module_dir / "variables.tf").write_text('variable "name" { type = string }\n', encoding="utf-8")
+
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            {
+                "infra": {
+                    "tf_modules": [
+                        {
+                            "module": "demo-module",
+                            "portable_source": "git::https://github.com/example/infra.git//modules/demo-module?ref=v1.2.3",
+                            "local_source": str(module_dir),
+                            "enable": True,
+                        }
+                    ]
+                },
+                "apps": {"helm_charts": []},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(tmp_path)
+    set_component_sources_file_override(sources_file)
+    set_component_sources_profile_override(SourceProfile.LOCAL)
+    reset_component_sources_cache()
+
+    _resolved_path, issues, warnings = _validate_component_sources_registry()
+
+    assert any("missing versions.tf" in issue for issue in issues)
+    assert any("must not configure providers" in issue for issue in issues)
+    assert any("missing README.md" in warning for warning in warnings)
+    assert any("missing examples/" in warning for warning in warnings)
+
+
+def test_validate_sources_reports_chart_contract_findings(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            {
+                "infra": {"tf_modules": []},
+                "apps": {
+                    "helm_charts": [
+                        {
+                            "name": "gateway-helm",
+                            "repo": "oci://docker.io/envoyproxy/gateway-helm",
+                            "version": "1.4.2",
+                            "enable": True,
+                        }
+                    ]
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._resolve_helm_chart_validation_issues",
+        lambda **_kwargs: (),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.chart_cli_contract_findings",
+        lambda **_kwargs: (
+            ("materialized chart is missing Chart.yaml in /tmp/fake-chart",),
+            ("materialized chart is missing README.md in /tmp/fake-chart",),
+        ),
+    )
+    monkeypatch.chdir(tmp_path)
+    set_component_sources_file_override(sources_file)
+    reset_component_sources_cache()
+
+    _resolved_path, issues, warnings = _validate_component_sources_registry()
+
+    assert any("missing Chart.yaml" in issue for issue in issues)
+    assert any("missing README.md" in warning for warning in warnings)
 
 
 def test_validate_sources_rejects_https_git_repo_module_source_without_git_prefix(
@@ -776,6 +1008,10 @@ def test_validate_sources_accepts_github_tree_chart_repo(
             return {"name": "n8n", "version": "1.2.3"}
 
     monkeypatch.setattr("nebius_cxcli.cli.HelmClient", _FakeHelmClient)
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.chart_cli_contract_findings",
+        lambda **_kwargs: ((), ()),
+    )
     monkeypatch.chdir(tmp_path)
     set_component_sources_file_override(sources_file)
     reset_component_sources_cache()

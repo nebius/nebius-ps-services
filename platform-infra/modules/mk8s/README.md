@@ -16,6 +16,9 @@ Out of scope:
 
 When this module is consumed through `nebius-cxcli`, the CLI can perform the
 post-apply kubeconfig handoff if the source catalog declares that contract.
+The bundled catalog resolves handoff access from `mk8s_cluster_public_endpoint`,
+so local app operations use the public or private control-plane endpoint
+dynamically instead of hardcoding public access.
 
 ## What this module does
 
@@ -132,6 +135,11 @@ intentional. Nebius treats an omitted MK8s service CIDR as `["/16"]`, and on a
 single-pool `/16` subnet that can consume the entire subnet pool and stall
 control-plane provisioning before any node groups are created.
 
+`cpu_nodes_count` does not have an internal module default. Callers should set
+it explicitly when they want the baseline CPU node group. `nebius-cxcli` does
+that through the bundled source catalog, so generated `config.yaml` files show
+the chosen baseline count instead of inheriting a hidden Terraform default.
+
 For direct Terraform usage, the example roots under `examples/` now re-expose
 `cluster_id` and `cluster_name` as root outputs so `terraform output` can be
 used directly from the example directory.
@@ -147,6 +155,22 @@ used directly from the example directory.
   `template.resources.platform` and `template.resources.preset` (from defaults
   or overrides).
 - Fixed-size and autoscaling settings are mutually exclusive per node group.
+
+## nebius-cxcli usage
+
+- `nebius-cxcli component add` prompts this module through
+  `infra.components[].inputs`.
+- `cpu_nodes_platform` and `cpu_nodes_preset` are treated as required by the
+  CLI when the baseline CPU node group is enabled.
+- If `mk8s_cluster_public_endpoint = false`, local `deploy` / `flux apply` /
+  `flux bootstrap` / `destroy` app flows still work, but only from a machine
+  that already has private network reachability to the MK8s control-plane
+  endpoint. `nebius-cxcli` does not hardcode a specific jump-host or VPN
+  product for that path.
+- Complex inputs such as `kube_network_service_cidrs`,
+  `gpu_driver_preset_map`, and the `mk8s_*_overrides` objects are meant to be
+  provided as YAML/JSON values in the wizard or edited directly in
+  `config.yaml`.
 
 ## Examples
 

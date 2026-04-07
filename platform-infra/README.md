@@ -64,10 +64,24 @@ Key behavior when these modules are consumed through the CLI:
   `generated/infra/terraform.auto.tfvars.json`
 - root provider/backend configuration is generated in the customer repo, not in
   this repo
+- reusable child modules must not configure provider auth or backend blocks
 - shared values such as admin SSH settings can be wired centrally in
   `nebius-cxcli` and then bound explicitly into module inputs
+- collection/object Terraform inputs are supported; the CLI wizard edits them as
+  YAML/JSON values instead of flattening them into string-only prompts
+- module-level `enabled` switches are not part of the contract; enablement
+  belongs in `config.yaml` plus the rendered Terraform root
 - secrets should still be injected at runtime rather than committed to config
   files
+
+`nebius-cxcli validate-sources` now enforces the fast module-side contract that
+keeps these Terraform child modules CLI-friendly:
+
+- module source must resolve and pass `terraform init -backend=false`
+- `versions.tf` must declare `required_version` and `required_providers`
+- child modules must not contain backend or provider configuration blocks
+- missing canonical files such as `main.tf`, `variables.tf`, `outputs.tf`,
+  `README.md`, and runnable `examples/` roots are reported as warnings
 
 If a custom or third-party module is used with `nebius-cxcli`, it should follow
 the same Terraform module hygiene described in
@@ -76,6 +90,16 @@ the same Terraform module hygiene described in
 If a module is intended to act as the cluster source for `deploy`/Flux
 handoff, it must expose a stable cluster ID output so the CLI can obtain
 kubeconfig after Terraform apply.
+
+If a module is intended to participate in Nebius API status reporting during
+`deploy`/`terraform apply`, the source catalog entry should be able to point to
+stable component inputs for:
+
+- the project or parent scope (`status.parent_input`)
+- the resource identity (`status.name_input`)
+
+That pattern is why the modules in this repo consistently use inputs such as
+`parent_id`, `cluster_name`, and `name`.
 
 ## Using Modules Directly
 
@@ -127,6 +151,10 @@ to help users choose the right module quickly.
   - `parent_id`
   - `cluster_name`
   - `subnet_id`
+- Caller should set `cpu_nodes_count` explicitly when a baseline CPU node group
+  is desired; `nebius-cxcli` seeds that value into `config.yaml` through
+  `component_sources.yaml` so the resulting project config makes node count
+  visible.
 - Examples:
   - `modules/mk8s/examples/minimal`
   - `modules/mk8s/examples/gpu`
@@ -134,26 +162,29 @@ to help users choose the right module quickly.
 ### [`managed-postgresql`](modules/managed-postgresql/README.md)
 
 - Creates a Nebius Managed PostgreSQL cluster
-- Typical required inputs:
+- Required inputs:
   - `parent_id`
   - `network_id`
+  - `name`
 - Example:
   - `modules/managed-postgresql/examples/minimal`
 
 ### [`sfs`](modules/sfs/README.md)
 
 - Creates a Nebius Shared File System
-- Typical required input:
+- Required inputs:
   - `parent_id`
+  - `name`
+  - `size_gib`
 - Example:
   - `modules/sfs/examples/minimal`
 
 ### [`object-storage`](modules/object-storage/README.md)
 
-- Creates one or more Nebius Object Storage buckets from a map input
-- Typical required inputs:
+- Creates one Nebius Object Storage bucket per module instance
+- Required inputs:
   - `parent_id`
-  - `buckets`
+  - `name`
 - Example:
   - `modules/object-storage/examples/minimal`
 
@@ -171,25 +202,24 @@ to help users choose the right module quickly.
 ### [`ssh-jumphost`](modules/ssh-jumphost/README.md)
 
 - Creates an SSH jump host VM
-- Typical required inputs:
+- Required inputs:
   - `parent_id`
   - `region`
   - `subnet_id`
   - `name`
-  - `ssh_user_name`
   - `ssh_public_key`
+  - `allowed_cidrs`
 - Example:
   - `modules/ssh-jumphost/examples/minimal`
 
 ### [`wireguard-jumphost`](modules/wireguard-jumphost/README.md)
 
 - Creates a WireGuard VPN jump host VM
-- Typical required inputs:
+- Required inputs:
   - `parent_id`
   - `region`
   - `subnet_id`
   - `name`
-  - `ssh_user_name`
   - `ssh_public_key`
 - Example:
   - `modules/wireguard-jumphost/examples/minimal`
@@ -264,20 +294,152 @@ platform-infra/
 If you want a custom Terraform module to behave well when consumed by
 `nebius-cxcli`, keep it aligned with the conventions used in this repo:
 
+### When Adding a New Module
+
+When you add a new Terraform module under `platform-infra/modules/<module>/`,
+follow this sequence:
+
+1. Create the reusable child-module files:
+   - `main.tf`
+   - `variables.tf`
+   - `outputs.tf`
+   - `versions.tf`
+   - `locals.tf` when computed values improve readability
+2. Create a runnable example root under `modules/<module>/examples/`:
+   - at minimum `examples/minimal/`
+   - include the example root `versions.tf`
+   - example roots are where `terraform init` and lock files belong
+3. Write `modules/<module>/README.md`:
+   - what the module does and does not do
+   - required inputs and important optional inputs
+   - outputs consumed by operators or `nebius-cxcli`
+   - local path and pinned Git source examples
+   - any runtime-only secret injection pattern
+4. Validate the module locally:
+   - `terraform -chdir=modules/<module>/examples/minimal init -backend=false`
+   - `terraform -chdir=modules/<module>/examples/minimal validate`
+   - `make validate` from `platform-infra/`
+5. If the module should be selectable from `nebius-cxcli`, add or update the
+   catalog entry in `services/nebius-cxcli/component_sources.yaml`:
+   - `portable_source`
+   - `local_source`
+   - `description`
+   - `group`
+   - optional `defaults`
+   - optional `handoff`
+   - optional `status`
+6. If the new module changes the CLI contract, update the relevant
+   `nebius-cxcli` docs and changelog in the same change.
+
+### Canonical Pattern
+
 - the source must resolve cleanly:
   - local path must exist
   - the module directory must contain Terraform `*.tf` files
   - remote Git sources should be pinned to a stable ref
+- the module must be a reusable child module:
+  - declare `required_version` and `required_providers`
+  - do not configure provider auth inside the module
+  - do not configure backend blocks inside the module
 - all user-settable inputs must be declared as Terraform variables
-- the module should pass:
-  - `terraform init -backend=false`
-  - `terraform validate`
+- do not add an internal Terraform `enabled` toggle for modules that the CLI
+  already enables/omits at the config/render layer
+- use stable, human-meaningful identity inputs when possible:
+  - `parent_id` for project/scope
+  - `name` or a similarly clear resource-name input for the created resource
+- export stable outputs for integration-critical values
+  - for example `cluster_id`, `instance_id`, `bucket_id`, `filesystem_id`
+  - cluster-source modules used by local `deploy` should expose a stable cluster
+    ID output for kubeconfig handoff
+- keep secrets and secret-bearing runtime values out of committed config:
+  - model declarative metadata as normal variables
+  - inject secret payloads at runtime where needed
+
+### CLI-Friendly Input Shape
+
+- scalar inputs are the easiest wizard experience and should be preferred for
+  common day-1/day-2 values
+- collection/object inputs are still acceptable:
+  - `list(...)`, `map(...)`, `object(...)`, and `tuple(...)` are supported by
+    the CLI wizard as YAML/JSON values
+  - document those inputs clearly in the module README so operators know they
+    are editing structured values
+- if an optional input is actually operationally required in real use, enforce
+  that with Terraform validation/preconditions and document it explicitly
 - avoid unsafe optional-value expressions that fail on omitted inputs
   - for example, prefer `try(x, null)` or `coalesce(try(x, null), {})` where
     appropriate
   - avoid patterns like `coalesce(try(x, null), null)`
-- secrets should be runtime-injected instead of committed to VCS
-- document required inputs, outputs, and example usage in the module README
+- prefer stable input names that the CLI can reason about across modules:
+  - `parent_id` for Nebius project/scope
+  - `name` for the primary resource identity
+  - more specific names such as `cluster_name` only when they improve clarity
+- when a module needs Nebius-backed status reporting, keep the watched resource
+  name and parent scope available from config inputs rather than only from
+  computed state
+- if an input needs a good interactive experience in the CLI, prefer a real
+  Terraform type over stringly typed blobs:
+  - `list(string)` for CIDRs and peer lists
+  - `map(string)` for labels/simple metadata
+  - `object(...)` / `map(object(...))` for structured module-native config
+
+### Validation and Documentation
+
+- the module should pass:
+  - `terraform init -backend=false`
+  - `terraform validate`
+- keep runnable example roots under `examples/`
+- document required inputs, outputs, example usage, and any runtime-only secret
+  injection pattern in the module README
+- if the module should participate in CLI status polling, keep the resource
+  identity discoverable from config inputs so `component_sources.yaml` can map
+  `status.parent_input` and `status.name_input` without inspecting Terraform
+  state
+- if the module should participate in local `deploy` cluster handoff, export a
+  stable cluster identifier output that `nebius-cxcli` can consume after
+  Terraform apply
+
+### `component_sources.yaml` Author Notes
+
+If a new module is meant to be exposed through `nebius-cxcli`, the catalog
+entry is part of the implementation, not an optional follow-up.
+
+Typical entry shape:
+
+```yaml
+infra:
+  tf_modules:
+    - module: example-module
+      portable_source: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/example-module?ref=main
+      local_source: ../../platform-infra/modules/example-module
+      description: Short operator-facing description
+      group: Compute
+      enable: false
+      outputs:
+        tf_outputs: true
+      defaults:
+        inputs.parent_id: shared.some_default
+      handoff:
+        cluster_id: cluster_id
+        access: access
+      status:
+        kind: nebius.some.service.resource
+        parent_input: parent_id
+        name_input: name
+```
+
+Guidance:
+
+- `module` should match the module directory name unless there is a very strong
+  reason not to
+- `description` should be short and operator-facing because it appears in the
+  CLI selection UX
+- `group` should match the existing grouping style (`Compute`, `Storage`,
+  `Security`, `Network`)
+- `handoff` is only for modules that act as the cluster source for local
+  kubeconfig/Flux flows
+- `status` is only for modules where the CLI should poll Nebius APIs during
+  deploy/apply
 
 If a Terraform error originates inside `.terraform/modules/...`, the issue is in
 the source module itself rather than the generated root. Fix and validate the

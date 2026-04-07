@@ -49,13 +49,13 @@ def test_wheel_metadata_pins_pygments_floor(tmp_path) -> None:
     wheel_path = _build_wheel(tmp_path)
 
     with ZipFile(wheel_path) as wheel_zip:
-        metadata_name = next(name for name in wheel_zip.namelist() if name.endswith(".dist-info/METADATA"))
+        metadata_name = next(
+            name for name in wheel_zip.namelist() if name.endswith(".dist-info/METADATA")
+        )
         metadata = message_from_string(wheel_zip.read(metadata_name).decode("utf-8"))
 
     requires_dist = metadata.get_all("Requires-Dist") or []
     assert any(
-        requirement.startswith("Pygments")
-        and ">=2.20.0" in requirement
-        and "<3.0.0" in requirement
+        requirement.startswith("Pygments") and ">=2.20.0" in requirement and "<3.0.0" in requirement
         for requirement in requires_dist
     )

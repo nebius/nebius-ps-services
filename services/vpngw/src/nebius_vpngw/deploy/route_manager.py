@@ -82,7 +82,9 @@ class RouteManager:
             instance_service_pb2_grpc,
         )
 
-        host_to_index = {inst.hostname: inst.instance_index for inst in plan.iter_instance_configs()}
+        host_to_index = {
+            inst.hostname: inst.instance_index for inst in plan.iter_instance_configs()
+        }
         allocations_by_index: dict[int, str] = {}
 
         # List instances in the project and find the private (static) IP allocation
@@ -118,15 +120,44 @@ class RouteManager:
                 continue
         return sorted(indices)
 
+    def _connection_peer_ips(
+        self,
+        conn: dict,
+        *,
+        instance_index: int | None = None,
+    ) -> set[str]:
+        peer_ips: set[str] = set()
+        for tunnel in conn.get("tunnels") or []:
+            if self._normalize_value(tunnel.get("ha_role") or "active") == "disable":
+                continue
+            if instance_index is not None:
+                try:
+                    tunnel_instance_index = int(tunnel.get("gateway_instance_index", 0) or 0)
+                except (TypeError, ValueError):
+                    continue
+                if tunnel_instance_index != instance_index:
+                    continue
+            peer_ip = (
+                ((tunnel.get("bgp", {}) or {}).get("remote_ip"))
+                or tunnel.get("inner_remote_ip")
+                or ""
+            )
+            if peer_ip:
+                peer_ips.add(str(peer_ip))
+        return peer_ips
+
     def _collect_remote_prefix_targets(
         self,
         plan: ResolvedDeploymentPlan,
         local_cfg: dict,
         allocations_by_index: dict[int, str],
     ) -> dict[str, str]:
-        defaults_mode = self._normalize_value(
-            (local_cfg.get("defaults", {}).get("routing", {}) or {}).get("mode")
-        ) or "bgp"
+        defaults_mode = (
+            self._normalize_value(
+                (local_cfg.get("defaults", {}).get("routing", {}) or {}).get("mode")
+            )
+            or "bgp"
+        )
 
         prefix_targets: dict[str, str] = {}
         prefix_source_labels: dict[str, set[str]] = {}
@@ -165,14 +196,18 @@ class RouteManager:
                 prefix_source_labels.setdefault(prefix, set()).add(source_label)
                 previous_alloc = prefix_targets.get(prefix)
                 if previous_alloc and previous_alloc != alloc_id:
-                    conflict_sources.setdefault(prefix, set()).update(prefix_source_labels.get(prefix, set()))
+                    conflict_sources.setdefault(prefix, set()).update(
+                        prefix_source_labels.get(prefix, set())
+                    )
                     continue
                 prefix_targets[prefix] = alloc_id
 
         if conflict_sources:
             details = "; ".join(
                 f"{prefix} via {', '.join(sources)}"
-                for prefix, sources in sorted((pfx, sorted(srcs)) for pfx, srcs in conflict_sources.items())
+                for prefix, sources in sorted(
+                    (pfx, sorted(srcs)) for pfx, srcs in conflict_sources.items()
+                )
             )
             raise ValueError(
                 "The same remote prefix is present on more than one gateway VM. "
@@ -322,7 +357,9 @@ class RouteManager:
         local_cfg: dict,
     ) -> dict[str, dict[str, set[str]]]:
         defaults_mode = (
-            self._normalize_value((local_cfg.get("defaults", {}).get("routing", {}) or {}).get("mode"))
+            self._normalize_value(
+                (local_cfg.get("defaults", {}).get("routing", {}) or {}).get("mode")
+            )
             or "bgp"
         )
         normalized_local_prefixes = {
@@ -333,16 +370,20 @@ class RouteManager:
         expected_by_host: dict[str, dict[str, set[str]]] = {
             inst_cfg.hostname: {} for inst_cfg in plan.iter_instance_configs()
         }
-        instances_by_index = {inst_cfg.instance_index: inst_cfg for inst_cfg in plan.iter_instance_configs()}
+        instances_by_index = {
+            inst_cfg.instance_index: inst_cfg for inst_cfg in plan.iter_instance_configs()
+        }
 
         for conn in local_cfg.get("connections", []) or []:
             if self._normalize_value(conn.get("routing_mode") or defaults_mode) != "bgp":
                 continue
 
             conn_bgp = conn.get("bgp", {}) or {}
-            advertised_prefixes = normalized_local_prefixes if conn_bgp.get(
-                "advertise_local_prefixes", True
-            ) else set()
+            advertised_prefixes = (
+                normalized_local_prefixes
+                if conn_bgp.get("advertise_local_prefixes", True)
+                else set()
+            )
 
             for tunnel in conn.get("tunnels", []) or []:
                 if self._normalize_value(tunnel.get("ha_role") or "active") == "disable":
@@ -361,7 +402,9 @@ class RouteManager:
                 if not inst_cfg:
                     continue
 
-                expected_by_host.setdefault(inst_cfg.hostname, {})[peer_ip] = set(advertised_prefixes)
+                expected_by_host.setdefault(inst_cfg.hostname, {})[peer_ip] = set(
+                    advertised_prefixes
+                )
 
         return expected_by_host
 
@@ -371,6 +414,132 @@ class RouteManager:
             return ipaddress.ip_network(prefix, strict=False)
         except Exception:
             return None
+
+    @staticmethod
+    def _path_nexthops(path: dict) -> set[str]:
+        return {
+            str(nh_ip)
+            for nh in path.get("nexthops", []) or []
+            if (nh_ip := nh.get("ip")) and nh_ip != "0.0.0.0"
+        }
+
+    @staticmethod
+    def _sort_prefix_targets(prefix_targets: dict[str, str]) -> dict[str, str]:
+        def _sort_key(item: tuple[str, str]) -> tuple[int, int, str]:
+            prefix, _alloc_id = item
+            network = ipaddress.ip_network(prefix, strict=False)
+            return (int(network.network_address), network.prefixlen, prefix)
+
+        return dict(sorted(prefix_targets.items(), key=_sort_key))
+
+    def _summarize_prefix_targets(self, prefix_targets: dict[str, str]) -> dict[str, str]:
+        grouped: dict[str, list[ipaddress.IPv4Network]] = {}
+        for prefix, alloc_id in prefix_targets.items():
+            try:
+                grouped.setdefault(alloc_id, []).append(ipaddress.ip_network(prefix, strict=False))
+            except Exception:
+                continue
+
+        summarized: dict[str, str] = {}
+        for alloc_id, networks in grouped.items():
+            for collapsed in ipaddress.collapse_addresses(networks):
+                summarized[str(collapsed)] = alloc_id
+
+        return self._sort_prefix_targets(summarized)
+
+    @staticmethod
+    def _route_destination_network(route) -> ipaddress.IPv4Network | None:
+        spec = getattr(route, "spec", None)
+        destination = getattr(spec, "destination", None) if spec else None
+        cidr = getattr(destination, "cidr", None) if destination else None
+        if not cidr:
+            return None
+        try:
+            return ipaddress.ip_network(cidr, strict=False)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _route_next_hop_allocation_id(route) -> str | None:
+        spec = getattr(route, "spec", None)
+        next_hop = getattr(spec, "next_hop", None) if spec else None
+        allocation = getattr(next_hop, "allocation", None) if next_hop else None
+        allocation_id = getattr(allocation, "id", None) if allocation else None
+        return str(allocation_id) if allocation_id else None
+
+    @staticmethod
+    def _route_name(route) -> str:
+        metadata = getattr(route, "metadata", None)
+        return str(getattr(metadata, "name", None) or "")
+
+    def _find_redundant_managed_routes(
+        self,
+        existing_routes,
+        desired_prefix_targets: dict[str, str],
+    ) -> list[object]:
+        desired_by_alloc: dict[str, list[ipaddress.IPv4Network]] = {}
+        desired_prefixes = set(desired_prefix_targets)
+
+        for prefix, alloc_id in desired_prefix_targets.items():
+            try:
+                desired_by_alloc.setdefault(alloc_id, []).append(
+                    ipaddress.ip_network(prefix, strict=False)
+                )
+            except Exception:
+                continue
+
+        redundant = []
+        for route in existing_routes:
+            route_name = self._route_name(route)
+            if not route_name.startswith("vpngw-"):
+                continue
+
+            alloc_id = self._route_next_hop_allocation_id(route)
+            if not alloc_id:
+                continue
+
+            route_network = self._route_destination_network(route)
+            if route_network is None:
+                continue
+
+            route_prefix = str(route_network)
+            if route_prefix in desired_prefixes:
+                continue
+
+            desired_networks = desired_by_alloc.get(alloc_id) or []
+            if any(route_network.subnet_of(summary_net) for summary_net in desired_networks):
+                redundant.append(route)
+
+        return redundant
+
+    def _delete_routes(
+        self,
+        rstub,
+        route_service_pb2,
+        routes_to_delete,
+        *,
+        route_table_id: str,
+    ) -> int:
+        deleted = 0
+        for route in routes_to_delete:
+            route_id = getattr(getattr(route, "metadata", None), "id", None)
+            if not route_id:
+                continue
+
+            dest_network = self._route_destination_network(route)
+            dest_label = str(dest_network) if dest_network else "unknown"
+            try:
+                rstub.Delete(route_service_pb2.DeleteRouteRequest(id=route_id))
+                print(
+                    f"[green]Deleted redundant managed route {dest_label} from {route_table_id}[/green]"
+                )
+                deleted += 1
+            except Exception as e:
+                print(
+                    f"[yellow]Failed to delete redundant managed route {dest_label} "
+                    f"from {route_table_id}: {e}[/yellow]"
+                )
+        return deleted
 
     @staticmethod
     def _bgp_advertisements_need_refresh(
@@ -894,12 +1063,24 @@ class RouteManager:
 
         Returns (connection_name, tunnel_name, inner_local_ip, ha_role) tuple.
         """
+        inst_index = getattr(inst_cfg, "instance_index", None)
+
         # Peer IP is the tunnel's inner_remote_ip (APIPA address on the tunnel interface)
         for conn in connections:
             conn_name = conn.get("name", "unnamed")
             tunnels = conn.get("tunnels", [])
 
             for tunnel in tunnels:
+                if self._normalize_value(tunnel.get("ha_role") or "active") == "disable":
+                    continue
+                if inst_index is not None:
+                    try:
+                        tunnel_inst_index = int(tunnel.get("gateway_instance_index", 0) or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if tunnel_inst_index != inst_index:
+                        continue
+
                 # Check inner_remote_ip (the remote peer's BGP IP on the tunnel)
                 inner_remote = tunnel.get("inner_remote_ip", "")
 
@@ -916,7 +1097,13 @@ class RouteManager:
         # Fallback if not found
         return ("unknown", "unknown", "0.0.0.0", "unknown")
 
-    def add_routes(self, plan: ResolvedDeploymentPlan, local_cfg: dict) -> None:
+    def add_routes(
+        self,
+        plan: ResolvedDeploymentPlan,
+        local_cfg: dict,
+        *,
+        summarize: bool = False,
+    ) -> None:
         """Ensure routes for connection.remote_prefixes and assign custom route tables when needed."""
         try:
             channel = self._channel()
@@ -967,7 +1154,9 @@ class RouteManager:
 
         allocations_by_index: dict[int, str] = {}
         if compute_channel:
-            allocations_by_index = self._find_gateway_private_allocations_by_index(compute_channel, plan)
+            allocations_by_index = self._find_gateway_private_allocations_by_index(
+                compute_channel, plan
+            )
         if not allocations_by_index:
             print(
                 "[yellow]Could not resolve private gateway allocations; cannot create routes.[/yellow]"
@@ -975,7 +1164,9 @@ class RouteManager:
             return
 
         try:
-            prefix_targets = self._collect_remote_prefix_targets(plan, local_cfg, allocations_by_index)
+            prefix_targets = self._collect_remote_prefix_targets(
+                plan, local_cfg, allocations_by_index
+            )
         except ValueError as e:
             print(f"[red]{e}[/red]")
             return
@@ -1004,13 +1195,25 @@ class RouteManager:
             except Exception:
                 continue
 
-        prefix_targets = dict(sorted(filtered_prefix_targets.items()))
+        prefix_targets = self._sort_prefix_targets(filtered_prefix_targets)
 
         if not prefix_targets:
             print(
                 "[yellow]No remote prefixes to add (all learned routes are local networks)[/yellow]"
             )
             return
+
+        original_prefix_count = len(prefix_targets)
+        if summarize:
+            summarized_targets = self._summarize_prefix_targets(prefix_targets)
+            if len(summarized_targets) < original_prefix_count:
+                print(
+                    f"[cyan]Summarized remote prefixes from {original_prefix_count} "
+                    f"to {len(summarized_targets)} exact route(s)[/cyan]"
+                )
+            else:
+                print("[dim]Summarization produced no exact route reduction[/dim]")
+            prefix_targets = summarized_targets
 
         print(f"[cyan]Found {len(prefix_targets)} remote prefix(es) to add as VPC routes[/cyan]")
 
@@ -1051,7 +1254,6 @@ class RouteManager:
             return
 
         for sn in selected_subnets:
-
             rt_info = sn.status.route_table
             if not rt_info.default and rt_info.id:
                 print(
@@ -1202,6 +1404,7 @@ class RouteManager:
                 existing_route_cidrs = {r.spec.destination.cidr for r in existing_routes}
             except Exception as e:
                 print(f"[yellow]Failed to list existing routes on {rt_id}: {e}[/yellow]")
+                existing_routes = []
                 existing_route_cidrs = set()
 
             # Add routes for each remote prefix (skip if already exists)
@@ -1226,12 +1429,107 @@ class RouteManager:
                         )
                     )
                     print(f"[green]Added route {pfx} -> allocation {alloc_id} on {rt_id}[/green]")
+                    existing_route_cidrs.add(pfx)
                 except Exception as e:
                     err_str = str(e).lower()
                     if "already exists" in err_str or "duplicate" in err_str:
                         print(f"[blue]Route {pfx} already exists on {rt_id}; skipping[/blue]")
+                        existing_route_cidrs.add(pfx)
+                    elif summarize and (
+                        "max-route-count" in err_str or "quota exceeded" in err_str
+                    ):
+                        redundant_routes = self._find_redundant_managed_routes(
+                            existing_routes,
+                            {pfx: alloc_id},
+                        )
+                        if not redundant_routes:
+                            print(f"[yellow]Failed to add route {pfx} on {rt_id}: {e}[/yellow]")
+                            continue
+
+                        print(
+                            f"[yellow]Route table {rt_id} hit its route limit while adding {pfx}. "
+                            f"Deleting {len(redundant_routes)} covered vpngw-managed route(s) and retrying.[/yellow]"
+                        )
+                        deleted = self._delete_routes(
+                            rstub,
+                            route_service_pb2,
+                            redundant_routes,
+                            route_table_id=rt_id,
+                        )
+                        if not deleted:
+                            print(f"[yellow]Failed to add route {pfx} on {rt_id}: {e}[/yellow]")
+                            continue
+
+                        existing_routes = [
+                            route
+                            for route in existing_routes
+                            if getattr(getattr(route, "metadata", None), "id", None)
+                            not in {
+                                getattr(getattr(dead_route, "metadata", None), "id", None)
+                                for dead_route in redundant_routes
+                            }
+                        ]
+                        existing_route_cidrs = {r.spec.destination.cidr for r in existing_routes}
+
+                        try:
+                            rstub.Create(
+                                route_service_pb2.CreateRouteRequest(
+                                    metadata=metadata_pb2.ResourceMetadata(
+                                        parent_id=rt_id,
+                                        name=f"vpngw-{pfx.replace('/', '-')}"[:63],
+                                    ),
+                                    spec=route_pb2.RouteSpec(
+                                        destination=route_pb2.DestinationMatch(cidr=pfx),
+                                        next_hop=route_pb2.NextHop(
+                                            allocation=route_pb2.AllocationNextHop(id=alloc_id)
+                                        ),
+                                    ),
+                                )
+                            )
+                            print(
+                                f"[green]Added summarized route {pfx} -> allocation {alloc_id} "
+                                f"on {rt_id} after pruning redundant specifics[/green]"
+                            )
+                            existing_route_cidrs.add(pfx)
+                        except Exception as retry_err:
+                            print(
+                                f"[yellow]Failed to add summarized route {pfx} on {rt_id} "
+                                f"after pruning redundant specifics: {retry_err}[/yellow]"
+                            )
                     else:
                         print(f"[yellow]Failed to add route {pfx} on {rt_id}: {e}[/yellow]")
+
+            if summarize:
+                effective_prefix_targets = {
+                    pfx: alloc_id
+                    for pfx, alloc_id in prefix_targets.items()
+                    if pfx in existing_route_cidrs
+                }
+                redundant_routes = self._find_redundant_managed_routes(
+                    existing_routes,
+                    effective_prefix_targets,
+                )
+                if redundant_routes:
+                    print(
+                        f"[cyan]Pruning {len(redundant_routes)} redundant vpngw-managed "
+                        f"route(s) from {rt_id} after summary reconciliation[/cyan]"
+                    )
+                    deleted = self._delete_routes(
+                        rstub,
+                        route_service_pb2,
+                        redundant_routes,
+                        route_table_id=rt_id,
+                    )
+                    if deleted:
+                        existing_routes = [
+                            route
+                            for route in existing_routes
+                            if getattr(getattr(route, "metadata", None), "id", None)
+                            not in {
+                                getattr(getattr(dead_route, "metadata", None), "id", None)
+                                for dead_route in redundant_routes
+                            }
+                        ]
 
     def _get_bgp_learned_routes(
         self, plan: ResolvedDeploymentPlan, conn: dict, local_cfg: dict
@@ -1265,6 +1563,7 @@ class RouteManager:
                 continue
             hostname = inst_cfg.hostname
             external_ip = inst_cfg.external_ip
+            peer_ips = self._connection_peer_ips(conn, instance_index=inst_cfg.instance_index)
 
             if not external_ip:
                 print(f"[yellow]Skipping {hostname}: no external IP for BGP route query[/yellow]")
@@ -1296,7 +1595,6 @@ class RouteManager:
                 routes = bgp_data.get("routes", {})
 
                 for prefix, route_data in routes.items():
-                    # Skip locally originated routes (next-hop 0.0.0.0)
                     if isinstance(route_data, dict):
                         paths = [route_data]
                     elif isinstance(route_data, list):
@@ -1304,18 +1602,17 @@ class RouteManager:
                     else:
                         continue
 
-                    # Check if any path has a real next-hop (not 0.0.0.0)
-                    has_real_nexthop = False
+                    relevant_paths = []
                     for path in paths:
-                        nexthops = path.get("nexthops", [])
-                        if nexthops:
-                            nh_ip = nexthops[0].get("ip", "0.0.0.0")
-                            if nh_ip != "0.0.0.0":
-                                has_real_nexthop = True
-                                break
+                        path_nexthops = self._path_nexthops(path)
+                        if not path_nexthops:
+                            continue
+                        if peer_ips and not (path_nexthops & peer_ips):
+                            continue
+                        relevant_paths.append(path)
 
-                    if not has_real_nexthop:
-                        continue  # Skip locally originated routes
+                    if not relevant_paths:
+                        continue
 
                     # Apply whitelist filter if configured
                     if whitelist_networks:
@@ -1330,7 +1627,8 @@ class RouteManager:
                         except Exception:
                             continue
 
-                    learned_prefixes.append(prefix)
+                    if prefix not in learned_prefixes:
+                        learned_prefixes.append(prefix)
 
                 print(
                     f"[cyan]Learned {len(routes)} BGP route(s) from {hostname} (connection: {conn_name})[/cyan]"
@@ -1361,9 +1659,12 @@ class RouteManager:
         console = Console()
 
         # Get routing mode and connections
-        defaults_mode = self._normalize_value(
-            (local_cfg.get("defaults", {}).get("routing", {}) or {}).get("mode")
-        ) or "bgp"
+        defaults_mode = (
+            self._normalize_value(
+                (local_cfg.get("defaults", {}).get("routing", {}) or {}).get("mode")
+            )
+            or "bgp"
+        )
         connections = local_cfg.get("connections", [])
 
         if connection_filter:
@@ -1387,6 +1688,9 @@ class RouteManager:
             for conn in connections:
                 conn_name = conn.get("name", "unnamed")
                 routing_mode = self._normalize_value(conn.get("routing_mode") or defaults_mode)
+                owner_indices = self._connection_instance_indices(conn)
+                if owner_indices and inst_cfg.instance_index not in owner_indices:
+                    continue
                 remote_prefixes = conn.get("remote_prefixes", []) or (
                     conn.get("bgp", {}) or {}
                 ).get("remote_prefixes", [])
@@ -1395,7 +1699,13 @@ class RouteManager:
 
                 if routing_mode == "bgp":
                     self._list_bgp_routes(
-                        hostname, external_ip, conn_name, remote_prefixes, console
+                        hostname,
+                        external_ip,
+                        conn_name,
+                        conn,
+                        inst_cfg.instance_index,
+                        remote_prefixes,
+                        console,
                     )
                 else:  # static mode
                     self._list_static_routes(
@@ -1407,6 +1717,8 @@ class RouteManager:
         hostname: str,
         external_ip: str,
         conn_name: str,
+        conn: dict,
+        instance_index: int,
         whitelist: list[str],
         console,
     ) -> None:
@@ -1417,6 +1729,11 @@ class RouteManager:
         import subprocess
 
         from rich.table import Table
+
+        peer_ips = self._connection_peer_ips(conn, instance_index=instance_index)
+        if not peer_ips:
+            print("[dim]No BGP tunnel peers configured on this gateway VM for the connection[/dim]")
+            return
 
         # Query BGP routes via SSH
         try:
@@ -1452,10 +1769,9 @@ class RouteManager:
             for route_data in routes.values():
                 paths = [route_data] if isinstance(route_data, dict) else route_data
                 for path in paths:
-                    for nh in path.get("nexthops", []):
-                        nh_ip = nh.get("ip")
-                        if nh_ip and nh_ip != "0.0.0.0":
-                            unique_nexthops.add(nh_ip)
+                    path_nexthops = self._path_nexthops(path)
+                    if path_nexthops & peer_ips:
+                        unique_nexthops.update(path_nexthops & peer_ips)
 
             # Query interface for each unique next-hop
             for nh_ip in unique_nexthops:
@@ -1498,6 +1814,7 @@ class RouteManager:
             table.add_column("Via", style="magenta")
             table.add_column("AS Path", style="yellow")
             table.add_column("Status", style="green")
+            row_count = 0
 
             for prefix, route_data in sorted(routes.items()):
                 if isinstance(route_data, dict):
@@ -1510,6 +1827,10 @@ class RouteManager:
                     continue
 
                 for path in paths:
+                    path_nexthops = self._path_nexthops(path)
+                    if not path_nexthops or not (path_nexthops & peer_ips):
+                        continue
+
                     nexthops = path.get("nexthops", [])
                     as_path = path.get("path", "")
 
@@ -1543,6 +1864,13 @@ class RouteManager:
                         status = "[dim]no-filter[/dim]"
 
                     table.add_row(prefix, nexthop_ip, via_iface, as_path, status)
+                    row_count += 1
+
+            if not row_count:
+                print(
+                    "[dim]No BGP routes currently learned from this connection's tunnel peer(s)[/dim]"
+                )
+                return
 
             console.print(table)
 

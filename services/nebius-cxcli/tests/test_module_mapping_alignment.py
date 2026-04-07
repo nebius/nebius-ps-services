@@ -18,8 +18,8 @@ from nebius_cxcli.component_sources import (
 from nebius_cxcli.components import component_entries, reset_component_entry_cache
 from nebius_cxcli.config_loader import load_config
 from nebius_cxcli.config_template import starter_config_yaml
-from nebius_cxcli.paths import resolve_instance_paths, validate_path_alignment
-from nebius_cxcli.render import render_instance
+from nebius_cxcli.paths import resolve_project_paths, validate_path_alignment
+from nebius_cxcli.render import render_project
 from nebius_cxcli.runtime_introspection import ModuleVariable, reset_runtime_introspection_cache
 
 
@@ -61,11 +61,11 @@ def _set_catalog_profile(profile: SourceProfile) -> None:
     reset_component_entry_cache()
 
 
-def _instance_config_path(base: Path) -> Path:
+def _project_config_path(base: Path) -> Path:
     return (
         base
         / "deployments"
-        / "instances"
+        / "projects"
         / "client-a--tenant-123"
         / "project-456"
         / "config.yaml"
@@ -102,15 +102,15 @@ def _payload_with_mk8s() -> dict:
 def test_render_tfvars_are_backed_by_declared_variables(tmp_path: Path) -> None:
     _set_catalog_profile(SourceProfile.LOCAL)
     reset_component_entry_cache()
-    config_path = _instance_config_path(tmp_path)
+    config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     payload = _payload_with_mk8s()
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     config = load_config(config_path)
-    paths = resolve_instance_paths(config_path)
+    paths = resolve_project_paths(config_path)
     validate_path_alignment(config, paths)
-    render_instance(config, paths, source_profile=SourceProfile.LOCAL)
+    render_project(config, paths, source_profile=SourceProfile.LOCAL)
 
     main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
     providers_tf = (paths.infra_dir / "providers.tf").read_text(encoding="utf-8")
@@ -131,16 +131,16 @@ def test_render_uses_resolved_local_path_for_local_module_sources(
 ) -> None:
     _set_catalog_profile(SourceProfile.LOCAL)
     reset_component_entry_cache()
-    config_path = _instance_config_path(tmp_path)
+    config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     payload = _payload_with_mk8s()
 
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     config = load_config(config_path)
-    paths = resolve_instance_paths(config_path)
+    paths = resolve_project_paths(config_path)
     validate_path_alignment(config, paths)
-    render_instance(config, paths, source_profile=SourceProfile.LOCAL)
+    render_project(config, paths, source_profile=SourceProfile.LOCAL)
 
     main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
     expected_mk8s_source = (
@@ -152,7 +152,7 @@ def test_render_uses_resolved_local_path_for_local_module_sources(
 def test_render_rejects_version_for_local_module_sources(tmp_path: Path) -> None:
     _set_catalog_profile(SourceProfile.LOCAL)
     reset_component_entry_cache()
-    config_path = _instance_config_path(tmp_path)
+    config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     payload = _payload_with_mk8s()
 
@@ -166,11 +166,11 @@ def test_render_rejects_version_for_local_module_sources(tmp_path: Path) -> None
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     config = load_config(config_path)
-    paths = resolve_instance_paths(config_path)
+    paths = resolve_project_paths(config_path)
     validate_path_alignment(config, paths)
 
     with pytest.raises(ValueError, match="resolves to a local directory"):
-        render_instance(config, paths, source_profile=SourceProfile.LOCAL)
+        render_project(config, paths, source_profile=SourceProfile.LOCAL)
 
 
 def test_render_prefers_active_catalog_source_over_stale_config_source(
@@ -178,7 +178,7 @@ def test_render_prefers_active_catalog_source_over_stale_config_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_catalog_profile(SourceProfile.PORTABLE)
-    config_path = _instance_config_path(tmp_path)
+    config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     payload = _payload_with_mk8s()
 
@@ -196,6 +196,7 @@ def test_render_prefers_active_catalog_source_over_stale_config_source(
         lambda _source: (
             ModuleVariable(name="parent_id", required=False, type_hint="string"),
             ModuleVariable(name="cluster_name", required=False, type_hint="string"),
+            ModuleVariable(name="cpu_nodes_count", required=False, type_hint="number"),
             ModuleVariable(name="cpu_nodes_platform", required=False, type_hint="string"),
             ModuleVariable(name="cpu_nodes_preset", required=False, type_hint="string"),
             ModuleVariable(name="subnet_id", required=False, type_hint="string"),
@@ -214,9 +215,9 @@ def test_render_prefers_active_catalog_source_over_stale_config_source(
     )
 
     config = load_config(config_path)
-    paths = resolve_instance_paths(config_path)
+    paths = resolve_project_paths(config_path)
     validate_path_alignment(config, paths)
-    render_instance(config, paths, source_profile=SourceProfile.PORTABLE)
+    render_project(config, paths, source_profile=SourceProfile.PORTABLE)
 
     main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
     assert (

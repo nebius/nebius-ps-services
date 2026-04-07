@@ -64,11 +64,17 @@ def test_version_from_setuptools_scm_uses_nested_scm_describe_command(monkeypatc
         captured.update(kwargs)
         return "0.5.5.dev10"
 
-    monkeypatch.setitem(sys.modules, "setuptools_scm", SimpleNamespace(get_version=fake_get_version))
+    monkeypatch.setitem(
+        sys.modules, "setuptools_scm", SimpleNamespace(get_version=fake_get_version)
+    )
 
-    assert runtime_version._version_from_setuptools_scm(Path("/tmp/repo/services/vpngw")) == "0.5.5.dev10"
+    assert (
+        runtime_version._version_from_setuptools_scm(Path("/tmp/repo/services/vpngw"))
+        == "0.5.5.dev10"
+    )
     assert captured["root"] == "/tmp/repo/services/vpngw"
     assert captured["search_parent_directories"] is True
+    assert captured["version_scheme"] == "semver-pep440"
     assert captured["scm"] == {"git": {"describe_command": runtime_version._GIT_DESCRIBE_COMMAND}}
     assert "git_describe_command" not in captured
 

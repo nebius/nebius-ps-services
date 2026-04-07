@@ -48,7 +48,7 @@ nebius_vpngw = ["systemd/*"]
 
 [tool.setuptools_scm]
 root = "."
-version_scheme = "python-simplified-semver"
+version_scheme = "semver-pep440"
 local_scheme = "no-local-version"
 version_file = "src/nebius_vpngw/_version.py"
 tag_regex = "^nebius-vpngw-v(?P<version>\\d+\\.\\d+\\.\\d+)$"
