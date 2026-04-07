@@ -309,6 +309,7 @@ Wizard field/option model:
 - Required fields are labeled `required` and must receive a valid value before the wizard advances unless the operator stops the wizard.
 - Optional fields are labeled `optional`; blank answers keep defaults/current values and leave the field implicit in `config.yaml` when the value still matches a virtual module/chart default.
 - Fields grouped behind a sibling `<prefix>_enabled` toggle are prompted only when that toggle is true; enabling the toggle during the wizard appends the dependent fields later in the same run.
+- Deferred dependency-prompt expansion must capture the current component's module metadata and required leaf set when the callback is queued, so later prompt expansion cannot accidentally read loop state from a different component iteration.
 - Empty optional complex defaults such as `{}` and `[]` are presented with a blank prompt default plus explicit “blank keeps current empty map/list” text, instead of rendering those literals as inline prompt defaults.
 - When Terraform module metadata falls back to local `variables.tf` parsing, multiline default values such as map/object literals must still be parsed as full defaults so the interactive wizard does not emit truncated prompt values.
 - If a selected module has no catalog default for a required field, `create` prompts for it and stores it in the per-project `config.yaml`. That is the canonical path for sensitive per-project values such as jump-host `ssh_public_key`.
@@ -638,6 +639,8 @@ Validation layers:
 2. Dynamic payload shape checks (`validate_dynamic_payload_structure`).
 3. Strict checks in CLI for deployment readiness.
 4. Optional plugin validation via `NEBIUS_CXCLI_RUNTIME_VALIDATION_PLUGINS`.
+
+Alias-based runtime validators should compose as one explicit guard when a component can advertise overlapping aliases, so a shared component row does not accidentally run mutually exclusive validation paths twice.
 
 Plugin default:
 

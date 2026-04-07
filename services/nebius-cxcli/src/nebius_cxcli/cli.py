@@ -45,9 +45,9 @@ from .component_defaults import (
     default_target_paths,
     literal_default_input_leaf_names,
     resolve_component_defaults,
-    shared_default_payload_paths,
     shared_default_conflicts,
     shared_default_input_sources,
+    shared_default_payload_paths,
 )
 from .component_instances import (
     INSTANCE_ID_FIELD,
@@ -3325,7 +3325,10 @@ def _run_component_field_wizard(
                             continue
                         _queue_module_field_prompt(leaf_name, None, required=True)
 
-                    def _expand_module_dependency_prompts() -> None:
+                    def _expand_module_dependency_prompts(
+                        module_specs_by_leaf: dict[str, Any] = module_specs_by_leaf,
+                        required_leaf_names: set[str] = required_leaf_names,
+                    ) -> None:
                         for leaf_name, spec in sorted(
                             module_specs_by_leaf.items(),
                             key=lambda item: (0 if item[1].required else 1, item[0]),

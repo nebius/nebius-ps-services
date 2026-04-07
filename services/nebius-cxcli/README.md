@@ -942,6 +942,7 @@ Python: `3.12+`
 
 ```bash
 make venv
+make lint
 make all
 ```
 
@@ -952,6 +953,8 @@ python -m nebius_cxcli --help
 python -m nebius_cxcli create --help
 python -m nebius_cxcli auth --help
 ```
+
+`make lint` is the same Ruff gate used by the `nebius-cxcli-ci` workflow, so import ordering and loop-closure lint failures should be fixed locally before pushing.
 
 Test suite focus:
 

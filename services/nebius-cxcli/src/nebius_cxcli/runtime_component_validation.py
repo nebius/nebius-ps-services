@@ -47,9 +47,12 @@ def validate_component_runtime_rules(
         aliases = set(getattr(entry, "aliases", ()))
         if "wireguard" in aliases or "wg" in aliases:
             _validate_wireguard(payload, get_path, as_text, base, id_pattern)
-        if "jump" in aliases or "host" in aliases:
-            if "wireguard" not in aliases and "wg" not in aliases:
-                _validate_ssh_jumphost(payload, get_path, as_text, base)
+        if (
+            ("jump" in aliases or "host" in aliases)
+            and "wireguard" not in aliases
+            and "wg" not in aliases
+        ):
+            _validate_ssh_jumphost(payload, get_path, as_text, base)
 
     # Mysterybox and cross-component checks use the registry too
     for entry in component_entries("infra"):
