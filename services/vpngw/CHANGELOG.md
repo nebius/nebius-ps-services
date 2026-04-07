@@ -14,6 +14,8 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [nebius-vpngw-v0.5.6] - 2026-04-07
+
 - Fixed BGP route scoping for multi-connection gateways: `list-routes-remote`
   now shows only the selected connection's learned paths on the owning gateway
   VM instead of repeating the full FRR table for every connection, and
