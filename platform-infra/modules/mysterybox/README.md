@@ -39,6 +39,15 @@ export TF_VAR_mysterybox_secret_values='{
 
 The module validates that all configured `payload_keys` have values.
 
+## nebius-cxcli usage
+
+- `nebius-cxcli component add` prompts this module through
+  `infra.components[].inputs`.
+- `inputs.secrets` is required and should be entered as a YAML/JSON mapping in
+  the wizard or edited directly in `config.yaml`.
+- `inputs.secret_values` should stay empty in `config.yaml`; pass those values
+  only at runtime through `TF_VAR_mysterybox_secret_values`.
+
 ## Example
 
 ```hcl

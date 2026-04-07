@@ -6,7 +6,9 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def block_unit_test_network(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> None:
+def block_unit_test_network(
+    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> None:
     if request.node.get_closest_marker("integration"):
         return
 

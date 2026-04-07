@@ -287,7 +287,9 @@ def parse_text_document(
                 "inner_cidr": inner_cidr,
                 "inner_local_ip": inner_local_ip,
                 "inner_remote_ip": inner_remote_ip,
-                "local_public_ip": local_public_ips[index] if index < len(local_public_ips) else None,
+                "local_public_ip": local_public_ips[index]
+                if index < len(local_public_ips)
+                else None,
                 "remote_public_ip": remote_public_ips[index]
                 if index < len(remote_public_ips)
                 else None,
@@ -299,7 +301,10 @@ def parse_text_document(
 
     spec = _clean_dict(
         {
-            "name": sanitize_name(connection_name or source_name, fallback=sanitize_name(source_name, fallback="peer-vpn")),
+            "name": sanitize_name(
+                connection_name or source_name,
+                fallback=sanitize_name(source_name, fallback="peer-vpn"),
+            ),
             "vendor": vendor,
             "routing_mode": routing_mode,
             "remote_asn": remote_asn,
@@ -374,8 +379,7 @@ def build_connection_config(spec: dict[str, t.Any], *, connection_index: int) ->
             "ha_role": _normalize_ha_role(tunnel_spec.get("ha_role"), tunnel_index=tunnel_index),
             "remote_public_ip": tunnel_spec.get("remote_public_ip") or defaults["remote_public_ip"],
             "psk": str(
-                tunnel_spec.get("psk")
-                or default_psk_placeholder(connection_name, tunnel_index)
+                tunnel_spec.get("psk") or default_psk_placeholder(connection_name, tunnel_index)
             ),
             "inner_cidr": tunnel_spec.get("inner_cidr") or defaults["inner_cidr"],
             "inner_local_ip": tunnel_spec.get("inner_local_ip") or defaults["inner_local_ip"],
@@ -384,9 +388,10 @@ def build_connection_config(spec: dict[str, t.Any], *, connection_index: int) ->
             "static_routes": tunnel_spec.get("static_routes"),
         }
         if not built.get("inner_cidr"):
-            built["inner_cidr"] = infer_inner_cidr(
-                built.get("inner_local_ip"), built.get("inner_remote_ip")
-            ) or defaults["inner_cidr"]
+            built["inner_cidr"] = (
+                infer_inner_cidr(built.get("inner_local_ip"), built.get("inner_remote_ip"))
+                or defaults["inner_cidr"]
+            )
         tunnels.append(_clean_dict(built))
 
     connection = {
@@ -449,7 +454,9 @@ def _load_structured_document(text: str, *, source_format: str) -> t.Any | None:
             stripped = text.lstrip()
             if stripped.startswith("{") or stripped.startswith("["):
                 return json.loads(text)
-            if ":" in text and any(line.lstrip().startswith(("-", "{")) for line in text.splitlines()):
+            if ":" in text and any(
+                line.lstrip().startswith(("-", "{")) for line in text.splitlines()
+            ):
                 return yaml.safe_load(text)
     except Exception:
         return None
@@ -467,7 +474,9 @@ def _parse_structured_document(
         return []
 
     if isinstance(document, dict):
-        connection_items = _find_container_items(document, CONTAINER_KEYS=CONNECTION_CONTAINER_KEYWORDS)
+        connection_items = _find_container_items(
+            document, CONTAINER_KEYS=CONNECTION_CONTAINER_KEYWORDS
+        )
         if connection_items:
             return [
                 _normalize_connection_mapping(
@@ -549,9 +558,13 @@ def _group_row_mappings_into_connections(
     group_meta: dict[tuple[str, str], dict[str, t.Any]] = {}
 
     for row in rows:
-        vendor = normalize_vendor(_find_value_by_alias(row, CONNECTION_FIELD_KEYWORDS["vendor"]) or vendor_hint)
+        vendor = normalize_vendor(
+            _find_value_by_alias(row, CONNECTION_FIELD_KEYWORDS["vendor"]) or vendor_hint
+        )
         name_value = _find_value_by_alias(row, CONNECTION_FIELD_KEYWORDS["name"]) or source_name
-        name = sanitize_name(name_value, fallback=sanitize_name(source_name, fallback=f"{vendor}-vpn"))
+        name = sanitize_name(
+            name_value, fallback=sanitize_name(source_name, fallback=f"{vendor}-vpn")
+        )
         key = (vendor, name)
         grouped_rows[key].append(row)
         group_meta.setdefault(key, row)
@@ -562,7 +575,9 @@ def _group_row_mappings_into_connections(
         remote_prefixes = _normalize_cidr_list(
             _find_value_by_alias(base_row, CONNECTION_FIELD_KEYWORDS["remote_prefixes"])
         )
-        remote_asn = coerce_int(_find_value_by_alias(base_row, CONNECTION_FIELD_KEYWORDS["remote_asn"]))
+        remote_asn = coerce_int(
+            _find_value_by_alias(base_row, CONNECTION_FIELD_KEYWORDS["remote_asn"])
+        )
         routing_mode = normalize_routing_mode(
             _find_value_by_alias(base_row, CONNECTION_FIELD_KEYWORDS["routing_mode"])
         )
@@ -756,7 +771,10 @@ def _looks_like_connection_mapping(mapping: dict[str, t.Any]) -> bool:
 
 
 def _looks_like_tunnel_mapping(mapping: dict[str, t.Any]) -> bool:
-    return any(_find_value_by_alias(mapping, aliases) is not None for aliases in TUNNEL_FIELD_KEYWORDS.values())
+    return any(
+        _find_value_by_alias(mapping, aliases) is not None
+        for aliases in TUNNEL_FIELD_KEYWORDS.values()
+    )
 
 
 def _find_value_by_alias(mapping: dict[str, t.Any], aliases: tuple[str, ...]) -> t.Any:
@@ -781,7 +799,9 @@ def _find_value_by_alias(mapping: dict[str, t.Any], aliases: tuple[str, ...]) ->
     return None
 
 
-def _flatten_mapping(obj: t.Any, path: tuple[str, ...] = ()) -> t.Iterable[tuple[tuple[str, ...], t.Any]]:
+def _flatten_mapping(
+    obj: t.Any, path: tuple[str, ...] = ()
+) -> t.Iterable[tuple[tuple[str, ...], t.Any]]:
     if isinstance(obj, dict):
         for key, value in obj.items():
             key_path = path + (normalize_key(str(key)),)
@@ -944,7 +964,9 @@ def _normalize_ha_role(value: t.Any, *, tunnel_index: int) -> str:
     return "active" if tunnel_index == 0 else "passive"
 
 
-def _merge_tunnels(existing: list[dict[str, t.Any]], new: list[dict[str, t.Any]]) -> list[dict[str, t.Any]]:
+def _merge_tunnels(
+    existing: list[dict[str, t.Any]], new: list[dict[str, t.Any]]
+) -> list[dict[str, t.Any]]:
     merged: list[dict[str, t.Any]] = [dict(item) for item in existing]
     fingerprints = {_tunnel_fingerprint(item): index for index, item in enumerate(merged)}
     for tunnel in new:
@@ -971,8 +993,4 @@ def _tunnel_fingerprint(tunnel: dict[str, t.Any]) -> tuple[t.Any, ...]:
 
 
 def _clean_dict(value: dict[str, t.Any]) -> dict[str, t.Any]:
-    return {
-        key: item
-        for key, item in value.items()
-        if item not in (None, "", [])
-    }
+    return {key: item for key, item in value.items() if item not in (None, "", [])}

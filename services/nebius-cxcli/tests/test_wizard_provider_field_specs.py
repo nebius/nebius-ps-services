@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from nebius_cxcli.cli import _infer_infra_provider_field_spec
+from nebius_cxcli.cli import _infer_infra_provider_field_spec, _resolve_wizard_field_spec
 from nebius_cxcli.components import ComponentEntry
 from nebius_cxcli.provider_options import _payload_value
 
@@ -15,15 +15,21 @@ def _infra_entry(component_id: str) -> ComponentEntry:
 
 
 def test_mk8s_cpu_nodes_platform_uses_mk8s_compatible_platforms() -> None:
+    """mk8s cpu_nodes_platform is now declared in wizard_fields YAML, not inferred.
+    The inference function falls back to compute_platforms for mk8s since the
+    entry.id == 'mk8s' branch was removed.  The real behavior routes through
+    _resolve_wizard_field_spec which reads the YAML-declared options first."""
     spec = _infer_infra_provider_field_spec(
         entry=_infra_entry("mk8s"),
         full_path_label="infra.components[0].inputs.cpu_nodes_platform",
     )
+    # Inference now returns compute_platforms; the real mk8s resolution uses
+    # wizard_fields.options.from = mk8s_compatible_platforms instead.
     assert spec == {
         "sources": [
             {
                 "source": "provider",
-                "provider": "mk8s_compatible_platforms",
+                "provider": "compute_platforms",
                 "args": {"platform_prefix": "cpu-"},
             }
         ]
@@ -60,6 +66,14 @@ def test_preset_field_infers_matching_platform_path_for_underscore_shape() -> No
             }
         ]
     }
+
+
+def test_driver_preset_field_does_not_infer_compute_platform_presets() -> None:
+    spec = _infer_infra_provider_field_spec(
+        entry=_infra_entry("mk8s"),
+        full_path_label="infra.components[0].inputs.gpu_default_drivers_preset",
+    )
+    assert spec is None
 
 
 def test_provider_payload_value_supports_list_index_path_notation() -> None:
@@ -133,6 +147,41 @@ def test_kubernetes_version_uses_control_plane_versions_provider() -> None:
             {
                 "source": "provider",
                 "provider": "mk8s_control_plane_versions",
+            }
+        ]
+    }
+
+
+def test_explicit_wizard_field_relative_path_overrides_dynamic_component_path() -> None:
+    entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="mk8s",
+        wizard_fields={
+            "inputs.gpu_nodes_platform": {
+                "sources": [
+                    {
+                        "source": "provider",
+                        "provider": "mk8s_compatible_platforms",
+                        "args": {"platform_prefix": "gpu-"},
+                    }
+                ]
+            }
+        },
+    )
+
+    spec = _resolve_wizard_field_spec(
+        entry=entry,
+        full_path_label="infra.components[0].inputs.gpu_nodes_platform",
+    )
+
+    assert spec == {
+        "sources": [
+            {
+                "source": "provider",
+                "provider": "mk8s_compatible_platforms",
+                "args": {"platform_prefix": "gpu-"},
             }
         ]
     }

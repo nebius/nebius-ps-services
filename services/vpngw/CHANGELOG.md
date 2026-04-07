@@ -14,6 +14,33 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [nebius-vpngw-v0.5.6] - 2026-04-07
+
+- Fixed BGP route scoping for multi-connection gateways: `list-routes-remote`
+  now shows only the selected connection's learned paths on the owning gateway
+  VM instead of repeating the full FRR table for every connection, and
+  `add-routes-local` now filters learned paths to that connection's tunnel
+  peers before deriving Nebius VPC routes.
+- Added `add-routes-local --summarize` for exact prefix collapsing per gateway
+  next-hop allocation so large remote route sets can reduce Nebius route-table
+  entry count without inventing broader supernets.
+- Updated versioning configuration to the current `setuptools-scm`
+  `semver-pep440` scheme and aligned runtime resolution/tests so `make all`
+  no longer emits the renamed-scheme deprecation warning.
+- Fixed multi-VM advertised-route labeling in `list-routes-local`: BGP peers are
+  now matched to connections/tunnels using both peer IP and owning gateway VM,
+  so reused APIPA ranges on different instances no longer cross-label output.
+- Added regression coverage for representative multi-connection topologies,
+  including the example 3-site single-VM and 3-site three-VM YAML layouts plus
+  the explicit tunnel-selection behavior of `failover`/`failback`.
+- Clarified live CLI `--help` text for multi-connection operation so
+  `list-routes-remote`, `restart-tunnel`, `failover`, and `failback` now
+  describe owning-VM scoping and when explicit tunnel selection is required.
+- Aligned the `vpngw` GitHub Actions workflows with the service release path:
+  CI now self-validates `vpngw` workflow YAML and exercises the wheel-build
+  regression test before release publication, and both workflows use explicit
+  Bash defaults for consistency with the monorepo pattern.
+
 ## [nebius-vpngw-v0.5.5] - 2026-03-31
 
 - Added regression coverage proving `publish-release.sh --prep` remains

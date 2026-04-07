@@ -163,6 +163,7 @@ class ProviderOptionLookup:
         self._sdk: object | None = None
         self._sdk_failed = False
         self._cache: dict[tuple[object, ...], tuple[OptionChoice, ...]] = {}
+        self._last_error: str | None = None
 
     def resolve(
         self,
@@ -172,6 +173,7 @@ class ProviderOptionLookup:
         payload: dict[str, Any],
         field_path: str,
     ) -> list[OptionChoice]:
+        self._last_error = None
         try:
             resolver = {
                 "mk8s_compatible_platforms": self._resolve_mk8s_compatible_platforms,
@@ -204,6 +206,9 @@ class ProviderOptionLookup:
             return []
         except Exception:
             return []
+
+    def last_error(self) -> str | None:
+        return self._last_error
 
     def validate_tenant_project_scope(
         self,
@@ -689,7 +694,9 @@ class ProviderOptionLookup:
                 config_file=Path(sdk_config_file) if sdk_config_file else None,
                 context="provider option lookup",
             )
+            self._last_error = None
             return self._sdk
-        except Exception:
+        except Exception as exc:
+            self._last_error = str(exc).strip() or exc.__class__.__name__
             self._sdk_failed = True
             return None

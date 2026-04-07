@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import shutil
 import subprocess
@@ -9,6 +10,7 @@ import tempfile
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -96,6 +98,32 @@ def _run_git_clone(git_url: str, ref: str) -> Path:
     return tmp_root / "repo"
 
 
+def _run_helm_pull(ref: str, *, repo: str = "", version: str = "") -> Path:
+    tmp_root = Path(tempfile.mkdtemp(prefix="nebius-cxcli-helm-pull-"))
+    command = ["helm", "pull", ref, "--untar", "--untardir", str(tmp_root)]
+    if repo:
+        command.extend(["--repo", repo])
+    if version:
+        command.extend(["--version", version])
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        shutil.rmtree(tmp_root, ignore_errors=True)
+        stderr = result.stderr.strip() or result.stdout.strip() or "unknown error"
+        raise RuntimeError(stderr)
+    directories = [path for path in tmp_root.iterdir() if path.is_dir()]
+    if len(directories) != 1:
+        shutil.rmtree(tmp_root, ignore_errors=True)
+        raise RuntimeError(
+            f"helm pull did not materialize exactly one chart directory for '{ref}'"
+        )
+    return directories[0]
+
+
 def _resolve_show_ref(reference: HelmChartReference) -> tuple[str, str, str, Path | None]:
     chart_name = reference.chart_name.strip()
     chart_repo = reference.chart_repo.strip().rstrip("/")
@@ -138,6 +166,101 @@ def _resolve_show_ref(reference: HelmChartReference) -> tuple[str, str, str, Pat
     if chart_name:
         return chart_name, "", chart_version, None
     raise RuntimeError("Chart reference is incomplete: chart name is required")
+
+
+@contextlib.contextmanager
+def _materialize_chart_dir(reference: HelmChartReference):
+    cleanup_roots: list[Path] = []
+    show_ref, repo, version, cleanup_dir = _resolve_show_ref(reference)
+    if cleanup_dir is not None:
+        cleanup_roots.append(cleanup_dir)
+
+    local_candidate = Path(show_ref)
+    if not repo and not version and local_candidate.exists() and local_candidate.is_dir():
+        try:
+            yield local_candidate
+        finally:
+            for root in reversed(cleanup_roots):
+                shutil.rmtree(root, ignore_errors=True)
+        return
+
+    chart_dir = _run_helm_pull(show_ref, repo=repo, version=version)
+    cleanup_roots.append(chart_dir.parent)
+    try:
+        yield chart_dir
+    finally:
+        for root in reversed(cleanup_roots):
+            shutil.rmtree(root, ignore_errors=True)
+
+
+@lru_cache(maxsize=64)
+def chart_cli_contract_findings(
+    *,
+    chart_name: str,
+    chart_repo: str,
+    chart_version: str,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    issues: list[str] = []
+    warnings: list[str] = []
+    reference = HelmChartReference(
+        chart_name=chart_name,
+        chart_repo=chart_repo,
+        chart_version=chart_version,
+    )
+    try:
+        with _materialize_chart_dir(reference) as chart_dir:
+            chart_yaml = chart_dir / "Chart.yaml"
+            values_yaml = chart_dir / "values.yaml"
+            templates_dir = chart_dir / "templates"
+            readme_file = chart_dir / "README.md"
+
+            if not chart_yaml.exists():
+                issues.append(f"materialized chart is missing Chart.yaml in {chart_dir}")
+            if not values_yaml.exists():
+                issues.append(f"materialized chart is missing values.yaml in {chart_dir}")
+            if not templates_dir.exists():
+                issues.append(f"materialized chart is missing templates/ in {chart_dir}")
+            elif not templates_dir.is_dir():
+                issues.append(f"materialized chart templates exists but is not a directory in {chart_dir}")
+            else:
+                template_files = [
+                    path for path in templates_dir.rglob("*")
+                    if path.is_file() and path.suffix.lower() in {".yaml", ".yml", ".tpl", ".txt"}
+                ]
+                if not template_files:
+                    issues.append(
+                        f"materialized chart templates/ has no renderable template files in {chart_dir}"
+                    )
+
+            if not readme_file.exists():
+                warnings.append(f"materialized chart is missing README.md in {chart_dir}")
+
+            if chart_yaml.exists():
+                payload = yaml.safe_load(chart_yaml.read_text(encoding="utf-8")) or {}
+                if not isinstance(payload, dict):
+                    issues.append(f"materialized chart Chart.yaml is not a mapping in {chart_dir}")
+                else:
+                    api_version = str(payload.get("apiVersion", "")).strip()
+                    resolved_name = str(payload.get("name", "")).strip()
+                    resolved_version = str(payload.get("version", "")).strip()
+                    if not api_version:
+                        issues.append(f"materialized chart Chart.yaml is missing apiVersion in {chart_dir}")
+                    elif api_version != "v2":
+                        warnings.append(
+                            f"materialized chart Chart.yaml uses apiVersion '{api_version}' instead of canonical Helm v2 format in {chart_dir}"
+                        )
+                    if not resolved_name:
+                        issues.append(f"materialized chart Chart.yaml is missing name in {chart_dir}")
+                    elif resolved_name != chart_name:
+                        issues.append(
+                            f"materialized chart name '{resolved_name}' does not match configured chart name '{chart_name}'"
+                        )
+                    if not resolved_version:
+                        issues.append(f"materialized chart Chart.yaml is missing version in {chart_dir}")
+    except Exception as exc:
+        return (f"could not materialize chart source via helm: {exc}",), ()
+
+    return tuple(issues), tuple(warnings)
 
 
 class HelmClient:

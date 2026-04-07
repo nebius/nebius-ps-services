@@ -81,7 +81,11 @@ Workflow:
 1. Fill minimal fields in `my-vpn.config.yaml`: `tenant_id`, `project_id`, `region_id`, `gateway_group` (leave `connections` for later).
    `project_id` must be set to a real value (or resolved via `${PROJECT_ID}` env var) before `prep-network`.
    Set `gateway_group.network_id` if you want a custom Nebius VPC instead of the auto-resolved `default-network`.
-2. Run network preparation: `nebius-vpngw prep-network --local-config-file my-vpn.config.yaml`
+2. Run network preparation:
+
+   ```bash
+   nebius-vpngw prep-network --local-config-file my-vpn.config.yaml
+   ```
 
 3. Share the allocated Nebius public IP(s) with the peer network team.
 4. The peer team creates their VPN gateway and points tunnels to those Nebius public IPs.
@@ -643,12 +647,14 @@ nebius-vpngw list-routes-local --local-config-file <file>
 # - Static mode: Uses remote_prefixes from YAML configuration
 # - Creates VPC route table entries with gateway private IP as next-hop
 # - Filters out local networks automatically
+# - Optional: --summarize collapses exact adjacent prefixes per next-hop
 # - Targets only subnets with explicit private pools; inherited parent-network subnets are skipped for safety
 # - Copies existing routes when creating custom route tables
 nebius-vpngw add-routes-local --local-config-file <file>
 
 # List remote routes (Remote → Nebius)
-# - BGP mode: Shows BGP-learned routes with whitelist status and XFRM interfaces
+# - BGP mode: Shows BGP-learned routes for the selected connection's tunnel peers
+#   with whitelist status and XFRM interfaces
 # - Static mode: Shows static routes and kernel installation status
 # - Filters out locally originated routes (next-hop 0.0.0.0)
 nebius-vpngw list-routes-remote --local-config-file <file>
@@ -660,11 +666,15 @@ nebius-vpngw list-routes-remote --local-config-file <file>
   - Destination: Remote networks (BGP-learned or statically configured)
   - Next-hop: VPN gateway private IP
   - Managed via Nebius VPC API
+  - Large imported route sets can hit per-route-table limits even when the tenant-wide route quota shown in the console still has headroom. `vpc.routetable.max-route-count` means the target subnet route table is full.
+  - `add-routes-local --summarize` only performs exact CIDR collapsing per gateway next-hop. It does not invent broader supernets with gaps.
 
 - **Remote Routes (Remote → Nebius)**: Routes on the gateway VMs that direct traffic from remote sites to Nebius networks
   - BGP mode: Dynamically learned via FRR and installed in kernel
   - Static mode: Manually configured in YAML
   - Visible via SSH queries to gateway VMs
+  - `list-routes-remote` scopes BGP output to the selected connection's tunnel peers on the owning gateway VM so multi-connection gateways do not repeat the full FRR table for every connection.
+  - `list-routes-local` attributes advertised BGP routes by both peer IP and owning gateway VM, so reused APIPA ranges on different gateway instances do not cross-label connection/tunnel output.
 
 **Tunnel Management:**
 
@@ -678,11 +688,13 @@ nebius-vpngw restart-tunnel all --local-config-file <file>
 # Manual failover to passive tunnel
 # - If exactly two tunnels exist, passive is auto-selected
 # - If more than two tunnels exist, pass the passive tunnel name
+# - In multi-connection configs, this is the normal path: be explicit
 nebius-vpngw failover --local-config-file <file>
 nebius-vpngw failover gcp-ha-tunnel-2 --local-config-file <file>
 
 # Manual failback to restore the active tunnel (does not disable passive)
 # - If multiple active tunnels exist, pass the active tunnel name
+# - In multi-connection configs, this is the normal path: be explicit
 nebius-vpngw failback --local-config-file <file>
 nebius-vpngw failback gcp-ha-tunnel-1 --local-config-file <file>
 ```
@@ -691,6 +703,11 @@ nebius-vpngw failback gcp-ha-tunnel-1 --local-config-file <file>
 resolved deployment plan. `failover` and `failback` also operate on the owning
 connection/instance only, so they remain safe to use in multi-VM and
 multi-connection topologies.
+
+The live `--help` output for these commands now reflects that ownership model:
+`list-routes-remote` is described as connection-scoped on the owning gateway VM,
+and `failover`/`failback` explicitly call out that multi-connection configs
+normally require a tunnel name.
 
 `failover` is an operational override. It administratively shuts down the
 configured active tunnel's BGP neighbor to move traffic to the passive tunnel,
@@ -1736,13 +1753,16 @@ python -m build --wheel --no-isolation
 ### linting the codes
 
 ```bash
-python -m ruff check src --fix
+python -m ruff format src tests
+python -m ruff check src tests --fix
 ```
 
 ## Release & Versioning
 
 - Versions are derived from annotated Git tags (`nebius-vpngw-vMAJOR.MINOR.PATCH`) via `setuptools-scm`; no manual edits to `pyproject.toml` are needed. Installed packages use published package metadata, source/editable checkouts prefer live SCM state, and wheel builds keep a package-local `_version.py` only as a fallback for metadata-free environments. When `setuptools-scm` is not installed in a source checkout, runtime version resolution falls back to `git describe` before it consults any generated `_version.py` cache.
+- The repo uses the current `setuptools-scm` `semver-pep440` version scheme so local lint/test/build runs stay free of the renamed-scheme deprecation warning.
 - Local developer builds should reuse the prepared project virtualenv (`python -m build --wheel --no-isolation` or `make build`) so the output stays stable and avoids transient isolated-build toolchain warnings.
+- The `vpngw` GitHub Actions workflows validate their own YAML in CI and exercise the wheel-build regression test path before release publication, so workflow edits and packaging regressions are checked before tag time.
 - Semantic Versioning policy:
   - **MAJOR:** breaking changes (CLI flags removed/changed, behavior changes that could break scripts).
   - **MINOR:** backward-compatible features (new options, new Nebius resources supported).

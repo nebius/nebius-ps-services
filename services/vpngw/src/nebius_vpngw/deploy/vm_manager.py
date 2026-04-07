@@ -245,7 +245,9 @@ class VMManager:
                     networks.append(network)
         return networks
 
-    def _get_network_private_pools(self, client: t.Any, network_obj: t.Any) -> list[tuple[str, t.Any]]:
+    def _get_network_private_pools(
+        self, client: t.Any, network_obj: t.Any
+    ) -> list[tuple[str, t.Any]]:
         from nebius.api.nebius.vpc.v1 import GetPoolRequest, PoolServiceClient  # type: ignore
 
         net_spec = getattr(network_obj, "spec", None)
@@ -318,7 +320,9 @@ class VMManager:
         )
 
         pool_name = getattr(pool_meta, "name", None) or pool_id
-        print(f"[VMManager] Extending network private pool '{pool_name}' with {desired_network} ...")
+        print(
+            f"[VMManager] Extending network private pool '{pool_name}' with {desired_network} ..."
+        )
 
         pool_client.update(
             UpdatePoolRequest(
@@ -930,9 +934,9 @@ class VMManager:
                                 )
                             break
                         except Exception as disk_err:
-                            if "FAILED_PRECONDITION" in str(disk_err) and "read-write attachments" in str(
+                            if "FAILED_PRECONDITION" in str(
                                 disk_err
-                            ):
+                            ) and "read-write attachments" in str(disk_err):
                                 if attempt < max_retries - 1:
                                     wait_time = 10 * (attempt + 1)
                                     print(
@@ -1402,9 +1406,13 @@ class VMManager:
             operation = alloc_client.create(request).wait()
             self._sync_operation(operation)
             resource = getattr(getattr(operation, "result", None), "resource", None)
-            return resource if resource is not None else self._get_allocation_by_name(
-                alloc_client,
-                alloc_name,
+            return (
+                resource
+                if resource is not None
+                else self._get_allocation_by_name(
+                    alloc_client,
+                    alloc_name,
+                )
             )
         except Exception as e:
             print(f"[VMManager] allocation create via client failed: {e}")
@@ -1544,16 +1552,18 @@ class VMManager:
                     name=alloc_name,
                     parent_id=self.project_id or "",
                 ),
-                spec=AllocationSpec(
-                    ipv4_private=IPv4PrivateAllocationSpec(subnet_id=subnet_id)
-                ),
+                spec=AllocationSpec(ipv4_private=IPv4PrivateAllocationSpec(subnet_id=subnet_id)),
             )
             operation = alloc_client.create(request).wait()
             self._sync_operation(operation)
             resource = getattr(getattr(operation, "result", None), "resource", None)
-            return resource if resource is not None else self._get_allocation_by_name(
-                alloc_client,
-                alloc_name,
+            return (
+                resource
+                if resource is not None
+                else self._get_allocation_by_name(
+                    alloc_client,
+                    alloc_name,
+                )
             )
         except Exception as e:
             print(f"[VMManager] private allocation create via client failed: {e}")
@@ -1697,9 +1707,7 @@ class VMManager:
                                 f"[VMManager] Still deleting... ({(wait_attempt + 1) * wait_interval}s / {max_wait}s)"
                             )
                             continue
-                        print(
-                            f"[VMManager] Disk state changed to {disk_state}, can now use disk"
-                        )
+                        print(f"[VMManager] Disk state changed to {disk_state}, can now use disk")
                         return candidate_disk_id
                     except Exception:
                         print(
@@ -1924,9 +1932,7 @@ class VMManager:
         inst_name = f"{spec.name}-{instance_index}"
         vm_exists = self._instance_exists(client, instance_api, inst_name)
         if vm_exists and not recreate:
-            print(
-                f"[VMManager] VM {inst_name} already exists (recreate=False), skipping creation"
-            )
+            print(f"[VMManager] VM {inst_name} already exists (recreate=False), skipping creation")
             vm_ip = self.get_vm_public_ip(inst_name)
             if vm_ip:
                 vm_ips[inst_name] = vm_ip
@@ -2172,7 +2178,9 @@ class VMManager:
             if alloc_obj is None:
                 break
             state = self._allocation_state(alloc_obj)
-            if not state or not any(token in state.lower() for token in ("delet", "releas", "pending")):
+            if not state or not any(
+                token in state.lower() for token in ("delet", "releas", "pending")
+            ):
                 break
         return allocations_by_ip
 
@@ -2219,7 +2227,9 @@ class VMManager:
                     f"[VMManager] Note: Requested IP {before_ip} could not be migrated; continuing with allocation in its existing subnet (IP {after_ip})."
                 )
             if alloc_obj and self._allocation_is_attached(alloc_obj):
-                print(f"[VMManager] Warning: Requested IP {desired_ip} is already attached to a resource.")
+                print(
+                    f"[VMManager] Warning: Requested IP {desired_ip} is already attached to a resource."
+                )
 
         by_name = self._get_allocation_by_name(alloc_client, alloc_name)
         if by_name is not None:
@@ -2326,9 +2336,7 @@ class VMManager:
 
         if desired_ip:
             return desired_ip
-        raise RuntimeError(
-            f"Allocation {alloc_name} returned no IP address (API may be delayed)."
-        )
+        raise RuntimeError(f"Allocation {alloc_name} returned no IP address (API may be delayed).")
 
     def prepare_network(
         self,
@@ -2672,7 +2680,9 @@ class VMManager:
 
             print(f"[VMManager] ✓ Subnet '{subnet_name}' created successfully")
             subnet_spec = getattr(subnet, "spec", None)
-            private_pools = getattr(subnet_spec, "ipv4_private_pools", None) if subnet_spec else None
+            private_pools = (
+                getattr(subnet_spec, "ipv4_private_pools", None) if subnet_spec else None
+            )
             if private_pools and getattr(private_pools, "use_network_pools", True):
                 raise RuntimeError(
                     f"[VMManager] CRITICAL: Subnet '{subnet_name}' was created but use_network_pools=true! "
@@ -2714,7 +2724,9 @@ class VMManager:
                     desired_network,
                     desired_prefix_length,
                 )
-                print(f"[VMManager] Found existing gateway subnet '{subnet_name}' ({existing_network})")
+                print(
+                    f"[VMManager] Found existing gateway subnet '{subnet_name}' ({existing_network})"
+                )
 
             if subnet_obj is None:
                 try:
@@ -2778,7 +2790,9 @@ class VMManager:
 
             # Check if subnet has route table attached
             subnet_spec = getattr(subnet_obj, "spec", None)
-            subnet_name = getattr(getattr(subnet_obj, "metadata", None), "name", None) or "gateway subnet"
+            subnet_name = (
+                getattr(getattr(subnet_obj, "metadata", None), "name", None) or "gateway subnet"
+            )
             rt_id = getattr(subnet_spec, "route_table_id", None) if subnet_spec else None
 
             if rt_id:
@@ -2875,7 +2889,9 @@ class VMManager:
                 # Fallback: let API keep the same IP by using /32 request semantics
                 ip_cidr = "/32"
 
-            print(f"[VMManager] Attempting to migrate allocation {ip_cidr} to the gateway subnet...")
+            print(
+                f"[VMManager] Attempting to migrate allocation {ip_cidr} to the gateway subnet..."
+            )
 
             # Get allocation ID and metadata
             if not alloc_id:
@@ -2974,7 +2990,9 @@ class VMManager:
                 route_pb2,  # type: ignore
             )  # type: ignore
 
-            subnet_name = getattr(getattr(subnet_obj, "metadata", None), "name", None) or "vpngw-subnet"
+            subnet_name = (
+                getattr(getattr(subnet_obj, "metadata", None), "name", None) or "vpngw-subnet"
+            )
             rt_name = self._gateway_route_table_name(subnet_name)
             rt_client = RouteTableServiceClient(client)  # type: ignore
             route_client = RouteServiceClient(client)  # type: ignore

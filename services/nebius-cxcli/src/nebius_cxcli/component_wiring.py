@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .component_sources import HandoffField
 
 from .component_defaults import (
     component_path_has_material_value,
     read_component_path,
     resolve_component_defaults,
 )
+from .component_instances import component_instance_id, component_type_id
 from .components import ComponentEntry, component_entries
 from .runtime_config import to_plain_data
 
@@ -21,8 +25,8 @@ def _split_path(path: str) -> tuple[str, ...]:
     return tuple(segment.strip() for segment in str(path).split(".") if segment.strip())
 
 
-def component_output_ref(component_id: str, output_name: str) -> str:
-    return f"{str(component_id).strip().lower()}.{str(output_name).strip().lower()}"
+def component_output_ref(component_instance_id: str, output_name: str) -> str:
+    return f"{str(component_instance_id).strip().lower()}.{str(output_name).strip().lower()}"
 
 
 def output_lookup(entry: ComponentEntry) -> dict[str, Any]:
@@ -101,7 +105,7 @@ def _component_rows(
     for row in rows:
         if not isinstance(row, Mapping):
             continue
-        component_id = str(row.get("id", "")).strip().lower()
+        component_id = component_type_id(row)
         if not component_id:
             continue
         entry = entry_by_id.get(component_id)
@@ -114,7 +118,10 @@ def _component_rows(
                 preserve_existing_literal=True,
                 preserve_existing_shared=False,
             )
-        resolved[component_id] = resolved_row
+        instance_id = component_instance_id(resolved_row)
+        if not instance_id:
+            continue
+        resolved[instance_id] = resolved_row
     return resolved
 
 
@@ -122,13 +129,22 @@ def resolved_component_row(
     payload: Mapping[str, Any],
     *,
     component_id: str,
+    instance_id: str | None = None,
 ) -> tuple[ComponentEntry | None, dict[str, Any] | None]:
     entry_lookup = component_entry_lookup()
     entry = entry_lookup.get(component_id)
     if entry is None:
         return None, None
     rows = _component_rows(payload, scope=entry.scope)
-    return entry, rows.get(component_id)
+    if instance_id is not None:
+        return entry, rows.get(instance_id)
+    matched_rows = [row for row in rows.values() if component_type_id(row) == component_id]
+    if len(matched_rows) > 1:
+        raise ValueError(
+            f"Component '{component_id}' has multiple enabled instances. "
+            "Resolve it by instance_id instead."
+        )
+    return entry, matched_rows[0] if matched_rows else None
 
 
 def resolve_static_component_output(
@@ -136,8 +152,9 @@ def resolve_static_component_output(
     *,
     component_id: str,
     output_name: str,
+    instance_id: str | None = None,
 ) -> Any:
-    entry, row = resolved_component_row(payload, component_id=component_id)
+    entry, row = resolved_component_row(payload, component_id=component_id, instance_id=instance_id)
     if entry is None or row is None:
         return _UNRESOLVED
     output_spec = output_lookup(entry).get(output_name)
@@ -145,12 +162,38 @@ def resolve_static_component_output(
         return _UNRESOLVED
     if output_spec.kind == "static":
         return to_plain_data(output_spec.value)
-    if output_spec.kind != "config":
-        return _UNRESOLVED
-    value = read_component_path(row, output_spec.source_path)
-    if value is None:
-        return _UNRESOLVED
-    return to_plain_data(value)
+    return _UNRESOLVED
+
+
+def resolve_handoff_field_value(
+    payload: Mapping[str, Any],
+    *,
+    component_id: str,
+    handoff_field: HandoffField,
+    instance_id: str | None = None,
+) -> Any:
+    """Resolve a HandoffField value from the component's config row.
+
+    For ``kind == "config_path"``, reads the dotted path directly from the
+    component row.  For ``kind == "output_ref"``, falls back to the existing
+    ``resolve_static_component_output`` helper.
+    """
+    if handoff_field.kind == "config_path":
+        _entry, row = resolved_component_row(
+            payload, component_id=component_id, instance_id=instance_id,
+        )
+        if row is None:
+            return _UNRESOLVED
+        value = read_component_path(row, handoff_field.value)
+        if value is None:
+            return _UNRESOLVED
+        return to_plain_data(value)
+    return resolve_static_component_output(
+        payload,
+        component_id=component_id,
+        output_name=handoff_field.value,
+        instance_id=instance_id,
+    )
 
 
 __all__ = [
@@ -162,6 +205,7 @@ __all__ = [
     "managed_input_binding_payload_paths",
     "managed_input_binding_paths",
     "output_lookup",
+    "resolve_handoff_field_value",
     "resolve_static_component_output",
     "resolved_component_row",
 ]

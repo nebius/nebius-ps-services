@@ -13,7 +13,7 @@ from .component_sources import SourceProfile
 from .flux_render import render_flux
 from .infra_render import render_terraform_artifacts
 from .inventory_ops import write_inventory
-from .paths import InstancePaths
+from .paths import ProjectPaths
 
 
 @dataclass(frozen=True)
@@ -21,13 +21,13 @@ class RenderResult:
     files_written: list[Path]
 
 
-def reset_generated_bundle(paths: InstancePaths) -> None:
+def reset_generated_bundle(paths: ProjectPaths) -> None:
     """Remove the previously generated bundle completely."""
     if paths.generated_dir.exists():
         shutil.rmtree(paths.generated_dir)
 
 
-def staged_generated_paths(paths: InstancePaths) -> InstancePaths:
+def staged_generated_paths(paths: ProjectPaths) -> ProjectPaths:
     """Create a sibling staging directory for a transactional generated/ replacement."""
     staging_dir = Path(
         tempfile.mkdtemp(
@@ -45,8 +45,8 @@ def staged_generated_paths(paths: InstancePaths) -> InstancePaths:
 
 
 def promote_staged_generated_paths(
-    staged_paths: InstancePaths,
-    final_paths: InstancePaths,
+    staged_paths: ProjectPaths,
+    final_paths: ProjectPaths,
 ) -> None:
     """Swap a fully rendered staged bundle into the canonical generated/ path."""
     backup_dir: Path | None = None
@@ -66,9 +66,9 @@ def promote_staged_generated_paths(
         shutil.rmtree(backup_dir)
 
 
-def _render_instance_to_paths(
+def _render_project_to_paths(
     config: Any,
-    paths: InstancePaths,
+    paths: ProjectPaths,
     *,
     component_output_values: dict[str, Any] | None = None,
     source_profile: SourceProfile = SourceProfile.PORTABLE,
@@ -85,9 +85,9 @@ def _render_instance_to_paths(
     return RenderResult(files_written=sorted(written))
 
 
-def render_instance(
+def render_project(
     config: Any,
-    paths: InstancePaths,
+    paths: ProjectPaths,
     *,
     component_output_values: dict[str, Any] | None = None,
     source_profile: SourceProfile = SourceProfile.PORTABLE,
@@ -95,7 +95,7 @@ def render_instance(
     """Render Terraform and Flux artifacts transactionally for one validated config."""
     staged_paths = staged_generated_paths(paths)
     try:
-        staged_result = _render_instance_to_paths(
+        staged_result = _render_project_to_paths(
             config,
             staged_paths,
             component_output_values=component_output_values,

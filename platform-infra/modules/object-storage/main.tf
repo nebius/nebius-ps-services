@@ -1,12 +1,12 @@
 resource "nebius_storage_v1_bucket" "protected" {
-  for_each = local.protected_buckets
+  count = var.protect_from_destroy ? 1 : 0
 
   parent_id = var.parent_id
-  name      = each.value.name
+  name      = var.name
 
-  versioning_policy    = each.value.versioning_policy
-  object_audit_logging = each.value.object_audit_logging
-  labels               = each.value.labels
+  versioning_policy    = var.versioning_policy
+  object_audit_logging = var.object_audit_logging
+  labels               = var.labels
 
   lifecycle {
     prevent_destroy = true
@@ -14,12 +14,12 @@ resource "nebius_storage_v1_bucket" "protected" {
 }
 
 resource "nebius_storage_v1_bucket" "unprotected" {
-  for_each = local.unprotected_buckets
+  count = var.protect_from_destroy ? 0 : 1
 
   parent_id = var.parent_id
-  name      = each.value.name
+  name      = var.name
 
-  versioning_policy    = each.value.versioning_policy
-  object_audit_logging = each.value.object_audit_logging
-  labels               = each.value.labels
+  versioning_policy    = var.versioning_policy
+  object_audit_logging = var.object_audit_logging
+  labels               = var.labels
 }

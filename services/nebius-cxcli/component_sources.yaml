@@ -10,28 +10,54 @@ shared:
 
 infra:
   tf_modules:
+    # `group` is a UI grouping label used in selection lists and prompts.
+    # It is not passed to Terraform and does not affect Nebius resources.
     - module: mk8s
       portable_source: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mk8s?ref=main
       local_source: ../../platform-infra/modules/mk8s
       description: Managed Kubernetes baseline cluster module
       group: Compute
+      kind: nebius.mk8s.cluster
+      aliases: [k8s, cluster, kubernetes]
       enable: true
+      # `defaults` seeds runtime config values and fills them only when omitted.
+      # For Terraform modules, target `inputs.*` paths. Values can be literals
+      # or `shared.<path>` references.
       defaults:
+        inputs.cpu_nodes_count: 2
         inputs.mk8s_cluster_public_endpoint: true
         inputs.kube_network_service_cidrs:
         - /20
+      # `wizard_fields` is optional progressive-enhancement metadata.
+      # Generic modules should work without it. Use it only when provider-backed
+      # UX needs an explicit hint or override beyond convention-based inference.
+      wizard_fields:
+        inputs.cpu_nodes_platform:
+          options:
+            from: mk8s_compatible_platforms
+            filter: "^cpu-"
+        inputs.gpu_nodes_platform:
+          options:
+            from: mk8s_compatible_platforms
+            filter: "^gpu-"
+      # `outputs` exports stable aliases from this component to the CLI/runtime
+      # and to other components.
       outputs:
         tf_outputs: true
-        static:
-          access: external
       handoff:
         cluster_id: cluster_id
-        access: access
+        access: inputs.mk8s_cluster_public_endpoint
+      # `status` tells the CLI how to poll Nebius readiness for the component's
+      # primary resource after provisioning.
+      status:
+        name_input: cluster_name
     - module: managed-postgresql
       portable_source: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/managed-postgresql?ref=main
       local_source: ../../platform-infra/modules/managed-postgresql
       description: Managed PostgreSQL database module
       group: Storage
+      kind: nebius.msp.postgresql.cluster
+      aliases: [postgresql, postgres, msp]
       enable: false
       outputs:
         tf_outputs: true
@@ -40,14 +66,18 @@ infra:
       local_source: ../../platform-infra/modules/sfs
       description: Shared filesystem and CSI integration module
       group: Storage
+      kind: nebius.compute.filesystem
+      aliases: [filesystem, fs, mounted]
       enable: false
       outputs:
         tf_outputs: true
     - module: object-storage
       portable_source: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/object-storage?ref=main
       local_source: ../../platform-infra/modules/object-storage
-      description: Object storage buckets module
+      description: Object storage bucket module
       group: Storage
+      kind: nebius.storage.bucket
+      aliases: [bucket, buckets]
       enable: false
       outputs:
         tf_outputs: true
@@ -56,6 +86,7 @@ infra:
       local_source: ../../platform-infra/modules/mysterybox
       description: MysteryBox secrets module
       group: Security
+      aliases: [secrets]
       enable: false
       outputs:
         tf_outputs: true
@@ -64,6 +95,7 @@ infra:
       local_source: ../../platform-infra/modules/wireguard-jumphost
       description: WireGuard jump host module
       group: Network
+      aliases: [wireguard, wg]
       enable: false
       outputs:
         tf_outputs: true
@@ -74,6 +106,7 @@ infra:
       local_source: ../../platform-infra/modules/ssh-jumphost
       description: SSH-only hardened jump host module
       group: Security
+      aliases: [jump, host]
       enable: false
       outputs:
         tf_outputs: true

@@ -75,7 +75,9 @@ def test_parse_peer_source_supports_json_keyword_matching(tmp_path: Path) -> Non
     assert tunnel["inner_cidr"] == "169.254.20.0/30"
 
 
-def test_build_config_from_peer_files_fills_schema_defaults_for_missing_fields(tmp_path: Path) -> None:
+def test_build_config_from_peer_files_fills_schema_defaults_for_missing_fields(
+    tmp_path: Path,
+) -> None:
     peer_file = tmp_path / "branch-office.yaml"
     peer_file.write_text(
         yaml.safe_dump(

@@ -310,9 +310,7 @@ def _format_role_override_lines(
         lines.append(f"Gateway VM: {hostname}")
         for override in overrides:
             lines.append(f"  Connection: {override['connection']}")
-            lines.append(
-                f"    Configured active tunnel: {override['configured_active_tunnel']}"
-            )
+            lines.append(f"    Configured active tunnel: {override['configured_active_tunnel']}")
             lines.append(f"    Current traffic path: {override['selected_tunnel']}")
             lines.append(f"    Reason: {override['reason']} ({override['detail']})")
 
@@ -412,8 +410,9 @@ def _build_remote_tunnel_restart_script() -> str:
     installed on the gateway VM. This inline helper is executed over SSH so the
     local CLI always uses the latest restart logic.
     """
-    return textwrap.dedent(
-        """
+    return (
+        textwrap.dedent(
+            """
         from __future__ import annotations
 
         import argparse
@@ -658,7 +657,9 @@ def _build_remote_tunnel_restart_script() -> str:
         if __name__ == "__main__":
             raise SystemExit(main())
         """
-    ).strip() + "\n"
+        ).strip()
+        + "\n"
+    )
 
 
 def _normalize_config_value(value: t.Any, fallback: str = "") -> str:
@@ -1632,10 +1633,7 @@ def create_from_peer_config(
         None,
         "--local-config-file",
         "-c",
-        help=(
-            "Output local config file path. "
-            "Alias for CONFIG_FILE on this command."
-        ),
+        help=("Output local config file path. Alias for CONFIG_FILE on this command."),
     ),
     peer_config_file: list[Path] = typer.Option(
         ...,
@@ -1661,7 +1659,11 @@ def create_from_peer_config(
 
     console = Console()
 
-    if config_file is not None and local_config_file is not None and config_file != local_config_file:
+    if (
+        config_file is not None
+        and local_config_file is not None
+        and config_file != local_config_file
+    ):
         console.print()
         console.print(
             Panel.fit(
@@ -2195,11 +2197,13 @@ def status(
                     route_data = json.loads(route_out.stdout)
                     routes = route_data.get("routes") or {}
                     if isinstance(routes, dict):
-                        ecmp_warnings_by_vm[inst_cfg.hostname] = _detect_cross_connection_ecmp_warnings(
-                            routes,
-                            peer_connection_map.get(inst_cfg.hostname, {}),
-                            peer_tunnel_map.get(inst_cfg.hostname, {}),
-                            peer_role_map.get(inst_cfg.hostname, {}),
+                        ecmp_warnings_by_vm[inst_cfg.hostname] = (
+                            _detect_cross_connection_ecmp_warnings(
+                                routes,
+                                peer_connection_map.get(inst_cfg.hostname, {}),
+                                peer_tunnel_map.get(inst_cfg.hostname, {}),
+                                peer_role_map.get(inst_cfg.hostname, {}),
+                            )
                         )
             except Exception:
                 pass
@@ -2359,15 +2363,17 @@ def status(
                         )
                         cache_key = connection_name or "__all__"
                         if cache_key not in carrying_by_connection:
-                            carrying_by_connection[cache_key] = _select_carrying_tunnel_for_connection(
-                                inst_cfg.hostname,
-                                connection_name,
-                                tunnel_order,
-                                tunnel_statuses,
-                                bgp_states,
-                                tunnel_bgp_map,
-                                tunnel_role_map,
-                                tunnel_connection_map,
+                            carrying_by_connection[cache_key] = (
+                                _select_carrying_tunnel_for_connection(
+                                    inst_cfg.hostname,
+                                    connection_name,
+                                    tunnel_order,
+                                    tunnel_statuses,
+                                    bgp_states,
+                                    tunnel_bgp_map,
+                                    tunnel_role_map,
+                                    tunnel_connection_map,
+                                )
                             )
                         traffic_state_display = _format_traffic_state(
                             inst_cfg.hostname,
@@ -2524,7 +2530,9 @@ def status(
                     # Format BGP status with colors
                     bgp_status = info.get("bgp", "-")
                     bgp_display = format_bgp_status(bgp_status)
-                    connection_name = tunnel_connection_map.get(inst_cfg.hostname, {}).get(tunnel_name)
+                    connection_name = tunnel_connection_map.get(inst_cfg.hostname, {}).get(
+                        tunnel_name
+                    )
                     cache_key = connection_name or "__all__"
                     if cache_key not in carrying_by_connection:
                         carrying_by_connection[cache_key] = _select_carrying_tunnel_for_connection(
@@ -2873,9 +2881,7 @@ print(json.dumps(health))
     console.print(routing_table)
 
     active_ecmp_warnings = {
-        hostname: warnings
-        for hostname, warnings in ecmp_warnings_by_vm.items()
-        if warnings
+        hostname: warnings for hostname, warnings in ecmp_warnings_by_vm.items() if warnings
     }
     if active_ecmp_warnings:
         warning_lines = _format_ecmp_warning_lines(active_ecmp_warnings)
@@ -3025,6 +3031,14 @@ def add_routes_local(
         None, exists=True, readable=True, help=f"Path to {DEFAULT_CONFIG_FILENAME}"
     ),
     project_id: str | None = typer.Option(None, help="Nebius project/folder identifier"),
+    summarize: bool = typer.Option(
+        False,
+        "--summarize",
+        help=(
+            "Collapse exact adjacent remote prefixes per gateway next-hop to reduce "
+            "route-table entries. Only exact unions are summarized."
+        ),
+    ),
 ):
     """Ensure Nebius VPC routes exist for remote prefixes (Nebius → Remote).
 
@@ -3054,7 +3068,7 @@ def add_routes_local(
     routes = RouteManager(project_id=proj_id, auth_token=auth_token)
 
     print("[bold]Ensuring VPC routes for remote prefixes on local subnets...[/bold]")
-    routes.add_routes(plan, local_cfg)
+    routes.add_routes(plan, local_cfg, summarize=summarize)
     routes.ensure_bgp_advertisements_current(plan, local_cfg)
 
     print("[green]Local route management completed.[/green]")
@@ -3072,6 +3086,7 @@ def list_routes_local(
     Shows:
     1. Route table entries on workload subnets selected by gateway.local_prefixes
     2. BGP routes being advertised to peer routers, organized by connection/tunnel
+    3. Multi-connection-safe peer attribution by owning gateway VM and peer IP
     """
     local_config_file = _resolve_local_config(
         local_config_file,
@@ -3123,8 +3138,9 @@ def list_routes_remote(
 ):
     """List remote routes learned/configured via VPN (Remote → Nebius).
 
-    - BGP mode: Shows BGP-learned routes from peers with whitelist status
-    - Static mode: Shows static routes configured on gateway VMs
+    - BGP mode: Shows routes learned from the selected connection's tunnel peers on the
+      owning gateway VM(s), with whitelist status
+    - Static mode: Shows static routes configured on the owning gateway VM(s)
     """
     local_config_file = _resolve_local_config(
         local_config_file,
@@ -3575,7 +3591,11 @@ def destroy(
 def restart_tunnel(
     tunnel_name: str = typer.Argument(
         ...,
-        help="Name of the tunnel to restart (use 'all' to restart all tunnels). Use 'nebius-vpngw status' to find tunnel names.",
+        help=(
+            "Name of the tunnel to restart (use 'all' to restart all tunnels). "
+            "Tunnel names are global across the config; only the owning gateway VM(s) are "
+            "targeted. Use 'nebius-vpngw status' to find tunnel names."
+        ),
     ),
     local_config_file: Path = typer.Option(
         None,
@@ -3591,7 +3611,8 @@ def restart_tunnel(
     This command connects to the gateway VMs via SSH, restarts the matching
     IPsec tunnel, and clears the matching BGP neighbor when the tunnel uses
     BGP. Useful for immediate recovery from tunnel and control-plane desync
-    or after network maintenance.
+    or after network maintenance. In multi-VM and multi-connection topologies,
+    a named tunnel only targets its owning connection/instance.
 
     Examples:
 
@@ -3685,9 +3706,7 @@ def restart_tunnel(
             ]
             if not target_instances:
                 available = sorted(
-                    tunnel
-                    for tunnels in tunnels_by_host.values()
-                    for tunnel in tunnels
+                    tunnel for tunnels in tunnels_by_host.values() for tunnel in tunnels
                 )
                 if available:
                     print(
@@ -3754,7 +3773,9 @@ def restart_tunnel(
                                 timeout=20,
                             )
                             if shutdown_result.returncode != 0:
-                                print(f"[red]✗ Failed to administratively shut BGP neighbor {peer_ip}[/red]")
+                                print(
+                                    f"[red]✗ Failed to administratively shut BGP neighbor {peer_ip}[/red]"
+                                )
                                 if shutdown_result.stdout.strip():
                                     print(f"[dim]{shutdown_result.stdout.strip()}[/dim]")
                                 if shutdown_result.stderr.strip():
@@ -3840,8 +3861,9 @@ def tunnel_failover(
     tunnel_name: str | None = typer.Argument(
         None,
         help=(
-            "Passive tunnel name to fail over to. Required when more than two enabled tunnels "
-            "exist in the config."
+            "Passive tunnel name to fail over to. Required when more than one passive "
+            "candidate exists in the config, which is typical for multi-connection "
+            "topologies."
         ),
     ),
     local_config_file: Path = typer.Option(
@@ -3852,7 +3874,7 @@ def tunnel_failover(
         show_default="nebius-vpngw.config.yaml in current directory",
     ),
 ) -> None:
-    """Manually fail over traffic to a passive tunnel by disabling the active BGP neighbor."""
+    """Manually fail over traffic within one connection/instance to a passive tunnel."""
     try:
         config_path = _resolve_local_config(
             local_config_file, create_if_missing=False, exit_after_create=False
@@ -4112,8 +4134,9 @@ def tunnel_failback(
     tunnel_name: str | None = typer.Argument(
         None,
         help=(
-            "Active tunnel name to restore. Required when multiple active tunnels exist in the "
-            "config."
+            "Active tunnel name to restore. Required when more than one active "
+            "candidate exists in the config, which is typical for multi-connection "
+            "topologies."
         ),
     ),
     local_config_file: Path = typer.Option(
@@ -4124,7 +4147,7 @@ def tunnel_failback(
         show_default="nebius-vpngw.config.yaml in current directory",
     ),
 ) -> None:
-    """Restore traffic to the active tunnel by re-enabling its BGP neighbor."""
+    """Restore traffic within one connection/instance to the active tunnel."""
     try:
         config_path = _resolve_local_config(
             local_config_file, create_if_missing=False, exit_after_create=False

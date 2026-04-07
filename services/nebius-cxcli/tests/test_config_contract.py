@@ -22,3 +22,23 @@ def test_starter_template_is_runtime_valid() -> None:
     assert config.version == "v1"
     assert config.client_info.client_name == "client-a"
     assert config.client_info.nebius.project_id == "project-456"
+
+
+def test_starter_template_disables_email_when_recipient_is_blank() -> None:
+    yaml_text = starter_config_yaml(
+        client_name="client-a",
+        tenant_id="tenant-123",
+        project_id="project-456",
+        region_id="eu-north1",
+        email=None,
+    )
+
+    payload = yaml.safe_load(yaml_text)
+    assert isinstance(payload, dict)
+    notifications = payload["client_info"]["notifications"]
+    assert notifications["email_enabled"] is False
+    assert notifications["email"] is None
+
+    config = validate_config(payload)
+    assert config.client_info.notifications.email_enabled is False
+    assert config.client_info.notifications.email is None

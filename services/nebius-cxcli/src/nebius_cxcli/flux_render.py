@@ -23,7 +23,7 @@ from .component_wiring import (
     resolve_static_component_output,
 )
 from .components import component_entries
-from .paths import InstancePaths
+from .paths import ProjectPaths
 from .runtime_config import to_plain_data
 
 
@@ -332,7 +332,7 @@ def _helm_release_doc(
 
 @dataclass
 class _FluxRenderState:
-    paths: InstancePaths
+    paths: ProjectPaths
     files: list[Path] = field(default_factory=list)
     resources: list[str] = field(default_factory=lambda: ["./helm-repositories.yaml"])
     repositories: list[dict[str, Any]] = field(default_factory=list)
@@ -408,7 +408,7 @@ def _render_flux_app_helm_releases(
 
 def render_flux(
     config: Any,
-    paths: InstancePaths,
+    paths: ProjectPaths,
     *,
     component_output_values: dict[str, Any] | None = None,
 ) -> list[Path]:
@@ -442,7 +442,7 @@ def render_flux(
             + "\n"
         )
     else:
-        repo_yaml = "# No Helm repositories are enabled for this instance\n"
+        repo_yaml = "# No Helm repositories are enabled for this project\n"
     repos_path.write_text(repo_yaml, encoding="utf-8")
     state.files.append(repos_path)
 

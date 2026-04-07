@@ -79,7 +79,7 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                   pip install --upgrade pip
                   pip install "git+{NEBIUS_PS_SERVICES_REPO}@${{{{ env.NEBIUS_CXCLI_REF }}}}#subdirectory=services/nebius-cxcli"
 
-              - name: Discover changed deployment instances
+              - name: Discover changed deployment projects
                 id: discover
                 run: |
                   set -euo pipefail

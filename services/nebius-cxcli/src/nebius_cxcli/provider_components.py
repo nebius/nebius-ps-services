@@ -295,6 +295,13 @@ def reset_provider_component_cache() -> None:
     discover_provider_resource_required_leaf_names.cache_clear()
 
 
+def _entry_aliases(component_id: str) -> tuple[str, ...]:
+    from .components import component_lookup
+
+    entry = component_lookup("infra").get(component_id)
+    return entry.aliases if entry is not None else ()
+
+
 def infer_infra_component_category(component_id: str) -> str:
     component = component_id.strip().lower()
     if not component:
@@ -305,17 +312,7 @@ def infer_infra_component_category(component_id: str) -> str:
         return _fallback_component_category(component)
 
     tokens = set(component.replace("_", "-").split("-"))
-    alias_tokens = set(tokens)
-    if "sfs" in tokens:
-        alias_tokens.add("filesystem")
-    if "object" in tokens:
-        alias_tokens.add("bucket")
-    if "postgresql" in tokens:
-        alias_tokens.add("msp")
-    if "mk8s" in tokens:
-        alias_tokens.add("cluster")
-    if "jumphost" in tokens:
-        alias_tokens.add("instance")
+    alias_tokens = set(tokens) | set(_entry_aliases(component))
 
     category_scores: dict[str, int] = {}
     for resource in resources:
@@ -337,15 +334,13 @@ def _component_matches_provider_resource(component_id: str, resource_name: str) 
     if component_tokens <= resource_tokens:
         return True
 
-    alias_groups: tuple[set[str], ...] = (
-        {"mk8s", "k8s", "cluster", "clusters"},
-        {"postgresql", "msp", "postgres"},
-        {"object", "storage", "bucket", "buckets"},
-        {"sfs", "filesystem", "mounted", "fs"},
-        {"wireguard", "wg"},
-        {"jumphost", "jump", "host", "instance"},
-    )
-    return any(component_tokens & group and resource_tokens & group for group in alias_groups)
+    entry_aliases = set(_entry_aliases(component_id))
+    if entry_aliases:
+        expanded = component_tokens | entry_aliases
+        if expanded & resource_tokens:
+            return True
+
+    return False
 
 
 def infer_infra_component_origin(component_id: str) -> str:
@@ -363,28 +358,20 @@ def infer_infra_component_origin(component_id: str) -> str:
 
 
 def _fallback_component_category(component_id: str) -> str:
-    tokens = set(component_id.replace("_", "-").split("-"))
-    if {"mk8s", "wireguard", "ssh", "jumphost"} & tokens:
-        return "Compute"
-    if {"object", "storage", "sfs", "postgresql"} & tokens:
-        return "Storage"
-    if {"mysterybox"} & tokens:
-        return "Security"
+    from .components import component_lookup
+
+    entry = component_lookup("infra").get(component_id)
+    if entry is not None and entry.group:
+        return entry.group
     return "Other"
 
 
 def _fallback_component_origin(component_id: str) -> str:
-    tokens = set(component_id.replace("_", "-").split("-"))
-    provider_like = {
-        "mk8s",
-        "postgresql",
-        "object",
-        "storage",
-        "sfs",
-        "mysterybox",
-    }
-    if tokens & provider_like:
-        return "provider"
+    from .components import component_lookup
+
+    entry = component_lookup("infra").get(component_id)
+    if entry is not None and entry.origin and entry.origin != "registry":
+        return entry.origin
     return "custom"
 
 

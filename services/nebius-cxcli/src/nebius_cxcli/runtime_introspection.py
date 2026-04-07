@@ -304,10 +304,229 @@ def _parse_hcl_default(raw: str) -> Any:
         return int(token)
     except ValueError:
         pass
+    if token.startswith("{") and token.endswith("}"):
+        parsed_mapping = _parse_hcl_mapping_default(token)
+        if parsed_mapping is not None:
+            return parsed_mapping
+    if token.startswith("[") and token.endswith("]"):
+        yaml_candidate = _hcl_default_to_yaml_candidate(token)
+        with contextlib.suppress(Exception):
+            return yaml.safe_load(yaml_candidate)
     try:
         return ast.literal_eval(token)
     except Exception:
         return token
+
+
+def _top_level_assignment_index(token: str) -> int | None:
+    in_string = False
+    escaped = False
+    brace_depth = 0
+    bracket_depth = 0
+    paren_depth = 0
+    for index, char in enumerate(token):
+        if in_string:
+            if escaped:
+                escaped = False
+                continue
+            if char == "\\":
+                escaped = True
+                continue
+            if char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+            continue
+        if char == "{":
+            brace_depth += 1
+            continue
+        if char == "}":
+            brace_depth = max(brace_depth - 1, 0)
+            continue
+        if char == "[":
+            bracket_depth += 1
+            continue
+        if char == "]":
+            bracket_depth = max(bracket_depth - 1, 0)
+            continue
+        if char == "(":
+            paren_depth += 1
+            continue
+        if char == ")":
+            paren_depth = max(paren_depth - 1, 0)
+            continue
+        if (
+            char == "="
+            and not in_string
+            and brace_depth == 0
+            and bracket_depth == 0
+            and paren_depth == 0
+        ):
+            return index
+    return None
+
+
+def _split_top_level_hcl_items(token: str) -> list[str]:
+    items: list[str] = []
+    current: list[str] = []
+    in_string = False
+    escaped = False
+    brace_depth = 0
+    bracket_depth = 0
+    paren_depth = 0
+    for char in token:
+        if in_string:
+            current.append(char)
+            if escaped:
+                escaped = False
+                continue
+            if char == "\\":
+                escaped = True
+                continue
+            if char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+            current.append(char)
+            continue
+        if char == "{":
+            brace_depth += 1
+            current.append(char)
+            continue
+        if char == "}":
+            brace_depth = max(brace_depth - 1, 0)
+            current.append(char)
+            continue
+        if char == "[":
+            bracket_depth += 1
+            current.append(char)
+            continue
+        if char == "]":
+            bracket_depth = max(bracket_depth - 1, 0)
+            current.append(char)
+            continue
+        if char == "(":
+            paren_depth += 1
+            current.append(char)
+            continue
+        if char == ")":
+            paren_depth = max(paren_depth - 1, 0)
+            current.append(char)
+            continue
+        if (
+            char in {",", "\n"}
+            and brace_depth == 0
+            and bracket_depth == 0
+            and paren_depth == 0
+        ):
+            item = "".join(current).strip()
+            if item:
+                items.append(item)
+            current = []
+            continue
+        current.append(char)
+    item = "".join(current).strip()
+    if item:
+        items.append(item)
+    return items
+
+
+def _parse_hcl_key(token: str) -> str | None:
+    text = token.strip().rstrip(",")
+    if not text:
+        return None
+    if text.startswith('"') and text.endswith('"'):
+        with contextlib.suppress(Exception):
+            return ast.literal_eval(text)
+    return text
+
+
+def _parse_hcl_mapping_default(token: str) -> dict[str, Any] | None:
+    text = token.strip()
+    if not (text.startswith("{") and text.endswith("}")):
+        return None
+    inner = text[1:-1].strip()
+    if not inner:
+        return {}
+    mapping: dict[str, Any] = {}
+    for item in _split_top_level_hcl_items(inner):
+        assignment_index = _top_level_assignment_index(item)
+        if assignment_index is None:
+            return None
+        key = _parse_hcl_key(item[:assignment_index])
+        if key is None:
+            return None
+        mapping[str(key)] = _parse_hcl_default(item[assignment_index + 1 :])
+    return mapping
+
+
+def _hcl_default_to_yaml_candidate(token: str) -> str:
+    return token.replace("=", ":")
+
+
+def _extract_hcl_attribute_expression(block: str, attribute_name: str) -> str | None:
+    match = re.search(
+        rf"(^|\n)\s*{re.escape(attribute_name)}\s*=\s*",
+        block,
+        re.MULTILINE,
+    )
+    if match is None:
+        return None
+    index = match.end()
+    while index < len(block) and block[index].isspace() and block[index] != "\n":
+        index += 1
+    if index >= len(block):
+        return ""
+    if block[index : index + 2] == "<<":
+        line_end = block.find("\n", index)
+        return block[index:] if line_end == -1 else block[index:line_end]
+
+    start = index
+    first = block[index]
+    if first not in "{[(":
+        line_end = block.find("\n", index)
+        return block[index:] if line_end == -1 else block[index:line_end]
+
+    in_string = False
+    escaped = False
+    brace_depth = 0
+    bracket_depth = 0
+    paren_depth = 0
+    for cursor in range(index, len(block)):
+        char = block[cursor]
+        if in_string:
+            if escaped:
+                escaped = False
+                continue
+            if char == "\\":
+                escaped = True
+                continue
+            if char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+            continue
+        if char == "{":
+            brace_depth += 1
+            continue
+        if char == "}":
+            brace_depth = max(brace_depth - 1, 0)
+        elif char == "[":
+            bracket_depth += 1
+            continue
+        elif char == "]":
+            bracket_depth = max(bracket_depth - 1, 0)
+        elif char == "(":
+            paren_depth += 1
+            continue
+        elif char == ")":
+            paren_depth = max(paren_depth - 1, 0)
+        if brace_depth == 0 and bracket_depth == 0 and paren_depth == 0 and cursor >= start:
+            return block[start : cursor + 1]
+    return block[start:]
 
 
 def _terraform_config_inspect_payload(path: Path) -> tuple[dict[str, Any] | None, str | None]:
@@ -453,7 +672,6 @@ def _extract_braced_block(text: str, open_brace_index: int) -> str | None:
 
 def _module_variables_from_tf_files(path: Path) -> tuple[ModuleVariable, ...]:
     variable_block_pattern = re.compile(r'variable\s+"([^"]+)"\s*\{', re.MULTILINE)
-    default_pattern = re.compile(r"(^|\n)\s*default\s*=\s*(.+)", re.MULTILINE)
     type_pattern = re.compile(r"(^|\n)\s*type\s*=\s*(.+)", re.MULTILINE)
     nullable_pattern = re.compile(r"(^|\n)\s*nullable\s*=\s*(.+)", re.MULTILINE)
     description_pattern = re.compile(r'(^|\n)\s*description\s*=\s*"([^"]*)"', re.MULTILINE)
@@ -474,22 +692,22 @@ def _module_variables_from_tf_files(path: Path) -> tuple[ModuleVariable, ...]:
             block = _extract_braced_block(text, open_brace_index)
             if block is None:
                 continue
-            default_match = default_pattern.search(block)
-            has_default = default_match is not None
-            default_value = _parse_hcl_default(default_match.group(2)) if default_match else None
-            required = not has_default
-            type_match = type_pattern.search(block)
-            type_hint = _normalize_type_hint(type_match.group(2) if type_match else None)
-            description_match = description_pattern.search(block)
-            description = _normalize_description(
-                description_match.group(2) if description_match else None
-            )
+            default_expr = _extract_hcl_attribute_expression(block, "default")
+            has_default = default_expr is not None
+            default_value = _parse_hcl_default(default_expr) if default_expr is not None else None
             nullable_value: bool | None = None
             nullable_match = nullable_pattern.search(block)
             if nullable_match:
                 nullable_token = str(nullable_match.group(2)).strip().lower().rstrip(",")
                 if nullable_token in {"true", "false"}:
                     nullable_value = nullable_token == "true"
+            required = (not has_default) and (nullable_value is not True)
+            type_match = type_pattern.search(block)
+            type_hint = _normalize_type_hint(type_match.group(2) if type_match else None)
+            description_match = description_pattern.search(block)
+            description = _normalize_description(
+                description_match.group(2) if description_match else None
+            )
 
             existing = discovered.get(name)
             if existing is None:
@@ -624,6 +842,97 @@ def module_source_validation_issues(module_source: str) -> tuple[str, ...]:
     return tuple(issues)
 
 
+_MODULE_PROVIDER_BLOCK_PATTERN = re.compile(r'(?m)^\s*provider\s+"[^"]+"\s*\{')
+_MODULE_REQUIRED_VERSION_PATTERN = re.compile(r"\brequired_version\b")
+_MODULE_REQUIRED_PROVIDERS_PATTERN = re.compile(r"\brequired_providers\b")
+_MODULE_BACKEND_BLOCK_PATTERN = re.compile(
+    r'(?s)\bterraform\s*\{.*?\bbackend\s+"[^"]+"\s*\{'
+)
+
+
+def _example_root_directories(examples_dir: Path) -> tuple[Path, ...]:
+    roots: list[Path] = []
+    for child in sorted(examples_dir.iterdir()):
+        if not child.is_dir():
+            continue
+        if (child / "main.tf").exists():
+            roots.append(child)
+    return tuple(roots)
+
+
+@lru_cache(maxsize=64)
+def module_cli_contract_findings(
+    module_source: str,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    source = str(module_source).strip()
+    if not source:
+        return (), ()
+
+    path_text, inspection_issue = _module_inspection_path(source)
+    if inspection_issue or not path_text:
+        return (), ()
+
+    module_dir = Path(path_text)
+    issues: list[str] = []
+    warnings: list[str] = []
+
+    canonical_tf_files = ("main.tf", "variables.tf", "outputs.tf")
+    for file_name in canonical_tf_files:
+        if not (module_dir / file_name).exists():
+            warnings.append(
+                f"module source '{source}' is missing canonical file '{file_name}' in {module_dir}"
+            )
+
+    versions_file = module_dir / "versions.tf"
+    if not versions_file.exists():
+        issues.append(
+            f"module source '{source}' is missing versions.tf in {module_dir}"
+        )
+    else:
+        versions_text = versions_file.read_text(encoding="utf-8")
+        if not _MODULE_REQUIRED_VERSION_PATTERN.search(versions_text):
+            issues.append(
+                f"module source '{source}' versions.tf is missing required_version"
+            )
+        if not _MODULE_REQUIRED_PROVIDERS_PATTERN.search(versions_text):
+            issues.append(
+                f"module source '{source}' versions.tf is missing required_providers"
+            )
+
+    readme_file = module_dir / "README.md"
+    if not readme_file.exists():
+        warnings.append(
+            f"module source '{source}' is missing README.md in {module_dir}"
+        )
+
+    examples_dir = module_dir / "examples"
+    if not examples_dir.exists():
+        warnings.append(
+            f"module source '{source}' is missing examples/ in {module_dir}"
+        )
+    elif not examples_dir.is_dir():
+        issues.append(
+            f"module source '{source}' examples exists but is not a directory in {module_dir}"
+        )
+    elif not _example_root_directories(examples_dir):
+        warnings.append(
+            f"module source '{source}' examples/ has no runnable example roots with main.tf"
+        )
+
+    for tf_file in sorted(module_dir.glob("*.tf")):
+        text = tf_file.read_text(encoding="utf-8")
+        if _MODULE_PROVIDER_BLOCK_PATTERN.search(text):
+            issues.append(
+                f"module source '{source}' contains provider blocks in {tf_file.name}; child modules must not configure providers"
+            )
+        if _MODULE_BACKEND_BLOCK_PATTERN.search(text):
+            issues.append(
+                f"module source '{source}' contains backend blocks in {tf_file.name}; child modules must not configure backends"
+            )
+
+    return tuple(issues), tuple(warnings)
+
+
 @lru_cache(maxsize=64)
 def module_variable_names(module_source: str) -> tuple[str, ...]:
     return tuple(variable.name for variable in module_variables(module_source))
@@ -663,6 +972,7 @@ def reset_runtime_introspection_cache() -> None:
     module_outputs.cache_clear()
     module_output_names.cache_clear()
     module_source_validation_issues.cache_clear()
+    module_cli_contract_findings.cache_clear()
     module_variable_names.cache_clear()
     module_required_variables.cache_clear()
     helm_chart_default_values.cache_clear()

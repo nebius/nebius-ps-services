@@ -22,6 +22,7 @@ Scaffold production-grade Python repositories with conservative, reusable defaul
 ## Defaults
 
 - `pyproject.toml` with PEP 621 metadata.
+- Prefer `pyproject.toml` as the single packaging metadata source; add a minimal `setup.py` shim only when repo policy, legacy build entrypoints, or release tooling still require `python setup.py` compatibility.
 - `setuptools` + `setuptools-scm` for build/versioning.
 - `src/` package layout.
 - If the package exposes `__version__`, a runtime resolver that prefers live

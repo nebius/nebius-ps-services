@@ -8,6 +8,7 @@ from collections.abc import Callable, Mapping
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from typing import Any
 
 from nebius.api.nebius.common.v1 import GetOperationRequest, ListOperationsRequest
@@ -21,6 +22,7 @@ from nebius.api.nebius.mk8s.v1 import (
 )
 from rich.markup import escape
 
+from .component_instances import component_instance_label
 from .runtime_config import to_plain_data
 from .sdk_auth import init_nebius_sdk
 
@@ -85,7 +87,18 @@ class Mk8sDeploymentTarget:
     cluster_name: str
 
 
+@dataclass(frozen=True)
+class StatusWatcherTarget:
+    component_id: str
+    kind: str
+    parent_id: str
+    resource_name: str
+    instance_id: str = ""
+
+
 def _mk8s_deployment_target(config: Any) -> Mk8sDeploymentTarget | None:
+    from .components import component_lookup
+
     payload = to_plain_data(config)
     if not isinstance(payload, dict):
         return None
@@ -98,19 +111,115 @@ def _mk8s_deployment_target(config: Any) -> Mk8sDeploymentTarget | None:
     components = infra.get("components")
     if not isinstance(components, list):
         return None
+
+    entry_by_id = component_lookup("infra")
     for item in components:
         if not isinstance(item, Mapping) or not bool(item.get("enabled", False)):
             continue
-        if _as_text(item.get("id")).lower() != "mk8s":
+        component_id = _as_text(item.get("id")).lower()
+        entry = entry_by_id.get(component_id)
+        if entry is None or getattr(entry, "handoff", None) is None:
             continue
         inputs = item.get("inputs")
         if not isinstance(inputs, Mapping):
             continue
-        cluster_name = _as_text(inputs.get("cluster_name"))
+        # Use status.name_input to find the cluster name field dynamically.
+        name_input = "cluster_name"
+        status = getattr(entry, "status", None)
+        if status is not None:
+            name_input = getattr(status, "name_input", "name") or "name"
+        cluster_name = _as_text(inputs.get(name_input))
         if not cluster_name:
             continue
         return Mk8sDeploymentTarget(project_id=project_id, cluster_name=cluster_name)
     return None
+
+
+def _resource_metadata_name(resource: Any) -> str:
+    metadata = getattr(resource, "metadata", None)
+    return _as_text(getattr(metadata, "name", None))
+
+
+def _resource_metadata_id(resource: Any) -> str:
+    metadata = getattr(resource, "metadata", None)
+    return _as_text(getattr(metadata, "id", None) or getattr(resource, "id", None))
+
+
+def _response_collection(response: Any, *field_names: str) -> list[Any]:
+    for field_name in field_names:
+        values = getattr(response, field_name, None)
+        if values is not None:
+            return list(values or [])
+    return []
+
+
+def _enum_field_name(message: Any, field_name: str, *, prefixes: tuple[str, ...] = ()) -> str:
+    if message is None:
+        return "UNKNOWN"
+    raw_value = getattr(message, field_name, None)
+    if isinstance(raw_value, Enum):
+        name = _as_text(getattr(raw_value, "name", None)).upper()
+        for prefix in prefixes:
+            if name.startswith(prefix):
+                name = name[len(prefix) :]
+                break
+        return name or "UNKNOWN"
+    descriptor = getattr(message, "DESCRIPTOR", None)
+    field = getattr(descriptor, "fields_by_name", {}).get(field_name) if descriptor is not None else None
+    enum_type = getattr(field, "enum_type", None)
+    if enum_type is not None:
+        with suppress(Exception):
+            value = enum_type.values_by_number.get(int(raw_value))
+            if value is not None:
+                name = _as_text(value.name).upper()
+                for prefix in prefixes:
+                    if name.startswith(prefix):
+                        name = name[len(prefix) :]
+                        break
+                return name or "UNKNOWN"
+    text = _as_text(raw_value).upper()
+    if not text:
+        return "UNKNOWN"
+    for prefix in prefixes:
+        if text.startswith(prefix):
+            text = text[len(prefix) :]
+            break
+    return text or "UNKNOWN"
+
+
+def _latest_operation_summary(operation_service: Any, resource_id: str) -> str | None:
+    response = operation_service.list(ListOperationsRequest(resource_id=resource_id)).wait()
+    operations = list(getattr(response, "operations", []) or [])
+    if not operations:
+        return None
+
+    latest = operations[0]
+    latest_created = getattr(latest, "created_at", None)
+    for item in operations[1:]:
+        created_at = getattr(item, "created_at", None)
+        if created_at and (not latest_created or created_at > latest_created):
+            latest = item
+            latest_created = created_at
+
+    operation_id = _as_text(getattr(latest, "id", None))
+    description = _as_text(getattr(latest, "description", None)) or "operation"
+    age_summary = ""
+    if latest_created is not None:
+        with suppress(Exception):
+            age_summary = _format_elapsed(
+                max(0.0, (datetime.now(latest_created.tzinfo) - latest_created).total_seconds())
+            )
+    done_summary = "state unknown"
+    with suppress(Exception):
+        full = operation_service.get(GetOperationRequest(id=operation_id)).wait()
+        done_summary = "done" if full.done() else "running"
+    parts = [description]
+    if operation_id:
+        parts.append(operation_id)
+    parts.append(done_summary)
+    if age_summary:
+        parts.append(age_summary)
+    return "op " + " ".join(parts)
 
 
 class _HeartbeatPoller:
@@ -152,7 +261,7 @@ class _Mk8sStatusPoller:
         response = self._cluster_client.list(
             ListClustersRequest(parent_id=self._target.project_id)
         ).wait()
-        items = list(getattr(response, "items", []))
+        items = _response_collection(response, "items", "clusters")
         for item in items:
             metadata = getattr(item, "metadata", None)
             if _as_text(getattr(metadata, "name", None)) == self._target.cluster_name:
@@ -163,7 +272,7 @@ class _Mk8sStatusPoller:
         response = self._node_group_client.list(
             ListNodeGroupsRequest(parent_id=cluster_id)
         ).wait()
-        return list(getattr(response, "items", []))
+        return _response_collection(response, "items", "node_groups")
 
     def _node_group_event_summaries(self, item: Any, *, state_name: str) -> tuple[str | None, tuple[str, ...]]:
         status = getattr(item, "status", None)
@@ -196,40 +305,7 @@ class _Mk8sStatusPoller:
         return f"{best_level} {name}: {_shorten(best_message, limit=96)}", tuple(transient_notes)
 
     def _latest_operation_summary(self, cluster_id: str) -> str | None:
-        operation_service = self._cluster_client.operation_service()
-        response = operation_service.list(ListOperationsRequest(resource_id=cluster_id)).wait()
-        operations = list(getattr(response, "operations", []) or [])
-        if not operations:
-            return None
-
-        latest = operations[0]
-        latest_created = getattr(latest, "created_at", None)
-        for item in operations[1:]:
-            created_at = getattr(item, "created_at", None)
-            if created_at and (not latest_created or created_at > latest_created):
-                latest = item
-                latest_created = created_at
-
-        operation_id = _as_text(getattr(latest, "id", None))
-        description = _as_text(getattr(latest, "description", None)) or "operation"
-        age_summary = ""
-        if latest_created is not None:
-            with suppress(Exception):
-                age_summary = _format_elapsed(
-                    max(0.0, (datetime.now(latest_created.tzinfo) - latest_created).total_seconds())
-                )
-        done_summary = "state unknown"
-        with suppress(Exception):
-            full = operation_service.get(GetOperationRequest(id=operation_id)).wait()
-            done = full.done()
-            done_summary = "done" if done else "running"
-        parts = [description]
-        if operation_id:
-            parts.append(operation_id)
-        parts.append(done_summary)
-        if age_summary:
-            parts.append(age_summary)
-        return "op " + " ".join(parts)
+        return _latest_operation_summary(self._cluster_client.operation_service(), cluster_id)
 
     def summary(self) -> str:
         cluster = self._find_cluster()
@@ -307,6 +383,223 @@ class _Mk8sStatusPoller:
 
     def close(self) -> None:
         self._sdk.sync_close()
+
+
+class _PostgreSQLStatusPoller:
+    def __init__(self, target: StatusWatcherTarget) -> None:
+        self._target = target
+        self._sdk = init_nebius_sdk(
+            parent_id=target.parent_id,
+            context="deployment status polling",
+        )
+
+        from nebius.api.nebius.msp.postgresql.v1alpha1 import (
+            ClusterServiceClient,
+            ListClustersRequest,
+        )
+
+        self._cluster_client = ClusterServiceClient(self._sdk)
+        self._list_request = ListClustersRequest
+
+    def _find_cluster(self):
+        response = self._cluster_client.list(
+            self._list_request(parent_id=self._target.parent_id)
+        ).wait()
+        items = _response_collection(response, "items", "clusters")
+        for item in items:
+            if _resource_metadata_name(item) == self._target.resource_name:
+                return item
+        return None
+
+    def summary(self) -> str:
+        cluster = self._find_cluster()
+        if cluster is None:
+            return (
+                f"managed-postgresql '{self._target.resource_name}' is not visible yet in "
+                f"project {self._target.parent_id}."
+            )
+
+        status = getattr(cluster, "status", None)
+        cluster_id = _resource_metadata_id(cluster)
+        phase = _enum_field_name(status, "phase", prefixes=("PHASE_",))
+        state = _enum_field_name(status, "state", prefixes=("STATE_",))
+        endpoints = getattr(status, "connection_endpoints", None)
+        endpoint_parts: list[str] = []
+        if _as_text(getattr(endpoints, "private_read_write", None)):
+            endpoint_parts.append("private rw ready")
+        if _as_text(getattr(endpoints, "public_read_write", None)):
+            endpoint_parts.append("public rw ready")
+        if not endpoint_parts:
+            endpoint_parts.append("endpoints pending")
+
+        operation_summary = (
+            _latest_operation_summary(self._cluster_client.operation_service(), cluster_id)
+            if cluster_id
+            else None
+        )
+        cluster_label = self._target.resource_name
+        if cluster_id:
+            cluster_label = f"{cluster_label} ({cluster_id})"
+        parts = [
+            f"managed-postgresql {cluster_label}: {phase}",
+            f"state {state}",
+            ", ".join(endpoint_parts),
+        ]
+        if operation_summary:
+            parts.append(operation_summary)
+        return "; ".join(parts) + "."
+
+    def close(self) -> None:
+        self._sdk.sync_close()
+
+
+class _FilesystemStatusPoller:
+    def __init__(self, target: StatusWatcherTarget) -> None:
+        self._target = target
+        self._sdk = init_nebius_sdk(
+            parent_id=target.parent_id,
+            context="deployment status polling",
+        )
+
+        from nebius.api.nebius.compute.v1 import FilesystemServiceClient, ListFilesystemsRequest
+
+        self._filesystem_client = FilesystemServiceClient(self._sdk)
+        self._list_request = ListFilesystemsRequest
+
+    def _find_filesystem(self):
+        response = self._filesystem_client.list(
+            self._list_request(parent_id=self._target.parent_id)
+        ).wait()
+        items = _response_collection(response, "items", "filesystems")
+        for item in items:
+            if _resource_metadata_name(item) == self._target.resource_name:
+                return item
+        return None
+
+    def summary(self) -> str:
+        filesystem = self._find_filesystem()
+        if filesystem is None:
+            return (
+                f"sfs '{self._target.resource_name}' is not visible yet in "
+                f"project {self._target.parent_id}."
+            )
+
+        status = getattr(filesystem, "status", None)
+        filesystem_id = _resource_metadata_id(filesystem)
+        state = _enum_field_name(status, "state")
+        state_description = _as_text(getattr(status, "state_description", None))
+        read_write_attachments = tuple(getattr(status, "read_write_attachments", []) or [])
+        read_only_attachments = tuple(getattr(status, "read_only_attachments", []) or [])
+        attachment_summary = (
+            f"attachments rw:{len(read_write_attachments)} ro:{len(read_only_attachments)}"
+        )
+        if bool(getattr(status, "reconciling", False)):
+            attachment_summary = f"{attachment_summary}; reconciling"
+
+        operation_summary = (
+            _latest_operation_summary(self._filesystem_client.operation_service(), filesystem_id)
+            if filesystem_id
+            else None
+        )
+        filesystem_label = self._target.resource_name
+        if filesystem_id:
+            filesystem_label = f"{filesystem_label} ({filesystem_id})"
+        parts = [
+            f"sfs {filesystem_label}: {state}",
+            attachment_summary,
+        ]
+        if state_description:
+            parts.append(state_description)
+        if operation_summary:
+            parts.append(operation_summary)
+        return "; ".join(parts) + "."
+
+    def close(self) -> None:
+        self._sdk.sync_close()
+
+
+class _ObjectStorageBucketStatusPoller:
+    def __init__(self, target: StatusWatcherTarget) -> None:
+        self._target = target
+        self._sdk = init_nebius_sdk(
+            parent_id=target.parent_id,
+            context="deployment status polling",
+        )
+
+        from nebius.api.nebius.storage.v1 import BucketServiceClient, GetBucketByNameRequest
+
+        self._bucket_client = BucketServiceClient(self._sdk)
+        self._get_by_name_request = GetBucketByNameRequest
+
+    def _find_bucket(self):
+        with suppress(Exception):
+            return self._bucket_client.get_by_name(
+                self._get_by_name_request(
+                    parent_id=self._target.parent_id,
+                    name=self._target.resource_name,
+                )
+            ).wait()
+        return None
+
+    def summary(self) -> str:
+        bucket = self._find_bucket()
+        if bucket is None:
+            return (
+                f"object-storage '{self._target.resource_name}' is not visible yet in "
+                f"project {self._target.parent_id}."
+            )
+
+        status = getattr(bucket, "status", None)
+        bucket_id = _resource_metadata_id(bucket)
+        state = _enum_field_name(status, "state", prefixes=("STATE_",))
+        operation_summary = (
+            _latest_operation_summary(self._bucket_client.operation_service(), bucket_id)
+            if bucket_id
+            else None
+        )
+        bucket_label = self._target.resource_name
+        if bucket_id:
+            bucket_label = f"{bucket_label} ({bucket_id})"
+        parts = [f"object-storage {bucket_label}: {state}"]
+        if operation_summary:
+            parts.append(operation_summary)
+        return "; ".join(parts) + "."
+
+    def close(self) -> None:
+        self._sdk.sync_close()
+
+
+class _CompositeStatusPoller:
+    def __init__(self, pollers: tuple[tuple[str, Any], ...]) -> None:
+        self._pollers = pollers
+
+    def summary(self) -> str:
+        summaries: list[str] = []
+        for label, poller in self._pollers:
+            try:
+                summaries.append(poller.summary())
+            except Exception as exc:
+                summaries.append(f"{label}: unavailable ({_shorten(str(exc), limit=96)})")
+        return " | ".join(summary for summary in summaries if summary) or "API unavailable; heartbeat only"
+
+    def close(self) -> None:
+        for _label, poller in self._pollers:
+            with suppress(Exception):
+                poller.close()
+
+
+def _mk8s_status_poller_from_target(target: StatusWatcherTarget) -> _Mk8sStatusPoller:
+    return _Mk8sStatusPoller(
+        Mk8sDeploymentTarget(project_id=target.parent_id, cluster_name=target.resource_name)
+    )
+
+
+_STATUS_POLLER_FACTORIES: dict[str, Callable[[StatusWatcherTarget], Any]] = {
+    "nebius.mk8s.cluster": _mk8s_status_poller_from_target,
+    "nebius.msp.postgresql.cluster": _PostgreSQLStatusPoller,
+    "nebius.compute.filesystem": _FilesystemStatusPoller,
+    "nebius.storage.bucket": _ObjectStorageBucketStatusPoller,
+}
 
 
 @dataclass
@@ -447,6 +740,7 @@ class DeploymentStatusReporter:
         config: Any,
         *,
         emit: Callable[[str], None],
+        status_watchers: list[Mapping[str, Any]] | None = None,
         poll_interval_seconds: float = 15.0,
         repeat_interval_seconds: float = 60.0,
     ) -> None:
@@ -460,31 +754,89 @@ class DeploymentStatusReporter:
         self._last_emit_at = 0.0
         self._terraform = TerraformApplyProgress()
         self._thread: threading.Thread | None = None
+        self._startup_notices: list[str] = []
 
-        target = _mk8s_deployment_target(config)
-        if target is None:
-            self._poller: _HeartbeatPoller | _Mk8sStatusPoller = _HeartbeatPoller()
-            self._startup_notice = None
-        else:
-            try:
-                self._poller = _Mk8sStatusPoller(target)
-                self._startup_notice = (
-                    f"Watching Terraform + Nebius status for mk8s cluster '{target.cluster_name}' "
-                    f"in project {target.project_id}."
+        explicit_watchers = tuple(status_watchers or ())
+        if explicit_watchers:
+            initialized_pollers: list[tuple[str, Any]] = []
+            labels: list[str] = []
+            for raw in explicit_watchers:
+                if not isinstance(raw, Mapping):
+                    continue
+                target = StatusWatcherTarget(
+                    component_id=_as_text(raw.get("component_id")).lower(),
+                    instance_id=(
+                        _as_text(raw.get("instance_id")).lower()
+                        or _as_text(raw.get("component_id")).lower()
+                    ),
+                    kind=_as_text(raw.get("kind")).lower(),
+                    parent_id=_as_text(raw.get("parent_id")),
+                    resource_name=_as_text(raw.get("resource_name")),
                 )
-            except Exception as exc:
+                if not all(
+                    (
+                        target.component_id,
+                        target.instance_id,
+                        target.kind,
+                        target.parent_id,
+                        target.resource_name,
+                    )
+                ):
+                    continue
+                label = (
+                    f"{component_instance_label(target.component_id, target.instance_id)} "
+                    f"'{target.resource_name}'"
+                )
+                factory = _STATUS_POLLER_FACTORIES.get(target.kind)
+                if factory is None:
+                    self._startup_notices.append(
+                        f"Nebius API status watcher kind '{target.kind}' is not supported for {label}; skipping."
+                    )
+                    continue
+                try:
+                    initialized_pollers.append((label, factory(target)))
+                    labels.append(label)
+                except Exception as exc:
+                    self._startup_notices.append(
+                        f"Nebius API status watcher unavailable for {label}; skipping. Reason: {exc}"
+                    )
+            if initialized_pollers:
+                self._poller: _HeartbeatPoller | _Mk8sStatusPoller | _CompositeStatusPoller = (
+                    _CompositeStatusPoller(tuple(initialized_pollers))
+                )
+                self._startup_notices.insert(
+                    0,
+                    "Watching Terraform + Nebius status for " + ", ".join(labels) + ".",
+                )
+            else:
                 self._poller = _HeartbeatPoller()
-                self._startup_notice = (
-                    "Nebius API status is unavailable; falling back to Terraform + elapsed heartbeat. "
-                    f"Reason: {exc}"
+                self._startup_notices.append(
+                    "Nebius API status is unavailable; falling back to Terraform + elapsed heartbeat."
                 )
+        else:
+            target = _mk8s_deployment_target(config)
+            if target is None:
+                self._poller = _HeartbeatPoller()
+            else:
+                try:
+                    self._poller = _Mk8sStatusPoller(target)
+                    self._startup_notices.append(
+                        f"Watching Terraform + Nebius status for mk8s cluster '{target.cluster_name}' "
+                        f"in project {target.project_id}."
+                    )
+                except Exception as exc:
+                    self._poller = _HeartbeatPoller()
+                    self._startup_notices.append(
+                        "Nebius API status is unavailable; falling back to Terraform + elapsed heartbeat. "
+                        f"Reason: {exc}"
+                    )
         try:
             self._api_summary = self._poller.summary()
         except Exception as exc:
             self._poller.close()
             self._poller = _HeartbeatPoller()
             self._api_summary = self._poller.summary()
-            self._startup_notice = (
+            self._startup_notices.append(
                 "Nebius API initial status lookup failed; falling back to Terraform + elapsed heartbeat. "
                 f"Reason: {exc}"
             )
@@ -538,8 +890,8 @@ class DeploymentStatusReporter:
             self._emit_status()
 
     def start(self) -> DeploymentStatusReporter:
-        if self._startup_notice:
-            self._emit(self._startup_notice)
+        for notice in self._startup_notices:
+            self._emit(notice)
         self._emit_status(force=True)
         self._thread = threading.Thread(
             target=self._run,
@@ -565,12 +917,14 @@ def deployment_status_reporting(
     config: Any,
     *,
     emit: Callable[[str], None],
+    status_watchers: list[Mapping[str, Any]] | None = None,
     poll_interval_seconds: float = 15.0,
     repeat_interval_seconds: float = 60.0,
 ):
     reporter = DeploymentStatusReporter(
         config,
         emit=emit,
+        status_watchers=status_watchers,
         poll_interval_seconds=poll_interval_seconds,
         repeat_interval_seconds=repeat_interval_seconds,
     ).start()

@@ -21,7 +21,9 @@ def test_create_config_writes_template(tmp_path: Path) -> None:
     assert "gateway_group:" in config_path.read_text(encoding="utf-8")
 
 
-def test_validate_config_smoke_passes_for_sample_config(tmp_path: Path, sample_config: dict) -> None:
+def test_validate_config_smoke_passes_for_sample_config(
+    tmp_path: Path, sample_config: dict
+) -> None:
     config_path = tmp_path / "integration.config.yaml"
     config_path.write_text(yaml.safe_dump(sample_config, sort_keys=False), encoding="utf-8")
 

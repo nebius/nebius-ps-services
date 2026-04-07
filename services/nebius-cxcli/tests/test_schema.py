@@ -72,6 +72,28 @@ def test_schema_rejects_duplicate_infra_component_ids(tmp_path: Path) -> None:
     assert "is duplicated" in str(exc_info.value)
 
 
+def test_schema_allows_duplicate_component_types_with_unique_instance_ids(tmp_path: Path) -> None:
+    payload = _dynamic_payload()
+    components = payload["infra"]["components"]
+    assert isinstance(components, list)
+    components.append(
+        {
+            "id": "mk8s",
+            "instance_id": "mk8s-secondary",
+            "enabled": True,
+            "inputs": {},
+        }
+    )
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    loaded = load_config(config_path)
+    assert len(loaded.infra.components) == len(components)
+    assert loaded.infra.mk8s.enabled is True
+    assert loaded.infra.mk8s_secondary.enabled is True
+
+
 def test_schema_rejects_invalid_chart_group_token(tmp_path: Path) -> None:
     payload = _dynamic_payload()
     charts = payload["apps"]["charts"]

@@ -118,6 +118,14 @@ jobs:
           set -euo pipefail
           make all
 
+      - name: Validate active component sources catalog
+        if: steps.state.outputs.release_exists == 'false'
+        env:
+          NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE: portable
+        run: |
+          set -euo pipefail
+          .venv/bin/python -m nebius_cxcli validate-sources component_sources.yaml
+
       - name: Resolve and verify release assets
         if: steps.state.outputs.release_exists == 'false'
         id: asset

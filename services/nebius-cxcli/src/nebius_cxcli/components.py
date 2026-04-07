@@ -15,6 +15,7 @@ from .component_sources import (
     ComponentOutput,
     Handoff,
     SourceProfile,
+    StatusWatcher,
     load_component_sources,
     reset_component_sources_cache,
 )
@@ -41,7 +42,9 @@ class ComponentEntry:
     dependency_match_names: tuple[str, ...] = ()
     wizard_fields: dict[str, dict[str, Any]] = field(default_factory=dict)
     group: str | None = None
+    kind: str = ""
     origin: str = "registry"
+    aliases: tuple[str, ...] = ()
     chart_name: str | None = None
     chart_repo: str | None = None
     default_namespace: str | None = None
@@ -50,6 +53,7 @@ class ComponentEntry:
     outputs: tuple[ComponentOutput, ...] = ()
     input_bindings: tuple[ComponentInputBinding, ...] = ()
     handoff: Handoff | None = None
+    status: StatusWatcher | None = None
 
 
 def _humanize_component_id(component_id: str) -> str:
@@ -113,16 +117,20 @@ def _infra_component_entries(
                 default_enabled=bool(module.enable),
                 selectable=True,
                 enabled_path=("infra", config_key, "enabled"),
-                origin="custom",
+                kind=module.kind,
+                origin=module.origin or "custom",
+                aliases=module.aliases,
                 engine_type="terraform_module",
                 source=module.source,
                 metadata_source=module.metadata_source,
                 version=module.version,
                 group=module.group,
+                wizard_fields=dict(module.wizard_fields or {}),
                 defaults=module.defaults,
                 outputs=module.outputs,
                 input_bindings=module.input_bindings,
                 handoff=module.handoff,
+                status=module.status,
             )
         )
         entry_ids.add(component_id)
@@ -140,6 +148,7 @@ def _entry_from_helm_chart(
     version: str | None,
     namespace: str | None,
     default_enabled: bool = False,
+    wizard_fields: dict[str, dict[str, Any]] | None = None,
     defaults: tuple[ComponentDefault, ...] = (),
     outputs: tuple[ComponentOutput, ...] = (),
     input_bindings: tuple[ComponentInputBinding, ...] = (),
@@ -168,6 +177,7 @@ def _entry_from_helm_chart(
         chart_repo=repo,
         default_namespace=namespace,
         default_release_name=release_name,
+        wizard_fields=dict(wizard_fields or {}),
         defaults=defaults,
         outputs=outputs,
         input_bindings=input_bindings,
@@ -201,6 +211,7 @@ def _app_component_entries(
                 version=chart.version,
                 namespace=chart.namespace,
                 default_enabled=bool(chart.enable),
+                wizard_fields=chart.wizard_fields,
                 defaults=chart.defaults,
                 outputs=chart.outputs,
                 input_bindings=chart.input_bindings,

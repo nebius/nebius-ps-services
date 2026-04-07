@@ -1,10 +1,3 @@
-variable "enabled" {
-  description = "Create Nebius shared filesystem."
-  type        = bool
-  default     = false
-  nullable    = false
-}
-
 variable "parent_id" {
   description = "Nebius project ID where SFS is created."
   type        = string
@@ -18,18 +11,20 @@ variable "parent_id" {
 variable "name" {
   description = "SFS name."
   type        = string
-  default     = ""
   nullable    = false
+  validation {
+    condition     = length(trimspace(var.name)) > 0
+    error_message = "name cannot be empty."
+  }
 }
 
 variable "size_gib" {
   description = "SFS size in GiB."
   type        = number
-  default     = 0
   nullable    = false
   validation {
-    condition     = floor(var.size_gib) == var.size_gib && var.size_gib >= 0
-    error_message = "size_gib must be an integer >= 0."
+    condition     = floor(var.size_gib) == var.size_gib && var.size_gib >= 1
+    error_message = "size_gib must be an integer >= 1."
   }
 }
 

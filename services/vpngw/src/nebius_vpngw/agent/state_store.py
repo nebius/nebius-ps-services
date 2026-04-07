@@ -49,9 +49,7 @@ class StateStore:
             "config_hash": self._hash_cfg(resolved_config),
             "package_version": _get_package_version(),
             "render_version": RENDER_VERSION,
-            "timestamp": dt.datetime.now(dt.timezone.utc)
-            .isoformat()
-            .replace("+00:00", "Z"),
+            "timestamp": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
             "resolved_config": resolved_config,
         }
         self.path.write_text(json.dumps(payload, indent=2), encoding="utf-8")

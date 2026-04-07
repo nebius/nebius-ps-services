@@ -16,14 +16,16 @@ from nebius_cxcli.generated_manifest import (
     write_generated_manifest,
     write_generated_manifest_to_path,
 )
-from nebius_cxcli.paths import InstancePaths
+from nebius_cxcli.paths import ProjectPaths
 
 
-def _instance_paths(tmp_path: Path) -> InstancePaths:
+def _project_paths(tmp_path: Path) -> ProjectPaths:
     repo_root = tmp_path / "repo"
-    generated_dir = repo_root / "deployments" / "instances" / "client-a--tenant-123" / "project-456" / "generated"
+    generated_dir = (
+        repo_root / "deployments" / "projects" / "client-a--tenant-123" / "project-456" / "generated"
+    )
     project_dir = generated_dir.parent
-    return InstancePaths(
+    return ProjectPaths(
         config_path=project_dir / "config.yaml",
         repo_root=repo_root,
         deployments_dir=repo_root / "deployments",
@@ -62,13 +64,21 @@ def _runtime_payload() -> dict:
 
 
 def test_build_generated_manifest_uses_repo_relative_paths(tmp_path: Path) -> None:
-    paths = _instance_paths(tmp_path)
+    paths = _project_paths(tmp_path)
 
     manifest = build_generated_manifest(
         config=_runtime_payload(),
         paths=paths,
         handoffs=[{"component_id": "mk8s", "access": "external"}],
         required_component_outputs=[{"component_id": "mk8s", "output_name": "cluster_id"}],
+        status_watchers=[
+            {
+                "component_id": "mk8s",
+                "kind": "nebius.mk8s.cluster",
+                "parent_id": "project-456",
+                "resource_name": "clust1",
+            }
+        ],
         source_profile="portable",
         terraform_tfvars={"mk8s_cluster_name": "clust1"},
         flux_version="v2.8.0",
@@ -77,13 +87,13 @@ def test_build_generated_manifest_uses_repo_relative_paths(tmp_path: Path) -> No
 
     assert manifest["schema"] == GENERATED_MANIFEST_SCHEMA
     assert manifest["source_contract"]["config_path"] == (
-        "deployments/instances/client-a--tenant-123/project-456/config.yaml"
+        "deployments/projects/client-a--tenant-123/project-456/config.yaml"
     )
     assert manifest["paths"] == {
-        "generated_dir": "deployments/instances/client-a--tenant-123/project-456/generated",
-        "infra_dir": "deployments/instances/client-a--tenant-123/project-456/generated/infra",
-        "flux_dir": "deployments/instances/client-a--tenant-123/project-456/generated/flux",
-        "inventory_dir": "deployments/instances/client-a--tenant-123/project-456/generated/inventory",
+        "generated_dir": "deployments/projects/client-a--tenant-123/project-456/generated",
+        "infra_dir": "deployments/projects/client-a--tenant-123/project-456/generated/infra",
+        "flux_dir": "deployments/projects/client-a--tenant-123/project-456/generated/flux",
+        "inventory_dir": "deployments/projects/client-a--tenant-123/project-456/generated/inventory",
     }
     assert manifest["tools"] == {
         "flux_version": "v2.8.0",
@@ -93,13 +103,21 @@ def test_build_generated_manifest_uses_repo_relative_paths(tmp_path: Path) -> No
     assert manifest["deploy"]["required_component_outputs"] == [
         {"component_id": "mk8s", "output_name": "cluster_id"}
     ]
+    assert manifest["deploy"]["status_watchers"] == [
+        {
+            "component_id": "mk8s",
+            "kind": "nebius.mk8s.cluster",
+            "parent_id": "project-456",
+            "resource_name": "clust1",
+        }
+    ]
     assert manifest["render"]["source_profile"] == "portable"
     assert "portable" not in manifest["render"]
     assert manifest["render"]["terraform_tfvars"] == {"mk8s_cluster_name": "clust1"}
 
 
 def test_write_load_and_runtime_config_round_trip(tmp_path: Path) -> None:
-    paths = _instance_paths(tmp_path)
+    paths = _project_paths(tmp_path)
 
     written_path = write_generated_manifest(
         config=_runtime_payload(),
@@ -129,7 +147,7 @@ def test_write_load_and_runtime_config_round_trip(tmp_path: Path) -> None:
 
 
 def test_write_generated_manifest_to_path_uses_explicit_output_path(tmp_path: Path) -> None:
-    paths = _instance_paths(tmp_path)
+    paths = _project_paths(tmp_path)
     explicit_path = tmp_path / "staging" / GENERATED_MANIFEST_FILENAME
 
     written_path = write_generated_manifest_to_path(
@@ -145,7 +163,7 @@ def test_write_generated_manifest_to_path_uses_explicit_output_path(tmp_path: Pa
 
     assert written_path == explicit_path
     assert json.loads(explicit_path.read_text(encoding="utf-8"))["paths"]["generated_dir"] == (
-        "deployments/instances/client-a--tenant-123/project-456/generated"
+        "deployments/projects/client-a--tenant-123/project-456/generated"
     )
 
 

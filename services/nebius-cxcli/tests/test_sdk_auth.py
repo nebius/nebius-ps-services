@@ -73,6 +73,45 @@ def test_init_nebius_sdk_uses_service_account_key_when_set(
     assert sdk.kwargs["parent_id"] == "project-1"
 
 
+def test_init_nebius_sdk_uses_iam_token_env_when_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_nebius_modules(monkeypatch)
+    monkeypatch.delenv("NEBIUS_AUTH_CREDENTIALS_FILE", raising=False)
+    monkeypatch.delenv("NEBIUS_SA_ID", raising=False)
+    monkeypatch.delenv("NEBIUS_AUTH_PUBLIC_KEY_ID", raising=False)
+    monkeypatch.delenv("NEBIUS_AUTH_PRIVATE_KEY_FILE", raising=False)
+    monkeypatch.setenv("NEBIUS_IAM_TOKEN", "iam-token-123")
+
+    sdk = sdk_auth.init_nebius_sdk(parent_id="project-1", context="test")
+
+    assert sdk.kwargs["credentials"] == "iam-token-123"
+    assert sdk.kwargs["parent_id"] == "project-1"
+
+
+def test_init_nebius_sdk_fetches_iam_token_from_cli_when_needed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_nebius_modules(monkeypatch)
+    monkeypatch.delenv("NEBIUS_AUTH_CREDENTIALS_FILE", raising=False)
+    monkeypatch.delenv("NEBIUS_SA_ID", raising=False)
+    monkeypatch.delenv("NEBIUS_AUTH_PUBLIC_KEY_ID", raising=False)
+    monkeypatch.delenv("NEBIUS_AUTH_PRIVATE_KEY_FILE", raising=False)
+    monkeypatch.delenv("NEBIUS_IAM_TOKEN", raising=False)
+
+    monkeypatch.setattr(
+        sdk_auth.subprocess,
+        "run",
+        lambda *args, **kwargs: type("CP", (), {"stdout": "cli-token-456\n"})(),
+    )
+
+    sdk = sdk_auth.init_nebius_sdk(parent_id="project-1", context="test")
+
+    assert sdk.kwargs["credentials"] == "cli-token-456"
+    assert sdk.kwargs["parent_id"] == "project-1"
+    assert sdk_auth.os.environ["NEBIUS_IAM_TOKEN"] == "cli-token-456"
+
+
 def test_init_nebius_sdk_falls_back_to_sdk_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -81,6 +120,12 @@ def test_init_nebius_sdk_falls_back_to_sdk_config(
     monkeypatch.delenv("NEBIUS_SA_ID", raising=False)
     monkeypatch.delenv("NEBIUS_AUTH_PUBLIC_KEY_ID", raising=False)
     monkeypatch.delenv("NEBIUS_AUTH_PRIVATE_KEY_FILE", raising=False)
+    monkeypatch.delenv("NEBIUS_IAM_TOKEN", raising=False)
+    monkeypatch.setattr(
+        sdk_auth.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError("nebius not found")),
+    )
 
     sdk = sdk_auth.init_nebius_sdk(
         profile="dev",

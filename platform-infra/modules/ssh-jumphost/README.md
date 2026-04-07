@@ -101,6 +101,15 @@ module "ssh_jump_host" {
   - `boot_disk_type`
   - `source_image_family`
 
+## nebius-cxcli usage
+
+- `nebius-cxcli component add` prompts this module through
+  `infra.components[].inputs`.
+- `inputs.allowed_cidrs` is required and should be entered as a YAML/JSON list
+  in the wizard or edited directly in `config.yaml`.
+- `inputs.ssh_public_key` is expected to be the inline public key text, not a
+  local file path.
+
 ## Outputs summary
 
 - `instance_id`

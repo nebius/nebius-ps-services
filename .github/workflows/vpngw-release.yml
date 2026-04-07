@@ -25,6 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
+        shell: bash
         working-directory: ${{ env.APP_DIR }}
     steps:
       - name: Checkout

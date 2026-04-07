@@ -951,6 +951,7 @@ Use the CLI to force traffic onto the passive tunnel by shutting down the active
 nebius-vpngw failover --local-config-file <file>
 
 # If more than two tunnels exist, pass the passive tunnel name explicitly
+# Multi-connection topologies normally fall into this explicit-selection path.
 nebius-vpngw failover <passive-tunnel-name> --local-config-file <file>
 ```
 
@@ -961,6 +962,11 @@ gateway VM.
 Tunnel names are required to be globally unique across the full config, so the
 operator commands can safely target a tunnel by name without also requiring the
 connection name.
+
+The CLI help text is expected to mirror this model: operator commands should
+describe tunnel-name selection in terms of the owning connection/instance, and
+route-listing help should describe BGP output as scoped to the selected
+connection on the owning gateway VM.
 
 Configured active/passive roles remain declarative. `failover` is an operational
 override that preserves the configured roles and lets `failback` restore the
@@ -996,11 +1002,15 @@ from the gateway VM that owns each connection.
   - Filters out locally originated routes (next-hop 0.0.0.0)
   - Filters out overlapping local networks (from `gateway.local_prefixes`)
 - **Static mode**: Uses `remote_prefixes` from YAML configuration
+- `--summarize` collapses exact adjacent/covering prefixes per gateway next-hop allocation before writing Nebius VPC routes
 - Finds workload subnets whose effective CIDRs match `gateway.local_prefixes`
 - Resolves private IP allocations per gateway VM via Compute API
 - Creates/reuses custom route tables for matching subnets
   - If subnet uses default route table: Creates custom RT and copies existing routes
   - Warns user about route table separation
+- Large learned route sets can still hit Nebius per-route-table limits even
+  when the tenant-wide `vpc.route.count` visible in the console is below quota. The API error
+  `vpc.routetable.max-route-count` means the target subnet route table is full.
 - Includes inherited parent-network subnets (`use_network_pools=true`) when their effective/status CIDRs overlap `gateway.local_prefixes`
 - Creates route entries: destination = remote prefix, next-hop = the owning gateway VM's private IP
 - Implements idempotency (skips existing routes)
@@ -1034,6 +1044,8 @@ Lists routes on gateway VMs that direct traffic from remote sites to Nebius netw
 
 - **BGP mode**:
   - SSHs to gateway VMs and queries FRR: `vtysh -c 'show bgp ipv4 unicast json'`
+  - Scopes displayed/imported paths to the selected connection's tunnel peer IPs on the owning gateway VM
+  - When showing locally advertised routes, matches peer IPs against the owning gateway VM as well so repeated APIPA ranges on other instances do not mislabel connection/tunnel output
   - Extracts routes with next-hop IPs, AS paths, and status
   - Queries `ip route get <next-hop>` to determine outgoing XFRM interface
   - Filters out locally originated routes (next-hop 0.0.0.0)
@@ -1829,6 +1841,8 @@ nebius-vpngw apply --local-config-file test.config.yaml
 - `vpngw-ci.yml` is reserved for pull requests and manual CI runs.
 - `vpngw-release.yml` is the dedicated tag-driven release workflow for `nebius-vpngw-v*`.
 - Source/editable checkouts resolve runtime version from live SCM state instead of trusting a generated `_version.py` cache: they use `setuptools-scm` when available and fall back to `git describe` when it is not. Wheel builds keep only the package-local `_version.py` fallback used outside live SCM contexts.
+- The service uses the current `setuptools-scm` `semver-pep440` scheme so developer test/build flows do not emit the renamed-scheme deprecation warning.
+- CI validates both `vpngw` workflow YAML files and runs the wheel-build regression test path before publication so workflow edits and packaging metadata regressions are caught before a tag-driven release runs.
 
 Release sequence:
 

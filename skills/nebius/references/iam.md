@@ -20,6 +20,28 @@ This reference defines a practical Python SDK flow for Nebius IAM automation:
 - For SA token exchange snippet: `PyJWT`
 - Operator is logged in with Nebius CLI (`nebius auth login`) or env-based credentials.
 
+## SDK Authentication Order
+
+Prefer the current Nebius Python SDK initialization order from the upstream
+`nebius/pysdk` README:
+
+1. Explicit credentials file (`NEBIUS_AUTH_CREDENTIALS_FILE` or `credentials_file_name=...`)
+2. Explicit service-account private key credentials
+3. `NEBIUS_IAM_TOKEN`
+4. Nebius CLI token via `nebius iam get-access-token`
+5. CLI config/profile via `from nebius.aio.cli_config import Config`
+
+Notes:
+
+- `SDK()` can use `NEBIUS_IAM_TOKEN` directly when that env var is present.
+- `Config()` may also pick up `NEBIUS_IAM_TOKEN` and `NEBIUS_PROFILE` unless
+  `no_env=True` is used.
+- For operator tools, a pragmatic fallback is:
+  - check explicit credentials first
+  - then `NEBIUS_IAM_TOKEN`
+  - then try `nebius iam get-access-token`
+  - then fall back to `Config()`
+
 ## Operational Notes
 
 - `project_id` is the parent for Service Account, authorized key, and access key resources.

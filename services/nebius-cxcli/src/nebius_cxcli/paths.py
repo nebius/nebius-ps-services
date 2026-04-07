@@ -1,4 +1,4 @@
-"""Path resolution helpers for deployment instances."""
+"""Path resolution helpers for project-scoped deployment configs."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import Any
 
 
 @dataclass(frozen=True)
-class InstancePaths:
+class ProjectPaths:
     config_path: Path
     repo_root: Path
     deployments_dir: Path
@@ -23,7 +23,7 @@ class InstancePaths:
     path_project_id: str
 
     @property
-    def instance_slug(self) -> str:
+    def client_tenant_slug(self) -> str:
         return f"{self.path_client_name}--{self.path_tenant_id}"
 
 
@@ -54,20 +54,20 @@ def _locate_deployments_dir(config_path: Path, repo_root: Path, hint: str | None
         raise ValueError(f"Deployments dir does not exist: {hinted}")
 
     # Infer deployments root from canonical config path shape:
-    # <deployments-root>/instances/<client>--<tenant>/<project>/config.yaml
+    # <deployments-root>/projects/<client>--<tenant>/<project>/config.yaml
     parents = config_path.parents
-    if len(parents) >= 4 and parents[2].name == "instances":
+    if len(parents) >= 4 and parents[2].name == "projects":
         return parents[3].resolve()
 
     raise ValueError(
         "Unable to infer deployments root from config path. "
-        "Expected <deployments-root>/instances/<client>--<tenant>/<project>/config.yaml"
+        "Expected <deployments-root>/projects/<client>--<tenant>/<project>/config.yaml"
     )
 
 
-def resolve_instance_paths(
+def resolve_project_paths(
     config_path: Path, deployments_dir_hint: str | None = None
-) -> InstancePaths:
+) -> ProjectPaths:
     resolved = config_path.resolve()
     if resolved.name != "config.yaml":
         raise ValueError("Config path must end with config.yaml")
@@ -81,9 +81,9 @@ def resolve_instance_paths(
         raise ValueError(f"{resolved} is not inside {deployments_dir}") from exc
 
     parts = relative.parts
-    if len(parts) != 4 or parts[0] != "instances":
+    if len(parts) != 4 or parts[0] != "projects":
         raise ValueError(
-            "Config path must match instances/<client>--<tenant>/<project>/config.yaml"
+            "Config path must match projects/<client>--<tenant>/<project>/config.yaml"
         )
 
     client_tenant = parts[1]
@@ -94,7 +94,7 @@ def resolve_instance_paths(
     project_dir = resolved.parent
     generated_dir = project_dir / "generated"
 
-    return InstancePaths(
+    return ProjectPaths(
         config_path=resolved,
         repo_root=repo_root,
         deployments_dir=deployments_dir,
@@ -109,7 +109,7 @@ def resolve_instance_paths(
     )
 
 
-def resolve_generated_paths(target_path: Path, deployments_dir_hint: str | None = None) -> InstancePaths:
+def resolve_generated_paths(target_path: Path, deployments_dir_hint: str | None = None) -> ProjectPaths:
     resolved = target_path.resolve()
     generated_dir: Path | None = None
 
@@ -128,10 +128,10 @@ def resolve_generated_paths(target_path: Path, deployments_dir_hint: str | None 
         )
 
     config_path = generated_dir.parent / "config.yaml"
-    return resolve_instance_paths(config_path, deployments_dir_hint=deployments_dir_hint)
+    return resolve_project_paths(config_path, deployments_dir_hint=deployments_dir_hint)
 
 
-def validate_path_alignment(config: Any, paths: InstancePaths) -> None:
+def validate_path_alignment(config: Any, paths: ProjectPaths) -> None:
     """Ensure canonical config values and path hierarchy are synchronized."""
     errors: list[str] = []
     if config.client_info.client_name != paths.path_client_name:

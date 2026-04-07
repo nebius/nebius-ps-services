@@ -59,9 +59,24 @@ class ComponentDefault:
 
 
 @dataclass(frozen=True)
+class HandoffField:
+    """A single field in a handoff contract."""
+
+    kind: str  # "output_ref" (TF output name) or "config_path" (dotted config input path)
+    value: str
+
+
+@dataclass(frozen=True)
 class Handoff:
-    cluster_id_output_name: str
-    access_output_name: str
+    cluster_id: HandoffField
+    access: HandoffField
+
+
+@dataclass(frozen=True)
+class StatusWatcher:
+    kind: str
+    parent_input: str = "parent_id"
+    name_input: str = "name"
 
 
 @dataclass(frozen=True)
@@ -104,10 +119,15 @@ class TFModuleSource:
     version: str | None = None
     enable: bool = False
     group: str | None = None
+    kind: str = ""
+    origin: str = ""
+    aliases: tuple[str, ...] = ()
+    wizard_fields: dict[str, dict[str, Any]] | None = None
     defaults: tuple[ComponentDefault, ...] = ()
     outputs: tuple[ComponentOutput, ...] = ()
     input_bindings: tuple[ComponentInputBinding, ...] = ()
     handoff: Handoff | None = None
+    status: StatusWatcher | None = None
 
 
 @dataclass(frozen=True)
@@ -120,6 +140,7 @@ class HelmChartSource:
     enable: bool = False
     description: str | None = None
     group: str | None = None
+    wizard_fields: dict[str, dict[str, Any]] | None = None
     defaults: tuple[ComponentDefault, ...] = ()
     outputs: tuple[ComponentOutput, ...] = ()
     input_bindings: tuple[ComponentInputBinding, ...] = ()
@@ -441,15 +462,15 @@ def _parse_component_outputs(
     if not isinstance(raw, dict):
         raise ValueError(
             f"{field_label} outputs must be a mapping with optional keys "
-            "'tf_outputs', 'terraform', 'config', and 'static'"
+            "'tf_outputs', 'terraform', and 'static'"
         )
 
-    supported_keys = {"tf_outputs", "terraform", "config", "static"}
+    supported_keys = {"tf_outputs", "terraform", "static"}
     unknown_keys = sorted(str(key) for key in raw if str(key) not in supported_keys)
     if unknown_keys:
         raise ValueError(
             f"{field_label} outputs use unsupported key(s): {', '.join(unknown_keys)}. "
-            "Supported keys are 'tf_outputs', 'terraform', 'config', and 'static'."
+            "Supported keys are 'tf_outputs', 'terraform', and 'static'."
         )
 
     tf_outputs_raw = raw.get("tf_outputs", False)
@@ -506,30 +527,6 @@ def _parse_component_outputs(
                     kind="terraform_output",
                     source_path=source_path,
                     sensitive=bool(source_output.sensitive) if source_output is not None else False,
-                ),
-                field_label=field_label,
-            )
-
-    config_raw = raw.get("config")
-    if config_raw is not None:
-        if not isinstance(config_raw, dict):
-            raise ValueError(
-                f"{field_label} outputs.config must be a mapping of alias -> component config path"
-            )
-        for output_name_raw, source_raw in config_raw.items():
-            output_name = _normalize_component_output_name(_as_text(output_name_raw))
-            source_path = _as_text(source_raw)
-            if not output_name or not source_path:
-                raise ValueError(
-                    f"{field_label} outputs.config entries must use non-empty alias and config path"
-                )
-            _append_component_output(
-                outputs,
-                seen_aliases=seen_aliases,
-                output=ComponentOutput(
-                    name=output_name,
-                    kind="config",
-                    source_path=source_path,
                 ),
                 field_label=field_label,
             )
@@ -620,21 +617,87 @@ def _parse_component_defaults(
     return tuple(defaults)
 
 
+def _parse_wizard_fields(
+    raw: Any,
+    *,
+    field_label: str,
+) -> dict[str, dict[str, Any]]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} wizard_fields must be a mapping of field path -> spec mapping")
+
+    wizard_fields: dict[str, dict[str, Any]] = {}
+    for field_path_raw, spec_raw in raw.items():
+        field_path = _as_text(field_path_raw)
+        if not field_path:
+            raise ValueError(f"{field_label} wizard_fields entries must use non-empty field paths")
+        if not isinstance(spec_raw, dict):
+            raise ValueError(
+                f"{field_label} wizard_fields['{field_path}'] must be a mapping when set"
+            )
+        wizard_fields[field_path] = copy.deepcopy(dict(spec_raw))
+    return wizard_fields
+
+
+def _classify_handoff_ref(raw_value: str) -> HandoffField:
+    """Classify a handoff reference as an output_ref or config_path.
+
+    If the value contains a dot it is treated as a direct config input path
+    (e.g. ``inputs.mk8s_cluster_public_endpoint``).  Otherwise it is the name
+    of a declared Terraform output (e.g. ``cluster_id``).
+    """
+    if "." in raw_value:
+        return HandoffField(kind="config_path", value=raw_value)
+    return HandoffField(kind="output_ref", value=_normalize_component_output_name(raw_value))
+
+
 def _parse_handoff(raw: Any) -> Handoff | None:
     if raw is None:
         return None
     if not isinstance(raw, dict):
         raise ValueError("handoff must be a mapping")
 
-    cluster_id_output_name = _normalize_component_output_name(_as_text(raw.get("cluster_id")))
-    if not cluster_id_output_name:
+    cluster_id_raw = _as_text(raw.get("cluster_id"))
+    if not cluster_id_raw:
         raise ValueError("handoff.cluster_id is required and must name a declared component output")
-    access_output_name = _normalize_component_output_name(_as_text(raw.get("access")))
-    if not access_output_name:
-        raise ValueError("handoff.access is required and must name a declared component output")
+    access_raw = _as_text(raw.get("access"))
+    if not access_raw:
+        raise ValueError("handoff.access is required")
     return Handoff(
-        cluster_id_output_name=cluster_id_output_name,
-        access_output_name=access_output_name,
+        cluster_id=_classify_handoff_ref(cluster_id_raw),
+        access=_classify_handoff_ref(access_raw),
+    )
+
+
+def _parse_status_watcher(raw: Any, *, module_kind: str = "") -> StatusWatcher | None:
+    if raw is None:
+        # If module-level kind is set, enable status polling with defaults.
+        if module_kind:
+            return StatusWatcher(kind=module_kind)
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("status must be a mapping")
+
+    supported_status_keys = {"kind", "parent_input", "name_input"}
+    unknown_status_keys = sorted(str(key) for key in raw if str(key) not in supported_status_keys)
+    if unknown_status_keys:
+        raise ValueError("status has unsupported field(s): " + ", ".join(unknown_status_keys))
+
+    kind = _as_text(raw.get("kind")).strip().lower() or module_kind
+    if not kind:
+        raise ValueError("status.kind is required (or set module-level kind)")
+
+    parent_input = _as_text(raw.get("parent_input")) or "parent_id"
+    name_input = _as_text(raw.get("name_input")) or "name"
+    if not parent_input:
+        raise ValueError("status.parent_input cannot be empty")
+    if not name_input:
+        raise ValueError("status.name_input cannot be empty")
+    return StatusWatcher(
+        kind=kind,
+        parent_input=parent_input,
+        name_input=name_input,
     )
 
 
@@ -701,10 +764,15 @@ def _parse_sources_payload(
             "version",
             "enable",
             "group",
+            "kind",
+            "origin",
+            "aliases",
+            "wizard_fields",
             "defaults",
             "outputs",
             "input",
             "handoff",
+            "status",
         }
         unknown_module_keys = sorted(str(key) for key in raw if str(key) not in supported_module_keys)
         if unknown_module_keys:
@@ -728,6 +796,16 @@ def _parse_sources_payload(
         version = _as_text(raw.get("version")) or None
         enable = bool(raw.get("enable", False))
         group = _as_text(raw.get("group")) or None
+        kind = _as_text(raw.get("kind")) or ""
+        origin = _as_text(raw.get("origin")) or ""
+        aliases_raw = raw.get("aliases")
+        aliases: tuple[str, ...] = ()
+        if isinstance(aliases_raw, list):
+            aliases = tuple(_as_text(item) for item in aliases_raw if _as_text(item))
+        wizard_fields = _parse_wizard_fields(
+            raw.get("wizard_fields"),
+            field_label=f"infra.tf_modules[{module_name}]",
+        )
         defaults = _parse_component_defaults(
             raw.get("defaults"),
             field_label=f"infra.tf_modules[{module_name}]",
@@ -740,6 +818,7 @@ def _parse_sources_payload(
         )
         input_bindings = _parse_component_input_bindings(raw.get("input"))
         handoff = _parse_handoff(raw.get("handoff"))
+        status = _parse_status_watcher(raw.get("status"), module_kind=kind)
         tf_modules.append(
             TFModuleSource(
                 module=module_name,
@@ -751,10 +830,15 @@ def _parse_sources_payload(
                 version=version,
                 enable=enable,
                 group=group,
+                kind=kind,
+                origin=origin,
+                aliases=aliases,
+                wizard_fields=wizard_fields,
                 defaults=defaults,
                 outputs=outputs,
                 input_bindings=input_bindings,
                 handoff=handoff,
+                status=status,
             )
         )
 
@@ -775,6 +859,7 @@ def _parse_sources_payload(
             "enable",
             "description",
             "group",
+            "wizard_fields",
             "defaults",
             "outputs",
             "input",
@@ -792,6 +877,10 @@ def _parse_sources_payload(
         enable = bool(raw.get("enable", False))
         description = _as_text(raw.get("description")) or None
         group = _as_text(raw.get("group")) or None
+        wizard_fields = _parse_wizard_fields(
+            raw.get("wizard_fields"),
+            field_label=f"apps.helm_charts[{chart_name}]",
+        )
         defaults = _parse_component_defaults(
             raw.get("defaults"),
             field_label=f"apps.helm_charts[{chart_name}]",
@@ -812,6 +901,7 @@ def _parse_sources_payload(
                 enable=enable,
                 description=description,
                 group=group,
+                wizard_fields=wizard_fields,
                 defaults=defaults,
                 outputs=outputs,
                 input_bindings=input_bindings,

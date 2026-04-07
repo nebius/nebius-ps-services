@@ -7,8 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .component_instances import component_instance_id, component_type_id
 from .component_wiring import resolved_component_row
-from .paths import InstancePaths
+from .paths import ProjectPaths
 from .runtime_config import to_plain_data
 
 
@@ -45,37 +46,51 @@ def _normalize_component_id(raw_value: Any) -> str:
     return str(raw_value or "").strip().lower().replace("_", "-")
 
 
-def _infra_component_rows(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def _infra_component_rows(payload: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     infra = _mapping(_lookup(payload, "infra"))
     rows = _lookup(infra, "components")
     if not isinstance(rows, list):
         return {}
-    result: dict[str, dict[str, Any]] = {}
+    result: dict[str, list[dict[str, Any]]] = {}
     for item in rows:
         if not isinstance(item, Mapping):
             continue
-        component_id = _normalize_component_id(_lookup(item, "id"))
+        component_id = component_type_id(item)
         if not component_id:
             continue
-        _entry, resolved = resolved_component_row(payload, component_id=component_id)
-        result[component_id] = _mapping(resolved if isinstance(resolved, Mapping) else item)
+        instance_id = component_instance_id(item)
+        _entry, resolved = resolved_component_row(
+            payload,
+            component_id=component_id,
+            instance_id=instance_id or None,
+        )
+        result.setdefault(component_id, []).append(
+            _mapping(resolved if isinstance(resolved, Mapping) else item)
+        )
     return result
 
 
-def _app_chart_rows(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def _app_chart_rows(payload: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     apps = _mapping(_lookup(payload, "apps"))
     rows = _lookup(apps, "charts")
     if not isinstance(rows, list):
         return {}
-    result: dict[str, dict[str, Any]] = {}
+    result: dict[str, list[dict[str, Any]]] = {}
     for item in rows:
         if not isinstance(item, Mapping):
             continue
-        chart_id = _normalize_component_id(_lookup(item, "id"))
+        chart_id = component_type_id(item)
         if not chart_id:
             continue
-        _entry, resolved = resolved_component_row(payload, component_id=chart_id)
-        result[chart_id] = _mapping(resolved if isinstance(resolved, Mapping) else item)
+        instance_id = component_instance_id(item)
+        _entry, resolved = resolved_component_row(
+            payload,
+            component_id=chart_id,
+            instance_id=instance_id or None,
+        )
+        result.setdefault(chart_id, []).append(
+            _mapping(resolved if isinstance(resolved, Mapping) else item)
+        )
     return result
 
 
@@ -91,16 +106,23 @@ def _chart_values(row: dict[str, Any] | None) -> dict[str, Any]:
     return _mapping(_lookup(row, "values"))
 
 
-def _chart_enabled(rows: dict[str, dict[str, Any]], *chart_ids: str) -> bool:
+def _first_row(rows: dict[str, list[dict[str, Any]]], key: str) -> dict[str, Any] | None:
+    grouped = rows.get(_normalize_component_id(key))
+    if not grouped:
+        return None
+    return grouped[0]
+
+
+def _chart_enabled(rows: dict[str, list[dict[str, Any]]], *chart_ids: str) -> bool:
     for chart_id in chart_ids:
-        row = rows.get(_normalize_component_id(chart_id))
-        if row is None:
+        grouped = rows.get(_normalize_component_id(chart_id))
+        if not grouped:
             continue
-        return bool(_lookup(row, "enabled"))
+        return any(bool(_lookup(row, "enabled")) for row in grouped)
     return False
 
 
-def _build_payload(config: Any, paths: InstancePaths) -> dict[str, dict]:
+def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
     payload_data = to_plain_data(config)
     if not isinstance(payload_data, dict):
         raise RuntimeError("Runtime config payload must be a mapping")
@@ -113,19 +135,37 @@ def _build_payload(config: Any, paths: InstancePaths) -> dict[str, dict]:
     infra_rows = _infra_component_rows(payload_data)
     app_rows = _app_chart_rows(payload_data)
 
-    mk8s_row = infra_rows.get("mk8s")
+    # Look up infra components by kind/handoff from the registry instead of
+    # by hard-coded component name.
+    from .components import component_lookup as _component_lookup
+
+    entry_by_id = _component_lookup("infra")
+
+    def _row_by_kind(kind: str) -> dict[str, Any] | None:
+        for cid, entry in entry_by_id.items():
+            if getattr(entry, "kind", "") == kind:
+                return _first_row(infra_rows, cid)
+        return None
+
+    def _row_by_handoff() -> dict[str, Any] | None:
+        for cid, entry in entry_by_id.items():
+            if getattr(entry, "handoff", None) is not None:
+                return _first_row(infra_rows, cid)
+        return None
+
+    mk8s_row = _row_by_handoff()
     mk8s_inputs = _component_inputs(mk8s_row)
     cpu_nodes = _mapping(_lookup(mk8s_inputs, "cpu_nodes"))
     gpu_nodes = _mapping(_lookup(mk8s_inputs, "gpu_nodes"))
     api_endpoint = _mapping(_lookup(mk8s_inputs, "api_endpoint"))
 
-    pg_row = infra_rows.get("managed-postgresql")
+    pg_row = _row_by_kind("nebius.msp.postgresql.cluster")
     pg_inputs = _component_inputs(pg_row)
 
-    sfs_row = infra_rows.get("sfs")
+    sfs_row = _row_by_kind("nebius.compute.filesystem")
     sfs_inputs = _component_inputs(sfs_row)
 
-    n8n_values = _chart_values(app_rows.get("n8n"))
+    n8n_values = _chart_values(_first_row(app_rows, "n8n"))
     n8n_chart_values = _mapping(_lookup(n8n_values, "values"))
     n8n_route = _mapping(_lookup(n8n_values, "route"))
     if not n8n_route:
@@ -134,17 +174,25 @@ def _build_payload(config: Any, paths: InstancePaths) -> dict[str, dict]:
         _coalesce(
             _lookup(mk8s_inputs, "cluster_name"),
             project_id,
-            paths.instance_slug,
+            f"{paths.client_tenant_slug}/{project_id}",
         )
     )
 
     return {
         "infra": {
-            "instance": paths.instance_slug,
+            "project_scope": f"{paths.client_tenant_slug}/{project_id}",
             "project_id": project_id,
             "region": region_id,
             "mk8s_enabled": bool(_lookup(mk8s_row or {}, "enabled")),
-            "wireguard_enabled": bool(_lookup(infra_rows.get("wireguard-jumphost") or {}, "enabled")),
+            "wireguard_enabled": any(
+                bool(_lookup(row, "enabled"))
+                for cid, rows in infra_rows.items()
+                for row in rows
+                if "wireguard" in cid or any(
+                    "wireguard" in alias
+                    for alias in getattr(entry_by_id.get(cid), "aliases", ())
+                )
+            ),
         },
         "mk8s": {
             "cluster_name": cluster_name,
@@ -214,7 +262,7 @@ def _build_payload(config: Any, paths: InstancePaths) -> dict[str, dict]:
         },
     }
 
-def write_inventory(config: Any, paths: InstancePaths) -> InventoryArtifacts:
+def write_inventory(config: Any, paths: ProjectPaths) -> InventoryArtifacts:
     """Write non-sensitive inventory artifacts to disk."""
     payload = _build_payload(config, paths)
     paths.inventory_dir.mkdir(parents=True, exist_ok=True)

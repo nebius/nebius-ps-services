@@ -8,14 +8,14 @@ from nebius_cxcli.components import component_entries, reset_component_entry_cac
 from nebius_cxcli.config_loader import load_config
 from nebius_cxcli.config_template import starter_config_yaml
 from nebius_cxcli.inventory_ops import write_inventory
-from nebius_cxcli.paths import resolve_instance_paths, validate_path_alignment
+from nebius_cxcli.paths import resolve_project_paths, validate_path_alignment
 
 
-def _instance_config_path(base: Path) -> Path:
+def _project_config_path(base: Path) -> Path:
     return (
         base
         / "deployments"
-        / "instances"
+        / "projects"
         / "client-a--tenant-123"
         / "project-456"
         / "config.yaml"
@@ -66,7 +66,7 @@ def _chart_row(payload: dict, chart_id: str) -> dict:
 
 def test_write_inventory_handles_dynamic_component_model(tmp_path: Path) -> None:
     reset_component_entry_cache()
-    config_path = _instance_config_path(tmp_path)
+    config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
     payload = _starter_payload(selected_infra={"mk8s"}, selected_apps={"n8n"})
@@ -87,7 +87,7 @@ def test_write_inventory_handles_dynamic_component_model(tmp_path: Path) -> None
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     config = load_config(config_path)
-    paths = resolve_instance_paths(config_path)
+    paths = resolve_project_paths(config_path)
     validate_path_alignment(config, paths)
 
     artifacts = write_inventory(config, paths)
@@ -104,14 +104,14 @@ def test_write_inventory_handles_dynamic_component_model(tmp_path: Path) -> None
 
 def test_write_inventory_removes_stale_disabled_component_files(tmp_path: Path) -> None:
     reset_component_entry_cache()
-    config_path = _instance_config_path(tmp_path)
+    config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
     payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     config = load_config(config_path)
-    paths = resolve_instance_paths(config_path)
+    paths = resolve_project_paths(config_path)
     validate_path_alignment(config, paths)
     paths.inventory_dir.mkdir(parents=True, exist_ok=True)
     stale_pg = paths.inventory_dir / "postgresql.json"
