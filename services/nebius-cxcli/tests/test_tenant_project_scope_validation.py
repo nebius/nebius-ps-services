@@ -79,7 +79,6 @@ def test_parent_id_dynamic_choices_prefer_validated_project_id() -> None:
         scope="infra",
         config_path="infra.components.mk8s",
         description="mk8s",
-        origin="custom",
         source="platform-infra/modules/mk8s",
     )
     payload = {
@@ -125,7 +124,6 @@ def test_seed_infra_project_scope_defaults_uses_client_project_id(
             scope="infra",
             config_path="infra.components.mk8s",
             description="mk8s",
-            origin="custom",
             source="../../platform-infra/modules/mk8s",
         ),
     )
@@ -170,7 +168,6 @@ def test_seed_infra_project_scope_defaults_does_not_copy_shared_ssh_fields(
             scope="infra",
             config_path="infra.components.mk8s",
             description="mk8s",
-            origin="custom",
             source="../../platform-infra/modules/mk8s",
         ),
     )

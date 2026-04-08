@@ -111,6 +111,7 @@ nebius-vpngw apply --local-config-file my-vpn.config.yaml
 
 ```bash
 nebius-vpngw add-routes-local --local-config-file my-vpn.config.yaml
+nebius-vpngw add-routes-local --local-config-file my-vpn.config.yaml --swap-route-table
 nebius-vpngw list-routes-local --local-config-file my-vpn.config.yaml
 ```
 
@@ -647,8 +648,17 @@ nebius-vpngw list-routes-local --local-config-file <file>
 # - Static mode: Uses remote_prefixes from YAML configuration
 # - Creates VPC route table entries with gateway private IP as next-hop
 # - Filters out local networks automatically
-# - Optional: --summarize collapses exact adjacent prefixes per next-hop
-# - Targets only subnets with explicit private pools; inherited parent-network subnets are skipped for safety
+# - Skips remote prefixes that overlap the target network's private pools
+# - Sanitizes inherited subnet status CIDRs to ignore explicit CIDRs owned by other subnets
+# - Optional: --summarize merges routes only when they already form an exact larger CIDR
+#   and use the same gateway next-hop
+# - Optional: --swap-route-table builds a fresh custom route table, copies preserved
+#   non-vpngw routes, rebuilds managed VPN routes, then reattaches the subnet
+# - --swap-route-table asks for confirmation and writes rollback specs under
+#   .nebius-vpngw-rollbacks/ next to the local config file
+# - A later run without --summarize reconciles back to exact managed routes and
+#   removes broader `vpngw-*` summaries after the exact routes are in place
+# - Targets explicit-pool subnets directly and inherited-pool subnets only after sanitizing inherited status CIDRs
 # - Copies existing routes when creating custom route tables
 nebius-vpngw add-routes-local --local-config-file <file>
 
@@ -667,7 +677,26 @@ nebius-vpngw list-routes-remote --local-config-file <file>
   - Next-hop: VPN gateway private IP
   - Managed via Nebius VPC API
   - Large imported route sets can hit per-route-table limits even when the tenant-wide route quota shown in the console still has headroom. `vpc.routetable.max-route-count` means the target subnet route table is full.
-  - `add-routes-local --summarize` only performs exact CIDR collapsing per gateway next-hop. It does not invent broader supernets with gaps.
+  - Prefixes that overlap the target network's private pools are skipped before route creation. Nebius treats those CIDRs as local to the network and rejects them as route destinations.
+  - For inherited-pool subnets (`use_network_pools=true`), the CLI sanitizes `status.ipv4_private_cidrs` against explicit CIDRs owned by other subnets before it decides which subnet route tables to touch. This avoids a Nebius console/API status bug where inherited subnets appear to own CIDRs that were explicitly carved out elsewhere.
+  - If a route with the same destination already exists but points to a different next-hop, `add-routes-local` warns and leaves that route unchanged instead of treating it as satisfied.
+  - `add-routes-local --summarize` is conservative. It only merges routes when:
+    - the prefixes are exact neighbors or one already contains the other
+    - the merged result is a valid CIDR block
+    - both routes use the same gateway next-hop
+  - Example: `10.0.0.0/24` + `10.0.1.0/24` can become `10.0.0.0/23` if both use the same gateway.
+  - It will not create a broader route if there is a gap. Example: `10.0.0.0/24` and `10.0.2.0/24` stay separate; it will not invent `10.0.0.0/22`.
+  - If you later rerun `add-routes-local` without `--summarize`, the CLI restores exact `vpngw-*` routes and prunes broader managed summaries after the exact routes are confirmed installed. It does not leave both forms behind.
+  - `add-routes-local --swap-route-table` is a blue/green cleanup mode for subnets that already use a custom route table:
+    - it creates a fresh custom route table
+    - copies non-`vpngw-*` routes from the currently attached table
+    - rebuilds managed VPN routes from the current YAML
+    - validates the replacement table before attaching the subnet to it
+    - leaves the old route table in place for rollback
+  - The live `add-routes-local --help` output now calls out that `--swap-route-table` validates the replacement table before cutover and prints a rollback command.
+  - The command prompts for confirmation before a swap because reattaching a subnet to a different route table can briefly impact traffic if the replacement table is incomplete or subnet reassignment converges slowly.
+  - For each successful swap, the CLI writes a rollback spec file to `.nebius-vpngw-rollbacks/` next to the local config file and prints the exact `nebius vpc subnet update --file ...` rollback command.
+  - `.nebius-vpngw-rollbacks/` is ignored in this repo because those files are local recovery artifacts, not source.
 
 - **Remote Routes (Remote → Nebius)**: Routes on the gateway VMs that direct traffic from remote sites to Nebius networks
   - BGP mode: Dynamically learned via FRR and installed in kernel

@@ -3039,6 +3039,25 @@ def add_routes_local(
             "route-table entries. Only exact unions are summarized."
         ),
     ),
+    swap_route_table: bool = typer.Option(
+        False,
+        "--swap-route-table",
+        help=(
+            "Build a fresh custom route table per selected subnet, copy preserved "
+            "non-vpngw routes, rebuild managed VPN routes from the current YAML, "
+            "validate the replacement table, then attach the subnet to the new "
+            "table and print a rollback command."
+        ),
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help=(
+            "Skip the confirmation prompt for --swap-route-table. Use only when "
+            "you already understand the cutover and rollback behavior."
+        ),
+    ),
 ):
     """Ensure Nebius VPC routes exist for remote prefixes (Nebius → Remote).
 
@@ -3046,6 +3065,12 @@ def add_routes_local(
     gateway.local_prefixes, adds only missing routes whose next-hop is the
     gateway private IP, and reconciles stale BGP advertisement state when the
     live gateway config no longer matches the current YAML.
+
+    Optional `--swap-route-table` performs a blue/green route-table cutover:
+    it builds a fresh custom route table, copies preserved non-vpngw routes,
+    rebuilds managed VPN routes from the current YAML, validates the
+    replacement, then attaches the subnet to the new table and prints a
+    rollback command.
     """
     local_config_file = _resolve_local_config(
         local_config_file,
@@ -3061,6 +3086,40 @@ def add_routes_local(
 
     # Resolve project_id
     proj_id = project_id or (local_cfg.get("project_id") or "").strip() or None
+    rollback_dir = local_config_file.parent / ".nebius-vpngw-rollbacks"
+
+    if swap_route_table and not yes:
+        print("")
+        print("[yellow]⚠ WARNING: --swap-route-table performs a blue/green subnet route-table cutover.[/yellow]")
+        print(
+            "[yellow]  • A fresh custom route table will be created for each selected workload subnet[/yellow]"
+        )
+        print(
+            "[yellow]  • Existing non-vpngw routes will be copied from the currently attached table[/yellow]"
+        )
+        print(
+            "[yellow]  • Managed VPN routes will be rebuilt from the current YAML and then the subnet will be reattached to the new table[/yellow]"
+        )
+        print(
+            "[yellow]  • The old route table will be left in place for rollback; rollback specs will be written to[/yellow]"
+        )
+        print(f"[yellow]    {rollback_dir}[/yellow]")
+        print("")
+        print(
+            "[yellow]If the replacement table is incomplete or the subnet update converges slowly, traffic for the subnet can be briefly impacted.[/yellow]"
+        )
+        print(
+            "[yellow]Only proceed if you are ready to validate routes immediately and use the printed rollback command if needed.[/yellow]"
+        )
+        print("")
+        import sys
+
+        sys.stdout.write("\033[1mProceed with route-table swap? [y/N]:\033[0m ")
+        sys.stdout.flush()
+        response = input().strip().lower()
+        if response not in ("y", "yes"):
+            print("[green]Aborted. No changes made.[/green]")
+            raise typer.Exit(code=0)
 
     # Get token for API access (required for route management)
     auth_token = _ensure_authentication(required=True, show_progress=True)
@@ -3068,7 +3127,13 @@ def add_routes_local(
     routes = RouteManager(project_id=proj_id, auth_token=auth_token)
 
     print("[bold]Ensuring VPC routes for remote prefixes on local subnets...[/bold]")
-    routes.add_routes(plan, local_cfg, summarize=summarize)
+    routes.add_routes(
+        plan,
+        local_cfg,
+        summarize=summarize,
+        swap_route_table=swap_route_table,
+        rollback_dir=rollback_dir,
+    )
     routes.ensure_bgp_advertisements_current(plan, local_cfg)
 
     print("[green]Local route management completed.[/green]")

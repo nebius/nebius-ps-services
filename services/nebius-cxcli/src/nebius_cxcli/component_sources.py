@@ -16,6 +16,8 @@ from typing import Any
 
 import yaml
 
+from .component_instances import INSTANCE_ID_PATTERN, normalize_component_token
+
 DEFAULT_COMPONENT_SOURCES_FILE = (Path(__file__).resolve().parents[2] / "component_sources.yaml").resolve()
 USER_COMPONENT_SOURCES_FILE = (Path.home() / ".config" / "nebius-cxcli" / "component_sources.yaml").resolve()
 GLOBAL_COMPONENT_SOURCES_FILE = Path("/etc/nebius-cxcli/component_sources.yaml")
@@ -48,6 +50,7 @@ class ComponentInputBinding:
     target_path: str
     source_component_id: str
     source_output_name: str
+    source_instance_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -59,17 +62,9 @@ class ComponentDefault:
 
 
 @dataclass(frozen=True)
-class HandoffField:
-    """A single field in a handoff contract."""
-
-    kind: str  # "output_ref" (TF output name) or "config_path" (dotted config input path)
-    value: str
-
-
-@dataclass(frozen=True)
 class Handoff:
-    cluster_id: HandoffField
-    access: HandoffField
+    cluster_id: str
+    access: str
 
 
 @dataclass(frozen=True)
@@ -108,6 +103,13 @@ def component_output_root_name(component_id: str, output_name: str) -> str:
     return f"{normalized_component}_{normalized_output}"
 
 
+def component_input_binding_ref(binding: ComponentInputBinding) -> str:
+    component_selector = binding.source_component_id
+    if binding.source_instance_id:
+        component_selector = f"{component_selector}@{binding.source_instance_id}"
+    return f"{component_selector}.{binding.source_output_name}"
+
+
 @dataclass(frozen=True)
 class TFModuleSource:
     module: str
@@ -120,8 +122,7 @@ class TFModuleSource:
     enable: bool = False
     group: str | None = None
     kind: str = ""
-    origin: str = ""
-    aliases: tuple[str, ...] = ()
+    validation_profile: str = ""
     wizard_fields: dict[str, dict[str, Any]] | None = None
     defaults: tuple[ComponentDefault, ...] = ()
     outputs: tuple[ComponentOutput, ...] = ()
@@ -133,6 +134,7 @@ class TFModuleSource:
 @dataclass(frozen=True)
 class HelmChartSource:
     name: str
+    chart_name: str | None = None
     repo: str | None = None
     version: str | None = None
     namespace: str | None = None
@@ -424,13 +426,12 @@ def _discover_terraform_outputs(module_source: str) -> tuple[ComponentOutput, ..
     issues = module_source_validation_issues(module_source)
     if issues:
         raise ValueError(
-            f"outputs.tf_outputs could not discover Terraform outputs for module source "
+            f"runtime.values could not discover Terraform outputs for module source "
             f"'{module_source}': {issues[0]}"
         )
     raise ValueError(
-        f"outputs.tf_outputs could not discover any Terraform outputs for module source "
-        f"'{module_source}'. Expose Terraform outputs in the module or declare explicit "
-        "outputs.terraform aliases instead."
+        f"runtime.values could not discover any Terraform outputs for module source "
+        f"'{module_source}'. Expose Terraform outputs in the module before using this component."
     )
 
 
@@ -450,105 +451,99 @@ def _append_component_output(
     outputs.append(output)
 
 
-def _parse_component_outputs(
+def _parse_component_runtime_values(
     raw: Any,
     *,
     field_label: str,
-    scope: str,
-    module_source: str | None = None,
+    module_source: str,
 ) -> tuple[ComponentOutput, ...]:
-    if raw is None:
-        return ()
-    if not isinstance(raw, dict):
-        raise ValueError(
-            f"{field_label} outputs must be a mapping with optional keys "
-            "'tf_outputs', 'terraform', and 'static'"
-        )
+    if raw is not None and not isinstance(raw, dict):
+        raise ValueError(f"{field_label} runtime.values must be a mapping of alias -> value reference")
 
-    supported_keys = {"tf_outputs", "terraform", "static"}
-    unknown_keys = sorted(str(key) for key in raw if str(key) not in supported_keys)
-    if unknown_keys:
-        raise ValueError(
-            f"{field_label} outputs use unsupported key(s): {', '.join(unknown_keys)}. "
-            "Supported keys are 'tf_outputs', 'terraform', and 'static'."
-        )
-
-    tf_outputs_raw = raw.get("tf_outputs", False)
-    if not isinstance(tf_outputs_raw, bool):
-        raise ValueError(f"{field_label} outputs.tf_outputs must be a boolean")
+    terraform_source_by_name: dict[str, ComponentOutput] = {}
+    source = _as_text(module_source)
+    if source:
+        try:
+            terraform_source_by_name = {
+                output.source_path: output for output in _discover_terraform_outputs(source)
+            }
+        except ValueError:
+            terraform_source_by_name = {}
 
     outputs: list[ComponentOutput] = []
     seen_aliases: set[str] = set()
+    for terraform_output in terraform_source_by_name.values():
+        _append_component_output(
+            outputs,
+            seen_aliases=seen_aliases,
+            output=terraform_output,
+            field_label=field_label,
+        )
 
-    if tf_outputs_raw:
-        if scope != "infra":
-            raise ValueError(f"{field_label} outputs.tf_outputs is supported only for infra.tf_modules[]")
-        source = _as_text(module_source)
-        if not source:
-            raise ValueError(f"{field_label} outputs.tf_outputs requires a non-empty module source")
-        for terraform_output in _discover_terraform_outputs(source):
-            _append_component_output(
-                outputs,
-                seen_aliases=seen_aliases,
-                output=terraform_output,
-                field_label=field_label,
-            )
+    if raw is None:
+        return tuple(outputs)
 
-    terraform_raw = raw.get("terraform")
-    if terraform_raw is not None:
-        if scope != "infra":
-            raise ValueError(f"{field_label} outputs.terraform is supported only for infra.tf_modules[]")
-        if not isinstance(terraform_raw, dict):
-            raise ValueError(
-                f"{field_label} outputs.terraform must be a mapping of alias -> Terraform output name"
-            )
-        terraform_source_by_name: dict[str, ComponentOutput] = {}
-        source = _as_text(module_source)
-        if source:
-            try:
-                terraform_source_by_name = {
-                    output.source_path: output for output in _discover_terraform_outputs(source)
-                }
-            except ValueError:
-                terraform_source_by_name = {}
-        for output_name_raw, source_raw in terraform_raw.items():
-            output_name = _normalize_component_output_name(_as_text(output_name_raw))
-            source_path = _as_text(source_raw)
-            if not output_name or not source_path:
-                raise ValueError(
-                    f"{field_label} outputs.terraform entries must use non-empty alias and Terraform output name"
+    for output_name_raw, value_raw in raw.items():
+        output_name = _normalize_component_output_name(_as_text(output_name_raw))
+        if not output_name:
+            raise ValueError(f"{field_label} runtime.values entries must use non-empty aliases")
+
+        if isinstance(value_raw, str):
+            token = value_raw.strip()
+            if token.startswith("output."):
+                source_path = _as_text(token.removeprefix("output."))
+                if not source_path:
+                    raise ValueError(
+                        f"{field_label} runtime.values['{output_name}'] must reference a non-empty Terraform output"
+                    )
+                source_output = terraform_source_by_name.get(source_path)
+                _append_component_output(
+                    outputs,
+                    seen_aliases=seen_aliases,
+                    output=ComponentOutput(
+                        name=output_name,
+                        kind="terraform_output",
+                        source_path=source_path,
+                        sensitive=bool(source_output.sensitive) if source_output is not None else False,
+                    ),
+                    field_label=field_label,
                 )
-            source_output = terraform_source_by_name.get(source_path)
-            _append_component_output(
-                outputs,
-                seen_aliases=seen_aliases,
-                output=ComponentOutput(
-                    name=output_name,
-                    kind="terraform_output",
-                    source_path=source_path,
-                    sensitive=bool(source_output.sensitive) if source_output is not None else False,
-                ),
-                field_label=field_label,
-            )
+                continue
 
-    static_raw = raw.get("static")
-    if static_raw is not None:
-        if not isinstance(static_raw, dict):
-            raise ValueError(f"{field_label} outputs.static must be a mapping of alias -> literal value")
-        for output_name_raw, value_raw in static_raw.items():
-            output_name = _normalize_component_output_name(_as_text(output_name_raw))
-            if not output_name:
-                raise ValueError(f"{field_label} outputs.static entries must use non-empty aliases")
-            _append_component_output(
-                outputs,
-                seen_aliases=seen_aliases,
-                output=ComponentOutput(
-                    name=output_name,
-                    kind="static",
-                    value=copy.deepcopy(value_raw),
-                ),
-                field_label=field_label,
-            )
+            if token.startswith("input."):
+                source_path = _as_text(token.removeprefix("input."))
+                if not source_path:
+                    raise ValueError(
+                        f"{field_label} runtime.values['{output_name}'] must reference a non-empty input path"
+                    )
+                if source_path.startswith("inputs."):
+                    raise ValueError(
+                        f"{field_label} runtime.values['{output_name}'] must use "
+                        f"'input.<path>' without the 'inputs.' prefix"
+                    )
+                source_path = f"inputs.{source_path}"
+                _append_component_output(
+                    outputs,
+                    seen_aliases=seen_aliases,
+                    output=ComponentOutput(
+                        name=output_name,
+                        kind="input",
+                        source_path=source_path,
+                    ),
+                    field_label=field_label,
+                )
+                continue
+
+        _append_component_output(
+            outputs,
+            seen_aliases=seen_aliases,
+            output=ComponentOutput(
+                name=output_name,
+                kind="literal",
+                value=copy.deepcopy(value_raw),
+            ),
+            field_label=field_label,
+        )
 
     return tuple(outputs)
 
@@ -565,19 +560,34 @@ def _parse_component_input_bindings(raw: Any) -> tuple[ComponentInputBinding, ..
         ref = _as_text(ref_raw)
         if not target_path or not ref:
             raise ValueError("input entries must use non-empty target path and component output reference")
-        component_token, separator, output_token = ref.partition(".")
-        component_id = _as_text(component_token).lower()
+        component_selector, separator, output_token = ref.partition(".")
+        component_token, instance_separator, instance_token = component_selector.partition("@")
+        component_id = normalize_component_token(component_token)
+        source_instance_id = normalize_component_token(instance_token) if instance_separator else None
         output_name = _normalize_component_output_name(output_token) if separator else ""
         if not component_id or not separator or not output_name:
             raise ValueError(
-                f"input binding '{target_path}' must use '<component-id>.<output-alias>' reference syntax. "
+                f"input binding '{target_path}' must use '<component-id>.<output-alias>' or "
+                "'<component-id>@<instance-id>.<output-alias>' reference syntax. "
                 "Use 'defaults' for literal values."
             )
+        if instance_separator:
+            if not source_instance_id:
+                raise ValueError(
+                    f"input binding '{target_path}' uses empty instance selector in '{ref}'. "
+                    "Use '<component-id>@<instance-id>.<output-alias>'."
+                )
+            if not INSTANCE_ID_PATTERN.fullmatch(source_instance_id):
+                raise ValueError(
+                    f"input binding '{target_path}' instance selector '{source_instance_id}' "
+                    "must use lowercase letters, digits, and hyphens"
+                )
         bindings.append(
             ComponentInputBinding(
                 target_path=target_path,
                 source_component_id=component_id,
                 source_output_name=output_name,
+                source_instance_id=source_instance_id,
             )
         )
     return tuple(bindings)
@@ -625,48 +635,97 @@ def _parse_wizard_fields(
     if raw is None:
         return {}
     if not isinstance(raw, dict):
-        raise ValueError(f"{field_label} wizard_fields must be a mapping of field path -> spec mapping")
+        raise ValueError(f"{field_label} wizard must be a mapping of field path -> spec mapping")
 
     wizard_fields: dict[str, dict[str, Any]] = {}
     for field_path_raw, spec_raw in raw.items():
         field_path = _as_text(field_path_raw)
         if not field_path:
-            raise ValueError(f"{field_label} wizard_fields entries must use non-empty field paths")
+            raise ValueError(f"{field_label} wizard entries must use non-empty field paths")
         if not isinstance(spec_raw, dict):
             raise ValueError(
-                f"{field_label} wizard_fields['{field_path}'] must be a mapping when set"
+                f"{field_label} wizard['{field_path}'] must be a mapping when set"
             )
-        wizard_fields[field_path] = copy.deepcopy(dict(spec_raw))
+        spec = copy.deepcopy(dict(spec_raw))
+        options = spec.get("options")
+        if isinstance(options, dict):
+            normalized_options: dict[str, Any] = {}
+            provider = _as_text(options.get("from"))
+            if provider:
+                normalized_options["from"] = provider
+            filter_regex = _as_text(options.get("filter_regex"))
+            if filter_regex:
+                normalized_options["filter"] = filter_regex
+            args: dict[str, Any] = {}
+            prefix = _as_text(options.get("prefix"))
+            if prefix:
+                args["platform_prefix"] = prefix
+            depends_on = _as_text(options.get("depends_on"))
+            if depends_on:
+                args["platform_path"] = depends_on
+            if args:
+                normalized_options["args"] = args
+            spec["options"] = normalized_options
+        wizard_fields[field_path] = spec
     return wizard_fields
 
 
-def _classify_handoff_ref(raw_value: str) -> HandoffField:
-    """Classify a handoff reference as an output_ref or config_path.
-
-    If the value contains a dot it is treated as a direct config input path
-    (e.g. ``inputs.mk8s_cluster_public_endpoint``).  Otherwise it is the name
-    of a declared Terraform output (e.g. ``cluster_id``).
-    """
-    if "." in raw_value:
-        return HandoffField(kind="config_path", value=raw_value)
-    return HandoffField(kind="output_ref", value=_normalize_component_output_name(raw_value))
-
-
-def _parse_handoff(raw: Any) -> Handoff | None:
+def _parse_runtime_contracts(
+    raw: Any,
+    *,
+    field_label: str,
+    outputs: tuple[ComponentOutput, ...],
+) -> Handoff | None:
     if raw is None:
         return None
     if not isinstance(raw, dict):
-        raise ValueError("handoff must be a mapping")
+        raise ValueError(f"{field_label} runtime.contracts must be a mapping")
 
-    cluster_id_raw = _as_text(raw.get("cluster_id"))
-    if not cluster_id_raw:
-        raise ValueError("handoff.cluster_id is required and must name a declared component output")
-    access_raw = _as_text(raw.get("access"))
-    if not access_raw:
-        raise ValueError("handoff.access is required")
+    supported_contract_keys = {"cluster_access"}
+    unknown_contract_keys = sorted(str(key) for key in raw if str(key) not in supported_contract_keys)
+    if unknown_contract_keys:
+        raise ValueError(
+            f"{field_label} runtime.contracts has unsupported field(s): "
+            + ", ".join(unknown_contract_keys)
+        )
+
+    cluster_access = raw.get("cluster_access")
+    if cluster_access is None:
+        return None
+    if not isinstance(cluster_access, dict):
+        raise ValueError(f"{field_label} runtime.contracts.cluster_access must be a mapping")
+
+    supported_cluster_access_keys = {"cluster_id", "access"}
+    unknown_cluster_access_keys = sorted(
+        str(key) for key in cluster_access if str(key) not in supported_cluster_access_keys
+    )
+    if unknown_cluster_access_keys:
+        raise ValueError(
+            f"{field_label} runtime.contracts.cluster_access has unsupported field(s): "
+            + ", ".join(unknown_cluster_access_keys)
+        )
+
+    cluster_id_alias = _normalize_component_output_name(_as_text(cluster_access.get("cluster_id")))
+    access_alias = _normalize_component_output_name(_as_text(cluster_access.get("access")))
+    if not cluster_id_alias:
+        raise ValueError(
+            f"{field_label} runtime.contracts.cluster_access.cluster_id is required and must name a runtime.values alias"
+        )
+    if not access_alias:
+        raise ValueError(
+            f"{field_label} runtime.contracts.cluster_access.access is required and must name a runtime.values alias"
+        )
+
+    declared_outputs = {output.name for output in outputs}
+    for alias in (cluster_id_alias, access_alias):
+        if alias not in declared_outputs:
+            raise ValueError(
+                f"{field_label} runtime.contracts.cluster_access references undeclared runtime.values alias '{alias}'"
+            )
+
     return Handoff(
-        cluster_id=_classify_handoff_ref(cluster_id_raw),
-        access=_classify_handoff_ref(access_raw),
+        cluster_id=cluster_id_alias,
+        access=access_alias,
     )
 
 
@@ -686,7 +745,7 @@ def _parse_status_watcher(raw: Any, *, module_kind: str = "") -> StatusWatcher |
 
     kind = _as_text(raw.get("kind")).strip().lower() or module_kind
     if not kind:
-        raise ValueError("status.kind is required (or set module-level kind)")
+        raise ValueError("status.kind is required when resource_kind is not set")
 
     parent_input = _as_text(raw.get("parent_input")) or "parent_id"
     name_input = _as_text(raw.get("name_input")) or "name"
@@ -710,11 +769,32 @@ def _resolved_module_source(
 ) -> str:
     if not portable_source:
         raise ValueError(
-            f"infra.tf_modules[{module_name}] portable_source is required"
+            f"components.infra.{module_name} source.portable is required"
         )
     if source_profile == SourceProfile.LOCAL and str(local_source or "").strip():
         return str(local_source).strip()
     return portable_source
+
+
+def _parse_ui_block(
+    raw: Any,
+    *,
+    field_label: str,
+) -> tuple[str | None, str | None, bool]:
+    if raw is None:
+        return None, None, False
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} ui must be a mapping")
+
+    supported_ui_keys = {"title", "group", "enabled"}
+    unknown_ui_keys = sorted(str(key) for key in raw if str(key) not in supported_ui_keys)
+    if unknown_ui_keys:
+        raise ValueError(f"{field_label} ui has unsupported field(s): " + ", ".join(unknown_ui_keys))
+
+    title = _as_text(raw.get("title")) or None
+    group = _as_text(raw.get("group")) or None
+    enabled = bool(raw.get("enabled", False))
+    return title, group, enabled
 
 
 def _parse_sources_payload(
@@ -725,61 +805,71 @@ def _parse_sources_payload(
 ) -> ComponentSources:
     if not isinstance(payload, dict):
         raise ValueError("component_sources root must be a mapping")
-    supported_root_keys = {"cli", "shared", "infra", "apps"}
+    supported_root_keys = {"cli", "shared", "components"}
     unknown_root = sorted(str(key) for key in payload if str(key) not in supported_root_keys)
     if unknown_root:
         raise ValueError("component_sources root has unsupported field(s): " + ", ".join(unknown_root))
 
     cli = _parse_cli_settings(payload.get("cli"))
     shared = _parse_shared_values(payload.get("shared"))
-    infra = payload.get("infra", {})
-    apps = payload.get("apps", {})
-    if not isinstance(infra, dict):
+    components = payload.get("components", {})
+    if components is None:
+        components = {}
+    if not isinstance(components, dict):
+        raise ValueError("components must be a mapping")
+    supported_component_scopes = {"infra", "apps"}
+    unknown_components = sorted(str(key) for key in components if str(key) not in supported_component_scopes)
+    if unknown_components:
+        raise ValueError("components has unsupported field(s): " + ", ".join(unknown_components))
+
+    infra = components.get("infra", {})
+    apps = components.get("apps", {})
+    if infra is None:
         infra = {}
-    if not isinstance(apps, dict):
+    if apps is None:
         apps = {}
-    supported_infra_keys = {"tf_modules"}
-    unknown_infra = sorted(str(key) for key in infra if str(key) not in supported_infra_keys)
-    if unknown_infra:
-        raise ValueError("infra has unsupported field(s): " + ", ".join(unknown_infra))
-    supported_apps_keys = {"helm_charts"}
-    unknown_apps = sorted(str(key) for key in apps if str(key) not in supported_apps_keys)
-    if unknown_apps:
-        raise ValueError("apps has unsupported field(s): " + ", ".join(unknown_apps))
+    if not isinstance(infra, dict):
+        raise ValueError("components.infra must be a mapping of component id -> component config")
+    if not isinstance(apps, dict):
+        raise ValueError("components.apps must be a mapping of component id -> chart config")
 
     tf_modules: list[TFModuleSource] = []
-    for raw in infra.get("tf_modules", []):
-        if not isinstance(raw, dict):
-            continue
-        module_name = _as_text(raw.get("module")).lower()
-        portable_source = _as_text(raw.get("portable_source"))
-        local_source = _as_text(raw.get("local_source")) or None
+    for module_name_raw, raw in infra.items():
+        module_name = _as_text(module_name_raw).lower()
         if not module_name:
             continue
+        if not isinstance(raw, dict):
+            raise ValueError(f"components.infra.{module_name} must be a mapping")
         supported_module_keys = {
-            "module",
-            "portable_source",
-            "local_source",
-            "description",
-            "version",
-            "enable",
-            "group",
-            "kind",
-            "origin",
-            "aliases",
-            "wizard_fields",
-            "defaults",
-            "outputs",
-            "input",
-            "handoff",
+            "source",
+            "ui",
+            "resource_kind",
             "status",
+            "validation",
+            "defaults",
+            "wizard",
+            "runtime",
+            "input",
         }
         unknown_module_keys = sorted(str(key) for key in raw if str(key) not in supported_module_keys)
         if unknown_module_keys:
             raise ValueError(
-                f"infra.tf_modules[{module_name}] has unsupported field(s): "
+                f"components.infra.{module_name} has unsupported field(s): "
                 + ", ".join(unknown_module_keys)
             )
+
+        source_block = raw.get("source", {})
+        if not isinstance(source_block, dict):
+            raise ValueError(f"components.infra.{module_name} source must be a mapping")
+        supported_source_keys = {"portable", "local"}
+        unknown_source_keys = sorted(str(key) for key in source_block if str(key) not in supported_source_keys)
+        if unknown_source_keys:
+            raise ValueError(
+                f"components.infra.{module_name} source has unsupported field(s): "
+                + ", ".join(unknown_source_keys)
+            )
+        portable_source = _as_text(source_block.get("portable"))
+        local_source = _as_text(source_block.get("local")) or None
         source = _resolved_module_source(
             module_name=module_name,
             portable_source=portable_source,
@@ -792,32 +882,43 @@ def _parse_sources_payload(
             resolved_source=source,
             source_root=source_root,
         )
-        description = _as_text(raw.get("description")) or None
-        version = _as_text(raw.get("version")) or None
-        enable = bool(raw.get("enable", False))
-        group = _as_text(raw.get("group")) or None
-        kind = _as_text(raw.get("kind")) or ""
-        origin = _as_text(raw.get("origin")) or ""
-        aliases_raw = raw.get("aliases")
-        aliases: tuple[str, ...] = ()
-        if isinstance(aliases_raw, list):
-            aliases = tuple(_as_text(item) for item in aliases_raw if _as_text(item))
+        description, group, enable = _parse_ui_block(
+            raw.get("ui"),
+            field_label=f"components.infra.{module_name}",
+        )
+        kind = _as_text(raw.get("resource_kind")) or ""
+        validation_profile = _as_text(raw.get("validation")) or ""
         wizard_fields = _parse_wizard_fields(
-            raw.get("wizard_fields"),
-            field_label=f"infra.tf_modules[{module_name}]",
+            raw.get("wizard"),
+            field_label=f"components.infra.{module_name}",
         )
         defaults = _parse_component_defaults(
             raw.get("defaults"),
-            field_label=f"infra.tf_modules[{module_name}]",
+            field_label=f"components.infra.{module_name}",
         )
-        outputs = _parse_component_outputs(
-            raw.get("outputs"),
-            field_label=f"infra.tf_modules[{module_name}]",
-            scope="infra",
+        runtime_raw = raw.get("runtime")
+        if runtime_raw is None:
+            runtime_raw = {}
+        if not isinstance(runtime_raw, dict):
+            raise ValueError(f"components.infra.{module_name} runtime must be a mapping")
+        supported_runtime_keys = {"values", "contracts"}
+        unknown_runtime_keys = sorted(str(key) for key in runtime_raw if str(key) not in supported_runtime_keys)
+        if unknown_runtime_keys:
+            raise ValueError(
+                f"components.infra.{module_name} runtime has unsupported field(s): "
+                + ", ".join(unknown_runtime_keys)
+            )
+        outputs = _parse_component_runtime_values(
+            runtime_raw.get("values"),
+            field_label=f"components.infra.{module_name}",
             module_source=metadata_source,
         )
         input_bindings = _parse_component_input_bindings(raw.get("input"))
-        handoff = _parse_handoff(raw.get("handoff"))
+        handoff = _parse_runtime_contracts(
+            runtime_raw.get("contracts"),
+            field_label=f"components.infra.{module_name}",
+            outputs=outputs,
+        )
         status = _parse_status_watcher(raw.get("status"), module_kind=kind)
         tf_modules.append(
             TFModuleSource(
@@ -827,12 +928,10 @@ def _parse_sources_payload(
                 local_source=local_source,
                 metadata_source=metadata_source,
                 description=description,
-                version=version,
                 enable=enable,
                 group=group,
                 kind=kind,
-                origin=origin,
-                aliases=aliases,
+                validation_profile=validation_profile,
                 wizard_fields=wizard_fields,
                 defaults=defaults,
                 outputs=outputs,
@@ -843,57 +942,77 @@ def _parse_sources_payload(
         )
 
     helm_charts: list[HelmChartSource] = []
-    for raw in apps.get("helm_charts", []):
+    for component_id_raw, raw in apps.items():
+        component_id = _as_text(component_id_raw)
+        if not component_id:
+            continue
         if not isinstance(raw, dict):
-            continue
-        chart_name = _as_text(raw.get("name"))
-        repo_raw = _as_text(raw.get("repo")).rstrip("/")
-        if not chart_name:
-            continue
+            raise ValueError(f"components.apps.{component_id} must be a mapping")
         supported_chart_keys = {
-            "name",
-            "repo",
-            "version",
-            "namespace",
-            "releasename",
-            "enable",
-            "description",
-            "group",
-            "wizard_fields",
+            "source",
+            "ui",
+            "release",
             "defaults",
-            "outputs",
+            "wizard",
             "input",
         }
         unknown_chart_keys = sorted(str(key) for key in raw if str(key) not in supported_chart_keys)
         if unknown_chart_keys:
             raise ValueError(
-                f"apps.helm_charts[{chart_name}] has unsupported field(s): "
+                f"components.apps.{component_id} has unsupported field(s): "
                 + ", ".join(unknown_chart_keys)
             )
-        repo = repo_raw or None
-        version = _as_text(raw.get("version")) or None
-        namespace = _as_text(raw.get("namespace")) or None
-        release_name = _as_text(raw.get("releasename")) or None
-        enable = bool(raw.get("enable", False))
-        description = _as_text(raw.get("description")) or None
-        group = _as_text(raw.get("group")) or None
+
+        source_block = raw.get("source", {})
+        if not isinstance(source_block, dict):
+            raise ValueError(f"components.apps.{component_id} source must be a mapping")
+        supported_app_source_keys = {"repo", "chart", "version"}
+        unknown_app_source_keys = sorted(
+            str(key) for key in source_block if str(key) not in supported_app_source_keys
+        )
+        if unknown_app_source_keys:
+            raise ValueError(
+                f"components.apps.{component_id} source has unsupported field(s): "
+                + ", ".join(unknown_app_source_keys)
+            )
+        repo = _as_text(source_block.get("repo")).rstrip("/") or None
+        chart_name = _as_text(source_block.get("chart")) or component_id
+        version = _as_text(source_block.get("version")) or None
+
+        release_block = raw.get("release", {})
+        if release_block is None:
+            release_block = {}
+        if not isinstance(release_block, dict):
+            raise ValueError(f"components.apps.{component_id} release must be a mapping")
+        supported_release_keys = {"namespace", "name"}
+        unknown_release_keys = sorted(
+            str(key) for key in release_block if str(key) not in supported_release_keys
+        )
+        if unknown_release_keys:
+            raise ValueError(
+                f"components.apps.{component_id} release has unsupported field(s): "
+                + ", ".join(unknown_release_keys)
+            )
+        namespace = _as_text(release_block.get("namespace")) or None
+        release_name = _as_text(release_block.get("name")) or None
+
+        description, group, enable = _parse_ui_block(
+            raw.get("ui"),
+            field_label=f"components.apps.{component_id}",
+        )
         wizard_fields = _parse_wizard_fields(
-            raw.get("wizard_fields"),
-            field_label=f"apps.helm_charts[{chart_name}]",
+            raw.get("wizard"),
+            field_label=f"components.apps.{component_id}",
         )
         defaults = _parse_component_defaults(
             raw.get("defaults"),
-            field_label=f"apps.helm_charts[{chart_name}]",
-        )
-        outputs = _parse_component_outputs(
-            raw.get("outputs"),
-            field_label=f"apps.helm_charts[{chart_name}]",
-            scope="apps",
+            field_label=f"components.apps.{component_id}",
         )
         input_bindings = _parse_component_input_bindings(raw.get("input"))
         helm_charts.append(
             HelmChartSource(
-                name=chart_name,
+                name=component_id,
+                chart_name=chart_name,
                 repo=repo,
                 version=version,
                 namespace=namespace,
@@ -903,7 +1022,7 @@ def _parse_sources_payload(
                 group=group,
                 wizard_fields=wizard_fields,
                 defaults=defaults,
-                outputs=outputs,
+                outputs=(),
                 input_bindings=input_bindings,
             )
         )

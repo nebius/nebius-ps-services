@@ -114,15 +114,30 @@ def test_dynamic_provider_checks_cover_custom_tf_module_fields() -> None:
         }
     }
 
-    checks = _dynamic_provider_field_checks(payload=payload, infra_entries=())
-    # mk8s cpu_nodes_platform is now declared in wizard_fields YAML (options.from),
-    # not inferred.  Without wizard_fields on the entry, inference falls back to
-    # compute_platforms.
-    assert (
-        "infra.components[0].inputs.cpu_nodes_platform",
-        "compute_platforms",
-        {"platform_prefix": "cpu-"},
-    ) in checks
+    entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="Managed Kubernetes",
+        source="../../platform-infra/modules/mk8s",
+        wizard_fields={
+            "inputs.cpu_nodes_platform": {
+                "options": {
+                    "from": "mk8s_compatible_platforms",
+                    "args": {"platform_prefix": "cpu-"},
+                }
+            }
+        },
+    )
+
+    checks = _dynamic_provider_field_checks(payload=payload, infra_entries=(entry,))
+    assert checks == (
+        (
+            "infra.components[0].inputs.cpu_nodes_platform",
+            "mk8s_compatible_platforms",
+            {"platform_prefix": "cpu-"},
+        ),
+    )
 
 
 def test_wizard_prompts_required_and_optional_tf_variables_in_interactive_mode(
@@ -160,7 +175,6 @@ def test_wizard_prompts_required_and_optional_tf_variables_in_interactive_mode(
         scope="infra",
         config_path="infra.mk8s",
         description="Managed Kubernetes",
-        origin="custom",
         source="../../platform-infra/modules/mk8s",
     )
 
@@ -267,7 +281,6 @@ def test_wizard_prompts_optional_complex_defaults_but_keeps_them_virtual(
         scope="infra",
         config_path="infra.mk8s",
         description="Managed Kubernetes",
-        origin="custom",
         source="../../platform-infra/modules/mk8s",
     )
 
@@ -377,7 +390,6 @@ def test_wizard_leaves_optional_unset_field_absent_when_blank(
         scope="infra",
         config_path="infra.mk8s",
         description="Managed Kubernetes",
-        origin="custom",
         source="../../platform-infra/modules/mk8s",
     )
 
@@ -444,7 +456,6 @@ def test_wizard_prompts_literal_component_defaults_for_custom_module_fields(
         scope="infra",
         config_path="infra.mk8s",
         description="Managed Kubernetes",
-        origin="custom",
         source="../../platform-infra/modules/mk8s",
         defaults=(
             ComponentDefault(target_path="inputs.cpu_nodes_count", value=2, kind="literal"),
@@ -536,7 +547,6 @@ def test_wizard_keeps_optional_provider_field_unset_without_reprompt(
         scope="infra",
         config_path="infra.mk8s",
         description="Managed Kubernetes",
-        origin="custom",
         source="../../platform-infra/modules/mk8s",
     )
 
@@ -628,7 +638,6 @@ def test_wizard_skips_dependent_fields_when_enabled_toggle_is_false(
         scope="infra",
         config_path="infra.mk8s",
         description="Managed Kubernetes",
-        origin="custom",
         source="../../platform-infra/modules/mk8s",
     )
     monkeypatch.setattr(
@@ -726,7 +735,6 @@ def test_wizard_prompts_dependent_fields_when_enabled_toggle_is_true(
         scope="infra",
         config_path="infra.mk8s",
         description="Managed Kubernetes",
-        origin="custom",
         source="../../platform-infra/modules/mk8s",
     )
     monkeypatch.setattr(

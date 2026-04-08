@@ -487,6 +487,7 @@ def test_route_and_operator_help_mentions_multi_connection_behavior() -> None:
     runner = CliRunner()
 
     list_remote_help = runner.invoke(app, ["list-routes-remote", "--help"])
+    add_routes_help = runner.invoke(app, ["add-routes-local", "--help"])
     failover_help = runner.invoke(app, ["failover", "--help"])
     restart_help = runner.invoke(app, ["restart-tunnel", "--help"])
 
@@ -494,11 +495,119 @@ def test_route_and_operator_help_mentions_multi_connection_behavior() -> None:
     assert "owning gateway VM" in list_remote_help.stdout
     assert "selected connection" in list_remote_help.stdout
 
+    assert add_routes_help.exit_code == 0
+    assert "--swap-route-table" in add_routes_help.stdout
+    assert "rollback command" in add_routes_help.stdout
+    assert "Skip the confirmation prompt for" in add_routes_help.stdout
+    assert "--swap-route-table" in add_routes_help.stdout
+
     assert failover_help.exit_code == 0
     assert "multi-connection topologies" in failover_help.stdout
 
     assert restart_help.exit_code == 0
     assert "only the owning gateway VM" in restart_help.stdout
+
+
+def test_add_routes_local_swap_route_table_requires_confirmation(tmp_path: Path, monkeypatch) -> None:
+    runner = CliRunner()
+    config_path = tmp_path / "swap.config.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+
+    local_cfg = {"project_id": "project-test"}
+    plan = _static_route_plan()
+    auth_calls = {"count": 0}
+
+    monkeypatch.setattr("nebius_vpngw.cli.load_local_config", lambda path: local_cfg)
+    monkeypatch.setattr("nebius_vpngw.cli.merge_with_peer_configs", lambda cfg, peers: plan)
+
+    def fake_authentication(*, required: bool, show_progress: bool) -> str:
+        auth_calls["count"] += 1
+        return "token"
+
+    monkeypatch.setattr("nebius_vpngw.cli._ensure_authentication", fake_authentication)
+
+    result = runner.invoke(
+        app,
+        [
+            "add-routes-local",
+            "--local-config-file",
+            str(config_path),
+            "--swap-route-table",
+        ],
+        input="n\n",
+    )
+
+    assert result.exit_code == 0
+    assert "--swap-route-table performs a blue/green subnet route-table cutover" in result.stdout
+    assert "Proceed with route-table swap? [y/N]:" in result.stdout
+    assert "Aborted. No changes made." in result.stdout
+    assert auth_calls["count"] == 0
+
+
+def test_add_routes_local_swap_route_table_passes_mode_and_rollback_dir(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runner = CliRunner()
+    config_path = tmp_path / "swap.config.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+
+    local_cfg = {"project_id": "project-test"}
+    plan = _static_route_plan()
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr("nebius_vpngw.cli.load_local_config", lambda path: local_cfg)
+    monkeypatch.setattr("nebius_vpngw.cli.merge_with_peer_configs", lambda cfg, peers: plan)
+    monkeypatch.setattr(
+        "nebius_vpngw.cli._ensure_authentication",
+        lambda *, required, show_progress: "token",
+    )
+
+    class FakeRouteManager:
+        def __init__(self, project_id, auth_token=None):
+            captured["project_id"] = project_id
+            captured["auth_token"] = auth_token
+
+        def add_routes(
+            self,
+            plan_obj,
+            local_cfg_obj,
+            *,
+            summarize: bool = False,
+            swap_route_table: bool = False,
+            rollback_dir=None,
+        ) -> None:
+            captured["plan"] = plan_obj
+            captured["local_cfg"] = local_cfg_obj
+            captured["summarize"] = summarize
+            captured["swap_route_table"] = swap_route_table
+            captured["rollback_dir"] = rollback_dir
+
+        def ensure_bgp_advertisements_current(self, plan_obj, local_cfg_obj) -> None:
+            captured["ensured_bgp"] = (plan_obj, local_cfg_obj)
+
+    monkeypatch.setattr("nebius_vpngw.cli.RouteManager", FakeRouteManager)
+
+    result = runner.invoke(
+        app,
+        [
+            "add-routes-local",
+            "--local-config-file",
+            str(config_path),
+            "--swap-route-table",
+        ],
+        input="yes\n",
+    )
+
+    assert result.exit_code == 0
+    assert captured["project_id"] == "project-test"
+    assert captured["auth_token"] == "token"
+    assert captured["plan"] is plan
+    assert captured["local_cfg"] is local_cfg
+    assert captured["summarize"] is False
+    assert captured["swap_route_table"] is True
+    assert captured["rollback_dir"] == config_path.parent / ".nebius-vpngw-rollbacks"
+    assert captured["ensured_bgp"] == (plan, local_cfg)
 
 
 def test_build_ssh_base_cmd_suppresses_host_key_noise(tmp_path: Path) -> None:

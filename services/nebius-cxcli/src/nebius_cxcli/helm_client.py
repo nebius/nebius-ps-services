@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -15,6 +16,11 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
+HELM_TIMEOUT_ENV = "NEBIUS_CXCLI_HELM_TIMEOUT_SECONDS"
+DEFAULT_HELM_COMMAND_TIMEOUT_SECONDS = 90
+DEFAULT_HELM_PULL_TIMEOUT_SECONDS = 120
+DEFAULT_GIT_CLONE_TIMEOUT_SECONDS = 120
 
 
 @dataclass(frozen=True)
@@ -65,18 +71,38 @@ def _repo_has_index(repo: str) -> bool:
     return isinstance(payload, dict) and isinstance(payload.get("entries"), dict)
 
 
+def _helm_timeout_seconds(*, default: int) -> int:
+    raw = os.environ.get(HELM_TIMEOUT_ENV, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{HELM_TIMEOUT_ENV} must be a positive integer") from exc
+    if value <= 0:
+        raise RuntimeError(f"{HELM_TIMEOUT_ENV} must be a positive integer")
+    return value
+
+
 def _run_helm_show(subcommand: str, ref: str, *, repo: str = "", version: str = "") -> str:
     command = ["helm", "show", subcommand, ref]
     if repo:
         command.extend(["--repo", repo])
     if version:
         command.extend(["--version", version])
-    result = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        timeout=90,
-    )
+    timeout_seconds = _helm_timeout_seconds(default=DEFAULT_HELM_COMMAND_TIMEOUT_SECONDS)
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"helm show {subcommand} timed out after {timeout_seconds} seconds for '{ref}'. "
+            f"Set {HELM_TIMEOUT_ENV} to a larger value for slow chart registries."
+        ) from exc
     if result.returncode != 0:
         stderr = result.stderr.strip() or result.stdout.strip() or "unknown error"
         raise RuntimeError(stderr)
@@ -85,12 +111,20 @@ def _run_helm_show(subcommand: str, ref: str, *, repo: str = "", version: str = 
 
 def _run_git_clone(git_url: str, ref: str) -> Path:
     tmp_root = Path(tempfile.mkdtemp(prefix="nebius-cxcli-helm-git-"))
-    result = subprocess.run(
-        ["git", "clone", "--depth", "1", "--branch", ref, git_url, str(tmp_root / "repo")],
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
+    timeout_seconds = _helm_timeout_seconds(default=DEFAULT_GIT_CLONE_TIMEOUT_SECONDS)
+    try:
+        result = subprocess.run(
+            ["git", "clone", "--depth", "1", "--branch", ref, git_url, str(tmp_root / "repo")],
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        shutil.rmtree(tmp_root, ignore_errors=True)
+        raise RuntimeError(
+            f"git clone timed out after {timeout_seconds} seconds for '{git_url}' ref '{ref}'. "
+            f"Set {HELM_TIMEOUT_ENV} to a larger value for slow chart sources."
+        ) from exc
     if result.returncode != 0:
         shutil.rmtree(tmp_root, ignore_errors=True)
         stderr = result.stderr.strip() or result.stdout.strip() or "unknown git clone error"
@@ -105,12 +139,20 @@ def _run_helm_pull(ref: str, *, repo: str = "", version: str = "") -> Path:
         command.extend(["--repo", repo])
     if version:
         command.extend(["--version", version])
-    result = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
+    timeout_seconds = _helm_timeout_seconds(default=DEFAULT_HELM_PULL_TIMEOUT_SECONDS)
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        shutil.rmtree(tmp_root, ignore_errors=True)
+        raise RuntimeError(
+            f"helm pull timed out after {timeout_seconds} seconds for '{ref}'. "
+            f"Set {HELM_TIMEOUT_ENV} to a larger value for slow chart registries."
+        ) from exc
     if result.returncode != 0:
         shutil.rmtree(tmp_root, ignore_errors=True)
         stderr = result.stderr.strip() or result.stdout.strip() or "unknown error"

@@ -25,50 +25,57 @@ def test_components_discovered_from_source_file(monkeypatch, tmp_path: Path) -> 
     sources_file.write_text(
         yaml.safe_dump(
             {
-                "infra": {
-                    "tf_modules": [
-                        {
-                            "module": "mk8s",
-                            "portable_source": "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3",
-                            "local_source": "platform-infra/modules/mk8s",
-                            "description": "Managed Kubernetes",
-                            "group": "Compute",
-                            "enable": True,
-                            "wizard_fields": {
+                "components": {
+                    "infra": {
+                        "mk8s": {
+                            "source": {
+                                "portable": "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3",
+                                "local": "platform-infra/modules/mk8s",
+                            },
+                            "ui": {
+                                "title": "Managed Kubernetes",
+                                "group": "Compute",
+                                "enabled": True,
+                            },
+                            "wizard": {
                                 "inputs.gpu_nodes_platform": {
-                                    "sources": [
-                                        {
-                                            "source": "provider",
-                                            "provider": "mk8s_compatible_platforms",
-                                            "args": {"platform_prefix": "gpu-"},
-                                        }
-                                    ]
+                                    "options": {
+                                        "from": "mk8s_compatible_platforms",
+                                        "prefix": "gpu-",
+                                    }
                                 }
                             },
                         },
-                        {
-                            "module": "wireguard-jumphost",
-                            "portable_source": "git::https://github.com/example/infra.git//modules/wireguard-jumphost?ref=v1.2.3",
-                            "local_source": "platform-infra/modules/wireguard-jumphost",
-                            "description": "WireGuard module",
-                            "group": "Network",
-                            "enable": False,
+                        "wireguard-jumphost": {
+                            "source": {
+                                "portable": "git::https://github.com/example/infra.git//modules/wireguard-jumphost?ref=v1.2.3",
+                                "local": "platform-infra/modules/wireguard-jumphost",
+                            },
+                            "ui": {
+                                "title": "WireGuard module",
+                                "group": "Network",
+                                "enabled": False,
+                            },
                         },
-                    ]
-                },
-                "apps": {
-                    "helm_charts": [
-                        {
-                            "name": "n8n",
-                            "repo": "https://community-charts.github.io/helm-charts",
-                            "version": "1.16.29",
-                            "namespace": "n8n",
-                            "releasename": "n8n",
-                            "description": "n8n workload",
-                            "group": "Workloads",
-                            "enable": False,
+                    },
+                    "apps": {
+                        "n8n": {
+                            "source": {
+                                "repo": "https://community-charts.github.io/helm-charts",
+                                "chart": "n8n",
+                                "version": "1.16.29",
+                            },
+                            "release": {
+                                "namespace": "n8n",
+                                "name": "n8n",
+                            },
+                            "ui": {
+                                "title": "n8n workload",
+                                "group": "Workloads",
+                                "enabled": False,
+                            },
                         }
-                    ],
+                    },
                 },
             },
             sort_keys=False,
@@ -81,25 +88,20 @@ def test_components_discovered_from_source_file(monkeypatch, tmp_path: Path) -> 
 
     infra = {entry.id: entry for entry in component_entries("infra")}
     assert set(infra) == {"mk8s", "wireguard-jumphost"}
-    assert infra["mk8s"].origin == "custom"
     assert infra["mk8s"].engine_type == "terraform_module"
     assert infra["mk8s"].group == "Compute"
     assert infra["mk8s"].default_enabled is True
     assert infra["mk8s"].wizard_fields == {
         "inputs.gpu_nodes_platform": {
-            "sources": [
-                {
-                    "source": "provider",
-                    "provider": "mk8s_compatible_platforms",
-                    "args": {"platform_prefix": "gpu-"},
-                }
-            ]
+            "options": {
+                "from": "mk8s_compatible_platforms",
+                "args": {"platform_prefix": "gpu-"},
+            }
         }
     }
 
     apps = {entry.id: entry for entry in component_entries("apps")}
     assert "n8n" in apps
-    assert apps["n8n"].origin == "helm"
     assert apps["n8n"].engine_type == "helm_release"
     assert apps["n8n"].chart_name == "n8n"
     assert apps["n8n"].chart_repo == "https://community-charts.github.io/helm-charts"
@@ -112,19 +114,25 @@ def test_app_chart_name_becomes_component_id(monkeypatch, tmp_path: Path) -> Non
     sources_file.write_text(
         yaml.safe_dump(
             {
-                "infra": {"tf_modules": []},
-                "apps": {
-                    "helm_charts": [
-                        {
-                            "name": "gateway-helm",
-                            "repo": "oci://docker.io/envoyproxy/gateway-helm",
-                            "version": "1.4.2",
-                            "namespace": "envoy-gateway-system",
-                            "releasename": "envoy-gateway",
-                            "group": "Platform",
-                            "enable": False,
+                "components": {
+                    "infra": {},
+                    "apps": {
+                        "gateway-helm": {
+                            "source": {
+                                "repo": "oci://docker.io/envoyproxy",
+                                "chart": "gateway-helm",
+                                "version": "1.4.2",
+                            },
+                            "release": {
+                                "namespace": "envoy-gateway-system",
+                                "name": "envoy-gateway",
+                            },
+                            "ui": {
+                                "group": "Platform",
+                                "enabled": False,
+                            },
                         }
-                    ]
+                    }
                 },
             },
             sort_keys=False,

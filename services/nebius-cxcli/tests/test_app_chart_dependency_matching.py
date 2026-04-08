@@ -57,7 +57,6 @@ def test_apps_dependency_resolution_uses_source_chart_name_fallback(monkeypatch)
             description="Envoy Gateway control plane",
             enabled_path=("apps", "platform", "gateway_helm", "enabled"),
             source="oci://docker.io/envoyproxy/gateway-helm",
-            origin="chart",
             dependency_match_names=("gateway-helm",),
         ),
         ComponentEntry(
@@ -67,7 +66,6 @@ def test_apps_dependency_resolution_uses_source_chart_name_fallback(monkeypatch)
             description="n8n workload",
             enabled_path=("apps", "workloads", "n8n", "enabled"),
             source="https://8gears.github.io/n8n-helm-chart/n8n",
-            origin="chart",
         ),
     )
 
@@ -151,7 +149,6 @@ def test_apps_dependency_resolution_skips_live_chart_lookup_for_unrelated_apps(
             description="Envoy Gateway control plane",
             enabled_path=("apps", "platform", "gateway_helm", "enabled"),
             source="oci://docker.io/envoyproxy/gateway-helm",
-            origin="chart",
             dependency_match_names=("gateway-helm",),
         ),
         ComponentEntry(
@@ -161,7 +158,6 @@ def test_apps_dependency_resolution_skips_live_chart_lookup_for_unrelated_apps(
             description="n8n workload",
             enabled_path=("apps", "workloads", "n8n", "enabled"),
             source="https://8gears.github.io/n8n-helm-chart/n8n",
-            origin="chart",
         ),
         ComponentEntry(
             id="cert-manager",
@@ -170,7 +166,6 @@ def test_apps_dependency_resolution_skips_live_chart_lookup_for_unrelated_apps(
             description="cert-manager",
             enabled_path=("apps", "platform", "cert_manager", "enabled"),
             source="oci://quay.io/jetstack/charts/cert-manager",
-            origin="chart",
         ),
     )
 

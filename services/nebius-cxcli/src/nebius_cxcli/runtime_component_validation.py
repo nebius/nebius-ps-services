@@ -1,8 +1,7 @@
 """Component-specific runtime validation adapters.
 
-Validation rules are dispatched by component ``kind`` (from YAML) rather than
-hard-coded component ID strings, and config paths are derived from
-``entry.config_path`` in the component registry.
+Validation rules are dispatched by explicit component validation profiles from
+the source catalog rather than ad-hoc aliases.
 """
 
 from __future__ import annotations
@@ -33,30 +32,22 @@ def validate_component_runtime_rules(
     from .components import component_entries
 
     for entry in component_entries("infra"):
-        base = entry.config_path  # e.g., "infra.mk8s", "infra.managed_postgresql"
-        kind = getattr(entry, "kind", "")
+        base = entry.config_path
+        profile = getattr(entry, "validation_profile", "")
 
-        if kind == "nebius.msp.postgresql.cluster":
+        if profile == "postgresql_cluster":
             _validate_postgresql(payload, get_path, as_text, base)
-        elif kind == "nebius.mk8s.cluster":
+        elif profile == "mk8s_cluster":
             _validate_mk8s_gpu(payload, get_path, as_text, base)
-        elif kind == "nebius.compute.filesystem":
+        elif profile == "shared_filesystem":
             _validate_sfs_csi(payload, get_path, as_text, base)
-
-        # Validation by component aliases/traits (no kind needed)
-        aliases = set(getattr(entry, "aliases", ()))
-        if "wireguard" in aliases or "wg" in aliases:
+        elif profile == "wireguard_jumphost":
             _validate_wireguard(payload, get_path, as_text, base, id_pattern)
-        if (
-            ("jump" in aliases or "host" in aliases)
-            and "wireguard" not in aliases
-            and "wg" not in aliases
-        ):
+        elif profile == "ssh_jumphost":
             _validate_ssh_jumphost(payload, get_path, as_text, base)
 
-    # Mysterybox and cross-component checks use the registry too
     for entry in component_entries("infra"):
-        if "secrets" in set(getattr(entry, "aliases", ())):
+        if getattr(entry, "validation_profile", "") == "mysterybox":
             _validate_mysterybox(payload, get_path, as_text, entry.config_path, env_var_pattern)
 
 

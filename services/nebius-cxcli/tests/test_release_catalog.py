@@ -11,14 +11,15 @@ from nebius_cxcli.release_catalog import render_release_catalog, verify_catalog,
 
 def _catalog_payload(portable_source: str, *, local_source: str | None = "../../platform-infra/modules/mk8s") -> dict[str, object]:
     return {
-        "infra": {
-            "tf_modules": [
-                {
-                    "module": "mk8s",
-                    "portable_source": portable_source,
-                    "local_source": local_source,
+        "components": {
+            "infra": {
+                "mk8s": {
+                    "source": {
+                        "portable": portable_source,
+                        "local": local_source,
+                    }
                 }
-            ]
+            }
         }
     }
 
@@ -43,9 +44,9 @@ def test_render_release_catalog_rewrites_internal_repo_refs(tmp_path: Path) -> N
     )
 
     payload = yaml.safe_load(output_path.read_text(encoding="utf-8"))
-    source = payload["infra"]["tf_modules"][0]["portable_source"]
+    source = payload["components"]["infra"]["mk8s"]["source"]["portable"]
     assert source.endswith("?ref=nebius-cxcli-v0.1.1")
-    assert "local_source" not in payload["infra"]["tf_modules"][0]
+    assert "local" not in payload["components"]["infra"]["mk8s"]["source"]
 
 
 def test_verify_catalog_rejects_external_main_ref(tmp_path: Path) -> None:

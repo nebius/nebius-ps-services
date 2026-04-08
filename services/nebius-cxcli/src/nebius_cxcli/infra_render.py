@@ -19,18 +19,19 @@ from .component_sources import (
     ComponentOutput,
     Handoff,
     SourceProfile,
+    component_input_binding_ref,
     component_output_root_name,
 )
 from .component_wiring import (
     _UNRESOLVED,
+    component_output_ref,
     input_binding_conflicts,
     output_lookup,
-    resolve_static_component_output,
-    resolved_component_row,
+    resolve_component_output_value,
+    resolve_input_binding_source,
 )
 from .components import ComponentEntry, component_entries
 from .paths import ProjectPaths
-from .provider_components import provider_resource_name_for_component
 from .runtime_config import to_plain_data
 from .runtime_introspection import module_variables, resolve_module_source_path
 from .templates import NEBIUS_PROVIDER_SOURCE, NEBIUS_PROVIDER_VERSION
@@ -130,12 +131,8 @@ def _terraform_providers_block() -> str:
 def _terraform_main_block(
     *,
     module_blocks: tuple[str, ...] = (),
-    provider_resource_blocks: tuple[str, ...] = (),
 ) -> str:
     lines: list[str] = []
-    for resource_block in provider_resource_blocks:
-        if resource_block:
-            lines.extend([resource_block, ""])
     for module_block in module_blocks:
         if module_block:
             lines.extend([module_block, ""])
@@ -198,21 +195,6 @@ def _contains_hcl_expression(value: Any) -> bool:
     return False
 
 
-def _normalize_module_mode(
-    *,
-    source: str,
-    inputs: dict[str, Any],
-    entry_origin: str | None,
-) -> str:
-    if source:
-        return "custom"
-    if any(key in inputs for key in ("resource_type", "provider_resource_type")):
-        return "provider"
-    if (entry_origin or "").strip().lower() == "provider":
-        return "provider"
-    return "custom"
-
-
 def _effective_component_source(*, row: dict[str, Any], entry: ComponentEntry | None) -> str:
     if entry is not None and str(entry.source or "").strip():
         return str(entry.source).strip()
@@ -223,157 +205,6 @@ def _effective_component_version(*, row: dict[str, Any], entry: ComponentEntry |
     if entry is not None and str(entry.version or "").strip():
         return str(entry.version).strip()
     return str(row.get("version", "")).strip()
-
-
-def _dynamic_provider_component_rows(
-    payload: dict[str, Any],
-    *,
-    source_profile: SourceProfile,
-) -> tuple[dict[str, Any], ...]:
-    infra = payload.get("infra")
-    if not isinstance(infra, dict):
-        return ()
-    components = infra.get("components")
-    if not isinstance(components, list):
-        return ()
-
-    rows: list[dict[str, Any]] = []
-    entry_by_id = {
-        entry.id: entry for entry in component_entries("infra", source_profile=source_profile)
-    }
-    for item in components:
-        if not isinstance(item, dict):
-            continue
-        if not bool(item.get("enabled", False)):
-            continue
-        component_id = str(item.get("id", "")).strip().lower()
-        if not component_id:
-            continue
-        entry = entry_by_id.get(component_id)
-        resolved_item = (
-            resolve_component_defaults(
-                payload=payload,
-                component_node=item,
-                entry=entry,
-                preserve_existing_literal=True,
-                preserve_existing_shared=False,
-            )
-            if entry is not None and entry.defaults
-            else dict(item)
-        )
-        inputs = resolved_item.get("inputs", {})
-        if not isinstance(inputs, dict):
-            inputs = {}
-        source = _effective_component_source(row=resolved_item, entry=entry)
-        version = _effective_component_version(row=resolved_item, entry=entry)
-        mode = _normalize_module_mode(
-            source=source,
-            inputs=inputs,
-            entry_origin=entry.origin if entry else None,
-        )
-        if mode != "provider":
-            continue
-        rows.append(
-            {
-                "id": component_id,
-                "source": source,
-                "version": version,
-                "inputs": inputs,
-            }
-        )
-    return tuple(rows)
-
-
-def _render_dynamic_provider_resource_block(
-    *,
-    resource_type: str,
-    resource_name: str,
-    attributes: dict[str, Any],
-) -> str:
-    lines = [
-        f'resource "{resource_type}" "{resource_name}" {{',
-    ]
-    for key in sorted(attributes.keys()):
-        attr_name = str(key).strip().replace("-", "_")
-        if not attr_name:
-            continue
-        if not _is_hcl_identifier(attr_name):
-            continue
-        lines.append(f"  {attr_name} = {_hcl_value(attributes[key], indent=4)}")
-    lines.append("}")
-    return "\n".join(lines)
-
-
-def _provider_resource_blocks(
-    config: Any,
-    *,
-    source_profile: SourceProfile,
-) -> tuple[str, ...]:
-    payload = to_plain_data(config)
-    if not isinstance(payload, dict):
-        return ()
-
-    entry_by_id = {
-        entry.id: entry for entry in component_entries("infra", source_profile=source_profile)
-    }
-    rows = _dynamic_provider_component_rows(payload, source_profile=source_profile)
-    blocks: list[str] = []
-    for row in rows:
-        component_id = str(row["id"])
-        inputs = row["inputs"]
-        if not isinstance(inputs, dict):
-            continue
-
-        explicit_resource_type = str(
-            inputs.get("resource_type") or inputs.get("provider_resource_type") or ""
-        ).strip()
-        source_hint = str(row.get("source", "")).strip()
-        if not source_hint:
-            entry = entry_by_id.get(component_id)
-            if entry and isinstance(entry.source, str):
-                source_hint = entry.source.strip()
-
-        resource_type = explicit_resource_type or source_hint
-        if not resource_type:
-            resource_type = provider_resource_name_for_component(component_id) or ""
-        resource_type = resource_type.strip()
-        if not resource_type:
-            continue
-        if not re.fullmatch(r"[a-z0-9_]+", resource_type):
-            raise ValueError(
-                f"infra component '{component_id}' resolved provider resource_type '{resource_type}' is invalid"
-            )
-
-        helper_keys = {
-            "resource_type",
-            "provider_resource_type",
-            "resource_name",
-            "depends_on_platform",
-        }
-        attributes = {
-            key: value
-            for key, value in inputs.items()
-            if str(key).strip().lower() not in helper_keys
-        }
-        resource_name = str(
-            inputs.get("resource_name")
-            or inputs.get("name")
-            or component_id.replace("-", "_")
-        ).strip()
-        if not _is_hcl_identifier(resource_name):
-            resource_name = _safe_hcl_identifier(
-                component_id.replace("-", "_"),
-                fallback_prefix="component",
-            )
-
-        blocks.append(
-            _render_dynamic_provider_resource_block(
-                resource_type=resource_type,
-                resource_name=resource_name,
-                attributes=attributes,
-            )
-        )
-    return tuple(blocks)
 
 
 def _normalize_git_ref(value: str | None) -> str | None:
@@ -430,7 +261,7 @@ def _module_source_for_profile(
     raise ValueError(
         f"infra component '{component_id}' resolves to local module source '{module_source}', "
         f"but source profile '{source_profile.value}' requires a portable Git or registry source. "
-        "Set portable_source in component_sources.yaml or rerun with --source-profile local."
+        "Set source.portable in component_sources.yaml or rerun with --source-profile local."
     )
 
 
@@ -567,19 +398,8 @@ def _build_module_plans(
         source = _effective_component_source(row=resolved_item, entry=entry)
         version = _effective_component_version(row=resolved_item, entry=entry) or None
 
-        mode = _normalize_module_mode(
-            source=source,
-            inputs=inputs,
-            entry_origin=entry.origin if entry else None,
-        )
-        if mode != "custom":
-            continue
-
         helper_keys = {
             "module_name",
-            "depends_on_platform",
-            "resource_type",
-            "provider_resource_type",
         }
         module_inputs = {
             key: value
@@ -670,6 +490,7 @@ def _build_module_plans(
                     f"binding '{source_ref}' and must not be set explicitly"
                 )
             for binding in entry.input_bindings:
+                declared_source_ref = component_input_binding_ref(binding)
                 source_entry = all_entry_by_id.get(binding.source_component_id)
                 if source_entry is None:
                     raise ValueError(
@@ -680,13 +501,22 @@ def _build_module_plans(
                 if source_output is None:
                     raise ValueError(
                         f"infra component '{component_label}' input binding '{binding.target_path}' references "
-                        f"undeclared output '{binding.source_component_id}.{binding.source_output_name}'"
+                        f"undeclared output '{declared_source_ref}'"
                     )
+                _resolved_source_entry, resolved_source_row, source_instance_id = (
+                    resolve_input_binding_source(payload, binding=binding)
+                )
+                source_ref = (
+                    component_output_ref(source_instance_id, binding.source_output_name)
+                    if source_instance_id
+                    else declared_source_ref
+                )
 
-                static_value = resolve_static_component_output(
+                static_value = resolve_component_output_value(
                     payload,
                     component_id=binding.source_component_id,
                     output_name=binding.source_output_name,
+                    instance_id=source_instance_id or binding.source_instance_id,
                 )
                 if static_value is not _UNRESOLVED:
                     set_component_path(module_inputs, binding.target_path, static_value)
@@ -695,25 +525,20 @@ def _build_module_plans(
                 if source_output.kind != "terraform_output":
                     raise ValueError(
                         f"infra component '{component_label}' input binding '{binding.target_path}' could not "
-                        f"resolve output '{binding.source_component_id}.{binding.source_output_name}' "
+                        f"resolve output '{source_ref}' "
                         "from the current config payload"
                     )
                 if source_entry.scope != "infra":
                     raise ValueError(
                         f"infra component '{component_label}' input binding '{binding.target_path}' references "
-                        f"Terraform output '{binding.source_component_id}.{binding.source_output_name}' "
+                        f"Terraform output '{source_ref}' "
                         f"from non-infra component '{binding.source_component_id}'"
                     )
-                _resolved_source_entry, resolved_source_row = resolved_component_row(
-                    payload,
-                    component_id=binding.source_component_id,
-                )
-                source_instance_id = component_instance_id(resolved_source_row) if resolved_source_row else ""
                 source_module_name = module_name_by_instance_id.get(source_instance_id)
                 if not source_module_name:
                     raise ValueError(
                         f"infra component '{component_label}' input binding '{binding.target_path}' requires "
-                        f"enabled infra component '{binding.source_component_id}'"
+                        f"enabled infra component matching '{declared_source_ref}'"
                     )
                 set_component_path(
                     module_inputs,
@@ -907,7 +732,7 @@ def _render_tfvars_json(plans: tuple[_ModulePlan, ...]) -> dict[str, Any]:
 def _handoff_output_name(plan: _ModulePlan) -> str:
     return component_output_root_name(
         plan.instance_id,
-        plan.handoff.cluster_id.value,
+        plan.handoff.cluster_id,
     )
 
 
@@ -924,7 +749,7 @@ def _render_outputs_tf(plans: tuple[_ModulePlan, ...]) -> str:
             )
             if (
                 plan.handoff is not None
-                and output.name == plan.handoff.cluster_id.value
+                and output.name == plan.handoff.cluster_id
             ):
                 description = "Cluster ID used for kubeconfig handoff during deploy/bootstrap flows"
             blocks.append(
@@ -942,10 +767,11 @@ def _render_outputs_tf(plans: tuple[_ModulePlan, ...]) -> str:
                     ]
                 )
             )
-        if plan.handoff is not None and plan.handoff.cluster_id.value not in output_by_name:
+        if plan.handoff is not None and plan.handoff.cluster_id not in output_by_name:
             raise ValueError(
-                f"infra component '{component_instance_label(plan.component_id, plan.instance_id)}' handoff.cluster_id "
-                f"'{plan.handoff.cluster_id.value}' is not declared under outputs"
+                f"infra component '{component_instance_label(plan.component_id, plan.instance_id)}' "
+                "runtime.contracts.cluster_access.cluster_id "
+                f"'{plan.handoff.cluster_id}' is not declared under runtime.values"
             )
     if not blocks:
         return "# No Terraform outputs were generated\n"
@@ -991,7 +817,6 @@ def render_terraform_artifacts(
     backend_settings = backend_settings_from_config(config)
     module_plans = _build_module_plans(config, source_profile=source_profile)
     module_blocks = tuple(_render_module_block(plan) for plan in module_plans)
-    provider_resource_blocks = _provider_resource_blocks(config, source_profile=source_profile)
     tfvars_payload = {
         **_provider_static_tfvars(config),
         **_render_tfvars_json(module_plans),
@@ -1018,7 +843,6 @@ def render_terraform_artifacts(
         main_tf_path,
         _terraform_main_block(
             module_blocks=module_blocks,
-            provider_resource_blocks=provider_resource_blocks,
         ),
     )
     written.append(main_tf_path)

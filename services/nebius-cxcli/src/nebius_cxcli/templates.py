@@ -40,6 +40,7 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
             paths:
               - "**/{deployments_dir}/**/generated/**"
               - ".github/workflows/nebius-deployments.yml"
+          workflow_dispatch:
 
         permissions:
           contents: read
@@ -83,7 +84,11 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                 id: discover
                 run: |
                   set -euo pipefail
-                  nebius-cxcli discover "${{{{ env.NEBIUS_DISCOVER_TARGET }}}}" > discover.json
+                  if [[ "${{GITHUB_EVENT_NAME}}" == "workflow_dispatch" ]]; then
+                    nebius-cxcli discover --all "${{{{ env.NEBIUS_DISCOVER_TARGET }}}}" > discover.json
+                  else
+                    nebius-cxcli discover "${{{{ env.NEBIUS_DISCOVER_TARGET }}}}" > discover.json
+                  fi
                   python - <<'PY' >> "$GITHUB_OUTPUT"
                   import json
                   from pathlib import Path

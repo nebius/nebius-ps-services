@@ -61,6 +61,7 @@ from .component_instances import (
 )
 from .component_sources import (
     SourceProfile,
+    component_input_binding_ref,
     component_output_root_name,
     load_component_sources,
     resolve_component_sources_file,
@@ -76,9 +77,8 @@ from .component_wiring import (
     input_binding_leaf_names,
     managed_input_binding_payload_paths,
     output_lookup,
-    resolve_handoff_field_value,
-    resolve_static_component_output,
-    resolved_component_row,
+    resolve_component_output_value,
+    resolve_input_binding_source,
 )
 from .components import (
     COMPONENT_ID_PATTERN,
@@ -152,13 +152,6 @@ from .paths import (
     resolve_generated_paths,
     resolve_project_paths,
     validate_path_alignment,
-)
-from .provider_components import (
-    infer_infra_component_category,
-    provider_component_match_status,
-    provider_resource_exists,
-    required_provider_leaf_names_for_component,
-    required_provider_leaf_names_for_resource,
 )
 from .provider_options import (
     OptionChoice,
@@ -328,9 +321,9 @@ def main_callback(
             "--source-profile",
             help=(
                 "Global optional override for the active component source profile. "
-                "Defaults to portable. portable always uses portable_source. "
-                "local prefers local_source and falls back to portable_source when "
-                "local_source is unset."
+                "Defaults to portable. portable always uses source.portable. "
+                "local prefers source.local and falls back to source.portable when "
+                "source.local is unset."
             ),
             case_sensitive=False,
         ),
@@ -1535,9 +1528,7 @@ def _resolve_component_ids_from_tokens(
 
 
 def _component_selector_label(entry: ComponentEntry, *, scope: ComponentScope) -> str:
-    origin = entry.origin.strip().lower() if entry.origin else ""
-    badge = f"[{origin}]" if origin in {"provider", "custom", "helm"} else ""
-    base = entry.id if not badge else f"{entry.id} {badge}"
+    base = entry.id
     if entry.group:
         return f"{entry.group} >> {base}"
     return base
@@ -1681,14 +1672,7 @@ def _with_infra_provider_groups(
     }
     enriched: list[ComponentEntry] = []
     for entry in entries:
-        if entry.group:
-            enriched.append(entry)
-            continue
-        category = infer_infra_component_category(entry.id)
-        if category == entry.group:
-            enriched.append(entry)
-            continue
-        enriched.append(replace(entry, group=category))
+        enriched.append(entry if entry.group else replace(entry, group="Other"))
     return tuple(
         sorted(
             enriched,
@@ -2123,97 +2107,81 @@ def _co_located_input_path(full_path_label: str, input_name: str) -> str | None:
     return f"{prefix}{marker}{input_name}"
 
 
-def _co_located_project_args(full_path_label: str) -> dict[str, Any]:
-    sibling_parent_id = _co_located_input_path(full_path_label, "parent_id")
-    if not sibling_parent_id:
-        return {}
-    if sibling_parent_id == full_path_label:
-        return {}
-    return {
-        "project_id_path": sibling_parent_id,
-        "fallback_project_id_path": "client_info.nebius.project_id",
+_PROVIDER_ARG_PATH_KEYS = frozenset(
+    {
+        "platform_path",
+        "project_id_path",
+        "fallback_project_id_path",
     }
+)
 
 
-def _infer_infra_provider_field_spec(
+def _dynamic_component_prefix(
     *,
     entry: ComponentEntry,
     full_path_label: str,
-) -> dict[str, Any] | None:
-    """Infer provider option sources from infra field path conventions."""
-    if not full_path_label.startswith("infra."):
-        return None
+) -> str:
+    if entry.scope == "infra":
+        match = re.match(r"^(infra\.components(?:\[[0-9]+\]|\.[^.]+))(?:\..+)?$", full_path_label)
+    else:
+        match = re.match(r"^(apps\.charts(?:\[[0-9]+\]|\.[^.]+))(?:\..+)?$", full_path_label)
+    return match.group(1) if match else ""
 
-    leaf = full_path_label.rsplit(".", maxsplit=1)[-1].strip().lower()
-    normalized_leaf = leaf.replace("-", "_")
-    co_located_project_args = _co_located_project_args(full_path_label)
 
-    if normalized_leaf in {"parent_id", "project_id"} or normalized_leaf.endswith(
-        ("_parent_id", "_project_id")
-    ):
-        return {"sources": [{"source": "provider", "provider": "tenant_projects"}]}
+def _normalize_provider_arg_path(
+    *,
+    entry: ComponentEntry,
+    full_path_label: str,
+    raw_path: str,
+) -> str:
+    token = str(raw_path).strip()
+    if not token:
+        return ""
+    if token.split(".", 1)[0] in {"version", "client_info", "infra", "apps"}:
+        return token
 
-    if normalized_leaf == "network_id" or normalized_leaf.endswith("_network_id"):
-        source: dict[str, Any] = {"source": "provider", "provider": "project_networks"}
-        if co_located_project_args:
-            source["args"] = co_located_project_args
-        return {"sources": [source]}
+    component_prefix = _dynamic_component_prefix(entry=entry, full_path_label=full_path_label)
+    if not component_prefix:
+        return token
 
-    if normalized_leaf == "subnet_id" or normalized_leaf.endswith("_subnet_id"):
-        source = {"source": "provider", "provider": "project_subnets"}
-        if co_located_project_args:
-            source["args"] = co_located_project_args
-        return {"sources": [source]}
+    if entry.scope == "infra":
+        if token.startswith("inputs."):
+            return f"{component_prefix}.{token}"
+        return f"{component_prefix}.inputs.{token}"
 
-    if normalized_leaf in {"k8s_version", "kubernetes_version", "control_plane_version"}:
-        return {
-            "sources": [
-                {
-                    "source": "provider",
-                    "provider": "mk8s_control_plane_versions",
-                }
-            ]
-        }
+    app_root_keys = {
+        "id",
+        "instance_id",
+        "group",
+        "enabled",
+        "repo",
+        "version",
+        "namespace",
+        "release-name",
+        "values",
+    }
+    if token.split(".", 1)[0] in app_root_keys:
+        return f"{component_prefix}.{token}"
+    return f"{component_prefix}.values.{token}"
 
-    if leaf in {"platform"} or leaf.endswith(("_platform", "-platform")):
-        is_gpu_path = (
-            leaf.startswith("gpu")
-            or "_gpu_" in leaf
-            or "-gpu-" in leaf
-            or ".gpu_" in full_path_label
-            or ".gpu-" in full_path_label
-        )
-        prefix = "gpu-" if is_gpu_path else "cpu-"
-        provider = "compute_platforms"
-        source: dict[str, Any] = {"source": "provider", "provider": provider}
-        if prefix:
-            source["args"] = {"platform_prefix": prefix}
-        return {"sources": [source]}
 
-    if normalized_leaf.endswith(("driver_preset", "drivers_preset")):
-        return None
-
-    if leaf in {"preset"} or leaf.endswith(("_preset", "-preset")):
-        platform_path = ""
-        if full_path_label.endswith(".preset"):
-            platform_path = f"{full_path_label[:-len('.preset')]}.platform"
-        elif full_path_label.endswith("_preset"):
-            platform_path = f"{full_path_label[:-len('_preset')]}_platform"
-        elif full_path_label.endswith("-preset"):
-            platform_path = f"{full_path_label[:-len('-preset')]}-platform"
-        if not platform_path:
-            return None
-        return {
-            "sources": [
-                {
-                    "source": "provider",
-                    "provider": "compute_platform_presets",
-                    "args": {"platform_path": platform_path},
-                }
-            ]
-        }
-
-    return None
+def _normalize_provider_args(
+    *,
+    entry: ComponentEntry,
+    full_path_label: str,
+    args: dict[str, Any],
+) -> dict[str, Any]:
+    normalized: dict[str, Any] = {}
+    for key, value in args.items():
+        if key in _PROVIDER_ARG_PATH_KEYS and isinstance(value, str):
+            normalized[key] = _normalize_provider_arg_path(
+                entry=entry,
+                full_path_label=full_path_label,
+                raw_path=value,
+            )
+            continue
+        normalized[key] = value
+    return normalized
 
 
 def _resolve_wizard_field_spec(
@@ -2237,9 +2205,6 @@ def _resolve_wizard_field_spec(
             relative_spec = entry.wizard_fields.get(relative)
             if isinstance(relative_spec, dict):
                 return relative_spec
-
-    if entry.scope == "infra":
-        return _infer_infra_provider_field_spec(entry=entry, full_path_label=full_path_label)
     return None
 
 
@@ -2275,14 +2240,15 @@ def _resolve_dynamic_field_choices(
     if spec is None:
         return []
 
-    # New flat `options` format: {from: <provider>, filter: <regex>}
+    # New flat `options` format: {from: <provider>, args?: {...}, filter?: <regex>}
     options = spec.get("options") if isinstance(spec, dict) else None
     if isinstance(options, dict):
         provider = str(options.get("from", "")).strip()
         if not provider or provider_lookup is None:
             return []
         filter_pattern = str(options.get("filter", "")).strip()
-        args: dict[str, Any] = {}
+        args_raw = options.get("args")
+        args: dict[str, Any] = dict(args_raw) if isinstance(args_raw, dict) else {}
         if filter_pattern:
             args["_filter"] = filter_pattern
         provider_choices = provider_lookup.resolve(
@@ -2369,7 +2335,15 @@ def _provider_source_specs_for_field(
         if not provider:
             return ()
         filter_pattern = str(options.get("filter", "")).strip()
-        args: dict[str, Any] = {"_filter": filter_pattern} if filter_pattern else {}
+        args_raw = options.get("args")
+        args: dict[str, Any] = dict(args_raw) if isinstance(args_raw, dict) else {}
+        if filter_pattern:
+            args["_filter"] = filter_pattern
+        args = _normalize_provider_args(
+            entry=entry,
+            full_path_label=full_path_label,
+            args=args,
+        )
         return ((provider, args),)
 
     # Legacy `sources` array format
@@ -2388,6 +2362,11 @@ def _provider_source_specs_for_field(
             continue
         args_raw = source.get("args")
         source_args = dict(args_raw) if isinstance(args_raw, dict) else {}
+        source_args = _normalize_provider_args(
+            entry=entry,
+            full_path_label=full_path_label,
+            args=source_args,
+        )
         key = (provider, json.dumps(source_args, sort_keys=True))
         if key in seen:
             continue
@@ -2490,33 +2469,20 @@ def _required_leaf_names_for_entry(entry: ComponentEntry) -> set[str]:
     if entry.scope != "infra":
         return set()
     required_names = set(_runtime_required_input_leaf_names(entry))
-    if entry.origin == "provider":
-        required_names |= {
-            _normalize_leaf_name(name)
-            for name in required_provider_leaf_names_for_component(entry.id)
-        }
-        source_hint = str(entry.source or "").strip()
-        if source_hint and "_" in source_hint:
-            required_names.update(
-                _normalize_leaf_name(name)
-                for name in required_provider_leaf_names_for_resource(source_hint)
-            )
-        return required_names
-    if entry.origin == "custom":
-        metadata_source = _entry_module_metadata_source(
-            entry,
-            fallback_source=str(entry.source or ""),
-        )
+    metadata_source = _entry_module_metadata_source(
+        entry,
+        fallback_source=str(entry.source or ""),
+    )
+    if metadata_source:
         required_names |= {
             _normalize_leaf_name(name)
             for name in module_required_variables(metadata_source)
         }
-        return required_names
     return required_names
 
 
 def _module_variable_specs_for_entry(entry: ComponentEntry) -> dict[str, Any]:
-    if entry.scope != "infra" or entry.origin != "custom":
+    if entry.scope != "infra":
         return {}
     source = _entry_module_metadata_source(entry, fallback_source=str(entry.source or ""))
     if not source:
@@ -2695,7 +2661,7 @@ def _app_chart_default_values(
     entry: ComponentEntry,
     instance_id: str | None = None,
 ) -> dict[str, Any]:
-    if entry.scope != "apps" or entry.origin != "helm":
+    if entry.scope != "apps":
         return {}
     component_path = (
         _dynamic_app_chart_path(payload, entry.id, instance_id=instance_id)
@@ -2823,26 +2789,9 @@ def _seed_component_prompt_fields(
     if entry.scope != "infra":
         return
 
-    # For source-defined terraform modules, seed required variables under component inputs.
-    if entry.origin == "custom":
-        inputs_node = component_node.get("inputs")
-        if not isinstance(inputs_node, dict):
-            inputs_node = {}
-            component_node["inputs"] = inputs_node
-        return
-
-    scalar_paths = _collect_scalar_leaf_paths(component_node)
-    visible_leaf_names = {
-        _normalize_leaf_name(str(path[-1]))
-        for path in scalar_paths
-        if path and isinstance(path[-1], str)
-    }
-    minimal_block = visible_leaf_names <= {"enabled"}
-    if not minimal_block:
-        return
-    for leaf_name in sorted(required_leaf_names):
-        key = leaf_name.replace("-", "_")
-        component_node.setdefault(key, "")
+    inputs_node = component_node.get("inputs")
+    if not isinstance(inputs_node, dict):
+        component_node["inputs"] = {}
 
 
 def _prompt_choice_override(
@@ -3165,7 +3114,7 @@ def _run_component_field_wizard(
 
         module_dependency_expander: Any = None
         if component_path is not None:
-            if entry.scope == "infra" and entry.origin == "custom":
+            if entry.scope == "infra":
                 # Infra wizard prompts are module-input driven for source-backed modules.
                 module_inputs_path = component_path + ("inputs",)
                 module_inputs = (
@@ -3346,7 +3295,7 @@ def _run_component_field_wizard(
                     module_dependency_expander = (
                         _expand_module_dependency_prompts if dependent_prefixes else None
                     )
-            elif entry.scope == "apps" and entry.origin == "helm":
+            elif entry.scope == "apps":
                 # App wizard prompts are Helm values-driven.
                 for key in ("namespace", "release-name"):
                     full_path = component_path + (key,)
@@ -3927,7 +3876,6 @@ def _component_dependency_issues_from_payload(
                     version=None,
                     depends_on=(),
                     dependency_match_names=(chart_id,),
-                    origin="helm",
                     group=group,
                 )
             )
@@ -4276,11 +4224,11 @@ def _validate_component_sources_registry(
         module_source = module.source.strip()
         _advance(f"infra:{module_id or '?'}")
         if not module_id:
-            issues.append("infra.tf_modules[] entry has empty module id")
+            issues.append("components.infra entry has empty component id")
             continue
         if not COMPONENT_ID_PATTERN.fullmatch(module_id):
             issues.append(
-                f"infra.tf_modules[{module_id}] module name must use lowercase letters, digits, and hyphens"
+                f"components.infra.{module_id} component id must use lowercase letters, digits, and hyphens"
             )
             continue
         if module_id in declared_entries:
@@ -4288,45 +4236,46 @@ def _validate_component_sources_registry(
         else:
             declared_entries[module_id] = ("infra", module)
         if not module_source:
-            issues.append(f"infra.tf_modules[{module_id}] is missing source")
+            issues.append(f"components.infra.{module_id} is missing source")
             continue
         source_issues = module_source_validation_issues(module_source)
         for issue in source_issues:
-            issues.append(f"infra.tf_modules[{module_id}] {issue}")
+            issues.append(f"components.infra.{module_id} {issue}")
         if not source_issues:
             module_contract_issues, module_contract_warnings = module_cli_contract_findings(
                 module_source
             )
             for issue in module_contract_issues:
-                issues.append(f"infra.tf_modules[{module_id}] {issue}")
+                issues.append(f"components.infra.{module_id} {issue}")
             for warning in module_contract_warnings:
-                warnings.append(f"infra.tf_modules[{module_id}] {warning}")
+                warnings.append(f"components.infra.{module_id} {warning}")
         local_module_path = _resolve_local_module_source_path(module_source)
         if local_module_path is None:
             continue
         expected_from_folder = _normalize_component_token(local_module_path.name)
         if expected_from_folder and expected_from_folder != module_id:
             warnings.append(
-                f"infra.tf_modules[{module_id}] folder name '{local_module_path.name}' "
+                f"components.infra.{module_id} folder name '{local_module_path.name}' "
                 f"normalizes to '{expected_from_folder}', which differs from module id '{module_id}'."
             )
         discovered_variables = module_variable_names(str(local_module_path))
         if not discovered_variables:
             warnings.append(
-                f"infra.tf_modules[{module_id}] has no discoverable Terraform variables; "
+                f"components.infra.{module_id} has no discoverable Terraform variables; "
                 "wizard field discovery may be limited."
             )
 
     for chart in sources.helm_charts:
-        chart_name = chart.name.strip()
-        chart_id = _normalize_component_token(chart_name)
+        chart_component_id = chart.name.strip()
+        chart_name = str(chart.chart_name or chart.name).strip()
+        chart_id = _normalize_component_token(chart_component_id)
         repo = str(chart.repo or "").strip()
         version = str(chart.version or "").strip()
-        chart_label = f"apps.helm_charts[{chart_name}]"
-        _advance(f"apps:{chart_name or '?'}")
+        chart_label = f"components.apps.{chart_component_id}"
+        _advance(f"apps:{chart_component_id or '?'}")
 
-        if not chart_name:
-            issues.append("apps.helm_charts[] entry has empty name")
+        if not chart_component_id:
+            issues.append("components.apps entry has empty component id")
             continue
         if chart_id in declared_entries:
             duplicate_ids.add(chart_id)
@@ -4362,14 +4311,7 @@ def _validate_component_sources_registry(
         default_targets = default_target_paths(source_entry)
         declared_module_input_names: set[str] = set()
 
-        if scope == "apps":
-            for output in source_entry.outputs:
-                if output.kind == "terraform_output":
-                    issues.append(
-                        f"apps component '{component_id}' output '{output.name}' cannot use "
-                        "Terraform-backed outputs; Helm chart sources may export config/static values only."
-                    )
-        else:
+        if scope == "infra":
             module_source = str(source_entry.source or "").strip()
             metadata_source = _entry_module_metadata_source(
                 None,
@@ -4392,7 +4334,7 @@ def _validate_component_sources_registry(
                     or (is_local_like_source and output.source_path not in declared_module_outputs)
                 ):
                     issues.append(
-                        f"infra component '{component_id}' output '{output.name}' references Terraform output "
+                        f"infra component '{component_id}' runtime.values '{output.name}' references Terraform output "
                         f"'{output.source_path}', but module source '{module_source}' does not expose it"
                     )
 
@@ -4413,6 +4355,7 @@ def _validate_component_sources_registry(
                 )
 
         for binding in source_entry.input_bindings:
+            declared_source_ref = component_input_binding_ref(binding)
             if binding.target_path in default_targets:
                 issues.append(
                     f"{scope} component '{component_id}' target path '{binding.target_path}' is managed by both "
@@ -4450,7 +4393,7 @@ def _validate_component_sources_registry(
             if source_output is None:
                 issues.append(
                     f"{scope} component '{component_id}' input binding '{binding.target_path}' references "
-                    f"undeclared output '{binding.source_component_id}.{binding.source_output_name}'"
+                    f"undeclared output '{declared_source_ref}'"
                 )
                 continue
             if source_output.kind == "terraform_output" and source_scope != "infra":
@@ -4478,43 +4421,40 @@ def _validate_component_sources_registry(
 
         handoff = getattr(source_entry, "handoff", None)
         if handoff is not None:
-            cluster_id_output = output_by_name.get(handoff.cluster_id.value)
+            cluster_id_output = output_by_name.get(handoff.cluster_id)
             if cluster_id_output is None:
                 issues.append(
-                    f"{scope} component '{component_id}' handoff.cluster_id "
-                    f"'{handoff.cluster_id.value}' is not declared under outputs"
+                    f"{scope} component '{component_id}' runtime.contracts.cluster_access.cluster_id "
+                    f"references undeclared runtime.values alias '{handoff.cluster_id}'"
                 )
             elif cluster_id_output.kind != "terraform_output":
                 issues.append(
-                    f"{scope} component '{component_id}' handoff.cluster_id "
-                    f"'{handoff.cluster_id.value}' must point to a Terraform-backed exported output alias"
+                    f"{scope} component '{component_id}' runtime.contracts.cluster_access.cluster_id "
+                    f"'{handoff.cluster_id}' must point to a Terraform-backed runtime.values alias"
                 )
 
-            if handoff.access.kind == "config_path":
-                pass  # config_path access is resolved directly; no output alias needed
-            else:
-                access_output = output_by_name.get(handoff.access.value)
-                if access_output is None:
-                    issues.append(
-                        f"{scope} component '{component_id}' handoff.access "
-                        f"'{handoff.access.value}' is not declared under outputs"
+            access_output = output_by_name.get(handoff.access)
+            if access_output is None:
+                issues.append(
+                    f"{scope} component '{component_id}' runtime.contracts.cluster_access.access "
+                    f"references undeclared runtime.values alias '{handoff.access}'"
+                )
+            elif access_output.kind == "terraform_output":
+                issues.append(
+                    f"{scope} component '{component_id}' runtime.contracts.cluster_access.access "
+                    f"'{handoff.access}' must point to an input/literal runtime.values alias"
+                )
+            elif access_output.kind == "literal":
+                try:
+                    _normalize_handoff_access_value(
+                        access_output.value,
+                        component_label=component_id,
+                        output_name=handoff.access,
                     )
-                elif access_output.kind == "terraform_output":
+                except RuntimeError as exc:
                     issues.append(
-                        f"{scope} component '{component_id}' handoff.access "
-                        f"'{handoff.access.value}' must point to a config/static exported output alias"
+                        str(exc)
                     )
-                elif access_output.kind == "static":
-                    try:
-                        _normalize_handoff_access_value(
-                            access_output.value,
-                            component_label=component_id,
-                            output_name=handoff.access.value,
-                        )
-                    except RuntimeError as exc:
-                        issues.append(
-                            str(exc)
-                        )
 
     if progress_callback is not None:
         progress_callback("done", total_items, total_items)
@@ -4565,30 +4505,23 @@ def _dynamic_provider_field_checks(
     seen: set[tuple[str, str, str]] = set()
     entry_by_id = {entry.id: entry for entry in infra_entries}
     for row in _dynamic_enabled_infra_component_rows(payload):
-        mode = str(row.get("mode", "")).strip().lower()
-        if mode not in {"provider", "custom"}:
-            continue
         component_id = str(row["id"])
         instance_id = str(row["instance_id"])
         source = str(row.get("source", "")).strip() or None
         entry = entry_by_id.get(component_id)
         if entry is None:
-            entry_origin = "provider" if mode == "provider" else "custom"
-            entry_label = (
-                "Runtime provider component"
-                if entry_origin == "provider"
-                else "Runtime source-backed component"
-            )
             entry = ComponentEntry(
                 id=component_id,
                 scope="infra",
                 config_path=f"infra.components.{instance_id}",
-                description=f"{entry_label} '{component_instance_label(component_id, instance_id)}'",
-                origin=entry_origin,
+                description=(
+                    f"Runtime source-backed component "
+                    f"'{component_instance_label(component_id, instance_id)}'"
+                ),
                 source=source,
             )
-        elif mode == "custom" and source and str(entry.source or "").strip() != source:
-            entry = replace(entry, origin="custom", source=source)
+        elif source and str(entry.source or "").strip() != source:
+            entry = replace(entry, source=source)
         component_path = _dynamic_infra_component_path(
             payload,
             component_id,
@@ -4638,50 +4571,9 @@ def _required_enabled_infra_field_issues(
         component_id = str(row["id"])
         instance_id = str(row["instance_id"])
         component_path_label = _component_instance_path_label("infra", component_id, instance_id)
-        mode = str(row.get("mode", "")).strip().lower()
         inputs = row.get("inputs", {})
         if not isinstance(inputs, Mapping):
             inputs = {}
-
-        if mode == "provider":
-            entry = entry_by_id.get(component_id)
-            if entry is None:
-                entry = ComponentEntry(
-                    id=component_id,
-                    scope="infra",
-                    config_path=f"infra.components.{instance_id}",
-                    description=f"Runtime provider component '{component_instance_label(component_id, instance_id)}'",
-                    origin="provider",
-                    source=None,
-                )
-            component_path = _dynamic_infra_component_path(
-                payload,
-                component_id,
-                instance_id=instance_id,
-            )
-            if component_path is None:
-                continue
-            inputs_path = component_path + ("inputs",)
-            inputs_node = _get_payload_value(payload, inputs_path)
-            if not isinstance(inputs_node, (dict, list)):
-                continue
-            for relative_path in _collect_scalar_leaf_paths(inputs_node):
-                full_path = inputs_path + relative_path
-                full_path_label = _format_payload_path(full_path)
-                if not _provider_field_path_is_active(payload, full_path_label):
-                    continue
-                if not _provider_source_specs_for_field(
-                    entry=entry,
-                    full_path_label=full_path_label,
-                ):
-                    continue
-                value = _get_payload_value(payload, full_path)
-                if value is None or (isinstance(value, str) and not value.strip()):
-                    issues.append(f"{full_path_label} is required")
-            continue
-
-        if mode != "custom":
-            continue
 
         source = str(row.get("source", "")).strip()
         entry = entry_by_id.get(component_id)
@@ -4804,19 +4696,10 @@ def _dynamic_enabled_infra_component_rows(payload: dict[str, Any]) -> list[dict[
         entry = entry_by_id.get(component_id)
         source = _effective_catalog_component_source(row=item, entry=entry)
         version = _effective_catalog_component_version(row=item, entry=entry)
-        if source:
-            inferred_mode = "custom"
-        elif any(key in inputs for key in ("resource_type", "provider_resource_type")) or (
-            entry is not None and entry.origin == "provider"
-        ):
-            inferred_mode = "provider"
-        else:
-            inferred_mode = "custom"
         rows.append(
             {
                 "id": component_id,
                 "instance_id": instance_id,
-                "mode": inferred_mode,
                 "source": source,
                 "version": version,
                 "inputs": inputs,
@@ -4867,8 +4750,6 @@ def _enabled_custom_module_source_issues(
     issues: list[str] = []
     entry_by_id = {entry.id: entry for entry in infra_entries}
     for row in _dynamic_enabled_infra_component_rows(payload):
-        if row.get("mode") != "custom":
-            continue
         component_id = str(row["id"])
         instance_id = str(row["instance_id"])
         component_label = _component_instance_path_label("infra", component_id, instance_id)
@@ -4926,6 +4807,7 @@ def _active_component_input_binding_issues(payload: dict[str, Any]) -> list[str]
                 f"'{source_ref}' and must not be set explicitly"
             )
         for binding in entry.input_bindings:
+            declared_source_ref = component_input_binding_ref(binding)
             source_entry = all_entries.get(binding.source_component_id)
             if source_entry is None:
                 issues.append(
@@ -4934,19 +4816,21 @@ def _active_component_input_binding_issues(payload: dict[str, Any]) -> list[str]
                 )
                 continue
             try:
-                _resolved_source_entry, resolved_source_row = resolved_component_row(
-                    payload,
-                    component_id=binding.source_component_id,
+                _resolved_source_entry, resolved_source_row, source_instance_id = (
+                    resolve_input_binding_source(payload, binding=binding)
                 )
             except ValueError as exc:
                 issues.append(str(exc))
                 continue
-            source_instance_id = component_instance_id(resolved_source_row) if resolved_source_row else ""
-            source_ref = component_output_ref(source_instance_id, binding.source_output_name)
+            source_ref = (
+                component_output_ref(source_instance_id, binding.source_output_name)
+                if source_instance_id
+                else declared_source_ref
+            )
             if not source_instance_id or source_instance_id not in active_rows:
                 issues.append(
                     f"{entry.scope} component '{component_instance_label(component_id, instance_id)}' input binding '{binding.target_path}' requires "
-                    f"enabled source component '{binding.source_component_id}'"
+                    f"enabled source component matching '{declared_source_ref}'"
                 )
                 continue
             source_output = output_lookup(source_entry).get(binding.source_output_name)
@@ -4957,11 +4841,11 @@ def _active_component_input_binding_issues(payload: dict[str, Any]) -> list[str]
                 )
                 continue
             if source_output.kind != "terraform_output":
-                static_value = resolve_static_component_output(
+                static_value = resolve_component_output_value(
                     payload,
                     component_id=binding.source_component_id,
                     output_name=binding.source_output_name,
-                    instance_id=source_instance_id or None,
+                    instance_id=source_instance_id or binding.source_instance_id,
                 )
                 if static_value is _UNRESOLVED:
                     issues.append(
@@ -4982,45 +4866,37 @@ def _active_handoff_issues(payload: dict[str, Any]) -> list[str]:
         if entry is None or entry.handoff is None:
             continue
 
-        if entry.handoff.access.kind == "config_path":
-            access_value = resolve_handoff_field_value(
-                payload,
-                component_id=component_id,
-                handoff_field=entry.handoff.access,
-                instance_id=instance_id,
+        access_output = output_lookup(entry).get(entry.handoff.access)
+        if access_output is None:
+            issues.append(
+                f"infra component '{component_label}' runtime.contracts.cluster_access.access "
+                f"references undeclared runtime.values alias '{entry.handoff.access}'"
             )
-        else:
-            access_output = output_lookup(entry).get(entry.handoff.access.value)
-            if access_output is None:
-                issues.append(
-                    f"infra component '{component_label}' handoff.access "
-                    f"'{entry.handoff.access.value}' is not declared under outputs"
-                )
-                continue
-            if access_output.kind == "terraform_output":
-                issues.append(
-                    f"infra component '{component_label}' handoff.access "
-                    f"'{entry.handoff.access.value}' must resolve from config/static output, not Terraform state"
-                )
-                continue
-            access_value = resolve_static_component_output(
-                payload,
-                component_id=component_id,
-                output_name=entry.handoff.access.value,
-                instance_id=instance_id,
+            continue
+        if access_output.kind == "terraform_output":
+            issues.append(
+                f"infra component '{component_label}' runtime.contracts.cluster_access.access "
+                f"'{entry.handoff.access}' must resolve from input/literal runtime.values, not Terraform state"
             )
+            continue
+        access_value = resolve_component_output_value(
+            payload,
+            component_id=component_id,
+            output_name=entry.handoff.access,
+            instance_id=instance_id,
+        )
 
         if access_value is _UNRESOLVED:
             issues.append(
-                f"infra component '{component_label}' handoff.access "
-                f"'{entry.handoff.access.value}' could not be resolved from the active config/catalog"
+                f"infra component '{component_label}' runtime.contracts.cluster_access.access "
+                f"'{entry.handoff.access}' could not be resolved from the active config/catalog"
             )
             continue
         try:
             _normalize_handoff_access_value(
                 access_value,
                 component_label=component_label,
-                output_name=entry.handoff.access.value,
+                output_name=entry.handoff.access,
             )
         except RuntimeError as exc:
             issues.append(
@@ -5101,13 +4977,8 @@ def _enabled_custom_module_input_schema_issues(
     entry_by_id = {entry.id: entry for entry in infra_entries}
     helper_input_names = {
         "module_name",
-        "depends_on_platform",
-        "resource_type",
-        "provider_resource_type",
     }
     for row in _dynamic_enabled_infra_component_rows(payload):
-        if row.get("mode") != "custom":
-            continue
         component_id = str(row["id"])
         instance_id = str(row["instance_id"])
         component_label = _component_instance_path_label("infra", component_id, instance_id)
@@ -5136,42 +5007,6 @@ def _enabled_custom_module_input_schema_issues(
                 issues.append(
                     f"{component_label}.inputs.{input_name} is not declared by module '{source}'"
                 )
-    return issues
-
-
-def _enabled_provider_schema_match_issues(
-    *,
-    payload: dict[str, Any],
-    infra_entries: tuple[ComponentEntry, ...],
-) -> list[str]:
-    issues: list[str] = []
-    checked_dynamic: set[str] = set()
-    for row in _dynamic_enabled_infra_component_rows(payload):
-        if row.get("mode") != "provider":
-            continue
-        component_id = str(row["id"])
-        instance_id = str(row["instance_id"])
-        if instance_id in checked_dynamic:
-            continue
-        checked_dynamic.add(instance_id)
-        match_status = provider_component_match_status(component_id)
-        if match_status is False:
-            issues.append(
-                f"infra component '{component_instance_label(component_id, instance_id)}' "
-                "does not match any live Terraform provider resource"
-            )
-        inputs = row.get("inputs", {})
-        if isinstance(inputs, Mapping):
-            resource_type = str(
-                inputs.get("resource_type") or inputs.get("provider_resource_type") or ""
-            ).strip()
-            if resource_type:
-                exists = provider_resource_exists(resource_type)
-                if exists is False:
-                    issues.append(
-                        f"infra component '{component_instance_label(component_id, instance_id)}' "
-                        f"declares unknown provider resource_type '{resource_type}'"
-                    )
     return issues
 
 
@@ -5221,7 +5056,6 @@ def _validate_strict_config(
     issues.extend(_required_enabled_infra_field_issues(payload=payload, infra_entries=infra_entries))
     issues.extend(_binding_conflict_issues(payload))
     issues.extend(_enabled_custom_module_input_schema_issues(payload=payload, infra_entries=infra_entries))
-    issues.extend(_enabled_provider_schema_match_issues(payload=payload, infra_entries=infra_entries))
     issues.extend(_placeholder_value_issues(payload))
     if issues:
         raise RuntimeError("Strict validation failed:\n  - " + "\n  - ".join(issues))
@@ -6002,11 +5836,10 @@ def _required_runtime_component_output_specs(config: Any) -> list[dict[str, str]
             source_output = output_lookup(source_entry).get(binding.source_output_name)
             if source_output is None or source_output.kind != "terraform_output":
                 continue
-            _source_entry, resolved_source_row = resolved_component_row(
+            _source_entry, resolved_source_row, source_instance_id = resolve_input_binding_source(
                 payload,
-                component_id=binding.source_component_id,
+                binding=binding,
             )
-            source_instance_id = component_instance_id(resolved_source_row) if resolved_source_row else ""
             if not source_instance_id:
                 continue
             source_ref = component_output_ref(source_instance_id, binding.source_output_name)
@@ -6198,21 +6031,21 @@ def _enabled_cluster_handoffs(config: Any) -> list[dict[str, str]]:
         entry = entry_by_id.get(component_id)
         if entry is None or entry.handoff is None:
             continue
-        access_value = resolve_handoff_field_value(
+        access_value = resolve_component_output_value(
             payload,
             component_id=component_id,
-            handoff_field=entry.handoff.access,
+            output_name=entry.handoff.access,
             instance_id=instance_id,
         )
         if access_value is _UNRESOLVED:
             raise RuntimeError(
-                f"infra component '{component_label}' handoff.access "
-                f"'{entry.handoff.access.value}' could not be resolved from the active config/catalog"
+                f"infra component '{component_label}' runtime.contracts.cluster_access.access "
+                f"'{entry.handoff.access}' could not be resolved from the active config/catalog"
             )
         normalized_access = _normalize_handoff_access_value(
             access_value,
             component_label=component_label,
-            output_name=entry.handoff.access.value,
+            output_name=entry.handoff.access,
         )
         handoffs.append(
             {
@@ -6220,11 +6053,11 @@ def _enabled_cluster_handoffs(config: Any) -> list[dict[str, str]]:
                 "instance_id": instance_id,
                 "cluster_id_output_name": component_output_root_name(
                     instance_id,
-                    entry.handoff.cluster_id.value,
+                    entry.handoff.cluster_id,
                 ),
                 "component_output_ref": component_output_ref(
                     instance_id,
-                    entry.handoff.cluster_id.value,
+                    entry.handoff.cluster_id,
                 ),
                 "access": normalized_access,
             }
@@ -6261,7 +6094,7 @@ def _normalize_handoff_access_value(
     if normalized_access in {"internal", "private"}:
         return "internal"
     raise RuntimeError(
-        f"infra component '{component_label}' handoff.access "
+        f"infra component '{component_label}' runtime.contracts.cluster_access.access "
         f"'{output_name}' resolved to '{access_value}'. "
         "Expected boolean public-endpoint state or one of: external, internal, public, private."
     )

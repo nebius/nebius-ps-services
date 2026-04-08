@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import ipaddress
+import json
+import re
+import shlex
+import time
 from pathlib import Path
 
 from rich import print
@@ -266,6 +270,48 @@ class RouteManager:
             return explicit_cidrs
         return self._extract_status_subnet_cidrs(subnet_obj)
 
+    def _subtract_subnet_cidrs(
+        self,
+        source_cidrs: list[ipaddress.IPv4Network],
+        blocked_cidrs: list[ipaddress.IPv4Network],
+    ) -> list[ipaddress.IPv4Network]:
+        remaining = list(source_cidrs)
+        for blocked in self._sort_networks(blocked_cidrs):
+            updated: list[ipaddress.IPv4Network] = []
+            for network in remaining:
+                if network.version != blocked.version or not network.overlaps(blocked):
+                    updated.append(network)
+                    continue
+                if network.subnet_of(blocked):
+                    continue
+                if blocked.subnet_of(network):
+                    updated.extend(network.address_exclude(blocked))
+                    continue
+                updated.append(network)
+            remaining = updated
+
+        unique_networks = {str(network): network for network in remaining}
+        return self._sort_networks(list(unique_networks.values()))
+
+    def _selection_cidrs_for_subnet(
+        self,
+        subnet_obj,
+        *,
+        other_explicit_cidrs: list[ipaddress.IPv4Network],
+    ) -> tuple[list[ipaddress.IPv4Network], bool]:
+        explicit_cidrs = self._extract_explicit_subnet_cidrs(subnet_obj)
+        if explicit_cidrs:
+            return self._sort_networks(explicit_cidrs), False
+
+        status_cidrs = self._extract_status_subnet_cidrs(subnet_obj)
+        if not self._subnet_uses_network_pools(subnet_obj):
+            return self._sort_networks(status_cidrs), False
+
+        sanitized_cidrs = self._subtract_subnet_cidrs(status_cidrs, other_explicit_cidrs)
+        raw_status_set = {str(network) for network in status_cidrs}
+        sanitized_set = {str(network) for network in sanitized_cidrs}
+        return sanitized_cidrs, raw_status_set != sanitized_set
+
     @staticmethod
     def _ssh_base_command(local_cfg: dict) -> list[str]:
         import os
@@ -432,6 +478,122 @@ class RouteManager:
 
         return dict(sorted(prefix_targets.items(), key=_sort_key))
 
+    @staticmethod
+    def _sort_networks(
+        networks: list[ipaddress.IPv4Network],
+    ) -> list[ipaddress.IPv4Network]:
+        return sorted(
+            networks,
+            key=lambda network: (
+                int(network.network_address),
+                network.prefixlen,
+                str(network),
+            ),
+        )
+
+    @staticmethod
+    def _extract_pool_cidrs(pool_obj) -> list[ipaddress.IPv4Network]:
+        pool_spec = getattr(pool_obj, "spec", None)
+        networks: list[ipaddress.IPv4Network] = []
+        for cidr_obj in getattr(pool_spec, "cidrs", []) or []:
+            cidr = getattr(cidr_obj, "cidr", None)
+            if not cidr:
+                continue
+            try:
+                networks.append(ipaddress.ip_network(cidr, strict=False))
+            except Exception:
+                continue
+        return networks
+
+    def _get_network_private_pool_cidrs(
+        self,
+        channel,
+        *,
+        network_id: str,
+    ) -> list[ipaddress.IPv4Network]:
+        from nebius.api.nebius.vpc.v1 import (
+            network_service_pb2,
+            network_service_pb2_grpc,
+            pool_service_pb2,
+            pool_service_pb2_grpc,
+        )
+
+        nstub = network_service_pb2_grpc.NetworkServiceStub(channel)
+        pstub = pool_service_pb2_grpc.PoolServiceStub(channel)
+
+        try:
+            network_obj = nstub.Get(network_service_pb2.GetNetworkRequest(id=network_id))
+        except Exception:
+            return []
+
+        network_spec = getattr(network_obj, "spec", None)
+        private_pools = getattr(network_spec, "ipv4_private_pools", None)
+        pool_refs = getattr(private_pools, "pools", []) or []
+
+        networks: list[ipaddress.IPv4Network] = []
+        for pool_ref in pool_refs:
+            inline_cidrs = self._extract_pool_cidrs(pool_ref)
+            if inline_cidrs:
+                networks.extend(inline_cidrs)
+                continue
+
+            pool_id = getattr(pool_ref, "pool_id", None) or getattr(pool_ref, "id", None)
+            if not pool_id:
+                continue
+
+            try:
+                pool_obj = pstub.Get(pool_service_pb2.GetPoolRequest(id=str(pool_id)))
+            except Exception:
+                continue
+
+            networks.extend(self._extract_pool_cidrs(pool_obj))
+
+        unique_networks = {str(network): network for network in networks}
+        return self._sort_networks(list(unique_networks.values()))
+
+    def _filter_prefix_targets(
+        self,
+        prefix_targets: dict[str, str],
+        *,
+        local_networks: list[ipaddress.IPv4Network],
+        network_pool_networks: list[ipaddress.IPv4Network],
+    ) -> tuple[dict[str, str], list[str], list[tuple[str, str]]]:
+        filtered_prefix_targets: dict[str, str] = {}
+        skipped_local_prefixes: list[str] = []
+        skipped_network_pool_prefixes: list[tuple[str, str]] = []
+
+        for prefix, alloc_id in prefix_targets.items():
+            try:
+                prefix_network = ipaddress.ip_network(prefix, strict=False)
+            except Exception:
+                continue
+
+            if any(prefix_network.overlaps(local_network) for local_network in local_networks):
+                skipped_local_prefixes.append(str(prefix_network))
+                continue
+
+            overlapping_pool = next(
+                (
+                    network_pool
+                    for network_pool in network_pool_networks
+                    if prefix_network.overlaps(network_pool)
+                ),
+                None,
+            )
+            if overlapping_pool is not None:
+                skipped_network_pool_prefixes.append(
+                    (str(prefix_network), str(overlapping_pool))
+                )
+                continue
+
+            filtered_prefix_targets[str(prefix_network)] = alloc_id
+
+        return (
+            self._sort_prefix_targets(filtered_prefix_targets),
+            skipped_local_prefixes,
+            skipped_network_pool_prefixes,
+        )
+
     def _summarize_prefix_targets(self, prefix_targets: dict[str, str]) -> dict[str, str]:
         grouped: dict[str, list[ipaddress.IPv4Network]] = {}
         for prefix, alloc_id in prefix_targets.items():
@@ -472,6 +634,51 @@ class RouteManager:
         metadata = getattr(route, "metadata", None)
         return str(getattr(metadata, "name", None) or "")
 
+    @staticmethod
+    def _route_is_managed(route) -> bool:
+        return RouteManager._route_name(route).startswith("vpngw-")
+
+    def _routes_with_destination(
+        self,
+        routes,
+        destination_cidr: str,
+    ) -> list[object]:
+        matching_routes = []
+        for route in routes:
+            route_network = self._route_destination_network(route)
+            if route_network is None:
+                continue
+            if str(route_network) == destination_cidr:
+                matching_routes.append(route)
+        return matching_routes
+
+    @staticmethod
+    def _route_next_hop_label(route) -> str:
+        allocation_id = RouteManager._route_next_hop_allocation_id(route)
+        if allocation_id:
+            return f"allocation {allocation_id}"
+
+        spec = getattr(route, "spec", None)
+        next_hop = getattr(spec, "next_hop", None) if spec else None
+        if getattr(next_hop, "default_egress_gateway", False):
+            return "default-egress"
+        return "non-allocation next-hop"
+
+    def _installed_prefix_targets(
+        self,
+        existing_routes,
+        desired_prefix_targets: dict[str, str],
+    ) -> dict[str, str]:
+        installed: dict[str, str] = {}
+        for prefix, alloc_id in desired_prefix_targets.items():
+            matching_routes = self._routes_with_destination(existing_routes, prefix)
+            if any(
+                self._route_next_hop_allocation_id(route) == alloc_id
+                for route in matching_routes
+            ):
+                installed[prefix] = alloc_id
+        return installed
+
     def _find_redundant_managed_routes(
         self,
         existing_routes,
@@ -511,6 +718,466 @@ class RouteManager:
                 redundant.append(route)
 
         return redundant
+
+    def _find_redundant_managed_covering_routes(
+        self,
+        existing_routes,
+        desired_prefix_targets: dict[str, str],
+        effective_prefix_targets: dict[str, str],
+    ) -> list[object]:
+        desired_by_alloc: dict[str, list[ipaddress.IPv4Network]] = {}
+        desired_prefixes = set(desired_prefix_targets)
+        effective_prefixes = set(effective_prefix_targets)
+
+        for prefix, alloc_id in desired_prefix_targets.items():
+            try:
+                desired_by_alloc.setdefault(alloc_id, []).append(
+                    ipaddress.ip_network(prefix, strict=False)
+                )
+            except Exception:
+                continue
+
+        redundant = []
+        for route in existing_routes:
+            route_name = self._route_name(route)
+            if not route_name.startswith("vpngw-"):
+                continue
+
+            alloc_id = self._route_next_hop_allocation_id(route)
+            if not alloc_id:
+                continue
+
+            route_network = self._route_destination_network(route)
+            if route_network is None:
+                continue
+
+            route_prefix = str(route_network)
+            if route_prefix in desired_prefixes:
+                continue
+
+            desired_networks = desired_by_alloc.get(alloc_id) or []
+            desired_prefixes_within_route = [
+                str(desired_network)
+                for desired_network in desired_networks
+                if desired_network.subnet_of(route_network)
+            ]
+            if not desired_prefixes_within_route:
+                continue
+
+            if all(prefix in effective_prefixes for prefix in desired_prefixes_within_route):
+                redundant.append(route)
+
+        return redundant
+
+    def _route_signature(self, route) -> tuple[str, str] | None:
+        route_network = self._route_destination_network(route)
+        if route_network is None:
+            return None
+        return str(route_network), self._route_next_hop_label(route)
+
+    def _missing_route_signatures(
+        self,
+        expected_signatures: set[tuple[str, str]],
+        existing_routes,
+    ) -> list[tuple[str, str]]:
+        existing_signatures = {
+            signature
+            for route in existing_routes
+            if (signature := self._route_signature(route)) is not None
+        }
+        return sorted(expected_signatures - existing_signatures)
+
+    @staticmethod
+    def _copyable_routes(existing_routes) -> list[object]:
+        return [route for route in existing_routes if not RouteManager._route_is_managed(route)]
+
+    @staticmethod
+    def _sanitize_name_fragment(value: str) -> str:
+        sanitized = re.sub(r"[^a-z0-9-]+", "-", value.strip().lower())
+        sanitized = re.sub(r"-+", "-", sanitized).strip("-")
+        return sanitized or "route-table"
+
+    def _swap_route_table_name(self, subnet_name: str) -> str:
+        suffix = f"{int(time.time())}-{int(time.time_ns() % 1_000_000):06d}"
+        name = f"{self._sanitize_name_fragment(subnet_name)}-vpngw-rt-swap-{suffix}"
+        return name[:63]
+
+    def _route_table_name(self, subnet_name: str) -> str:
+        return f"{subnet_name}-vpngw-rt"
+
+    @staticmethod
+    def _subnet_pool_group_to_dict(pool_group) -> dict | None:
+        if pool_group is None:
+            return None
+
+        result: dict[str, object] = {
+            "use_network_pools": bool(getattr(pool_group, "use_network_pools", False)),
+            "pools": [],
+        }
+        for pool in getattr(pool_group, "pools", []) or []:
+            pool_entry: dict[str, object] = {"cidrs": []}
+            for cidr_obj in getattr(pool, "cidrs", []) or []:
+                cidr = getattr(cidr_obj, "cidr", None)
+                if not cidr:
+                    continue
+                cidr_entry: dict[str, object] = {"cidr": str(cidr)}
+                max_mask_length = getattr(cidr_obj, "max_mask_length", None)
+                if max_mask_length not in (None, 0):
+                    cidr_entry["max_mask_length"] = int(max_mask_length)
+                state = getattr(cidr_obj, "state", None)
+                if state is not None and hasattr(state, "name"):
+                    cidr_entry["state"] = str(state.name).lower()
+                elif state not in (None, 0, ""):
+                    cidr_entry["state"] = str(state)
+                pool_entry["cidrs"].append(cidr_entry)
+            if pool_entry["cidrs"]:
+                result["pools"].append(pool_entry)
+        return result
+
+    def _write_swap_rollback_spec(
+        self,
+        *,
+        rollback_dir: Path,
+        subnet_obj,
+        previous_route_table_id: str,
+    ) -> Path:
+        rollback_dir.mkdir(parents=True, exist_ok=True)
+
+        subnet_name = getattr(getattr(subnet_obj, "metadata", None), "name", None) or "subnet"
+        subnet_id = getattr(getattr(subnet_obj, "metadata", None), "id", None) or ""
+        subnet_spec = getattr(subnet_obj, "spec", None)
+        network_id = getattr(subnet_spec, "network_id", None) or ""
+
+        payload: dict[str, object] = {
+            "metadata": {
+                "id": subnet_id,
+                "parent_id": self.project_id or "",
+                "name": str(subnet_name),
+            },
+            "spec": {
+                "network_id": network_id,
+                "route_table_id": previous_route_table_id,
+            },
+        }
+
+        private_pools = self._subnet_pool_group_to_dict(
+            getattr(subnet_spec, "ipv4_private_pools", None)
+        )
+        public_pools = self._subnet_pool_group_to_dict(
+            getattr(subnet_spec, "ipv4_public_pools", None)
+        )
+        if private_pools is not None:
+            payload["spec"]["ipv4_private_pools"] = private_pools
+        if public_pools is not None:
+            payload["spec"]["ipv4_public_pools"] = public_pools
+
+        safe_subnet = self._sanitize_name_fragment(str(subnet_name))
+        rollback_path = rollback_dir / (
+            f"rollback-{safe_subnet}-{int(time.time())}-{int(time.time_ns() % 1_000_000):06d}.json"
+        )
+        rollback_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        return rollback_path
+
+    @staticmethod
+    def _subnet_update_spec(subnet_pb2, subnet_obj, *, route_table_id: str):
+        subnet_spec = getattr(subnet_obj, "spec", None)
+        existing_ipv4_private_pools = getattr(subnet_spec, "ipv4_private_pools", None)
+        existing_ipv4_public_pools = getattr(subnet_spec, "ipv4_public_pools", None)
+        return subnet_pb2.SubnetSpec(
+            network_id=getattr(subnet_spec, "network_id", ""),
+            route_table_id=route_table_id,
+            ipv4_private_pools=existing_ipv4_private_pools,
+            ipv4_public_pools=existing_ipv4_public_pools,
+        )
+
+    def _attach_route_table_to_subnet(
+        self,
+        sstub,
+        subnet_service_pb2,
+        metadata_pb2,
+        subnet_pb2,
+        *,
+        subnet_obj,
+        route_table_id: str,
+    ) -> None:
+        sstub.Update(
+            subnet_service_pb2.UpdateSubnetRequest(
+                metadata=metadata_pb2.ResourceMetadata(id=subnet_obj.metadata.id),
+                spec=self._subnet_update_spec(
+                    subnet_pb2,
+                    subnet_obj,
+                    route_table_id=route_table_id,
+                ),
+            )
+        )
+
+    def _list_route_table_routes(
+        self,
+        rstub,
+        route_service_pb2,
+        *,
+        route_table_id: str,
+    ):
+        return rstub.List(route_service_pb2.ListRoutesRequest(parent_id=route_table_id)).items
+
+    def _copy_routes_to_route_table(
+        self,
+        rstub,
+        route_service_pb2,
+        metadata_pb2,
+        *,
+        destination_route_table_id: str,
+        routes_to_copy,
+    ) -> tuple[int, list[tuple[str, str]]]:
+        copied = 0
+        failures: list[tuple[str, str]] = []
+        for route in routes_to_copy:
+            destination = self._route_destination_network(route)
+            destination_label = str(destination) if destination else "unknown"
+            route_name = self._route_name(route)
+            metadata_name = route_name[:63] if route_name else f"copied-{destination_label.replace('/', '-')}"[:63]
+            try:
+                rstub.Create(
+                    route_service_pb2.CreateRouteRequest(
+                        metadata=metadata_pb2.ResourceMetadata(
+                            parent_id=destination_route_table_id,
+                            name=metadata_name,
+                        ),
+                        spec=route.spec,
+                    )
+                )
+                copied += 1
+            except Exception as e:
+                failures.append((destination_label, str(e)))
+        return copied, failures
+
+    def _reconcile_route_table(
+        self,
+        rstub,
+        route_service_pb2,
+        route_pb2,
+        metadata_pb2,
+        *,
+        route_table_id: str,
+        prefix_targets: dict[str, str],
+        summarize: bool,
+    ):
+        try:
+            existing_routes = self._list_route_table_routes(
+                rstub,
+                route_service_pb2,
+                route_table_id=route_table_id,
+            )
+        except Exception as e:
+            print(f"[yellow]Failed to list existing routes on {route_table_id}: {e}[/yellow]")
+            existing_routes = []
+
+        for pfx, alloc_id in prefix_targets.items():
+            matching_routes = self._routes_with_destination(existing_routes, pfx)
+            if matching_routes and any(
+                self._route_next_hop_allocation_id(route) == alloc_id
+                for route in matching_routes
+            ):
+                print(f"[blue]Route {pfx} already exists on {route_table_id}; skipping[/blue]")
+                continue
+            if matching_routes:
+                existing_next_hops = ", ".join(
+                    sorted({self._route_next_hop_label(route) for route in matching_routes})
+                )
+                print(
+                    f"[yellow]Route {pfx} already exists on {route_table_id} with {existing_next_hops}; "
+                    f"expected allocation {alloc_id}. Leaving the existing route unchanged.[/yellow]"
+                )
+                continue
+
+            try:
+                rstub.Create(
+                    route_service_pb2.CreateRouteRequest(
+                        metadata=metadata_pb2.ResourceMetadata(
+                            parent_id=route_table_id,
+                            name=f"vpngw-{pfx.replace('/', '-')}"[:63],
+                        ),
+                        spec=route_pb2.RouteSpec(
+                            destination=route_pb2.DestinationMatch(cidr=pfx),
+                            next_hop=route_pb2.NextHop(
+                                allocation=route_pb2.AllocationNextHop(id=alloc_id)
+                            ),
+                        ),
+                    )
+                )
+                print(
+                    f"[green]Added route {pfx} -> allocation {alloc_id} on {route_table_id}[/green]"
+                )
+            except Exception as e:
+                err_str = str(e).lower()
+                if "already exists" in err_str or "duplicate" in err_str:
+                    try:
+                        existing_routes = self._list_route_table_routes(
+                            rstub,
+                            route_service_pb2,
+                            route_table_id=route_table_id,
+                        )
+                    except Exception:
+                        existing_routes = []
+                    matching_routes = self._routes_with_destination(existing_routes, pfx)
+                    if any(
+                        self._route_next_hop_allocation_id(route) == alloc_id
+                        for route in matching_routes
+                    ):
+                        print(f"[blue]Route {pfx} already exists on {route_table_id}; skipping[/blue]")
+                    else:
+                        existing_next_hops = ", ".join(
+                            sorted({self._route_next_hop_label(route) for route in matching_routes})
+                        ) or "unknown next-hop"
+                        print(
+                            f"[yellow]Route {pfx} already exists on {route_table_id} with "
+                            f"{existing_next_hops}; expected allocation {alloc_id}. "
+                            "Leaving the existing route unchanged.[/yellow]"
+                        )
+                elif summarize and ("max-route-count" in err_str or "quota exceeded" in err_str):
+                    redundant_routes = self._find_redundant_managed_routes(
+                        existing_routes,
+                        {pfx: alloc_id},
+                    )
+                    if not redundant_routes:
+                        print(f"[yellow]Failed to add route {pfx} on {route_table_id}: {e}[/yellow]")
+                        continue
+
+                    print(
+                        f"[yellow]Route table {route_table_id} hit its route limit while adding {pfx}. "
+                        f"Deleting {len(redundant_routes)} covered vpngw-managed route(s) and retrying.[/yellow]"
+                    )
+                    deleted = self._delete_routes(
+                        rstub,
+                        route_service_pb2,
+                        redundant_routes,
+                        route_table_id=route_table_id,
+                    )
+                    if not deleted:
+                        print(f"[yellow]Failed to add route {pfx} on {route_table_id}: {e}[/yellow]")
+                        continue
+
+                    existing_routes = [
+                        route
+                        for route in existing_routes
+                        if getattr(getattr(route, "metadata", None), "id", None)
+                        not in {
+                            getattr(getattr(dead_route, "metadata", None), "id", None)
+                            for dead_route in redundant_routes
+                        }
+                    ]
+
+                    try:
+                        rstub.Create(
+                            route_service_pb2.CreateRouteRequest(
+                                metadata=metadata_pb2.ResourceMetadata(
+                                    parent_id=route_table_id,
+                                    name=f"vpngw-{pfx.replace('/', '-')}"[:63],
+                                ),
+                                spec=route_pb2.RouteSpec(
+                                    destination=route_pb2.DestinationMatch(cidr=pfx),
+                                    next_hop=route_pb2.NextHop(
+                                        allocation=route_pb2.AllocationNextHop(id=alloc_id)
+                                    ),
+                                ),
+                            )
+                        )
+                        print(
+                            f"[green]Added summarized route {pfx} -> allocation {alloc_id} "
+                            f"on {route_table_id} after pruning redundant specifics[/green]"
+                        )
+                    except Exception as retry_err:
+                        print(
+                            f"[yellow]Failed to add summarized route {pfx} on {route_table_id} "
+                            f"after pruning redundant specifics: {retry_err}[/yellow]"
+                        )
+                else:
+                    print(f"[yellow]Failed to add route {pfx} on {route_table_id}: {e}[/yellow]")
+
+            try:
+                existing_routes = self._list_route_table_routes(
+                    rstub,
+                    route_service_pb2,
+                    route_table_id=route_table_id,
+                )
+            except Exception:
+                existing_routes = []
+
+        if summarize:
+            try:
+                existing_routes = self._list_route_table_routes(
+                    rstub,
+                    route_service_pb2,
+                    route_table_id=route_table_id,
+                )
+            except Exception as e:
+                print(
+                    f"[yellow]Failed to refresh routes on {route_table_id} before summary "
+                    f"reconciliation: {e}[/yellow]"
+                )
+                existing_routes = []
+            effective_prefix_targets = self._installed_prefix_targets(
+                existing_routes,
+                prefix_targets,
+            )
+            redundant_routes = self._find_redundant_managed_routes(
+                existing_routes,
+                effective_prefix_targets,
+            )
+            if redundant_routes:
+                print(
+                    f"[cyan]Pruning {len(redundant_routes)} redundant vpngw-managed "
+                    f"route(s) from {route_table_id} after summary reconciliation[/cyan]"
+                )
+                self._delete_routes(
+                    rstub,
+                    route_service_pb2,
+                    redundant_routes,
+                    route_table_id=route_table_id,
+                )
+        else:
+            try:
+                existing_routes = self._list_route_table_routes(
+                    rstub,
+                    route_service_pb2,
+                    route_table_id=route_table_id,
+                )
+            except Exception as e:
+                print(
+                    f"[yellow]Failed to refresh routes on {route_table_id} before exact-route "
+                    f"reconciliation: {e}[/yellow]"
+                )
+                existing_routes = []
+
+            effective_prefix_targets = self._installed_prefix_targets(
+                existing_routes,
+                prefix_targets,
+            )
+            redundant_covering_routes = self._find_redundant_managed_covering_routes(
+                existing_routes,
+                prefix_targets,
+                effective_prefix_targets,
+            )
+            if redundant_covering_routes:
+                print(
+                    f"[cyan]Pruning {len(redundant_covering_routes)} broader vpngw-managed "
+                    f"route(s) from {route_table_id} after exact-route reconciliation[/cyan]"
+                )
+                self._delete_routes(
+                    rstub,
+                    route_service_pb2,
+                    redundant_covering_routes,
+                    route_table_id=route_table_id,
+                )
+
+        try:
+            return self._list_route_table_routes(
+                rstub,
+                route_service_pb2,
+                route_table_id=route_table_id,
+            )
+        except Exception:
+            return []
 
     def _delete_routes(
         self,
@@ -784,9 +1451,21 @@ class RouteManager:
         *,
         target_network_id: str,
         gateway_subnet_name: str,
-    ) -> tuple[list[object], list[tuple[str, list[str]]]]:
-        selected: list[object] = []
-        inherited_selected: list[tuple[str, list[str]]] = []
+    ) -> tuple[list[tuple[object, list[ipaddress.IPv4Network]]], list[str]]:
+        selected: list[tuple[object, list[ipaddress.IPv4Network]]] = []
+        diagnostics: list[str] = []
+        explicit_cidrs_by_subnet_name: dict[str, list[ipaddress.IPv4Network]] = {}
+
+        for subnet_obj in subnets:
+            subnet_spec = getattr(subnet_obj, "spec", None)
+            subnet_network_id = getattr(subnet_spec, "network_id", None)
+            if subnet_network_id != target_network_id:
+                continue
+
+            subnet_name = getattr(getattr(subnet_obj, "metadata", None), "name", None) or ""
+            explicit_cidrs_by_subnet_name[subnet_name] = self._extract_explicit_subnet_cidrs(
+                subnet_obj
+            )
 
         for subnet_obj in subnets:
             subnet_spec = getattr(subnet_obj, "spec", None)
@@ -798,21 +1477,53 @@ class RouteManager:
             if subnet_name == gateway_subnet_name:
                 continue
 
-            effective_cidrs = self._effective_subnet_cidrs(subnet_obj)
-            if not any(
+            other_explicit_cidrs = [
+                cidr
+                for other_subnet_name, cidrs in explicit_cidrs_by_subnet_name.items()
+                if other_subnet_name != subnet_name
+                for cidr in cidrs
+            ]
+            effective_cidrs, sanitized_inherited_status = self._selection_cidrs_for_subnet(
+                subnet_obj,
+                other_explicit_cidrs=other_explicit_cidrs,
+            )
+            matches_gateway_prefixes = any(
                 effective_cidr.overlaps(prefix)
                 for effective_cidr in effective_cidrs
                 for prefix in gateway_prefixes
-            ):
+            )
+            if not matches_gateway_prefixes:
+                if self._subnet_uses_network_pools(subnet_obj) and sanitized_inherited_status:
+                    raw_status_cidrs = self._extract_status_subnet_cidrs(subnet_obj)
+                    raw_status_overlaps = any(
+                        raw_status_cidr.overlaps(prefix)
+                        for raw_status_cidr in raw_status_cidrs
+                        for prefix in gateway_prefixes
+                    )
+                    if raw_status_overlaps:
+                        diagnostics.append(
+                            f"[dim]Ignoring inherited subnet {subnet_name} for gateway.local_prefixes "
+                            "matching because Nebius status CIDRs overlap explicit CIDRs owned by "
+                            "other subnets.[/dim]"
+                        )
                 continue
 
-            selected.append(subnet_obj)
+            selected.append((subnet_obj, effective_cidrs))
             if self._subnet_uses_network_pools(subnet_obj):
-                inherited_selected.append(
-                    (subnet_name, [str(effective_cidr) for effective_cidr in effective_cidrs])
-                )
+                cidr_labels = ", ".join(str(effective_cidr) for effective_cidr in effective_cidrs)
+                if sanitized_inherited_status:
+                    diagnostics.append(
+                        f"[dim]Subnet {subnet_name} inherits parent network pools "
+                        "(use_network_pools=true); sanitized status CIDRs to exclude explicit "
+                        f"CIDRs owned by other subnets before matching: {cidr_labels}[/dim]"
+                    )
+                else:
+                    diagnostics.append(
+                        f"[dim]Subnet {subnet_name} inherits parent network pools "
+                        f"(use_network_pools=true); matching via status CIDRs: {cidr_labels}[/dim]"
+                    )
 
-        return selected, inherited_selected
+        return selected, diagnostics
 
     def list_routes(self, plan: ResolvedDeploymentPlan, local_cfg: dict) -> None:
         """List route tables attached to subnets matching gateway.local_prefixes."""
@@ -856,19 +1567,15 @@ class RouteManager:
         subnets = sstub.List(
             subnet_service_pb2.ListSubnetsRequest(parent_id=self.project_id or "")
         ).items
-        selected_subnets, inherited_selected = self._select_local_prefix_subnets(
+        selected_subnets, subnet_selection_diagnostics = self._select_local_prefix_subnets(
             subnets,
             gateway_prefixes,
             target_network_id=target_network_id,
             gateway_subnet_name=gateway_subnet_name,
         )
 
-        for subnet_name, inherited_cidrs in inherited_selected:
-            print(
-                f"[dim]Subnet {subnet_name} inherits parent network pools "
-                f"(use_network_pools=true); matching via effective CIDRs: "
-                f"{', '.join(inherited_cidrs)}[/dim]"
-            )
+        for diagnostic in subnet_selection_diagnostics:
+            print(diagnostic)
 
         if not selected_subnets:
             print(
@@ -876,8 +1583,8 @@ class RouteManager:
                 f"in network {target_network_id}.[/yellow]"
             )
 
-        for sn in selected_subnets:
-            subnet_cidrs = [str(net) for net in self._effective_subnet_cidrs(sn)]
+        for sn, selected_cidrs in selected_subnets:
+            subnet_cidrs = [str(net) for net in selected_cidrs]
 
             rt_id = sn.status.route_table.id
             rt_default = sn.status.route_table.default
@@ -1103,6 +1810,8 @@ class RouteManager:
         local_cfg: dict,
         *,
         summarize: bool = False,
+        swap_route_table: bool = False,
+        rollback_dir: Path | None = None,
     ) -> None:
         """Ensure routes for connection.remote_prefixes and assign custom route tables when needed."""
         try:
@@ -1163,6 +1872,19 @@ class RouteManager:
             )
             return
 
+        target_network_id = self._resolve_target_network_id(channel, local_cfg)
+        if not target_network_id:
+            print(
+                "[yellow]Could not resolve the target network for route updates. "
+                "Set gateway_group.network_id explicitly.[/yellow]"
+            )
+            return
+
+        network_pool_networks = self._get_network_private_pool_cidrs(
+            channel,
+            network_id=target_network_id,
+        )
+
         try:
             prefix_targets = self._collect_remote_prefix_targets(
                 plan, local_cfg, allocations_by_index
@@ -1182,20 +1904,22 @@ class RouteManager:
             ipaddress.ip_network(p)
             for p in (local_cfg.get("gateway", {}).get("local_prefixes") or [])
         ]
-        filtered_prefix_targets: dict[str, str] = {}
-        for pfx, alloc_id in prefix_targets.items():
-            try:
-                pfx_net = ipaddress.ip_network(pfx)
-                # Skip if this prefix overlaps with any local prefix
-                is_local = any(pfx_net.overlaps(local_net) for local_net in local_networks)
-                if is_local:
-                    print(f"[dim]Skipping {pfx} (overlaps with local_prefixes)[/dim]")
-                    continue
-                filtered_prefix_targets[str(pfx_net)] = alloc_id
-            except Exception:
-                continue
+        (
+            prefix_targets,
+            skipped_local_prefixes,
+            skipped_network_pool_prefixes,
+        ) = self._filter_prefix_targets(
+            prefix_targets,
+            local_networks=local_networks,
+            network_pool_networks=network_pool_networks,
+        )
 
-        prefix_targets = self._sort_prefix_targets(filtered_prefix_targets)
+        for prefix in skipped_local_prefixes:
+            print(f"[dim]Skipping {prefix} (overlaps with local_prefixes)[/dim]")
+        for prefix, pool_cidr in skipped_network_pool_prefixes:
+            print(
+                f"[dim]Skipping {prefix} (overlaps target network private pool {pool_cidr})[/dim]"
+            )
 
         if not prefix_targets:
             print(
@@ -1221,30 +1945,19 @@ class RouteManager:
         rtstub = route_table_service_pb2_grpc.RouteTableServiceStub(channel)
         rstub = route_service_pb2_grpc.RouteServiceStub(channel)
         gateway_subnet_name = self._gateway_subnet_name(local_cfg)
-        target_network_id = self._resolve_target_network_id(channel, local_cfg)
-        if not target_network_id:
-            print(
-                "[yellow]Could not resolve the target network for route updates. "
-                "Set gateway_group.network_id explicitly.[/yellow]"
-            )
-            return
 
         subnets = sstub.List(
             subnet_service_pb2.ListSubnetsRequest(parent_id=self.project_id or "")
         ).items
-        selected_subnets, inherited_selected = self._select_local_prefix_subnets(
+        selected_subnets, subnet_selection_diagnostics = self._select_local_prefix_subnets(
             subnets,
             gateway_prefixes,
             target_network_id=target_network_id,
             gateway_subnet_name=gateway_subnet_name,
         )
 
-        for subnet_name, inherited_cidrs in inherited_selected:
-            print(
-                f"[dim]Subnet {subnet_name} inherits parent network pools "
-                f"(use_network_pools=true); matching via effective CIDRs: "
-                f"{', '.join(inherited_cidrs)}[/dim]"
-            )
+        for diagnostic in subnet_selection_diagnostics:
+            print(diagnostic)
 
         if not selected_subnets:
             print(
@@ -1253,8 +1966,183 @@ class RouteManager:
             )
             return
 
-        for sn in selected_subnets:
+        for sn, _selected_cidrs in selected_subnets:
             rt_info = sn.status.route_table
+            current_route_table_id = rt_info.id or ""
+            current_route_table_label = current_route_table_id or "default route table"
+
+            if swap_route_table:
+                source_route_table_id = current_route_table_id
+                if not source_route_table_id:
+                    print(
+                        f"[yellow]Cannot swap route table for subnet {sn.metadata.name}: "
+                        "the currently attached route table ID is unavailable, so a "
+                        "safe rollback target cannot be generated.[/yellow]"
+                    )
+                    continue
+
+                print(
+                    f"[cyan]Subnet {sn.metadata.name} will swap from route table "
+                    f"{source_route_table_id} to a fresh custom table...[/cyan]"
+                )
+
+                swap_rt_name = self._swap_route_table_name(sn.metadata.name)
+                try:
+                    op = rtstub.Create(
+                        route_table_service_pb2.CreateRouteTableRequest(
+                            metadata=metadata_pb2.ResourceMetadata(
+                                name=swap_rt_name,
+                                parent_id=self.project_id,
+                            ),
+                            spec=route_table_pb2.RouteTableSpec(network_id=sn.spec.network_id),
+                        )
+                    )
+                    rt_id = op.resource_id or ""
+                except Exception as e:
+                    print(
+                        f"[yellow]Failed to create swap route table for subnet {sn.metadata.name}: {e}[/yellow]"
+                    )
+                    continue
+
+                if not rt_id:
+                    print(
+                        f"[red]Route table create returned no resource_id for subnet {sn.metadata.name}; skipping.[/red]"
+                    )
+                    continue
+
+                existing_routes = []
+                if source_route_table_id:
+                    try:
+                        existing_routes = self._list_route_table_routes(
+                            rstub,
+                            route_service_pb2,
+                            route_table_id=source_route_table_id,
+                        )
+                    except Exception as e:
+                        print(
+                            f"[yellow]Failed to list routes on source route table "
+                            f"{source_route_table_id} for subnet {sn.metadata.name}: {e}[/yellow]"
+                        )
+                        continue
+
+                routes_to_copy = self._copyable_routes(existing_routes)
+                copied, copy_failures = self._copy_routes_to_route_table(
+                    rstub,
+                    route_service_pb2,
+                    metadata_pb2,
+                    destination_route_table_id=rt_id,
+                    routes_to_copy=routes_to_copy,
+                )
+                if routes_to_copy:
+                    print(
+                        f"[cyan]Copied {copied}/{len(routes_to_copy)} non-vpngw route(s) "
+                        f"from {current_route_table_label} to {rt_id}[/cyan]"
+                    )
+                else:
+                    print(
+                        f"[dim]No non-vpngw routes to copy from {current_route_table_label}[/dim]"
+                    )
+
+                if copy_failures:
+                    print(
+                        f"[yellow]Swap route table {rt_id} is incomplete; copy failures prevent cutover.[/yellow]"
+                    )
+                    for dest_label, error_text in copy_failures:
+                        print(
+                            f"[yellow]  Could not copy preserved route {dest_label}: {error_text}[/yellow]"
+                        )
+                    print(
+                        f"[yellow]Leaving unattached swap route table {rt_id} for inspection. "
+                        "Current subnet attachment is unchanged.[/yellow]"
+                    )
+                    continue
+
+                existing_routes = self._reconcile_route_table(
+                    rstub,
+                    route_service_pb2,
+                    route_pb2,
+                    metadata_pb2,
+                    route_table_id=rt_id,
+                    prefix_targets=prefix_targets,
+                    summarize=summarize,
+                )
+
+                preserved_signatures = {
+                    signature
+                    for route in routes_to_copy
+                    if (signature := self._route_signature(route)) is not None
+                }
+                missing_preserved_routes = self._missing_route_signatures(
+                    preserved_signatures,
+                    existing_routes,
+                )
+                installed_prefix_targets = self._installed_prefix_targets(
+                    existing_routes,
+                    prefix_targets,
+                )
+                missing_prefix_targets = sorted(
+                    set(prefix_targets) - set(installed_prefix_targets)
+                )
+
+                if missing_preserved_routes or missing_prefix_targets:
+                    print(
+                        f"[yellow]Swap route table {rt_id} failed validation; subnet "
+                        f"{sn.metadata.name} will stay on {current_route_table_label}.[/yellow]"
+                    )
+                    for destination, next_hop in missing_preserved_routes:
+                        print(
+                            f"[yellow]  Missing preserved route after copy: {destination} -> "
+                            f"{next_hop}[/yellow]"
+                        )
+                    for prefix in missing_prefix_targets:
+                        print(
+                            f"[yellow]  Missing managed route after reconciliation: {prefix}[/yellow]"
+                        )
+                    print(
+                        f"[yellow]Leaving unattached swap route table {rt_id} for inspection. "
+                        "Current subnet attachment is unchanged.[/yellow]"
+                    )
+                    continue
+
+                if rollback_dir is None:
+                    rollback_dir = Path.cwd() / ".nebius-vpngw-rollbacks"
+                rollback_path = self._write_swap_rollback_spec(
+                    rollback_dir=rollback_dir,
+                    subnet_obj=sn,
+                    previous_route_table_id=current_route_table_id,
+                )
+
+                try:
+                    self._attach_route_table_to_subnet(
+                        sstub,
+                        subnet_service_pb2,
+                        metadata_pb2,
+                        subnet_pb2,
+                        subnet_obj=sn,
+                        route_table_id=rt_id,
+                    )
+                except Exception as e:
+                    print(
+                        f"[yellow]Failed to attach swap route table {rt_id} to subnet "
+                        f"{sn.metadata.name}: {e}[/yellow]"
+                    )
+                    print(
+                        f"[yellow]Rollback spec saved to {rollback_path}, but the subnet "
+                        "attachment was not changed.[/yellow]"
+                    )
+                    continue
+
+                print(
+                    f"[green]Swapped subnet {sn.metadata.name} from {current_route_table_label} "
+                    f"to fresh route table {rt_id}[/green]"
+                )
+                print(f"[cyan]Rollback spec saved to {rollback_path}[/cyan]")
+                print(
+                    "[yellow]Rollback command:[/yellow] "
+                    f"[bold]nebius vpc subnet update --file {shlex.quote(str(rollback_path))}[/bold]"
+                )
+                continue
+
             if not rt_info.default and rt_info.id:
                 print(
                     f"[cyan]Subnet {sn.metadata.name} already uses custom route table {rt_info.id}; "
@@ -1263,7 +2151,7 @@ class RouteManager:
                 rt_id = rt_info.id
             else:
                 # Subnet uses default route table - need to create custom RT
-                rt_name = f"{sn.metadata.name}-vpngw-rt"
+                rt_name = self._route_table_name(sn.metadata.name)
 
                 # Check if route table already exists (idempotency)
                 existing_rts = rtstub.List(
@@ -1279,22 +2167,13 @@ class RouteManager:
                     # Attach to subnet if not already attached
                     if rt_info.id != rt_id:
                         try:
-                            # Preserve existing IP pool configuration when updating route table
-                            existing_ipv4_private_pools = getattr(
-                                sn.spec, "ipv4_private_pools", None
-                            )
-                            existing_ipv4_public_pools = getattr(sn.spec, "ipv4_public_pools", None)
-
-                            sstub.Update(
-                                subnet_service_pb2.UpdateSubnetRequest(
-                                    metadata=metadata_pb2.ResourceMetadata(id=sn.metadata.id),
-                                    spec=subnet_pb2.SubnetSpec(
-                                        network_id=sn.spec.network_id,
-                                        route_table_id=rt_id,
-                                        ipv4_private_pools=existing_ipv4_private_pools,
-                                        ipv4_public_pools=existing_ipv4_public_pools,
-                                    ),
-                                )
+                            self._attach_route_table_to_subnet(
+                                sstub,
+                                subnet_service_pb2,
+                                metadata_pb2,
+                                subnet_pb2,
+                                subnet_obj=sn,
+                                route_table_id=rt_id,
                             )
                             print(
                                 f"[green]Attached route table {rt_id} to subnet {sn.metadata.name}[/green]"
@@ -1366,19 +2245,13 @@ class RouteManager:
                                 )
 
                         # Attach to subnet - preserve IP pool configuration
-                        existing_ipv4_private_pools = getattr(sn.spec, "ipv4_private_pools", None)
-                        existing_ipv4_public_pools = getattr(sn.spec, "ipv4_public_pools", None)
-
-                        sstub.Update(
-                            subnet_service_pb2.UpdateSubnetRequest(
-                                metadata=metadata_pb2.ResourceMetadata(id=sn.metadata.id),
-                                spec=subnet_pb2.SubnetSpec(
-                                    network_id=sn.spec.network_id,
-                                    route_table_id=new_rt_id,
-                                    ipv4_private_pools=existing_ipv4_private_pools,
-                                    ipv4_public_pools=existing_ipv4_public_pools,
-                                ),
-                            )
+                        self._attach_route_table_to_subnet(
+                            sstub,
+                            subnet_service_pb2,
+                            metadata_pb2,
+                            subnet_pb2,
+                            subnet_obj=sn,
+                            route_table_id=new_rt_id,
                         )
                         rt_id = new_rt_id
                         print(
@@ -1396,140 +2269,15 @@ class RouteManager:
                         )
                         continue
 
-            # Get existing routes to check for duplicates (idempotency)
-            try:
-                existing_routes = rstub.List(
-                    route_service_pb2.ListRoutesRequest(parent_id=rt_id)
-                ).items
-                existing_route_cidrs = {r.spec.destination.cidr for r in existing_routes}
-            except Exception as e:
-                print(f"[yellow]Failed to list existing routes on {rt_id}: {e}[/yellow]")
-                existing_routes = []
-                existing_route_cidrs = set()
-
-            # Add routes for each remote prefix (skip if already exists)
-            for pfx, alloc_id in prefix_targets.items():
-                if pfx in existing_route_cidrs:
-                    print(f"[blue]Route {pfx} already exists on {rt_id}; skipping[/blue]")
-                    continue
-
-                try:
-                    rstub.Create(
-                        route_service_pb2.CreateRouteRequest(
-                            metadata=metadata_pb2.ResourceMetadata(
-                                parent_id=rt_id,
-                                name=f"vpngw-{pfx.replace('/', '-')}"[:63],
-                            ),
-                            spec=route_pb2.RouteSpec(
-                                destination=route_pb2.DestinationMatch(cidr=pfx),
-                                next_hop=route_pb2.NextHop(
-                                    allocation=route_pb2.AllocationNextHop(id=alloc_id)
-                                ),
-                            ),
-                        )
-                    )
-                    print(f"[green]Added route {pfx} -> allocation {alloc_id} on {rt_id}[/green]")
-                    existing_route_cidrs.add(pfx)
-                except Exception as e:
-                    err_str = str(e).lower()
-                    if "already exists" in err_str or "duplicate" in err_str:
-                        print(f"[blue]Route {pfx} already exists on {rt_id}; skipping[/blue]")
-                        existing_route_cidrs.add(pfx)
-                    elif summarize and (
-                        "max-route-count" in err_str or "quota exceeded" in err_str
-                    ):
-                        redundant_routes = self._find_redundant_managed_routes(
-                            existing_routes,
-                            {pfx: alloc_id},
-                        )
-                        if not redundant_routes:
-                            print(f"[yellow]Failed to add route {pfx} on {rt_id}: {e}[/yellow]")
-                            continue
-
-                        print(
-                            f"[yellow]Route table {rt_id} hit its route limit while adding {pfx}. "
-                            f"Deleting {len(redundant_routes)} covered vpngw-managed route(s) and retrying.[/yellow]"
-                        )
-                        deleted = self._delete_routes(
-                            rstub,
-                            route_service_pb2,
-                            redundant_routes,
-                            route_table_id=rt_id,
-                        )
-                        if not deleted:
-                            print(f"[yellow]Failed to add route {pfx} on {rt_id}: {e}[/yellow]")
-                            continue
-
-                        existing_routes = [
-                            route
-                            for route in existing_routes
-                            if getattr(getattr(route, "metadata", None), "id", None)
-                            not in {
-                                getattr(getattr(dead_route, "metadata", None), "id", None)
-                                for dead_route in redundant_routes
-                            }
-                        ]
-                        existing_route_cidrs = {r.spec.destination.cidr for r in existing_routes}
-
-                        try:
-                            rstub.Create(
-                                route_service_pb2.CreateRouteRequest(
-                                    metadata=metadata_pb2.ResourceMetadata(
-                                        parent_id=rt_id,
-                                        name=f"vpngw-{pfx.replace('/', '-')}"[:63],
-                                    ),
-                                    spec=route_pb2.RouteSpec(
-                                        destination=route_pb2.DestinationMatch(cidr=pfx),
-                                        next_hop=route_pb2.NextHop(
-                                            allocation=route_pb2.AllocationNextHop(id=alloc_id)
-                                        ),
-                                    ),
-                                )
-                            )
-                            print(
-                                f"[green]Added summarized route {pfx} -> allocation {alloc_id} "
-                                f"on {rt_id} after pruning redundant specifics[/green]"
-                            )
-                            existing_route_cidrs.add(pfx)
-                        except Exception as retry_err:
-                            print(
-                                f"[yellow]Failed to add summarized route {pfx} on {rt_id} "
-                                f"after pruning redundant specifics: {retry_err}[/yellow]"
-                            )
-                    else:
-                        print(f"[yellow]Failed to add route {pfx} on {rt_id}: {e}[/yellow]")
-
-            if summarize:
-                effective_prefix_targets = {
-                    pfx: alloc_id
-                    for pfx, alloc_id in prefix_targets.items()
-                    if pfx in existing_route_cidrs
-                }
-                redundant_routes = self._find_redundant_managed_routes(
-                    existing_routes,
-                    effective_prefix_targets,
-                )
-                if redundant_routes:
-                    print(
-                        f"[cyan]Pruning {len(redundant_routes)} redundant vpngw-managed "
-                        f"route(s) from {rt_id} after summary reconciliation[/cyan]"
-                    )
-                    deleted = self._delete_routes(
-                        rstub,
-                        route_service_pb2,
-                        redundant_routes,
-                        route_table_id=rt_id,
-                    )
-                    if deleted:
-                        existing_routes = [
-                            route
-                            for route in existing_routes
-                            if getattr(getattr(route, "metadata", None), "id", None)
-                            not in {
-                                getattr(getattr(dead_route, "metadata", None), "id", None)
-                                for dead_route in redundant_routes
-                            }
-                        ]
+            self._reconcile_route_table(
+                rstub,
+                route_service_pb2,
+                route_pb2,
+                metadata_pb2,
+                route_table_id=rt_id,
+                prefix_targets=prefix_targets,
+                summarize=summarize,
+            )
 
     def _get_bgp_learned_routes(
         self, plan: ResolvedDeploymentPlan, conn: dict, local_cfg: dict
@@ -1594,6 +2342,7 @@ class RouteManager:
                 bgp_data = json.loads(result.stdout)
                 routes = bgp_data.get("routes", {})
 
+                selected_prefixes_for_host = 0
                 for prefix, route_data in routes.items():
                     if isinstance(route_data, dict):
                         paths = [route_data]
@@ -1629,9 +2378,12 @@ class RouteManager:
 
                     if prefix not in learned_prefixes:
                         learned_prefixes.append(prefix)
+                        selected_prefixes_for_host += 1
 
                 print(
-                    f"[cyan]Learned {len(routes)} BGP route(s) from {hostname} (connection: {conn_name})[/cyan]"
+                    f"[cyan]Selected {selected_prefixes_for_host} connection-scoped BGP "
+                    f"route(s) from {hostname} (connection: {conn_name}; FRR table: "
+                    f"{len(routes)} route(s))[/cyan]"
                 )
 
             except subprocess.TimeoutExpired:

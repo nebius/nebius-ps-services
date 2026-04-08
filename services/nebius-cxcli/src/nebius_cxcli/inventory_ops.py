@@ -188,10 +188,7 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
                 bool(_lookup(row, "enabled"))
                 for cid, rows in infra_rows.items()
                 for row in rows
-                if "wireguard" in cid or any(
-                    "wireguard" in alias
-                    for alias in getattr(entry_by_id.get(cid), "aliases", ())
-                )
+                if "wireguard" in cid
             ),
         },
         "mk8s": {

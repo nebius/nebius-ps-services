@@ -30,11 +30,11 @@ def _load_yaml(path: Path) -> dict[str, Any]:
 
 
 def _infra_modules(payload: dict[str, Any], *, subject: str) -> list[dict[str, Any]]:
-    modules = (((payload or {}).get("infra") or {}).get("tf_modules") or [])
-    if not isinstance(modules, list) or not modules:
-        raise ValueError(f"{subject} has no infra.tf_modules entries")
+    modules = (((payload or {}).get("components") or {}).get("infra") or {})
+    if not isinstance(modules, dict) or not modules:
+        raise ValueError(f"{subject} has no components.infra entries")
     normalized: list[dict[str, Any]] = []
-    for module in modules:
+    for module in modules.values():
         if isinstance(module, dict):
             normalized.append(module)
     return normalized
@@ -49,10 +49,13 @@ def render_release_catalog(
     payload = _load_yaml(input_path)
     modules = _infra_modules(payload, subject=str(input_path))
     for module in modules:
-        source = str(module.get("portable_source", "")).strip()
+        source_block = module.get("source")
+        if not isinstance(source_block, dict):
+            continue
+        source = str(source_block.get("portable", "")).strip()
         if source.startswith(REPO_PREFIX):
-            module["portable_source"] = source.replace("?ref=main", f"?ref={release_ref}")
-        module.pop("local_source", None)
+            source_block["portable"] = source.replace("?ref=main", f"?ref={release_ref}")
+        source_block.pop("local", None)
     output_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
 
@@ -64,7 +67,11 @@ def _validate_module_sources(
 ) -> None:
     bad_sources: list[str] = []
     for module in modules:
-        source = str(module.get("portable_source", "")).strip()
+        source_block = module.get("source")
+        if not isinstance(source_block, dict):
+            bad_sources.append("<missing-source>")
+            continue
+        source = str(source_block.get("portable", "")).strip()
         if not source:
             bad_sources.append("<empty>")
             continue
@@ -78,9 +85,9 @@ def _validate_module_sources(
         if "?ref=main" in source:
             bad_sources.append(source)
             continue
-        local_source = str(module.get("local_source", "")).strip()
+        local_source = str(source_block.get("local", "")).strip()
         if local_source:
-            bad_sources.append(f"local_source={local_source}")
+            bad_sources.append(f"source.local={local_source}")
     if bad_sources:
         raise ValueError(
             f"{subject} contains non-portable or incorrectly pinned module sources: "
