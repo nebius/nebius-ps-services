@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import yaml
+from typer.main import get_command
 from typer.testing import CliRunner
 
 from nebius_vpngw.cli import (
@@ -486,28 +487,27 @@ def test_each_cli_command_help_renders() -> None:
 
 
 def test_route_and_operator_help_mentions_multi_connection_behavior() -> None:
-    runner = CliRunner()
+    click_app = get_command(app)
 
-    list_remote_help = runner.invoke(app, ["list-routes-remote", "--help"], env=HELP_ENV)
-    add_routes_help = runner.invoke(app, ["add-routes-local", "--help"], env=HELP_ENV)
-    failover_help = runner.invoke(app, ["failover", "--help"], env=HELP_ENV)
-    restart_help = runner.invoke(app, ["restart-tunnel", "--help"], env=HELP_ENV)
+    list_remote_help = click_app.commands["list-routes-remote"].help or ""
+    add_routes_cmd = click_app.commands["add-routes-local"]
+    add_routes_help = add_routes_cmd.help or ""
+    failover_help = click_app.commands["failover"].params[0].help or ""
+    restart_help = click_app.commands["restart-tunnel"].params[0].help or ""
 
-    assert list_remote_help.exit_code == 0
-    assert "owning gateway VM" in list_remote_help.stdout
-    assert "selected connection" in list_remote_help.stdout
+    assert "owning gateway VM" in list_remote_help
+    assert "selected connection" in list_remote_help
 
-    assert add_routes_help.exit_code == 0
-    assert "--swap-route-table" in add_routes_help.stdout
-    assert "rollback command" in add_routes_help.stdout
-    assert "Skip the confirmation prompt for" in add_routes_help.stdout
-    assert "--swap-route-table" in add_routes_help.stdout
+    assert "--swap-route-table" in add_routes_help
+    assert "rollback command" in add_routes_help
 
-    assert failover_help.exit_code == 0
-    assert "multi-connection topologies" in failover_help.stdout
+    option_help_by_name = {param.name: param.help or "" for param in add_routes_cmd.params}
+    assert "rollback command" in option_help_by_name["swap_route_table"]
+    assert "Skip the confirmation prompt for" in option_help_by_name["yes"]
+    assert "--swap-route-table" in option_help_by_name["yes"]
 
-    assert restart_help.exit_code == 0
-    assert "only the owning gateway VM" in restart_help.stdout
+    assert "multi-connection topologies" in failover_help
+    assert "only the owning gateway VM" in restart_help
 
 
 def test_add_routes_local_swap_route_table_requires_confirmation(tmp_path: Path, monkeypatch) -> None:
