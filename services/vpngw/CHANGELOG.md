@@ -14,6 +14,8 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [nebius-vpngw-v0.5.7] - 2026-04-08
+
 - Fixed `add-routes-local` safety checks and output:
   - skip remote prefixes that overlap the target network's private pools before
     the Nebius API rejects them
