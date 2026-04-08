@@ -122,6 +122,23 @@ def _local_catalog_path() -> Path:
     return Path(__file__).resolve().parents[1] / "component_sources.yaml"
 
 
+def _catalog(
+    *,
+    infra: dict[str, object] | None = None,
+    apps: dict[str, object] | None = None,
+    shared: dict[str, object] | None = None,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "components": {
+            "infra": infra or {},
+            "apps": apps or {},
+        }
+    }
+    if shared is not None:
+        payload["shared"] = shared
+    return payload
+
+
 def _catalog_with_shared_admin_ssh(
     tmp_path: Path,
     *,
@@ -301,41 +318,6 @@ def test_render_keeps_duplicate_component_instances_distinct(
     assert 'module "mk8s_2" {' in main_tf
     assert 'output "mk8s_cluster_id" {' in outputs_tf
     assert 'output "mk8s_2_cluster_id" {' in outputs_tf
-
-
-def test_render_emits_dynamic_provider_resource_blocks(tmp_path: Path) -> None:
-    reset_component_entry_cache()
-    config_path = _project_config_path(tmp_path)
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-
-    runtime_payload = _starter_payload(selected_infra=set(), selected_apps=set())
-    dynamic_payload = to_dynamic_payload(runtime_payload)
-    dynamic_payload["infra"]["components"] = [
-        {
-            "id": "runtime-network",
-            "enabled": True,
-            "inputs": {
-                "resource_type": "nebius_vpc_v1_network",
-                "resource_name": "runtime_network",
-                "depends_on_platform": False,
-                "parent_id": "project-456",
-                "name": "runtime-network",
-            },
-        }
-    ]
-
-    config_path.write_text(yaml.safe_dump(dynamic_payload, sort_keys=False), encoding="utf-8")
-
-    config = load_config(config_path)
-    paths = resolve_project_paths(config_path)
-    validate_path_alignment(config, paths)
-
-    render_project(config, paths, source_profile=SourceProfile.LOCAL)
-
-    main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
-    assert 'resource "nebius_vpc_v1_network" "runtime_network"' in main_tf
-    assert 'name = "runtime-network"' in main_tf
-    assert 'parent_id = "project-456"' in main_tf
 
 
 def test_render_dynamic_chart_shape_writes_flux_manifests(tmp_path: Path) -> None:
@@ -621,29 +603,30 @@ def test_render_uses_shared_defaults_for_app_chart_values(tmp_path: Path, monkey
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
-            {
-                "shared": {
+            _catalog(
+                shared={
                     "admin_ssh": {
                         "user_name": "adminuser",
                         "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB8demo",
                     }
                 },
-                "infra": {"tf_modules": []},
-                "apps": {
-                    "helm_charts": [
-                        {
-                            "name": "demo-app",
+                apps={
+                    "demo-app": {
+                        "source": {
                             "repo": "https://example.invalid/charts",
+                            "chart": "demo-app",
                             "version": "1.0.0",
+                        },
+                        "release": {
                             "namespace": "demo",
-                            "releasename": "demo-app",
-                            "defaults": {
-                                "values.admin.sshUser": "shared.admin_ssh.user_name",
-                            },
-                        }
-                    ]
+                            "name": "demo-app",
+                        },
+                        "defaults": {
+                            "values.admin.sshUser": "shared.admin_ssh.user_name",
+                        },
+                    }
                 },
-            },
+            ),
             sort_keys=False,
         ),
         encoding="utf-8",
@@ -709,25 +692,23 @@ def test_render_supports_infra_input_binding_from_component_output(
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
-            {
-                "infra": {
-                    "tf_modules": [
-                        {
-                            "module": "producer",
-                            "portable_source": "git::https://github.com/example/infra.git//modules/producer?ref=v1.2.3",
-                            "local_source": str(producer_dir),
-                            "outputs": {"tf_outputs": True},
+            _catalog(
+                infra={
+                    "producer": {
+                        "source": {
+                            "portable": "git::https://github.com/example/infra.git//modules/producer?ref=v1.2.3",
+                            "local": str(producer_dir),
+                        }
+                    },
+                    "consumer": {
+                        "source": {
+                            "portable": "git::https://github.com/example/infra.git//modules/consumer?ref=v1.2.3",
+                            "local": str(consumer_dir),
                         },
-                        {
-                            "module": "consumer",
-                            "portable_source": "git::https://github.com/example/infra.git//modules/consumer?ref=v1.2.3",
-                            "local_source": str(consumer_dir),
-                            "input": {"inputs.upstream_id": "producer.instance_id"},
-                        },
-                    ]
-                },
-                "apps": {"helm_charts": []},
-            },
+                        "input": {"inputs.upstream_id": "producer.instance_id"},
+                    },
+                }
+            ),
             sort_keys=False,
         ),
         encoding="utf-8",
@@ -783,36 +764,38 @@ def test_render_supports_app_input_binding_from_component_output_with_runtime_va
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
-            {
-                "infra": {
-                    "tf_modules": [
-                        {
-                            "module": "mk8s",
-                            "portable_source": "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3",
-                            "local_source": str(mk8s_dir),
-                            "outputs": {
-                                "tf_outputs": True,
-                                "static": {"access": "external"},
-                            },
-                        }
-                    ]
+            _catalog(
+                infra={
+                    "mk8s": {
+                        "source": {
+                            "portable": "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3",
+                            "local": str(mk8s_dir),
+                        },
+                        "runtime": {
+                            "values": {
+                                "access": "external",
+                            }
+                        },
+                    }
                 },
-                "apps": {
-                    "helm_charts": [
-                        {
-                            "name": "demo-app",
+                apps={
+                    "demo-app": {
+                        "source": {
                             "repo": "https://example.invalid/charts",
+                            "chart": "demo-app",
                             "version": "1.0.0",
+                        },
+                        "release": {
                             "namespace": "demo",
-                            "releasename": "demo-app",
-                            "input": {
-                                "values.global.clusterId": "mk8s.cluster_id",
-                                "values.global.access": "mk8s.access",
-                            },
-                        }
-                    ]
+                            "name": "demo-app",
+                        },
+                        "input": {
+                            "values.global.clusterId": "mk8s.cluster_id",
+                            "values.global.access": "mk8s.access",
+                        },
+                    }
                 },
-            },
+            ),
             sort_keys=False,
         ),
         encoding="utf-8",
@@ -835,7 +818,13 @@ def test_render_supports_app_input_binding_from_component_output_with_runtime_va
         },
         "infra": {
             "components": [
-                {"id": "mk8s", "enabled": True, "source": str(mk8s_dir), "inputs": {}},
+                {
+                    "id": "mk8s",
+                    "instance_id": "mk8s-blue",
+                    "enabled": True,
+                    "source": str(mk8s_dir),
+                    "inputs": {},
+                },
             ]
         },
         "apps": {
@@ -862,7 +851,7 @@ def test_render_supports_app_input_binding_from_component_output_with_runtime_va
     render_project(
         config,
         paths,
-        component_output_values={"mk8s.cluster_id": "cluster-u123"},
+        component_output_values={"mk8s-blue.cluster_id": "cluster-u123"},
         source_profile=SourceProfile.LOCAL,
     )
 
@@ -871,6 +860,114 @@ def test_render_supports_app_input_binding_from_component_output_with_runtime_va
     )
     assert release_doc["spec"]["values"]["global"]["clusterId"] == "cluster-u123"
     assert release_doc["spec"]["values"]["global"]["access"] == "external"
+
+
+def test_render_supports_explicit_instance_qualified_app_input_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    producer_dir = tmp_path / "modules" / "producer"
+    producer_dir.mkdir(parents=True, exist_ok=True)
+    (producer_dir / "main.tf").write_text('output "instance_id" { value = "instance-123" }\n', encoding="utf-8")
+
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                infra={
+                    "producer": {
+                        "source": {
+                            "portable": "git::https://github.com/example/infra.git//modules/producer?ref=v1.2.3",
+                            "local": str(producer_dir),
+                        }
+                    }
+                },
+                apps={
+                    "demo-app": {
+                        "source": {
+                            "repo": "https://example.invalid/charts",
+                            "chart": "demo-app",
+                            "version": "1.0.0",
+                        },
+                        "release": {
+                            "namespace": "demo",
+                            "name": "demo-app",
+                        },
+                        "input": {
+                            "values.global.upstreamId": "producer@producer-blue.instance_id",
+                        },
+                    }
+                },
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    _set_catalog_override(sources_file, source_profile=SourceProfile.LOCAL)
+    monkeypatch.chdir(tmp_path)
+
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-456",
+                "region_id": "eu-north1",
+            },
+            "notifications": {"email_enabled": True, "email": "ops@example.com"},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "producer",
+                    "instance_id": "producer-red",
+                    "enabled": True,
+                    "source": str(producer_dir),
+                    "inputs": {},
+                },
+                {
+                    "id": "producer",
+                    "instance_id": "producer-blue",
+                    "enabled": True,
+                    "source": str(producer_dir),
+                    "inputs": {},
+                },
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "demo-app",
+                    "group": "workloads",
+                    "enabled": True,
+                    "repo": "https://example.invalid/charts",
+                    "version": "1.0.0",
+                    "namespace": "demo",
+                    "release-name": "demo-app",
+                    "values": {},
+                }
+            ]
+        },
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+
+    render_project(
+        config,
+        paths,
+        component_output_values={"producer-blue.instance_id": "instance-blue"},
+        source_profile=SourceProfile.LOCAL,
+    )
+
+    release_doc = yaml.safe_load(
+        (paths.flux_dir / "helmrelease-workloads-demo-app.yaml").read_text(encoding="utf-8")
+    )
+    assert release_doc["spec"]["values"]["global"]["upstreamId"] == "instance-blue"
 
 
 def test_render_uses_component_source_defaults_when_config_omits_values(
@@ -887,36 +984,37 @@ def test_render_uses_component_source_defaults_when_config_omits_values(
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
-            {
-                "infra": {
-                    "tf_modules": [
-                        {
-                            "module": "demo-module",
-                            "portable_source": "git::https://github.com/example/infra.git//modules/demo-module?ref=v1.2.3",
-                            "local_source": str(module_dir),
-                            "defaults": {
-                                "inputs.cluster_name": "demo-cluster",
-                                "inputs.cpu_nodes_count": 3,
-                            },
-                        }
-                    ]
+            _catalog(
+                infra={
+                    "demo-module": {
+                        "source": {
+                            "portable": "git::https://github.com/example/infra.git//modules/demo-module?ref=v1.2.3",
+                            "local": str(module_dir),
+                        },
+                        "defaults": {
+                            "inputs.cluster_name": "demo-cluster",
+                            "inputs.cpu_nodes_count": 3,
+                        },
+                    }
                 },
-                "apps": {
-                    "helm_charts": [
-                        {
-                            "name": "demo-app",
+                apps={
+                    "demo-app": {
+                        "source": {
                             "repo": "https://example.invalid/charts",
+                            "chart": "demo-app",
                             "version": "1.0.0",
+                        },
+                        "release": {
                             "namespace": "demo",
-                            "releasename": "demo-app",
-                            "defaults": {
-                                "values.replicaCount": 2,
-                                "values.image.tag": "stable",
-                            },
-                        }
-                    ]
+                            "name": "demo-app",
+                        },
+                        "defaults": {
+                            "values.replicaCount": 2,
+                            "values.image.tag": "stable",
+                        },
+                    }
                 },
-            },
+            ),
             sort_keys=False,
         ),
         encoding="utf-8",

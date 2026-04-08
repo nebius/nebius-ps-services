@@ -24,7 +24,7 @@ def _service_cidr_prefix_lengths(raw_value: Any) -> tuple[int, ...]:
         return ()
     if not isinstance(raw_value, (list, tuple)):
         raise RuntimeError(
-            "infra.components[mk8s].inputs.kube_network_service_cidrs must be a list of CIDR "
+            "inputs.kube_network_service_cidrs must be a list of CIDR "
             'strings or prefix-length strings such as ["/20"].'
         )
 
@@ -33,7 +33,7 @@ def _service_cidr_prefix_lengths(raw_value: Any) -> tuple[int, ...]:
         text = _as_text(item)
         if not text:
             raise RuntimeError(
-                "infra.components[mk8s].inputs.kube_network_service_cidrs cannot contain empty values."
+                "inputs.kube_network_service_cidrs cannot contain empty values."
             )
         try:
             if text.startswith("/"):
@@ -42,14 +42,14 @@ def _service_cidr_prefix_lengths(raw_value: Any) -> tuple[int, ...]:
                 prefix = ipaddress.ip_network(text, strict=False).prefixlen
         except Exception as exc:
             raise RuntimeError(
-                "infra.components[mk8s].inputs.kube_network_service_cidrs contains an invalid "
+                "inputs.kube_network_service_cidrs contains an invalid "
                 f"value: {text!r}"
             ) from exc
         prefixes.append(prefix)
 
     if len(prefixes) != 1:
         raise RuntimeError(
-            "infra.components[mk8s].inputs.kube_network_service_cidrs must contain exactly one "
+            "inputs.kube_network_service_cidrs must contain exactly one "
             "CIDR or prefix value."
         )
     return tuple(prefixes)
@@ -91,7 +91,7 @@ def validate_mk8s_network_preflight(config: Any) -> None:
                 continue
             component_id = _as_text(item.get("id")).lower()
             mk8s_entry = entry_by_id.get(component_id)
-            if mk8s_entry is None or getattr(mk8s_entry, "handoff", None) is None:
+            if mk8s_entry is None or getattr(mk8s_entry, "validation_profile", "") != "mk8s_cluster":
                 continue
 
             resolved = resolve_component_defaults(
@@ -130,7 +130,8 @@ def validate_mk8s_network_preflight(config: Any) -> None:
             if service_prefix <= pool_prefix:
                 raise RuntimeError(
                     "MK8s network preflight failed: "
-                    f"infra.components[mk8s].inputs.kube_network_service_cidrs={list(raw_service_cidrs)!r} "
+                    f"component '{component_id}' inputs.kube_network_service_cidrs="
+                    f"{list(raw_service_cidrs)!r} "
                     f"is too large for subnet {subnet_id} pool {pool_cidr}. "
                     "Nebius reserves Kubernetes service CIDRs from the same subnet pool, so this "
                     "single-pool subnet can stall cluster provisioning before any node groups are created. "

@@ -38,15 +38,18 @@ def _build_release_ref() -> str | None:
 
 
 def _rewrite_internal_repo_refs(payload: dict[str, Any], *, release_ref: str) -> dict[str, Any]:
-    modules = (((payload or {}).get("infra") or {}).get("tf_modules") or [])
-    if not isinstance(modules, list):
+    modules = (((payload or {}).get("components") or {}).get("infra") or {})
+    if not isinstance(modules, dict):
         return payload
-    for module in modules:
+    for module in modules.values():
         if not isinstance(module, dict):
             continue
-        source = str(module.get("portable_source", "")).strip()
+        source_block = module.get("source")
+        if not isinstance(source_block, dict):
+            continue
+        source = str(source_block.get("portable", "")).strip()
         if source.startswith(_REPO_PREFIX):
-            module["portable_source"] = source.replace("?ref=main", f"?ref={release_ref}")
+            source_block["portable"] = source.replace("?ref=main", f"?ref={release_ref}")
     return payload
 
 
@@ -57,12 +60,14 @@ def _render_bundled_component_sources(source: Path) -> str:
     release_ref = _build_release_ref()
     if release_ref:
         payload = _rewrite_internal_repo_refs(payload, release_ref=release_ref)
-    modules = (((payload or {}).get("infra") or {}).get("tf_modules") or [])
-    if isinstance(modules, list):
-        for module in modules:
+    modules = (((payload or {}).get("components") or {}).get("infra") or {})
+    if isinstance(modules, dict):
+        for module in modules.values():
             if not isinstance(module, dict):
                 continue
-            module.pop("local_source", None)
+            source_block = module.get("source")
+            if isinstance(source_block, dict):
+                source_block.pop("local", None)
     return yaml.safe_dump(payload, sort_keys=False)
 
 

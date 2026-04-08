@@ -35,14 +35,15 @@ def _write_catalog(
     path.write_text(
         yaml.safe_dump(
             {
-                "infra": {
-                    "tf_modules": [
-                        {
-                            "module": "mk8s",
-                            "portable_source": portable_source,
-                            "local_source": local_source,
+                "components": {
+                    "infra": {
+                        "mk8s": {
+                            "source": {
+                                "portable": portable_source,
+                                "local": local_source,
+                            }
                         }
-                    ]
+                    }
                 }
             },
             sort_keys=False,
@@ -77,10 +78,10 @@ def test_render_bundled_component_sources_rewrites_ref_from_build_env(
 
     rendered = yaml.safe_load(module._render_bundled_component_sources(catalog))
 
-    assert rendered["infra"]["tf_modules"][0]["portable_source"].endswith(
+    assert rendered["components"]["infra"]["mk8s"]["source"]["portable"].endswith(
         "?ref=feature/test-portable-catalog"
     )
-    assert "local_source" not in rendered["infra"]["tf_modules"][0]
+    assert "local" not in rendered["components"]["infra"]["mk8s"]["source"]
 
 
 def test_render_bundled_component_sources_prefers_release_ref_over_cli_ref(
@@ -97,7 +98,9 @@ def test_render_bundled_component_sources_prefers_release_ref_over_cli_ref(
 
     rendered = yaml.safe_load(module._render_bundled_component_sources(catalog))
 
-    assert rendered["infra"]["tf_modules"][0]["portable_source"].endswith("?ref=deadbeefcafebabe")
+    assert rendered["components"]["infra"]["mk8s"]["source"]["portable"].endswith(
+        "?ref=deadbeefcafebabe"
+    )
 
 
 def test_select_bundled_component_sources_uses_root_catalog_by_default(

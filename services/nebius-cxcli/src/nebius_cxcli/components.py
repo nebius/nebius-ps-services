@@ -43,8 +43,7 @@ class ComponentEntry:
     wizard_fields: dict[str, dict[str, Any]] = field(default_factory=dict)
     group: str | None = None
     kind: str = ""
-    origin: str = "registry"
-    aliases: tuple[str, ...] = ()
+    validation_profile: str = ""
     chart_name: str | None = None
     chart_repo: str | None = None
     default_namespace: str | None = None
@@ -118,8 +117,6 @@ def _infra_component_entries(
                 selectable=True,
                 enabled_path=("infra", config_key, "enabled"),
                 kind=module.kind,
-                origin=module.origin or "custom",
-                aliases=module.aliases,
                 engine_type="terraform_module",
                 source=module.source,
                 metadata_source=module.metadata_source,
@@ -131,6 +128,7 @@ def _infra_component_entries(
                 input_bindings=module.input_bindings,
                 handoff=module.handoff,
                 status=module.status,
+                validation_profile=module.validation_profile,
             )
         )
         entry_ids.add(component_id)
@@ -171,7 +169,6 @@ def _entry_from_helm_chart(
         version=version,
         dependency_match_names=(component_id, chart_name.lower().strip(), release_name.lower().strip()),
         depends_on=(),
-        origin="helm",
         group=normalized_group or None,
         chart_name=chart_name,
         chart_repo=repo,
@@ -196,6 +193,7 @@ def _app_component_entries(
     for chart in sources.helm_charts:
         release_name = chart.release_name or chart.name
         component_id = _normalize_entry_id(chart.name)
+        chart_name = chart.chart_name or chart.name
         if not component_id or component_id in entry_ids:
             continue
         if not COMPONENT_ID_PATTERN.fullmatch(component_id):
@@ -207,7 +205,7 @@ def _app_component_entries(
                 description=chart.description or f"Helm chart ({component_id})",
                 group=chart.group,
                 repo=chart.repo,
-                chart_name=chart.name,
+                chart_name=chart_name,
                 version=chart.version,
                 namespace=chart.namespace,
                 default_enabled=bool(chart.enable),

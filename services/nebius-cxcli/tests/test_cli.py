@@ -127,6 +127,19 @@ def _project_config_path(deployments_root: Path) -> Path:
     )
 
 
+def _catalog(
+    *,
+    infra: dict[str, object] | None = None,
+    apps: dict[str, object] | None = None,
+) -> dict[str, object]:
+    return {
+        "components": {
+            "infra": infra or {},
+            "apps": apps or {},
+        }
+    }
+
+
 def _create_non_interactive(deployments_root: Path, *extra: str):
     return runner.invoke(
         app,
@@ -694,22 +707,25 @@ def test_load_context_uses_component_sources_override_file(tmp_path: Path) -> No
     external_sources = tmp_path / "external-component-sources.yaml"
     external_sources.write_text(
         yaml.safe_dump(
-            {
-                "infra": {"tf_modules": []},
-                "apps": {
-                    "helm_charts": [
-                        {
-                            "name": "nginx",
+            _catalog(
+                apps={
+                    "nginx": {
+                        "source": {
                             "repo": "https://charts.bitnami.com/bitnami",
+                            "chart": "nginx",
                             "version": "",
+                        },
+                        "release": {
                             "namespace": "default",
-                            "releasename": "external-app",
+                            "name": "external-app",
+                        },
+                        "ui": {
                             "group": "Workloads",
-                            "enable": False,
-                        }
-                    ]
-                },
-            },
+                            "enabled": False,
+                        },
+                    }
+                }
+            ),
             sort_keys=False,
         ),
         encoding="utf-8",
@@ -756,38 +772,43 @@ def test_create_seeds_component_source_defaults_into_config(tmp_path: Path) -> N
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
-            {
-                "infra": {
-                    "tf_modules": [
-                        {
-                            "module": "demo-module",
-                            "portable_source": "git::https://github.com/example/infra.git//modules/demo-module?ref=v1.2.3",
-                            "local_source": str(module_dir),
-                            "enable": True,
-                            "defaults": {
-                                "inputs.cluster_name": "demo-cluster",
-                                "inputs.cpu_nodes_count": 3,
-                            },
-                        }
-                    ]
+            _catalog(
+                infra={
+                    "demo-module": {
+                        "source": {
+                            "portable": "git::https://github.com/example/infra.git//modules/demo-module?ref=v1.2.3",
+                            "local": str(module_dir),
+                        },
+                        "ui": {
+                            "enabled": True,
+                        },
+                        "defaults": {
+                            "inputs.cluster_name": "demo-cluster",
+                            "inputs.cpu_nodes_count": 3,
+                        },
+                    }
                 },
-                "apps": {
-                    "helm_charts": [
-                        {
-                            "name": "demo-app",
+                apps={
+                    "demo-app": {
+                        "source": {
                             "repo": "https://example.invalid/charts",
+                            "chart": "demo-app",
                             "version": "1.0.0",
+                        },
+                        "release": {
                             "namespace": "demo",
-                            "releasename": "demo-app",
-                            "enable": True,
-                            "defaults": {
-                                "values.replicaCount": 2,
-                                "values.image.tag": "stable",
-                            },
-                        }
-                    ]
+                            "name": "demo-app",
+                        },
+                        "ui": {
+                            "enabled": True,
+                        },
+                        "defaults": {
+                            "values.replicaCount": 2,
+                            "values.image.tag": "stable",
+                        },
+                    }
                 },
-            },
+            ),
             sort_keys=False,
         ),
         encoding="utf-8",
@@ -1317,6 +1338,7 @@ def test_bootstrap_ci_no_auth_writes_workflow_in_repo_root(
     assert "defaults:" in content
     assert "shell: bash" in content
     assert "cache: pip" in content
+    assert "workflow_dispatch:" in content
     assert "has_changes" in content
     assert 'NEBIUS_CXCLI_PYTHON_VERSION: "3.12"' in content
     assert "Install kubectl" in content
@@ -1329,6 +1351,8 @@ def test_bootstrap_ci_no_auth_writes_workflow_in_repo_root(
     assert 'echo "NEBIUS_AUTH_PRIVATE_KEY_FILE=${KEY_PATH}"' in content
     assert "NEBIUS_DISCOVER_TARGET: customer/deployments-root" in content
     assert "customer/deployments-root" in content
+    assert 'if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then' in content
+    assert 'nebius-cxcli discover --all "${{ env.NEBIUS_DISCOVER_TARGET }}" > discover.json' in content
     assert "name: ${{ matrix.github_environment }}" in content
     assert '**/customer/deployments-root/**/generated/**' in content
     assert '**/customer/deployments-root/**/config.yaml' not in content

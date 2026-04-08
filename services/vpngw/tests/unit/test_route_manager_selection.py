@@ -3,6 +3,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import typing as t
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -90,7 +91,7 @@ def _three_vm_plan() -> ResolvedDeploymentPlan:
     )
 
 
-def test_select_local_prefix_subnets_includes_inherited_and_skips_gateway_subnet() -> None:
+def test_select_local_prefix_subnets_excludes_inherited_status_cidrs_owned_by_other_subnets() -> None:
     route_manager = RouteManager(project_id="project-test")
     subnets = [
         _fake_subnet(
@@ -132,14 +133,44 @@ def test_select_local_prefix_subnets_includes_inherited_and_skips_gateway_subnet
         gateway_subnet_name="custom-gateway-subnet",
     )
 
-    selected_subnets = t.cast(list[SimpleNamespace], selected)
-    assert [subnet.metadata.name for subnet in selected_subnets] == [
-        "default-subnet",
+    selected_subnets = t.cast(list[tuple[SimpleNamespace, list[ipaddress.IPv4Network]]], selected)
+    assert [subnet.metadata.name for subnet, _cidrs in selected_subnets] == [
         "workload-subnet-1",
         "workload-subnet-2",
     ]
     assert inherited_selected == [
-        ("default-subnet", ["10.48.0.0/13", "172.16.10.0/24", "172.16.20.0/24"])
+        "[dim]Ignoring inherited subnet default-subnet for gateway.local_prefixes matching because Nebius status CIDRs overlap explicit CIDRs owned by other subnets.[/dim]"
+    ]
+
+
+def test_select_local_prefix_subnets_keeps_inherited_status_cidrs_after_sanitizing_explicit_ones() -> None:
+    route_manager = RouteManager(project_id="project-test")
+    subnets = [
+        _fake_subnet(
+            name="default-subnet",
+            network_id="net-1",
+            status_cidrs=["10.48.0.0/13", "172.16.10.0/24"],
+            use_network_pools=True,
+        ),
+        _fake_subnet(
+            name="workload-subnet-1",
+            network_id="net-1",
+            explicit_cidrs=["172.16.10.0/24"],
+        ),
+    ]
+
+    selected, inherited_selected = route_manager._select_local_prefix_subnets(
+        subnets,
+        [ipaddress.IPv4Network("10.48.0.0/13")],
+        target_network_id="net-1",
+        gateway_subnet_name="custom-gateway-subnet",
+    )
+
+    selected_subnets = t.cast(list[tuple[SimpleNamespace, list[ipaddress.IPv4Network]]], selected)
+    assert [subnet.metadata.name for subnet, _cidrs in selected_subnets] == ["default-subnet"]
+    assert [str(cidr) for cidr in selected_subnets[0][1]] == ["10.48.0.0/13"]
+    assert inherited_selected == [
+        "[dim]Subnet default-subnet inherits parent network pools (use_network_pools=true); sanitized status CIDRs to exclude explicit CIDRs owned by other subnets before matching: 10.48.0.0/13[/dim]"
     ]
 
 
@@ -255,6 +286,24 @@ def test_summarize_prefix_targets_collapses_exact_ranges_per_allocation() -> Non
     }
 
 
+def test_filter_prefix_targets_skips_local_and_network_pool_overlaps() -> None:
+    route_manager = RouteManager(project_id="project-test")
+
+    filtered, skipped_local, skipped_network_pools = route_manager._filter_prefix_targets(
+        {
+            "10.20.0.0/16": "alloc-a",
+            "10.96.0.0/13": "alloc-a",
+            "172.16.88.0/28": "alloc-a",
+        },
+        local_networks=[ipaddress.IPv4Network("10.96.0.0/13")],
+        network_pool_networks=[ipaddress.IPv4Network("172.16.0.0/12")],
+    )
+
+    assert filtered == {"10.20.0.0/16": "alloc-a"}
+    assert skipped_local == ["10.96.0.0/13"]
+    assert skipped_network_pools == [("172.16.88.0/28", "172.16.0.0/12")]
+
+
 def test_find_redundant_managed_routes_only_returns_covered_vpngw_routes() -> None:
     route_manager = RouteManager(project_id="project-test")
     existing_routes = [
@@ -290,6 +339,132 @@ def test_find_redundant_managed_routes_only_returns_covered_vpngw_routes() -> No
     )
 
     assert [route.metadata.id for route in redundant] == ["route-1", "route-2"]
+
+
+def test_installed_prefix_targets_require_matching_next_hop() -> None:
+    route_manager = RouteManager(project_id="project-test")
+    existing_routes = [
+        _fake_route(
+            route_id="route-1",
+            name="manual-summary",
+            cidr="10.10.0.0/23",
+            allocation_id="alloc-b",
+        ),
+        _fake_route(
+            route_id="route-2",
+            name="vpngw-summary",
+            cidr="10.20.0.0/23",
+            allocation_id="alloc-a",
+        ),
+    ]
+
+    installed = route_manager._installed_prefix_targets(
+        existing_routes,
+        {
+            "10.10.0.0/23": "alloc-a",
+            "10.20.0.0/23": "alloc-a",
+        },
+    )
+
+    assert installed == {"10.20.0.0/23": "alloc-a"}
+
+
+def test_find_redundant_managed_covering_routes_returns_broader_summaries_once_exact_routes_exist() -> None:
+    route_manager = RouteManager(project_id="project-test")
+    existing_routes = [
+        _fake_route(
+            route_id="route-1",
+            name="vpngw-10.10.0.0-23",
+            cidr="10.10.0.0/23",
+            allocation_id="alloc-a",
+        ),
+        _fake_route(
+            route_id="route-2",
+            name="manual-10.20.0.0-23",
+            cidr="10.20.0.0/23",
+            allocation_id="alloc-a",
+        ),
+        _fake_route(
+            route_id="route-3",
+            name="vpngw-10.30.0.0-23",
+            cidr="10.30.0.0/23",
+            allocation_id="alloc-b",
+        ),
+    ]
+
+    redundant = route_manager._find_redundant_managed_covering_routes(
+        existing_routes,
+        {
+            "10.10.0.0/24": "alloc-a",
+            "10.10.1.0/24": "alloc-a",
+            "10.20.0.0/24": "alloc-a",
+        },
+        {
+            "10.10.0.0/24": "alloc-a",
+            "10.10.1.0/24": "alloc-a",
+            "10.20.0.0/24": "alloc-a",
+        },
+    )
+
+    assert [route.metadata.id for route in redundant] == ["route-1"]
+
+
+def test_find_redundant_managed_covering_routes_keeps_summary_until_all_exact_routes_exist() -> None:
+    route_manager = RouteManager(project_id="project-test")
+    existing_routes = [
+        _fake_route(
+            route_id="route-1",
+            name="vpngw-10.10.0.0-23",
+            cidr="10.10.0.0/23",
+            allocation_id="alloc-a",
+        ),
+    ]
+
+    redundant = route_manager._find_redundant_managed_covering_routes(
+        existing_routes,
+        {
+            "10.10.0.0/24": "alloc-a",
+            "10.10.1.0/24": "alloc-a",
+        },
+        {
+            "10.10.0.0/24": "alloc-a",
+        },
+    )
+
+    assert redundant == []
+
+
+def test_write_swap_rollback_spec_persists_subnet_restore_payload(tmp_path: Path) -> None:
+    route_manager = RouteManager(project_id="project-test")
+    subnet = _fake_subnet(
+        name="workload-subnet",
+        network_id="net-1",
+        explicit_cidrs=["10.96.0.0/13"],
+    )
+
+    rollback_path = route_manager._write_swap_rollback_spec(
+        rollback_dir=tmp_path,
+        subnet_obj=subnet,
+        previous_route_table_id="rt-old-123",
+    )
+
+    assert rollback_path.exists()
+    payload = json.loads(rollback_path.read_text(encoding="utf-8"))
+    assert payload == {
+        "metadata": {
+            "id": "id-workload-subnet",
+            "parent_id": "project-test",
+            "name": "workload-subnet",
+        },
+        "spec": {
+            "network_id": "net-1",
+            "route_table_id": "rt-old-123",
+            "ipv4_private_pools": {
+                "use_network_pools": False,
+                "pools": [{"cidrs": [{"cidr": "10.96.0.0/13"}]}],
+            },
+        },
+    }
 
 
 def test_get_bgp_learned_routes_queries_only_connection_owner_vm(
@@ -395,6 +570,62 @@ def test_get_bgp_learned_routes_filters_to_connection_peer_ips(
     prefixes = route_manager._get_bgp_learned_routes(_three_vm_plan(), conn, local_cfg)
 
     assert prefixes == ["10.10.0.0/16", "10.11.0.0/16"]
+
+
+def test_get_bgp_learned_routes_reports_connection_scoped_count(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    route_manager = RouteManager(project_id="project-test")
+    local_cfg = {
+        "gateway_group": {"vm_spec": {}},
+    }
+    conn = {
+        "name": "gcp-site-a",
+        "routing_mode": "bgp",
+        "tunnels": [
+            {
+                "gateway_instance_index": 0,
+                "ha_role": "active",
+                "inner_remote_ip": "169.254.10.2",
+            },
+            {
+                "gateway_instance_index": 0,
+                "ha_role": "passive",
+                "inner_remote_ip": "169.254.11.2",
+            },
+        ],
+    }
+
+    def fake_run(cmd, capture_output, text, timeout):
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "routes": {
+                        "10.10.0.0/16": [
+                            {"nexthops": [{"ip": "169.254.10.2"}]},
+                        ],
+                        "10.11.0.0/16": [
+                            {"nexthops": [{"ip": "169.254.11.2"}]},
+                        ],
+                        "10.20.0.0/16": [
+                            {"nexthops": [{"ip": "169.254.20.2"}]},
+                        ],
+                    }
+                }
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    prefixes = route_manager._get_bgp_learned_routes(_three_vm_plan(), conn, local_cfg)
+
+    assert prefixes == ["10.10.0.0/16", "10.11.0.0/16"]
+    captured = capsys.readouterr().out
+    assert "Selected 2 connection-scoped BGP route(s)" in captured
+    assert "FRR table: 3 route(s)" in captured
 
 
 def test_list_remote_routes_processes_only_connections_owned_by_current_vm(

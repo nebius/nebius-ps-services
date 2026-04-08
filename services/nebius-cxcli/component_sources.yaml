@@ -8,150 +8,226 @@ shared:
   admin_ssh:
     user_name: ubuntu
 
-infra:
-  tf_modules:
-    # `group` is a UI grouping label used in selection lists and prompts.
-    # It is not passed to Terraform and does not affect Nebius resources.
-    - module: mk8s
-      portable_source: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mk8s?ref=main
-      local_source: ../../platform-infra/modules/mk8s
-      description: Managed Kubernetes baseline cluster module
-      group: Compute
-      kind: nebius.mk8s.cluster
-      aliases: [k8s, cluster, kubernetes]
-      enable: true
-      # `defaults` seeds runtime config values and fills them only when omitted.
-      # For Terraform modules, target `inputs.*` paths. Values can be literals
-      # or `shared.<path>` references.
+components:
+  infra:
+    mk8s:
+      source:
+        portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mk8s?ref=main
+        local: ../../platform-infra/modules/mk8s
+
+      ui:
+        title: Managed Kubernetes baseline cluster
+        group: Compute
+        enabled: true
+
+      resource_kind: nebius.mk8s.cluster
+
+      status:
+        name_input: cluster_name
+
+      validation: mk8s_cluster
+
       defaults:
         inputs.cpu_nodes_count: 2
         inputs.mk8s_cluster_public_endpoint: true
         inputs.kube_network_service_cidrs:
-        - /20
-      # `wizard_fields` is optional progressive-enhancement metadata.
-      # Generic modules should work without it. Use it only when provider-backed
-      # UX needs an explicit hint or override beyond convention-based inference.
-      wizard_fields:
+          - /20
+
+      wizard:
         inputs.cpu_nodes_platform:
           options:
             from: mk8s_compatible_platforms
-            filter: "^cpu-"
+            # Plain prefix match, not regex.
+            prefix: cpu-
+
         inputs.gpu_nodes_platform:
           options:
             from: mk8s_compatible_platforms
-            filter: "^gpu-"
-      # `outputs` exports stable aliases from this component to the CLI/runtime
-      # and to other components.
-      outputs:
-        tf_outputs: true
-      handoff:
-        cluster_id: cluster_id
-        access: inputs.mk8s_cluster_public_endpoint
-      # `status` tells the CLI how to poll Nebius readiness for the component's
-      # primary resource after provisioning.
-      status:
-        name_input: cluster_name
-    - module: managed-postgresql
-      portable_source: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/managed-postgresql?ref=main
-      local_source: ../../platform-infra/modules/managed-postgresql
-      description: Managed PostgreSQL database module
-      group: Storage
-      kind: nebius.msp.postgresql.cluster
-      aliases: [postgresql, postgres, msp]
-      enable: false
-      outputs:
-        tf_outputs: true
-    - module: sfs
-      portable_source: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/sfs?ref=main
-      local_source: ../../platform-infra/modules/sfs
-      description: Shared filesystem and CSI integration module
-      group: Storage
-      kind: nebius.compute.filesystem
-      aliases: [filesystem, fs, mounted]
-      enable: false
-      outputs:
-        tf_outputs: true
-    - module: object-storage
-      portable_source: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/object-storage?ref=main
-      local_source: ../../platform-infra/modules/object-storage
-      description: Object storage bucket module
-      group: Storage
-      kind: nebius.storage.bucket
-      aliases: [bucket, buckets]
-      enable: false
-      outputs:
-        tf_outputs: true
-    - module: mysterybox
-      portable_source: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mysterybox?ref=main
-      local_source: ../../platform-infra/modules/mysterybox
-      description: MysteryBox secrets module
-      group: Security
-      aliases: [secrets]
-      enable: false
-      outputs:
-        tf_outputs: true
-    - module: wireguard-jumphost
-      portable_source: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/wireguard-jumphost?ref=main
-      local_source: ../../platform-infra/modules/wireguard-jumphost
-      description: WireGuard jump host module
-      group: Network
-      aliases: [wireguard, wg]
-      enable: false
-      outputs:
-        tf_outputs: true
-      defaults:
-        inputs.ssh_user_name: shared.admin_ssh.user_name
-    - module: ssh-jumphost
-      portable_source: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/ssh-jumphost?ref=main
-      local_source: ../../platform-infra/modules/ssh-jumphost
-      description: SSH-only hardened jump host module
-      group: Security
-      aliases: [jump, host]
-      enable: false
-      outputs:
-        tf_outputs: true
+            # Plain prefix match, not regex.
+            prefix: gpu-
+
+        inputs.cpu_nodes_preset:
+          options:
+            from: compute_platform_presets
+            # Input path whose selected value drives this lookup.
+            depends_on: inputs.cpu_nodes_platform
+
+        inputs.gpu_nodes_preset:
+          options:
+            from: compute_platform_presets
+            depends_on: inputs.gpu_nodes_platform
+
+      runtime:
+        values:
+          # Exports a reusable runtime value from this component input.
+          # input.<path> resolves under inputs.<path> for infra components.
+          access: input.mk8s_cluster_public_endpoint
+
+        contracts:
+          cluster_access:
+            # Uses the auto-exported Terraform output named cluster_id.
+            cluster_id: cluster_id
+            # Uses the runtime value declared above.
+            access: access
+
+    managed-postgresql:
+      source:
+        portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/managed-postgresql?ref=main
+        local: ../../platform-infra/modules/managed-postgresql
+
+      ui:
+        title: Managed PostgreSQL database
+        group: Storage
+        enabled: false
+
+      resource_kind: nebius.msp.postgresql.cluster
+      validation: postgresql_cluster
+
+    sfs:
+      source:
+        portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/sfs?ref=main
+        local: ../../platform-infra/modules/sfs
+
+      ui:
+        title: Shared filesystem and CSI integration
+        group: Storage
+        enabled: false
+
+      resource_kind: nebius.compute.filesystem
+      validation: shared_filesystem
+
+    object-storage:
+      source:
+        portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/object-storage?ref=main
+        local: ../../platform-infra/modules/object-storage
+
+      ui:
+        title: Object storage bucket
+        group: Storage
+        enabled: false
+
+      resource_kind: nebius.storage.bucket
+
+    mysterybox:
+      source:
+        portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mysterybox?ref=main
+        local: ../../platform-infra/modules/mysterybox
+
+      ui:
+        title: MysteryBox secrets
+        group: Security
+        enabled: false
+
+      validation: mysterybox
+
+    wireguard-jumphost:
+      source:
+        portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/wireguard-jumphost?ref=main
+        local: ../../platform-infra/modules/wireguard-jumphost
+
+      ui:
+        title: WireGuard jump host
+        group: Network
+        enabled: false
+
+      validation: wireguard_jumphost
+
       defaults:
         inputs.ssh_user_name: shared.admin_ssh.user_name
 
-apps:
-  helm_charts:
-    - name: gateway-helm
-      repo: oci://docker.io/envoyproxy
-      version: 1.7.0
-      namespace: envoy-gateway-system
-      releasename: envoy-gateway
-      description: Envoy Gateway control plane
-      group: Platform
-      enable: false
-    - name: cert-manager
-      repo: oci://quay.io/jetstack/charts
-      version: v1.19.2
-      namespace: cert-manager
-      releasename: cert-manager
-      description: cert-manager for certificate automation
-      group: Platform
-      enable: false
-    - name: external-dns
-      repo: https://kubernetes-sigs.github.io/external-dns
-      version: 1.20.0
-      namespace: external-dns
-      releasename: external-dns
-      description: ExternalDNS controller
-      group: Platform
-      enable: false
-    - name: external-secrets
-      repo: https://charts.external-secrets.io
-      version: 2.0.1
-      namespace: external-secrets
-      releasename: external-secrets
-      description: External Secrets Operator
-      group: Platform
-      enable: false
-    - name: n8n
-      repo: oci://8gears.container-registry.com/library/n8n
-      version: 2.0.1
-      namespace: n8n
-      releasename: n8n
-      description: n8n is an extendable workflow automation tool
-      group: Workloads
-      enable: false
+    ssh-jumphost:
+      source:
+        portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/ssh-jumphost?ref=main
+        local: ../../platform-infra/modules/ssh-jumphost
+
+      ui:
+        title: SSH-only hardened jump host
+        group: Security
+        enabled: false
+
+      validation: ssh_jumphost
+
+      defaults:
+        inputs.ssh_user_name: shared.admin_ssh.user_name
+
+  apps:
+    gateway-helm:
+      source:
+        repo: oci://docker.io/envoyproxy
+        chart: gateway-helm
+        version: 1.7.0
+
+      ui:
+        title: Envoy Gateway control plane
+        group: Platform
+        enabled: false
+
+      release:
+        namespace: envoy-gateway-system
+        name: envoy-gateway
+
+      # Helm chart defaults are merged into apps.charts[].values when missing.
+      # Example:
+      # values.service.type: LoadBalancer
+      # values.deployment.replicas: 2
+      defaults: {}
+
+    cert-manager:
+      source:
+        repo: oci://quay.io/jetstack/charts
+        chart: cert-manager
+        version: v1.19.2
+
+      ui:
+        title: cert-manager for certificate automation
+        group: Platform
+        enabled: false
+
+      release:
+        namespace: cert-manager
+        name: cert-manager
+
+    external-dns:
+      source:
+        repo: https://kubernetes-sigs.github.io/external-dns
+        chart: external-dns
+        version: 1.20.0
+
+      ui:
+        title: ExternalDNS controller
+        group: Platform
+        enabled: false
+
+      release:
+        namespace: external-dns
+        name: external-dns
+
+    external-secrets:
+      source:
+        repo: https://charts.external-secrets.io
+        chart: external-secrets
+        version: 2.0.1
+
+      ui:
+        title: External Secrets Operator
+        group: Platform
+        enabled: false
+
+      release:
+        namespace: external-secrets
+        name: external-secrets
+
+    n8n:
+      source:
+        repo: oci://8gears.container-registry.com/library/n8n
+        chart: n8n
+        version: 2.0.1
+
+      ui:
+        title: n8n workflow automation
+        group: Workloads
+        enabled: false
+
+      release:
+        namespace: n8n
+        name: n8n

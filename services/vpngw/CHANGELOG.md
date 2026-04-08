@@ -14,6 +14,35 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [nebius-vpngw-v0.5.7] - 2026-04-08
+
+- Fixed `add-routes-local` safety checks and output:
+  - skip remote prefixes that overlap the target network's private pools before
+    the Nebius API rejects them
+  - sanitize inherited subnet status CIDRs against explicit CIDRs owned by
+    other subnets before matching route-table targets, to avoid the Nebius
+    inherited-pool display/API status bug
+  - only treat an existing route as satisfied when the destination CIDR also
+    points to the expected gateway allocation
+  - when rerunning without `--summarize`, prune broader `vpngw-*` summaries
+    after the exact desired routes under them are confirmed installed, so the
+    command does not leave both summarized and exact managed routes behind
+  - report connection-scoped BGP route counts instead of the raw FRR table size
+- Added `add-routes-local --swap-route-table`:
+  - builds a fresh custom route table per selected subnet
+  - copies preserved non-`vpngw-*` routes from the currently attached table
+  - rebuilds managed VPN routes from the current YAML before cutover
+  - validates the replacement table before reattaching the subnet
+  - requires explicit confirmation and writes rollback spec files plus exact
+    `nebius vpc subnet update --file ...` rollback commands
+  - updated live CLI `--help` text so operators see the validation-before-cutover
+    and rollback-command behavior directly in `add-routes-local --help`
+  - ignores local `.nebius-vpngw-rollbacks/` recovery artifacts and trims the
+    confirmation warning to the traffic-impact/rollback guidance
+- Clarified the `add-routes-local --summarize` documentation in `README.md`
+  and `doc/design.md` with plainer wording and concrete CIDR examples so the
+  exact merge behavior is easier to understand.
+
 ## [nebius-vpngw-v0.5.6] - 2026-04-07
 
 - Fixed BGP route scoping for multi-connection gateways: `list-routes-remote`

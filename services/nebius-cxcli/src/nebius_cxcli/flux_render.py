@@ -14,13 +14,15 @@ from .component_defaults import (
     set_component_path,
     shared_default_conflicts,
 )
+from .component_sources import component_input_binding_ref
 from .component_wiring import (
     _UNRESOLVED,
     component_entry_lookup,
     component_output_ref,
     input_binding_conflicts,
     output_lookup,
-    resolve_static_component_output,
+    resolve_component_output_value,
+    resolve_input_binding_source,
 )
 from .components import component_entries
 from .paths import ProjectPaths
@@ -195,11 +197,8 @@ def _configured_app_release_specs(
                             f"binding '{source_ref}' and must not be set explicitly"
                         )
                     for binding in entry.input_bindings:
+                        declared_source_ref = component_input_binding_ref(binding)
                         source_entry = all_entry_by_id.get(binding.source_component_id)
-                        source_ref = component_output_ref(
-                            binding.source_component_id,
-                            binding.source_output_name,
-                        )
                         if source_entry is None:
                             raise ValueError(
                                 f"apps chart '{entry_id}' input binding '{binding.target_path}' references "
@@ -209,13 +208,22 @@ def _configured_app_release_specs(
                         if source_output is None:
                             raise ValueError(
                                 f"apps chart '{entry_id}' input binding '{binding.target_path}' references "
-                                f"undeclared output '{source_ref}'"
+                                f"undeclared output '{declared_source_ref}'"
                             )
+                        _resolved_source_entry, resolved_source_row, source_instance_id = (
+                            resolve_input_binding_source(payload, binding=binding)
+                        )
+                        source_ref = (
+                            component_output_ref(source_instance_id, binding.source_output_name)
+                            if source_instance_id
+                            else declared_source_ref
+                        )
 
-                        static_value = resolve_static_component_output(
+                        static_value = resolve_component_output_value(
                             payload,
                             component_id=binding.source_component_id,
                             output_name=binding.source_output_name,
+                            instance_id=source_instance_id or binding.source_instance_id,
                         )
                         if static_value is not _UNRESOLVED:
                             set_component_path(chart_node, binding.target_path, static_value)

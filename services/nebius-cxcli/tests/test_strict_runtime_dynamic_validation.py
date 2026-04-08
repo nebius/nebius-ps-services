@@ -91,7 +91,6 @@ def test_strict_validation_requires_enabled_module_inputs(tmp_path: Path, monkey
         "nebius_cxcli.cli.module_required_variables",
         lambda _source: ("platform", "preset"),
     )
-    monkeypatch.setattr("nebius_cxcli.cli.provider_component_match_status", lambda _id: None)
     monkeypatch.setattr("nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: [])
 
     with pytest.raises(RuntimeError) as exc_info:
@@ -119,7 +118,6 @@ def test_strict_validation_checks_dynamic_custom_component_source(
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     config = load_config(config_path)
 
-    monkeypatch.setattr("nebius_cxcli.cli.provider_component_match_status", lambda _id: None)
     monkeypatch.setattr("nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: [])
 
     with pytest.raises(RuntimeError) as exc_info:
@@ -169,7 +167,6 @@ def test_strict_validation_requires_managed_postgresql_name_when_enabled(
         "nebius_cxcli.cli.module_required_variables",
         lambda _source: ("parent_id", "network_id"),
     )
-    monkeypatch.setattr("nebius_cxcli.cli.provider_component_match_status", lambda _id: None)
     monkeypatch.setattr("nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: [])
 
     with pytest.raises(RuntimeError) as exc_info:
@@ -202,7 +199,6 @@ def test_strict_validation_mk8s_cpu_shape_not_required_when_has_default(
         "nebius_cxcli.cli.module_required_variables",
         lambda _source: ("parent_id", "cluster_name", "subnet_id"),
     )
-    monkeypatch.setattr("nebius_cxcli.cli.provider_component_match_status", lambda _id: None)
     monkeypatch.setattr("nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: [])
 
     try:
@@ -232,7 +228,6 @@ def test_strict_validation_requires_object_storage_name_when_enabled(
         "nebius_cxcli.cli.module_required_variables",
         lambda _source: ("parent_id",),
     )
-    monkeypatch.setattr("nebius_cxcli.cli.provider_component_match_status", lambda _id: None)
     monkeypatch.setattr("nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: [])
 
     with pytest.raises(RuntimeError) as exc_info:
@@ -265,7 +260,6 @@ def test_strict_validation_ssh_jumphost_allowed_cidrs_not_required_when_has_defa
         "nebius_cxcli.cli.module_required_variables",
         lambda _source: ("parent_id", "region", "subnet_id", "name", "ssh_public_key"),
     )
-    monkeypatch.setattr("nebius_cxcli.cli.provider_component_match_status", lambda _id: None)
     monkeypatch.setattr("nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: [])
 
     try:
@@ -295,7 +289,6 @@ def test_strict_validation_mysterybox_secrets_not_required_when_has_default(
         "nebius_cxcli.cli.module_required_variables",
         lambda _source: ("parent_id",),
     )
-    monkeypatch.setattr("nebius_cxcli.cli.provider_component_match_status", lambda _id: None)
     monkeypatch.setattr("nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: [])
 
     try:

@@ -17,7 +17,6 @@ import nebius_cxcli.flux_ops as flux_ops
 from nebius_cxcli.component_sources import (
     ComponentOutput,
     Handoff,
-    HandoffField,
     SourceProfile,
     reset_component_sources_cache,
     set_component_sources_file_override,
@@ -1719,8 +1718,10 @@ def test_flux_install_manifest_url_uses_default_pinned_release(
                         "version": "v2.8.0",
                     }
                 },
-                "infra": {"tf_modules": []},
-                "apps": {"helm_charts": []},
+                "components": {
+                    "infra": {},
+                    "apps": {},
+                },
             },
             sort_keys=False,
         ),
@@ -2743,13 +2744,13 @@ def test_enabled_cluster_handoffs_normalizes_boolean_access_outputs(
         outputs=(
             ComponentOutput(
                 name="access",
-                kind="config",
+                kind="input",
                 source_path="inputs.mk8s_cluster_public_endpoint",
             ),
         ),
         handoff=Handoff(
-            cluster_id=HandoffField(kind="output_ref", value="cluster_id"),
-            access=HandoffField(kind="config_path", value="inputs.mk8s_cluster_public_endpoint"),
+            cluster_id="cluster_id",
+            access="access",
         ),
     )
     payload = {
@@ -3660,8 +3661,8 @@ def test_top_level_help_describes_global_component_sources_override() -> None:
     assert "--source-profile" in output
     assert "Defaults" in output
     assert "to portable." in output
-    assert "portable_source" in output
-    assert "local_source" in output
+    assert "source.portable" in output
+    assert "source.local" in output
 
 
 def test_auth_help_has_no_subcommand_layer() -> None:

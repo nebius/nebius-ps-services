@@ -4,10 +4,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from .component_sources import HandoffField
+from typing import Any
 
 from .component_defaults import (
     component_path_has_material_value,
@@ -15,6 +12,7 @@ from .component_defaults import (
     resolve_component_defaults,
 )
 from .component_instances import component_instance_id, component_type_id
+from .component_sources import ComponentInputBinding, component_input_binding_ref
 from .components import ComponentEntry, component_entries
 from .runtime_config import to_plain_data
 
@@ -44,7 +42,7 @@ def input_binding_conflicts(
             conflicts.append(
                 (
                     binding.target_path,
-                    component_output_ref(binding.source_component_id, binding.source_output_name),
+                    component_input_binding_ref(binding),
                 )
             )
     return tuple(conflicts)
@@ -147,7 +145,21 @@ def resolved_component_row(
     return entry, matched_rows[0] if matched_rows else None
 
 
-def resolve_static_component_output(
+def resolve_input_binding_source(
+    payload: Mapping[str, Any],
+    *,
+    binding: ComponentInputBinding,
+) -> tuple[ComponentEntry | None, dict[str, Any] | None, str]:
+    entry, row = resolved_component_row(
+        payload,
+        component_id=binding.source_component_id,
+        instance_id=binding.source_instance_id,
+    )
+    instance_id = component_instance_id(row) if row is not None else ""
+    return entry, row, instance_id
+
+
+def resolve_component_output_value(
     payload: Mapping[str, Any],
     *,
     component_id: str,
@@ -160,40 +172,14 @@ def resolve_static_component_output(
     output_spec = output_lookup(entry).get(output_name)
     if output_spec is None:
         return _UNRESOLVED
-    if output_spec.kind == "static":
-        return to_plain_data(output_spec.value)
-    return _UNRESOLVED
-
-
-def resolve_handoff_field_value(
-    payload: Mapping[str, Any],
-    *,
-    component_id: str,
-    handoff_field: HandoffField,
-    instance_id: str | None = None,
-) -> Any:
-    """Resolve a HandoffField value from the component's config row.
-
-    For ``kind == "config_path"``, reads the dotted path directly from the
-    component row.  For ``kind == "output_ref"``, falls back to the existing
-    ``resolve_static_component_output`` helper.
-    """
-    if handoff_field.kind == "config_path":
-        _entry, row = resolved_component_row(
-            payload, component_id=component_id, instance_id=instance_id,
-        )
-        if row is None:
-            return _UNRESOLVED
-        value = read_component_path(row, handoff_field.value)
+    if output_spec.kind == "input":
+        value = read_component_path(row, output_spec.source_path)
         if value is None:
             return _UNRESOLVED
         return to_plain_data(value)
-    return resolve_static_component_output(
-        payload,
-        component_id=component_id,
-        output_name=handoff_field.value,
-        instance_id=instance_id,
-    )
+    if output_spec.kind == "literal":
+        return to_plain_data(output_spec.value)
+    return _UNRESOLVED
 
 
 __all__ = [
@@ -205,7 +191,7 @@ __all__ = [
     "managed_input_binding_payload_paths",
     "managed_input_binding_paths",
     "output_lookup",
-    "resolve_handoff_field_value",
-    "resolve_static_component_output",
+    "resolve_component_output_value",
+    "resolve_input_binding_source",
     "resolved_component_row",
 ]

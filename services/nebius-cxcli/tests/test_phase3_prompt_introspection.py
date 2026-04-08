@@ -21,7 +21,6 @@ def test_required_leaf_names_for_custom_component(monkeypatch) -> None:
         scope="infra",
         config_path="infra.wireguard-jumphost",
         description="wg",
-        origin="custom",
         source="platform-infra/modules/wireguard-jumphost",
     )
     required = _required_leaf_names_for_entry(entry)
@@ -43,7 +42,6 @@ def test_prune_redundant_app_chart_defaults_removes_only_chart_default_copies(mo
         scope="apps",
         config_path="apps.workloads.demo_app",
         description="demo",
-        origin="helm",
     )
     payload = {
         "apps": {
@@ -97,7 +95,6 @@ def test_run_component_field_wizard_keeps_chart_defaults_virtual_on_stop(monkeyp
         scope="apps",
         config_path="apps.platform.gateway-helm",
         description="gateway",
-        origin="helm",
         group="platform",
         source="oci://docker.io/envoyproxy/gateway-helm",
         version="1.0.0",

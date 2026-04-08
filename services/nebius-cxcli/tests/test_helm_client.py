@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,6 +11,7 @@ from nebius_cxcli.helm_client import (
     HelmClient,
     _materialize_chart_dir,
     _resolve_show_ref,
+    _run_helm_show,
     chart_cli_contract_findings,
 )
 
@@ -99,6 +101,26 @@ def test_search_repo_skips_oci_sources(monkeypatch: pytest.MonkeyPatch) -> None:
     result = client.search_repo(chart_name="gateway-helm", chart_repo="oci://docker.io/envoyproxy")
     assert result == []
     assert invoked["value"] is False
+
+
+def test_run_helm_show_uses_configured_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed: dict[str, int] = {}
+
+    def _fake_run(*_args, **kwargs):  # type: ignore[no-untyped-def]
+        observed["timeout"] = kwargs["timeout"]
+        return SimpleNamespace(
+            returncode=0,
+            stdout="apiVersion: v2\nname: demo\nversion: 1.0.0\n",
+            stderr="",
+        )
+
+    monkeypatch.setenv("NEBIUS_CXCLI_HELM_TIMEOUT_SECONDS", "321")
+    monkeypatch.setattr("nebius_cxcli.helm_client.subprocess.run", _fake_run)
+
+    output = _run_helm_show("chart", "oci://docker.io/example/demo", version="1.0.0")
+
+    assert "apiVersion: v2" in output
+    assert observed["timeout"] == 321
 
 
 def test_materialize_chart_dir_uses_local_path_without_pull(tmp_path: Path) -> None:

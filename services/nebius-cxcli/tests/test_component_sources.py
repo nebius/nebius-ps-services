@@ -87,41 +87,68 @@ def _write_sources_file(
                         "version": "1.14.1",
                     },
                 },
-                "infra": {
-                    "tf_modules": [
-                        {
-                            "module": module_name,
-                            "portable_source": (
-                                "git::https://github.com/example/infra.git//modules/"
-                                f"{module_name}?ref=v1.2.3"
-                            ),
-                            "local_source": (
-                                f"platform-infra/modules/{module_name}"
-                                if local_source is None
-                                else local_source
-                            ),
-                            "description": f"{module_name} module",
-                            "enable": True,
+                "components": {
+                    "infra": {
+                        module_name: {
+                            "source": {
+                                "portable": (
+                                    "git::https://github.com/example/infra.git//modules/"
+                                    f"{module_name}?ref=v1.2.3"
+                                ),
+                                "local": (
+                                    f"platform-infra/modules/{module_name}"
+                                    if local_source is None
+                                    else local_source
+                                ),
+                            },
+                            "ui": {
+                                "title": f"{module_name} module",
+                                "enabled": True,
+                            },
                         }
-                    ]
-                },
-                "apps": {
-                    "helm_charts": [
-                        {
-                            "name": "demo-app",
-                            "repo": "https://example.invalid/charts",
-                            "version": "1.0.0",
-                            "namespace": "demo",
-                            "releasename": "demo-app",
-                            "enable": False,
+                    },
+                    "apps": {
+                        "demo-app": {
+                            "source": {
+                                "repo": "https://example.invalid/charts",
+                                "chart": "demo-app",
+                                "version": "1.0.0",
+                            },
+                            "release": {
+                                "namespace": "demo",
+                                "name": "demo-app",
+                            },
+                            "ui": {
+                                "enabled": False,
+                            },
                         }
-                    ],
+                    },
                 },
             },
             sort_keys=False,
         ),
         encoding="utf-8",
     )
+
+
+def _catalog(
+    *,
+    infra: dict[str, object] | None = None,
+    apps: dict[str, object] | None = None,
+    cli: dict[str, object] | None = None,
+    shared: dict[str, object] | None = None,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "components": {
+            "infra": infra or {},
+            "apps": apps or {},
+        }
+    }
+    if cli is not None:
+        payload["cli"] = cli
+    if shared is not None:
+        payload["shared"] = shared
+    return payload
 
 
 def _normalized_catalog_signature(path: Path) -> dict[str, object]:
@@ -210,8 +237,8 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(monkeypatch, t
     sources_file = tmp_path / "component-sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
-            {
-                "cli": {
+            _catalog(
+                cli={
                     "flux": {
                         "version": "v2.8.0",
                     },
@@ -219,75 +246,77 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(monkeypatch, t
                         "version": "1.14.1",
                     },
                 },
-                "shared": {
+                shared={
                     "admin_ssh": {
                         "user_name": "ubuntu",
                         "public_key": "ssh-ed25519 AAAA demo",
                     }
                 },
-                "infra": {
-                    "tf_modules": [
-                        {
-                            "module": "wireguard-jumphost",
-                            "portable_source": (
+                infra={
+                    "wireguard-jumphost": {
+                        "source": {
+                            "portable": (
                                 "git::https://github.com/example/infra.git//modules/"
                                 "wireguard-jumphost?ref=v1.2.3"
                             ),
-                            "local_source": "platform-infra/modules/wireguard-jumphost",
-                            "version": "1.2.3",
+                            "local": "platform-infra/modules/wireguard-jumphost",
+                        },
+                        "ui": {
+                            "title": "WireGuard jump host",
                             "group": "Network",
-                            "enable": True,
-                            "wizard_fields": {
-                                "inputs.subnet_id": {
-                                    "sources": [
-                                        {
-                                            "source": "provider",
-                                            "provider": "project_subnets",
-                                        }
-                                    ]
+                            "enabled": True,
+                        },
+                        "resource_kind": "nebius.compute.instance",
+                        "wizard": {
+                            "inputs.subnet_id": {
+                                "options": {
+                                    "from": "project_subnets",
+                                }
+                            }
+                        },
+                        "defaults": {
+                            "inputs.instance_count": 1,
+                            "inputs.ssh_user_name": "shared.admin_ssh.user_name",
+                        },
+                        "runtime": {
+                            "values": {
+                                "access": "external",
+                            },
+                            "contracts": {
+                                "cluster_access": {
+                                    "cluster_id": "cluster_id",
+                                    "access": "access",
                                 }
                             },
-                            "defaults": {
-                                "inputs.instance_count": 1,
-                                "inputs.ssh_user_name": "shared.admin_ssh.user_name",
-                            },
-                            "outputs": {
-                                "terraform": {
-                                    "cluster_id": "cluster_id",
-                                },
-                                "static": {
-                                    "access": "external",
-                                },
-                            },
-                            "handoff": {
-                                "cluster_id": "cluster_id",
-                                "access": "access",
-                            },
-                            "status": {
-                                "kind": "nebius.compute.instance",
-                                "parent_input": "parent_id",
-                                "name_input": "name",
-                            },
-                        }
-                    ]
+                        },
+                        "status": {
+                            "parent_input": "parent_id",
+                            "name_input": "name",
+                        },
+                    }
                 },
-                "apps": {
-                    "helm_charts": [
-                        {
-                            "name": "gateway-helm",
-                            "repo": "oci://docker.io/envoyproxy/gateway-helm",
+                apps={
+                    "gateway-helm": {
+                        "source": {
+                            "repo": "oci://docker.io/envoyproxy",
+                            "chart": "gateway-helm",
                             "version": "1.4.2",
+                        },
+                        "release": {
                             "namespace": "envoy-gateway-system",
-                            "releasename": "envoy-gateway",
+                            "name": "envoy-gateway",
+                        },
+                        "ui": {
+                            "title": "Envoy Gateway",
                             "group": "Platform",
-                            "enable": True,
-                            "defaults": {
-                                "values.replicaCount": 2,
-                            },
-                        }
-                    ],
+                            "enabled": True,
+                        },
+                        "defaults": {
+                            "values.replicaCount": 2,
+                        },
+                    }
                 },
-            },
+            ),
             sort_keys=False,
         ),
         encoding="utf-8",
@@ -314,17 +343,14 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(monkeypatch, t
         loaded.tf_modules[0].metadata_source
         == "git::https://github.com/example/infra.git//modules/wireguard-jumphost?ref=v1.2.3"
     )
-    assert loaded.tf_modules[0].version == "1.2.3"
+    assert loaded.tf_modules[0].description == "WireGuard jump host"
     assert loaded.tf_modules[0].group == "Network"
     assert loaded.tf_modules[0].enable is True
     assert loaded.tf_modules[0].wizard_fields == {
         "inputs.subnet_id": {
-            "sources": [
-                {
-                    "source": "provider",
-                    "provider": "project_subnets",
-                }
-            ]
+            "options": {
+                "from": "project_subnets",
+            }
         }
     }
     assert loaded.tf_modules[0].defaults[0].target_path == "inputs.instance_count"
@@ -333,22 +359,22 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(monkeypatch, t
     assert loaded.tf_modules[0].defaults[1].target_path == "inputs.ssh_user_name"
     assert loaded.tf_modules[0].defaults[1].kind == "shared"
     assert loaded.tf_modules[0].defaults[1].source_path == "shared.admin_ssh.user_name"
-    assert loaded.tf_modules[0].outputs[0].name == "cluster_id"
-    assert loaded.tf_modules[0].outputs[0].kind == "terraform_output"
-    assert loaded.tf_modules[0].outputs[0].source_path == "cluster_id"
-    assert loaded.tf_modules[0].outputs[1].name == "access"
-    assert loaded.tf_modules[0].outputs[1].kind == "static"
-    assert loaded.tf_modules[0].outputs[1].value == "external"
+    output_by_name = {output.name: output for output in loaded.tf_modules[0].outputs}
+    assert output_by_name["cluster_id"].kind == "terraform_output"
+    assert output_by_name["cluster_id"].source_path == "cluster_id"
+    assert output_by_name["access"].kind == "literal"
+    assert output_by_name["access"].value == "external"
     assert loaded.tf_modules[0].handoff is not None
-    assert loaded.tf_modules[0].handoff.cluster_id.value == "cluster_id"
-    assert loaded.tf_modules[0].handoff.access.value == "access"
+    assert loaded.tf_modules[0].handoff.cluster_id == "cluster_id"
+    assert loaded.tf_modules[0].handoff.access == "access"
     assert loaded.tf_modules[0].status is not None
     assert loaded.tf_modules[0].status.kind == "nebius.compute.instance"
     assert loaded.tf_modules[0].status.parent_input == "parent_id"
     assert loaded.tf_modules[0].status.name_input == "name"
 
     assert loaded.helm_charts[0].name == "gateway-helm"
-    assert loaded.helm_charts[0].repo == "oci://docker.io/envoyproxy/gateway-helm"
+    assert loaded.helm_charts[0].chart_name == "gateway-helm"
+    assert loaded.helm_charts[0].repo == "oci://docker.io/envoyproxy"
     assert loaded.helm_charts[0].namespace == "envoy-gateway-system"
     assert loaded.helm_charts[0].release_name == "envoy-gateway"
     assert loaded.helm_charts[0].group == "Platform"
@@ -361,47 +387,92 @@ def test_load_component_sources_rejects_release_name_alias_for_helm_chart(tmp_pa
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
-            {
-                "infra": {"tf_modules": []},
-                "apps": {
-                    "helm_charts": [
-                        {
-                            "name": "gateway-helm",
-                            "repo": "oci://docker.io/envoyproxy/gateway-helm",
+            _catalog(
+                apps={
+                    "gateway-helm": {
+                        "source": {
+                            "repo": "oci://docker.io/envoyproxy",
+                            "chart": "gateway-helm",
                             "version": "1.4.2",
+                        },
+                        "release": {
                             "namespace": "envoy-gateway-system",
                             "release-name": "envoy-gateway",
-                        }
-                    ]
-                },
-            },
+                        },
+                    }
+                }
+            ),
             sort_keys=False,
         ),
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="unsupported field\\(s\\): release-name"):
+    with pytest.raises(
+        ValueError,
+        match=r"components\.apps\.gateway-helm release has unsupported field\(s\): release-name",
+    ):
         load_component_sources(explicit=sources_file)
+
+
+def test_load_component_sources_parses_instance_qualified_input_binding(tmp_path: Path) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                infra={
+                    "mk8s": {
+                        "source": {
+                            "portable": "git::https://example.invalid/repo.git//mk8s?ref=v1.0.0",
+                        }
+                    }
+                },
+                apps={
+                    "demo-app": {
+                        "source": {
+                            "repo": "https://example.invalid/charts",
+                            "chart": "demo-app",
+                            "version": "1.0.0",
+                        },
+                        "release": {
+                            "namespace": "demo",
+                            "name": "demo-app",
+                        },
+                        "input": {
+                            "values.global.clusterId": "mk8s@mk8s-blue.cluster_id",
+                        },
+                    }
+                },
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_component_sources(explicit=sources_file)
+
+    binding = loaded.helm_charts[0].input_bindings[0]
+    assert binding.target_path == "values.global.clusterId"
+    assert binding.source_component_id == "mk8s"
+    assert binding.source_instance_id == "mk8s-blue"
+    assert binding.source_output_name == "cluster_id"
 
 
 def test_load_component_sources_rejects_invalid_status_watcher_block(tmp_path: Path) -> None:
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
-            {
-                "infra": {
-                    "tf_modules": [
-                        {
-                            "module": "managed-postgresql",
-                            "portable_source": "git::https://example.invalid/repo.git//managed-postgresql?ref=v1.0.0",
-                            "status": {
-                                "name_input": "name",
-                            },
-                        }
-                    ]
-                },
-                "apps": {"helm_charts": []},
-            },
+            _catalog(
+                infra={
+                    "managed-postgresql": {
+                        "source": {
+                            "portable": "git::https://example.invalid/repo.git//managed-postgresql?ref=v1.0.0",
+                        },
+                        "status": {
+                            "name_input": "name",
+                        },
+                    }
+                }
+            ),
             sort_keys=False,
         ),
         encoding="utf-8",
@@ -436,6 +507,33 @@ def test_load_component_sources_falls_back_to_bundled_default(monkeypatch, tmp_p
 
     loaded = load_component_sources()
     assert loaded.tf_modules[0].module == "bundled-mod"
+
+
+def test_runtime_values_reject_legacy_input_prefix(tmp_path: Path) -> None:
+    sources_file = tmp_path / "component-sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                infra={
+                    "mk8s": {
+                        "source": {
+                            "portable": "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3",
+                        },
+                        "runtime": {
+                            "values": {
+                                "access": "input.inputs.mk8s_cluster_public_endpoint",
+                            }
+                        },
+                    }
+                }
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="without the 'inputs\\.' prefix"):
+        load_component_sources(explicit=sources_file)
 
 
 def test_load_component_sources_falls_back_to_repo_default_catalog_when_bundled_missing(
@@ -497,13 +595,25 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         "inputs.cpu_nodes_platform": {
             "options": {
                 "from": "mk8s_compatible_platforms",
-                "filter": "^cpu-",
+                "args": {"platform_prefix": "cpu-"},
             }
         },
         "inputs.gpu_nodes_platform": {
             "options": {
                 "from": "mk8s_compatible_platforms",
-                "filter": "^gpu-",
+                "args": {"platform_prefix": "gpu-"},
+            }
+        },
+        "inputs.cpu_nodes_preset": {
+            "options": {
+                "from": "compute_platform_presets",
+                "args": {"platform_path": "inputs.cpu_nodes_platform"},
+            }
+        },
+        "inputs.gpu_nodes_preset": {
+            "options": {
+                "from": "compute_platform_presets",
+                "args": {"platform_path": "inputs.gpu_nodes_platform"},
             }
         }
     }
@@ -592,29 +702,27 @@ def test_load_component_sources_rejects_unsupported_config_bindings_field(
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
-            {
-                "cli": {
+            _catalog(
+                cli={
                     "flux": {
                         "version": "v2.8.0",
                     }
                 },
-                "infra": {
-                    "tf_modules": [
-                        {
-                            "module": "wireguard-jumphost",
-                            "portable_source": (
+                infra={
+                    "wireguard-jumphost": {
+                        "source": {
+                            "portable": (
                                 "git::https://github.com/example/infra.git//modules/"
                                 "wireguard-jumphost?ref=v1.2.3"
                             ),
-                            "local_source": "platform-infra/modules/wireguard-jumphost",
-                            "config_bindings": {
-                                "inputs.ssh_user_name": "shared.admin_ssh.user_name",
-                            },
-                        }
-                    ]
+                            "local": "platform-infra/modules/wireguard-jumphost",
+                        },
+                        "config_bindings": {
+                            "inputs.ssh_user_name": "shared.admin_ssh.user_name",
+                        },
+                    }
                 },
-                "apps": {"helm_charts": []},
-            },
+            ),
             sort_keys=False,
         ),
         encoding="utf-8",
@@ -635,15 +743,13 @@ def test_load_component_sources_rejects_invalid_flux_version(
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
-            {
-                "cli": {
+            _catalog(
+                cli={
                     "flux": {
                         "version": "latest",
                     }
-                },
-                "infra": {"tf_modules": []},
-                "apps": {"helm_charts": []},
-            },
+                }
+            ),
             sort_keys=False,
         ),
         encoding="utf-8",
@@ -664,15 +770,13 @@ def test_load_component_sources_rejects_invalid_terraform_version(
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
-            {
-                "cli": {
+            _catalog(
+                cli={
                     "terraform": {
                         "version": "latest",
                     }
-                },
-                "infra": {"tf_modules": []},
-                "apps": {"helm_charts": []},
-            },
+                }
+            ),
             sort_keys=False,
         ),
         encoding="utf-8",
@@ -694,7 +798,17 @@ def test_validate_sources_resolves_relative_local_module_path_from_component_sou
     module_dir.mkdir(parents=True, exist_ok=True)
     (module_dir / "main.tf").write_text('output "demo" { value = var.name }\n', encoding="utf-8")
     (module_dir / "variables.tf").write_text('variable "name" { type = string }\n', encoding="utf-8")
-    (module_dir / "outputs.tf").write_text('output "name" { value = var.name }\n', encoding="utf-8")
+    (module_dir / "outputs.tf").write_text(
+        '\n'.join(
+            [
+                'output "cluster_id" { value = "cluster-123" }',
+                'output "cluster_ca_certificate" { value = "ca-cert" }',
+                'output "instance_id" { value = "instance-123" }',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
     (module_dir / "versions.tf").write_text(
         '\n'.join(
             [
@@ -720,19 +834,19 @@ def test_validate_sources_resolves_relative_local_module_path_from_component_sou
     sources_file = catalog_dir / "component_sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
-            {
-                "infra": {
-                    "tf_modules": [
-                        {
-                            "module": "demo-module",
-                            "portable_source": "git::https://github.com/example/infra.git//modules/demo-module?ref=v1.2.3",
-                            "local_source": "./modules/demo-module",
-                            "enable": True,
-                        }
-                    ]
-                },
-                "apps": {"helm_charts": []},
-            },
+            _catalog(
+                infra={
+                    "demo-module": {
+                        "source": {
+                            "portable": "git::https://github.com/example/infra.git//modules/demo-module?ref=v1.2.3",
+                            "local": "./modules/demo-module",
+                        },
+                        "ui": {
+                            "enabled": True,
+                        },
+                    }
+                }
+            ),
             sort_keys=False,
         ),
         encoding="utf-8",
@@ -757,7 +871,17 @@ def test_validate_sources_accepts_absolute_local_module_path(monkeypatch, tmp_pa
     module_dir.mkdir(parents=True, exist_ok=True)
     (module_dir / "main.tf").write_text('output "demo" { value = var.name }\n', encoding="utf-8")
     (module_dir / "variables.tf").write_text('variable "name" { type = string }\n', encoding="utf-8")
-    (module_dir / "outputs.tf").write_text('output "name" { value = var.name }\n', encoding="utf-8")
+    (module_dir / "outputs.tf").write_text(
+        '\n'.join(
+            [
+                'output "cluster_id" { value = "cluster-123" }',
+                'output "cluster_ca_certificate" { value = "ca-cert" }',
+                'output "instance_id" { value = "instance-123" }',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
     (module_dir / "versions.tf").write_text(
         '\n'.join(
             [
@@ -783,19 +907,19 @@ def test_validate_sources_accepts_absolute_local_module_path(monkeypatch, tmp_pa
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
-            {
-                "infra": {
-                    "tf_modules": [
-                        {
-                            "module": "demo-module",
-                            "portable_source": "git::https://github.com/example/infra.git//modules/demo-module?ref=v1.2.3",
-                            "local_source": str(module_dir),
-                            "enable": True,
-                        }
-                    ]
-                },
-                "apps": {"helm_charts": []},
-            },
+            _catalog(
+                infra={
+                    "demo-module": {
+                        "source": {
+                            "portable": "git::https://github.com/example/infra.git//modules/demo-module?ref=v1.2.3",
+                            "local": str(module_dir),
+                        },
+                        "ui": {
+                            "enabled": True,
+                        },
+                    }
+                }
+            ),
             sort_keys=False,
         ),
         encoding="utf-8",
@@ -835,19 +959,19 @@ def test_validate_sources_reports_module_contract_issues_for_missing_versions_an
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
-            {
-                "infra": {
-                    "tf_modules": [
-                        {
-                            "module": "demo-module",
-                            "portable_source": "git::https://github.com/example/infra.git//modules/demo-module?ref=v1.2.3",
-                            "local_source": str(module_dir),
-                            "enable": True,
-                        }
-                    ]
-                },
-                "apps": {"helm_charts": []},
-            },
+            _catalog(
+                infra={
+                    "demo-module": {
+                        "source": {
+                            "portable": "git::https://github.com/example/infra.git//modules/demo-module?ref=v1.2.3",
+                            "local": str(module_dir),
+                        },
+                        "ui": {
+                            "enabled": True,
+                        },
+                    }
+                }
+            ),
             sort_keys=False,
         ),
         encoding="utf-8",
@@ -872,19 +996,20 @@ def test_validate_sources_reports_chart_contract_findings(
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
-            {
-                "infra": {"tf_modules": []},
-                "apps": {
-                    "helm_charts": [
-                        {
-                            "name": "gateway-helm",
-                            "repo": "oci://docker.io/envoyproxy/gateway-helm",
+            _catalog(
+                apps={
+                    "gateway-helm": {
+                        "source": {
+                            "repo": "oci://docker.io/envoyproxy",
+                            "chart": "gateway-helm",
                             "version": "1.4.2",
-                            "enable": True,
-                        }
-                    ]
-                },
-            },
+                        },
+                        "ui": {
+                            "enabled": True,
+                        },
+                    }
+                }
+            ),
             sort_keys=False,
         ),
         encoding="utf-8",
@@ -917,18 +1042,18 @@ def test_validate_sources_rejects_https_git_repo_module_source_without_git_prefi
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
-            {
-                "infra": {
-                    "tf_modules": [
-                        {
-                            "module": "demo-module",
-                            "portable_source": "https://github.com/example/platform-modules.git//modules/demo?ref=v1.2.3",
-                            "enable": True,
-                        }
-                    ]
-                },
-                "apps": {"helm_charts": []},
-            },
+            _catalog(
+                infra={
+                    "demo-module": {
+                        "source": {
+                            "portable": "https://github.com/example/platform-modules.git//modules/demo?ref=v1.2.3",
+                        },
+                        "ui": {
+                            "enabled": True,
+                        },
+                    }
+                }
+            ),
             sort_keys=False,
         ),
         encoding="utf-8",
@@ -951,18 +1076,18 @@ def test_validate_sources_rejects_registry_style_module_source(
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
-            {
-                "infra": {
-                    "tf_modules": [
-                        {
-                            "module": "demo-module",
-                            "portable_source": "app.terraform.io/example/network/nebius",
-                            "enable": True,
-                        }
-                    ]
-                },
-                "apps": {"helm_charts": []},
-            },
+            _catalog(
+                infra={
+                    "demo-module": {
+                        "source": {
+                            "portable": "app.terraform.io/example/network/nebius",
+                        },
+                        "ui": {
+                            "enabled": True,
+                        },
+                    }
+                }
+            ),
             sort_keys=False,
         ),
         encoding="utf-8",
@@ -984,19 +1109,20 @@ def test_validate_sources_accepts_github_tree_chart_repo(
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
-            {
-                "infra": {"tf_modules": []},
-                "apps": {
-                    "helm_charts": [
-                        {
-                            "name": "n8n",
+            _catalog(
+                apps={
+                    "n8n": {
+                        "source": {
                             "repo": "https://github.com/example/charts/tree/main/charts/n8n",
+                            "chart": "n8n",
                             "version": "1.2.3",
-                            "enable": True,
-                        }
-                    ]
-                },
-            },
+                        },
+                        "ui": {
+                            "enabled": True,
+                        },
+                    }
+                }
+            ),
             sort_keys=False,
         ),
         encoding="utf-8",
@@ -1030,19 +1156,20 @@ def test_validate_sources_fails_when_helm_is_required_but_unavailable(
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
-            {
-                "infra": {"tf_modules": []},
-                "apps": {
-                    "helm_charts": [
-                        {
-                            "name": "gateway-helm",
-                            "repo": "oci://docker.io/envoyproxy/gateway-helm",
+            _catalog(
+                apps={
+                    "gateway-helm": {
+                        "source": {
+                            "repo": "oci://docker.io/envoyproxy",
+                            "chart": "gateway-helm",
                             "version": "1.4.2",
-                            "enable": True,
-                        }
-                    ]
-                },
-            },
+                        },
+                        "ui": {
+                            "enabled": True,
+                        },
+                    }
+                }
+            ),
             sort_keys=False,
         ),
         encoding="utf-8",

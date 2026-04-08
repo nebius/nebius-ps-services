@@ -16,8 +16,8 @@ Architecture rationale:
 - `config.yaml` is the operator-facing orchestration contract, while Terraform modules and Helm charts are the provisioning contracts.
 - Terraform modules are used for infra because they provide desired-state planning, apply/destroy behavior, state/locking, reusable variable/output interfaces, and portable generated artifacts; the Nebius SDK is used for dynamic discovery, validation, status polling, and guard rails rather than replacing Terraform as the reconciler.
 - Helm charts are used for apps because they preserve the native app deployment contract and keep workloads cluster-agnostic while Flux/Helm remain the runtime owners of app reconciliation.
-- Component UX follows a progressive-enhancement model: generic Terraform modules and Helm charts should work with zero extra mapping, convention-friendly fields get better dynamic UX automatically, and optional `wizard_fields` metadata is reserved for advanced integration or ambiguous cases.
-- Terraform output aliases and `handoff` aliases are treated as a stable interface once the CLI, generated manifests, deploy/bootstrap flows, or app bindings consume them. Renaming or changing one is a breaking contract change, not an internal refactor.
+- Component UX follows a progressive-enhancement model: generic Terraform modules and Helm charts should work with zero extra mapping, and optional `wizard` metadata is reserved for explicit Nebius-backed field choices or other advanced integration.
+- Terraform output aliases and infra `runtime.values` aliases are treated as a stable interface once the CLI, generated manifests, deploy/bootstrap flows, or app bindings consume them. Renaming or changing one is a breaking contract change, not an internal refactor.
 
 ## Table of Contents
 
@@ -82,20 +82,35 @@ Schema:
 
 - `cli.flux.version`: Flux controller install version used by local `deploy` when controllers are missing and by managed `flux bootstrap` CLI download
 - `cli.terraform.version`: Terraform CLI version used by the managed Terraform download path
-- `infra.tf_modules[]`: `module`, required `portable_source`, optional `local_source`, `version`, `group`, `enable`, optional `wizard_fields`, optional `defaults`, optional `outputs`, optional `input`, optional `handoff`
-- `apps.helm_charts[]`: `name`, `repo`, `version`, `namespace`, `releasename`, `group`, `enable`, optional `wizard_fields`, optional `defaults`, optional `outputs`, optional `input`
+- `components.infra.<component-id>`: `source.portable`, optional `source.local`, optional `ui`, optional `resource_kind`, optional `status`, optional `validation`, optional `defaults`, optional `wizard`, optional `runtime`, optional `input`
+- `components.apps.<component-id>`: `source.repo`, optional `source.chart`, optional `source.version`, optional `ui`, optional `release`, optional `defaults`, optional `input`
 
-`wizard_fields` is optional catalog metadata for advanced wizard behavior. Most modules should rely on Terraform variable or Helm values introspection alone; use `wizard_fields` only when you need to disambiguate provider-backed choices or add an explicit override beyond naming conventions.
+`wizard` is optional catalog metadata for advanced wizard behavior. Most modules should rely on Terraform variable or Helm values introspection alone; use `wizard` when a field needs explicit Nebius-backed choices or another catalog-defined override.
+
+`runtime` is only for infra components:
+
+- `runtime.values` declares reusable exported values for this component.
+- `runtime.values.<name>: output.<terraform-output>` exports a Terraform output after apply.
+- `runtime.values.<name>: input.<path>` exports a value from this component's own input path and resolves under `inputs.<path>`.
+- `runtime.values.<name>: <literal>` exports a literal YAML value.
+- `runtime.contracts.cluster_access` is the explicit kubeconfig/bootstrap contract used by local deploy and Flux commands.
+- `runtime.contracts.cluster_access.cluster_id` must name a Terraform-backed value declared under `runtime.values` or auto-exported from module outputs.
+- `runtime.contracts.cluster_access.access` must name an input-backed or literal value declared under `runtime.values`.
+
+`input` is the consumer-side binding block for both infra and apps:
+
+- `input.<target-path>: <component-id>.<runtime-value>`
+- `input.<target-path>: <component-id>@<instance-id>.<runtime-value>`
 
 Source profile selection:
 
-- `portable` is the default. It always uses `portable_source`.
-- `local` prefers `local_source` and falls back to `portable_source` when `local_source` is unset.
+- `portable` is the default. It always uses `source.portable`.
+- `local` prefers `source.local` and falls back to `source.portable` when `source.local` is unset.
 - Choose the active profile with the global CLI flag `--source-profile {portable|local}`. When omitted, the CLI defaults to `portable`.
 - Or set `NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE={portable|local}`.
-- For schema/output introspection, nebius-cxcli prefers a resolvable `local_source` when one exists, even while the active profile is `portable`. This keeps workstation/CI validation fast without changing the emitted portable module source addresses.
+- For schema/output introspection, nebius-cxcli prefers a resolvable `source.local` when one exists, even while the active profile is `portable`. This keeps workstation/CI validation fast without changing the emitted portable module source addresses.
 
-`apps.helm_charts[].repo` supports:
+`components.apps.<id>.source.repo` supports:
 
 - HTTP/S Helm repositories (must serve `index.yaml`)
 - OCI chart repositories (`oci://...`)
@@ -103,12 +118,12 @@ Source profile selection:
 
 Source requirements enforced by `validate-sources`:
 
-- Terraform modules (`infra.tf_modules[]`):
-  - `module` must be lowercase letters/digits/hyphens.
-  - `portable_source` is required.
-  - `local_source` is optional.
+- Terraform components (`components.infra.<id>`):
+  - `<component-id>` must be lowercase letters/digits/hyphens.
+  - `source.portable` is required.
+  - `source.local` is optional.
   - `validate-sources` validates the module source resolved by the active source profile.
-  - `local_source` may use a relative path (`./...`, `../...`, `../../...`) or an absolute filesystem path.
+  - `source.local` may use a relative path (`./...`, `../...`, `../../...`) or an absolute filesystem path.
   - Relative local paths are resolved from the active `component_sources.yaml` file location first.
   - The active local filesystem source must resolve to an existing directory.
   - Directory must contain at least one `*.tf` file.
@@ -121,24 +136,25 @@ Source requirements enforced by `validate-sources`:
     - relative local path
     - absolute local path
     - Git repo source address such as `git::https://github.com/org/repo.git//modules/mk8s?ref=v1.2.3`
-  - Local Terraform module sources are rendered as resolved local filesystem paths. If you need a portable or pinned remote ref, declare it in `portable_source`.
+  - Local Terraform module sources are rendered as resolved local filesystem paths. If you need a portable or pinned remote ref, declare it in `source.portable`.
   - Plain `http://` or `https://` module URLs are rejected. Use the Terraform Git source format instead.
   - Registry-style and `oci://` Terraform module sources are rejected.
-  - `outputs.tf_outputs: true` auto-exports every Terraform output exposed by the module under the same alias name.
-  - `outputs.terraform` exports or renames specific Terraform outputs (`<alias>: <terraform-output-name>`).
-  - `outputs.config` exports values from the component config row (`<alias>: <component-path>`).
-  - `outputs.static` exports literal YAML values (`<alias>: <literal-value>`).
-  - Every exported Terraform-backed alias must map to a real Terraform output exposed by the source module.
-  - If you provide a custom module behind a `handoff`-enabled component and plan to use `deploy` or CI kubeconfig bootstrap, that handoff must reference one of those declared Terraform-backed aliases.
-- Helm charts (`apps.helm_charts[]`):
-  - HTTP repo format: `repo` must be a Helm repo base URL, `repo/index.yaml` must be readable, chart must exist in `entries`, and configured version must exist.
-  - OCI format: `repo` must be direct OCI chart ref (`oci://.../<chart-name>`), basename must match chart `name`, and configured version must be a semantic version tag.
-  - GitHub tree format: `repo` may point at a chart directory in git (`https://github.com/<owner>/<repo>/tree/<ref>/<chart-path>`). Helm validates the chart from that path directly.
+  - All Terraform outputs exposed by the module are exported automatically under their normalized names.
+  - `runtime.values` may add named literal values or input-derived values on top of those auto-exported Terraform outputs.
+  - Every Terraform-backed runtime value must map to a real Terraform output exposed by the source module.
+  - If you provide a custom module behind `runtime.contracts.cluster_access` and plan to use `deploy` or CI kubeconfig bootstrap, `cluster_id` must resolve to one of those Terraform-backed runtime values.
+- App charts (`components.apps.<id>`):
+  - HTTP repo format: `source.repo` must be a Helm repo base URL, `repo/index.yaml` must be readable, chart must exist in `entries`, and configured version must exist.
+  - OCI format: `source.repo` must be an OCI repo prefix (`oci://...`), and `source.chart` supplies the chart name.
+  - GitHub tree format: `source.repo` may point at a chart directory in git (`https://github.com/<owner>/<repo>/tree/<ref>/<chart-path>`). Helm validates the chart from that path directly.
   - Helm chart sources are fail-fast validated with `helm show chart`; missing Helm, unreachable repos, bad refs, missing charts, and version mismatches are hard failures.
+  - Set `NEBIUS_CXCLI_HELM_TIMEOUT_SECONDS` to raise the Helm validation timeout for slow OCI registries or chart sources without changing the catalog.
   - `validate-sources` also materializes the resolved chart and checks the CLI-facing chart contract:
     - fails when `Chart.yaml`, `values.yaml`, or `templates/` are missing
     - fails when `Chart.yaml` is missing `apiVersion`, `name`, or `version`
     - warns when the chart is not on canonical Helm v2 metadata or when `README.md` is missing
+  - App `defaults` seed `values.*` when missing.
+  - `release.namespace` and `release.name` are the default Helm namespace and release name used by `create`.
 
 Resolution precedence:
 
@@ -184,34 +200,54 @@ cli:
   terraform:
     version: 1.14.1
 
-infra:
-  tf_modules:
-    - module: mk8s
-      portable_source: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mk8s?ref=main
-      local_source: ../../platform-infra/modules/mk8s
+components:
+  infra:
+    mk8s:
+      source:
+        portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mk8s?ref=main
+        local: ../../platform-infra/modules/mk8s
+      ui:
+        title: Managed Kubernetes baseline cluster
+        group: Compute
+        enabled: true
+      resource_kind: nebius.mk8s.cluster
+      validation: mk8s_cluster
+      status:
+        name_input: cluster_name
       defaults:
         inputs.cpu_nodes_count: 2
-      outputs:
-        tf_outputs: true
-        config:
-          access: inputs.mk8s_cluster_public_endpoint
-      handoff:
-        cluster_id: cluster_id
-        access: access
-    - module: shared-vpc
-      portable_source: git::https://github.com/example/platform-infra.git//modules/shared-vpc?ref=v1.2.3
+        inputs.mk8s_cluster_public_endpoint: true
+      wizard:
+        inputs.cpu_nodes_platform:
+          options:
+            from: mk8s_compatible_platforms
+            prefix: cpu-
+      runtime:
+        values:
+          access: input.mk8s_cluster_public_endpoint
+        contracts:
+          cluster_access:
+            cluster_id: cluster_id
+            access: access
 
-apps:
-  helm_charts:
-    - name: external-dns
-      repo: https://kubernetes-sigs.github.io/external-dns/
-      version: 1.18.0
-    - name: gateway-helm
-      repo: oci://docker.io/envoyproxy/gateway-helm
-      version: 1.4.2
-    - name: n8n
-      repo: https://github.com/example/charts/tree/main/charts/n8n
-      version: 1.2.3
+  apps:
+    external-dns:
+      source:
+        repo: https://kubernetes-sigs.github.io/external-dns
+        chart: external-dns
+        version: 1.18.0
+      release:
+        namespace: external-dns
+        name: external-dns
+
+    gateway-helm:
+      source:
+        repo: oci://docker.io/envoyproxy
+        chart: gateway-helm
+        version: 1.7.0
+      release:
+        namespace: envoy-gateway-system
+        name: envoy-gateway
 ```
 
 `cli.flux.version` is the catalog-controlled Flux controller version for local `deploy` and the managed Flux CLI download path.  
@@ -221,8 +257,8 @@ To upgrade either managed tool version, bump the value in the active `component_
 Portable build/release behavior:
 
 - `component_sources.yaml` is the only checked-in catalog.
-- Build/package steps bundle a portable view of that catalog into the wheel by stripping `local_source`.
-- CI/release workflows rewrite internal `portable_source` refs from `?ref=main` to the current commit or tag before publishing wheel or catalog assets.
+- Build/package steps bundle a portable view of that catalog into the wheel by stripping `source.local`.
+- CI/release workflows rewrite internal `source.portable` refs from `?ref=main` to the current commit or tag before publishing wheel or catalog assets.
 
 Recommended workflow:
 
@@ -256,23 +292,22 @@ Managed vs external local tools:
 
 The CLI checks those external prerequisites when the relevant command path needs them and fails fast with guidance if they are missing.
 
-`outputs` declares producer-side exports.  
-Supported export keys are `tf_outputs`, `terraform`, `config`, and `static`.  
 `defaults` declares source-defined target values. Literal values are seeded into component config at `create` time and reused at runtime when the target path is missing. Shared-derived values use `shared.<path>` and resolve from top-level `shared` in the active source catalog.  
-For Terraform modules, `defaults` targets must start with `inputs.`. For Helm charts, they must start with `values.`.  
-`input` declares consumer-side target paths wired from `<component-id>.<output-alias>`.  
+For Terraform components, `defaults` targets must start with `inputs.`. For app charts, they must start with `values.`.  
+`input` declares consumer-side target paths wired from `<component-id>.<runtime-value>` or `<component-id>@<instance-id>.<runtime-value>`.  
 `input` is reserved for component-output references only. Use `defaults` for literal values or shared-derived values.  
+Unqualified refs resolve only when exactly one enabled instance of the source component type matches; qualify the ref with `@<instance-id>` when multiple instances of the same type are enabled.  
 Shared-derived defaults are managed by the source catalog and must not be duplicated explicitly in `config.yaml`.
 Do not declare `shared` in `config.yaml`; shared values are catalog-only and configs with a root `shared` key are rejected.
 
-`handoff` is an infra-to-runtime orchestration contract.  
-It is declared once on the Terraform module source entry, not on every Helm chart.  
-`handoff.cluster_id` must reference a declared Terraform-backed `outputs` alias.  
-`handoff.access` must reference a declared config/static `outputs` alias that resolves to either an explicit access token (`external`/`internal`, `public`/`private`) or a boolean public-endpoint flag.  
-Generic exported values do not replace `handoff`; local deploy/bootstrap still needs an explicit runtime contract for kubeconfig setup.  
+`runtime.contracts.cluster_access` is the infra-to-runtime orchestration contract.  
+It is declared once on the infra component source entry, not on every Helm chart.  
+`cluster_id` must reference a declared Terraform-backed runtime value.  
+`access` must reference an input/literal runtime value that resolves to either an explicit access token (`external`/`internal`, `public`/`private`) or a boolean public-endpoint flag.  
+Generic runtime values do not replace `runtime.contracts.cluster_access`; local deploy/bootstrap still needs an explicit kubeconfig contract.  
 When enabled charts are deployed, the CLI uses that contract to read the rendered Terraform root output and prepare kubeconfig before Flux/kubectl work starts.
 
-For `apps.helm_charts[]`, `namespace` and `releasename` are defaults:
+For app source entries, `release.namespace` and `release.name` are defaults:
 
 - interactive create wizard prompts them for enabled apps
 - non-interactive create can override with:
@@ -287,7 +322,7 @@ Runtime config shape:
 - `client_info` does not include legacy `env` or `cluster_name` fields.
 - `infra.components[]`: `id`, `enabled`, `inputs`
 - `apps.charts[]`: `id`, `group`, `enabled`, `repo`, `version`, `namespace`, `release-name`, `values`
-- Source catalogs use `releasename`; project `config.yaml` uses `release-name`. Aliases such as `release-name` in `component_sources.yaml` or `release_name` in `config.yaml` are not supported.
+- Source catalogs use `release.name`; project `config.yaml` uses `release-name`. Alias keys are intentionally unsupported.
 - Static nested component configs (`infra.<component>.enabled`, `apps.<group>.<chart>.enabled`) are not supported.
 - Canonical project path: `<deployments-root>/projects/<client-name>--<tenant-id>/<project-id>/config.yaml`
 
@@ -342,11 +377,11 @@ Wizard field behavior:
 - Multiline Terraform defaults discovered from module `variables.tf` files, including map/object defaults, are parsed as full values in wizard mode instead of being truncated to the first line.
 - Source-backed infra `inputs.parent_id`/`inputs.project_id` default to `client_info.nebius.project_id` when those variables exist.
 - `component_sources.yaml` can declare top-level `shared` values and shared-derived `defaults` so components read shared values from the active source catalog instead of duplicating them under component `inputs` or chart `values`.
-- The bundled `mk8s` catalog entry defaults `inputs.mk8s_cluster_public_endpoint: true`, and the handoff contract now resolves access dynamically from that input. If you switch the control plane to private-only, local app operations still work, but only from a machine that already has private network reachability to the MK8s API endpoint.
+- The bundled `mk8s` catalog entry defaults `inputs.mk8s_cluster_public_endpoint: true`, and `runtime.contracts.cluster_access` now resolves access dynamically from that input. If you switch the control plane to private-only, local app operations still work, but only from a machine that already has private network reachability to the MK8s API endpoint.
 - The bundled `mk8s` catalog entry also defaults `inputs.kube_network_service_cidrs: ["/20"]`. Nebius treats an omitted MK8s service CIDR as `["/16"]`; on a single-pool `/16` subnet that can consume the whole pool and leave no address space for control-plane allocations, which looks like a long `PROVISIONING` stall.
 - The bundled `mk8s` catalog entry also defaults `inputs.cpu_nodes_count: 2`. That keeps the baseline cluster footprint explicit in `config.yaml` and editable in the wizard instead of relying on a hidden Terraform module default for CPU node-group size.
 - Fields behind a sibling `<prefix>_enabled` toggle, such as MK8s GPU settings behind `gpu_enabled`, stay hidden until that toggle is true.
-- Provider-backed option lists are inferred by field patterns and resolved live from Nebius APIs when available.
+- Provider-backed option lists come only from explicit `wizard` metadata and are resolved live from Nebius APIs when available.
 - If live provider choices are unavailable for a field, the CLI prints a field-specific warning immediately before that prompt and explains whether the next manual-input prompt is required or can be skipped with Enter.
 - Optional provider-backed fields now accept blank/skip answers as “leave unset” without revalidating that blank value against the live option list.
 - Helm chart default values discovered from the live chart are not copied into `config.yaml`; the app wizard can show them as prompt defaults, but only explicit overrides are written back.
@@ -368,12 +403,14 @@ shared:
   admin_ssh:
     user_name: ubuntu
 
-infra:
-  tf_modules:
-    - module: wireguard-jumphost
-      portable_source: git::https://github.com/example/platform-infra.git//modules/wireguard-jumphost?ref=v1.2.3
-      local_source: ../../platform-infra/modules/wireguard-jumphost
-      enable: false
+components:
+  infra:
+    wireguard-jumphost:
+      source:
+        portable: git::https://github.com/example/platform-infra.git//modules/wireguard-jumphost?ref=v1.2.3
+        local: ../../platform-infra/modules/wireguard-jumphost
+      ui:
+        enabled: false
       defaults:
         inputs.ssh_user_name: shared.admin_ssh.user_name
 ```
@@ -397,22 +434,25 @@ Catalog defaults example:
 
 ```yaml
 # component_sources.yaml
-infra:
-  tf_modules:
-    - module: mk8s
-      portable_source: git::https://github.com/example/platform-infra.git//modules/mk8s?ref=v1.2.3
-      local_source: ../../platform-infra/modules/mk8s
+components:
+  infra:
+    mk8s:
+      source:
+        portable: git::https://github.com/example/platform-infra.git//modules/mk8s?ref=v1.2.3
+        local: ../../platform-infra/modules/mk8s
       defaults:
         inputs.cluster_name: demo-cluster
         inputs.cpu_nodes_count: 3
 
-apps:
-  helm_charts:
-    - name: demo-app
-      repo: https://example.invalid/charts
-      version: 1.0.0
-      namespace: demo
-      releasename: demo-app
+  apps:
+    demo-app:
+      source:
+        repo: https://example.invalid/charts
+        chart: demo-app
+        version: 1.0.0
+      release:
+        namespace: demo
+        name: demo-app
       defaults:
         values.replicaCount: 2
         values.image.tag: stable
@@ -424,23 +464,25 @@ Component output binding example:
 
 ```yaml
 # component_sources.yaml
-infra:
-  tf_modules:
-    - module: mk8s
-      portable_source: git::https://github.com/example/platform-infra.git//modules/mk8s?ref=v1.2.3
-      local_source: ../../platform-infra/modules/mk8s
-      outputs:
-        tf_outputs: true
-        config:
-          access: inputs.mk8s_cluster_public_endpoint
+components:
+  infra:
+    mk8s:
+      source:
+        portable: git::https://github.com/example/platform-infra.git//modules/mk8s?ref=v1.2.3
+        local: ../../platform-infra/modules/mk8s
+      runtime:
+        values:
+          access: input.mk8s_cluster_public_endpoint
 
-apps:
-  helm_charts:
-    - name: demo-app
-      repo: https://example.invalid/charts
-      version: 1.0.0
-      namespace: demo
-      releasename: demo-app
+  apps:
+    demo-app:
+      source:
+        repo: https://example.invalid/charts
+        chart: demo-app
+        version: 1.0.0
+      release:
+        namespace: demo
+        name: demo-app
       input:
         values.global.clusterId: mk8s.cluster_id
         values.global.clusterAccess: mk8s.access
@@ -448,15 +490,14 @@ apps:
 
 This contract is fully catalog-driven:
 
-- producers declare exported aliases under `outputs`
+- producers declare exported aliases under `runtime.values`
 - consumers declare target paths under `input`
 - both producer and consumer must exist in `component_sources.yaml`
 - source component ids must be globally unique across `infra` and `apps`
 
 Resolution model:
 
-- `outputs.static` resolves immediately from the source catalog entry.
-- `outputs.config` resolves immediately from the source component config row.
+- `runtime.values` may resolve immediately from a literal or from an `input.<path>` reference in the source infra component.
 - Terraform-backed outputs render as native `module.<producer>.<output>` references for infra consumers.
 - Terraform-backed outputs for app consumers resolve from Terraform state. `deploy` and `flux bootstrap` handle that automatically after Terraform outputs exist.
 - Plain `render` resolves Terraform-backed app bindings only when prior Terraform state already exists. Otherwise it fails fast with guidance instead of emitting partial values.
@@ -496,7 +537,7 @@ For Flux/GitOps, the important safety boundary is Git history, not the local ren
 
 Sensitive per-project values such as jump-host SSH public keys belong in the private project `config.yaml`, not in the shipped public `component_sources.yaml`.
 
-Local `deploy`/`flux bootstrap` behavior when apps + a handoff-enabled cluster component are enabled:
+Local `deploy`/`flux bootstrap` behavior when apps + an infra component with `runtime.contracts.cluster_access` is enabled:
 
 - `deploy` now runs `terraform validate` after render and before apply.
 - When Terraform is not already in `PATH`, `deploy`, `terraform plan`, `terraform apply`, `terraform unlock`, and backend-backed Terraform output lookups use a managed Terraform CLI download pinned by `component_sources.yaml` `cli.terraform.version`. The binary is cached under the local nebius-cxcli cache and is not installed system-wide.
@@ -505,13 +546,13 @@ Local `deploy`/`flux bootstrap` behavior when apps + a handoff-enabled cluster c
 - If Terraform apply fails, the CLI exits with the Terraform error as the canonical failure and appends the last known merged Terraform/API status snapshot.
 - Remote state lock failures are called out separately: the CLI explains that Terraform never acquired the backend lock, so the run created nothing, and points at the stale `.tflock` object metadata when Terraform provides it.
 - When Nebius MK8s node-group status reports `ERROR` events, the merged status block includes those alerts. Known transient bootstrap warnings such as waiting for ProviderID registration or temporary `Ready=False` node conditions are shown as notes instead of alerts while the node group is still provisioning.
-- After apply, `deploy` reads the rendered Terraform output declared by `handoff.cluster_id` and configures a temporary kubeconfig before applying Flux manifests.
-- `handoff.access` is config-driven for the bundled `mk8s` component, so the CLI automatically selects the public or private control-plane endpoint based on `inputs.mk8s_cluster_public_endpoint` instead of assuming public access.
-- On non-CI local runs, that same cluster handoff also updates the user kubeconfig at `~/.kube/config` with a `nebius-cxcli` exec-based credential entry, so `kubectl` can be used against the target cluster after `deploy`, `flux apply`, or `flux bootstrap` without installing a separate Nebius CLI.
-- `destroy` and `flux destroy` still use the same MK8s handoff contract for temporary cluster access when app resources must be removed first, but they do not persist or switch the user's local `~/.kube/config`.
-- When the selected handoff endpoint is private, `deploy`, `flux apply`, `flux bootstrap`, `destroy`, and `flux destroy` require the current machine to already have a private network path to the MK8s API. The CLI does not hardcode or auto-provision that path; customer environments can satisfy it with VPNs, routed private networks, subnet routers, SSH/WireGuard tunnels, or by running the command from an in-network runner.
+- After apply, `deploy` reads the rendered Terraform output declared by `runtime.contracts.cluster_access.cluster_id` and configures a temporary kubeconfig before applying Flux manifests.
+- `runtime.contracts.cluster_access.access` is input-driven for the bundled `mk8s` component, so the CLI automatically selects the public or private control-plane endpoint based on `inputs.mk8s_cluster_public_endpoint` instead of assuming public access.
+- On non-CI local runs, that same cluster-access runtime contract also updates the user kubeconfig at `~/.kube/config` with a `nebius-cxcli` exec-based credential entry, so `kubectl` can be used against the target cluster after `deploy`, `flux apply`, or `flux bootstrap` without installing a separate Nebius CLI.
+- `destroy` and `flux destroy` still use the same MK8s runtime contract for temporary cluster access when app resources must be removed first, but they do not persist or switch the user's local `~/.kube/config`.
+- When the selected cluster-access endpoint is private, `deploy`, `flux apply`, `flux bootstrap`, `destroy`, and `flux destroy` require the current machine to already have a private network path to the MK8s API. The CLI does not hardcode or auto-provision that path; customer environments can satisfy it with VPNs, routed private networks, subnet routers, SSH/WireGuard tunnels, or by running the command from an in-network runner.
 - Before `deploy`, `flux apply`, or `flux bootstrap` starts Flux work against a handed-off MK8s cluster, the CLI first checks Kubernetes node readiness and only waits when the nodes are not `Ready` yet. When the cluster is already healthy, it proceeds to Flux work immediately instead of presenting that probe as a wait.
-- Once the cluster handoff is ready, the local Flux phase now keeps one continuous spinner alive and updates its message through cluster reachability, Flux API discovery, rendered manifest apply, and the final rendered-resource readiness wait so the command does not go visually idle between phases.
+- Once the cluster-access runtime contract is ready, the local Flux phase now keeps one continuous spinner alive and updates its message through cluster reachability, Flux API discovery, rendered manifest apply, and the final rendered-resource readiness wait so the command does not go visually idle between phases.
 - In non-interactive logs such as GitHub Actions, those same phase updates fall back to stable printed lines instead of transient spinner frames, so CI logs remain readable and do not depend on TTY animation support.
 - Generated Flux artifacts are treated as the deploy truth. If an app chart depends on Terraform-backed component outputs, you must rerender after the needed Terraform state exists before treating `generated/flux` as the final GitOps payload.
 - Flux render writes explicit Namespace manifests for chart target namespaces before namespaced `HelmRelease` resources, so local `kubectl apply -k generated/flux` does not fail with `namespaces "<name>" not found`.
@@ -528,7 +569,7 @@ Local `deploy`/`flux bootstrap` behavior when apps + a handoff-enabled cluster c
 - `flux apply` is safe to rerun sequentially with the same `generated/flux`: it applies the existing rendered manifests, skips Flux controller installation when controllers are already present, and waits for the rendered Flux resources to become `Ready`.
 - `flux bootstrap` auto-downloads a managed Flux CLI binary from the official Flux GitHub release for the catalog-pinned `cli.flux.version` when `flux` is not already in `PATH`. The binary is cached under the local nebius-cxcli cache and is not installed system-wide.
 - `flux bootstrap` resolves the GitHub repo slug from `GITHUB_REPOSITORY` when present, otherwise it falls back to the local git `origin` remote.
-- `flux bootstrap` uses the same handoff contract instead of hardcoding `mk8s_cluster_id` in CI workflow glue.
+- `flux bootstrap` uses the same runtime contract instead of hardcoding `mk8s_cluster_id` in CI workflow glue.
 - `flux bootstrap` only takes the reconcile path when the cluster already has both Flux controllers and the bootstrap Git objects `GitRepository/flux-system` plus `Kustomization/flux-system`. If controllers exist but those bootstrap objects do not, the CLI runs a real `flux bootstrap github ...` instead of a reconcile that would fail.
 - `flux bootstrap` is the GitOps path. It expects the rendered manifests to be committed and pushed to the watched GitHub repo/path before or immediately after bootstrap. If you want an immediate local cluster apply without depending on Git content yet, use `flux apply`.
 - Local kubeconfig persistence can be disabled explicitly with `NEBIUS_CXCLI_PERSIST_LOCAL_KUBECONFIG=false`. In CI it is skipped automatically.
@@ -712,8 +753,9 @@ nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
   - Generates or reconciles the customer GitHub Actions workflow, always reconciles GitHub email settings from local `email --setup`, and optionally bootstraps/syncs the required Nebius CI auth secrets. The generated workflow watches and deploys only `generated/**`.
   - The workflow file is CLI-managed. Re-running `bootstrap-ci` automatically reconciles `.github/workflows/nebius-deployments.yml` to the latest generated contract and is idempotent when no drift exists.
   - Generated workflows validate changed bundles with `nebius-cxcli validate-generated --portable` before Terraform plan/apply.
+  - Generated workflows also support manual `workflow_dispatch`. Manual runs switch discovery to `nebius-cxcli discover --all <scope>`, so every tracked project under the configured deployments scope is included even when there is no fresh git diff.
   - Generated workflows rely on the same generated-bundle CLI commands, which recreate ignored `generated/infra/terraform.auto.tfvars.json` from `generated/nebius-cxcli-manifest.json` before Terraform runs.
-  - Generated workflows do not install the standalone `nebius` CLI. MK8s kubeconfig handoff and token retrieval stay inside `nebius-cxcli` via the Nebius SDK.
+  - Generated workflows do not install the standalone `nebius` CLI. MK8s kubeconfig generation and token retrieval stay inside `nebius-cxcli` via the Nebius SDK.
   - Generated workflows install `kubectl` directly from upstream Kubernetes release binaries instead of `azure/setup-kubectl`, so they are not coupled to GitHub Actions Node runtime deprecations.
   - Generated workflows also keep the Python version in one env var and emit compact single-line discovery JSON into `GITHUB_OUTPUT` so matrix handoff stays deterministic.
   - The target `config.yaml` must already live inside the customer git repository because the workflow is written at that repo root under `.github/workflows/`.

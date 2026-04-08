@@ -167,7 +167,7 @@ This intelligent resolution handles the common case (default network or single V
 - **Policy separation:** Distinct egress controls without affecting application subnets
 - **Operational safety:** Safer VM recreations with reduced ARP/ND noise
 - **Capacity:** The gateway subnet can be pinned to an explicit private CIDR or auto-carved from the target VPC’s private pool. Auto-carving uses `gateway_group.subnet.prefix_length` (default `/24`). Explicit CIDRs can come from extended RFC1918 ranges after the network pool is updated.
-- **Control-plane safety:** `add-routes-local` and `list-routes-local` target workload subnets whose effective CIDRs overlap `gateway.local_prefixes`. For explicit-pool subnets this comes from `spec.ipv4_private_pools`; for inherited-pool subnets (`use_network_pools=true`) it falls back to the effective CIDRs exposed in subnet status so shared-pool workloads can still receive VPN routes.
+- **Control-plane safety:** `add-routes-local` and `list-routes-local` target workload subnets whose effective CIDRs overlap `gateway.local_prefixes`. For explicit-pool subnets this comes from `spec.ipv4_private_pools`. For inherited-pool subnets (`use_network_pools=true`), the CLI uses `status.ipv4_private_cidrs` only after subtracting CIDRs explicitly owned by other subnets in the same network. This is a defensive workaround for a Nebius console/API status bug where inherited subnets can appear to own CIDRs that were actually carved out for explicit-pool subnets.
 
 ### Public IP Allocations
 
@@ -1002,7 +1002,26 @@ from the gateway VM that owns each connection.
   - Filters out locally originated routes (next-hop 0.0.0.0)
   - Filters out overlapping local networks (from `gateway.local_prefixes`)
 - **Static mode**: Uses `remote_prefixes` from YAML configuration
-- `--summarize` collapses exact adjacent/covering prefixes per gateway next-hop allocation before writing Nebius VPC routes
+- Skips remote prefixes that overlap the target network's private pools before calling the VPC API
+- Sanitizes inherited subnet status CIDRs against explicit CIDRs owned by other subnets before matching `gateway.local_prefixes`
+- If the destination CIDR already exists in the route table with a different next-hop, warns and leaves that route unchanged
+- `--summarize` only merges routes when they already form an exact larger CIDR
+  block and use the same gateway next-hop allocation
+  - Example: `10.0.0.0/24` + `10.0.1.0/24` -> `10.0.0.0/23`
+  - It does not invent broader supernets when prefixes have gaps or different next-hops
+- A later `add-routes-local` run without `--summarize` reconciles back to exact
+  managed routes and prunes broader `vpngw-*` summaries only after the exact
+  routes under them are confirmed installed
+- `--swap-route-table` is an explicit blue/green mode:
+  - creates a fresh custom route table for each selected subnet
+  - copies only non-`vpngw-*` routes from the currently attached table
+  - rebuilds managed VPN routes from the current YAML on the fresh table
+  - validates preserved/manual routes and desired managed routes before cutover
+  - reattaches the subnet only after the replacement table passes validation
+  - writes a rollback spec file and prints a `nebius vpc subnet update --file ...`
+    command that restores the previously attached route table
+  - the live CLI `--help` text explicitly calls out the validation-before-cutover
+    and rollback-command behavior for operators
 - Finds workload subnets whose effective CIDRs match `gateway.local_prefixes`
 - Resolves private IP allocations per gateway VM via Compute API
 - Creates/reuses custom route tables for matching subnets
@@ -1011,9 +1030,13 @@ from the gateway VM that owns each connection.
 - Large learned route sets can still hit Nebius per-route-table limits even
   when the tenant-wide `vpc.route.count` visible in the console is below quota. The API error
   `vpc.routetable.max-route-count` means the target subnet route table is full.
-- Includes inherited parent-network subnets (`use_network_pools=true`) when their effective/status CIDRs overlap `gateway.local_prefixes`
+- Includes inherited parent-network subnets (`use_network_pools=true`) only after sanitizing status CIDRs against explicit CIDRs owned by other subnets
 - Creates route entries: destination = remote prefix, next-hop = the owning gateway VM's private IP
-- Implements idempotency (skips existing routes)
+- Implements idempotency (skips existing exact routes and cleans up prior
+  broader `vpngw-*` summaries when plain exact-route reconciliation is requested)
+- Requires explicit operator confirmation before `--swap-route-table` mutates any
+  subnet attachments, and warns about brief traffic impact if the replacement
+  table is incomplete or subnet reassignment converges slowly
 - Reconciles stale FRR/BGP advertisement state before reporting so `list-routes-local` and `add-routes-local` reflect the current YAML
 
 **2. List local routes (Nebius VPC → Remote):**
@@ -2029,6 +2052,16 @@ update_req = UpdateSubnetRequest(
 - `spec.ipv4_private_pools.use_network_pools` is `false` (or field is absent)
 - `spec.ipv4_private_pools.pools[0].cidrs[0].cidr` shows the expected `/24` CIDR
 - `status.ipv4_private_cidrs` contains the expected `/24` CIDR (what the console displays)
+
+### Inherited Pool Status Bug
+
+**Problem:** For subnets with `use_network_pools=true`, the Nebius console and API `status.ipv4_private_cidrs` can make an inherited subnet look like it owns CIDRs that were explicitly carved out for other subnets.
+
+**Observed impact:** If tooling trusts those raw status CIDRs, it can target the wrong workload subnet route table when matching `gateway.local_prefixes`.
+
+**Current mitigation in this project:** `add-routes-local` and `list-routes-local` sanitize inherited subnet status CIDRs by subtracting all explicit subnet CIDRs from other subnets in the same network before they match subnets to `gateway.local_prefixes`. This keeps shared-pool subnets usable while avoiding false positives from leaked explicit CIDRs in inherited subnet status.
+
+**Operational note:** Treat raw inherited `status.ipv4_private_cidrs` as advisory, not authoritative, when debugging routing decisions.
 
 ### Packet Duplication Issue (Historical - Resolved)
 
