@@ -29,6 +29,8 @@ from nebius_vpngw.config_loader import (
 from nebius_vpngw.deploy.vm_diff import ChangeType, VMDiff
 from nebius_vpngw.schema import HARole, RoutingMode
 
+HELP_ENV = {"COLUMNS": "120"}
+
 
 def test_load_local_config_drops_unset_gateway_group_network_id_placeholder(
     tmp_path: Path,
@@ -478,7 +480,7 @@ def test_each_cli_command_help_renders() -> None:
     command_names = [_registered_command_name(command) for command in app.registered_commands]
 
     for command_name in command_names:
-        result = runner.invoke(app, [command_name, "--help"])
+        result = runner.invoke(app, [command_name, "--help"], env=HELP_ENV)
         assert result.exit_code == 0, command_name
         assert "Usage:" in result.stdout
 
@@ -486,10 +488,10 @@ def test_each_cli_command_help_renders() -> None:
 def test_route_and_operator_help_mentions_multi_connection_behavior() -> None:
     runner = CliRunner()
 
-    list_remote_help = runner.invoke(app, ["list-routes-remote", "--help"])
-    add_routes_help = runner.invoke(app, ["add-routes-local", "--help"])
-    failover_help = runner.invoke(app, ["failover", "--help"])
-    restart_help = runner.invoke(app, ["restart-tunnel", "--help"])
+    list_remote_help = runner.invoke(app, ["list-routes-remote", "--help"], env=HELP_ENV)
+    add_routes_help = runner.invoke(app, ["add-routes-local", "--help"], env=HELP_ENV)
+    failover_help = runner.invoke(app, ["failover", "--help"], env=HELP_ENV)
+    restart_help = runner.invoke(app, ["restart-tunnel", "--help"], env=HELP_ENV)
 
     assert list_remote_help.exit_code == 0
     assert "owning gateway VM" in list_remote_help.stdout
