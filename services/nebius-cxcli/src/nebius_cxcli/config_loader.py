@@ -16,8 +16,7 @@ def validate_config(payload: dict[str, Any]) -> AttrDict:
     """Validate payload with runtime rules and wrap for attribute access."""
     if not is_dynamic_payload(payload):
         raise ValueError(
-            "config.yaml must use dynamic model with 'infra.components[]' and "
-            "'apps.charts[]'"
+            "config.yaml must use dynamic model with 'infra.components[]' and 'apps.charts[]'"
         )
     validate_dynamic_payload_structure(payload)
     validate_runtime_payload(payload)

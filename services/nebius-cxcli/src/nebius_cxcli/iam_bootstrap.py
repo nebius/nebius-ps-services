@@ -256,7 +256,9 @@ def _ensure_group(
     if group_id:
         return group_id, True
 
-    existing = groups.get_by_name(GetGroupByNameRequest(parent_id=project_id, name=group_name)).wait()
+    existing = groups.get_by_name(
+        GetGroupByNameRequest(parent_id=project_id, name=group_name)
+    ).wait()
     existing_id = getattr(getattr(existing, "metadata", None), "id", "")
     if existing_id:
         return existing_id, True

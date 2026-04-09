@@ -37,8 +37,7 @@ def to_dynamic_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Return dynamic payload copy. Static payloads are rejected."""
     if not is_dynamic_payload(payload):
         raise ValueError(
-            "config payload must use dynamic model with 'infra.components[]' and "
-            "'apps.charts[]'"
+            "config payload must use dynamic model with 'infra.components[]' and 'apps.charts[]'"
         )
     return _deep_copy(dict(payload))
 
@@ -47,8 +46,7 @@ def to_runtime_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Normalize payload into runtime shape expected by render/ops."""
     if not is_dynamic_payload(payload):
         raise ValueError(
-            "config payload must use dynamic model with 'infra.components[]' and "
-            "'apps.charts[]'"
+            "config payload must use dynamic model with 'infra.components[]' and 'apps.charts[]'"
         )
 
     dynamic_payload = _deep_copy(dict(payload))

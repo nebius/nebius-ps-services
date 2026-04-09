@@ -3,231 +3,153 @@ cli:
     version: v2.8.0
   terraform:
     version: 1.14.1
-
 shared:
   admin_ssh:
     user_name: ubuntu
-
 components:
   infra:
     mk8s:
       source:
         portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mk8s?ref=main
         local: ../../platform-infra/modules/mk8s
-
       ui:
         title: Managed Kubernetes baseline cluster
         group: Compute
         enabled: true
-
-      resource_kind: nebius.mk8s.cluster
-
       status:
+        kind: nebius.mk8s.cluster
         name_input: cluster_name
-
-      validation: mk8s_cluster
-
       defaults:
         inputs.cpu_nodes_count: 2
         inputs.mk8s_cluster_public_endpoint: true
         inputs.kube_network_service_cidrs:
           - /20
-
-      wizard:
-        inputs.cpu_nodes_platform:
-          options:
-            from: mk8s_compatible_platforms
-            # Plain prefix match, not regex.
-            prefix: cpu-
-
-        inputs.gpu_nodes_platform:
-          options:
-            from: mk8s_compatible_platforms
-            # Plain prefix match, not regex.
-            prefix: gpu-
-
-        inputs.cpu_nodes_preset:
-          options:
-            from: compute_platform_presets
-            # Input path whose selected value drives this lookup.
-            depends_on: inputs.cpu_nodes_platform
-
-        inputs.gpu_nodes_preset:
-          options:
-            from: compute_platform_presets
-            depends_on: inputs.gpu_nodes_platform
-
-      runtime:
-        values:
-          # Exports a reusable runtime value from this component input.
-          # input.<path> resolves under inputs.<path> for infra components.
-          access: input.mk8s_cluster_public_endpoint
-
-        contracts:
-          cluster_access:
-            # Uses the auto-exported Terraform output named cluster_id.
-            cluster_id: cluster_id
-            # Uses the runtime value declared above.
-            access: access
-
+      wizard_profile: mk8s
     managed-postgresql:
       source:
         portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/managed-postgresql?ref=main
         local: ../../platform-infra/modules/managed-postgresql
-
       ui:
         title: Managed PostgreSQL database
         group: Storage
         enabled: false
-
-      resource_kind: nebius.msp.postgresql.cluster
-      validation: postgresql_cluster
-
+      status:
+        kind: nebius.msp.postgresql.cluster
+      wizard_profile: managed-postgresql
     sfs:
       source:
         portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/sfs?ref=main
         local: ../../platform-infra/modules/sfs
-
       ui:
         title: Shared filesystem and CSI integration
         group: Storage
         enabled: false
-
-      resource_kind: nebius.compute.filesystem
-      validation: shared_filesystem
-
+      status:
+        kind: nebius.compute.filesystem
     object-storage:
       source:
         portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/object-storage?ref=main
         local: ../../platform-infra/modules/object-storage
-
       ui:
         title: Object storage bucket
         group: Storage
         enabled: false
-
-      resource_kind: nebius.storage.bucket
-
+      status:
+        kind: nebius.storage.bucket
+      wizard_profile: object-storage
     mysterybox:
       source:
         portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mysterybox?ref=main
         local: ../../platform-infra/modules/mysterybox
-
       ui:
         title: MysteryBox secrets
         group: Security
         enabled: false
-
-      validation: mysterybox
-
     wireguard-jumphost:
       source:
         portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/wireguard-jumphost?ref=main
         local: ../../platform-infra/modules/wireguard-jumphost
-
       ui:
         title: WireGuard jump host
         group: Network
         enabled: false
-
-      validation: wireguard_jumphost
-
+      wizard_profile: wireguard-jumphost
       defaults:
         inputs.ssh_user_name: shared.admin_ssh.user_name
-
     ssh-jumphost:
       source:
         portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/ssh-jumphost?ref=main
         local: ../../platform-infra/modules/ssh-jumphost
-
       ui:
         title: SSH-only hardened jump host
         group: Security
         enabled: false
-
-      validation: ssh_jumphost
-
+      wizard_profile: ssh-jumphost
       defaults:
         inputs.ssh_user_name: shared.admin_ssh.user_name
-
   apps:
     gateway-helm:
       source:
         repo: oci://docker.io/envoyproxy
         chart: gateway-helm
         version: 1.7.0
-
       ui:
         title: Envoy Gateway control plane
         group: Platform
         enabled: false
-
       release:
         namespace: envoy-gateway-system
         name: envoy-gateway
-
       # Helm chart defaults are merged into apps.charts[].values when missing.
       # Example:
       # values.service.type: LoadBalancer
       # values.deployment.replicas: 2
       defaults: {}
-
     cert-manager:
       source:
         repo: oci://quay.io/jetstack/charts
         chart: cert-manager
         version: v1.19.2
-
       ui:
         title: cert-manager for certificate automation
         group: Platform
         enabled: false
-
       release:
         namespace: cert-manager
         name: cert-manager
-
     external-dns:
       source:
         repo: https://kubernetes-sigs.github.io/external-dns
         chart: external-dns
         version: 1.20.0
-
       ui:
         title: ExternalDNS controller
         group: Platform
         enabled: false
-
       release:
         namespace: external-dns
         name: external-dns
-
     external-secrets:
       source:
         repo: https://charts.external-secrets.io
         chart: external-secrets
         version: 2.0.1
-
       ui:
         title: External Secrets Operator
         group: Platform
         enabled: false
-
       release:
         namespace: external-secrets
         name: external-secrets
-
     n8n:
       source:
         repo: oci://8gears.container-registry.com/library/n8n
         chart: n8n
         version: 2.0.1
-
       ui:
         title: n8n workflow automation
         group: Workloads
         enabled: false
-
       release:
         namespace: n8n
         name: n8n

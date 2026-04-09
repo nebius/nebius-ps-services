@@ -21,6 +21,11 @@ All notable changes to this repository will be documented in this file.
   them in a container-specific virtual environment, preserves Git metadata for
   monorepo subprojects, and best-effort opens a new Dev Containers window for
   the running container.
+- Added the `onboard-nbs-cxcli` Codex skill under `skills/` as the central
+  onboarding guide for Nebius Terraform modules that need to be wired into
+  `services/nebius-cxcli`, including the catalog-first workflow and the
+  optional code-owned layers for wizard/provider, runtime validation, status
+  polling, and cluster handoff behavior.
 - Added `nebius-cxcli component list`, `component add`, and `component remove`
   as the day-2 config-editing workflow for existing project `config.yaml`
   files, with interactive infra/apps selection and non-interactive CLI usage.

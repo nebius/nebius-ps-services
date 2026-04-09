@@ -160,9 +160,7 @@ def _run_helm_pull(ref: str, *, repo: str = "", version: str = "") -> Path:
     directories = [path for path in tmp_root.iterdir() if path.is_dir()]
     if len(directories) != 1:
         shutil.rmtree(tmp_root, ignore_errors=True)
-        raise RuntimeError(
-            f"helm pull did not materialize exactly one chart directory for '{ref}'"
-        )
+        raise RuntimeError(f"helm pull did not materialize exactly one chart directory for '{ref}'")
     return directories[0]
 
 
@@ -263,10 +261,13 @@ def chart_cli_contract_findings(
             if not templates_dir.exists():
                 issues.append(f"materialized chart is missing templates/ in {chart_dir}")
             elif not templates_dir.is_dir():
-                issues.append(f"materialized chart templates exists but is not a directory in {chart_dir}")
+                issues.append(
+                    f"materialized chart templates exists but is not a directory in {chart_dir}"
+                )
             else:
                 template_files = [
-                    path for path in templates_dir.rglob("*")
+                    path
+                    for path in templates_dir.rglob("*")
                     if path.is_file() and path.suffix.lower() in {".yaml", ".yml", ".tpl", ".txt"}
                 ]
                 if not template_files:
@@ -286,19 +287,25 @@ def chart_cli_contract_findings(
                     resolved_name = str(payload.get("name", "")).strip()
                     resolved_version = str(payload.get("version", "")).strip()
                     if not api_version:
-                        issues.append(f"materialized chart Chart.yaml is missing apiVersion in {chart_dir}")
+                        issues.append(
+                            f"materialized chart Chart.yaml is missing apiVersion in {chart_dir}"
+                        )
                     elif api_version != "v2":
                         warnings.append(
                             f"materialized chart Chart.yaml uses apiVersion '{api_version}' instead of canonical Helm v2 format in {chart_dir}"
                         )
                     if not resolved_name:
-                        issues.append(f"materialized chart Chart.yaml is missing name in {chart_dir}")
+                        issues.append(
+                            f"materialized chart Chart.yaml is missing name in {chart_dir}"
+                        )
                     elif resolved_name != chart_name:
                         issues.append(
                             f"materialized chart name '{resolved_name}' does not match configured chart name '{chart_name}'"
                         )
                     if not resolved_version:
-                        issues.append(f"materialized chart Chart.yaml is missing version in {chart_dir}")
+                        issues.append(
+                            f"materialized chart Chart.yaml is missing version in {chart_dir}"
+                        )
     except Exception as exc:
         return (f"could not materialize chart source via helm: {exc}",), ()
 

@@ -49,9 +49,7 @@ def test_local_managed_modules_do_not_expose_internal_enabled_switches() -> None
 
     managed_pg_specs = {item.name: item for item in module_variables(str(managed_pg_dir))}
     sfs_specs = {item.name: item for item in module_variables(str(sfs_dir))}
-    object_storage_specs = {
-        item.name: item for item in module_variables(str(object_storage_dir))
-    }
+    object_storage_specs = {item.name: item for item in module_variables(str(object_storage_dir))}
 
     assert "enabled" not in managed_pg_specs
     assert "enabled" not in sfs_specs
@@ -244,6 +242,187 @@ def test_wizard_prompts_required_and_optional_tf_variables_in_interactive_mode(
     assert "infra.components[0].inputs.optional_field" in prompted_paths
     assert prompt_type_hints["infra.components[0].inputs.required_field"] == "string"
     assert prompt_type_hints["infra.components[0].inputs.optional_field"] == "string"
+
+
+def test_wizard_declared_infra_field_does_not_warn_when_input_key_is_not_seeded(
+    monkeypatch,
+) -> None:
+    config_yaml = yaml.safe_dump(
+        {
+            "version": "v1",
+            "client_info": {
+                "client_name": "demo",
+                "nebius": {
+                    "tenant_id": "tenant-1",
+                    "project_id": "project-1",
+                    "region_id": "us-central1",
+                },
+                "notifications": {"email_enabled": True, "email": None},
+            },
+            "infra": {
+                "components": [
+                    {
+                        "id": "mk8s",
+                        "enabled": True,
+                        "source": "../../platform-infra/modules/mk8s",
+                        "inputs": {},
+                    }
+                ],
+            },
+            "apps": {"charts": []},
+        },
+        sort_keys=False,
+    )
+
+    entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="Managed Kubernetes",
+        source="../../platform-infra/modules/mk8s",
+        wizard_fields={
+            "inputs.cpu_nodes_platform": {
+                "options": {
+                    "from": "mk8s_compatible_platforms",
+                    "args": {"platform_prefix": "cpu-"},
+                }
+            }
+        },
+    )
+
+    monkeypatch.setattr("nebius_cxcli.cli.module_required_variables", lambda _source: ())
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_variables",
+        lambda _source: (
+            ModuleVariable(name="cpu_nodes_platform", required=False, type_hint="string"),
+        ),
+    )
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
+
+    rendered_messages: list[str] = []
+    prompted_paths: list[str] = []
+
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.console.print",
+        lambda *args, **_kwargs: rendered_messages.append(" ".join(str(arg) for arg in args)),
+    )
+
+    def _fake_prompt(
+        path_label: str,
+        current: object,
+        *,
+        choices=None,
+        type_hint=None,
+        required=False,
+    ) -> tuple[object, bool]:
+        _ = current, choices, type_hint, required
+        prompted_paths.append(path_label)
+        return "cpu-d3", False
+
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
+
+    updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=config_yaml,
+        selected_infra={"mk8s"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=None,
+    )
+
+    assert completed is True
+    assert prompted_paths.count("infra.components[0].inputs.cpu_nodes_platform") == 1
+    assert not any("Skipping wizard field" in message for message in rendered_messages)
+    payload = yaml.safe_load(updated_yaml)
+    assert payload["infra"]["components"][0]["inputs"]["cpu_nodes_platform"] == "cpu-d3"
+
+
+def test_wizard_declared_nested_app_value_path_is_prompted_and_created(
+    monkeypatch,
+) -> None:
+    config_yaml = yaml.safe_dump(
+        {
+            "version": "v1",
+            "client_info": {
+                "client_name": "demo",
+                "nebius": {
+                    "tenant_id": "tenant-1",
+                    "project_id": "project-1",
+                    "region_id": "us-central1",
+                },
+                "notifications": {"email_enabled": True, "email": None},
+            },
+            "infra": {"components": []},
+            "apps": {
+                "charts": [
+                    {
+                        "id": "demo-app",
+                        "instance_id": "demo-app",
+                        "enabled": True,
+                        "repo": "oci://docker.io/example/demo-app",
+                        "version": "1.0.0",
+                        "namespace": "demo",
+                        "release-name": "demo-app",
+                        "values": {},
+                    }
+                ]
+            },
+        },
+        sort_keys=False,
+    )
+
+    entry = ComponentEntry(
+        id="demo-app",
+        scope="apps",
+        config_path="apps.platform.demo-app",
+        description="Demo app",
+        chart_name="demo-app",
+        chart_repo="oci://docker.io/example/demo-app",
+        default_namespace="demo",
+        default_release_name="demo-app",
+        wizard_fields={
+            "values.image.tag": {},
+        },
+    )
+
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
+
+    rendered_messages: list[str] = []
+    prompted_paths: list[str] = []
+
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.console.print",
+        lambda *args, **_kwargs: rendered_messages.append(" ".join(str(arg) for arg in args)),
+    )
+
+    def _fake_prompt(
+        path_label: str,
+        current: object,
+        *,
+        choices=None,
+        type_hint=None,
+        required=False,
+    ) -> tuple[object, bool]:
+        _ = current, choices, type_hint, required
+        prompted_paths.append(path_label)
+        return "1.2.3", False
+
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
+
+    updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=config_yaml,
+        selected_infra=set(),
+        selected_apps={"demo-app"},
+        infra_entries=(),
+        app_entries=(entry,),
+        provider_lookup=None,
+    )
+
+    assert completed is True
+    assert prompted_paths.count("apps.charts[0].values.image.tag") == 1
+    assert not any("Skipping wizard field" in message for message in rendered_messages)
+    payload = yaml.safe_load(updated_yaml)
+    assert payload["apps"]["charts"][0]["values"] == {"image": {"tag": "1.2.3"}}
 
 
 def test_wizard_prompts_optional_complex_defaults_but_keeps_them_virtual(
@@ -457,9 +636,7 @@ def test_wizard_prompts_literal_component_defaults_for_custom_module_fields(
         config_path="infra.mk8s",
         description="Managed Kubernetes",
         source="../../platform-infra/modules/mk8s",
-        defaults=(
-            ComponentDefault(target_path="inputs.cpu_nodes_count", value=2, kind="literal"),
-        ),
+        defaults=(ComponentDefault(target_path="inputs.cpu_nodes_count", value=2, kind="literal"),),
     )
 
     monkeypatch.setattr(
@@ -639,6 +816,20 @@ def test_wizard_skips_dependent_fields_when_enabled_toggle_is_false(
         config_path="infra.mk8s",
         description="Managed Kubernetes",
         source="../../platform-infra/modules/mk8s",
+        wizard_fields={
+            "inputs.gpu_nodes_platform": {
+                "options": {
+                    "from": "mk8s_compatible_platforms",
+                    "args": {"platform_prefix": "gpu-"},
+                }
+            },
+            "inputs.gpu_nodes_preset": {
+                "options": {
+                    "from": "compute_platform_presets",
+                    "args": {"platform_path": "inputs.gpu_nodes_platform"},
+                }
+            },
+        },
     )
     monkeypatch.setattr(
         "nebius_cxcli.cli.module_required_variables",
@@ -699,6 +890,7 @@ def test_wizard_skips_dependent_fields_when_enabled_toggle_is_false(
     assert "infra.components[0].inputs.cluster_name" in prompted_paths
     assert "infra.components[0].inputs.gpu_enabled" in prompted_paths
     assert "infra.components[0].inputs.gpu_nodes_platform" not in prompted_paths
+    assert "infra.components[0].inputs.gpu_nodes_preset" not in prompted_paths
 
 
 def test_wizard_prompts_dependent_fields_when_enabled_toggle_is_true(
@@ -736,6 +928,20 @@ def test_wizard_prompts_dependent_fields_when_enabled_toggle_is_true(
         config_path="infra.mk8s",
         description="Managed Kubernetes",
         source="../../platform-infra/modules/mk8s",
+        wizard_fields={
+            "inputs.gpu_nodes_platform": {
+                "options": {
+                    "from": "mk8s_compatible_platforms",
+                    "args": {"platform_prefix": "gpu-"},
+                }
+            },
+            "inputs.gpu_nodes_preset": {
+                "options": {
+                    "from": "compute_platform_presets",
+                    "args": {"platform_path": "inputs.gpu_nodes_platform"},
+                }
+            },
+        },
     )
     monkeypatch.setattr(
         "nebius_cxcli.cli.module_required_variables",
@@ -793,3 +999,121 @@ def test_wizard_prompts_dependent_fields_when_enabled_toggle_is_true(
     assert completed is True
     assert "infra.components[0].inputs.gpu_enabled" in prompted_paths
     assert "infra.components[0].inputs.gpu_nodes_platform" in prompted_paths
+    assert "infra.components[0].inputs.gpu_nodes_preset" not in prompted_paths
+
+
+def test_wizard_prompts_gpu_preset_only_after_platform_is_selected(
+    monkeypatch,
+) -> None:
+    config_yaml = yaml.safe_dump(
+        {
+            "version": "v1",
+            "client_info": {
+                "client_name": "demo",
+                "nebius": {
+                    "tenant_id": "tenant-1",
+                    "project_id": "project-1",
+                    "region_id": "us-central1",
+                },
+                "notifications": {"email_enabled": True, "email": None},
+            },
+            "infra": {
+                "components": [
+                    {
+                        "id": "mk8s",
+                        "enabled": True,
+                        "source": "../../platform-infra/modules/mk8s",
+                        "inputs": {},
+                    }
+                ],
+            },
+            "apps": {"charts": []},
+        },
+        sort_keys=False,
+    )
+    entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="Managed Kubernetes",
+        source="../../platform-infra/modules/mk8s",
+        wizard_fields={
+            "inputs.gpu_nodes_platform": {
+                "options": {
+                    "from": "mk8s_compatible_platforms",
+                    "args": {"platform_prefix": "gpu-"},
+                }
+            },
+            "inputs.gpu_nodes_preset": {
+                "options": {
+                    "from": "compute_platform_presets",
+                    "args": {"platform_path": "inputs.gpu_nodes_platform"},
+                }
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_required_variables",
+        lambda _source: ("cluster_name",),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_variables",
+        lambda _source: (
+            ModuleVariable(name="cluster_name", required=True, type_hint="string"),
+            ModuleVariable(
+                name="gpu_enabled",
+                required=False,
+                type_hint="bool",
+                has_default=True,
+                default=False,
+            ),
+            ModuleVariable(
+                name="gpu_nodes_platform",
+                required=False,
+                type_hint="string",
+                has_default=True,
+                default="",
+            ),
+            ModuleVariable(
+                name="gpu_nodes_preset",
+                required=False,
+                type_hint="string",
+                has_default=True,
+                default="",
+            ),
+        ),
+    )
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
+
+    prompted_paths: list[str] = []
+
+    def _fake_prompt(
+        path_label: str,
+        current: object,
+        *,
+        choices=None,
+        type_hint=None,
+        required=False,
+    ) -> tuple[object, bool]:
+        _ = current, choices, type_hint, required
+        prompted_paths.append(path_label)
+        if path_label.endswith(".gpu_enabled"):
+            return True, False
+        if path_label.endswith(".gpu_nodes_platform"):
+            return "gpu-h100-sxm", False
+        return current, False
+
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
+
+    _updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=config_yaml,
+        selected_infra={"mk8s"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=None,
+    )
+
+    assert completed is True
+    assert "infra.components[0].inputs.gpu_nodes_platform" in prompted_paths
+    assert "infra.components[0].inputs.gpu_nodes_preset" in prompted_paths

@@ -137,7 +137,9 @@ def test_schema_rejects_unknown_root_key(tmp_path: Path) -> None:
 
 def test_schema_rejects_shared_root_key(tmp_path: Path) -> None:
     payload = _dynamic_payload()
-    payload["shared"] = {"admin_ssh": {"user_name": "ubuntu", "public_key": "ssh-ed25519 AAAA demo"}}
+    payload["shared"] = {
+        "admin_ssh": {"user_name": "ubuntu", "public_key": "ssh-ed25519 AAAA demo"}
+    }
 
     config_path = tmp_path / "config.yaml"
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")

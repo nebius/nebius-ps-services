@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .cluster_handoffs import Handoff
 from .component_defaults import (
     resolve_component_defaults,
     set_component_path,
@@ -17,7 +18,6 @@ from .component_defaults import (
 from .component_instances import component_instance_id, component_instance_label, component_type_id
 from .component_sources import (
     ComponentOutput,
-    Handoff,
     SourceProfile,
     component_input_binding_ref,
     component_output_root_name,
@@ -48,6 +48,7 @@ _PROVIDER_VAR_SA_ID = "nebius_service_account_id"
 _PROVIDER_VAR_AUTH_PUBLIC_KEY_ID = "nebius_auth_public_key_id"
 _PROVIDER_VAR_AUTH_PRIVATE_KEY_FILE = "nebius_auth_private_key_file"
 _PROVIDER_VAR_CREDENTIALS_FILE = "nebius_service_account_credentials_file"
+
 
 @dataclass(frozen=True)
 class _VariableBinding:
@@ -176,10 +177,7 @@ def _hcl_value(value: Any, *, indent: int = 2) -> str:
         for key in sorted(value.keys()):
             raw_key = str(key)
             map_key = raw_key if _is_hcl_identifier(raw_key) else json.dumps(raw_key)
-            lines.append(
-                " " * indent
-                + f"{map_key} = {_hcl_value(value[key], indent=indent + 2)}"
-            )
+            lines.append(" " * indent + f"{map_key} = {_hcl_value(value[key], indent=indent + 2)}")
         lines.append(" " * max(indent - 2, 0) + "}")
         return "\n".join(lines)
     return json.dumps(to_plain_data(value))
@@ -732,7 +730,7 @@ def _render_tfvars_json(plans: tuple[_ModulePlan, ...]) -> dict[str, Any]:
 def _handoff_output_name(plan: _ModulePlan) -> str:
     return component_output_root_name(
         plan.instance_id,
-        plan.handoff.cluster_id,
+        plan.handoff.cluster_id_output_name,
     )
 
 
@@ -747,10 +745,7 @@ def _render_outputs_tf(plans: tuple[_ModulePlan, ...]) -> str:
                 f"Exported output '{output.name}' from component "
                 f"'{component_instance_label(plan.component_id, plan.instance_id)}'"
             )
-            if (
-                plan.handoff is not None
-                and output.name == plan.handoff.cluster_id
-            ):
+            if plan.handoff is not None and output.name == plan.handoff.cluster_id_output_name:
                 description = "Cluster ID used for kubeconfig handoff during deploy/bootstrap flows"
             blocks.append(
                 "\n".join(
@@ -758,20 +753,16 @@ def _render_outputs_tf(plans: tuple[_ModulePlan, ...]) -> str:
                         f'output "{component_output_root_name(plan.instance_id, output.name)}" {{',
                         f"  description = {json.dumps(description)}",
                         f"  value       = module.{plan.module_name}.{output.source_path}",
-                        *(
-                            ["  sensitive   = true"]
-                            if output.sensitive
-                            else []
-                        ),
+                        *(["  sensitive   = true"] if output.sensitive else []),
                         "}",
                     ]
                 )
             )
-        if plan.handoff is not None and plan.handoff.cluster_id not in output_by_name:
+        if plan.handoff is not None and plan.handoff.cluster_id_output_name not in output_by_name:
             raise ValueError(
                 f"infra component '{component_instance_label(plan.component_id, plan.instance_id)}' "
-                "runtime.contracts.cluster_access.cluster_id "
-                f"'{plan.handoff.cluster_id}' is not declared under runtime.values"
+                "cluster handoff requires Terraform output "
+                f"'{plan.handoff.cluster_id_output_name}' to be exported by the module"
             )
     if not blocks:
         return "# No Terraform outputs were generated\n"

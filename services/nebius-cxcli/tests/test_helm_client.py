@@ -49,7 +49,9 @@ def test_resolve_show_ref_oci_repo_prefix_appends_chart_name() -> None:
     assert cleanup_dir is None
 
 
-def test_resolve_show_ref_http_repo_without_index_fails_fast(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_show_ref_http_repo_without_index_fails_fast(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr("nebius_cxcli.helm_client._repo_has_index", lambda _repo: False)
 
     with pytest.raises(RuntimeError, match="missing '/index.yaml'"):
@@ -126,7 +128,9 @@ def test_run_helm_show_uses_configured_timeout(monkeypatch: pytest.MonkeyPatch) 
 def test_materialize_chart_dir_uses_local_path_without_pull(tmp_path: Path) -> None:
     chart_dir = tmp_path / "demo-chart"
     chart_dir.mkdir()
-    (chart_dir / "Chart.yaml").write_text("apiVersion: v2\nname: demo\nversion: 1.0.0\n", encoding="utf-8")
+    (chart_dir / "Chart.yaml").write_text(
+        "apiVersion: v2\nname: demo\nversion: 1.0.0\n", encoding="utf-8"
+    )
 
     with _materialize_chart_dir(
         HelmChartReference(chart_name=str(chart_dir), chart_repo="", chart_version="")

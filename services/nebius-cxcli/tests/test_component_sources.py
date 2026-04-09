@@ -189,7 +189,9 @@ def test_component_sources_resolution_precedence(monkeypatch, tmp_path: Path) ->
     ):
         _write_sources_file(file_path, module_name=module_name)
 
-    monkeypatch.setattr("nebius_cxcli.component_sources.DEFAULT_COMPONENT_SOURCES_FILE", default_file)
+    monkeypatch.setattr(
+        "nebius_cxcli.component_sources.DEFAULT_COMPONENT_SOURCES_FILE", default_file
+    )
     monkeypatch.setattr("nebius_cxcli.component_sources.USER_COMPONENT_SOURCES_FILE", user_file)
     monkeypatch.setattr("nebius_cxcli.component_sources.GLOBAL_COMPONENT_SOURCES_FILE", global_file)
 
@@ -232,7 +234,9 @@ def test_component_sources_profile_resolution_precedence(monkeypatch: pytest.Mon
     assert resolve_component_sources_profile(explicit=SourceProfile.LOCAL) == SourceProfile.LOCAL
 
 
-def test_load_component_sources_reads_tf_modules_and_helm_entries(monkeypatch, tmp_path: Path) -> None:
+def test_load_component_sources_reads_tf_modules_and_helm_entries(
+    monkeypatch, tmp_path: Path
+) -> None:
     monkeypatch.chdir(tmp_path)
     sources_file = tmp_path / "component-sources.yaml"
     sources_file.write_text(
@@ -266,7 +270,6 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(monkeypatch, t
                             "group": "Network",
                             "enabled": True,
                         },
-                        "resource_kind": "nebius.compute.instance",
                         "wizard": {
                             "inputs.subnet_id": {
                                 "options": {
@@ -278,18 +281,8 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(monkeypatch, t
                             "inputs.instance_count": 1,
                             "inputs.ssh_user_name": "shared.admin_ssh.user_name",
                         },
-                        "runtime": {
-                            "values": {
-                                "access": "external",
-                            },
-                            "contracts": {
-                                "cluster_access": {
-                                    "cluster_id": "cluster_id",
-                                    "access": "access",
-                                }
-                            },
-                        },
                         "status": {
+                            "kind": "nebius.compute.instance",
                             "parent_input": "parent_id",
                             "name_input": "name",
                         },
@@ -346,6 +339,7 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(monkeypatch, t
     assert loaded.tf_modules[0].description == "WireGuard jump host"
     assert loaded.tf_modules[0].group == "Network"
     assert loaded.tf_modules[0].enable is True
+    assert loaded.tf_modules[0].validation_profile == "wireguard_jumphost"
     assert loaded.tf_modules[0].wizard_fields == {
         "inputs.subnet_id": {
             "options": {
@@ -362,11 +356,7 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(monkeypatch, t
     output_by_name = {output.name: output for output in loaded.tf_modules[0].outputs}
     assert output_by_name["cluster_id"].kind == "terraform_output"
     assert output_by_name["cluster_id"].source_path == "cluster_id"
-    assert output_by_name["access"].kind == "literal"
-    assert output_by_name["access"].value == "external"
-    assert loaded.tf_modules[0].handoff is not None
-    assert loaded.tf_modules[0].handoff.cluster_id == "cluster_id"
-    assert loaded.tf_modules[0].handoff.access == "access"
+    assert loaded.tf_modules[0].handoff is None
     assert loaded.tf_modules[0].status is not None
     assert loaded.tf_modules[0].status.kind == "nebius.compute.instance"
     assert loaded.tf_modules[0].status.parent_input == "parent_id"
@@ -381,6 +371,66 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(monkeypatch, t
     assert loaded.helm_charts[0].enable is True
     assert loaded.helm_charts[0].defaults[0].target_path == "values.replicaCount"
     assert loaded.helm_charts[0].defaults[0].value == 2
+
+
+def test_load_component_sources_adds_builtin_mk8s_handoff(tmp_path: Path) -> None:
+    sources_file = tmp_path / "component-sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                infra={
+                    "mk8s": {
+                        "source": {
+                            "portable": "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3",
+                        },
+                        "status": {
+                            "kind": "nebius.mk8s.cluster",
+                            "name_input": "cluster_name",
+                        },
+                    }
+                }
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_component_sources(explicit=sources_file)
+
+    output_by_name = {output.name: output for output in loaded.tf_modules[0].outputs}
+    assert output_by_name["cluster_id"].kind == "terraform_output"
+    assert output_by_name["cluster_id"].source_path == "cluster_id"
+    assert loaded.tf_modules[0].validation_profile == "mk8s_cluster"
+    assert loaded.tf_modules[0].handoff is not None
+    assert loaded.tf_modules[0].handoff.cluster_id_output_name == "cluster_id"
+    assert loaded.tf_modules[0].handoff.access_kind == "input"
+    assert loaded.tf_modules[0].handoff.access_source_path == "inputs.mk8s_cluster_public_endpoint"
+
+
+def test_load_component_sources_rejects_public_validation_field(tmp_path: Path) -> None:
+    sources_file = tmp_path / "component-sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                infra={
+                    "mk8s": {
+                        "source": {
+                            "portable": "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3",
+                        },
+                        "validation": "mk8s_cluster",
+                    }
+                }
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"components\.infra\.mk8s has unsupported field\(s\): validation",
+    ):
+        load_component_sources(explicit=sources_file)
 
 
 def test_load_component_sources_rejects_release_name_alias_for_helm_chart(tmp_path: Path) -> None:
@@ -482,15 +532,183 @@ def test_load_component_sources_rejects_invalid_status_watcher_block(tmp_path: P
         load_component_sources(explicit=sources_file)
 
 
+def test_load_component_sources_rejects_legacy_resource_kind_field(tmp_path: Path) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                infra={
+                    "managed-postgresql": {
+                        "source": {
+                            "portable": "git::https://example.invalid/repo.git//managed-postgresql?ref=v1.0.0",
+                        },
+                        "resource_kind": "nebius.msp.postgresql.cluster",
+                    }
+                }
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"components\.infra\.managed-postgresql has unsupported field\(s\): resource_kind",
+    ):
+        load_component_sources(explicit=sources_file)
+
+
+def test_load_component_sources_expands_builtin_wizard_profile(tmp_path: Path) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                infra={
+                    "managed-postgresql": {
+                        "source": {
+                            "portable": "git::https://example.invalid/repo.git//managed-postgresql?ref=v1.0.0",
+                        },
+                        "wizard_profile": "managed-postgresql",
+                    }
+                }
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_component_sources(explicit=sources_file)
+    module = loaded.tf_modules[0]
+
+    assert module.wizard_fields == {
+        "inputs.network_id": {
+            "options": {
+                "from": "project_networks",
+            }
+        },
+        "inputs.tier": {
+            "sources": [
+                {
+                    "source": "static",
+                    "values": ["small", "medium", "large"],
+                }
+            ]
+        },
+    }
+
+
+def test_load_component_sources_merges_profile_and_explicit_wizard_override(tmp_path: Path) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                infra={
+                    "managed-postgresql": {
+                        "source": {
+                            "portable": "git::https://example.invalid/repo.git//managed-postgresql?ref=v1.0.0",
+                        },
+                        "wizard_profile": "managed-postgresql",
+                        "wizard": {
+                            "inputs.network_id": {
+                                "options": {
+                                    "from": "project_networks",
+                                    "filter_regex": "^vpcnetwork-",
+                                }
+                            }
+                        },
+                    }
+                }
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_component_sources(explicit=sources_file)
+    module = loaded.tf_modules[0]
+
+    assert module.wizard_fields == {
+        "inputs.network_id": {
+            "options": {
+                "from": "project_networks",
+                "filter": "^vpcnetwork-",
+            }
+        },
+        "inputs.tier": {
+            "sources": [
+                {
+                    "source": "static",
+                    "values": ["small", "medium", "large"],
+                }
+            ]
+        },
+    }
+
+
+def test_load_component_sources_rejects_profile_name_that_does_not_match_component_id(
+    tmp_path: Path,
+) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                infra={
+                    "managed-postgresql": {
+                        "source": {
+                            "portable": "git::https://example.invalid/repo.git//managed-postgresql?ref=v1.0.0",
+                        },
+                        "wizard_profile": "mk8s",
+                    }
+                }
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="wizard_profile must match component id 'managed-postgresql' when set",
+    ):
+        load_component_sources(explicit=sources_file)
+
+
+def test_load_component_sources_rejects_unknown_wizard_profile(tmp_path: Path) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                infra={
+                    "managed-postgresql": {
+                        "source": {
+                            "portable": "git::https://example.invalid/repo.git//managed-postgresql?ref=v1.0.0",
+                        },
+                        "wizard_profile": "unknown-profile",
+                    }
+                }
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="wizard_profile 'unknown-profile' is unknown"):
+        load_component_sources(explicit=sources_file)
+
+
 def test_load_component_sources_falls_back_to_bundled_default(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     missing_default = tmp_path / "missing-default.yaml"
     missing_user = tmp_path / "missing-user.yaml"
     missing_global = tmp_path / "missing-global.yaml"
 
-    monkeypatch.setattr("nebius_cxcli.component_sources.DEFAULT_COMPONENT_SOURCES_FILE", missing_default)
+    monkeypatch.setattr(
+        "nebius_cxcli.component_sources.DEFAULT_COMPONENT_SOURCES_FILE", missing_default
+    )
     monkeypatch.setattr("nebius_cxcli.component_sources.USER_COMPONENT_SOURCES_FILE", missing_user)
-    monkeypatch.setattr("nebius_cxcli.component_sources.GLOBAL_COMPONENT_SOURCES_FILE", missing_global)
+    monkeypatch.setattr(
+        "nebius_cxcli.component_sources.GLOBAL_COMPONENT_SOURCES_FILE", missing_global
+    )
     monkeypatch.delenv("NEBIUS_CXCLI_COMPONENT_SOURCES_FILE", raising=False)
 
     bundled_dir = tmp_path / "nebius_cxcli"
@@ -509,7 +727,7 @@ def test_load_component_sources_falls_back_to_bundled_default(monkeypatch, tmp_p
     assert loaded.tf_modules[0].module == "bundled-mod"
 
 
-def test_runtime_values_reject_legacy_input_prefix(tmp_path: Path) -> None:
+def test_load_component_sources_rejects_runtime_block(tmp_path: Path) -> None:
     sources_file = tmp_path / "component-sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
@@ -521,8 +739,8 @@ def test_runtime_values_reject_legacy_input_prefix(tmp_path: Path) -> None:
                         },
                         "runtime": {
                             "values": {
-                                "access": "input.inputs.mk8s_cluster_public_endpoint",
-                            }
+                                "access": "external",
+                            },
                         },
                     }
                 }
@@ -532,7 +750,7 @@ def test_runtime_values_reject_legacy_input_prefix(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="without the 'inputs\\.' prefix"):
+    with pytest.raises(ValueError, match=r"components\.infra\.mk8s has unsupported field\(s\): runtime"):
         load_component_sources(explicit=sources_file)
 
 
@@ -545,9 +763,13 @@ def test_load_component_sources_falls_back_to_repo_default_catalog_when_bundled_
     missing_global = tmp_path / "missing-global.yaml"
     missing_prefix = tmp_path / "missing-prefix"
 
-    monkeypatch.setattr("nebius_cxcli.component_sources.DEFAULT_COMPONENT_SOURCES_FILE", default_file)
+    monkeypatch.setattr(
+        "nebius_cxcli.component_sources.DEFAULT_COMPONENT_SOURCES_FILE", default_file
+    )
     monkeypatch.setattr("nebius_cxcli.component_sources.USER_COMPONENT_SOURCES_FILE", missing_user)
-    monkeypatch.setattr("nebius_cxcli.component_sources.GLOBAL_COMPONENT_SOURCES_FILE", missing_global)
+    monkeypatch.setattr(
+        "nebius_cxcli.component_sources.GLOBAL_COMPONENT_SOURCES_FILE", missing_global
+    )
     monkeypatch.setattr(
         "nebius_cxcli.component_sources.importlib_resources.files",
         lambda _package: missing_prefix,
@@ -579,6 +801,7 @@ def test_bundled_object_storage_declares_bucket_status_watcher() -> None:
     )
     object_storage = next(item for item in loaded.tf_modules if item.module == "object-storage")
 
+    assert object_storage.validation_profile == ""
     assert object_storage.status is not None
     assert object_storage.status.kind == "nebius.storage.bucket"
     assert object_storage.status.parent_input == "parent_id"
@@ -592,6 +815,11 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
     mk8s = next(item for item in loaded.tf_modules if item.module == "mk8s")
 
     assert mk8s.wizard_fields == {
+        "inputs.subnet_id": {
+            "options": {
+                "from": "project_subnets",
+            }
+        },
         "inputs.cpu_nodes_platform": {
             "options": {
                 "from": "mk8s_compatible_platforms",
@@ -615,7 +843,102 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
                 "from": "compute_platform_presets",
                 "args": {"platform_path": "inputs.gpu_nodes_platform"},
             }
+        },
+    }
+
+
+def test_bundled_managed_postgresql_uses_wizard_profile() -> None:
+    loaded = load_component_sources(
+        explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml"
+    )
+    module = next(item for item in loaded.tf_modules if item.module == "managed-postgresql")
+
+    assert module.wizard_fields == {
+        "inputs.network_id": {
+            "options": {
+                "from": "project_networks",
+            }
+        },
+        "inputs.tier": {
+            "sources": [
+                {
+                    "source": "static",
+                    "values": ["small", "medium", "large"],
+                }
+            ]
+        },
+    }
+
+
+def test_bundled_jump_hosts_use_component_scoped_wizard_profiles() -> None:
+    loaded = load_component_sources(
+        explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml"
+    )
+
+    wireguard = next(item for item in loaded.tf_modules if item.module == "wireguard-jumphost")
+    ssh = next(item for item in loaded.tf_modules if item.module == "ssh-jumphost")
+
+    assert wireguard.wizard_fields == {
+        "inputs.subnet_id": {
+            "options": {
+                "from": "project_subnets",
+            }
+        },
+        "inputs.platform": {
+            "options": {
+                "from": "compute_platforms",
+            }
+        },
+        "inputs.preset": {
+            "options": {
+                "from": "compute_platform_presets",
+                "args": {"platform_path": "inputs.platform"},
+            }
         }
+    }
+    assert ssh.wizard_fields == {
+        "inputs.subnet_id": {
+            "options": {
+                "from": "project_subnets",
+            }
+        },
+        "inputs.platform": {
+            "options": {
+                "from": "compute_platforms",
+            }
+        },
+        "inputs.preset": {
+            "options": {
+                "from": "compute_platform_presets",
+                "args": {"platform_path": "inputs.platform"},
+            }
+        }
+    }
+
+
+def test_bundled_object_storage_uses_wizard_profile() -> None:
+    loaded = load_component_sources(
+        explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml"
+    )
+    module = next(item for item in loaded.tf_modules if item.module == "object-storage")
+
+    assert module.wizard_fields == {
+        "inputs.versioning_policy": {
+            "sources": [
+                {
+                    "source": "static",
+                    "values": ["DISABLED", "ENABLED", "SUSPENDED"],
+                }
+            ]
+        },
+        "inputs.object_audit_logging": {
+            "sources": [
+                {
+                    "source": "static",
+                    "values": ["NONE", "MUTATE_ONLY", "ALL"],
+                }
+            ]
+        },
     }
 
 
@@ -681,7 +1004,9 @@ def test_portable_profile_prefers_resolved_local_source_for_module_metadata(
 
 
 def test_shipped_catalogs_do_not_embed_jump_host_public_key_defaults() -> None:
-    loaded = load_component_sources(explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml")
+    loaded = load_component_sources(
+        explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml"
+    )
     for module_id in ("wireguard-jumphost", "ssh-jumphost"):
         module = next(item for item in loaded.tf_modules if item.module == module_id)
         default_targets = {default.target_path for default in module.defaults}
@@ -736,9 +1061,7 @@ def test_load_component_sources_rejects_unsupported_config_bindings_field(
         load_component_sources()
 
 
-def test_load_component_sources_rejects_invalid_flux_version(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_load_component_sources_rejects_invalid_flux_version(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
@@ -797,9 +1120,11 @@ def test_validate_sources_resolves_relative_local_module_path_from_component_sou
     module_dir = catalog_dir / "modules" / "demo-module"
     module_dir.mkdir(parents=True, exist_ok=True)
     (module_dir / "main.tf").write_text('output "demo" { value = var.name }\n', encoding="utf-8")
-    (module_dir / "variables.tf").write_text('variable "name" { type = string }\n', encoding="utf-8")
+    (module_dir / "variables.tf").write_text(
+        'variable "name" { type = string }\n', encoding="utf-8"
+    )
     (module_dir / "outputs.tf").write_text(
-        '\n'.join(
+        "\n".join(
             [
                 'output "cluster_id" { value = "cluster-123" }',
                 'output "cluster_ca_certificate" { value = "ca-cert" }',
@@ -810,7 +1135,7 @@ def test_validate_sources_resolves_relative_local_module_path_from_component_sou
         encoding="utf-8",
     )
     (module_dir / "versions.tf").write_text(
-        '\n'.join(
+        "\n".join(
             [
                 "terraform {",
                 '  required_version = ">= 1.10.0, < 2.0.0"',
@@ -870,9 +1195,11 @@ def test_validate_sources_accepts_absolute_local_module_path(monkeypatch, tmp_pa
     module_dir = tmp_path / "demo-module"
     module_dir.mkdir(parents=True, exist_ok=True)
     (module_dir / "main.tf").write_text('output "demo" { value = var.name }\n', encoding="utf-8")
-    (module_dir / "variables.tf").write_text('variable "name" { type = string }\n', encoding="utf-8")
+    (module_dir / "variables.tf").write_text(
+        'variable "name" { type = string }\n', encoding="utf-8"
+    )
     (module_dir / "outputs.tf").write_text(
-        '\n'.join(
+        "\n".join(
             [
                 'output "cluster_id" { value = "cluster-123" }',
                 'output "cluster_ca_certificate" { value = "ca-cert" }',
@@ -883,7 +1210,7 @@ def test_validate_sources_accepts_absolute_local_module_path(monkeypatch, tmp_pa
         encoding="utf-8",
     )
     (module_dir / "versions.tf").write_text(
-        '\n'.join(
+        "\n".join(
             [
                 "terraform {",
                 '  required_version = ">= 1.10.0, < 2.0.0"',
@@ -943,7 +1270,7 @@ def test_validate_sources_reports_module_contract_issues_for_missing_versions_an
     module_dir = tmp_path / "demo-module"
     module_dir.mkdir(parents=True, exist_ok=True)
     (module_dir / "main.tf").write_text(
-        '\n'.join(
+        "\n".join(
             [
                 'provider "nebius" {}',
                 'output "demo" {',
@@ -954,7 +1281,9 @@ def test_validate_sources_reports_module_contract_issues_for_missing_versions_an
         ),
         encoding="utf-8",
     )
-    (module_dir / "variables.tf").write_text('variable "name" { type = string }\n', encoding="utf-8")
+    (module_dir / "variables.tf").write_text(
+        'variable "name" { type = string }\n', encoding="utf-8"
+    )
 
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
@@ -1066,8 +1395,12 @@ def test_validate_sources_rejects_https_git_repo_module_source_without_git_prefi
     _resolved_path, issues, warnings = _validate_component_sources_registry()
 
     assert warnings == []
-    assert any("is not supported as a plain HTTP(S) Terraform module source" in issue for issue in issues)
-    assert any("git::https://github.com/org/repo.git//modules/mk8s?ref=v1.2.3" in issue for issue in issues)
+    assert any(
+        "is not supported as a plain HTTP(S) Terraform module source" in issue for issue in issues
+    )
+    assert any(
+        "git::https://github.com/org/repo.git//modules/mk8s?ref=v1.2.3" in issue for issue in issues
+    )
 
 
 def test_validate_sources_rejects_registry_style_module_source(
@@ -1100,7 +1433,10 @@ def test_validate_sources_rejects_registry_style_module_source(
     _resolved_path, issues, warnings = _validate_component_sources_registry()
 
     assert warnings == []
-    assert any("module source 'app.terraform.io/example/network/nebius' is not supported" in issue for issue in issues)
+    assert any(
+        "module source 'app.terraform.io/example/network/nebius' is not supported" in issue
+        for issue in issues
+    )
 
 
 def test_validate_sources_accepts_github_tree_chart_repo(

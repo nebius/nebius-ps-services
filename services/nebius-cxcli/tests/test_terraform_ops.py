@@ -107,7 +107,7 @@ def test_translate_terraform_failure_explains_missing_mk8s_cluster_output_contra
     )
 
     assert "Rendered Terraform root expects child module output `cluster_id`" in message
-    assert "handoff-enabled component" in message
+    assert "component with built-in cluster handoff" in message
 
 
 def test_translate_terraform_failure_explains_remote_state_lockfile_issue() -> None:
@@ -169,9 +169,7 @@ def test_terraform_failure_text_from_json_events_formats_location_and_detail() -
     assert 'Call to function "coalesce" failed' in rendered
 
 
-def test_run_forwards_successful_stdout_and_stderr(
-    monkeypatch, capsys
-) -> None:
+def test_run_forwards_successful_stdout_and_stderr(monkeypatch, capsys) -> None:
     monkeypatch.setattr(
         "nebius_cxcli.terraform_ops.subprocess.run",
         lambda *args, **kwargs: SimpleNamespace(stdout="plan ok\n", stderr="warning\n"),

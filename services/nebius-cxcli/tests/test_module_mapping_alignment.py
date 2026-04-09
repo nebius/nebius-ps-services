@@ -63,12 +63,7 @@ def _set_catalog_profile(profile: SourceProfile) -> None:
 
 def _project_config_path(base: Path) -> Path:
     return (
-        base
-        / "deployments"
-        / "projects"
-        / "client-a--tenant-123"
-        / "project-456"
-        / "config.yaml"
+        base / "deployments" / "projects" / "client-a--tenant-123" / "project-456" / "config.yaml"
     )
 
 

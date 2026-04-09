@@ -9,11 +9,11 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, Literal, cast
 
+from .cluster_handoffs import Handoff
 from .component_sources import (
     ComponentDefault,
     ComponentInputBinding,
     ComponentOutput,
-    Handoff,
     SourceProfile,
     StatusWatcher,
     load_component_sources,
@@ -42,7 +42,6 @@ class ComponentEntry:
     dependency_match_names: tuple[str, ...] = ()
     wizard_fields: dict[str, dict[str, Any]] = field(default_factory=dict)
     group: str | None = None
-    kind: str = ""
     validation_profile: str = ""
     chart_name: str | None = None
     chart_repo: str | None = None
@@ -116,7 +115,6 @@ def _infra_component_entries(
                 default_enabled=bool(module.enable),
                 selectable=True,
                 enabled_path=("infra", config_key, "enabled"),
-                kind=module.kind,
                 engine_type="terraform_module",
                 source=module.source,
                 metadata_source=module.metadata_source,
@@ -167,7 +165,11 @@ def _entry_from_helm_chart(
         engine_type="helm_release",
         source=source,
         version=version,
-        dependency_match_names=(component_id, chart_name.lower().strip(), release_name.lower().strip()),
+        dependency_match_names=(
+            component_id,
+            chart_name.lower().strip(),
+            release_name.lower().strip(),
+        ),
         depends_on=(),
         group=normalized_group or None,
         chart_name=chart_name,
@@ -285,9 +287,7 @@ def _normalize_component_id(value: str, *, field_name: str) -> str:
     if not normalized:
         raise ValueError(f"{field_name} cannot be empty")
     if not COMPONENT_ID_PATTERN.fullmatch(normalized):
-        raise ValueError(
-            f"{field_name} must use lowercase letters, digits, and hyphens"
-        )
+        raise ValueError(f"{field_name} must use lowercase letters, digits, and hyphens")
     return normalized
 
 

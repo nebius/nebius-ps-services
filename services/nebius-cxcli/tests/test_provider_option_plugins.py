@@ -1,8 +1,93 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 
-from nebius_cxcli.provider_options import ProviderOptionLookup
+from nebius_cxcli.provider_options import OptionChoice, ProviderOptionLookup
+
+
+def _install_module(monkeypatch, name: str, module: ModuleType) -> None:
+    parts = name.split(".")
+    for index in range(1, len(parts)):
+        package_name = ".".join(parts[:index])
+        package = sys.modules.get(package_name)
+        if package is None:
+            package = ModuleType(package_name)
+            package.__path__ = []  # type: ignore[attr-defined]
+            monkeypatch.setitem(sys.modules, package_name, package)
+        if index > 1:
+            parent_name = ".".join(parts[: index - 1])
+            setattr(sys.modules[parent_name], parts[index - 1], package)
+    monkeypatch.setitem(sys.modules, name, module)
+    if len(parts) > 1:
+        parent_name = ".".join(parts[:-1])
+        setattr(sys.modules[parent_name], parts[-1], module)
+
+
+def _install_fake_mk8s_module(monkeypatch, *, compatible_platforms: list[str]) -> None:
+    mk8s_module = ModuleType("nebius.api.nebius.mk8s.v1")
+
+    class GetNodeGroupCompatibilityMatrixRequest:
+        def __init__(self, *, cluster_kubernetes_version: str) -> None:
+            self.cluster_kubernetes_version = cluster_kubernetes_version
+
+    class NodeGroupServiceClient:
+        def __init__(self, sdk: object) -> None:
+            self.sdk = sdk
+
+        def get_compatibility_matrix(self, request: object) -> SimpleNamespace:
+            _ = request
+            response = SimpleNamespace(
+                versions=[
+                    SimpleNamespace(
+                        items=[
+                            SimpleNamespace(compatible_platforms=list(compatible_platforms)),
+                        ]
+                    )
+                ]
+            )
+            return SimpleNamespace(wait=lambda: response)
+
+    mk8s_module.GetNodeGroupCompatibilityMatrixRequest = GetNodeGroupCompatibilityMatrixRequest
+    mk8s_module.NodeGroupServiceClient = NodeGroupServiceClient
+    _install_module(monkeypatch, "nebius.api.nebius.mk8s.v1", mk8s_module)
+
+
+def _install_fake_compute_module(
+    monkeypatch,
+    *,
+    platforms: list[tuple[str, str | None]],
+) -> None:
+    compute_module = ModuleType("nebius.api.nebius.compute.v1")
+
+    class ListPlatformsRequest:
+        def __init__(self, *, parent_id: str, page_size: int, page_token: str) -> None:
+            self.parent_id = parent_id
+            self.page_size = page_size
+            self.page_token = page_token
+
+    class PlatformServiceClient:
+        def __init__(self, sdk: object) -> None:
+            self.sdk = sdk
+
+        def list(self, request: object) -> SimpleNamespace:
+            _ = request
+            response = SimpleNamespace(
+                items=[
+                    SimpleNamespace(
+                        metadata=SimpleNamespace(name=name),
+                        spec=SimpleNamespace(short_human_readable_name=short_name),
+                    )
+                    for name, short_name in platforms
+                ],
+                next_page_token="",
+            )
+            return SimpleNamespace(wait=lambda: response)
+
+    compute_module.ListPlatformsRequest = ListPlatformsRequest
+    compute_module.PlatformServiceClient = PlatformServiceClient
+    _install_module(monkeypatch, "nebius.api.nebius.compute.v1", compute_module)
 
 
 def test_provider_option_lookup_uses_plugin_for_unknown_provider(
@@ -31,6 +116,84 @@ def test_provider_option_lookup_uses_plugin_for_unknown_provider(
     )
     assert [choice.value for choice in resolved] == ["us-central1"]
     assert [choice.label for choice in resolved] == ["US Central 1"]
+
+
+def test_provider_option_lookup_applies_filter_regex_to_plugin_choices(
+    monkeypatch,
+) -> None:
+    def _plugin(**kwargs):
+        if kwargs.get("provider") != "vendor_networks":
+            return []
+        return [
+            {"value": "vpcnetwork-prod-a", "label": "Prod"},
+            {"value": "vpcnetwork-dev-a", "label": "Dev"},
+        ]
+
+    monkeypatch.setenv(
+        "NEBIUS_CXCLI_PROVIDER_OPTION_PLUGINS",
+        "tests.test_provider_option_plugins:_plugin",
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.provider_options._load_option_plugins",
+        lambda _specs: (_plugin,),
+    )
+
+    lookup = ProviderOptionLookup()
+    resolved = lookup.resolve(
+        provider="vendor_networks",
+        args={"_filter": "^vpcnetwork-prod-"},
+        payload={},
+        field_path="infra.components[0].inputs.network_id",
+    )
+
+    assert [choice.value for choice in resolved] == ["vpcnetwork-prod-a"]
+    assert lookup.last_error() is None
+
+
+def test_provider_option_lookup_records_builtin_resolver_error(monkeypatch) -> None:
+    lookup = ProviderOptionLookup()
+
+    def _boom(*, args, payload, field_path):
+        _ = args, payload, field_path
+        raise RuntimeError("network resolver exploded")
+
+    monkeypatch.setattr(lookup, "_resolve_project_networks", _boom)
+
+    resolved = lookup.resolve(
+        provider="project_networks",
+        args={},
+        payload={},
+        field_path="infra.components[0].inputs.network_id",
+    )
+
+    assert resolved == []
+    assert lookup.last_error() == "project_networks: network resolver exploded"
+
+
+def test_provider_option_lookup_records_plugin_error(monkeypatch) -> None:
+    def _plugin(**kwargs):
+        _ = kwargs
+        raise RuntimeError("plugin resolver exploded")
+
+    monkeypatch.setenv(
+        "NEBIUS_CXCLI_PROVIDER_OPTION_PLUGINS",
+        "tests.test_provider_option_plugins:_plugin",
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.provider_options._load_option_plugins",
+        lambda _specs: (_plugin,),
+    )
+
+    lookup = ProviderOptionLookup()
+    resolved = lookup.resolve(
+        provider="vendor_networks",
+        args={},
+        payload={},
+        field_path="infra.components[0].inputs.network_id",
+    )
+
+    assert resolved == []
+    assert lookup.last_error() == "vendor_networks: plugin resolver exploded"
 
 
 def test_provider_option_lookup_sdk_uses_shared_sdk_auth(monkeypatch) -> None:
@@ -63,3 +226,81 @@ def test_provider_option_lookup_sdk_uses_shared_sdk_auth(monkeypatch) -> None:
         "config_file": Path("/tmp/provider-sdk-config.yaml"),
         "context": "provider option lookup",
     }
+
+
+def test_compute_platforms_use_live_project_inventory(monkeypatch) -> None:
+    _install_fake_compute_module(
+        monkeypatch,
+        platforms=[
+            ("gpu-h100-sxm", "GPU H100 SXM"),
+            ("cpu-d3", "CPU D3"),
+            ("cpu-e2", None),
+        ],
+    )
+
+    lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
+
+    resolved = lookup.resolve(
+        provider="compute_platforms",
+        args={"platform_prefix": "cpu-"},
+        payload={"client_info": {"nebius": {"project_id": "project-123"}}},
+        field_path="infra.components[0].inputs.cpu_nodes_platform",
+    )
+
+    assert [(choice.value, choice.label) for choice in resolved] == [
+        ("cpu-d3", "cpu-d3  (CPU D3)"),
+        ("cpu-e2", "cpu-e2"),
+    ]
+
+
+def test_mk8s_compatible_platforms_intersect_project_inventory(monkeypatch) -> None:
+    _install_fake_mk8s_module(
+        monkeypatch,
+        compatible_platforms=["cpu-d3", "gpu-h100-sxm", "gpu-h200-sxm"],
+    )
+
+    lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
+    monkeypatch.setattr(lookup, "_resolve_k8s_version", lambda payload, args: "1.31")
+    monkeypatch.setattr(
+        lookup,
+        "_resolve_project_compute_platform_inventory",
+        lambda project_id: (
+            OptionChoice(value="gpu-h100-sxm", label="gpu-h100-sxm  (GPU H100 SXM)"),
+            OptionChoice(value="gpu-l40s", label="gpu-l40s  (GPU L40S)"),
+        ),
+    )
+
+    resolved = lookup.resolve(
+        provider="mk8s_compatible_platforms",
+        args={"platform_prefix": "gpu-", "project_id": "project-123"},
+        payload={},
+        field_path="infra.components[0].inputs.gpu_nodes_platform",
+    )
+
+    assert [(choice.value, choice.label) for choice in resolved] == [
+        ("gpu-h100-sxm", "gpu-h100-sxm  (GPU H100 SXM)"),
+    ]
+
+
+def test_mk8s_compatible_platforms_fall_back_to_matrix_without_project_scope(monkeypatch) -> None:
+    _install_fake_mk8s_module(
+        monkeypatch,
+        compatible_platforms=["cpu-d3", "gpu-h100-sxm"],
+    )
+
+    lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
+    monkeypatch.setattr(lookup, "_resolve_k8s_version", lambda payload, args: "1.31")
+
+    resolved = lookup.resolve(
+        provider="mk8s_compatible_platforms",
+        args={"platform_prefix": "cpu-"},
+        payload={},
+        field_path="infra.components[0].inputs.cpu_nodes_platform",
+    )
+
+    assert [(choice.value, choice.label) for choice in resolved] == [
+        ("cpu-d3", "cpu-d3"),
+    ]

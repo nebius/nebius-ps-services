@@ -22,7 +22,12 @@ from nebius_cxcli.paths import ProjectPaths
 def _project_paths(tmp_path: Path) -> ProjectPaths:
     repo_root = tmp_path / "repo"
     generated_dir = (
-        repo_root / "deployments" / "projects" / "client-a--tenant-123" / "project-456" / "generated"
+        repo_root
+        / "deployments"
+        / "projects"
+        / "client-a--tenant-123"
+        / "project-456"
+        / "generated"
     )
     project_dir = generated_dir.parent
     return ProjectPaths(

@@ -32,9 +32,7 @@ def _service_cidr_prefix_lengths(raw_value: Any) -> tuple[int, ...]:
     for item in raw_value:
         text = _as_text(item)
         if not text:
-            raise RuntimeError(
-                "inputs.kube_network_service_cidrs cannot contain empty values."
-            )
+            raise RuntimeError("inputs.kube_network_service_cidrs cannot contain empty values.")
         try:
             if text.startswith("/"):
                 prefix = int(text[1:])
@@ -42,15 +40,13 @@ def _service_cidr_prefix_lengths(raw_value: Any) -> tuple[int, ...]:
                 prefix = ipaddress.ip_network(text, strict=False).prefixlen
         except Exception as exc:
             raise RuntimeError(
-                "inputs.kube_network_service_cidrs contains an invalid "
-                f"value: {text!r}"
+                f"inputs.kube_network_service_cidrs contains an invalid value: {text!r}"
             ) from exc
         prefixes.append(prefix)
 
     if len(prefixes) != 1:
         raise RuntimeError(
-            "inputs.kube_network_service_cidrs must contain exactly one "
-            "CIDR or prefix value."
+            "inputs.kube_network_service_cidrs must contain exactly one CIDR or prefix value."
         )
     return tuple(prefixes)
 
@@ -91,7 +87,10 @@ def validate_mk8s_network_preflight(config: Any) -> None:
                 continue
             component_id = _as_text(item.get("id")).lower()
             mk8s_entry = entry_by_id.get(component_id)
-            if mk8s_entry is None or getattr(mk8s_entry, "validation_profile", "") != "mk8s_cluster":
+            if (
+                mk8s_entry is None
+                or getattr(mk8s_entry, "validation_profile", "") != "mk8s_cluster"
+            ):
                 continue
 
             resolved = resolve_component_defaults(
@@ -113,7 +112,9 @@ def validate_mk8s_network_preflight(config: Any) -> None:
                 continue
 
             if sdk is None:
-                sdk = init_nebius_sdk(parent_id=project_id or None, context="MK8s network preflight")
+                sdk = init_nebius_sdk(
+                    parent_id=project_id or None, context="MK8s network preflight"
+                )
             subnet_client = SubnetServiceClient(sdk)
             subnet = subnet_client.get(GetSubnetRequest(id=subnet_id)).wait()
             pool_cidrs = _subnet_pool_cidrs(subnet)

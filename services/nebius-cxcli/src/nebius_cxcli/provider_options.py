@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import importlib
 import os
+import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from .sdk_auth import init_nebius_sdk
 
@@ -86,7 +87,7 @@ def _load_option_plugins(specs: str) -> tuple[ProviderOptionPlugin, ...]:
             continue
         if not callable(resolver):
             continue
-        plugins.append(resolver)
+        plugins.append(cast(ProviderOptionPlugin, resolver))
     return tuple(plugins)
 
 
@@ -127,7 +128,9 @@ def _payload_value(payload: dict[str, Any], dotted_path: str) -> object | None:
                     return None
                 if part < 0 or part >= len(current):
                     return None
-                current = current[part]
+                current_list = cast(list[object], current)
+                part_index: int = part
+                current = current_list[part_index]
                 continue
             if not isinstance(current, dict):
                 return None
@@ -156,11 +159,32 @@ def _as_str(value: object | None) -> str | None:
     return text or None
 
 
+def _provider_error_message(provider: str, exc: Exception) -> str:
+    message = str(exc).strip() or exc.__class__.__name__
+    return f"{provider}: {message}"
+
+
+def _apply_choice_filter(
+    choices: Iterable[OptionChoice],
+    *,
+    filter_pattern: str | None,
+) -> list[OptionChoice]:
+    resolved = list(choices)
+    normalized_pattern = _as_str(filter_pattern)
+    if not normalized_pattern:
+        return resolved
+    try:
+        compiled = re.compile(normalized_pattern)
+    except re.error:
+        return resolved
+    return [choice for choice in resolved if compiled.search(choice.value)]
+
+
 class ProviderOptionLookup:
     """Resolve dynamic field choices from Nebius APIs with in-process caching."""
 
     def __init__(self) -> None:
-        self._sdk: object | None = None
+        self._sdk: Any | None = None
         self._sdk_failed = False
         self._cache: dict[tuple[object, ...], tuple[OptionChoice, ...]] = {}
         self._last_error: str | None = None
@@ -185,9 +209,18 @@ class ProviderOptionLookup:
                 "mk8s_control_plane_versions": self._resolve_mk8s_control_plane_versions,
             }.get(provider)
             if provider in SUPPORTED_PROVIDER_OPTION_SOURCES and resolver is not None:
-                resolved = list(resolver(args=args, payload=payload, field_path=field_path))
-                if resolved:
-                    return resolved
+                try:
+                    builtin_choices = resolver(args=args, payload=payload, field_path=field_path)
+                except Exception as exc:
+                    self._last_error = _provider_error_message(provider, exc)
+                else:
+                    resolved = _apply_choice_filter(
+                        builtin_choices,
+                        filter_pattern=_as_str(args.get("_filter")),
+                    )
+                    if resolved:
+                        self._last_error = None
+                        return resolved
 
             plugin_specs = os.environ.get(_OPTION_PLUGIN_ENV, "")
             for plugin in _load_option_plugins(plugin_specs):
@@ -198,13 +231,19 @@ class ProviderOptionLookup:
                         payload=payload,
                         field_path=field_path,
                     )
-                except Exception:
+                except Exception as exc:
+                    self._last_error = _provider_error_message(provider, exc)
                     continue
-                resolved = _normalize_plugin_choices(items)
+                resolved = _apply_choice_filter(
+                    _normalize_plugin_choices(items),
+                    filter_pattern=_as_str(args.get("_filter")),
+                )
                 if resolved:
+                    self._last_error = None
                     return resolved
             return []
-        except Exception:
+        except Exception as exc:
+            self._last_error = _provider_error_message(provider, exc)
             return []
 
     def last_error(self) -> str | None:
@@ -269,7 +308,9 @@ class ProviderOptionLookup:
             )
 
         try:
-            project = ProjectServiceClient(sdk).get(GetProjectRequest(id=normalized_project_id)).wait()
+            project = (
+                ProjectServiceClient(sdk).get(GetProjectRequest(id=normalized_project_id)).wait()
+            )
         except Exception as exc:
             return TenantProjectValidationResult(
                 valid=False,
@@ -338,65 +379,18 @@ class ProviderOptionLookup:
         if configured_default:
             return configured_default
 
-        versions = self._resolve_mk8s_control_plane_versions(args={}, payload=payload, field_path="")
+        versions = self._resolve_mk8s_control_plane_versions(
+            args={}, payload=payload, field_path=""
+        )
         if not versions:
             return None
         return versions[0].value
 
-    def _resolve_mk8s_compatible_platforms(
+    def _resolve_project_compute_platform_inventory(
         self,
-        *,
-        args: dict[str, Any],
-        payload: dict[str, Any],
-        field_path: str,
+        project_id: str,
     ) -> tuple[OptionChoice, ...]:
-        version = self._resolve_k8s_version(payload, args)
-        if not version:
-            return ()
-        prefix = _as_str(args.get("platform_prefix"))
-        cache_key = ("mk8s_compatible_platforms", version, prefix)
-        if cache_key in self._cache:
-            return self._cache[cache_key]
-
-        sdk = self._sdk_or_none()
-        if sdk is None:
-            return ()
-        from nebius.api.nebius.mk8s.v1 import (
-            GetNodeGroupCompatibilityMatrixRequest,
-            NodeGroupServiceClient,
-        )
-
-        response = NodeGroupServiceClient(sdk).get_compatibility_matrix(
-            GetNodeGroupCompatibilityMatrixRequest(cluster_kubernetes_version=version)
-        ).wait()
-
-        platforms: set[str] = set()
-        for version_item in list(getattr(response, "versions", [])):
-            for item in list(getattr(version_item, "items", [])):
-                for platform in list(getattr(item, "compatible_platforms", [])):
-                    text = _as_str(platform)
-                    if not text:
-                        continue
-                    if prefix and not text.startswith(prefix):
-                        continue
-                    platforms.add(text)
-
-        resolved = tuple(OptionChoice(value=name, label=name) for name in sorted(platforms))
-        self._cache[cache_key] = resolved
-        return resolved
-
-    def _resolve_compute_platforms(
-        self,
-        *,
-        args: dict[str, Any],
-        payload: dict[str, Any],
-        field_path: str,
-    ) -> tuple[OptionChoice, ...]:
-        project_id = self._resolve_project_id(payload, args)
-        if not project_id:
-            return ()
-        prefix = _as_str(args.get("platform_prefix"))
-        cache_key = ("compute_platforms", project_id, prefix)
+        cache_key = ("compute_platform_inventory", project_id)
         if cache_key in self._cache:
             return self._cache[cache_key]
 
@@ -422,14 +416,91 @@ class ProviderOptionLookup:
             name = _as_str(getattr(metadata, "name", None))
             if not name:
                 continue
-            if prefix and not name.startswith(prefix):
-                continue
             short_name = _as_str(getattr(spec, "short_human_readable_name", None))
             label = f"{name}  ({short_name})" if short_name else name
             options.append(OptionChoice(value=name, label=label))
 
         options.sort(key=lambda item: item.value)
         resolved = tuple(options)
+        self._cache[cache_key] = resolved
+        return resolved
+
+    def _resolve_mk8s_compatible_platforms(
+        self,
+        *,
+        args: dict[str, Any],
+        payload: dict[str, Any],
+        field_path: str,
+    ) -> tuple[OptionChoice, ...]:
+        version = self._resolve_k8s_version(payload, args)
+        if not version:
+            return ()
+        prefix = _as_str(args.get("platform_prefix"))
+        project_id = self._resolve_project_id(payload, args)
+        cache_key = ("mk8s_compatible_platforms", version, prefix, project_id)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        sdk = self._sdk_or_none()
+        if sdk is None:
+            return ()
+        from nebius.api.nebius.mk8s.v1 import (
+            GetNodeGroupCompatibilityMatrixRequest,
+            NodeGroupServiceClient,
+        )
+
+        response = (
+            NodeGroupServiceClient(sdk)
+            .get_compatibility_matrix(
+                GetNodeGroupCompatibilityMatrixRequest(cluster_kubernetes_version=version)
+            )
+            .wait()
+        )
+
+        platforms: set[str] = set()
+        for version_item in list(getattr(response, "versions", [])):
+            for item in list(getattr(version_item, "items", [])):
+                for platform in list(getattr(item, "compatible_platforms", [])):
+                    text = _as_str(platform)
+                    if not text:
+                        continue
+                    if prefix and not text.startswith(prefix):
+                        continue
+                    platforms.add(text)
+
+        compatible_names = sorted(platforms)
+        if project_id:
+            inventory = self._resolve_project_compute_platform_inventory(project_id)
+            available_by_name = {choice.value: choice for choice in inventory}
+            resolved = tuple(
+                available_by_name[name] for name in compatible_names if name in available_by_name
+            )
+        else:
+            resolved = tuple(OptionChoice(value=name, label=name) for name in compatible_names)
+        self._cache[cache_key] = resolved
+        return resolved
+
+    def _resolve_compute_platforms(
+        self,
+        *,
+        args: dict[str, Any],
+        payload: dict[str, Any],
+        field_path: str,
+    ) -> tuple[OptionChoice, ...]:
+        project_id = self._resolve_project_id(payload, args)
+        if not project_id:
+            return ()
+        prefix = _as_str(args.get("platform_prefix"))
+        cache_key = ("compute_platforms", project_id, prefix)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        inventory = self._resolve_project_compute_platform_inventory(project_id)
+        resolved = tuple(
+            choice
+            for choice in inventory
+            if not prefix or choice.value.startswith(prefix)
+        )
         self._cache[cache_key] = resolved
         return resolved
 
@@ -447,7 +518,7 @@ class ProviderOptionLookup:
         platform_path = _as_str(args.get("platform_path"))
         if not platform_path:
             if field_path.endswith(".preset"):
-                platform_path = f"{field_path[:-len('.preset')]}.platform"
+                platform_path = f"{field_path[: -len('.preset')]}.platform"
             else:
                 return ()
 
@@ -490,9 +561,7 @@ class ProviderOptionLookup:
                 suffix_parts.append(f"RAM={memory}GiB")
             if gpu not in (None, 0):
                 suffix_parts.append(f"GPU={gpu}")
-            label = (
-                f"{preset_name}  ({', '.join(suffix_parts)})" if suffix_parts else preset_name
-            )
+            label = f"{preset_name}  ({', '.join(suffix_parts)})" if suffix_parts else preset_name
             options.append(OptionChoice(value=preset_name, label=label))
 
         resolved = tuple(options)
@@ -653,16 +722,19 @@ class ProviderOptionLookup:
             ListClusterControlPlaneVersionsRequest,
         )
 
-        response = ClusterServiceClient(sdk).list_control_plane_versions(
-            ListClusterControlPlaneVersionsRequest()
-        ).wait()
+        response = (
+            ClusterServiceClient(sdk)
+            .list_control_plane_versions(ListClusterControlPlaneVersionsRequest())
+            .wait()
+        )
         items = list(getattr(response, "items", []))
-        versions = [
-            _as_str(getattr(item, "version", None))
-            for item in items
-            if _as_str(getattr(item, "version", None))
-        ]
-        resolved = tuple(OptionChoice(value=version, label=version) for version in versions)
+        options: list[OptionChoice] = []
+        for item in items:
+            version = _as_str(getattr(item, "version", None))
+            if not version:
+                continue
+            options.append(OptionChoice(value=version, label=version))
+        resolved = tuple(options)
         self._cache[cache_key] = resolved
         return resolved
 
@@ -677,7 +749,7 @@ class ProviderOptionLookup:
                 return items
             page_token = next_page_token
 
-    def _sdk_or_none(self):
+    def _sdk_or_none(self) -> Any | None:
         if self._sdk_failed:
             return None
         if self._sdk is not None:

@@ -58,7 +58,9 @@ def _reset_runtime_state(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda _config, *, source_profile: (),
     )
     monkeypatch.setattr("nebius_cxcli.infra_render.module_variables", lambda _source: ())
-    monkeypatch.setattr("nebius_cxcli.cli._try_generate_terraform_lock_file", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._try_generate_terraform_lock_file", lambda *_args, **_kwargs: False
+    )
     monkeypatch.setattr(
         "nebius_cxcli.cli._validate_active_component_sources",
         lambda _cfg, *, chart_meta_cache=None: None,
@@ -99,7 +101,10 @@ def _mock_bootstrap_ci_github_sync(
     monkeypatch.setattr(
         cli_module,
         "_resolve_bootstrap_ci_github_target",
-        lambda *, github_repo, github_token_env, repo_root: (github_repo or repo_slug, github_token),
+        lambda *, github_repo, github_token_env, repo_root: (
+            github_repo or repo_slug,
+            github_token,
+        ),
     )
     monkeypatch.setattr(
         cli_module,
@@ -118,13 +123,7 @@ def _mock_bootstrap_ci_github_sync(
 
 
 def _project_config_path(deployments_root: Path) -> Path:
-    return (
-        deployments_root
-        / "projects"
-        / "client-a--tenant-123"
-        / "project-456"
-        / "config.yaml"
-    )
+    return deployments_root / "projects" / "client-a--tenant-123" / "project-456" / "config.yaml"
 
 
 def _catalog(
@@ -577,7 +576,9 @@ def test_create_prunes_redundant_live_chart_default_values_from_existing_config(
     assert "Updated:" in refreshed.output
 
     cleaned = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    cleaned_gateway = next(item for item in cleaned["apps"]["charts"] if item.get("id") == "gateway-helm")
+    cleaned_gateway = next(
+        item for item in cleaned["apps"]["charts"] if item.get("id") == "gateway-helm"
+    )
     assert cleaned_gateway["values"] == {}
 
 
@@ -656,11 +657,11 @@ def test_create_non_interactive_no_subnet_option(tmp_path: Path) -> None:
             "client-a",
             "--tenant-id",
             "tenant-123",
-                "--project-id",
-                "project-456",
-                "--no-validate-sources",
-            ],
-        )
+            "--project-id",
+            "project-456",
+            "--no-validate-sources",
+        ],
+    )
     assert result.exit_code == 0, result.output
 
 
@@ -686,11 +687,11 @@ def test_create_aborts_cleanly_on_component_selection_cancel(
             "client-a",
             "--tenant-id",
             "tenant-123",
-                "--project-id",
-                "project-456",
-                "--no-validate-sources",
-            ],
-        )
+            "--project-id",
+            "project-456",
+            "--no-validate-sources",
+        ],
+    )
 
     assert result.exit_code == 130
     assert "Cancelled by user" in result.output
@@ -765,8 +766,7 @@ def test_create_seeds_component_source_defaults_into_config(tmp_path: Path) -> N
     module_dir.mkdir(parents=True, exist_ok=True)
     (module_dir / "main.tf").write_text("terraform {}\n", encoding="utf-8")
     (module_dir / "variables.tf").write_text(
-        'variable "cluster_name" { type = string }\n'
-        'variable "cpu_nodes_count" { type = number }\n',
+        'variable "cluster_name" { type = string }\nvariable "cpu_nodes_count" { type = number }\n',
         encoding="utf-8",
     )
     sources_file = tmp_path / "component_sources.yaml"
@@ -917,7 +917,9 @@ def test_create_updates_existing_instance_component_selection(tmp_path: Path) ->
     components = payload.get("infra", {}).get("components", [])
     assert isinstance(components, list)
     mk8s_row = next(
-        row for row in components if isinstance(row, dict) and str(row.get("id", "")).strip() == "mk8s"
+        row
+        for row in components
+        if isinstance(row, dict) and str(row.get("id", "")).strip() == "mk8s"
     )
     inputs = mk8s_row.setdefault("inputs", {})
     assert isinstance(inputs, dict)
@@ -940,7 +942,9 @@ def test_create_updates_existing_instance_component_selection(tmp_path: Path) ->
     refreshed_components = refreshed.get("infra", {}).get("components", [])
     assert isinstance(refreshed_components, list)
     refreshed_mk8s = next(
-        row for row in refreshed_components if isinstance(row, dict) and str(row.get("id", "")).strip() == "mk8s"
+        row
+        for row in refreshed_components
+        if isinstance(row, dict) and str(row.get("id", "")).strip() == "mk8s"
     )
     refreshed_inputs = refreshed_mk8s.get("inputs", {})
     assert isinstance(refreshed_inputs, dict)
@@ -1013,7 +1017,9 @@ def test_component_add_noninteractive_preserves_existing_values(tmp_path: Path) 
     components = payload.get("infra", {}).get("components", [])
     assert isinstance(components, list)
     mk8s_row = next(
-        row for row in components if isinstance(row, dict) and str(row.get("id", "")).strip() == "mk8s"
+        row
+        for row in components
+        if isinstance(row, dict) and str(row.get("id", "")).strip() == "mk8s"
     )
     inputs = mk8s_row.setdefault("inputs", {})
     assert isinstance(inputs, dict)
@@ -1028,7 +1034,9 @@ def test_component_add_noninteractive_preserves_existing_values(tmp_path: Path) 
     refreshed_components = refreshed.get("infra", {}).get("components", [])
     assert isinstance(refreshed_components, list)
     mk8s_refreshed = next(
-        row for row in refreshed_components if isinstance(row, dict) and str(row.get("id", "")).strip() == "mk8s"
+        row
+        for row in refreshed_components
+        if isinstance(row, dict) and str(row.get("id", "")).strip() == "mk8s"
     )
     managed_pg = next(
         row
@@ -1119,7 +1127,9 @@ def test_component_add_noninteractive_adds_app_chart_and_preserves_existing_valu
     charts = payload.get("apps", {}).get("charts", [])
     assert isinstance(charts, list)
     gateway_row = next(
-        row for row in charts if isinstance(row, dict) and str(row.get("id", "")).strip() == "gateway-helm"
+        row
+        for row in charts
+        if isinstance(row, dict) and str(row.get("id", "")).strip() == "gateway-helm"
     )
     gateway_row["namespace"] = "edge"
     gateway_row["release-name"] = "edge-gateway"
@@ -1133,10 +1143,14 @@ def test_component_add_noninteractive_adds_app_chart_and_preserves_existing_valu
     refreshed_charts = refreshed.get("apps", {}).get("charts", [])
     assert isinstance(refreshed_charts, list)
     gateway_refreshed = next(
-        row for row in refreshed_charts if isinstance(row, dict) and str(row.get("id", "")).strip() == "gateway-helm"
+        row
+        for row in refreshed_charts
+        if isinstance(row, dict) and str(row.get("id", "")).strip() == "gateway-helm"
     )
     n8n_row = next(
-        row for row in refreshed_charts if isinstance(row, dict) and str(row.get("id", "")).strip() == "n8n"
+        row
+        for row in refreshed_charts
+        if isinstance(row, dict) and str(row.get("id", "")).strip() == "n8n"
     )
     assert gateway_refreshed["namespace"] == "edge"
     assert gateway_refreshed["release-name"] == "edge-gateway"
@@ -1352,15 +1366,17 @@ def test_bootstrap_ci_no_auth_writes_workflow_in_repo_root(
     assert "NEBIUS_DISCOVER_TARGET: customer/deployments-root" in content
     assert "customer/deployments-root" in content
     assert 'if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then' in content
-    assert 'nebius-cxcli discover --all "${{ env.NEBIUS_DISCOVER_TARGET }}" > discover.json' in content
+    assert (
+        'nebius-cxcli discover --all "${{ env.NEBIUS_DISCOVER_TARGET }}" > discover.json' in content
+    )
     assert "name: ${{ matrix.github_environment }}" in content
-    assert '**/customer/deployments-root/**/generated/**' in content
-    assert '**/customer/deployments-root/**/config.yaml' not in content
+    assert "**/customer/deployments-root/**/generated/**" in content
+    assert "**/customer/deployments-root/**/config.yaml" not in content
     assert "Validate source contract changes" not in content
     assert 'nebius-cxcli validate-generated --portable "${{ matrix.generated }}"' in content
     assert "Restore generated Terraform inputs" not in content
-    assert 'generated manifest is missing render.terraform_tfvars' not in content
-    assert 'print(f"discovery={json.dumps(payload, separators=(\',\', \':\'))}")' in content
+    assert "generated manifest is missing render.terraform_tfvars" not in content
+    assert "print(f\"discovery={json.dumps(payload, separators=(',', ':'))}\")" in content
     assert "Install Nebius CLI" not in content
     assert "curl -sSL https://storage.eu-north1.nebius.cloud/cli/install.sh | bash" not in content
     assert "NEBIUS_API_ENDPOINT" not in content
@@ -1372,7 +1388,10 @@ def test_bootstrap_ci_no_auth_writes_workflow_in_repo_root(
     assert "vars.SMTP_HOST != ''" not in content
     assert "SMTP_HOST: ${{ vars.SMTP_HOST }}" in content
     assert "SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}" in content
-    assert f"NEBIUS_CXCLI_REF: ${{{{ vars.NEBIUS_CXCLI_REF || '{cli_module.default_cli_ref()}' }}}}" in content
+    assert (
+        f"NEBIUS_CXCLI_REF: ${{{{ vars.NEBIUS_CXCLI_REF || '{cli_module.default_cli_ref()}' }}}}"
+        in content
+    )
 
 
 def test_bootstrap_ci_no_auth_is_idempotent_without_force(
@@ -1776,9 +1795,8 @@ def test_bootstrap_ci_clears_github_email_settings_when_local_email_disabled(
     result = runner.invoke(app, ["bootstrap-ci", str(config_path), "--no-auth-bootstrap"])
 
     assert result.exit_code == 0, result.output
-    assert (
-        "cleared GitHub email settings: 4 environment variable(s), 2 secret(s)"
-        in " ".join(result.output.split())
+    assert "cleared GitHub email settings: 4 environment variable(s), 2 secret(s)" in " ".join(
+        result.output.split()
     )
 
 
@@ -1872,17 +1890,15 @@ def test_auth_rejects_github_flags_when_no_bootstrap_ci() -> None:
         ],
     )
     assert result.exit_code == 1
-    assert "--github-repo and --github-token-env are valid only with --bootstrap-ci" in result.output
+    assert (
+        "--github-repo and --github-token-env are valid only with --bootstrap-ci" in result.output
+    )
 
 
 def test_discover_accepts_non_git_directory(tmp_path: Path) -> None:
     deployments_root = tmp_path / "deployments"
     config_path = (
-        deployments_root
-        / "projects"
-        / "client-a--tenant-123"
-        / "project-456"
-        / "config.yaml"
+        deployments_root / "projects" / "client-a--tenant-123" / "project-456" / "config.yaml"
     )
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text("version: v1\n", encoding="utf-8")
@@ -1911,11 +1927,7 @@ def test_discover_in_git_repo_outputs_repo_relative_paths(tmp_path: Path) -> Non
 
     deployments_root = repo_root / "deployments"
     config_path = (
-        deployments_root
-        / "projects"
-        / "client-a--tenant-123"
-        / "project-456"
-        / "config.yaml"
+        deployments_root / "projects" / "client-a--tenant-123" / "project-456" / "config.yaml"
     )
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text("version: v1\n", encoding="utf-8")
@@ -1944,11 +1956,7 @@ def test_discover_accepts_generated_subdirectory_scope(tmp_path: Path) -> None:
 
     deployments_root = repo_root / "deployments"
     generated_dir = (
-        deployments_root
-        / "projects"
-        / "client-a--tenant-123"
-        / "project-456"
-        / "generated"
+        deployments_root / "projects" / "client-a--tenant-123" / "project-456" / "generated"
     )
     config_path = generated_dir.parent / "config.yaml"
     generated_dir.mkdir(parents=True, exist_ok=True)

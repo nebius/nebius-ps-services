@@ -10,6 +10,7 @@ This folder contains multiple ready-to-use Codex skills for developers.
 - `helmchart`
 - `linter`
 - `nebius`
+- `onboard-nbs-cxcli`
 - `python-project`
 - `publish-image`
 - `publish-release`
@@ -28,6 +29,11 @@ project in a new Dev Containers window on macOS with Docker Desktop.
 `github-workflows` provides repo-aligned GitHub Actions assets and references
 for PR/merge CI, release publication, container image publishing, and workflow
 hardening.
+
+`onboard-nbs-cxcli` is the repo-specific onboarding guide for adding Nebius
+Terraform modules to `services/nebius-cxcli`, including when a change stops at
+`component_sources.yaml` and when it must also touch wizard/provider/status,
+runtime validation, or cluster handoff code.
 
 `publish-release` scaffolds the local release helper script and changelog flow,
 including first-push upstream setup for new local release branches during

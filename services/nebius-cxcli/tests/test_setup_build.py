@@ -52,7 +52,9 @@ def _write_catalog(
     )
 
 
-def test_select_bundled_component_sources_prefers_portable_staged_catalog(monkeypatch, tmp_path: Path) -> None:
+def test_select_bundled_component_sources_prefers_portable_staged_catalog(
+    monkeypatch, tmp_path: Path
+) -> None:
     module = _load_setup_module(monkeypatch)
     staged = tmp_path / "component_sources.yaml"
     _write_catalog(

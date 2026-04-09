@@ -118,9 +118,7 @@ def send_inventory_email(
     username = _env_or_config_text("SMTP_USERNAME", smtp_settings, "username")
     password = _env_or_config_text("SMTP_PASSWORD", smtp_settings, "password")
     from_addr = (
-        _env_or_config_text("SMTP_FROM", smtp_settings, "from")
-        or username
-        or "noreply@localhost"
+        _env_or_config_text("SMTP_FROM", smtp_settings, "from") or username or "noreply@localhost"
     )
 
     project_id = (

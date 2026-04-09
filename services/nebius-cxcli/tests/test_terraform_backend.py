@@ -16,7 +16,9 @@ from nebius_cxcli.terraform_backend import (
 )
 
 
-def _config(*, client_name: str = "client-a", project_id: str = "project-456", region: str = "eu-north1"):
+def _config(
+    *, client_name: str = "client-a", project_id: str = "project-456", region: str = "eu-north1"
+):
     return wrap_runtime_config(
         {
             "version": "v1",

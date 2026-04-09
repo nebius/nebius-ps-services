@@ -1,7 +1,6 @@
 """Component-specific runtime validation adapters.
 
-Validation rules are dispatched by explicit component validation profiles from
-the source catalog rather than ad-hoc aliases.
+Validation rules are dispatched by resolved bundled validation profiles.
 """
 
 from __future__ import annotations
@@ -106,7 +105,9 @@ def _validate_sfs_csi(
 
                 static_pv_name = pvc.get("static_pv_name", pvc.get("static-pv-name"))
                 static_sub_path = pvc.get("static_sub_path", pvc.get("static-sub-path"))
-                if mode == "dynamic" and (static_pv_name is not None or static_sub_path is not None):
+                if mode == "dynamic" and (
+                    static_pv_name is not None or static_sub_path is not None
+                ):
                     raise ValueError("sfs.csi.pvcs[].static_* fields require sfs.csi.mode='static'")
 
 
@@ -123,12 +124,8 @@ def _validate_wireguard(
         if not wireguard_name:
             raise ValueError(f"{base}.name is required when enabled=true")
         if not id_pattern.fullmatch(wireguard_name):
-            raise ValueError(
-                f"{base}.name must use lowercase letters, digits, and hyphens"
-            )
-        create_public_ip = bool(
-            get_path(payload, f"{base}.create_public_ip_allocation", True)
-        )
+            raise ValueError(f"{base}.name must use lowercase letters, digits, and hyphens")
+        create_public_ip = bool(get_path(payload, f"{base}.create_public_ip_allocation", True))
         if as_text(get_path(payload, f"{base}.public_ip_allocation_id")) and create_public_ip:
             raise ValueError(
                 f"{base}.create_public_ip_allocation must be false "
@@ -140,13 +137,11 @@ def _validate_wireguard(
             interface = ipaddress.ip_interface(tunnel_cidr)
         except ValueError as exc:
             raise ValueError(
-                f"{base}.tunnel_cidr must be a valid IPv4 interface CIDR "
-                "(example: 10.8.0.1/24)"
+                f"{base}.tunnel_cidr must be a valid IPv4 interface CIDR (example: 10.8.0.1/24)"
             ) from exc
         if interface.version != 4:
             raise ValueError(
-                f"{base}.tunnel_cidr must be an IPv4 interface CIDR "
-                "(example: 10.8.0.1/24)"
+                f"{base}.tunnel_cidr must be an IPv4 interface CIDR (example: 10.8.0.1/24)"
             )
 
         listen_port = get_path(payload, f"{base}.listen_port", 51820)
@@ -176,8 +171,7 @@ def _validate_ssh_jumphost(
                 network = ipaddress.ip_network(str(cidr), strict=False)
             except ValueError as exc:
                 raise ValueError(
-                    f"{base}.allowed_cidrs must contain valid CIDRs "
-                    "(for example 203.0.113.10/32)"
+                    f"{base}.allowed_cidrs must contain valid CIDRs (for example 203.0.113.10/32)"
                 ) from exc
             if network.version != 4:
                 raise ValueError(f"{base}.allowed_cidrs currently supports IPv4 CIDRs only")
@@ -200,9 +194,7 @@ def _validate_mysterybox(
             if not isinstance(secret, Mapping):
                 continue
             scope = as_text(secret.get("scope"))
-            k8s_sync_enabled = bool(
-                get_path(secret, "k8s_sync.enabled", False)
-            )
+            k8s_sync_enabled = bool(get_path(secret, "k8s_sync.enabled", False))
             if k8s_sync_enabled and scope != "apps":
                 raise ValueError(
                     f"{base}.secrets[].k8s_sync.enabled=true requires {base}.secrets[].scope='apps'"
@@ -219,7 +211,9 @@ def _validate_mysterybox(
                         f"{base}.secrets[].entries[].value_from_env must be an environment variable name"
                     )
 
-    external_secrets_enabled = bool(get_path(payload, "apps.platform.external_secrets.enabled", False))
+    external_secrets_enabled = bool(
+        get_path(payload, "apps.platform.external_secrets.enabled", False)
+    )
     external_secrets_mysterybox_enabled = bool(
         get_path(payload, "apps.platform.external_secrets.mysterybox.enabled", False)
     )

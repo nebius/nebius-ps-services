@@ -37,7 +37,12 @@ class FakeSMTP:
 def _project_paths(tmp_path: Path) -> ProjectPaths:
     repo_root = tmp_path / "repo"
     generated_dir = (
-        repo_root / "deployments" / "projects" / "client-a--tenant-123" / "project-456" / "generated"
+        repo_root
+        / "deployments"
+        / "projects"
+        / "client-a--tenant-123"
+        / "project-456"
+        / "generated"
     )
     project_dir = generated_dir.parent
     return ProjectPaths(
@@ -55,7 +60,9 @@ def _project_paths(tmp_path: Path) -> ProjectPaths:
     )
 
 
-def _config(*, email: str | None = "ops@example.com", project_id: str = "project-456") -> SimpleNamespace:
+def _config(
+    *, email: str | None = "ops@example.com", project_id: str = "project-456"
+) -> SimpleNamespace:
     return SimpleNamespace(
         client_info=SimpleNamespace(
             notifications=SimpleNamespace(email_enabled=True, email=email),
@@ -74,7 +81,9 @@ def test_send_inventory_email_returns_false_when_email_not_configured(tmp_path: 
     )
 
 
-def test_send_inventory_email_returns_false_when_email_notifications_disabled(tmp_path: Path) -> None:
+def test_send_inventory_email_returns_false_when_email_notifications_disabled(
+    tmp_path: Path,
+) -> None:
     paths = _project_paths(tmp_path)
     config = _config()
     config.client_info.notifications.email_enabled = False
@@ -86,7 +95,9 @@ def test_send_inventory_email_returns_false_when_email_notifications_disabled(tm
     )
 
 
-def test_send_inventory_email_warns_when_smtp_host_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_send_inventory_email_warns_when_smtp_host_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     paths = _project_paths(tmp_path)
     monkeypatch.delenv("SMTP_HOST", raising=False)
 

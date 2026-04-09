@@ -14,9 +14,9 @@ from typer.testing import CliRunner
 import nebius_cxcli.cli as cli
 import nebius_cxcli.component_sources as component_sources
 import nebius_cxcli.flux_ops as flux_ops
+from nebius_cxcli.cluster_handoffs import Handoff
 from nebius_cxcli.component_sources import (
     ComponentOutput,
-    Handoff,
     SourceProfile,
     reset_component_sources_cache,
     set_component_sources_file_override,
@@ -99,7 +99,9 @@ def test_render_overwrite_warning_never_mentions_flux_system(tmp_path: Path) -> 
 
     bootstrap_dir = fake_paths.flux_dir / "flux-system"
     bootstrap_dir.mkdir(parents=True, exist_ok=True)
-    (bootstrap_dir / "gotk-sync.yaml").write_text("apiVersion: v1\nkind: ConfigMap\n", encoding="utf-8")
+    (bootstrap_dir / "gotk-sync.yaml").write_text(
+        "apiVersion: v1\nkind: ConfigMap\n", encoding="utf-8"
+    )
 
     warning_with_bootstrap = cli._render_overwrite_warning(fake_paths)
 
@@ -235,7 +237,9 @@ def test_load_generated_context_exports_manifest_tool_versions(
                 "mk8s_cluster_name": "clust1",
             }
         },
-        "runtime_config": {"client_info": {"client_name": "client-a", "nebius": {"project_id": "project-456"}}},
+        "runtime_config": {
+            "client_info": {"client_name": "client-a", "nebius": {"project_id": "project-456"}}
+        },
     }
     runtime_config = SimpleNamespace(client_info=SimpleNamespace(client_name="client-a"))
 
@@ -252,9 +256,9 @@ def test_load_generated_context_exports_manifest_tool_versions(
     assert manifest is fake_manifest
     assert os.environ[FLUX_VERSION_ENV] == "v2.8.0"
     assert os.environ[TERRAFORM_VERSION_ENV] == "1.14.1"
-    assert json.loads((fake_paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")) == {
-        "mk8s_cluster_name": "clust1"
-    }
+    assert json.loads(
+        (fake_paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
+    ) == {"mk8s_cluster_name": "clust1"}
 
 
 def test_try_generate_terraform_lock_file_uses_backendless_init_and_cleans_workdir(
@@ -320,8 +324,7 @@ def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.Mon
         cli,
         "_runtime_component_output_values",
         lambda config, paths: (
-            calls.update({"outputs_config": config, "outputs_paths": paths})
-            or {}
+            calls.update({"outputs_config": config, "outputs_paths": paths}) or {}
         ),
     )
     monkeypatch.setattr(
@@ -354,8 +357,10 @@ def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.Mon
     monkeypatch.setattr(
         cli,
         "write_inventory",
-        lambda config, paths: calls.update({"inventory_config": config, "inventory_paths": paths})
-        or SimpleNamespace(markdown=paths.inventory_dir / "inventory.md"),
+        lambda config, paths: (
+            calls.update({"inventory_config": config, "inventory_paths": paths})
+            or SimpleNamespace(markdown=paths.inventory_dir / "inventory.md")
+        ),
     )
     monkeypatch.setattr(
         cli,
@@ -423,7 +428,9 @@ def test_render_command_accepts_local_source_profile(
         ),
     )
     monkeypatch.setattr(cli, "_runtime_component_output_values", lambda config, paths: {})
-    monkeypatch.setattr(cli, "render_flux", lambda config, paths, *, component_output_values=None: [])
+    monkeypatch.setattr(
+        cli, "render_flux", lambda config, paths, *, component_output_values=None: []
+    )
     monkeypatch.setattr(cli, "write_inventory", lambda config, paths: None)
     monkeypatch.setattr(
         cli,
@@ -457,7 +464,9 @@ def test_validate_generated_command_portable_checks_module_sources(
         "_load_generated_context",
         lambda _path: ("cfg", fake_paths, {"render": {"module_sources": []}}),
     )
-    monkeypatch.setattr(cli, "_ensure_terraform_backend_ready", lambda config, *, auto_auth_bootstrap: None)
+    monkeypatch.setattr(
+        cli, "_ensure_terraform_backend_ready", lambda config, *, auto_auth_bootstrap: None
+    )
     monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _config: {})
     monkeypatch.setattr(cli, "terraform_validate", lambda infra_dir, *, extra_env=None: None)
     monkeypatch.setattr(cli, "_active_chart_count", lambda _config: 0)
@@ -487,7 +496,9 @@ def test_validate_generated_command_requires_manifest_module_sources_metadata(
         "_load_generated_context",
         lambda _path: ("cfg", fake_paths, {"render": {}}),
     )
-    monkeypatch.setattr(cli, "_ensure_terraform_backend_ready", lambda config, *, auto_auth_bootstrap: None)
+    monkeypatch.setattr(
+        cli, "_ensure_terraform_backend_ready", lambda config, *, auto_auth_bootstrap: None
+    )
     monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _config: {})
     monkeypatch.setattr(cli, "terraform_validate", lambda infra_dir, *, extra_env=None: None)
     monkeypatch.setattr(cli, "_active_chart_count", lambda _config: 0)
@@ -501,7 +512,9 @@ def test_validate_generated_command_requires_manifest_module_sources_metadata(
     assert "render.module_sources" in _plain_output(result.output)
 
 
-def test_validate_sources_command_reports_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_validate_sources_command_reports_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     sources = SimpleNamespace(
         tf_modules=[SimpleNamespace(module="mk8s")],
         helm_charts=[SimpleNamespace(name="gateway-helm")],
@@ -633,7 +646,9 @@ def test_render_command_force_allows_noninteractive_overwrite(
     monkeypatch.setattr(
         cli,
         "write_inventory",
-        lambda *_args, **_kwargs: SimpleNamespace(markdown=fake_paths.inventory_dir / "inventory.md"),
+        lambda *_args, **_kwargs: SimpleNamespace(
+            markdown=fake_paths.inventory_dir / "inventory.md"
+        ),
     )
     monkeypatch.setattr(
         cli,
@@ -668,7 +683,9 @@ def test_render_command_prompts_before_overwrite_when_interactive(
     monkeypatch.setattr(
         cli,
         "write_inventory",
-        lambda *_args, **_kwargs: SimpleNamespace(markdown=fake_paths.inventory_dir / "inventory.md"),
+        lambda *_args, **_kwargs: SimpleNamespace(
+            markdown=fake_paths.inventory_dir / "inventory.md"
+        ),
     )
     monkeypatch.setattr(
         cli,
@@ -680,7 +697,9 @@ def test_render_command_prompts_before_overwrite_when_interactive(
     result = runner.invoke(cli.app, ["render", str(tmp_path / "config.yaml")], input="y\n")
 
     assert result.exit_code == 0, result.output
-    assert "Continue and overwrite the existing generated artifacts?" in _plain_output(result.output)
+    assert "Continue and overwrite the existing generated artifacts?" in _plain_output(
+        result.output
+    )
     assert calls["rendered"] is True
 
 
@@ -739,7 +758,9 @@ def test_render_command_preserves_existing_generated_bundle_when_rerender_fails(
     assert not any(fake_paths.project_dir.glob(".generated-staging-*"))
 
 
-def test_deploy_command_passes_auto_auth_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_deploy_command_passes_auto_auth_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, object] = {}
     manifest = {"schema": "nebius-cxcli-generated/v1"}
@@ -748,7 +769,9 @@ def test_deploy_command_passes_auto_auth_flag(tmp_path: Path, monkeypatch: pytes
     monkeypatch.setattr(
         cli,
         "_ensure_ci_workflow_for_deployments_root",
-        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("deploy must not bootstrap CI workflow")),
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("deploy must not bootstrap CI workflow")
+        ),
     )
     monkeypatch.setattr(
         cli,
@@ -788,7 +811,9 @@ def test_deploy_command_passes_auto_auth_flag(tmp_path: Path, monkeypatch: pytes
     }
 
 
-def test_destroy_command_passes_auto_auth_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_destroy_command_passes_auto_auth_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, object] = {}
     manifest = {"schema": "nebius-cxcli-generated/v1"}
@@ -892,13 +917,17 @@ def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env
     monkeypatch.setattr(
         cli,
         "_warn_if_flux_gitops_not_bootstrapped",
-        lambda config, paths, *, extra_env=None: calls.append(("warn_bootstrap", config, paths, extra_env)),
+        lambda config, paths, *, extra_env=None: calls.append(
+            ("warn_bootstrap", config, paths, extra_env)
+        ),
     )
     monkeypatch.setattr(
         cli,
         "write_inventory",
-        lambda config, paths: calls.append(("inventory", config, paths))
-        or SimpleNamespace(markdown=paths.inventory_dir / "inventory.md"),
+        lambda config, paths: (
+            calls.append(("inventory", config, paths))
+            or SimpleNamespace(markdown=paths.inventory_dir / "inventory.md")
+        ),
     )
 
     cli._deploy_generated_artifacts("cfg", fake_paths, manifest, auto_auth_bootstrap=True)
@@ -913,13 +942,13 @@ def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env
             "kube_env",
             "cfg",
             fake_paths,
-                [
-                    {
-                        "component_id": "mk8s",
-                        "instance_id": "mk8s",
-                        "cluster_id_output_name": "mk8s_cluster_id",
-                        "component_output_ref": "mk8s.cluster_id",
-                        "access": "external",
+            [
+                {
+                    "component_id": "mk8s",
+                    "instance_id": "mk8s",
+                    "cluster_id_output_name": "mk8s_cluster_id",
+                    "component_output_ref": "mk8s.cluster_id",
+                    "access": "external",
                 }
             ],
         ),
@@ -1034,7 +1063,9 @@ def test_destroy_generated_artifacts_continues_when_flux_teardown_fails(
             },
         ),
     )
-    monkeypatch.setattr(cli.console, "print", lambda message, *args, **kwargs: messages.append(str(message)))
+    monkeypatch.setattr(
+        cli.console, "print", lambda message, *args, **kwargs: messages.append(str(message))
+    )
 
     cli._destroy_generated_artifacts(
         config,
@@ -1049,7 +1080,9 @@ def test_destroy_generated_artifacts_continues_when_flux_teardown_fails(
         "initialize": True,
         "status_watchers": None,
     }
-    assert any("Rendered app teardown failed before infra destroy" in message for message in messages)
+    assert any(
+        "Rendered app teardown failed before infra destroy" in message for message in messages
+    )
     assert any("cluster unreachable" in message for message in messages)
 
 
@@ -1130,10 +1163,7 @@ def test_apply_rendered_flux_installs_flux_controllers_when_missing(
     cli._apply_rendered_flux(fake_paths, extra_env={"KUBECONFIG": "/tmp/kubeconfig"})
 
     assert ("install_flux", {"KUBECONFIG": "/tmp/kubeconfig"}) in calls
-    assert any(
-        call[0] == "run" and call[1] == ("kubectl", "cluster-info")
-        for call in calls
-    )
+    assert any(call[0] == "run" and call[1] == ("kubectl", "cluster-info") for call in calls)
     assert len(cache_dirs) == 1
     cache_dir = cache_dirs[0]
     assert isinstance(cache_dir, Path)
@@ -1275,7 +1305,9 @@ def test_apply_rendered_flux_prints_phase_lines_when_console_is_not_terminal(
         lambda cmd, **kwargs: SimpleNamespace(returncode=0, stderr="", stdout=""),
     )
     monkeypatch.setattr(cli, "_console_is_terminal", lambda: False)
-    monkeypatch.setattr(cli.console, "print", lambda message, *args, **kwargs: printed.append(str(message)))
+    monkeypatch.setattr(
+        cli.console, "print", lambda message, *args, **kwargs: printed.append(str(message))
+    )
 
     class _FakeStatus:
         def update(self, _message: str, **_kwargs: object) -> None:
@@ -1603,7 +1635,11 @@ def test_wait_for_rendered_flux_resources_emits_cluster_status_while_waiting(
                 "",
             )
         return (
-            {"status": {"conditions": [{"type": "Ready", "status": "True", "reason": "Succeeded"}]}},
+            {
+                "status": {
+                    "conditions": [{"type": "Ready", "status": "True", "reason": "Succeeded"}]
+                }
+            },
             "",
         )
 
@@ -1683,7 +1719,13 @@ def test_wait_for_rendered_flux_resources_returns_when_only_sources_remain_pendi
         if target.kind == "HelmRepository":
             return ({}, "")
         return (
-            {"status": {"conditions": [{"type": "Ready", "status": "True", "reason": "InstallSucceeded"}]}},
+            {
+                "status": {
+                    "conditions": [
+                        {"type": "Ready", "status": "True", "reason": "InstallSucceeded"}
+                    ]
+                }
+            },
             "",
         )
 
@@ -1746,7 +1788,9 @@ def test_run_terraform_apply_with_status_wraps_apply_in_status_reporting(
     monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _cfg: {"TF_VAR_DEMO": "1"})
 
     @contextmanager
-    def _fake_reporting(config: object, *, emit, poll_interval_seconds=15.0, repeat_interval_seconds=60.0):
+    def _fake_reporting(
+        config: object, *, emit, poll_interval_seconds=15.0, repeat_interval_seconds=60.0
+    ):
         calls.append(("status_enter", config, poll_interval_seconds, repeat_interval_seconds))
         emit("hello")
         yield reporter
@@ -1843,17 +1887,23 @@ def test_run_terraform_apply_with_status_appends_last_known_status_on_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    reporter = SimpleNamespace(handle_terraform_event="callback", snapshot=lambda: "Status [10s] TF: failed | API: pending")
+    reporter = SimpleNamespace(
+        handle_terraform_event="callback", snapshot=lambda: "Status [10s] TF: failed | API: pending"
+    )
 
     monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _cfg: {"TF_VAR_DEMO": "1"})
 
     @contextmanager
-    def _fake_reporting(config: object, *, emit, poll_interval_seconds=15.0, repeat_interval_seconds=60.0):
+    def _fake_reporting(
+        config: object, *, emit, poll_interval_seconds=15.0, repeat_interval_seconds=60.0
+    ):
         yield reporter
 
     monkeypatch.setattr(cli, "deployment_status_reporting", _fake_reporting)
 
-    def _fake_apply(infra_dir: Path, *, extra_env=None, initialize=True, event_callback=None) -> None:
+    def _fake_apply(
+        infra_dir: Path, *, extra_env=None, initialize=True, event_callback=None
+    ) -> None:
         raise RuntimeError("terraform failed")
 
     monkeypatch.setattr(cli, "terraform_apply", _fake_apply)
@@ -1927,9 +1977,7 @@ def test_terraform_plan_command_invokes_runtime_auth_and_plan(
 
     monkeypatch.setattr(cli, "_load_generated_context", lambda _path: ("cfg", fake_paths, manifest))
 
-    def _fake_ensure_terraform_backend_ready(
-        config: object, *, auto_auth_bootstrap: bool
-    ) -> None:
+    def _fake_ensure_terraform_backend_ready(config: object, *, auto_auth_bootstrap: bool) -> None:
         captured["backend"] = {
             "config": config,
             "auto_auth_bootstrap": auto_auth_bootstrap,
@@ -2004,9 +2052,7 @@ def test_terraform_apply_command_invokes_runtime_auth_and_apply(
 
     monkeypatch.setattr(cli, "_load_generated_context", lambda _path: ("cfg", fake_paths, manifest))
 
-    def _fake_ensure_terraform_backend_ready(
-        config: object, *, auto_auth_bootstrap: bool
-    ) -> None:
+    def _fake_ensure_terraform_backend_ready(config: object, *, auto_auth_bootstrap: bool) -> None:
         captured["backend"] = {
             "config": config,
             "auto_auth_bootstrap": auto_auth_bootstrap,
@@ -2084,9 +2130,7 @@ def test_terraform_destroy_command_invokes_runtime_auth_and_destroy(
     monkeypatch.setattr(cli, "_load_generated_context", lambda _path: ("cfg", fake_paths, manifest))
     monkeypatch.setattr(cli, "_confirm_generated_destroy", lambda *args, **kwargs: True)
 
-    def _fake_ensure_terraform_backend_ready(
-        config: object, *, auto_auth_bootstrap: bool
-    ) -> None:
+    def _fake_ensure_terraform_backend_ready(config: object, *, auto_auth_bootstrap: bool) -> None:
         captured["backend"] = {
             "config": config,
             "auto_auth_bootstrap": auto_auth_bootstrap,
@@ -2186,7 +2230,9 @@ def test_terraform_unlock_command_reports_cleared_lock_metadata(
     assert "owner=rezab@host" in plain
 
 
-def test_flux_bootstrap_command_invokes_flux_ops(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_flux_bootstrap_command_invokes_flux_ops(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, object] = {}
     manifest = {"schema": "nebius-cxcli-generated/v1", "deploy": {}}
@@ -2643,10 +2689,9 @@ def test_prepare_cluster_handoff_kube_env_loads_runtime_auth_cache_when_env_miss
     monkeypatch.setattr(
         cli,
         "_runtime_auth_cache_load",
-        lambda *, project_id, client_name: captured.setdefault(
-            "cache_load", (project_id, client_name)
-        )
-        or True,
+        lambda *, project_id, client_name: (
+            captured.setdefault("cache_load", (project_id, client_name)) or True
+        ),
     )
     monkeypatch.setattr(
         cli,
@@ -2741,16 +2786,11 @@ def test_enabled_cluster_handoffs_normalizes_boolean_access_outputs(
         scope="infra",
         config_path="infra.components.mk8s",
         description="MK8s",
-        outputs=(
-            ComponentOutput(
-                name="access",
-                kind="input",
-                source_path="inputs.mk8s_cluster_public_endpoint",
-            ),
-        ),
+        outputs=(),
         handoff=Handoff(
-            cluster_id="cluster_id",
-            access="access",
+            cluster_id_output_name="cluster_id",
+            access_kind="input",
+            access_source_path="inputs.mk8s_cluster_public_endpoint",
         ),
     )
     payload = {
@@ -2816,7 +2856,9 @@ def test_persist_cluster_handoff_kubeconfig_merges_exec_entries(
             {
                 "apiVersion": "v1",
                 "kind": "Config",
-                "clusters": [{"name": "existing-cluster", "cluster": {"server": "https://existing"}}],
+                "clusters": [
+                    {"name": "existing-cluster", "cluster": {"server": "https://existing"}}
+                ],
                 "users": [{"name": "existing-user", "user": {"token": "existing"}}],
                 "contexts": [
                     {
@@ -2875,10 +2917,9 @@ def test_mk8s_token_command_emits_exec_credential_from_sdk(
     monkeypatch.setattr(
         cli,
         "_runtime_auth_cache_load",
-        lambda *, project_id, client_name: captured.setdefault(
-            "cache_load", (project_id, client_name)
-        )
-        or True,
+        lambda *, project_id, client_name: (
+            captured.setdefault("cache_load", (project_id, client_name)) or True
+        ),
     )
     monkeypatch.setattr(
         cli,
@@ -3318,7 +3359,9 @@ def test_help_text_maps_commands_to_target_types() -> None:
     assert "create uses a deployments root directory" in output
     assert "discover uses a deployment-scope directory" in output
     assert "component/validate/render/bootstrap-ci use config.yaml" in output
-    assert "validate-generated/deploy/destroy/terraform/flux/inventory/email use generated/" in output
+    assert (
+        "validate-generated/deploy/destroy/terraform/flux/inventory/email use generated/" in output
+    )
     assert "validate-sources accepts optional component_sources.yaml" in output
     assert "auth has no positional path" in output
     assert "bootstrap-ci Use CONFIG_YAML" in output
@@ -3434,7 +3477,11 @@ def test_flux_apply_command_fails_when_no_enabled_charts_exist(
     monkeypatch.setattr(
         cli,
         "_load_generated_context",
-        lambda _path: (fake_config, fake_paths, {"schema": "nebius-cxcli-generated/v1", "deploy": {}}),
+        lambda _path: (
+            fake_config,
+            fake_paths,
+            {"schema": "nebius-cxcli-generated/v1", "deploy": {}},
+        ),
     )
 
     result = runner.invoke(cli.app, ["flux", "apply", str(tmp_path / "generated")])
@@ -3443,7 +3490,9 @@ def test_flux_apply_command_fails_when_no_enabled_charts_exist(
     assert "No enabled apps charts are configured for this project." in _plain_output(result.output)
 
 
-def test_inventory_commands_invoke_inventory_ops(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_inventory_commands_invoke_inventory_ops(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     fake_paths = _fake_paths(tmp_path)
     monkeypatch.setattr(
         cli,
@@ -3453,7 +3502,9 @@ def test_inventory_commands_invoke_inventory_ops(tmp_path: Path, monkeypatch: py
     monkeypatch.setattr(
         cli,
         "write_inventory",
-        lambda _cfg, _paths: SimpleNamespace(markdown=tmp_path / "generated" / "inventory" / "inventory.md"),
+        lambda _cfg, _paths: SimpleNamespace(
+            markdown=tmp_path / "generated" / "inventory" / "inventory.md"
+        ),
     )
 
     write_result = runner.invoke(cli.app, ["inventory", "write", str(tmp_path / "generated")])
@@ -3462,7 +3513,9 @@ def test_inventory_commands_invoke_inventory_ops(tmp_path: Path, monkeypatch: py
     assert "Inventory written:" in _plain_output(write_result.output)
 
 
-def test_email_command_handles_sent_and_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_email_command_handles_sent_and_noop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, object] = {}
     monkeypatch.setattr(
@@ -3702,7 +3755,10 @@ def test_bootstrap_ci_command_with_auth_passes_github_flags(
     monkeypatch.setattr(
         cli,
         "_resolve_bootstrap_ci_github_target",
-        lambda *, github_repo, github_token_env, repo_root: (github_repo or "owner/repo", "token-123"),
+        lambda *, github_repo, github_token_env, repo_root: (
+            github_repo or "owner/repo",
+            "token-123",
+        ),
     )
     monkeypatch.setattr(
         cli,
@@ -3802,7 +3858,9 @@ def test_auth_recreate_forces_profile_rotation(monkeypatch: pytest.MonkeyPatch) 
     )
 
     assert result.exit_code == 0, result.output
-    assert "Recreated runtime auth profile for project 'project-123'" in _plain_output(result.output)
+    assert "Recreated runtime auth profile for project 'project-123'" in _plain_output(
+        result.output
+    )
 
 
 def test_auth_bootstrap_ci_syncs_runtime_profile(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3859,7 +3917,9 @@ def test_auth_validate_profile_ok(monkeypatch: pytest.MonkeyPatch) -> None:
         issues=(),
     )
     monkeypatch.setattr(cli, "_runtime_auth_profile_status", lambda **_kwargs: status)
-    monkeypatch.setattr(cli, "_resolve_project_id_for_auth_bootstrap", lambda **_kwargs: "project-123")
+    monkeypatch.setattr(
+        cli, "_resolve_project_id_for_auth_bootstrap", lambda **_kwargs: "project-123"
+    )
 
     result = runner.invoke(
         cli.app,
@@ -3920,7 +3980,9 @@ def test_auth_validate_profile_fails_on_invalid_profile(monkeypatch: pytest.Monk
         issues=("private key file missing",),
     )
     monkeypatch.setattr(cli, "_runtime_auth_profile_status", lambda **_kwargs: status)
-    monkeypatch.setattr(cli, "_resolve_project_id_for_auth_bootstrap", lambda **_kwargs: "project-123")
+    monkeypatch.setattr(
+        cli, "_resolve_project_id_for_auth_bootstrap", lambda **_kwargs: "project-123"
+    )
 
     result = runner.invoke(
         cli.app,

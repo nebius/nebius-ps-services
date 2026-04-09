@@ -44,7 +44,10 @@ def test_parse_git_describe_version_returns_exact_tag_version() -> None:
 
 
 def test_parse_git_describe_version_bumps_patch_for_dev_distance() -> None:
-    assert runtime_version._parse_git_describe_version("nebius-cxcli-v0.1.8-4-g0bd28e5") == "0.1.9.dev4"
+    assert (
+        runtime_version._parse_git_describe_version("nebius-cxcli-v0.1.8-4-g0bd28e5")
+        == "0.1.9.dev4"
+    )
 
 
 def test_version_from_setuptools_scm_uses_nested_scm_describe_command(monkeypatch) -> None:
@@ -54,9 +57,14 @@ def test_version_from_setuptools_scm_uses_nested_scm_describe_command(monkeypatc
         captured.update(kwargs)
         return "0.1.9.dev4"
 
-    monkeypatch.setitem(sys.modules, "setuptools_scm", SimpleNamespace(get_version=fake_get_version))
+    monkeypatch.setitem(
+        sys.modules, "setuptools_scm", SimpleNamespace(get_version=fake_get_version)
+    )
 
-    assert runtime_version._version_from_setuptools_scm(Path("/tmp/repo/services/nebius-cxcli")) == "0.1.9.dev4"
+    assert (
+        runtime_version._version_from_setuptools_scm(Path("/tmp/repo/services/nebius-cxcli"))
+        == "0.1.9.dev4"
+    )
     assert captured["root"] == "/tmp/repo/services/nebius-cxcli"
     assert captured["search_parent_directories"] is True
     assert captured["scm"] == {"git": {"describe_command": runtime_version._GIT_DESCRIBE_COMMAND}}

@@ -353,12 +353,16 @@ def test_transient_node_group_warnings_are_classified_as_notes() -> None:
         message="Waiting for a node with matching ProviderID to exist for node mk8snodegroup-123",
         state_name="PROVISIONING",
     )
-    assert _transient_node_group_note(
-        "Node condition Ready is False for node mk8snodegroup-123"
-    ) == "waiting for node readiness"
-    assert _transient_node_group_note(
-        "Waiting for a node with matching ProviderID to exist for node mk8snodegroup-123"
-    ) == "waiting for node registration"
+    assert (
+        _transient_node_group_note("Node condition Ready is False for node mk8snodegroup-123")
+        == "waiting for node readiness"
+    )
+    assert (
+        _transient_node_group_note(
+            "Waiting for a node with matching ProviderID to exist for node mk8snodegroup-123"
+        )
+        == "waiting for node registration"
+    )
 
 
 def test_mk8s_status_poller_uses_shared_sdk_auth(monkeypatch) -> None:

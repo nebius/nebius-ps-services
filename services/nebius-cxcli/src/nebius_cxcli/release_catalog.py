@@ -30,7 +30,7 @@ def _load_yaml(path: Path) -> dict[str, Any]:
 
 
 def _infra_modules(payload: dict[str, Any], *, subject: str) -> list[dict[str, Any]]:
-    modules = (((payload or {}).get("components") or {}).get("infra") or {})
+    modules = ((payload or {}).get("components") or {}).get("infra") or {}
     if not isinstance(modules, dict) or not modules:
         raise ValueError(f"{subject} has no components.infra entries")
     normalized: list[dict[str, Any]] = []
@@ -107,9 +107,7 @@ def verify_wheel(*, wheel_path: Path, release_ref: str) -> None:
             name for name in zf.namelist() if name.endswith(BUNDLED_COMPONENT_SOURCES_SUFFIX)
         ]
         if not candidate_names:
-            raise ValueError(
-                f"{wheel_path} is missing bundled {BUNDLED_COMPONENT_SOURCES_SUFFIX}"
-            )
+            raise ValueError(f"{wheel_path} is missing bundled {BUNDLED_COMPONENT_SOURCES_SUFFIX}")
         payload = yaml.safe_load(zf.read(candidate_names[0]).decode("utf-8")) or {}
     if not isinstance(payload, dict):
         raise ValueError(f"{wheel_path} bundled component sources root must be a mapping")

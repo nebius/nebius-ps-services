@@ -71,12 +71,7 @@ def _stub_catalog_output_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _project_config_path(base: Path) -> Path:
     return (
-        base
-        / "deployments"
-        / "projects"
-        / "client-a--tenant-123"
-        / "project-456"
-        / "config.yaml"
+        base / "deployments" / "projects" / "client-a--tenant-123" / "project-456" / "config.yaml"
     )
 
 
@@ -110,7 +105,9 @@ def _infra_component_row(payload: dict, component_id: str) -> dict:
     raise KeyError(component_id)
 
 
-def _set_catalog_override(path: Path, *, source_profile: SourceProfile = SourceProfile.PORTABLE) -> None:
+def _set_catalog_override(
+    path: Path, *, source_profile: SourceProfile = SourceProfile.PORTABLE
+) -> None:
     set_component_sources_file_override(path)
     set_component_sources_profile_override(source_profile)
     reset_component_sources_cache()
@@ -176,14 +173,14 @@ def test_render_creates_source_only_module_and_flux_outputs(
 
     monkeypatch.setattr(
         "nebius_cxcli.infra_render.module_variables",
-            lambda _source: (
-                ModuleVariable(name="parent_id", required=False, type_hint="string"),
-                ModuleVariable(name="cluster_name", required=False, type_hint="string"),
-                ModuleVariable(name="cpu_nodes_count", required=False, type_hint="number"),
-                ModuleVariable(name="cpu_nodes_platform", required=False, type_hint="string"),
-                ModuleVariable(name="cpu_nodes_preset", required=False, type_hint="string"),
-                ModuleVariable(name="subnet_id", required=False, type_hint="string"),
-                ModuleVariable(name="gpu_enabled", required=False, type_hint="bool"),
+        lambda _source: (
+            ModuleVariable(name="parent_id", required=False, type_hint="string"),
+            ModuleVariable(name="cluster_name", required=False, type_hint="string"),
+            ModuleVariable(name="cpu_nodes_count", required=False, type_hint="number"),
+            ModuleVariable(name="cpu_nodes_platform", required=False, type_hint="string"),
+            ModuleVariable(name="cpu_nodes_preset", required=False, type_hint="string"),
+            ModuleVariable(name="subnet_id", required=False, type_hint="string"),
+            ModuleVariable(name="gpu_enabled", required=False, type_hint="bool"),
             ModuleVariable(
                 name="mk8s_cluster_public_endpoint",
                 required=False,
@@ -224,9 +221,7 @@ def test_render_creates_source_only_module_and_flux_outputs(
         explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml",
         source_profile=SourceProfile.PORTABLE,
     )
-    mk8s_source = next(
-        item.source for item in portable_catalog.tf_modules if item.module == "mk8s"
-    )
+    mk8s_source = next(item.source for item in portable_catalog.tf_modules if item.module == "mk8s")
     assert f'source = "{mk8s_source}"' in main_tf
     assert "subnet_id = var.mk8s_subnet_id" in main_tf
     assert "inputs = jsondecode(" not in main_tf
@@ -285,14 +280,14 @@ def test_render_keeps_duplicate_component_instances_distinct(
 
     monkeypatch.setattr(
         "nebius_cxcli.infra_render.module_variables",
-            lambda _source: (
-                ModuleVariable(name="parent_id", required=False, type_hint="string"),
-                ModuleVariable(name="cluster_name", required=False, type_hint="string"),
-                ModuleVariable(name="cpu_nodes_count", required=False, type_hint="number"),
-                ModuleVariable(name="cpu_nodes_platform", required=False, type_hint="string"),
-                ModuleVariable(name="cpu_nodes_preset", required=False, type_hint="string"),
-                ModuleVariable(name="gpu_enabled", required=False, type_hint="bool"),
-                ModuleVariable(
+        lambda _source: (
+            ModuleVariable(name="parent_id", required=False, type_hint="string"),
+            ModuleVariable(name="cluster_name", required=False, type_hint="string"),
+            ModuleVariable(name="cpu_nodes_count", required=False, type_hint="number"),
+            ModuleVariable(name="cpu_nodes_platform", required=False, type_hint="string"),
+            ModuleVariable(name="cpu_nodes_preset", required=False, type_hint="string"),
+            ModuleVariable(name="gpu_enabled", required=False, type_hint="bool"),
+            ModuleVariable(
                 name="mk8s_cluster_public_endpoint",
                 required=False,
                 type_hint="bool",
@@ -388,7 +383,7 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     stale_tf.parent.mkdir(parents=True, exist_ok=True)
     bootstrap_flux_dir.mkdir(parents=True, exist_ok=True)
     stale_inventory.parent.mkdir(parents=True, exist_ok=True)
-    stale_tf.write_text("resource \"null_resource\" \"stale\" {}\n", encoding="utf-8")
+    stale_tf.write_text('resource "null_resource" "stale" {}\n', encoding="utf-8")
     bootstrap_sync.write_text("apiVersion: v1\nkind: ConfigMap\n", encoding="utf-8")
     bootstrap_components.write_text("apiVersion: v1\nkind: ConfigMap\n", encoding="utf-8")
     bootstrap_kustomization.write_text(
@@ -409,7 +404,9 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     assert not bootstrap_components.exists()
     assert not bootstrap_kustomization.exists()
     assert (paths.infra_dir / "main.tf").exists()
-    kustomization_doc = yaml.safe_load((paths.flux_dir / "kustomization.yaml").read_text(encoding="utf-8"))
+    kustomization_doc = yaml.safe_load(
+        (paths.flux_dir / "kustomization.yaml").read_text(encoding="utf-8")
+    )
     assert "./flux-system" not in kustomization_doc["resources"]
     assert (paths.inventory_dir / "inventory.md").exists()
 
@@ -439,7 +436,9 @@ def test_render_instance_preserves_existing_generated_bundle_when_rerender_fails
         written.write_text("terraform {}\n", encoding="utf-8")
         return [written]
 
-    monkeypatch.setattr("nebius_cxcli.render.render_terraform_artifacts", _fake_render_terraform_artifacts)
+    monkeypatch.setattr(
+        "nebius_cxcli.render.render_terraform_artifacts", _fake_render_terraform_artifacts
+    )
     monkeypatch.setattr(
         "nebius_cxcli.render.render_flux",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
@@ -513,10 +512,9 @@ def test_render_dynamic_oci_chart_writes_flux_oci_repository(tmp_path: Path) -> 
 
     kustomization_doc = yaml.safe_load(kustomization.read_text(encoding="utf-8"))
     assert "./namespace-envoy-gateway-system.yaml" in kustomization_doc["resources"]
-    assert (
-        kustomization_doc["resources"].index("./namespace-envoy-gateway-system.yaml")
-        < kustomization_doc["resources"].index("./helmrelease-platform-envoy-gateway.yaml")
-    )
+    assert kustomization_doc["resources"].index(
+        "./namespace-envoy-gateway-system.yaml"
+    ) < kustomization_doc["resources"].index("./helmrelease-platform-envoy-gateway.yaml")
 
 
 def test_render_removes_stale_legacy_nested_flux_layout(tmp_path: Path) -> None:
@@ -599,7 +597,9 @@ def test_render_uses_shared_admin_ssh_username_binding_for_wireguard_jumphost(
     assert "wireguard_jumphost_ssh_public_key" not in tfvars
 
 
-def test_render_uses_shared_defaults_for_app_chart_values(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_render_uses_shared_defaults_for_app_chart_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
@@ -682,11 +682,15 @@ def test_render_supports_infra_input_binding_from_component_output(
 ) -> None:
     producer_dir = tmp_path / "modules" / "producer"
     producer_dir.mkdir(parents=True, exist_ok=True)
-    (producer_dir / "main.tf").write_text('output "instance_id" { value = "instance-123" }\n', encoding="utf-8")
+    (producer_dir / "main.tf").write_text(
+        'output "instance_id" { value = "instance-123" }\n', encoding="utf-8"
+    )
 
     consumer_dir = tmp_path / "modules" / "consumer"
     consumer_dir.mkdir(parents=True, exist_ok=True)
-    (consumer_dir / "variables.tf").write_text('variable "upstream_id" { type = string }\n', encoding="utf-8")
+    (consumer_dir / "variables.tf").write_text(
+        'variable "upstream_id" { type = string }\n', encoding="utf-8"
+    )
     (consumer_dir / "main.tf").write_text("terraform {}\n", encoding="utf-8")
 
     sources_file = tmp_path / "component_sources.yaml"
@@ -754,12 +758,14 @@ def test_render_supports_infra_input_binding_from_component_output(
     assert "value       = module.producer.instance_id" in outputs_tf
 
 
-def test_render_supports_app_input_binding_from_component_output_with_runtime_values(
+def test_render_supports_app_input_binding_from_component_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     mk8s_dir = tmp_path / "modules" / "mk8s"
     mk8s_dir.mkdir(parents=True, exist_ok=True)
-    (mk8s_dir / "main.tf").write_text('output "cluster_id" { value = "cluster-u123" }\n', encoding="utf-8")
+    (mk8s_dir / "main.tf").write_text(
+        'output "cluster_id" { value = "cluster-u123" }\n', encoding="utf-8"
+    )
 
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
@@ -770,11 +776,6 @@ def test_render_supports_app_input_binding_from_component_output_with_runtime_va
                         "source": {
                             "portable": "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3",
                             "local": str(mk8s_dir),
-                        },
-                        "runtime": {
-                            "values": {
-                                "access": "external",
-                            }
                         },
                     }
                 },
@@ -791,7 +792,6 @@ def test_render_supports_app_input_binding_from_component_output_with_runtime_va
                         },
                         "input": {
                             "values.global.clusterId": "mk8s.cluster_id",
-                            "values.global.access": "mk8s.access",
                         },
                     }
                 },
@@ -859,7 +859,6 @@ def test_render_supports_app_input_binding_from_component_output_with_runtime_va
         (paths.flux_dir / "helmrelease-workloads-demo-app.yaml").read_text(encoding="utf-8")
     )
     assert release_doc["spec"]["values"]["global"]["clusterId"] == "cluster-u123"
-    assert release_doc["spec"]["values"]["global"]["access"] == "external"
 
 
 def test_render_supports_explicit_instance_qualified_app_input_binding(
@@ -867,7 +866,9 @@ def test_render_supports_explicit_instance_qualified_app_input_binding(
 ) -> None:
     producer_dir = tmp_path / "modules" / "producer"
     producer_dir.mkdir(parents=True, exist_ok=True)
-    (producer_dir / "main.tf").write_text('output "instance_id" { value = "instance-123" }\n', encoding="utf-8")
+    (producer_dir / "main.tf").write_text(
+        'output "instance_id" { value = "instance-123" }\n', encoding="utf-8"
+    )
 
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(

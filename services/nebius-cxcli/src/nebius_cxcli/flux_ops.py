@@ -49,7 +49,9 @@ _FLUX_NAMESPACE_STUCK_RESOURCE_TYPES = (
     "helmrepositories.source.toolkit.fluxcd.io",
     "kustomizations.kustomize.toolkit.fluxcd.io",
 )
-_FLUX_REQUIRED_CRDS = tuple(sorted({resource_type for resource_type, _namespace in _FLUX_REQUIRED_API_TYPES}))
+_FLUX_REQUIRED_CRDS = tuple(
+    sorted({resource_type for resource_type, _namespace in _FLUX_REQUIRED_API_TYPES})
+)
 _BENIGN_KUBECTL_OUTPUT_MARKERS = (
     "token from NEBIUS_IAM_TOKEN env is used",
     "missing the kubectl.kubernetes.io/last-applied-configuration annotation",
@@ -194,7 +196,9 @@ def _iter_yaml_docs(path: Path) -> list[dict[str, Any]]:
 def _flux_wait_targets(flux_dir: Path) -> list[FluxWaitTarget]:
     files = _kustomization_resource_files(flux_dir)
     if not files:
-        files = sorted(path for path in flux_dir.glob("*.yaml") if path.name != "kustomization.yaml")
+        files = sorted(
+            path for path in flux_dir.glob("*.yaml") if path.name != "kustomization.yaml"
+        )
     source_targets: list[FluxWaitTarget] = []
     workload_targets: list[FluxWaitTarget] = []
     seen: set[tuple[str, str, str]] = set()
@@ -323,8 +327,7 @@ def _format_flux_target_summary(
 
     state_label = reason or "NotReady"
     summary = (
-        f"[yellow]{target.kind}[/yellow] {escape(label)}: "
-        f"[yellow]{escape(state_label)}[/yellow]"
+        f"[yellow]{target.kind}[/yellow] {escape(label)}: [yellow]{escape(state_label)}[/yellow]"
     )
     if message:
         summary += f"; {escape(message)}"

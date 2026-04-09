@@ -9,7 +9,9 @@ import yaml
 from nebius_cxcli.release_catalog import render_release_catalog, verify_catalog, verify_wheel
 
 
-def _catalog_payload(portable_source: str, *, local_source: str | None = "../../platform-infra/modules/mk8s") -> dict[str, object]:
+def _catalog_payload(
+    portable_source: str, *, local_source: str | None = "../../platform-infra/modules/mk8s"
+) -> dict[str, object]:
     return {
         "components": {
             "infra": {

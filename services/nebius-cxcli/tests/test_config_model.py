@@ -177,6 +177,7 @@ def test_create_writes_runtime_shape_with_selected_components(tmp_path: Path) ->
             "--project-id",
             "project-456",
             "--no-validate-sources",
+            "--no-validate-config",
             "--infra",
             "mk8s",
             "--app",
@@ -185,7 +186,9 @@ def test_create_writes_runtime_shape_with_selected_components(tmp_path: Path) ->
     )
     assert result.exit_code == 0, result.output
 
-    config_path = deployments_root / "projects" / "client-a--tenant-123" / "project-456" / "config.yaml"
+    config_path = (
+        deployments_root / "projects" / "client-a--tenant-123" / "project-456" / "config.yaml"
+    )
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
     assert isinstance(payload, dict)
