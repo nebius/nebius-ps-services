@@ -32,7 +32,9 @@ BUNDLED_COMPONENT_SOURCES_FILENAME = "component_sources.yaml"
 COMPONENT_SOURCES_FILE_ENV = "NEBIUS_CXCLI_COMPONENT_SOURCES_FILE"
 COMPONENT_SOURCES_PROFILE_ENV = "NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE"
 DEFAULT_FLUX_VERSION = "v2.8.0"
+DEFAULT_FLUX_RELEASE_TIMEOUT = "5m"
 DEFAULT_TERRAFORM_VERSION = "1.14.1"
+GO_DURATION_RE = re.compile(r"(?:\d+(?:\.\d+)?(?:ns|us|µs|ms|s|m|h))+")
 
 _CLI_COMPONENT_SOURCES_FILE_OVERRIDE: Path | None = None
 _CLI_COMPONENT_SOURCES_PROFILE_OVERRIDE: SourceProfile | None = None
@@ -78,6 +80,7 @@ class StatusWatcher:
 @dataclass(frozen=True)
 class FluxSettings:
     version: str = DEFAULT_FLUX_VERSION
+    release_timeout: str = DEFAULT_FLUX_RELEASE_TIMEOUT
 
 
 @dataclass(frozen=True)
@@ -139,6 +142,7 @@ class HelmChartSource:
     version: str | None = None
     namespace: str | None = None
     release_name: str | None = None
+    release_timeout: str | None = None
     enable: bool = False
     description: str | None = None
     group: str | None = None
@@ -373,7 +377,7 @@ def _parse_cli_settings(raw: Any) -> CliSettings:
     if not isinstance(flux_raw, dict):
         raise ValueError("cli.flux must be a mapping")
 
-    supported_flux_keys = {"version"}
+    supported_flux_keys = {"version", "release_timeout"}
     unknown_flux = sorted(str(key) for key in flux_raw if str(key) not in supported_flux_keys)
     if unknown_flux:
         raise ValueError("cli.flux has unsupported field(s): " + ", ".join(unknown_flux))
@@ -382,6 +386,11 @@ def _parse_cli_settings(raw: Any) -> CliSettings:
     if not re.fullmatch(r"v?[0-9]+(?:\.[0-9]+){1,2}", raw_version):
         raise ValueError("cli.flux.version must be a semantic version like 'v2.8.0'")
     version = raw_version if raw_version.startswith("v") else f"v{raw_version}"
+    release_timeout = _as_text(flux_raw.get("release_timeout")) or DEFAULT_FLUX_RELEASE_TIMEOUT
+    if not GO_DURATION_RE.fullmatch(release_timeout):
+        raise ValueError(
+            "cli.flux.release_timeout must be a Go-style duration like '5m' or '12m30s'"
+        )
     terraform_raw = raw.get("terraform", {})
     if terraform_raw is None:
         terraform_raw = {}
@@ -400,7 +409,7 @@ def _parse_cli_settings(raw: Any) -> CliSettings:
         raise ValueError("cli.terraform.version must be a semantic version like '1.14.1'")
 
     return CliSettings(
-        flux=FluxSettings(version=version),
+        flux=FluxSettings(version=version, release_timeout=release_timeout),
         terraform=TerraformSettings(version=terraform_version),
     )
 
@@ -882,7 +891,7 @@ def _parse_sources_payload(
             release_block = {}
         if not isinstance(release_block, dict):
             raise ValueError(f"components.apps.{component_id} release must be a mapping")
-        supported_release_keys = {"namespace", "name"}
+        supported_release_keys = {"namespace", "name", "timeout"}
         unknown_release_keys = sorted(
             str(key) for key in release_block if str(key) not in supported_release_keys
         )
@@ -893,6 +902,12 @@ def _parse_sources_payload(
             )
         namespace = _as_text(release_block.get("namespace")) or None
         release_name = _as_text(release_block.get("name")) or None
+        release_timeout = _as_text(release_block.get("timeout")) or cli.flux.release_timeout
+        if not GO_DURATION_RE.fullmatch(release_timeout):
+            raise ValueError(
+                f"components.apps.{component_id} release.timeout must be a Go-style duration "
+                "like '5m' or '12m30s'"
+            )
 
         description, group, enable = _parse_ui_block(
             raw.get("ui"),
@@ -917,6 +932,7 @@ def _parse_sources_payload(
                 version=version,
                 namespace=namespace,
                 release_name=release_name,
+                release_timeout=release_timeout,
                 enable=enable,
                 description=description,
                 group=group,

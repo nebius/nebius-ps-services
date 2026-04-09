@@ -123,6 +123,7 @@ def _catalog(
     *,
     infra: dict[str, object] | None = None,
     apps: dict[str, object] | None = None,
+    cli: dict[str, object] | None = None,
     shared: dict[str, object] | None = None,
 ) -> dict[str, object]:
     payload: dict[str, object] = {
@@ -131,6 +132,8 @@ def _catalog(
             "apps": apps or {},
         }
     }
+    if cli is not None:
+        payload["cli"] = cli
     if shared is not None:
         payload["shared"] = shared
     return payload
@@ -515,6 +518,103 @@ def test_render_dynamic_oci_chart_writes_flux_oci_repository(tmp_path: Path) -> 
     assert kustomization_doc["resources"].index(
         "./namespace-envoy-gateway-system.yaml"
     ) < kustomization_doc["resources"].index("./helmrelease-platform-envoy-gateway.yaml")
+
+
+def test_render_uses_component_source_release_timeout_for_helm_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                apps={
+                    "demo-app": {
+                        "source": {
+                            "repo": "https://example.invalid/charts",
+                            "chart": "demo-app",
+                            "version": "1.0.0",
+                        },
+                        "release": {
+                            "namespace": "demo",
+                            "name": "demo-app",
+                            "timeout": "10m",
+                        },
+                    }
+                }
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    _set_catalog_override(sources_file, source_profile=SourceProfile.PORTABLE)
+    monkeypatch.chdir(tmp_path)
+
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = _starter_payload(selected_infra=set(), selected_apps={"demo-app"})
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+
+    render_project(config, paths, source_profile=SourceProfile.PORTABLE)
+
+    release_doc = yaml.safe_load(
+        (paths.flux_dir / "helmrelease-workloads-demo-app.yaml").read_text(encoding="utf-8")
+    )
+    assert release_doc["spec"]["timeout"] == "10m"
+
+
+def test_render_uses_global_flux_release_timeout_when_chart_omits_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                cli={
+                    "flux": {
+                        "version": "v2.8.0",
+                        "release_timeout": "15m",
+                    }
+                },
+                apps={
+                    "demo-app": {
+                        "source": {
+                            "repo": "https://example.invalid/charts",
+                            "chart": "demo-app",
+                            "version": "1.0.0",
+                        },
+                        "release": {
+                            "namespace": "demo",
+                            "name": "demo-app",
+                        },
+                    }
+                },
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    _set_catalog_override(sources_file, source_profile=SourceProfile.PORTABLE)
+    monkeypatch.chdir(tmp_path)
+
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = _starter_payload(selected_infra=set(), selected_apps={"demo-app"})
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+
+    render_project(config, paths, source_profile=SourceProfile.PORTABLE)
+
+    release_doc = yaml.safe_load(
+        (paths.flux_dir / "helmrelease-workloads-demo-app.yaml").read_text(encoding="utf-8")
+    )
+    assert release_doc["spec"]["timeout"] == "15m"
 
 
 def test_render_removes_stale_legacy_nested_flux_layout(tmp_path: Path) -> None:

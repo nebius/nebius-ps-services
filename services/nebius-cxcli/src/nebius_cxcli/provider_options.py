@@ -16,6 +16,7 @@ from .sdk_auth import init_nebius_sdk
 SUPPORTED_PROVIDER_OPTION_SOURCES = frozenset(
     {
         "mk8s_compatible_platforms",
+        "mk8s_infiniband_fabrics",
         "compute_platforms",
         "compute_platform_presets",
         "project_subnets",
@@ -40,6 +41,29 @@ class TenantProjectValidationResult:
     valid: bool
     message: str = ""
     retryable: bool = True
+
+
+@dataclass(frozen=True)
+class _Mk8sInfiniBandFabric:
+    value: str
+    platform: str
+    region: str
+
+
+# Keep this in the documented Nebius fabric order for stable prompt rendering.
+_MK8S_INFINIBAND_FABRICS: tuple[_Mk8sInfiniBandFabric, ...] = (
+    _Mk8sInfiniBandFabric(value="fabric-2", platform="gpu-h100-sxm", region="eu-north1"),
+    _Mk8sInfiniBandFabric(value="fabric-3", platform="gpu-h100-sxm", region="eu-north1"),
+    _Mk8sInfiniBandFabric(value="fabric-4", platform="gpu-h100-sxm", region="eu-north1"),
+    _Mk8sInfiniBandFabric(value="fabric-5", platform="gpu-h200-sxm", region="eu-west1"),
+    _Mk8sInfiniBandFabric(value="fabric-6", platform="gpu-h100-sxm", region="eu-north1"),
+    _Mk8sInfiniBandFabric(value="fabric-7", platform="gpu-h200-sxm", region="eu-north1"),
+    _Mk8sInfiniBandFabric(value="eu-north2-a", platform="gpu-h200-sxm", region="eu-north2"),
+    _Mk8sInfiniBandFabric(value="me-west1-a", platform="gpu-b200-sxm-a", region="me-west1"),
+    _Mk8sInfiniBandFabric(value="uk-south1-a", platform="gpu-b300-sxm", region="uk-south1"),
+    _Mk8sInfiniBandFabric(value="us-central1-a", platform="gpu-h200-sxm", region="us-central1"),
+    _Mk8sInfiniBandFabric(value="us-central1-b", platform="gpu-b200-sxm", region="us-central1"),
+)
 
 
 def _normalize_plugin_choices(items: Iterable[object] | None) -> list[OptionChoice]:
@@ -201,6 +225,7 @@ class ProviderOptionLookup:
         try:
             resolver = {
                 "mk8s_compatible_platforms": self._resolve_mk8s_compatible_platforms,
+                "mk8s_infiniband_fabrics": self._resolve_mk8s_infiniband_fabrics,
                 "compute_platforms": self._resolve_compute_platforms,
                 "compute_platform_presets": self._resolve_compute_platform_presets,
                 "project_subnets": self._resolve_project_subnets,
@@ -477,6 +502,41 @@ class ProviderOptionLookup:
             )
         else:
             resolved = tuple(OptionChoice(value=name, label=name) for name in compatible_names)
+        self._cache[cache_key] = resolved
+        return resolved
+
+    def _resolve_mk8s_infiniband_fabrics(
+        self,
+        *,
+        args: dict[str, Any],
+        payload: dict[str, Any],
+        field_path: str,
+    ) -> tuple[OptionChoice, ...]:
+        platform_path = _as_str(args.get("platform_path"))
+        if not platform_path and field_path.endswith(".infiniband_fabric"):
+            platform_path = f"{field_path.rsplit('.', maxsplit=1)[0]}.gpu_nodes_platform"
+
+        platform_name = _as_str(args.get("platform"))
+        if not platform_name and platform_path:
+            platform_name = _as_str(_payload_value(payload, platform_path))
+        if not platform_name:
+            return ()
+
+        region_id = _as_str(args.get("region_id")) or _as_str(
+            _payload_value(payload, "client_info.nebius.region_id")
+        )
+        cache_key = ("mk8s_infiniband_fabrics", platform_name, region_id)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        resolved = tuple(
+            OptionChoice(
+                value=item.value,
+                label=f"{item.value}  ({item.platform}, {item.region})",
+            )
+            for item in _MK8S_INFINIBAND_FABRICS
+            if item.platform == platform_name and (not region_id or item.region == region_id)
+        )
         self._cache[cache_key] = resolved
         return resolved
 

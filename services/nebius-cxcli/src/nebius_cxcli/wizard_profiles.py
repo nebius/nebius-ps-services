@@ -47,6 +47,10 @@ def _static_sources(*values: str) -> dict[str, Any]:
     }
 
 
+def _suppressed_prompt_fields(*field_paths: str) -> dict[str, dict[str, Any]]:
+    return {field_path: {"prompt": False} for field_path in field_paths}
+
+
 BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
     "mk8s": {
         **_project_subnets_field(),
@@ -74,6 +78,17 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
                 "depends_on": "inputs.gpu_nodes_platform",
             }
         },
+        "inputs.infiniband_fabric": {
+            "options": {
+                "from": "mk8s_infiniband_fabrics",
+                "depends_on": "inputs.gpu_nodes_platform",
+            }
+        },
+        **_suppressed_prompt_fields(
+            "inputs.mk8s_cluster_overrides",
+            "inputs.mk8s_cpu_node_group_overrides",
+            "inputs.mk8s_gpu_node_group_overrides",
+        ),
     },
     "managed-postgresql": {
         "inputs.network_id": {

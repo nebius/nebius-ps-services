@@ -1582,6 +1582,226 @@ def test_wait_for_rendered_flux_resources_raises_with_guidance_on_failure(
         )
 
 
+def test_wait_for_rendered_flux_resources_fails_fast_on_terminal_workload_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    flux_dir = tmp_path / "generated" / "flux"
+    flux_dir.mkdir(parents=True, exist_ok=True)
+    (flux_dir / "kustomization.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "kustomize.config.k8s.io/v1beta1",
+                "kind": "Kustomization",
+                "resources": ["./helm-repositories.yaml", "./helmrelease-demo.yaml"],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (flux_dir / "helm-repositories.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "source.toolkit.fluxcd.io/v1",
+                "kind": "HelmRepository",
+                "metadata": {"name": "demo", "namespace": "flux-system"},
+                "spec": {"interval": "30m", "url": "oci://example.invalid/demo", "type": "oci"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (flux_dir / "helmrelease-demo.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "helm.toolkit.fluxcd.io/v2",
+                "kind": "HelmRelease",
+                "metadata": {"name": "demo", "namespace": "demo"},
+                "spec": {"interval": "5m", "chart": {"spec": {"chart": "demo"}}},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(flux_ops, "_require_binary", lambda _name: None)
+
+    def _fake_get_target(target, *, env, timeout_seconds=20):
+        if target.kind == "HelmRepository":
+            return ({}, "")
+        return (
+            {
+                "status": {
+                    "conditions": [
+                        {
+                            "type": "Stalled",
+                            "status": "True",
+                            "reason": "RetriesExceeded",
+                            "message": "Failed to install after 1 attempt(s)",
+                        },
+                        {
+                            "type": "Ready",
+                            "status": "False",
+                            "reason": "InstallFailed",
+                            "message": "startup api check failed",
+                        },
+                    ]
+                }
+            },
+            "",
+        )
+
+    monkeypatch.setattr(flux_ops, "_kubectl_get_target", _fake_get_target)
+
+    with pytest.raises(
+        RuntimeError,
+        match="One or more rendered Flux resources reached a terminal failure state",
+    ):
+        flux_ops.wait_for_rendered_flux_resources(
+            SimpleNamespace(flux_dir=flux_dir),
+            timeout_seconds=600,
+        )
+
+
+def test_wait_for_rendered_flux_resources_waits_for_other_workloads_to_settle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    flux_dir = tmp_path / "generated" / "flux"
+    flux_dir.mkdir(parents=True, exist_ok=True)
+    (flux_dir / "kustomization.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "kustomize.config.k8s.io/v1beta1",
+                "kind": "Kustomization",
+                "resources": ["./helmrelease-failed.yaml", "./helmrelease-slow.yaml"],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (flux_dir / "helmrelease-failed.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "helm.toolkit.fluxcd.io/v2",
+                "kind": "HelmRelease",
+                "metadata": {"name": "failed", "namespace": "demo"},
+                "spec": {"interval": "5m", "chart": {"spec": {"chart": "failed"}}},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (flux_dir / "helmrelease-slow.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "helm.toolkit.fluxcd.io/v2",
+                "kind": "HelmRelease",
+                "metadata": {"name": "slow", "namespace": "demo"},
+                "spec": {"interval": "5m", "chart": {"spec": {"chart": "slow"}}},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(flux_ops, "_require_binary", lambda _name: None)
+    call_counts: dict[str, int] = {"failed": 0, "slow": 0}
+
+    def _fake_get_target(target, *, env, timeout_seconds=20):
+        call_counts[target.name] += 1
+        if target.name == "failed":
+            return (
+                {
+                    "status": {
+                        "conditions": [
+                            {
+                                "type": "Stalled",
+                                "status": "True",
+                                "reason": "RetriesExceeded",
+                                "message": "install failed",
+                            },
+                            {
+                                "type": "Ready",
+                                "status": "False",
+                                "reason": "InstallFailed",
+                                "message": "install failed",
+                            },
+                        ]
+                    }
+                },
+                "",
+            )
+        if call_counts["slow"] == 1:
+            return (
+                {
+                    "status": {
+                        "conditions": [
+                            {
+                                "type": "Ready",
+                                "status": "False",
+                                "reason": "Progressing",
+                                "message": "still reconciling",
+                            }
+                        ]
+                    }
+                },
+                "",
+            )
+        return ({"status": {"conditions": [{"type": "Ready", "status": "True"}]}}, "")
+
+    monkeypatch.setattr(flux_ops, "_kubectl_get_target", _fake_get_target)
+
+    with pytest.raises(
+        RuntimeError,
+        match="One or more rendered Flux resources reached a terminal failure state",
+    ):
+        flux_ops.wait_for_rendered_flux_resources(
+            SimpleNamespace(flux_dir=flux_dir),
+            timeout_seconds=600,
+            poll_interval_seconds=0.01,
+        )
+
+    assert call_counts["failed"] >= 2
+    assert call_counts["slow"] >= 2
+
+
+def test_flux_wait_targets_capture_rendered_timeout_hints(tmp_path: Path) -> None:
+    flux_dir = tmp_path / "generated" / "flux"
+    flux_dir.mkdir(parents=True, exist_ok=True)
+    (flux_dir / "kustomization.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "kustomize.config.k8s.io/v1beta1",
+                "kind": "Kustomization",
+                "resources": ["./helmrelease-demo.yaml"],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (flux_dir / "helmrelease-demo.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "helm.toolkit.fluxcd.io/v2",
+                "kind": "HelmRelease",
+                "metadata": {"name": "demo", "namespace": "demo"},
+                "spec": {
+                    "interval": "5m",
+                    "timeout": "12m30s",
+                    "chart": {"spec": {"chart": "demo"}},
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    targets = flux_ops._flux_wait_targets(flux_dir)
+
+    assert len(targets) == 1
+    assert targets[0].timeout_seconds == 750
+    assert flux_ops._suggested_flux_wait_timeout_seconds(targets) == 810
+
+
 def test_wait_for_rendered_flux_resources_emits_cluster_status_while_waiting(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

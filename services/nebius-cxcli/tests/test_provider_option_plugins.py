@@ -304,3 +304,61 @@ def test_mk8s_compatible_platforms_fall_back_to_matrix_without_project_scope(mon
     assert [(choice.value, choice.label) for choice in resolved] == [
         ("cpu-d3", "cpu-d3"),
     ]
+
+
+def test_mk8s_infiniband_fabrics_filter_by_selected_region_and_gpu_platform() -> None:
+    lookup = ProviderOptionLookup()
+
+    resolved = lookup.resolve(
+        provider="mk8s_infiniband_fabrics",
+        args={"platform_path": "infra.components[0].inputs.gpu_nodes_platform"},
+        payload={
+            "client_info": {
+                "nebius": {
+                    "region_id": "us-central1",
+                }
+            },
+            "infra": {
+                "components": [
+                    {
+                        "inputs": {
+                            "gpu_nodes_platform": "gpu-h200-sxm",
+                        }
+                    }
+                ]
+            },
+        },
+        field_path="infra.components[0].inputs.infiniband_fabric",
+    )
+
+    assert [(choice.value, choice.label) for choice in resolved] == [
+        ("us-central1-a", "us-central1-a  (gpu-h200-sxm, us-central1)"),
+    ]
+
+
+def test_mk8s_infiniband_fabrics_return_all_platform_matches_without_region_filter() -> None:
+    lookup = ProviderOptionLookup()
+
+    resolved = lookup.resolve(
+        provider="mk8s_infiniband_fabrics",
+        args={"platform_path": "infra.components[0].inputs.gpu_nodes_platform"},
+        payload={
+            "infra": {
+                "components": [
+                    {
+                        "inputs": {
+                            "gpu_nodes_platform": "gpu-h200-sxm",
+                        }
+                    }
+                ]
+            },
+        },
+        field_path="infra.components[0].inputs.infiniband_fabric",
+    )
+
+    assert [(choice.value, choice.label) for choice in resolved] == [
+        ("fabric-5", "fabric-5  (gpu-h200-sxm, eu-west1)"),
+        ("fabric-7", "fabric-7  (gpu-h200-sxm, eu-north1)"),
+        ("eu-north2-a", "eu-north2-a  (gpu-h200-sxm, eu-north2)"),
+        ("us-central1-a", "us-central1-a  (gpu-h200-sxm, us-central1)"),
+    ]

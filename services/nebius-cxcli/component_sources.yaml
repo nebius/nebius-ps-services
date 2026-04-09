@@ -1,6 +1,7 @@
 cli:
   flux:
     version: v2.8.0
+    release_timeout: 5m
   terraform:
     version: 1.14.1
 shared:
@@ -117,6 +118,8 @@ components:
       release:
         namespace: cert-manager
         name: cert-manager
+      defaults:
+        values.crds.enabled: true
     external-dns:
       source:
         repo: https://kubernetes-sigs.github.io/external-dns

@@ -28,6 +28,11 @@ def load_config(path: Path) -> AttrDict:
     """Load one config.yaml file and return runtime-wrapped config."""
     if not path.exists():
         raise ValueError(f"Config file not found: {path}")
+    if path.is_dir():
+        raise ValueError(
+            "Expected a project config.yaml file path, but got a directory: "
+            f"{path}. Pass projects/<client>--<tenant>/<project>/config.yaml."
+        )
     with path.open("r", encoding="utf-8") as handle:
         payload = yaml.safe_load(handle) or {}
     if not isinstance(payload, dict):
