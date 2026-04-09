@@ -135,34 +135,29 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
     infra_rows = _infra_component_rows(payload_data)
     app_rows = _app_chart_rows(payload_data)
 
-    # Look up infra components by kind/handoff from the registry instead of
-    # by hard-coded component name.
+    # Look up infra components by their declared status kind instead of
+    # hard-coded component ids.
     from .components import component_lookup as _component_lookup
 
     entry_by_id = _component_lookup("infra")
 
-    def _row_by_kind(kind: str) -> dict[str, Any] | None:
+    def _row_by_status_kind(kind: str) -> dict[str, Any] | None:
         for cid, entry in entry_by_id.items():
-            if getattr(entry, "kind", "") == kind:
+            status = getattr(entry, "status", None)
+            if status is not None and getattr(status, "kind", "") == kind:
                 return _first_row(infra_rows, cid)
         return None
 
-    def _row_by_handoff() -> dict[str, Any] | None:
-        for cid, entry in entry_by_id.items():
-            if getattr(entry, "handoff", None) is not None:
-                return _first_row(infra_rows, cid)
-        return None
-
-    mk8s_row = _row_by_handoff()
+    mk8s_row = _row_by_status_kind("nebius.mk8s.cluster")
     mk8s_inputs = _component_inputs(mk8s_row)
     cpu_nodes = _mapping(_lookup(mk8s_inputs, "cpu_nodes"))
     gpu_nodes = _mapping(_lookup(mk8s_inputs, "gpu_nodes"))
     api_endpoint = _mapping(_lookup(mk8s_inputs, "api_endpoint"))
 
-    pg_row = _row_by_kind("nebius.msp.postgresql.cluster")
+    pg_row = _row_by_status_kind("nebius.msp.postgresql.cluster")
     pg_inputs = _component_inputs(pg_row)
 
-    sfs_row = _row_by_kind("nebius.compute.filesystem")
+    sfs_row = _row_by_status_kind("nebius.compute.filesystem")
     sfs_inputs = _component_inputs(sfs_row)
 
     n8n_values = _chart_values(_first_row(app_rows, "n8n"))
@@ -194,7 +189,9 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
         "mk8s": {
             "cluster_name": cluster_name,
             "cpu_nodes": {
-                "count": _coalesce(_lookup(cpu_nodes, "count"), _lookup(mk8s_inputs, "cpu_nodes_count")),
+                "count": _coalesce(
+                    _lookup(cpu_nodes, "count"), _lookup(mk8s_inputs, "cpu_nodes_count")
+                ),
                 "platform": _coalesce(
                     _lookup(cpu_nodes, "platform"),
                     _lookup(mk8s_inputs, "cpu_nodes_platform"),
@@ -206,7 +203,11 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
             },
             "gpu_nodes": {
                 "enabled": bool(
-                    _coalesce(_lookup(gpu_nodes, "enabled"), _lookup(mk8s_inputs, "gpu_nodes_enabled"), False)
+                    _coalesce(
+                        _lookup(gpu_nodes, "enabled"),
+                        _lookup(mk8s_inputs, "gpu_nodes_enabled"),
+                        False,
+                    )
                 ),
                 "groups": _coalesce(
                     _lookup(gpu_nodes, "node_groups"),
@@ -244,7 +245,9 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
             "block_size_kib": _lookup(sfs_inputs, "block_size_kib"),
         },
         "apps": {
-            "envoy_gateway": _chart_enabled(app_rows, "gateway-helm", "envoy-gateway", "envoy_gateway"),
+            "envoy_gateway": _chart_enabled(
+                app_rows, "gateway-helm", "envoy-gateway", "envoy_gateway"
+            ),
             "cert_manager": _chart_enabled(app_rows, "cert-manager", "cert_manager"),
             "external_dns": _chart_enabled(app_rows, "external-dns", "external_dns"),
             "observability": _chart_enabled(app_rows, "nebius-observability", "observability"),
@@ -258,6 +261,7 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
             },
         },
     }
+
 
 def write_inventory(config: Any, paths: ProjectPaths) -> InventoryArtifacts:
     """Write non-sensitive inventory artifacts to disk."""

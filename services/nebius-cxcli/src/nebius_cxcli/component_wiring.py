@@ -99,7 +99,9 @@ def _component_rows(
         return {}
 
     resolved: dict[str, dict[str, Any]] = {}
-    entry_by_id = {entry.id: entry for entry in component_entries("infra" if scope == "infra" else "apps")}
+    entry_by_id = {
+        entry.id: entry for entry in component_entries("infra" if scope == "infra" else "apps")
+    }
     for row in rows:
         if not isinstance(row, Mapping):
             continue

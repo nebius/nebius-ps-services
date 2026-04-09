@@ -97,7 +97,9 @@ def test_ensure_github_environment_puts_encoded_environment(monkeypatch) -> None
     }
 
 
-def test_upsert_environment_secrets_ensures_environment_then_upserts_each_secret(monkeypatch) -> None:
+def test_upsert_environment_secrets_ensures_environment_then_upserts_each_secret(
+    monkeypatch,
+) -> None:
     calls: list[tuple[str, dict[str, object]]] = []
 
     monkeypatch.setattr(

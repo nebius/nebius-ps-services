@@ -189,10 +189,7 @@ def _module_inspection_path(module_source: str) -> tuple[str | None, str | None]
     try:
         terraform_bin = resolve_terraform_binary()
     except Exception as exc:
-        return (
-            None,
-            f"terraform is required to inspect module source '{source}': {exc}"
-        )
+        return (None, f"terraform is required to inspect module source '{source}': {exc}")
 
     tmp_root = Path(tempfile.mkdtemp(prefix="nebius-cxcli-module-probe-"))
     _register_module_probe_root(tmp_root)
@@ -221,7 +218,7 @@ def _module_inspection_path(module_source: str) -> tuple[str | None, str | None]
         return (
             None,
             f"terraform init timed out while validating module source '{source}'. "
-            "Confirm the source address, credentials, and network reachability."
+            "Confirm the source address, credentials, and network reachability.",
         )
     except Exception as exc:
         return None, f"terraform init could not validate module source '{source}': {exc}"
@@ -242,12 +239,12 @@ def _module_inspection_path(module_source: str) -> tuple[str | None, str | None]
             None,
             f"terraform init failed for module source '{source}': {failure_line}. "
             "Confirm the source address, credentials, and pinned ref. "
-            "For local modules, run `terraform init -backend=false` and `terraform validate` in the module directory."
+            "For local modules, run `terraform init -backend=false` and `terraform validate` in the module directory.",
         )
     return (
         None,
         f"terraform init failed for module source '{source}'. "
-        "Confirm the source address, credentials, and pinned ref."
+        "Confirm the source address, credentials, and pinned ref.",
     )
 
 
@@ -415,12 +412,7 @@ def _split_top_level_hcl_items(token: str) -> list[str]:
             paren_depth = max(paren_depth - 1, 0)
             current.append(char)
             continue
-        if (
-            char in {",", "\n"}
-            and brace_depth == 0
-            and bracket_depth == 0
-            and paren_depth == 0
-        ):
+        if char in {",", "\n"} and brace_depth == 0 and bracket_depth == 0 and paren_depth == 0:
             item = "".join(current).strip()
             if item:
                 items.append(item)
@@ -571,9 +563,13 @@ def _module_variables_from_config_inspect(path: Path) -> tuple[ModuleVariable, .
             continue
         required = bool(meta.get("required")) if isinstance(meta, dict) else False
         type_hint = _normalize_type_hint(meta.get("type")) if isinstance(meta, dict) else None
-        description = _normalize_description(meta.get("description")) if isinstance(meta, dict) else None
+        description = (
+            _normalize_description(meta.get("description")) if isinstance(meta, dict) else None
+        )
         has_default = isinstance(meta, dict) and "default" in meta
-        default_value = _deep_copy(meta.get("default")) if has_default and isinstance(meta, dict) else None
+        default_value = (
+            _deep_copy(meta.get("default")) if has_default and isinstance(meta, dict) else None
+        )
         nullable_value: bool | None = None
         if isinstance(meta, dict) and isinstance(meta.get("nullable"), bool):
             nullable_value = bool(meta.get("nullable"))
@@ -618,7 +614,9 @@ def _module_outputs_from_config_inspect(path: Path) -> tuple[ModuleOutput, ...] 
         if not name:
             continue
         sensitive = bool(meta.get("sensitive")) if isinstance(meta, dict) else False
-        description = _normalize_description(meta.get("description")) if isinstance(meta, dict) else None
+        description = (
+            _normalize_description(meta.get("description")) if isinstance(meta, dict) else None
+        )
         existing = collected.get(name)
         if existing is None:
             collected[name] = ModuleOutput(
@@ -845,9 +843,7 @@ def module_source_validation_issues(module_source: str) -> tuple[str, ...]:
 _MODULE_PROVIDER_BLOCK_PATTERN = re.compile(r'(?m)^\s*provider\s+"[^"]+"\s*\{')
 _MODULE_REQUIRED_VERSION_PATTERN = re.compile(r"\brequired_version\b")
 _MODULE_REQUIRED_PROVIDERS_PATTERN = re.compile(r"\brequired_providers\b")
-_MODULE_BACKEND_BLOCK_PATTERN = re.compile(
-    r'(?s)\bterraform\s*\{.*?\bbackend\s+"[^"]+"\s*\{'
-)
+_MODULE_BACKEND_BLOCK_PATTERN = re.compile(r'(?s)\bterraform\s*\{.*?\bbackend\s+"[^"]+"\s*\{')
 
 
 def _example_root_directories(examples_dir: Path) -> tuple[Path, ...]:
@@ -885,31 +881,21 @@ def module_cli_contract_findings(
 
     versions_file = module_dir / "versions.tf"
     if not versions_file.exists():
-        issues.append(
-            f"module source '{source}' is missing versions.tf in {module_dir}"
-        )
+        issues.append(f"module source '{source}' is missing versions.tf in {module_dir}")
     else:
         versions_text = versions_file.read_text(encoding="utf-8")
         if not _MODULE_REQUIRED_VERSION_PATTERN.search(versions_text):
-            issues.append(
-                f"module source '{source}' versions.tf is missing required_version"
-            )
+            issues.append(f"module source '{source}' versions.tf is missing required_version")
         if not _MODULE_REQUIRED_PROVIDERS_PATTERN.search(versions_text):
-            issues.append(
-                f"module source '{source}' versions.tf is missing required_providers"
-            )
+            issues.append(f"module source '{source}' versions.tf is missing required_providers")
 
     readme_file = module_dir / "README.md"
     if not readme_file.exists():
-        warnings.append(
-            f"module source '{source}' is missing README.md in {module_dir}"
-        )
+        warnings.append(f"module source '{source}' is missing README.md in {module_dir}")
 
     examples_dir = module_dir / "examples"
     if not examples_dir.exists():
-        warnings.append(
-            f"module source '{source}' is missing examples/ in {module_dir}"
-        )
+        warnings.append(f"module source '{source}' is missing examples/ in {module_dir}")
     elif not examples_dir.is_dir():
         issues.append(
             f"module source '{source}' examples exists but is not a directory in {module_dir}"

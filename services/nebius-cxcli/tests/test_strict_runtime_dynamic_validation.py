@@ -78,7 +78,9 @@ def _catalog_with_shared_admin_ssh(
     return override_path
 
 
-def test_strict_validation_requires_enabled_module_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_strict_validation_requires_enabled_module_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
     mk8s = _infra_component_row(payload, "mk8s")
     mk8s["inputs"] = {}
@@ -91,7 +93,9 @@ def test_strict_validation_requires_enabled_module_inputs(tmp_path: Path, monkey
         "nebius_cxcli.cli.module_required_variables",
         lambda _source: ("platform", "preset"),
     )
-    monkeypatch.setattr("nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: [])
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: []
+    )
 
     with pytest.raises(RuntimeError) as exc_info:
         _validate_strict_config(config)
@@ -118,7 +122,9 @@ def test_strict_validation_checks_dynamic_custom_component_source(
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     config = load_config(config_path)
 
-    monkeypatch.setattr("nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: [])
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: []
+    )
 
     with pytest.raises(RuntimeError) as exc_info:
         _validate_strict_config(config)
@@ -167,13 +173,13 @@ def test_strict_validation_requires_managed_postgresql_name_when_enabled(
         "nebius_cxcli.cli.module_required_variables",
         lambda _source: ("parent_id", "network_id"),
     )
-    monkeypatch.setattr("nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: [])
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: []
+    )
 
     with pytest.raises(RuntimeError) as exc_info:
         _validate_strict_config(config)
-    assert "infra.components[managed-postgresql].inputs.name is required" in str(
-        exc_info.value
-    )
+    assert "infra.components[managed-postgresql].inputs.name is required" in str(exc_info.value)
 
 
 def test_strict_validation_mk8s_cpu_shape_not_required_when_has_default(
@@ -199,7 +205,9 @@ def test_strict_validation_mk8s_cpu_shape_not_required_when_has_default(
         "nebius_cxcli.cli.module_required_variables",
         lambda _source: ("parent_id", "cluster_name", "subnet_id"),
     )
-    monkeypatch.setattr("nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: [])
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: []
+    )
 
     try:
         _validate_strict_config(config)
@@ -228,13 +236,13 @@ def test_strict_validation_requires_object_storage_name_when_enabled(
         "nebius_cxcli.cli.module_required_variables",
         lambda _source: ("parent_id",),
     )
-    monkeypatch.setattr("nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: [])
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: []
+    )
 
     with pytest.raises(RuntimeError) as exc_info:
         _validate_strict_config(config)
-    assert "infra.components[object-storage].inputs.name is required" in str(
-        exc_info.value
-    )
+    assert "infra.components[object-storage].inputs.name is required" in str(exc_info.value)
 
 
 def test_strict_validation_ssh_jumphost_allowed_cidrs_not_required_when_has_default(
@@ -260,7 +268,9 @@ def test_strict_validation_ssh_jumphost_allowed_cidrs_not_required_when_has_defa
         "nebius_cxcli.cli.module_required_variables",
         lambda _source: ("parent_id", "region", "subnet_id", "name", "ssh_public_key"),
     )
-    monkeypatch.setattr("nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: [])
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: []
+    )
 
     try:
         _validate_strict_config(config)
@@ -289,7 +299,9 @@ def test_strict_validation_mysterybox_secrets_not_required_when_has_default(
         "nebius_cxcli.cli.module_required_variables",
         lambda _source: ("parent_id",),
     )
-    monkeypatch.setattr("nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: [])
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: []
+    )
 
     try:
         _validate_strict_config(config)
@@ -341,7 +353,9 @@ def test_strict_validation_rejects_missing_local_custom_module_source_dir(tmp_pa
     assert "does not resolve to an existing local directory" in str(exc_info.value)
 
 
-def test_strict_validation_rejects_local_custom_module_source_without_tf_files(tmp_path: Path) -> None:
+def test_strict_validation_rejects_local_custom_module_source_without_tf_files(
+    tmp_path: Path,
+) -> None:
     module_dir = tmp_path / "empty-module"
     module_dir.mkdir()
 

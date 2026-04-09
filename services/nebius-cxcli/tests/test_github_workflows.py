@@ -45,7 +45,10 @@ def test_nebius_cxcli_ci_workflow_tracks_platform_modules_and_parses() -> None:
     assert isinstance(steps, list)
     serialized_steps = "\n".join(str(step) for step in steps)
     assert "Validate active component sources catalog" in serialized_steps
-    assert ".venv/bin/python -m nebius_cxcli validate-sources component_sources.yaml" in serialized_steps
+    assert (
+        ".venv/bin/python -m nebius_cxcli validate-sources component_sources.yaml"
+        in serialized_steps
+    )
 
 
 def test_nebius_cxcli_release_workflow_parses() -> None:
@@ -61,4 +64,7 @@ def test_nebius_cxcli_release_workflow_parses() -> None:
     assert isinstance(steps, list)
     serialized_steps = "\n".join(str(step) for step in steps)
     assert "Validate active component sources catalog" in serialized_steps
-    assert ".venv/bin/python -m nebius_cxcli validate-sources component_sources.yaml" in serialized_steps
+    assert (
+        ".venv/bin/python -m nebius_cxcli validate-sources component_sources.yaml"
+        in serialized_steps
+    )

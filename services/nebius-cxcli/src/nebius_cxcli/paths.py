@@ -82,9 +82,7 @@ def resolve_project_paths(
 
     parts = relative.parts
     if len(parts) != 4 or parts[0] != "projects":
-        raise ValueError(
-            "Config path must match projects/<client>--<tenant>/<project>/config.yaml"
-        )
+        raise ValueError("Config path must match projects/<client>--<tenant>/<project>/config.yaml")
 
     client_tenant = parts[1]
     if "--" not in client_tenant:
@@ -109,7 +107,9 @@ def resolve_project_paths(
     )
 
 
-def resolve_generated_paths(target_path: Path, deployments_dir_hint: str | None = None) -> ProjectPaths:
+def resolve_generated_paths(
+    target_path: Path, deployments_dir_hint: str | None = None
+) -> ProjectPaths:
     resolved = target_path.resolve()
     generated_dir: Path | None = None
 
@@ -144,13 +144,10 @@ def validate_path_alignment(config: Any, paths: ProjectPaths) -> None:
             "tenant_id mismatch: "
             f"config='{config.client_info.nebius.tenant_id}', path='{paths.path_tenant_id}'"
         )
-    config_project_id = str(
-        getattr(config.client_info.nebius, "project_id", None) or ""
-    ).strip()
+    config_project_id = str(getattr(config.client_info.nebius, "project_id", None) or "").strip()
     if config_project_id != paths.path_project_id:
         errors.append(
-            "project_id mismatch: "
-            f"config='{config_project_id}', path='{paths.path_project_id}'"
+            f"project_id mismatch: config='{config_project_id}', path='{paths.path_project_id}'"
         )
     if errors:
         raise ValueError("Path alignment failed:\n  - " + "\n  - ".join(errors))

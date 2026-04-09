@@ -8,7 +8,9 @@ import nebius_cxcli.managed_tools as managed_tools
 def test_resolve_terraform_binary_uses_managed_cache_when_missing_from_path(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(managed_tools.shutil, "which", lambda name: None if name == "terraform" else None)
+    monkeypatch.setattr(
+        managed_tools.shutil, "which", lambda name: None if name == "terraform" else None
+    )
     monkeypatch.setattr(
         managed_tools,
         "load_cli_settings",
@@ -47,7 +49,9 @@ def test_resolve_flux_binary_prefers_existing_path(monkeypatch) -> None:
 
 def test_resolve_terraform_binary_uses_env_override_without_loading_catalog(monkeypatch) -> None:
     monkeypatch.setenv(managed_tools.TERRAFORM_VERSION_ENV, "1.15.0")
-    monkeypatch.setattr(managed_tools.shutil, "which", lambda name: None if name == "terraform" else None)
+    monkeypatch.setattr(
+        managed_tools.shutil, "which", lambda name: None if name == "terraform" else None
+    )
     monkeypatch.setattr(
         managed_tools,
         "load_cli_settings",
@@ -74,7 +78,9 @@ def test_resolve_terraform_binary_uses_env_override_without_loading_catalog(monk
 
 def test_resolve_flux_binary_uses_env_override_without_loading_catalog(monkeypatch) -> None:
     monkeypatch.setenv(managed_tools.FLUX_VERSION_ENV, "2.9.0")
-    monkeypatch.setattr(managed_tools.shutil, "which", lambda name: None if name == "flux" else None)
+    monkeypatch.setattr(
+        managed_tools.shutil, "which", lambda name: None if name == "flux" else None
+    )
     monkeypatch.setattr(
         managed_tools,
         "load_cli_settings",

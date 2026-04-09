@@ -34,7 +34,9 @@ def test_delete_rendered_flux_uses_kubectl_delete_kustomize(
     fake_paths.flux_dir.mkdir(parents=True, exist_ok=True)
     calls: list[list[str]] = []
 
-    monkeypatch.setattr(flux_ops.shutil, "which", lambda name: "/usr/bin/kubectl" if name == "kubectl" else None)
+    monkeypatch.setattr(
+        flux_ops.shutil, "which", lambda name: "/usr/bin/kubectl" if name == "kubectl" else None
+    )
 
     def _fake_run(cmd: list[str], **kwargs):
         calls.append(cmd)
@@ -64,14 +66,21 @@ def test_delete_rendered_flux_fails_fast_when_cluster_is_unreachable(
     fake_paths = _fake_paths(tmp_path)
     fake_paths.flux_dir.mkdir(parents=True, exist_ok=True)
 
-    monkeypatch.setattr(flux_ops.shutil, "which", lambda name: "/usr/bin/kubectl" if name == "kubectl" else None)
+    monkeypatch.setattr(
+        flux_ops.shutil, "which", lambda name: "/usr/bin/kubectl" if name == "kubectl" else None
+    )
     monkeypatch.setattr(
         flux_ops.subprocess,
         "run",
-        lambda cmd, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr="connection refused\n"),
+        lambda cmd, **kwargs: SimpleNamespace(
+            returncode=1, stdout="", stderr="connection refused\n"
+        ),
     )
 
-    with pytest.raises(RuntimeError, match="kubectl could not reach the target Kubernetes cluster for local destroy"):
+    with pytest.raises(
+        RuntimeError,
+        match="kubectl could not reach the target Kubernetes cluster for local destroy",
+    ):
         flux_ops.delete_rendered_flux(fake_paths, extra_env={"KUBECONFIG": "/tmp/kubeconfig"})
 
 
@@ -81,7 +90,9 @@ def test_delete_rendered_flux_private_handoff_reports_network_guidance(
     fake_paths = _fake_paths(tmp_path)
     fake_paths.flux_dir.mkdir(parents=True, exist_ok=True)
 
-    monkeypatch.setattr(flux_ops.shutil, "which", lambda name: "/usr/bin/kubectl" if name == "kubectl" else None)
+    monkeypatch.setattr(
+        flux_ops.shutil, "which", lambda name: "/usr/bin/kubectl" if name == "kubectl" else None
+    )
     monkeypatch.setattr(
         flux_ops.subprocess,
         "run",

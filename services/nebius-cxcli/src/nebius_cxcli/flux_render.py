@@ -396,9 +396,7 @@ def _render_flux_app_helm_releases(
             )
             flux_source_kind = "GitRepository"
         state.ensure_namespace(namespace)
-        release_file_name = (
-            f"helmrelease-{_file_slug(scope)}-{_file_slug(release_name)}.yaml"
-        )
+        release_file_name = f"helmrelease-{_file_slug(scope)}-{_file_slug(release_name)}.yaml"
         state.write_doc(
             Path(release_file_name),
             _helm_release_doc(
@@ -446,7 +444,9 @@ def render_flux(
     _ensure_parent(repos_path)
     if state.repositories:
         repo_yaml = (
-            "\n---\n".join(yaml.safe_dump(doc, sort_keys=False).strip() for doc in state.repositories)
+            "\n---\n".join(
+                yaml.safe_dump(doc, sort_keys=False).strip() for doc in state.repositories
+            )
             + "\n"
         )
     else:

@@ -43,17 +43,13 @@ def _validate_client_info(payload: Mapping[str, Any]) -> None:
         str(key) for key in client_info if str(key) not in supported_client_info_keys
     )
     if unknown_client_info:
-        raise ValueError(
-            "client_info has unsupported field(s): " + ", ".join(unknown_client_info)
-        )
+        raise ValueError("client_info has unsupported field(s): " + ", ".join(unknown_client_info))
 
     client_name = _as_text(client_info.get("client_name"))
     if not client_name:
         raise ValueError("client_info.client_name is required")
     if not _CLIENT_NAME_PATTERN.fullmatch(client_name):
-        raise ValueError(
-            "client_info.client_name must use lowercase letters, digits, and hyphens"
-        )
+        raise ValueError("client_info.client_name must use lowercase letters, digits, and hyphens")
 
     nebius = client_info.get("nebius")
     if not isinstance(nebius, Mapping):
@@ -183,9 +179,7 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
         if not instance_id:
             raise ValueError(f"infra.components[{index}].instance_id could not be derived")
         if instance_id in seen_infra_instance_ids:
-            raise ValueError(
-                f"infra.components[{index}].instance_id '{instance_id}' is duplicated"
-            )
+            raise ValueError(f"infra.components[{index}].instance_id '{instance_id}' is duplicated")
         if instance_id in seen_global_instance_ids:
             raise ValueError(
                 f"component instance_id '{instance_id}' is duplicated across infra/apps"
@@ -203,7 +197,9 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
             raise ValueError(f"infra.components[{index}].version must be a string when set")
         if not isinstance(raw_component.get("inputs"), Mapping):
             raise ValueError(f"infra.components[{index}].inputs must be a mapping")
-        if isinstance(raw_component.get("inputs"), Mapping) and "module" in raw_component.get("inputs", {}):
+        if isinstance(raw_component.get("inputs"), Mapping) and "module" in raw_component.get(
+            "inputs", {}
+        ):
             raise ValueError(
                 f"infra.components[{index}].inputs.module is not supported; "
                 "set module source at infra.components[].source and module vars directly under infra.components[].inputs"
@@ -250,9 +246,7 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
         if not instance_id:
             raise ValueError(f"apps.charts[{index}].instance_id could not be derived")
         if instance_id in seen_app_instance_ids:
-            raise ValueError(
-                f"apps.charts[{index}].instance_id '{instance_id}' is duplicated"
-            )
+            raise ValueError(f"apps.charts[{index}].instance_id '{instance_id}' is duplicated")
         if instance_id in seen_global_instance_ids:
             raise ValueError(
                 f"component instance_id '{instance_id}' is duplicated across infra/apps"

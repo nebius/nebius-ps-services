@@ -145,9 +145,7 @@ def _translate_terraform_failure(*, cmd: list[str], cwd: Path, stderr: str) -> s
             if object_hint:
                 guidance += f" If you have confirmed no other Terraform operation is running, remove the stale lockfile from {object_hint} and retry."
             else:
-                guidance += (
-                    " If you have confirmed no other Terraform operation is running, remove the stale backend lockfile and retry."
-                )
+                guidance += " If you have confirmed no other Terraform operation is running, remove the stale backend lockfile and retry."
             if who or created:
                 details: list[str] = []
                 if who:
@@ -191,8 +189,8 @@ def _translate_terraform_failure(*, cmd: list[str], cwd: Path, stderr: str) -> s
             attribute = missing_output_match.group("attribute")
             issues.append(
                 f"Rendered Terraform root expects child module output `{attribute}` at `{location}`. "
-                "If you use a custom source for a handoff-enabled component, that "
-                f"module must expose `output \"{attribute}\"` for deploy/bootstrap cluster handoff."
+                "If you use a custom source for a component with built-in cluster handoff, that "
+                f'module must expose `output "{attribute}"` for deploy/bootstrap cluster handoff.'
             )
             continue
 
@@ -351,7 +349,13 @@ def _stream_json_events(
 
     event_errors = _terraform_failure_text_from_events(collected_events)
     diagnostics = "\n".join(
-        part for part in [event_errors, "\n".join(stdout_fallback).strip(), "\n".join(stderr_lines).strip()] if part
+        part
+        for part in [
+            event_errors,
+            "\n".join(stdout_fallback).strip(),
+            "\n".join(stderr_lines).strip(),
+        ]
+        if part
     ).strip()
     raise RuntimeError(
         _translate_terraform_failure(

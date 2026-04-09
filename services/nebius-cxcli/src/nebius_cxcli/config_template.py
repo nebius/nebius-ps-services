@@ -199,9 +199,7 @@ def _starter_payload(
                 preserve_existing_literal=True,
                 include_shared=False,
             )
-        charts_node.append(
-            chart_row
-        )
+        charts_node.append(chart_row)
 
     return payload
 

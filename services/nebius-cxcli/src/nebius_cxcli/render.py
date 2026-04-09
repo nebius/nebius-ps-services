@@ -56,7 +56,11 @@ def promote_staged_generated_paths(
             final_paths.generated_dir.rename(backup_dir)
         staged_paths.generated_dir.rename(final_paths.generated_dir)
     except Exception:
-        if backup_dir is not None and backup_dir.exists() and not final_paths.generated_dir.exists():
+        if (
+            backup_dir is not None
+            and backup_dir.exists()
+            and not final_paths.generated_dir.exists()
+        ):
             backup_dir.rename(final_paths.generated_dir)
         raise
     finally:

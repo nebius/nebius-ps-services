@@ -39,7 +39,9 @@ def test_prompt_choice_override_text_prompt_abort_stops_wizard(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(cli, "_is_tty_session", lambda: False)
-    monkeypatch.setattr(cli.typer, "prompt", lambda *_args, **_kwargs: (_ for _ in ()).throw(cli.typer.Abort()))
+    monkeypatch.setattr(
+        cli.typer, "prompt", lambda *_args, **_kwargs: (_ for _ in ()).throw(cli.typer.Abort())
+    )
 
     value, should_stop = cli._prompt_choice_override(
         path_label="infra.components[0].inputs.parent_id",
@@ -52,7 +54,9 @@ def test_prompt_choice_override_text_prompt_abort_stops_wizard(
 
 
 def test_prompt_scalar_override_abort_stops_wizard(monkeypatch) -> None:
-    monkeypatch.setattr(cli.typer, "prompt", lambda *_args, **_kwargs: (_ for _ in ()).throw(cli.typer.Abort()))
+    monkeypatch.setattr(
+        cli.typer, "prompt", lambda *_args, **_kwargs: (_ for _ in ()).throw(cli.typer.Abort())
+    )
 
     value, should_stop = cli._prompt_scalar_override(
         "infra.components[0].inputs.cluster_name",
@@ -208,7 +212,9 @@ def test_provider_fallback_warning_for_optional_field_mentions_blank_is_allowed(
 
     assert "Dynamic provider options unavailable" in warning
     assert "The next prompt is manual input only." in warning
-    assert "Press Enter there to keep the current value or leave the optional field unset." in warning
+    assert (
+        "Press Enter there to keep the current value or leave the optional field unset." in warning
+    )
 
 
 def test_provider_fallback_warning_for_required_field_mentions_manual_entry_is_required() -> None:

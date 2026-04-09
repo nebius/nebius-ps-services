@@ -118,16 +118,15 @@ def _mk8s_deployment_target(config: Any) -> Mk8sDeploymentTarget | None:
             continue
         component_id = _as_text(item.get("id")).lower()
         entry = entry_by_id.get(component_id)
-        if entry is None or getattr(entry, "handoff", None) is None:
+        status = getattr(entry, "status", None) if entry is not None else None
+        if status is None or getattr(status, "kind", "") != "nebius.mk8s.cluster":
             continue
         inputs = item.get("inputs")
         if not isinstance(inputs, Mapping):
             continue
         # Use status.name_input to find the cluster name field dynamically.
         name_input = "cluster_name"
-        status = getattr(entry, "status", None)
-        if status is not None:
-            name_input = getattr(status, "name_input", "name") or "name"
+        name_input = getattr(status, "name_input", "name") or "name"
         cluster_name = _as_text(inputs.get(name_input))
         if not cluster_name:
             continue
@@ -165,7 +164,11 @@ def _enum_field_name(message: Any, field_name: str, *, prefixes: tuple[str, ...]
                 break
         return name or "UNKNOWN"
     descriptor = getattr(message, "DESCRIPTOR", None)
-    field = getattr(descriptor, "fields_by_name", {}).get(field_name) if descriptor is not None else None
+    field = (
+        getattr(descriptor, "fields_by_name", {}).get(field_name)
+        if descriptor is not None
+        else None
+    )
     enum_type = getattr(field, "enum_type", None)
     if enum_type is not None:
         with suppress(Exception):
@@ -269,12 +272,12 @@ class _Mk8sStatusPoller:
         return None
 
     def _list_node_groups(self, cluster_id: str) -> list[Any]:
-        response = self._node_group_client.list(
-            ListNodeGroupsRequest(parent_id=cluster_id)
-        ).wait()
+        response = self._node_group_client.list(ListNodeGroupsRequest(parent_id=cluster_id)).wait()
         return _response_collection(response, "items", "node_groups")
 
-    def _node_group_event_summaries(self, item: Any, *, state_name: str) -> tuple[str | None, tuple[str, ...]]:
+    def _node_group_event_summaries(
+        self, item: Any, *, state_name: str
+    ) -> tuple[str | None, tuple[str, ...]]:
         status = getattr(item, "status", None)
         events = list(getattr(status, "events", []) or [])
         best_level = ""
@@ -288,7 +291,9 @@ class _Mk8sStatusPoller:
             message = _as_text(getattr(last_occurrence, "message", None))
             if not message:
                 continue
-            if _is_transient_node_group_warning(level=level, message=message, state_name=state_name):
+            if _is_transient_node_group_warning(
+                level=level, message=message, state_name=state_name
+            ):
                 note = _transient_node_group_note(message)
                 if note and note not in transient_notes:
                     transient_notes.append(note)
@@ -580,7 +585,10 @@ class _CompositeStatusPoller:
                 summaries.append(poller.summary())
             except Exception as exc:
                 summaries.append(f"{label}: unavailable ({_shorten(str(exc), limit=96)})")
-        return " | ".join(summary for summary in summaries if summary) or "API unavailable; heartbeat only"
+        return (
+            " | ".join(summary for summary in summaries if summary)
+            or "API unavailable; heartbeat only"
+        )
 
     def close(self) -> None:
         for _label, poller in self._pollers:

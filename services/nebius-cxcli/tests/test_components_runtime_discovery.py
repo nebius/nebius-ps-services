@@ -37,14 +37,7 @@ def test_components_discovered_from_source_file(monkeypatch, tmp_path: Path) -> 
                                 "group": "Compute",
                                 "enabled": True,
                             },
-                            "wizard": {
-                                "inputs.gpu_nodes_platform": {
-                                    "options": {
-                                        "from": "mk8s_compatible_platforms",
-                                        "prefix": "gpu-",
-                                    }
-                                }
-                            },
+                            "wizard_profile": "mk8s",
                         },
                         "wireguard-jumphost": {
                             "source": {
@@ -92,12 +85,35 @@ def test_components_discovered_from_source_file(monkeypatch, tmp_path: Path) -> 
     assert infra["mk8s"].group == "Compute"
     assert infra["mk8s"].default_enabled is True
     assert infra["mk8s"].wizard_fields == {
+        "inputs.subnet_id": {
+            "options": {
+                "from": "project_subnets",
+            }
+        },
+        "inputs.cpu_nodes_platform": {
+            "options": {
+                "from": "mk8s_compatible_platforms",
+                "args": {"platform_prefix": "cpu-"},
+            }
+        },
         "inputs.gpu_nodes_platform": {
             "options": {
                 "from": "mk8s_compatible_platforms",
                 "args": {"platform_prefix": "gpu-"},
             }
-        }
+        },
+        "inputs.cpu_nodes_preset": {
+            "options": {
+                "from": "compute_platform_presets",
+                "args": {"platform_path": "inputs.cpu_nodes_platform"},
+            }
+        },
+        "inputs.gpu_nodes_preset": {
+            "options": {
+                "from": "compute_platform_presets",
+                "args": {"platform_path": "inputs.gpu_nodes_platform"},
+            }
+        },
     }
 
     apps = {entry.id: entry for entry in component_entries("apps")}
@@ -132,7 +148,7 @@ def test_app_chart_name_becomes_component_id(monkeypatch, tmp_path: Path) -> Non
                                 "enabled": False,
                             },
                         }
-                    }
+                    },
                 },
             },
             sort_keys=False,

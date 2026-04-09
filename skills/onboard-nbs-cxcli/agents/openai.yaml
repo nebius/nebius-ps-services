@@ -1,0 +1,4 @@
+interface:
+  display_name: "Onboard NBS CXCLI"
+  short_description: "Onboard Nebius Terraform modules into nebius-cxcli"
+  default_prompt: "Use $onboard-nbs-cxcli to add or review a Nebius Terraform module in nebius-cxcli, including component_sources.yaml, wizard/provider onboarding, runtime validation, status polling, cluster handoffs, and the focused tests/docs that must change with it."

@@ -157,7 +157,9 @@ def _environment_name_for_config(*, root: Path, config_relative: str) -> str:
         raise ValueError(f"config payload is not a mapping: {config_relative}")
     client_info = payload.get("client_info") or {}
     nebius = client_info.get("nebius") if isinstance(client_info, dict) else {}
-    client_name = str(client_info.get("client_name") if isinstance(client_info, dict) else "").strip()
+    client_name = str(
+        client_info.get("client_name") if isinstance(client_info, dict) else ""
+    ).strip()
     project_id = str(nebius.get("project_id") if isinstance(nebius, dict) else "").strip()
     if not client_name or not project_id:
         raise ValueError(
@@ -189,7 +191,7 @@ def discover_configs(
     deployments_dir: str,
     include_all: bool = False,
     repo_root: Path | None = None,
-    ) -> dict[str, list[dict[str, object]]]:
+) -> dict[str, list[dict[str, object]]]:
     """Build discover payload for changed or known deployment projects in this run."""
     deployment_path = Path(deployments_dir)
     if repo_root is not None:

@@ -13,12 +13,7 @@ from nebius_cxcli.paths import resolve_project_paths, validate_path_alignment
 
 def _project_config_path(base: Path) -> Path:
     return (
-        base
-        / "deployments"
-        / "projects"
-        / "client-a--tenant-123"
-        / "project-456"
-        / "config.yaml"
+        base / "deployments" / "projects" / "client-a--tenant-123" / "project-456" / "config.yaml"
     )
 
 
@@ -119,11 +114,11 @@ def test_write_inventory_removes_stale_disabled_component_files(tmp_path: Path) 
     stale_apps = paths.inventory_dir / "apps.json"
     stale_infra = paths.inventory_dir / "infra.json"
     stale_mk8s = paths.inventory_dir / "mk8s.json"
-    stale_pg.write_text("{\"enabled\": true}\n", encoding="utf-8")
-    stale_sfs.write_text("{\"enabled\": true}\n", encoding="utf-8")
-    stale_apps.write_text("{\"enabled\": true}\n", encoding="utf-8")
-    stale_infra.write_text("{\"enabled\": true}\n", encoding="utf-8")
-    stale_mk8s.write_text("{\"enabled\": true}\n", encoding="utf-8")
+    stale_pg.write_text('{"enabled": true}\n', encoding="utf-8")
+    stale_sfs.write_text('{"enabled": true}\n', encoding="utf-8")
+    stale_apps.write_text('{"enabled": true}\n', encoding="utf-8")
+    stale_infra.write_text('{"enabled": true}\n', encoding="utf-8")
+    stale_mk8s.write_text('{"enabled": true}\n', encoding="utf-8")
 
     artifacts = write_inventory(config, paths)
 

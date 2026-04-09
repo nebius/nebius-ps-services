@@ -114,7 +114,9 @@ def backend_settings_from_config(config: Any) -> TerraformBackendSettings:
     project_id = _as_text(nebius.get("project_id"))
     region_id = _as_text(nebius.get("region_id"))
     if not client_name:
-        raise RuntimeError("client_info.client_name is required to derive Terraform backend settings")
+        raise RuntimeError(
+            "client_info.client_name is required to derive Terraform backend settings"
+        )
     if not project_id:
         raise RuntimeError(
             "client_info.nebius.project_id is required to derive Terraform backend settings"
@@ -124,7 +126,9 @@ def backend_settings_from_config(config: Any) -> TerraformBackendSettings:
             "client_info.nebius.region_id is required to derive Terraform backend settings"
         )
 
-    object_key = _as_text(os.environ.get("NEBIUS_CXCLI_TFSTATE_OBJECT_KEY", DEFAULT_STATE_OBJECT_KEY))
+    object_key = _as_text(
+        os.environ.get("NEBIUS_CXCLI_TFSTATE_OBJECT_KEY", DEFAULT_STATE_OBJECT_KEY)
+    )
     object_key = object_key.lstrip("/") or DEFAULT_STATE_OBJECT_KEY
     endpoint = f"https://storage.{region_id}.nebius.cloud"
     bucket = _build_bucket_name(client_name=client_name, project_id=project_id)
@@ -218,8 +222,7 @@ def read_state_lock_info(
         payload = json.loads(completed.stdout or "{}")
     except json.JSONDecodeError as exc:
         raise RuntimeError(
-            "Remote Terraform state lock object did not contain valid JSON: "
-            f"{exc}"
+            f"Remote Terraform state lock object did not contain valid JSON: {exc}"
         ) from exc
     if not isinstance(payload, dict):
         raise RuntimeError("Remote Terraform state lock object did not contain a JSON mapping")

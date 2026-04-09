@@ -16,10 +16,17 @@ from typing import Any
 
 import yaml
 
+from .cluster_handoffs import Handoff, resolve_builtin_handoff
 from .component_instances import INSTANCE_ID_PATTERN, normalize_component_token
+from .validation_profiles import resolve_builtin_validation_profile
+from .wizard_profiles import resolve_builtin_wizard_profile
 
-DEFAULT_COMPONENT_SOURCES_FILE = (Path(__file__).resolve().parents[2] / "component_sources.yaml").resolve()
-USER_COMPONENT_SOURCES_FILE = (Path.home() / ".config" / "nebius-cxcli" / "component_sources.yaml").resolve()
+DEFAULT_COMPONENT_SOURCES_FILE = (
+    Path(__file__).resolve().parents[2] / "component_sources.yaml"
+).resolve()
+USER_COMPONENT_SOURCES_FILE = (
+    Path.home() / ".config" / "nebius-cxcli" / "component_sources.yaml"
+).resolve()
 GLOBAL_COMPONENT_SOURCES_FILE = Path("/etc/nebius-cxcli/component_sources.yaml")
 BUNDLED_COMPONENT_SOURCES_FILENAME = "component_sources.yaml"
 COMPONENT_SOURCES_FILE_ENV = "NEBIUS_CXCLI_COMPONENT_SOURCES_FILE"
@@ -59,12 +66,6 @@ class ComponentDefault:
     value: Any = None
     kind: str = "literal"
     source_path: str = ""
-
-
-@dataclass(frozen=True)
-class Handoff:
-    cluster_id: str
-    access: str
 
 
 @dataclass(frozen=True)
@@ -121,7 +122,6 @@ class TFModuleSource:
     version: str | None = None
     enable: bool = False
     group: str | None = None
-    kind: str = ""
     validation_profile: str = ""
     wizard_fields: dict[str, dict[str, Any]] | None = None
     defaults: tuple[ComponentDefault, ...] = ()
@@ -205,9 +205,7 @@ def resolve_component_sources_profile(*, explicit: SourceProfile | None = None) 
             return SourceProfile(env_value)
         except ValueError as exc:
             allowed = ", ".join(item.value for item in SourceProfile)
-            raise ValueError(
-                f"{COMPONENT_SOURCES_PROFILE_ENV} must be one of: {allowed}"
-            ) from exc
+            raise ValueError(f"{COMPONENT_SOURCES_PROFILE_ENV} must be one of: {allowed}") from exc
 
     return SourceProfile.PORTABLE
 
@@ -241,9 +239,7 @@ def resolve_component_sources_file(*, explicit: Path | None = None) -> Path:
     if env_path:
         resolved = Path(env_path).expanduser().resolve()
         if not resolved.exists() or not resolved.is_file():
-            raise ValueError(
-                f"{COMPONENT_SOURCES_FILE_ENV} points to a missing file: {resolved}"
-            )
+            raise ValueError(f"{COMPONENT_SOURCES_FILE_ENV} points to a missing file: {resolved}")
         return resolved
 
     if USER_COMPONENT_SOURCES_FILE.exists() and USER_COMPONENT_SOURCES_FILE.is_file():
@@ -266,7 +262,9 @@ def _as_text(value: Any) -> str:
     return str(value).strip() if value is not None else ""
 
 
-def _resolve_existing_local_module_source(source: str, *, source_root: Path | None = None) -> str | None:
+def _resolve_existing_local_module_source(
+    source: str, *, source_root: Path | None = None
+) -> str | None:
     token = str(source).strip()
     if not token or token.startswith(("git::", "http://", "https://", "oci://")):
         return None
@@ -426,13 +424,22 @@ def _discover_terraform_outputs(module_source: str) -> tuple[ComponentOutput, ..
     issues = module_source_validation_issues(module_source)
     if issues:
         raise ValueError(
-            f"runtime.values could not discover Terraform outputs for module source "
+            f"component outputs could not be discovered for module source "
             f"'{module_source}': {issues[0]}"
         )
     raise ValueError(
-        f"runtime.values could not discover any Terraform outputs for module source "
+        f"component outputs could not be discovered for module source "
         f"'{module_source}'. Expose Terraform outputs in the module before using this component."
     )
+
+
+def _discover_component_outputs(module_source: str) -> tuple[ComponentOutput, ...]:
+    source = _as_text(module_source)
+    if not source:
+        return ()
+    with suppress(ValueError):
+        return _discover_terraform_outputs(source)
+    return ()
 
 
 def _append_component_output(
@@ -451,101 +458,31 @@ def _append_component_output(
     outputs.append(output)
 
 
-def _parse_component_runtime_values(
-    raw: Any,
+def _component_outputs_with_builtin_handoff(
+    outputs: tuple[ComponentOutput, ...],
     *,
     field_label: str,
-    module_source: str,
+    handoff: Handoff | None,
 ) -> tuple[ComponentOutput, ...]:
-    if raw is not None and not isinstance(raw, dict):
-        raise ValueError(f"{field_label} runtime.values must be a mapping of alias -> value reference")
+    if handoff is None:
+        return outputs
 
-    terraform_source_by_name: dict[str, ComponentOutput] = {}
-    source = _as_text(module_source)
-    if source:
-        try:
-            terraform_source_by_name = {
-                output.source_path: output for output in _discover_terraform_outputs(source)
-            }
-        except ValueError:
-            terraform_source_by_name = {}
+    if any(output.name == handoff.cluster_id_output_name for output in outputs):
+        return outputs
 
-    outputs: list[ComponentOutput] = []
-    seen_aliases: set[str] = set()
-    for terraform_output in terraform_source_by_name.values():
-        _append_component_output(
-            outputs,
-            seen_aliases=seen_aliases,
-            output=terraform_output,
-            field_label=field_label,
-        )
-
-    if raw is None:
-        return tuple(outputs)
-
-    for output_name_raw, value_raw in raw.items():
-        output_name = _normalize_component_output_name(_as_text(output_name_raw))
-        if not output_name:
-            raise ValueError(f"{field_label} runtime.values entries must use non-empty aliases")
-
-        if isinstance(value_raw, str):
-            token = value_raw.strip()
-            if token.startswith("output."):
-                source_path = _as_text(token.removeprefix("output."))
-                if not source_path:
-                    raise ValueError(
-                        f"{field_label} runtime.values['{output_name}'] must reference a non-empty Terraform output"
-                    )
-                source_output = terraform_source_by_name.get(source_path)
-                _append_component_output(
-                    outputs,
-                    seen_aliases=seen_aliases,
-                    output=ComponentOutput(
-                        name=output_name,
-                        kind="terraform_output",
-                        source_path=source_path,
-                        sensitive=bool(source_output.sensitive) if source_output is not None else False,
-                    ),
-                    field_label=field_label,
-                )
-                continue
-
-            if token.startswith("input."):
-                source_path = _as_text(token.removeprefix("input."))
-                if not source_path:
-                    raise ValueError(
-                        f"{field_label} runtime.values['{output_name}'] must reference a non-empty input path"
-                    )
-                if source_path.startswith("inputs."):
-                    raise ValueError(
-                        f"{field_label} runtime.values['{output_name}'] must use "
-                        f"'input.<path>' without the 'inputs.' prefix"
-                    )
-                source_path = f"inputs.{source_path}"
-                _append_component_output(
-                    outputs,
-                    seen_aliases=seen_aliases,
-                    output=ComponentOutput(
-                        name=output_name,
-                        kind="input",
-                        source_path=source_path,
-                    ),
-                    field_label=field_label,
-                )
-                continue
-
-        _append_component_output(
-            outputs,
-            seen_aliases=seen_aliases,
-            output=ComponentOutput(
-                name=output_name,
-                kind="literal",
-                value=copy.deepcopy(value_raw),
-            ),
-            field_label=field_label,
-        )
-
-    return tuple(outputs)
+    merged = list(outputs)
+    seen_aliases = {output.name for output in outputs}
+    _append_component_output(
+        merged,
+        seen_aliases=seen_aliases,
+        output=ComponentOutput(
+            name=handoff.cluster_id_output_name,
+            kind="terraform_output",
+            source_path=handoff.cluster_id_output_name,
+        ),
+        field_label=field_label,
+    )
+    return tuple(merged)
 
 
 def _parse_component_input_bindings(raw: Any) -> tuple[ComponentInputBinding, ...]:
@@ -559,11 +496,15 @@ def _parse_component_input_bindings(raw: Any) -> tuple[ComponentInputBinding, ..
         target_path = _as_text(target_path_raw)
         ref = _as_text(ref_raw)
         if not target_path or not ref:
-            raise ValueError("input entries must use non-empty target path and component output reference")
+            raise ValueError(
+                "input entries must use non-empty target path and component output reference"
+            )
         component_selector, separator, output_token = ref.partition(".")
         component_token, instance_separator, instance_token = component_selector.partition("@")
         component_id = normalize_component_token(component_token)
-        source_instance_id = normalize_component_token(instance_token) if instance_separator else None
+        source_instance_id = (
+            normalize_component_token(instance_token) if instance_separator else None
+        )
         output_name = _normalize_component_output_name(output_token) if separator else ""
         if not component_id or not separator or not output_name:
             raise ValueError(
@@ -643,9 +584,7 @@ def _parse_wizard_fields(
         if not field_path:
             raise ValueError(f"{field_label} wizard entries must use non-empty field paths")
         if not isinstance(spec_raw, dict):
-            raise ValueError(
-                f"{field_label} wizard['{field_path}'] must be a mapping when set"
-            )
+            raise ValueError(f"{field_label} wizard['{field_path}'] must be a mapping when set")
         spec = copy.deepcopy(dict(spec_raw))
         options = spec.get("options")
         if isinstance(options, dict):
@@ -670,70 +609,39 @@ def _parse_wizard_fields(
     return wizard_fields
 
 
-def _parse_runtime_contracts(
-    raw: Any,
+def _parse_component_wizard_fields(
     *,
+    component_id: str,
+    raw_profile: Any,
+    raw_wizard: Any,
     field_label: str,
-    outputs: tuple[ComponentOutput, ...],
-) -> Handoff | None:
-    if raw is None:
-        return None
-    if not isinstance(raw, dict):
-        raise ValueError(f"{field_label} runtime.contracts must be a mapping")
+) -> dict[str, dict[str, Any]]:
+    merged_raw: dict[str, Any] = {}
 
-    supported_contract_keys = {"cluster_access"}
-    unknown_contract_keys = sorted(str(key) for key in raw if str(key) not in supported_contract_keys)
-    if unknown_contract_keys:
-        raise ValueError(
-            f"{field_label} runtime.contracts has unsupported field(s): "
-            + ", ".join(unknown_contract_keys)
-        )
-
-    cluster_access = raw.get("cluster_access")
-    if cluster_access is None:
-        return None
-    if not isinstance(cluster_access, dict):
-        raise ValueError(f"{field_label} runtime.contracts.cluster_access must be a mapping")
-
-    supported_cluster_access_keys = {"cluster_id", "access"}
-    unknown_cluster_access_keys = sorted(
-        str(key) for key in cluster_access if str(key) not in supported_cluster_access_keys
-    )
-    if unknown_cluster_access_keys:
-        raise ValueError(
-            f"{field_label} runtime.contracts.cluster_access has unsupported field(s): "
-            + ", ".join(unknown_cluster_access_keys)
-        )
-
-    cluster_id_alias = _normalize_component_output_name(_as_text(cluster_access.get("cluster_id")))
-    access_alias = _normalize_component_output_name(_as_text(cluster_access.get("access")))
-    if not cluster_id_alias:
-        raise ValueError(
-            f"{field_label} runtime.contracts.cluster_access.cluster_id is required and must name a runtime.values alias"
-        )
-    if not access_alias:
-        raise ValueError(
-            f"{field_label} runtime.contracts.cluster_access.access is required and must name a runtime.values alias"
-        )
-
-    declared_outputs = {output.name for output in outputs}
-    for alias in (cluster_id_alias, access_alias):
-        if alias not in declared_outputs:
+    if raw_profile is not None:
+        profile_name = _as_text(raw_profile)
+        if not profile_name:
+            raise ValueError(f"{field_label} wizard_profile must be a non-empty string when set")
+        profile_fields = resolve_builtin_wizard_profile(profile_name)
+        if profile_name != component_id:
             raise ValueError(
-                f"{field_label} runtime.contracts.cluster_access references undeclared runtime.values alias '{alias}'"
+                f"{field_label} wizard_profile must match component id '{component_id}' when set"
             )
+        merged_raw.update(profile_fields)
 
-    return Handoff(
-        cluster_id=cluster_id_alias,
-        access=access_alias,
-    )
+    if raw_wizard is not None:
+        if not isinstance(raw_wizard, dict):
+            raise ValueError(
+                f"{field_label} wizard must be a mapping of field path -> spec mapping"
+            )
+        for key, value in raw_wizard.items():
+            merged_raw[key] = copy.deepcopy(value)
+
+    return _parse_wizard_fields(merged_raw or None, field_label=field_label)
 
 
-def _parse_status_watcher(raw: Any, *, module_kind: str = "") -> StatusWatcher | None:
+def _parse_status_watcher(raw: Any) -> StatusWatcher | None:
     if raw is None:
-        # If module-level kind is set, enable status polling with defaults.
-        if module_kind:
-            return StatusWatcher(kind=module_kind)
         return None
     if not isinstance(raw, dict):
         raise ValueError("status must be a mapping")
@@ -743,9 +651,9 @@ def _parse_status_watcher(raw: Any, *, module_kind: str = "") -> StatusWatcher |
     if unknown_status_keys:
         raise ValueError("status has unsupported field(s): " + ", ".join(unknown_status_keys))
 
-    kind = _as_text(raw.get("kind")).strip().lower() or module_kind
+    kind = _as_text(raw.get("kind")).strip().lower()
     if not kind:
-        raise ValueError("status.kind is required when resource_kind is not set")
+        raise ValueError("status.kind is required")
 
     parent_input = _as_text(raw.get("parent_input")) or "parent_id"
     name_input = _as_text(raw.get("name_input")) or "name"
@@ -768,9 +676,7 @@ def _resolved_module_source(
     source_profile: SourceProfile,
 ) -> str:
     if not portable_source:
-        raise ValueError(
-            f"components.infra.{module_name} source.portable is required"
-        )
+        raise ValueError(f"components.infra.{module_name} source.portable is required")
     if source_profile == SourceProfile.LOCAL and str(local_source or "").strip():
         return str(local_source).strip()
     return portable_source
@@ -789,7 +695,9 @@ def _parse_ui_block(
     supported_ui_keys = {"title", "group", "enabled"}
     unknown_ui_keys = sorted(str(key) for key in raw if str(key) not in supported_ui_keys)
     if unknown_ui_keys:
-        raise ValueError(f"{field_label} ui has unsupported field(s): " + ", ".join(unknown_ui_keys))
+        raise ValueError(
+            f"{field_label} ui has unsupported field(s): " + ", ".join(unknown_ui_keys)
+        )
 
     title = _as_text(raw.get("title")) or None
     group = _as_text(raw.get("group")) or None
@@ -808,7 +716,9 @@ def _parse_sources_payload(
     supported_root_keys = {"cli", "shared", "components"}
     unknown_root = sorted(str(key) for key in payload if str(key) not in supported_root_keys)
     if unknown_root:
-        raise ValueError("component_sources root has unsupported field(s): " + ", ".join(unknown_root))
+        raise ValueError(
+            "component_sources root has unsupported field(s): " + ", ".join(unknown_root)
+        )
 
     cli = _parse_cli_settings(payload.get("cli"))
     shared = _parse_shared_values(payload.get("shared"))
@@ -818,7 +728,9 @@ def _parse_sources_payload(
     if not isinstance(components, dict):
         raise ValueError("components must be a mapping")
     supported_component_scopes = {"infra", "apps"}
-    unknown_components = sorted(str(key) for key in components if str(key) not in supported_component_scopes)
+    unknown_components = sorted(
+        str(key) for key in components if str(key) not in supported_component_scopes
+    )
     if unknown_components:
         raise ValueError("components has unsupported field(s): " + ", ".join(unknown_components))
 
@@ -843,15 +755,15 @@ def _parse_sources_payload(
         supported_module_keys = {
             "source",
             "ui",
-            "resource_kind",
             "status",
-            "validation",
             "defaults",
+            "wizard_profile",
             "wizard",
-            "runtime",
             "input",
         }
-        unknown_module_keys = sorted(str(key) for key in raw if str(key) not in supported_module_keys)
+        unknown_module_keys = sorted(
+            str(key) for key in raw if str(key) not in supported_module_keys
+        )
         if unknown_module_keys:
             raise ValueError(
                 f"components.infra.{module_name} has unsupported field(s): "
@@ -862,7 +774,9 @@ def _parse_sources_payload(
         if not isinstance(source_block, dict):
             raise ValueError(f"components.infra.{module_name} source must be a mapping")
         supported_source_keys = {"portable", "local"}
-        unknown_source_keys = sorted(str(key) for key in source_block if str(key) not in supported_source_keys)
+        unknown_source_keys = sorted(
+            str(key) for key in source_block if str(key) not in supported_source_keys
+        )
         if unknown_source_keys:
             raise ValueError(
                 f"components.infra.{module_name} source has unsupported field(s): "
@@ -886,40 +800,25 @@ def _parse_sources_payload(
             raw.get("ui"),
             field_label=f"components.infra.{module_name}",
         )
-        kind = _as_text(raw.get("resource_kind")) or ""
-        validation_profile = _as_text(raw.get("validation")) or ""
-        wizard_fields = _parse_wizard_fields(
-            raw.get("wizard"),
+        validation_profile = resolve_builtin_validation_profile(module_name)
+        wizard_fields = _parse_component_wizard_fields(
+            component_id=module_name,
+            raw_profile=raw.get("wizard_profile"),
+            raw_wizard=raw.get("wizard"),
             field_label=f"components.infra.{module_name}",
         )
         defaults = _parse_component_defaults(
             raw.get("defaults"),
             field_label=f"components.infra.{module_name}",
         )
-        runtime_raw = raw.get("runtime")
-        if runtime_raw is None:
-            runtime_raw = {}
-        if not isinstance(runtime_raw, dict):
-            raise ValueError(f"components.infra.{module_name} runtime must be a mapping")
-        supported_runtime_keys = {"values", "contracts"}
-        unknown_runtime_keys = sorted(str(key) for key in runtime_raw if str(key) not in supported_runtime_keys)
-        if unknown_runtime_keys:
-            raise ValueError(
-                f"components.infra.{module_name} runtime has unsupported field(s): "
-                + ", ".join(unknown_runtime_keys)
-            )
-        outputs = _parse_component_runtime_values(
-            runtime_raw.get("values"),
+        handoff = resolve_builtin_handoff(module_name)
+        outputs = _component_outputs_with_builtin_handoff(
+            _discover_component_outputs(metadata_source),
             field_label=f"components.infra.{module_name}",
-            module_source=metadata_source,
+            handoff=handoff,
         )
         input_bindings = _parse_component_input_bindings(raw.get("input"))
-        handoff = _parse_runtime_contracts(
-            runtime_raw.get("contracts"),
-            field_label=f"components.infra.{module_name}",
-            outputs=outputs,
-        )
-        status = _parse_status_watcher(raw.get("status"), module_kind=kind)
+        status = _parse_status_watcher(raw.get("status"))
         tf_modules.append(
             TFModuleSource(
                 module=module_name,
@@ -930,7 +829,6 @@ def _parse_sources_payload(
                 description=description,
                 enable=enable,
                 group=group,
-                kind=kind,
                 validation_profile=validation_profile,
                 wizard_fields=wizard_fields,
                 defaults=defaults,
@@ -1000,8 +898,10 @@ def _parse_sources_payload(
             raw.get("ui"),
             field_label=f"components.apps.{component_id}",
         )
-        wizard_fields = _parse_wizard_fields(
-            raw.get("wizard"),
+        wizard_fields = _parse_component_wizard_fields(
+            component_id=component_id,
+            raw_profile=None,
+            raw_wizard=raw.get("wizard"),
             field_label=f"components.apps.{component_id}",
         )
         defaults = _parse_component_defaults(
@@ -1054,7 +954,9 @@ def _load_cli_settings_from_path(path: Path) -> CliSettings:
 
 
 def _load_bundled_component_sources(*, source_profile: SourceProfile) -> ComponentSources:
-    resource = importlib_resources.files("nebius_cxcli").joinpath(BUNDLED_COMPONENT_SOURCES_FILENAME)
+    resource = importlib_resources.files("nebius_cxcli").joinpath(
+        BUNDLED_COMPONENT_SOURCES_FILENAME
+    )
     try:
         payload = yaml.safe_load(resource.read_text(encoding="utf-8")) or {}
         return _parse_sources_payload(payload, source_profile=source_profile)
@@ -1068,7 +970,9 @@ def _load_bundled_component_sources(*, source_profile: SourceProfile) -> Compone
         return _load_sources_from_path(prefix_candidate, source_profile=source_profile)
 
     if DEFAULT_COMPONENT_SOURCES_FILE.exists() and DEFAULT_COMPONENT_SOURCES_FILE.is_file():
-        return _load_sources_from_path(DEFAULT_COMPONENT_SOURCES_FILE, source_profile=source_profile)
+        return _load_sources_from_path(
+            DEFAULT_COMPONENT_SOURCES_FILE, source_profile=source_profile
+        )
 
     raise FileNotFoundError(
         "Bundled component sources file is missing from the installed package layout."
@@ -1076,7 +980,9 @@ def _load_bundled_component_sources(*, source_profile: SourceProfile) -> Compone
 
 
 def _load_bundled_cli_settings() -> CliSettings:
-    resource = importlib_resources.files("nebius_cxcli").joinpath(BUNDLED_COMPONENT_SOURCES_FILENAME)
+    resource = importlib_resources.files("nebius_cxcli").joinpath(
+        BUNDLED_COMPONENT_SOURCES_FILENAME
+    )
     try:
         payload = yaml.safe_load(resource.read_text(encoding="utf-8")) or {}
         if not isinstance(payload, dict):

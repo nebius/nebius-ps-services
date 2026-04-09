@@ -97,7 +97,7 @@ Sections:
 - `cli.flux.version`
 - `cli.terraform.version`
 - `components.infra.<component-id>`
-  - `source.portable`, optional `source.local`, optional `ui`, optional `resource_kind`, optional `status`, optional `validation`, optional `defaults`, optional `wizard`, optional `runtime`, optional `input`
+  - `source.portable`, optional `source.local`, optional `ui`, optional `status`, optional `defaults`, optional `wizard_profile`, optional `wizard`, optional `input`
 - `components.apps.<component-id>`
   - `source.repo`, optional `source.chart`, optional `source.version`, optional `ui`, optional `release`, optional `defaults`, optional `input`
   - `source.repo` can be HTTP/S Helm repo base (must expose `index.yaml`), OCI (`oci://...`), or GitHub tree URL for git-hosted charts
@@ -106,17 +106,36 @@ Sections:
 
 - new Terraform modules work from their variables
 - new Helm charts work from their chart metadata and `values.yaml`
-- optional `wizard` only adds explicit hints when introspection alone is not enough
+- optional `wizard_profile` or `wizard` only adds explicit hints when introspection alone is not enough
+- when `wizard.<field>.options` is used, the supported keys are `from`, `prefix`, `depends_on`, and `filter_regex`; `filter_regex` is the only regex-capable selector, while `prefix` and `depends_on` remain plain string/path helpers
+- `status` is the canonical Nebius status-polling contract for infra components; if polling is needed, `status.kind` must be declared explicitly
 
-`runtime` is only for infra components:
+`wizard_profile` is the built-in shorthand layer for component-specific Nebius wizard wiring. It expands to a tested `wizard` mapping at catalog-load time. When both `wizard_profile` and explicit `wizard` are set on the same infra component, profile fields load first and explicit `wizard` entries override or extend them. Built-in `wizard_profile` names are one-to-one with infra component ids, and the loader enforces that exact match when a profile is set.
 
-- `runtime.values` declares reusable exported values for that component
-- `runtime.values.<name>: output.<terraform-output>` exports a Terraform output after apply
-- `runtime.values.<name>: input.<path>` exports a value from the component's own input path and resolves under `inputs.<path>`
-- `runtime.values.<name>: <literal>` exports a literal YAML value
-- `runtime.contracts.cluster_access` declares the kubeconfig/bootstrap contract used by local deploy and Flux commands
-- `runtime.contracts.cluster_access.cluster_id` must name a Terraform-backed runtime value
-- `runtime.contracts.cluster_access.access` must name an input-backed or literal runtime value
+Built-in infra `wizard_profile` definitions are currently centralized in `src/nebius_cxcli/wizard_profiles.py`, not split into one Python file per component. That is an implementation choice, not a schema requirement.
+
+Bundled infra components currently align like this:
+
+- `mk8s`, `managed-postgresql`, `wireguard-jumphost`, `ssh-jumphost`, and `object-storage` use matching `wizard_profile` names because they have tested guided-choice behavior.
+- `sfs` and `mysterybox` do not carry `wizard_profile` today because plain Terraform introspection is sufficient for their current UX.
+- App components do not use `wizard_profile`; they stay on Helm introspection plus optional explicit `wizard` entries.
+
+When `wizard.<field>.options` is present, it acts as wiring between an existing Terraform input or Helm value path and a guided option provider. The field itself still belongs to the module/chart contract; the catalog metadata only tells the CLI how to fetch valid choices for that field. For Nebius-backed flows, that means the operator-facing destination remains something like `inputs.cpu_nodes_platform`, while `from: mk8s_compatible_platforms` or `from: compute_platform_presets` tells the CLI which Nebius API-backed lookup to execute. For MK8s platform fields, the provider now treats the MK8s compatibility matrix as the authoritative support filter and, when a project id is available, intersects that set with the selected project's live compute-platform inventory so the wizard only offers currently available CPU/GPU platforms. `depends_on` is the chaining input for multi-step lookups, such as querying presets for the platform selected in a previous prompt, and that relative path is normalized against the active component instance for both prompt-time choice loading and strict provider-value validation. Chained provider-backed fields are only prompted after their dependency field has a concrete value, so optional downstream fields do not emit a spurious manual-entry fallback warning when their upstream selector was skipped. `filter_regex` is the only regex-capable selector, and it is applied consistently to displayed choices and manual-entry validation. Fields that do not need guided choices should rely on normal Terraform/Helm introspection and omit both `wizard_profile` and `wizard`.
+
+Built-in infra `wizard_profile` names currently include:
+
+- `mk8s`
+- `managed-postgresql`
+- `wireguard-jumphost`
+- `ssh-jumphost`
+- `object-storage`
+
+Component output and handoff contract:
+
+- Terraform outputs exposed by a source module are exported automatically under their normalized names.
+- Consumer-side `input` bindings use those exported Terraform output names.
+- Cluster handoff for kubeconfig/bootstrap is code-owned, not catalog-declared.
+- Today the bundled `mk8s` component is the only built-in cluster handoff source. It uses Terraform output `cluster_id` and derives endpoint access from `inputs.mk8s_cluster_public_endpoint`.
 
 Source profile contract:
 
@@ -148,9 +167,7 @@ Source validation requirements (`validate-sources`):
   - Plain `http://` or `https://` module URLs are rejected. Users must provide the Terraform Git source form instead.
   - Registry-style and `oci://` Terraform module sources are rejected.
   - All Terraform outputs exposed by the module are exported automatically under their normalized names.
-  - `runtime.values` may add named literal values or input-derived values on top of those auto-exported Terraform outputs.
-  - Every Terraform-backed runtime value must map to a real Terraform output exposed by the source module.
-  - Custom modules wired with `runtime.contracts.cluster_access` must reference one of those Terraform-backed runtime values if they are used with local `deploy` or CI kubeconfig bootstrap flows.
+  - If a custom module is used behind the bundled `mk8s` component, it must still expose Terraform output `cluster_id` for local `deploy` and CI kubeconfig bootstrap flows.
 - Helm chart sources (`components.apps.<id>`):
   - HTTP repo mode: `source.repo` is a Helm repository base URL; `index.yaml` must be readable; chart name and configured version must be present in index entries.
   - OCI mode: `source.repo` is an OCI repo prefix (`oci://...`); `source.chart` provides the chart name.
@@ -167,7 +184,7 @@ Accepted Terraform module source examples:
 
 Local Terraform module sources are rendered as resolved local filesystem paths. If you need a pinned remote ref, declare an explicit `git::...?...ref=...` source instead of combining a local path with `version`.
 
-Accepted runtime contract example:
+Accepted built-in MK8s handoff example:
 
 ```yaml
 cli:
@@ -184,28 +201,20 @@ components:
         local: ../../platform-infra/modules/mk8s
       defaults:
         inputs.cpu_nodes_count: 2
-      runtime:
-        values:
-          access: input.mk8s_cluster_public_endpoint
-        contracts:
-          cluster_access:
-            cluster_id: cluster_id
-            access: access
+        inputs.mk8s_cluster_public_endpoint: true
 ```
 
-This is an infra-to-runtime orchestration contract.
-Terraform outputs are exported automatically, and `runtime.values` adds any extra literal or input-derived values the runtime needs.
-`runtime.contracts.cluster_access.cluster_id` / `access` point to the runtime values the CLI should use for cluster access after apply.
-`access` can resolve from explicit access tokens (`external`/`internal`, `public`/`private`) or from a boolean public-endpoint flag.
-Generic runtime values do not replace the cluster-access block, because deploy/bootstrap still need an explicit kubeconfig contract.
-Helm chart definitions stay cluster-agnostic; `deploy`/`flux bootstrap`/CI consume the runtime contract once and then run Flux/kubectl against that cluster.
+This is the catalog shape for the bundled MK8s component after the handoff contract was moved into code.
+Terraform outputs are still exported automatically, and the built-in MK8s handoff consumes Terraform output `cluster_id`.
+Endpoint access still resolves from `inputs.mk8s_cluster_public_endpoint`, but that binding now lives in code instead of `component_sources.yaml`.
+Helm chart definitions stay cluster-agnostic; `deploy`/`flux bootstrap`/CI consume the built-in MK8s handoff once and then run Flux/kubectl against that cluster.
 Flux controller installation version for local `deploy` is configured in the same catalog under `cli.flux.version`.
 Managed Terraform CLI download version is configured in the same catalog under `cli.terraform.version`.
 
-Module outputs and runtime-value aliases must be treated as a versioned interface.
-In practice that means aliases such as `cluster_id` and `access` are not just internal module details once the CLI, generated manifest, app bindings, or deploy/bootstrap flows consume them.
-Renaming, removing, or changing the meaning/type of one of those aliases is a breaking contract change for the component, even if the underlying Terraform module still applies successfully.
-When a module evolves, either keep the exported aliases stable or introduce the change as an explicit contract/version change rather than silently reusing the old component identity with different output semantics.
+Module outputs consumed by app bindings or built-in handoff behavior must be treated as a versioned interface.
+In practice that means names such as `cluster_id` are not just internal module details once the CLI, generated manifest, app bindings, or deploy/bootstrap flows consume them.
+Renaming, removing, or changing the meaning/type of one of those outputs is a breaking contract change for the component, even if the underlying Terraform module still applies successfully.
+When a module evolves, either keep those exported outputs stable or introduce the change as an explicit contract/version change rather than silently reusing the old component identity with different output semantics.
 
 Flux namespace architecture:
 
@@ -225,9 +234,6 @@ components:
       source:
         portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mk8s?ref=main
         local: ../../platform-infra/modules/mk8s
-      runtime:
-        values:
-          access: input.mk8s_cluster_public_endpoint
 
   apps:
     demo-app:
@@ -240,7 +246,6 @@ components:
         name: demo-app
       input:
         values.global.clusterId: mk8s.cluster_id
-        values.global.clusterAccess: mk8s.access
 ```
 
 Contract rules:
@@ -249,14 +254,13 @@ Contract rules:
 - Terraform module defaults must target `inputs.*`.
 - Helm chart defaults must target `values.*`.
 - Shared-derived defaults use `shared.<path>`.
-- Producers declare reusable values under `runtime.values`.
+- Producers expose Terraform outputs from their source modules.
 - Consumers declare target paths under `input`.
 - `input` is reserved for component-output references; literal values and shared-derived values must use `defaults`.
 - References use `<component-id>.<output-alias>` or `<component-id>@<instance-id>.<output-alias>`.
 - Unqualified references resolve only when exactly one enabled source instance matches that component type.
 - Both producer and consumer must be declared in `component_sources.yaml`.
 - Component ids must be globally unique across `infra` and `apps`.
-- `runtime.values` may resolve immediately from a literal or from an `input.<path>` reference in the source infra component.
 - Literal `defaults` seed starter config during `create` and apply as runtime fallback when the target field is missing.
 - Shared-derived `defaults` resolve from top-level catalog `shared` values at validation/render/deploy time and are not copied into `config.yaml`.
 - Terraform-backed outputs render as native Terraform module references for infra consumers.
@@ -314,13 +318,14 @@ Wizard field/option model:
 - `component_sources.yaml` can declare top-level `shared` values, and `defaults` entries can reference them with `shared.<path>` so shared values flow into Terraform module inputs or Helm chart values without duplicating them in component config blocks.
 - `shared` is catalog-only; `config.yaml` must not declare a root `shared` block.
 - The shipped public catalogs should contain only non-sensitive shared defaults. Project-scoped SSH public keys for jump-host modules belong in the private project `config.yaml`, not in `component_sources.yaml`.
-- The bundled `mk8s` source entry sets `defaults.inputs.mk8s_cluster_public_endpoint: true`, and `runtime.contracts.cluster_access` resolves endpoint access dynamically from that input. If operators switch the control plane to private-only, local app operations still work as long as the machine running `nebius-cxcli` already has private network reachability to the MK8s API endpoint.
+- The bundled `mk8s` source entry sets `defaults.inputs.mk8s_cluster_public_endpoint: true`, and the built-in MK8s handoff resolves endpoint access dynamically from that input. If operators switch the control plane to private-only, local app operations still work as long as the machine running `nebius-cxcli` already has private network reachability to the MK8s API endpoint.
 - The bundled `mk8s` source entry also sets `defaults.inputs.kube_network_service_cidrs: ["/20"]`. Nebius defaults omitted MK8s service CIDRs to `["/16"]`; on a single-pool `/16` subnet that can consume the entire pool and stall control-plane provisioning. `validate --strict` and `deploy` now preflight that case against the live subnet before Terraform apply.
 - The bundled `mk8s` source entry also sets `defaults.inputs.cpu_nodes_count: 2`, so the baseline CPU node-group size is visible in `config.yaml` and editable in the wizard instead of coming from an implicit Terraform module default.
-- `component_sources.yaml` can also declare producer-side `runtime.values` exports and consumer-side `input` bindings so component outputs feed other component inputs without adding hardcoded wiring to the CLI.
+- `component_sources.yaml` can declare consumer-side `input` bindings so component outputs feed other component inputs without adding hardcoded wiring to the CLI.
 - Interactive field prompting now offers all discoverable required and optional component fields for newly selected components.
 - Required fields are labeled `required` and must receive a valid value before the wizard advances unless the operator stops the wizard.
 - Optional fields are labeled `optional`; blank answers keep defaults/current values and leave the field implicit in `config.yaml` when the value still matches a virtual module/chart default.
+- Declared `wizard` metadata targeting `inputs.*` or `values.*` remains promptable even before that leaf exists in the payload; the wizard treats those paths as create-on-write prompt targets instead of warning that the path is missing.
 - Fields grouped behind a sibling `<prefix>_enabled` toggle are prompted only when that toggle is true; enabling the toggle during the wizard appends the dependent fields later in the same run.
 - Deferred dependency-prompt expansion must capture the current component's module metadata and required leaf set when the callback is queued, so later prompt expansion cannot accidentally read loop state from a different component iteration.
 - Empty optional complex defaults such as `{}` and `[]` are presented with a blank prompt default plus explicit “blank keeps current empty map/list” text, instead of rendering those literals as inline prompt defaults.
@@ -337,6 +342,8 @@ Wizard field/option model:
   - `project_networks`
   - `tenant_projects`
   - `mk8s_control_plane_versions`
+- The bundled `mk8s` catalog uses that contract directly: `inputs.subnet_id` is wired to `project_subnets`, platform fields use the MK8s compatibility lookup intersected with project compute-platform inventory, and preset fields are chained to the selected live compute platform.
+- The bundled jump-host profiles apply the same pattern at a simpler scope: `inputs.subnet_id` is project-scoped, `inputs.platform` comes from the live compute-platform inventory, and `inputs.preset` is chained to the selected platform.
 - Wizard stop token is `q`; on exit, remaining fields keep defaults.
 - Stopping the wizard never discards the current project config edit. `create` and `component add` persist the current payload and warn only when required fields remain unresolved; if only optional fields are skipped, no warning is emitted.
 
@@ -654,7 +661,7 @@ Validation layers:
 3. Strict checks in CLI for deployment readiness.
 4. Optional plugin validation via `NEBIUS_CXCLI_RUNTIME_VALIDATION_PLUGINS`.
 
-Built-in runtime validation is selected only by explicit `validation` profiles from the source catalog, so a component runs only the rule set it opted into.
+Bundled runtime validation selection is code-owned in `src/nebius_cxcli/validation_profiles.py`, mirroring the built-in wizard-profile and cluster-handoff layers. It is internal metadata, not a supported public catalog field.
 
 Plugin default:
 
@@ -695,14 +702,14 @@ Infra render:
 - Before backend-enabled Terraform init paths (`validate-generated`, `terraform plan`, `terraform apply`, `deploy`), CLI ensures the backend bucket exists via Nebius Storage API.
 - Backend lock recovery is explicit: `terraform unlock <generated-dir>` inspects the remote `.tflock` object for the rendered backend and then uses Terraform `force-unlock` only when the lock appears stale. By default it refuses to unlock while local Terraform/deploy operations are still active or when the recorded lock owner differs from the current local identity.
 - `terraform unlock` still requires `aws` CLI in `PATH`; Terraform itself may come from `PATH` or the managed Terraform download path.
-- Local `deploy` validates the rendered Terraform root before apply, then if enabled charts and an infra component with `runtime.contracts.cluster_access` is present it resolves the rendered cluster ID output and prepares kubeconfig before applying rendered Flux manifests.
+- Local `deploy` validates the rendered Terraform root before apply, then if enabled charts and the bundled `mk8s` component are present it resolves the rendered cluster ID output and prepares kubeconfig before applying rendered Flux manifests.
 - Customer-side commands operate on the rendered `generated/` bundle as the deploy contract and do not need the source catalog to recover local Terraform module paths from the original render machine.
-- On non-CI local runs, that same cluster-access runtime contract also updates the user kubeconfig at `~/.kube/config` with a `nebius-cxcli` exec-based credential entry, so the target MK8s cluster is immediately usable with `kubectl` after `deploy`, `flux apply`, or `flux bootstrap` without a separate Nebius CLI install.
-- Only `deploy`, `flux apply`, and `flux bootstrap` persist that local kubeconfig runtime contract. `destroy` and `flux destroy` use only a temporary kubeconfig because they need cluster access for rendered app teardown but should not switch the operator's local current-context as a side effect.
-- The bundled MK8s runtime contract no longer hardcodes public access. It resolves the endpoint choice from `inputs.mk8s_cluster_public_endpoint`, so the CLI selects the private API endpoint automatically when the cluster is configured private-only.
+- On non-CI local runs, that same built-in MK8s handoff also updates the user kubeconfig at `~/.kube/config` with a `nebius-cxcli` exec-based credential entry, so the target MK8s cluster is immediately usable with `kubectl` after `deploy`, `flux apply`, or `flux bootstrap` without a separate Nebius CLI install.
+- Only `deploy`, `flux apply`, and `flux bootstrap` persist that local kubeconfig handoff. `destroy` and `flux destroy` use only a temporary kubeconfig because they need cluster access for rendered app teardown but should not switch the operator's local current-context as a side effect.
+- The built-in MK8s handoff no longer hardcodes public access. It resolves the endpoint choice from `inputs.mk8s_cluster_public_endpoint`, so the CLI selects the private API endpoint automatically when the cluster is configured private-only.
 - Private-endpoint cluster access is supported, but reachability is still an environment concern. `nebius-cxcli` fails early with a targeted message when `kubectl` cannot reach a private control-plane endpoint; operators must provide that path through their own VPN, routed private network, tunnel, subnet router, or an in-network runner.
 - Before `deploy`, `flux apply`, or `flux bootstrap` starts Flux work against a handed-off MK8s cluster, the CLI performs a fast node-readiness probe first and only enters a wait loop when the nodes are not `Ready` yet. Healthy existing clusters proceed to Flux work immediately.
-- After that cluster-access runtime contract is prepared, the local Flux phase keeps one continuous spinner alive and updates its message across cluster reachability, Flux API discovery, rendered-manifest apply, and the final rendered-resource readiness wait so the command remains visibly active during quiet kubectl/Flux setup work.
+- After that built-in MK8s handoff is prepared, the local Flux phase keeps one continuous spinner alive and updates its message across cluster reachability, Flux API discovery, rendered-manifest apply, and the final rendered-resource readiness wait so the command remains visibly active during quiet kubectl/Flux setup work.
 - In non-interactive environments, those same phase updates degrade to ordinary printed lines rather than transient spinner frames, so CI logs stay readable without requiring terminal animation support.
 - `terraform plan` and `terraform apply` operate on the existing generated infra bundle rather than rerendering from `config.yaml`.
 - `terraform apply` is a sequentially idempotent infra-only path for a given `generated/infra` bundle. Repeated runs converge through Terraform state; concurrent runs against the same backend are intentionally blocked by remote state locking.
@@ -722,7 +729,7 @@ Infra render:
 - `flux apply` is also sequentially idempotent for a given `generated/flux` bundle: it applies the current rendered manifests, skips Flux controller installation when the controllers already exist, and waits for the rendered Flux resources to report `Ready`.
 - `flux bootstrap` auto-downloads a managed Flux CLI binary from the official Flux GitHub release for the catalog-pinned `cli.flux.version` when `flux` is not already available in `PATH`. The binary is cached under the local nebius-cxcli cache and is not installed system-wide.
 - `flux bootstrap` resolves the GitHub repo slug from `GITHUB_REPOSITORY` when present, otherwise it falls back to the local git `origin` remote.
-- `flux bootstrap` uses the same runtime contract rather than hardcoding a specific Terraform output name in CI workflow logic.
+- `flux bootstrap` uses the same built-in MK8s handoff rather than hardcoding a specific Terraform output name in CI workflow logic.
 - `flux bootstrap` only switches to reconcile mode when the cluster already contains both the core Flux controller deployments and the bootstrap Git objects `GitRepository/flux-system` plus `Kustomization/flux-system`. A cluster that only has Flux controllers from local `deploy`/`flux apply` is not treated as Git-bootstrapped yet.
 - `flux bootstrap` is intentionally the GitOps path, not the direct-apply path. It assumes the rendered manifests are committed and pushed to the watched Git repository/path. `flux apply` is the local direct-apply path for immediate day-2 deployment before Git reconciliation is in place.
 - GitOps safety comes from publishing one final watched-path snapshot, not from tearing Flux down. Normal updates should rerender locally, review the `generated/` diff, and push a single commit; do not publish an intermediate manifest-deletion commit and do not routinely unbootstrap/rebootstrap Flux to replace rendered artifacts.
@@ -731,12 +738,15 @@ Infra render:
 
 Managed vs external local tooling:
 
+- Local developer bootstrap for this repo assumes Python `3.12+`, `make`, `git`, Python venv support, and a native build toolchain for Python-package fallback builds before `make venv` / `make all` are expected to work.
+- The repo Makefile exposes an explicit fast/default unit lane plus separate integration/coverage entrypoints: `make test-unit`, `make test-integration`, and `make coverage`. The current suite still lives under `tests/`, so `test-unit` is the practical default while `tests/integration` remains the reserved isolated lane for future slower coverage.
+- Provider lookup helpers should stay friendly to strict IDE type checkers as well as runtime checks; when `callable()` or optional-value narrowing is not enough for Pyright/Pylance, prefer explicit casts or stepwise typed locals over compact inference-heavy comprehensions.
 - Auto-managed by the CLI when missing:
   - `terraform` for Terraform-backed validation, render lockfile generation, `terraform plan`, `terraform apply`, `terraform unlock`, and backend-backed Terraform output reads
   - `flux` for `flux bootstrap`
 - Still external prerequisites:
   - `kubectl` for `deploy`, `destroy`, `flux apply`, `flux destroy`, `flux bootstrap`, and Flux readiness probes
-  - Nebius SDK auth for kubeconfig generation against infra components that declare `runtime.contracts.cluster_access`; the standalone `nebius` CLI is only an optional auth-token fallback, not a runtime dependency for cluster API access
+  - Nebius SDK auth for kubeconfig generation against built-in cluster handoff components such as the bundled `mk8s`; the standalone `nebius` CLI is only an optional auth-token fallback, not a runtime dependency for cluster API access
   - `helm` for strict Helm source validation
   - `aws` CLI for `terraform unlock` remote lock inspection
 
@@ -814,7 +824,12 @@ The component source model itself is Terraform-module + Helm-chart based, but th
 
 - `setup.py`: wheel-build hook that bundles the portable `component_sources.yaml` view and rewrites internal release refs for published artifacts.
 - `src/nebius_cxcli/cli.py`: CLI entrypoints, orchestration, strict checks, command behavior.
-- `src/nebius_cxcli/component_sources.py`: source registry loading + precedence resolution.
+- `src/nebius_cxcli/component_sources.py`: source registry loading, strict schema parsing, source-profile resolution, automatic Terraform output export, and `wizard_profile` expansion/merge.
+- `src/nebius_cxcli/cluster_handoffs.py`: built-in cluster handoff contracts such as the bundled `mk8s` kubeconfig/bootstrap handoff.
+- `src/nebius_cxcli/validation_profiles.py`: built-in runtime validation-profile defaults for bundled infra components.
+- `src/nebius_cxcli/wizard_profiles.py`: built-in one-to-one infra `wizard_profile` registry for bundled component-guidance shorthands.
+- `src/nebius_cxcli/component_defaults.py`: shared/default resolution and virtual prompt-default seeding for source-catalog values.
+- `src/nebius_cxcli/component_wiring.py`: producer-to-consumer Terraform output binding helpers.
 - `src/nebius_cxcli/components.py`: runtime component entry generation and dependency helpers.
 - `src/nebius_cxcli/config_template.py`: starter `config.yaml` generation from runtime entries.
 - `src/nebius_cxcli/config_model.py`: runtime/dynamic shape conversion.
@@ -823,10 +838,12 @@ The component source model itself is Terraform-module + Helm-chart based, but th
 - `src/nebius_cxcli/runtime_plugin_validation.py`: optional validation plugin loader.
 - `src/nebius_cxcli/runtime_component_validation.py`: optional component rule plugin (not default-loaded).
 - `src/nebius_cxcli/runtime_introspection.py`: module/chart introspection helpers.
-- `src/nebius_cxcli/provider_options.py`: provider-backed field option lookup.
+- `src/nebius_cxcli/provider_options.py`: Nebius/provider-backed field option lookup, built-in provider source registry, plugin hooks, option filtering, and resolver error reporting.
+- `src/nebius_cxcli/sdk_auth.py`: shared Nebius SDK initialization used by auth/bootstrap and provider-backed option lookups.
 - `src/nebius_cxcli/infra_render.py`: Terraform render generation.
 - `src/nebius_cxcli/terraform_backend.py`: Terraform remote-state backend derivation/rendering + bucket bootstrap.
 - `src/nebius_cxcli/flux_render.py`: Flux render generation.
+- `../../skills/onboard-nbs-cxcli/SKILL.md`: central Codex skill for onboarding Nebius Terraform modules into `nebius-cxcli`, including when to stop at `component_sources.yaml` and when to touch code-owned onboarding layers.
 - `src/nebius_cxcli/render.py`: combined render orchestration.
 - `src/nebius_cxcli/terraform_ops.py`: terraform command wrappers.
 - `src/nebius_cxcli/flux_ops.py`: flux bootstrap/reconcile wrappers.
@@ -834,12 +851,16 @@ The component source model itself is Terraform-module + Helm-chart based, but th
 - `src/nebius_cxcli/iam_bootstrap.py`: Nebius IAM bootstrap (identity + key material).
 - `src/nebius_cxcli/github_secrets.py`: GitHub repo/environment secret sync helpers.
 - `src/nebius_cxcli/paths.py`: project path resolution and alignment checks.
+- `src/nebius_cxcli/generated_manifest.py`: generated-bundle manifest read/write helpers for deploy/runtime replay.
+- `src/nebius_cxcli/email_settings.py`: operator-local SMTP/email settings persistence and resolution.
 - `src/nebius_cxcli/inventory_ops.py`: inventory write operations.
 - `src/nebius_cxcli/notify_ops.py`: email notification operations.
+- `src/nebius_cxcli/managed_tools.py`: managed Terraform/Flux download and cache helpers for tool bootstrap.
 - `component_sources.yaml`: repo-level starter source registry editable by operators.
 - `<install-prefix>/nebius_cxcli/component_sources.yaml` (wheel data-file): bundled fallback source registry shipped inside wheel builds.
 - The `nebius-cxcli` GitHub release workflow publishes both the wheel and the raw portable catalog file so operators can download the editable source catalog directly from the release page with module refs already pinned to the published release tag.
 - The repo CI and release workflows run the same local `make all` verification contract before wheel verification or release publication so GitHub Actions and local development stay on one lint/test/build path.
+- That `make all` path intentionally reuses the repo `.venv` for `python -m build --wheel --no-isolation` and overlaps the wheel build with the lint/test gate after env setup instead of paying for a second isolated build environment on every run; `make venv` upgrades `setuptools` first so the shared environment satisfies the build backend contract.
 - After `make all`, those workflows also run `validate-sources component_sources.yaml` against the active portable catalog so real Terraform-module and Helm-chart source contracts are checked in automation, not only in unit tests.
 - Post-`make all` workflow verification uses the repo `.venv/bin/python` for `nebius_cxcli.release_catalog` commands so wheel/catalog checks import the checked-out editable package reliably under GitHub Actions.
 
@@ -847,5 +868,8 @@ Primary automated test ownership:
 
 - `tests/test_cli.py` and `tests/test_cli_command_coverage.py`: CLI command contract and workflow-generation behavior.
 - `tests/test_component_sources.py`: component source precedence and validation rules, including `validate-sources` registry checks.
+- `tests/test_components_runtime_discovery.py`: component-entry discovery from source catalogs, including bundled `wizard_profile` expansion on runtime entries.
+- `tests/test_wizard_provider_field_specs.py`: explicit wizard/provider wiring behavior, relative `depends_on` normalization, and provider-backed allowed-value semantics.
+- `tests/test_provider_option_plugins.py`: provider-option plugin hooks, plugin filtering, and provider error reporting behavior.
 - `tests/test_github_secrets.py`: GitHub repo/environment secret helper behavior, including environment creation and environment-secret upsert orchestration.
 - `tests/test_setup_build.py`: setup/build packaging contract, with CI build env isolated so source selection and release-ref rewrite precedence stay deterministic under GitHub Actions.

@@ -6,7 +6,9 @@ import subprocess
 from pathlib import Path
 
 SCRIPT_SOURCE = Path(__file__).resolve().parents[1] / "publish-release.sh"
-RUNTIME_VERSION_SOURCE = Path(__file__).resolve().parents[1] / "src" / "nebius_cxcli" / "runtime_version.py"
+RUNTIME_VERSION_SOURCE = (
+    Path(__file__).resolve().parents[1] / "src" / "nebius_cxcli" / "runtime_version.py"
+)
 INIT_SOURCE = Path(__file__).resolve().parents[1] / "src" / "nebius_cxcli" / "__init__.py"
 
 
@@ -248,9 +250,7 @@ def test_publish_release_prep_fails_when_remote_tag_already_exists(
 
     changelog = repo_root / "CHANGELOG.md"
     changelog.write_text(
-        "# Changelog\n\n"
-        "## [Unreleased]\n\n"
-        "- Prepare release `v0.1.3`.\n",
+        "# Changelog\n\n## [Unreleased]\n\n- Prepare release `v0.1.3`.\n",
         encoding="utf-8",
     )
 
@@ -262,7 +262,10 @@ def test_publish_release_prep_fails_when_remote_tag_already_exists(
     _run(["git", "add", "CHANGELOG.md", "publish-release.sh"], cwd=repo_root)
     _run(["git", "commit", "-qm", "init"], cwd=repo_root)
     _run(["git", "push", "-u", "origin", "main"], cwd=repo_root)
-    _run(["git", "tag", "-a", "nebius-cxcli-v0.1.3", "-m", "Release nebius-cxcli-v0.1.3"], cwd=repo_root)
+    _run(
+        ["git", "tag", "-a", "nebius-cxcli-v0.1.3", "-m", "Release nebius-cxcli-v0.1.3"],
+        cwd=repo_root,
+    )
     _run(["git", "push", "origin", "refs/tags/nebius-cxcli-v0.1.3"], cwd=repo_root)
     _run(["git", "tag", "-d", "nebius-cxcli-v0.1.3"], cwd=repo_root)
 
@@ -384,7 +387,10 @@ def test_publish_release_publish_fails_when_release_section_is_empty(
     )
 
     assert result.returncode != 0
-    assert "Release changelog section for nebius-cxcli-v0.1.3 in CHANGELOG.md is empty" in result.stderr
+    assert (
+        "Release changelog section for nebius-cxcli-v0.1.3 in CHANGELOG.md is empty"
+        in result.stderr
+    )
     remote_tags = subprocess.run(
         ["git", "ls-remote", "--tags", "origin", "refs/tags/nebius-cxcli-v0.1.3"],
         cwd=repo_root,
@@ -421,9 +427,15 @@ def test_publish_release_publish_uses_git_version_when_setuptools_scm_is_unavail
     package_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(RUNTIME_VERSION_SOURCE, package_dir / "runtime_version.py")
     shutil.copy2(INIT_SOURCE, package_dir / "__init__.py")
-    (package_dir / "_version.py").write_text('__version__ = version = "0.1.10.dev4"\n', encoding="utf-8")
-    (repo_root / "pyproject.toml").write_text("[project]\nname = 'nebius-cxcli'\n", encoding="utf-8")
-    (repo_root / "setuptools_scm.py").write_text('raise ImportError("blocked for test")\n', encoding="utf-8")
+    (package_dir / "_version.py").write_text(
+        '__version__ = version = "0.1.10.dev4"\n', encoding="utf-8"
+    )
+    (repo_root / "pyproject.toml").write_text(
+        "[project]\nname = 'nebius-cxcli'\n", encoding="utf-8"
+    )
+    (repo_root / "setuptools_scm.py").write_text(
+        'raise ImportError("blocked for test")\n', encoding="utf-8"
+    )
 
     _run(["git", "init", "-q"], cwd=repo_root)
     _run(["git", "checkout", "-qb", "main"], cwd=repo_root)
@@ -431,7 +443,15 @@ def test_publish_release_publish_uses_git_version_when_setuptools_scm_is_unavail
     _run(["git", "config", "user.email", "test@example.com"], cwd=repo_root)
     _run(["git", "remote", "add", "origin", str(origin)], cwd=repo_root)
     _run(
-        ["git", "add", "CHANGELOG.md", "publish-release.sh", "pyproject.toml", "setuptools_scm.py", "src"],
+        [
+            "git",
+            "add",
+            "CHANGELOG.md",
+            "publish-release.sh",
+            "pyproject.toml",
+            "setuptools_scm.py",
+            "src",
+        ],
         cwd=repo_root,
     )
     _run(["git", "commit", "-qm", "init"], cwd=repo_root)
