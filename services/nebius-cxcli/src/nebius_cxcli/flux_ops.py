@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -57,6 +59,7 @@ _BENIGN_KUBECTL_OUTPUT_MARKERS = (
     "missing the kubectl.kubernetes.io/last-applied-configuration annotation",
     "The missing annotation will be patched automatically.",
 )
+_GO_DURATION_PART_RE = re.compile(r"(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)")
 
 
 @dataclass(frozen=True)
@@ -66,6 +69,7 @@ class FluxWaitTarget:
     namespace: str
     kind: str
     is_source: bool
+    timeout_seconds: int | None = None
 
 
 @dataclass(frozen=True)
@@ -73,6 +77,9 @@ class FluxTargetStatus:
     target: FluxWaitTarget
     is_ready: bool
     has_ready_condition: bool
+    is_terminal_failure: bool
+    failure_reason: str
+    failure_message: str
     summary: str
 
 
@@ -193,6 +200,56 @@ def _iter_yaml_docs(path: Path) -> list[dict[str, Any]]:
     return docs
 
 
+def _parse_go_duration_seconds(raw: str) -> int | None:
+    text = raw.strip()
+    if not text:
+        return None
+    total_seconds = 0.0
+    position = 0
+    for match in _GO_DURATION_PART_RE.finditer(text):
+        if match.start() != position:
+            return None
+        value = float(match.group(1))
+        unit = match.group(2)
+        position = match.end()
+        multiplier = {
+            "ns": 1e-9,
+            "us": 1e-6,
+            "µs": 1e-6,
+            "ms": 1e-3,
+            "s": 1.0,
+            "m": 60.0,
+            "h": 3600.0,
+        }[unit]
+        total_seconds += value * multiplier
+    if position != len(text):
+        return None
+    return max(1, int(math.ceil(total_seconds)))
+
+
+def _target_manifest_timeout_seconds(doc: dict[str, Any], *, is_source: bool) -> int | None:
+    if is_source:
+        return None
+    spec = doc.get("spec")
+    if not isinstance(spec, dict):
+        return None
+    raw_timeout = spec.get("timeout")
+    if not isinstance(raw_timeout, str):
+        return None
+    return _parse_go_duration_seconds(raw_timeout)
+
+
+def _suggested_flux_wait_timeout_seconds(
+    targets: list[FluxWaitTarget], *, minimum_seconds: int = 600, grace_seconds: int = 60
+) -> int:
+    hinted_timeouts = [
+        timeout for timeout in (target.timeout_seconds for target in targets) if timeout is not None
+    ]
+    if not hinted_timeouts:
+        return minimum_seconds
+    return max(minimum_seconds, max(hinted_timeouts) + grace_seconds)
+
+
 def _flux_wait_targets(flux_dir: Path) -> list[FluxWaitTarget]:
     files = _kustomization_resource_files(flux_dir)
     if not files:
@@ -229,6 +286,9 @@ def _flux_wait_targets(flux_dir: Path) -> list[FluxWaitTarget]:
                 namespace=namespace,
                 kind=kind,
                 is_source=(group == _FLUX_SOURCE_GROUP),
+                timeout_seconds=_target_manifest_timeout_seconds(
+                    doc, is_source=(group == _FLUX_SOURCE_GROUP)
+                ),
             )
             if group == _FLUX_SOURCE_GROUP:
                 source_targets.append(target)
@@ -269,7 +329,7 @@ def _kubectl_get_target(
         return None, "returned unreadable status payload"
 
 
-def _ready_condition(payload: dict[str, Any]) -> dict[str, Any] | None:
+def _condition_by_type(payload: dict[str, Any], condition_type: str) -> dict[str, Any] | None:
     status = payload.get("status")
     if not isinstance(status, dict):
         return None
@@ -279,9 +339,23 @@ def _ready_condition(payload: dict[str, Any]) -> dict[str, Any] | None:
     for item in conditions:
         if not isinstance(item, dict):
             continue
-        if str(item.get("type", "")).strip() == "Ready":
+        if str(item.get("type", "")).strip() == condition_type:
             return item
     return None
+
+
+def _ready_condition(payload: dict[str, Any]) -> dict[str, Any] | None:
+    return _condition_by_type(payload, "Ready")
+
+
+def _stalled_condition(payload: dict[str, Any]) -> dict[str, Any] | None:
+    return _condition_by_type(payload, "Stalled")
+
+
+def _condition_status_true(condition: dict[str, Any] | None) -> bool:
+    if not isinstance(condition, dict):
+        return False
+    return str(condition.get("status", "")).strip().lower() == "true"
 
 
 def _format_flux_target_summary(
@@ -293,6 +367,9 @@ def _format_flux_target_summary(
             target=target,
             is_ready=False,
             has_ready_condition=False,
+            is_terminal_failure=False,
+            failure_reason="",
+            failure_message="",
             summary=(
                 f"[yellow]{target.kind}[/yellow] {escape(label)}: "
                 f"[yellow]waiting[/yellow]; {escape(detail)}"
@@ -300,11 +377,37 @@ def _format_flux_target_summary(
         )
 
     ready = _ready_condition(payload)
+    stalled = _stalled_condition(payload)
+    if _condition_status_true(stalled):
+        reason = str(stalled.get("reason", "")).strip() or str(
+            (ready or {}).get("reason", "")
+        ).strip() or "Stalled"
+        message = (
+            _first_non_empty_line(str(stalled.get("message", "")).strip())
+            or _first_non_empty_line(str((ready or {}).get("message", "")).strip())
+            or ""
+        )
+        summary = f"[red]{target.kind}[/red] {escape(label)}: [red]{escape(reason)}[/red]"
+        if message:
+            summary += f"; {escape(message)}"
+        return FluxTargetStatus(
+            target=target,
+            is_ready=False,
+            has_ready_condition=ready is not None,
+            is_terminal_failure=True,
+            failure_reason=reason,
+            failure_message=message,
+            summary=summary,
+        )
+
     if ready is None:
         return FluxTargetStatus(
             target=target,
             is_ready=False,
             has_ready_condition=False,
+            is_terminal_failure=False,
+            failure_reason="",
+            failure_message="",
             summary=(
                 f"[yellow]{target.kind}[/yellow] {escape(label)}: "
                 "[yellow]waiting[/yellow]; controller has not published a Ready condition yet"
@@ -322,6 +425,9 @@ def _format_flux_target_summary(
             target=target,
             is_ready=True,
             has_ready_condition=True,
+            is_terminal_failure=False,
+            failure_reason="",
+            failure_message="",
             summary=summary,
         )
 
@@ -335,8 +441,24 @@ def _format_flux_target_summary(
         target=target,
         is_ready=False,
         has_ready_condition=True,
+        is_terminal_failure=False,
+        failure_reason="",
+        failure_message="",
         summary=summary,
     )
+
+
+def _select_actionable_flux_status(statuses: list[FluxTargetStatus]) -> FluxTargetStatus | None:
+    for status in statuses:
+        if status.is_terminal_failure and not status.target.is_source:
+            return status
+    for status in statuses:
+        if status.is_terminal_failure:
+            return status
+    for status in statuses:
+        if not status.is_ready and not status.target.is_source:
+            return status
+    return next((status for status in statuses if not status.is_ready), None)
 
 
 def _flux_status_block(
@@ -344,21 +466,16 @@ def _flux_status_block(
     *,
     env: dict[str, str],
     started_at: float,
-) -> tuple[bool, bool, str, FluxWaitTarget | None]:
+) -> tuple[list[FluxTargetStatus], bool, bool, str]:
     lines: list[str] = []
     ready_count = 0
-    first_pending: FluxWaitTarget | None = None
-    pending_statuses: list[FluxTargetStatus] = []
+    statuses: list[FluxTargetStatus] = []
     for target in targets:
         payload, detail = _kubectl_get_target(target, env=env)
         status = _format_flux_target_summary(target, payload, detail)
+        statuses.append(status)
         if status.is_ready:
             ready_count += 1
-        elif first_pending is None:
-            first_pending = target
-            pending_statuses.append(status)
-        elif not status.is_ready:
-            pending_statuses.append(status)
         lines.append(f"[dim]-[/dim] {status.summary}")
     total = len(targets)
     elapsed = max(0, int(time.monotonic() - started_at))
@@ -368,17 +485,19 @@ def _flux_status_block(
         f"[bold cyan]Flux status[/bold cyan] [dim][{elapsed_label}][/dim] "
         f"[bold]{ready_count}/{total} Ready[/bold]"
     )
-    only_sources_pending = bool(pending_statuses) and all(
-        status.target.is_source for status in pending_statuses
+    non_ready_statuses = [status for status in statuses if not status.is_ready]
+    terminal_failures = [status for status in non_ready_statuses if status.is_terminal_failure]
+    only_sources_pending = bool(non_ready_statuses) and not terminal_failures and all(
+        status.target.is_source for status in non_ready_statuses
     )
-    return ready_count == total, only_sources_pending, "\n".join([header, *lines]), first_pending
+    return statuses, ready_count == total, only_sources_pending, "\n".join([header, *lines])
 
 
 def wait_for_rendered_flux_resources(
     paths: ProjectPaths,
     *,
     extra_env: dict[str, str] | None = None,
-    timeout_seconds: int = 600,
+    timeout_seconds: int | None = None,
     emit: Callable[[str], None] | None = None,
     poll_interval_seconds: float = 5.0,
     repeat_interval_seconds: float = 20.0,
@@ -391,17 +510,31 @@ def wait_for_rendered_flux_resources(
     if not targets:
         return
     started_at = time.monotonic()
-    deadline = started_at + timeout_seconds
+    effective_timeout_seconds = (
+        timeout_seconds
+        if timeout_seconds is not None
+        else _suggested_flux_wait_timeout_seconds(targets)
+    )
+    deadline = started_at + effective_timeout_seconds
     last_emitted = ""
     last_emit_time = 0.0
-    last_pending: FluxWaitTarget | None = None
+    last_actionable_status: FluxTargetStatus | None = None
+    last_terminal_failures: list[FluxTargetStatus] = []
 
     while True:
-        all_ready, only_sources_pending, block, pending_target = _flux_status_block(
+        statuses, all_ready, only_sources_pending, block = _flux_status_block(
             targets,
             env=env,
             started_at=started_at,
         )
+        non_ready_statuses = [status for status in statuses if not status.is_ready]
+        terminal_failures = [status for status in non_ready_statuses if status.is_terminal_failure]
+        pending_workloads = [
+            status
+            for status in non_ready_statuses
+            if not status.is_terminal_failure and not status.target.is_source
+        ]
+        actionable_status = _select_actionable_flux_status(non_ready_statuses)
         now = time.monotonic()
         if emit and (block != last_emitted or (now - last_emit_time) >= repeat_interval_seconds):
             emit(block)
@@ -417,28 +550,50 @@ def wait_for_rendered_flux_resources(
                     "source wait. Inspect the source objects separately if you need source-controller health details."
                 )
             return
-        last_pending = pending_target
+        last_actionable_status = actionable_status
+        last_terminal_failures = terminal_failures
+        if terminal_failures and not pending_workloads:
+            break
         if now >= deadline:
             break
         time.sleep(max(0.1, poll_interval_seconds))
 
-    if last_pending is None:
+    if last_actionable_status is None:
         raise RuntimeError(
-            f"Rendered Flux resources did not become Ready within {timeout_seconds}s."
+            f"Rendered Flux resources did not become Ready within {effective_timeout_seconds}s."
         )
 
-    target_label = f"{last_pending.kind} '{last_pending.name}'"
-    if last_pending.namespace:
-        target_label = f"{target_label} in namespace '{last_pending.namespace}'"
+    target = last_actionable_status.target
+    target_label = f"{target.kind} '{target.name}'"
+    if target.namespace:
+        target_label = f"{target_label} in namespace '{target.namespace}'"
     describe_cmd = ["kubectl"]
-    if last_pending.namespace:
-        describe_cmd.extend(["-n", last_pending.namespace])
-    describe_cmd.extend(["describe", f"{last_pending.resource_type}/{last_pending.name}"])
+    if target.namespace:
+        describe_cmd.extend(["-n", target.namespace])
+    describe_cmd.extend(["describe", f"{target.resource_type}/{target.name}"])
     events_cmd = ["kubectl"]
-    if last_pending.namespace:
-        events_cmd.extend(["-n", last_pending.namespace])
+    if target.namespace:
+        events_cmd.extend(["-n", target.namespace])
     events_cmd.extend(["get", "events", "--sort-by=.lastTimestamp"])
-    guidance = f"Flux resource {target_label} did not become Ready within {timeout_seconds}s."
+    if last_terminal_failures:
+        failure_summary = "; ".join(
+            f"{status.target.kind} {status.target.namespace}/{status.target.name}: "
+            f"{status.failure_reason or 'terminal failure'}"
+            for status in last_terminal_failures
+        )
+        guidance = "One or more rendered Flux resources reached a terminal failure state."
+        if failure_summary:
+            guidance += f"\nFailed resources: {failure_summary}"
+        if last_actionable_status.failure_message:
+            guidance += f"\nFailure detail: {last_actionable_status.failure_message}"
+        guidance += (
+            "\nThe rendered manifests were already applied; other Flux-managed resources may continue "
+            "reconciling in the cluster after this CLI command exits."
+        )
+    else:
+        guidance = (
+            f"Flux resource {target_label} did not become Ready within {effective_timeout_seconds}s."
+        )
     if last_emitted:
         guidance += "\nLast known status:\n" + last_emitted
     raise RuntimeError(

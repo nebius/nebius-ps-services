@@ -114,6 +114,21 @@ def test_components_discovered_from_source_file(monkeypatch, tmp_path: Path) -> 
                 "args": {"platform_path": "inputs.gpu_nodes_platform"},
             }
         },
+        "inputs.infiniband_fabric": {
+            "options": {
+                "from": "mk8s_infiniband_fabrics",
+                "args": {"platform_path": "inputs.gpu_nodes_platform"},
+            }
+        },
+        "inputs.mk8s_cluster_overrides": {
+            "prompt": False,
+        },
+        "inputs.mk8s_cpu_node_group_overrides": {
+            "prompt": False,
+        },
+        "inputs.mk8s_gpu_node_group_overrides": {
+            "prompt": False,
+        },
     }
 
     apps = {entry.id: entry for entry in component_entries("apps")}

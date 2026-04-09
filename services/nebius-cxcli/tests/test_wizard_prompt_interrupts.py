@@ -164,6 +164,35 @@ def test_prompt_choice_override_keeps_optional_field_unset_when_empty(monkeypatc
     assert value is None
 
 
+def test_prompt_choice_override_optional_empty_prompt_mentions_blank_keeps_unset(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: False)
+    captured: dict[str, object] = {}
+
+    def _fake_prompt(text: str, default=None):
+        captured["text"] = text
+        captured["default"] = default
+        return ""
+
+    monkeypatch.setattr(cli.typer, "prompt", _fake_prompt)
+
+    value, should_stop = cli._prompt_choice_override(
+        path_label="infra.components[0].inputs.infiniband_fabric",
+        current="",
+        choices=[
+            OptionChoice(value="us-central1-a", label="us-central1-a  (gpu-h200-sxm, us-central1)"),
+        ],
+        type_hint="string",
+        required=False,
+    )
+
+    assert should_stop is False
+    assert value == ""
+    assert captured["default"] == ""
+    assert "blank keeps unset" in str(captured["text"])
+
+
 def test_prompt_scalar_override_reprompts_blank_for_required_field(monkeypatch) -> None:
     prompts = iter(["", "cluster-a"])
     monkeypatch.setattr(cli.typer, "prompt", lambda *_args, **_kwargs: next(prompts))
@@ -199,6 +228,7 @@ def test_prompt_scalar_override_uses_blank_default_for_empty_optional_map(monkey
     assert should_stop is False
     assert value == {}
     assert captured["default"] == ""
+    assert "enter a single-line YAML/JSON value" in str(captured["text"])
     assert "blank keeps current empty map {}" in str(captured["text"])
 
 

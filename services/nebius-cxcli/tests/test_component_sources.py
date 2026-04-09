@@ -9,6 +9,7 @@ import yaml
 import nebius_cxcli.component_sources as component_sources
 from nebius_cxcli.cli import _validate_component_sources_registry
 from nebius_cxcli.component_sources import (
+    ComponentDefault,
     ComponentOutput,
     SourceProfile,
     load_component_sources,
@@ -298,6 +299,7 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(
                         "release": {
                             "namespace": "envoy-gateway-system",
                             "name": "envoy-gateway",
+                            "timeout": "10m",
                         },
                         "ui": {
                             "title": "Envoy Gateway",
@@ -321,6 +323,7 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(
 
     loaded = load_component_sources()
     assert loaded.cli.flux.version == "v2.8.0"
+    assert loaded.cli.flux.release_timeout == "5m"
     assert loaded.cli.terraform.version == "1.14.1"
     assert loaded.tf_modules[0].module == "wireguard-jumphost"
     assert (
@@ -367,10 +370,48 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(
     assert loaded.helm_charts[0].repo == "oci://docker.io/envoyproxy"
     assert loaded.helm_charts[0].namespace == "envoy-gateway-system"
     assert loaded.helm_charts[0].release_name == "envoy-gateway"
+    assert loaded.helm_charts[0].release_timeout == "10m"
     assert loaded.helm_charts[0].group == "Platform"
     assert loaded.helm_charts[0].enable is True
     assert loaded.helm_charts[0].defaults[0].target_path == "values.replicaCount"
     assert loaded.helm_charts[0].defaults[0].value == 2
+
+
+def test_app_release_timeout_inherits_global_flux_default(tmp_path: Path) -> None:
+    sources_file = tmp_path / "component-sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                cli={
+                    "flux": {
+                        "version": "v2.8.0",
+                        "release_timeout": "15m",
+                    },
+                    "terraform": {"version": "1.14.1"},
+                },
+                apps={
+                    "demo-app": {
+                        "source": {
+                            "repo": "https://example.invalid/charts",
+                            "chart": "demo-app",
+                            "version": "1.0.0",
+                        },
+                        "release": {
+                            "namespace": "demo",
+                            "name": "demo-app",
+                        },
+                    }
+                },
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_component_sources(explicit=sources_file)
+
+    assert loaded.cli.flux.release_timeout == "15m"
+    assert loaded.helm_charts[0].release_timeout == "15m"
 
 
 def test_load_component_sources_adds_builtin_mk8s_handoff(tmp_path: Path) -> None:
@@ -844,7 +885,38 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
                 "args": {"platform_path": "inputs.gpu_nodes_platform"},
             }
         },
+        "inputs.infiniband_fabric": {
+            "options": {
+                "from": "mk8s_infiniband_fabrics",
+                "args": {"platform_path": "inputs.gpu_nodes_platform"},
+            }
+        },
+        "inputs.mk8s_cluster_overrides": {
+            "prompt": False,
+        },
+        "inputs.mk8s_cpu_node_group_overrides": {
+            "prompt": False,
+        },
+        "inputs.mk8s_gpu_node_group_overrides": {
+            "prompt": False,
+        },
     }
+
+
+def test_bundled_cert_manager_enables_chart_crds_by_default() -> None:
+    loaded = load_component_sources(
+        explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml"
+    )
+    cert_manager = next(item for item in loaded.helm_charts if item.name == "cert-manager")
+
+    assert cert_manager.defaults == (
+        ComponentDefault(
+            target_path="values.crds.enabled",
+            value=True,
+            kind="literal",
+            source_path="",
+        ),
+    )
 
 
 def test_bundled_managed_postgresql_uses_wizard_profile() -> None:

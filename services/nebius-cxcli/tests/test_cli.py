@@ -479,6 +479,38 @@ def test_render_recreates_deployments_gitignore_in_git_repo(tmp_path: Path) -> N
     assert "projects/*/*/generated/infra/terraform.auto.tfvars.json" in content
 
 
+def test_first_render_from_create_scaffold_does_not_require_force(tmp_path: Path) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    create_result = _create_non_interactive(deployments_root)
+    assert create_result.exit_code == 0, create_result.output
+
+    config_path = _project_config_path(deployments_root)
+    result = runner.invoke(app, ["render", str(config_path)])
+
+    assert result.exit_code == 0, result.output
+    normalized = " ".join(result.output.split())
+    assert "Render will overwrite existing generated artifacts under" not in normalized
+    assert "Continue and overwrite the existing generated artifacts?" not in normalized
+
+
+def test_render_rejects_generated_directory_when_config_yaml_is_required(tmp_path: Path) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    create_result = _create_non_interactive(deployments_root)
+    assert create_result.exit_code == 0, create_result.output
+
+    generated_dir = _project_config_path(deployments_root).parent / "generated"
+    result = runner.invoke(app, ["render", str(generated_dir)])
+
+    assert result.exit_code == 1, result.output
+    normalized = " ".join(result.output.split())
+    assert "Expected a project config.yaml file path, but got a directory:" in normalized
+    assert "Pass projects/<client>--<tenant>/<project>/config.yaml." in normalized
+
+
 def test_create_force_overwrites_existing_config(tmp_path: Path) -> None:
     deployments_root = tmp_path / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)
@@ -496,6 +528,53 @@ def test_create_force_overwrites_existing_config(tmp_path: Path) -> None:
 
     refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert refreshed["client_info"]["nebius"]["region_id"] == "eu-north1"
+
+
+def test_create_force_noninteractive_warns_before_overwrite(tmp_path: Path) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    first = _create_non_interactive(deployments_root)
+    assert first.exit_code == 0, first.output
+
+    forced = _create_non_interactive(deployments_root, "--force")
+    assert forced.exit_code == 0, forced.output
+    assert "`create --force` will overwrite" in forced.output
+    normalized_output = " ".join(forced.output.lower().split())
+    assert "does not delete the deployments root" in normalized_output
+    assert "arbitrary files in the target folder" in normalized_output
+
+
+def test_create_interactive_force_existing_project_requires_confirmation(
+    tmp_path: Path,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    first = _create_non_interactive(deployments_root)
+    assert first.exit_code == 0, first.output
+
+    config_path = _project_config_path(deployments_root)
+    original = config_path.read_text(encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "create",
+            str(deployments_root),
+            "--force",
+            "--no-validate-sources",
+        ],
+        input="y\n\n\n\nn\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Existing deployments root detected." in result.output
+    assert "`create --force` will overwrite" in result.output
+    assert "Continue with forced project overwrite?" in result.output
+    assert "(y/n, q=stop wizard) [n]" in result.output
+    assert "No changes applied." in result.output
+    assert config_path.read_text(encoding="utf-8") == original
 
 
 def test_create_uses_defaults_when_no_component_flags(tmp_path: Path) -> None:

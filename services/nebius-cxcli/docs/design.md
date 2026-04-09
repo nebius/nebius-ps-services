@@ -42,7 +42,7 @@ Core principles:
 - Customer-side commands operate on `generated/`.
 - Source-driven component discovery from `component_sources.yaml`.
 - Runtime introspection for module/chart fields and chart dependencies.
-- Progressive-enhancement wizard model: infra inputs come from Terraform module variables and app inputs come from Helm values, and optional `wizard` metadata is reserved for explicit Nebius/chart-aware choices or other advanced integration. Complex Terraform types stay native and are entered as YAML/JSON values instead of being flattened into string-only prompts.
+- Progressive-enhancement wizard model: infra inputs come from Terraform module variables and app inputs come from Helm values, and optional `wizard` metadata is reserved for explicit Nebius/chart-aware choices or other advanced integration. Complex Terraform types stay native and are entered as single-line YAML/JSON values instead of being flattened into string-only prompts.
 - Generic render path for Terraform modules/resources and Flux Helm releases.
 - Optional plugin boundaries for provider-specific runtime option lookups and validation.
 
@@ -95,6 +95,7 @@ Primary source registry (repo root): `component_sources.yaml`
 Sections:
 
 - `cli.flux.version`
+- `cli.flux.release_timeout`
 - `cli.terraform.version`
 - `components.infra.<component-id>`
   - `source.portable`, optional `source.local`, optional `ui`, optional `status`, optional `defaults`, optional `wizard_profile`, optional `wizard`, optional `input`
@@ -120,7 +121,7 @@ Bundled infra components currently align like this:
 - `sfs` and `mysterybox` do not carry `wizard_profile` today because plain Terraform introspection is sufficient for their current UX.
 - App components do not use `wizard_profile`; they stay on Helm introspection plus optional explicit `wizard` entries.
 
-When `wizard.<field>.options` is present, it acts as wiring between an existing Terraform input or Helm value path and a guided option provider. The field itself still belongs to the module/chart contract; the catalog metadata only tells the CLI how to fetch valid choices for that field. For Nebius-backed flows, that means the operator-facing destination remains something like `inputs.cpu_nodes_platform`, while `from: mk8s_compatible_platforms` or `from: compute_platform_presets` tells the CLI which Nebius API-backed lookup to execute. For MK8s platform fields, the provider now treats the MK8s compatibility matrix as the authoritative support filter and, when a project id is available, intersects that set with the selected project's live compute-platform inventory so the wizard only offers currently available CPU/GPU platforms. `depends_on` is the chaining input for multi-step lookups, such as querying presets for the platform selected in a previous prompt, and that relative path is normalized against the active component instance for both prompt-time choice loading and strict provider-value validation. Chained provider-backed fields are only prompted after their dependency field has a concrete value, so optional downstream fields do not emit a spurious manual-entry fallback warning when their upstream selector was skipped. `filter_regex` is the only regex-capable selector, and it is applied consistently to displayed choices and manual-entry validation. Fields that do not need guided choices should rely on normal Terraform/Helm introspection and omit both `wizard_profile` and `wizard`.
+When `wizard.<field>.options` is present, it acts as wiring between an existing Terraform input or Helm value path and a guided option provider. The field itself still belongs to the module/chart contract; the catalog metadata only tells the CLI how to fetch valid choices for that field. For Nebius-backed flows, that means the operator-facing destination remains something like `inputs.cpu_nodes_platform`, while `from: mk8s_compatible_platforms` or `from: compute_platform_presets` tells the CLI which Nebius API-backed lookup to execute. For MK8s platform fields, the provider now treats the MK8s compatibility matrix as the authoritative support filter and, when a project id is available, intersects that set with the selected project's live compute-platform inventory so the wizard only offers currently available CPU/GPU platforms. The bundled MK8s `inputs.infiniband_fabric` field is also provider-wired, but it uses the documented Nebius GPU-cluster fabric matrix keyed by the selected GPU platform plus `client_info.nebius.region_id`, so the field stays optional while still offering constrained guided choices. Wizard metadata can also suppress optional advanced fields from interactive prompting with `prompt: false`; the bundled MK8s profile uses that for the raw `mk8s_*_overrides` passthrough maps so normal create flows stay focused on common inputs while the advanced escape hatches remain available in `config.yaml`. `depends_on` is the chaining input for multi-step lookups, such as querying presets for the platform selected in a previous prompt, and that relative path is normalized against the active component instance for both prompt-time choice loading and strict provider-value validation. Chained provider-backed fields are only prompted after their dependency field has a concrete value, so optional downstream fields do not emit a spurious manual-entry fallback warning when their upstream selector was skipped. `filter_regex` is the only regex-capable selector, and it is applied consistently to displayed choices and manual-entry validation. Fields that do not need guided choices should rely on normal Terraform/Helm introspection and omit both `wizard_profile` and `wizard`.
 
 Built-in infra `wizard_profile` names currently include:
 
@@ -209,6 +210,7 @@ Terraform outputs are still exported automatically, and the built-in MK8s handof
 Endpoint access still resolves from `inputs.mk8s_cluster_public_endpoint`, but that binding now lives in code instead of `component_sources.yaml`.
 Helm chart definitions stay cluster-agnostic; `deploy`/`flux bootstrap`/CI consume the built-in MK8s handoff once and then run Flux/kubectl against that cluster.
 Flux controller installation version for local `deploy` is configured in the same catalog under `cli.flux.version`.
+Default rendered Helm release timeout is configured in the same catalog under `cli.flux.release_timeout`.
 Managed Terraform CLI download version is configured in the same catalog under `cli.terraform.version`.
 
 Module outputs consumed by app bindings or built-in handoff behavior must be treated as a versioned interface.
@@ -244,6 +246,7 @@ components:
       release:
         namespace: demo
         name: demo-app
+        timeout: 10m
       input:
         values.global.clusterId: mk8s.cluster_id
 ```
@@ -304,6 +307,7 @@ Instance self-containment:
 - Config-based commands resolve sources from the active `component_sources.yaml` resolution path.
 - Canonical project path is `<deployments-root>/projects/<client-name>--<tenant-id>/<project-id>/config.yaml`.
 - App chart defaults (`release.namespace`, `release.name`) can be edited in wizard mode or overridden in non-interactive mode with `--app-namespace` and `--app-releasename`.
+- App chart `release.timeout` is optional catalog metadata for Flux `HelmRelease.spec.timeout`; when omitted, the chart inherits `cli.flux.release_timeout`. That keeps a global default in the catalog while still allowing per-chart overrides without hardcoding chart-specific logic in the deploy loop.
 
 Wizard field/option model:
 
@@ -421,7 +425,7 @@ The command boundary is intentional:
 - Auto-resolves app chart dependencies from chart metadata before persisting the updated selection.
 - Runs the field wizard only for newly added components; existing component values remain untouched.
 - The field wizard offers all discoverable required and optional fields for each newly added component, keeping module/chart defaults virtual unless the operator overrides them.
-- Accepts complex Terraform inputs such as lists/maps/objects as YAML/JSON prompt values so reusable modules do not need CLI-specific scalar shims.
+- Accepts complex Terraform inputs such as lists/maps/objects as single-line YAML/JSON prompt values so reusable modules do not need CLI-specific scalar shims.
 - Validates the active source catalog by default before editing `config.yaml`, matching `create`.
 - Reuses the existing project tenant/project scope and validates it non-interactively before provider-backed prompts, instead of silently downgrading dynamic Nebius lookups.
 - Non-interactive mode accepts one or more explicit infra-module ids or app-chart ids, repeats of the same id to create more than one component instance, and `<component-id>@<instance-id>` when the caller wants to control the new instance id explicitly.
@@ -459,8 +463,10 @@ The command boundary is intentional:
 ### `render <config.yaml>`
 
 - Writes deterministic artifacts under `generated/infra`, `generated/flux`, and `generated/inventory`.
+- Requires the project `config.yaml` path explicitly; passing `generated/` is a usage error and should be rejected with targeted guidance instead of a raw filesystem exception.
 - Writes `generated/nebius-cxcli-manifest.json`, which snapshots the runtime config and deployment metadata needed to operate on the generated bundle later.
 - Warns before overwriting an existing generated bundle, because rerendering is the replace path back to the original `config.yaml` contract.
+- The overwrite warning should not trigger on the scaffold created by `create` alone; empty generated subdirectories and the placeholder `generated/inventory/inventory.md` are not treated as meaningful existing rendered artifacts.
 - Renders into a hidden sibling staging directory first and swaps it into `generated/` only after the replacement bundle is complete, so a failed rerender leaves the current bundle intact.
 - When Terraform is available from `PATH` or the managed download path, attempts backend-disabled `terraform init -backend=false` to produce/update `.terraform.lock.hcl`.
 - Removes transient `.terraform/` workdir state after lockfile generation so the canonical rendered bundle stays clean.
@@ -498,7 +504,7 @@ The command boundary is intentional:
 
 `object-storage` is modeled as one bucket per enabled component instance. That keeps `config.yaml`, the field wizard, and the Terraform module contract aligned on scalar inputs like `inputs.name`, `inputs.versioning_policy`, and `inputs.protect_from_destroy` while still allowing multiple buckets in one project through distinct `instance_id` values.
 
-Modules that expose collection/object inputs, such as `mysterybox.secrets`, `ssh-jumphost.allowed_cidrs`, `wireguard-jumphost.clients`, or MK8s override objects, should keep those Terraform-native shapes. The CLI is responsible for prompting them as YAML/JSON and for failing early on known effectively-required inputs instead of flattening module contracts to fit a scalar-only wizard.
+Modules that expose collection/object inputs, such as `mysterybox.secrets`, `ssh-jumphost.allowed_cidrs`, `wireguard-jumphost.clients`, or MK8s override objects, should keep those Terraform-native shapes. The CLI is responsible for prompting them as single-line YAML/JSON values and for failing early on known effectively-required inputs instead of flattening module contracts to fit a scalar-only wizard.
 
 ### `bootstrap-ci <config.yaml>`
 
@@ -623,8 +629,8 @@ Modules that expose collection/object inputs, such as `mysterybox.secrets`, `ssh
 
 ## Idempotency Rules
 
-- `create`: idempotent reconcile by default; `--force` is explicit reset.
-- `create --force`: deterministic reset for the same inputs, but intentionally bypasses the safer default reconcile/update flow.
+- `create`: idempotent reconcile by default; `--force` is explicit overwrite for the resolved project config.
+- `create --force`: deterministic overwrite for the same resolved project identity, but intentionally bypasses the safer default reconcile/update flow. It does not delete the deployments root or unrelated project folders.
 - `component list`: read-only; safe to repeat.
 - `component add`: additive, not type-idempotent; repeating a component type creates another instance. Existing rows and values remain untouched unless a new instance is explicitly added.
 - `component remove`: idempotent for already-absent components; removal is blocked when it would violate dependency contracts.
@@ -722,7 +728,9 @@ Infra render:
 - If Flux controllers are missing, local `deploy` installs the core Flux controllers into the target cluster from the official Flux install manifest before applying rendered resources. This removes the `flux` CLI dependency from local `deploy`.
 - The Flux install manifest version used by local `deploy` comes from `component_sources.yaml` `cli.flux.version`.
 - After `kubectl apply -k generated/flux`, local `deploy` waits for the rendered Flux `source.toolkit` and `helm.toolkit` resources to become `Ready`, so a chart fetch/install failure does not get masked as a successful local deploy.
+- The local Flux wait budget should remain resource-driven as well: when rendered workload resources declare `spec.timeout`, the CLI derives its default outer wait window from the longest rendered workload timeout plus a short grace period instead of assuming every chart fits in one fixed global window.
 - During that Flux wait, local `deploy` and `flux apply` poll the rendered Flux resources from the cluster with `kubectl get -o json` and print a generic status block for the rendered `HelmRepository`, `GitRepository`, `HelmRelease`, and `Kustomization` objects. The status surface is resource-driven, not chart-specific.
+- If one rendered workload reaches a terminal Flux failure while other rendered workloads are still progressing, the CLI keeps watching the remaining workload resources until they settle; it then exits non-zero with the failed-resource summary instead of waiting out the whole window on whichever source object happened to be listed first.
 - If all rendered workload resources are already `Ready` and only rendered Flux source objects remain pending without any `Ready` condition, the CLI stops waiting and completes with a note. That guardrail avoids false hangs on source-controller status gaps after a successful local apply.
 - `deploy` and `flux apply` intentionally stay local direct-apply commands. They do not auto-bootstrap GitOps, because GitOps bootstrap has extra GitHub/Flux side effects. If the cluster is not bootstrapped yet, they now finish the local apply and print a warning with the exact `nebius-cxcli flux bootstrap <generated-dir>` follow-up command.
 - `flux apply` reuses that same local app-deploy path without Terraform apply, which makes it the apps-only command for day-2 chart deployments after infra is already present.

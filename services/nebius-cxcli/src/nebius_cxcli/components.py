@@ -47,6 +47,7 @@ class ComponentEntry:
     chart_repo: str | None = None
     default_namespace: str | None = None
     default_release_name: str | None = None
+    default_release_timeout: str | None = None
     defaults: tuple[ComponentDefault, ...] = ()
     outputs: tuple[ComponentOutput, ...] = ()
     input_bindings: tuple[ComponentInputBinding, ...] = ()
@@ -143,6 +144,7 @@ def _entry_from_helm_chart(
     chart_name: str,
     version: str | None,
     namespace: str | None,
+    release_timeout: str | None,
     default_enabled: bool = False,
     wizard_fields: dict[str, dict[str, Any]] | None = None,
     defaults: tuple[ComponentDefault, ...] = (),
@@ -176,6 +178,7 @@ def _entry_from_helm_chart(
         chart_repo=repo,
         default_namespace=namespace,
         default_release_name=release_name,
+        default_release_timeout=release_timeout,
         wizard_fields=dict(wizard_fields or {}),
         defaults=defaults,
         outputs=outputs,
@@ -210,6 +213,7 @@ def _app_component_entries(
                 chart_name=chart_name,
                 version=chart.version,
                 namespace=chart.namespace,
+                release_timeout=chart.release_timeout,
                 default_enabled=bool(chart.enable),
                 wizard_fields=chart.wizard_fields,
                 defaults=chart.defaults,

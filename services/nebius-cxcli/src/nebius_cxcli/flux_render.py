@@ -283,6 +283,9 @@ def _configured_app_release_specs(
                 interval = "5m"
                 scope = str(chart_node.get("group", "")).strip().lower() or "workloads"
                 chart_values = values_node
+                release_timeout = (
+                    str(entry.default_release_timeout or "").strip() if entry is not None else ""
+                )
 
                 specs.append(
                     {
@@ -298,6 +301,7 @@ def _configured_app_release_specs(
                         "chart_ref": chart_ref,
                         "chart_version": chart_version if source_kind == "helm_repository" else "",
                         "interval": interval,
+                        "timeout": release_timeout,
                         "values": chart_values,
                     }
                 )
@@ -313,6 +317,7 @@ def _helm_release_doc(
     chart_ref: str,
     chart_version: str | None,
     interval: str,
+    timeout: str | None,
     values: dict[str, Any],
 ) -> dict[str, Any]:
     chart_spec: dict[str, Any] = {
@@ -325,16 +330,19 @@ def _helm_release_doc(
     }
     if chart_version:
         chart_spec["version"] = chart_version
+    spec: dict[str, Any] = {
+        "interval": interval,
+        "chart": {"spec": chart_spec},
+        "install": {"createNamespace": True},
+        "values": values,
+    }
+    if timeout:
+        spec["timeout"] = timeout
     return {
         "apiVersion": "helm.toolkit.fluxcd.io/v2",
         "kind": "HelmRelease",
         "metadata": {"name": release_name, "namespace": namespace},
-        "spec": {
-            "interval": interval,
-            "chart": {"spec": chart_spec},
-            "install": {"createNamespace": True},
-            "values": values,
-        },
+        "spec": spec,
     }
 
 
@@ -407,6 +415,7 @@ def _render_flux_app_helm_releases(
                 chart_ref=release["chart_ref"],
                 chart_version=release["chart_version"],
                 interval=release["interval"],
+                timeout=release["timeout"] or None,
                 values=release["values"],
             ),
         )
