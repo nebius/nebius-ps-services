@@ -3277,11 +3277,16 @@ def _run_component_field_wizard(
                             return True
                         return dependency_prefix in _enabled_prefixes(module_inputs=module_inputs)
 
+                    current_entry = entry
+                    current_payload = payload
+
                     def _append_field_prompt(
                         leaf_name: str,
                         spec: Any | None,
                         *,
                         required: bool,
+                        payload: dict[str, Any] = current_payload,
+                        current_entry: ComponentEntry = current_entry,
                         bound_prompt_paths: set[PayloadPath] = bound_prompt_paths,
                         module_inputs: dict[str, Any] = module_inputs,
                         module_inputs_path: PayloadPath = module_inputs_path,
@@ -3305,7 +3310,7 @@ def _run_component_field_wizard(
                         label = _format_payload_path(full_path)
                         if not _provider_prompt_dependencies_ready(
                             payload=payload,
-                            entry=entry,
+                            entry=current_entry,
                             full_path_label=label,
                         ):
                             return
@@ -3358,9 +3363,21 @@ def _run_component_field_wizard(
                             continue
                         _queue_module_field_prompt(leaf_name, None, required=True)
 
+                    current_declared_prompt_paths = tuple(declared_prompt_paths)
+
                     def _append_declared_module_prompt_paths(
+                        payload: dict[str, Any] = current_payload,
+                        current_entry: ComponentEntry = current_entry,
                         module_inputs_path: PayloadPath = module_inputs_path,
+                        module_inputs: dict[str, Any] = module_inputs,
                         module_specs_by_leaf: dict[str, Any] = module_specs_by_leaf,
+                        declared_prompt_paths: tuple[PayloadPath, ...] = current_declared_prompt_paths,
+                        bound_prompt_paths: set[PayloadPath] = bound_prompt_paths,
+                        prompt_paths: list[PayloadPath] = prompt_paths,
+                        seen_prompt_labels: set[str] = seen_prompt_labels,
+                        field_type_hints: dict[str, str | None] = field_type_hints,
+                        required_leaf_names: set[str] = required_leaf_names,
+                        required_prompt_labels: set[str] = required_prompt_labels,
                     ) -> None:
                         for full_path in declared_prompt_paths:
                             if full_path in bound_prompt_paths or full_path in prompt_paths:
@@ -3370,7 +3387,7 @@ def _run_component_field_wizard(
                                 continue
                             if not _provider_prompt_dependencies_ready(
                                 payload=payload,
-                                entry=entry,
+                                entry=current_entry,
                                 full_path_label=label,
                             ):
                                 continue

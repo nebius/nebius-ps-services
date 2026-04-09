@@ -177,6 +177,7 @@ def test_create_writes_runtime_shape_with_selected_components(tmp_path: Path) ->
             "--project-id",
             "project-456",
             "--no-validate-sources",
+            "--no-validate-config",
             "--infra",
             "mk8s",
             "--app",
