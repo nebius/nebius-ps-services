@@ -27,7 +27,7 @@ jobs:
     steps:
       - name: Load reviewer policy
         id: policy
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const path = '.github/REVIEWERS';
@@ -91,7 +91,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Trim requested reviewers
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           REVIEWERS_JSON: ${{ needs.load-reviewers.outputs.reviewers_json }}
         with:
