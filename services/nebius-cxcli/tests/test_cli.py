@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -11,17 +12,34 @@ from typer.testing import CliRunner
 import nebius_cxcli.cli as cli_module
 import nebius_cxcli.component_sources as component_sources
 import nebius_cxcli.templates as templates_module
-from nebius_cxcli.cli import _load_context, app
+from nebius_cxcli.cli import _load_context, _load_runtime_context, app
 from nebius_cxcli.component_sources import (
     ComponentOutput,
+    SourceProfile,
     reset_component_sources_cache,
     set_component_sources_file_override,
     set_component_sources_profile_override,
 )
 from nebius_cxcli.components import component_entries, reset_component_entry_cache
 from nebius_cxcli.email_settings import EmailSettings
+from nebius_cxcli.quota_checks import QuotaCheck, QuotaReport
 
 runner = CliRunner()
+
+_VALID_ED25519_PUBLIC_KEY = (
+    "ssh-ed25519 "
+    "AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f "
+    "demo@example"
+)
+
+
+def _empty_quota_report() -> cli_module.QuotaReport:
+    return cli_module.QuotaReport(
+        tenant_id="tenant-123",
+        project_id="project-456",
+        region_id="eu-north1",
+        checked_at="2026-04-10T00:00:00+00:00",
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -75,6 +93,11 @@ def _reset_runtime_state(monkeypatch: pytest.MonkeyPatch) -> None:
         ),
     )
     monkeypatch.setattr("nebius_cxcli.cli._with_infra_provider_groups", lambda entries: entries)
+    monkeypatch.setattr(
+        cli_module,
+        "assess_live_quotas",
+        lambda *_args, **_kwargs: _empty_quota_report(),
+    )
     set_component_sources_file_override(None)
     set_component_sources_profile_override(None)
     reset_component_sources_cache()
@@ -123,7 +146,16 @@ def _mock_bootstrap_ci_github_sync(
 
 
 def _project_config_path(deployments_root: Path) -> Path:
-    return deployments_root / "projects" / "client-a--tenant-123" / "project-456" / "config.yaml"
+    return deployments_root / "tenant-123" / "project-456" / "config.yaml"
+
+
+def _project_dir(
+    deployments_root: Path,
+    *,
+    tenant_id: str = "tenant-123",
+    project_id: str = "project-456",
+) -> Path:
+    return deployments_root / tenant_id / project_id
 
 
 def _catalog(
@@ -155,6 +187,59 @@ def _create_non_interactive(deployments_root: Path, *extra: str):
             "--no-validate-sources",
             *extra,
         ],
+    )
+
+
+def _create_named_non_interactive(
+    deployments_root: Path,
+    *,
+    client_name: str,
+    tenant_id: str,
+    project_id: str,
+    extra: tuple[str, ...] = (),
+):
+    return runner.invoke(
+        app,
+        [
+            "create",
+            str(deployments_root),
+            "--no-interactive",
+            "--client-name",
+            client_name,
+            "--tenant-id",
+            tenant_id,
+            "--project-id",
+            project_id,
+            "--no-validate-sources",
+            *extra,
+        ],
+    )
+
+
+def _discover_config_payload(
+    *,
+    client_name: str = "client-a",
+    tenant_id: str = "tenant-123",
+    project_id: str = "project-456",
+) -> str:
+    return yaml.safe_dump(
+        {
+            "client_info": {
+                "client_name": client_name,
+                "nebius": {
+                    "tenant_id": tenant_id,
+                    "project_id": project_id,
+                    "region_id": "eu-north1",
+                },
+                "notifications": {
+                    "email_enabled": False,
+                    "email": None,
+                },
+            },
+            "infra": {"components": []},
+            "apps": {"charts": []},
+        },
+        sort_keys=False,
     )
 
 
@@ -224,7 +309,7 @@ def test_create_target_path_help_mentions_any_existing_directory() -> None:
     assert "Environment (dev|stage|prod)" not in result.output
 
 
-def test_create_existing_instance_is_idempotent_without_force(tmp_path: Path) -> None:
+def test_create_existing_instance_requires_force_to_overwrite(tmp_path: Path) -> None:
     deployments_root = tmp_path / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)
 
@@ -232,8 +317,56 @@ def test_create_existing_instance_is_idempotent_without_force(tmp_path: Path) ->
     assert first.exit_code == 0, first.output
 
     second = _create_non_interactive(deployments_root)
-    assert second.exit_code == 0, second.output
-    assert "Config up-to-date:" in second.output
+    assert second.exit_code == 1, second.output
+    normalized_output = " ".join(second.output.split())
+    assert "no longer reconciles existing configs" in normalized_output
+    assert "component list/add/remove" in normalized_output
+    assert "--force" in second.output
+
+
+def test_create_warns_when_live_quota_is_insufficient(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        cli_module,
+        "assess_live_quotas",
+        lambda *_args, **_kwargs: QuotaReport(
+            tenant_id="tenant-123",
+            project_id="project-456",
+            region_id="eu-north1",
+            checked_at="2026-04-10T00:00:00+00:00",
+            checks=(
+                QuotaCheck(
+                    component_id="ssh-jumphost",
+                    instance_id="ssh-jumphost",
+                    component_label="ssh-jumphost",
+                    quota_name="compute.instance.count",
+                    region="eu-north1",
+                    required=1,
+                    reason="one VM",
+                    unit="",
+                    available=0,
+                    sufficient=False,
+                    tenant_limit=0,
+                    tenant_usage=0,
+                    project_limit=None,
+                    project_usage=0,
+                    source_scope="tenant",
+                    description="VM count",
+                    contributors=(),
+                ),
+            ),
+        ),
+    )
+
+    result = _create_non_interactive(deployments_root, "--infra", "ssh-jumphost")
+
+    assert result.exit_code == 0, result.output
+    assert "Create completed with quota warnings." in result.output
+    assert "compute.instance.count requires 1, available 0" in result.output
 
 
 def test_create_runs_post_write_validation_by_default(
@@ -314,26 +447,23 @@ def test_create_interactive_existing_project_requires_confirmation(
             str(deployments_root),
             "--no-validate-sources",
         ],
-        input="\n\n\n\nn\n",
+        input="\n\nn\n",
     )
 
     assert result.exit_code == 0, result.output
-    assert "Existing project configs detected under this deployments root." in result.output
-    assert "Exactly one existing project config was found." in result.output
-    assert "Existing deployments root detected." in result.output
-    assert "Continue and enter project identity?" in result.output
-    assert "[y]" in result.output
-    assert "Client name [client-a]" in result.output
     assert "Tenant ID [tenant-123]" in result.output
     assert "Project ID [project-456]" in result.output
-    assert "Existing project config detected." in result.output
-    assert "Continue with create reconcile mode?" in result.output
-    assert "(y/n, q=stop wizard) [y]" in result.output
+    assert "Existing project detected." in result.output
+    assert "Continue and overwrite the existing tenant/project folder from scratch?" in result.output
+    assert "(y/n, q=stop wizard) [n]" in result.output
+    assert "Existing deployments root detected." not in result.output
+    assert "Continue and enter project identity?" not in result.output
+    assert "Client name [client-a]" not in result.output
     assert "No changes applied." in result.output
     assert config_path.read_text(encoding="utf-8") == original
 
 
-def test_create_interactive_existing_root_can_stop_before_identity_prompts(
+def test_create_interactive_existing_root_new_project_skips_overwrite_warning(
     tmp_path: Path,
 ) -> None:
     deployments_root = tmp_path / "deployments"
@@ -352,17 +482,56 @@ def test_create_interactive_existing_root_can_stop_before_identity_prompts(
             str(deployments_root),
             "--no-validate-sources",
         ],
-        input="n\n",
+        input="\nproject-789\nclient-b\n\n\nn\n",
     )
 
     assert result.exit_code == 0, result.output
-    assert "Existing deployments root detected." in result.output
-    assert "Continue and enter project identity?" in result.output
+    assert "Tenant ID [tenant-123]" in result.output
+    assert "Project ID [project-456]" in result.output
+    assert "Existing deployments root detected." not in result.output
+    assert "Continue and enter project identity?" not in result.output
+    assert "Existing project detected." not in result.output
+    assert "Continue and overwrite the existing tenant/project folder from scratch?" not in result.output
     assert "Client name [client-a]" not in result.output
-    assert "Tenant ID [tenant-123]" not in result.output
-    assert "Project ID [project-456]" not in result.output
-    assert "No changes applied." in result.output
+    assert "Created project:" in result.output
     assert config_path.read_text(encoding="utf-8") == original
+    assert (deployments_root / "tenant-123" / "project-789" / "config.yaml").exists()
+
+
+def test_create_non_interactive_existing_tenant_new_project_creates_config(
+    tmp_path: Path,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    first = _create_non_interactive(deployments_root)
+    assert first.exit_code == 0, first.output
+
+    original_config_path = _project_config_path(deployments_root)
+    original = original_config_path.read_text(encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "create",
+            str(deployments_root),
+            "--no-interactive",
+            "--client-name",
+            "client-b",
+            "--tenant-id",
+            "tenant-123",
+            "--project-id",
+            "project-789",
+            "--no-validate-sources",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Existing project found:" not in result.output
+    assert "Existing project detected." not in result.output
+    assert "Created project:" in result.output
+    assert original_config_path.read_text(encoding="utf-8") == original
+    assert (deployments_root / "tenant-123" / "project-789" / "config.yaml").exists()
 
 
 def test_single_existing_project_create_defaults_reads_identity_from_existing_config(
@@ -376,11 +545,8 @@ def test_single_existing_project_create_defaults_reads_identity_from_existing_co
 
     defaults = cli_module._single_existing_project_create_defaults(deployments_root)
     assert defaults is not None
-    assert defaults.client_name == "client-a"
     assert defaults.tenant_id == "tenant-123"
     assert defaults.project_id == "project-456"
-    assert defaults.region_id == "eu-north1"
-    assert defaults.email is None
     assert defaults.config_path == _project_config_path(deployments_root)
 
 
@@ -428,13 +594,13 @@ def test_create_writes_deployments_gitignore_when_target_is_in_git_repo(tmp_path
     gitignore_path = deployments_root / ".gitignore"
     assert gitignore_path.exists()
     content = gitignore_path.read_text(encoding="utf-8")
-    assert "projects/*/*/generated/" not in content.splitlines()
-    assert "projects/*/*/config.yaml" not in content
-    assert "projects/*/*/generated/infra/.terraform/" in content
-    assert "projects/*/*/generated/infra/crash.*.log" in content
-    assert "projects/*/*/generated/infra/terraform.auto.tfvars.json" in content
+    assert "*/*/generated/" not in content.splitlines()
+    assert "*/*/config.yaml" not in content
+    assert "*/*/generated/infra/.terraform/" in content
+    assert "*/*/generated/infra/crash.*.log" in content
+    assert "*/*/generated/infra/terraform.auto.tfvars.json" in content
 
-    second = _create_non_interactive(deployments_root)
+    second = _create_non_interactive(deployments_root, "--force")
     assert second.exit_code == 0, second.output
     second_content = gitignore_path.read_text(encoding="utf-8")
     assert second_content.count("# >>> nebius-cxcli managed ignores >>>") == 1
@@ -472,11 +638,111 @@ def test_render_recreates_deployments_gitignore_in_git_repo(tmp_path: Path) -> N
     assert render_result.exit_code == 0, render_result.output
     assert gitignore_path.exists()
     content = gitignore_path.read_text(encoding="utf-8")
-    assert "projects/*/*/generated/" not in content.splitlines()
-    assert "projects/*/*/config.yaml" not in content
-    assert "projects/*/*/generated/infra/.terraform/" in content
-    assert "projects/*/*/generated/infra/crash.*.log" in content
-    assert "projects/*/*/generated/infra/terraform.auto.tfvars.json" in content
+    assert "*/*/generated/" not in content.splitlines()
+    assert "*/*/config.yaml" not in content
+    assert "*/*/generated/infra/.terraform/" in content
+    assert "*/*/generated/infra/crash.*.log" in content
+    assert "*/*/generated/infra/terraform.auto.tfvars.json" in content
+
+
+def test_render_normalizes_ssh_public_key_file_path_into_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    create_result = _create_non_interactive(deployments_root, "--infra", "wireguard-jumphost")
+    assert create_result.exit_code == 0, create_result.output
+
+    key_path = tmp_path / "id_ed25519.pub"
+    key_path.write_text(_VALID_ED25519_PUBLIC_KEY + "\n", encoding="utf-8")
+
+    config_path = _project_config_path(deployments_root)
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    jumphost = next(
+        item
+        for item in payload["infra"]["components"]
+        if isinstance(item, dict) and item.get("id") == "wireguard-jumphost"
+    )
+    jumphost["inputs"] = {
+        "parent_id": "project-456",
+        "region": "eu-north1",
+        "subnet_id": "subnet-123",
+        "name": "wg-jumphost",
+        "ssh_user_name": "ubuntu",
+        "ssh_public_key": str(key_path),
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    monkeypatch.setattr(
+        cli_module,
+        "_confirm_render_overwrite",
+        lambda _paths, *, force: True,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "render_terraform_artifacts",
+        lambda _config, _paths, *, source_profile: [tmp_path / "main.tf"],
+    )
+    monkeypatch.setattr(cli_module, "_runtime_component_output_values", lambda _config, _paths: {})
+    monkeypatch.setattr(
+        cli_module,
+        "render_flux",
+        lambda _config, _paths, *, component_output_values=None: [],
+    )
+    monkeypatch.setattr(cli_module, "write_inventory", lambda _config, _paths: None)
+    monkeypatch.setattr(
+        cli_module,
+        "_write_generated_runtime_manifest",
+        lambda _config, paths, *, source_profile, **kwargs: paths.generated_dir / "manifest.json",
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_try_generate_terraform_lock_file",
+        lambda _config, _paths: False,
+    )
+
+    result = runner.invoke(app, ["render", "--force", str(config_path)])
+
+    assert result.exit_code == 0, result.output
+    refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    refreshed_jumphost = next(
+        item
+        for item in refreshed["infra"]["components"]
+        if isinstance(item, dict) and item.get("id") == "wireguard-jumphost"
+    )
+    assert refreshed_jumphost["inputs"]["ssh_public_key"] == _VALID_ED25519_PUBLIC_KEY
+
+
+def test_load_context_rejects_missing_materialized_shared_admin_ssh_username(
+    tmp_path: Path,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    created = _create_non_interactive(deployments_root, "--infra", "ssh-jumphost")
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    ssh_jumphost = next(
+        item
+        for item in payload["infra"]["components"]
+        if isinstance(item, dict) and item.get("id") == "ssh-jumphost"
+    )
+    ssh_jumphost_inputs = ssh_jumphost.get("inputs", {})
+    assert isinstance(ssh_jumphost_inputs, dict)
+    ssh_jumphost_inputs.pop("ssh_user_name", None)
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"infra\.components\[id=ssh-jumphost\]\.inputs\.ssh_user_name is required; "
+            r"shared-derived defaults must be materialized into config\.yaml"
+        ),
+    ):
+        _load_context(config_path)
 
 
 def test_first_render_from_create_scaffold_does_not_require_force(tmp_path: Path) -> None:
@@ -508,26 +774,52 @@ def test_render_rejects_generated_directory_when_config_yaml_is_required(tmp_pat
     assert result.exit_code == 1, result.output
     normalized = " ".join(result.output.split())
     assert "Expected a project config.yaml file path, but got a directory:" in normalized
-    assert "Pass projects/<client>--<tenant>/<project>/config.yaml." in normalized
+    assert "Pass <tenant>/<project>/config.yaml." in normalized
 
 
-def test_create_force_overwrites_existing_config(tmp_path: Path) -> None:
+def test_create_force_overwrites_from_scratch_and_reuses_client_info_defaults(
+    tmp_path: Path,
+) -> None:
     deployments_root = tmp_path / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)
 
-    first = _create_non_interactive(deployments_root)
+    first = _create_non_interactive(deployments_root, "--infra", "mk8s", "--app", "n8n")
     assert first.exit_code == 0, first.output
 
     config_path = _project_config_path(deployments_root)
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    payload["client_info"]["nebius"]["region_id"] = "mutated"
+    payload["client_info"]["nebius"]["region_id"] = "me-west1"
+    payload["client_info"]["notifications"]["email_enabled"] = True
+    payload["client_info"]["notifications"]["email"] = "ops@example.com"
+    components = payload.get("infra", {}).get("components", [])
+    assert isinstance(components, list)
+    mk8s_row = next(
+        row
+        for row in components
+        if isinstance(row, dict) and str(row.get("id", "")).strip().lower() == "mk8s"
+    )
+    inputs = mk8s_row.setdefault("inputs", {})
+    assert isinstance(inputs, dict)
+    inputs["cluster_name"] = "custom-cluster"
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
-    forced = _create_non_interactive(deployments_root, "--force")
+    forced = _create_non_interactive(
+        deployments_root,
+        "--force",
+        "--infra",
+        "none",
+        "--app",
+        "none",
+    )
     assert forced.exit_code == 0, forced.output
 
     refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    assert refreshed["client_info"]["nebius"]["region_id"] == "eu-north1"
+    assert "Overwritten project:" in forced.output
+    assert refreshed["client_info"]["nebius"]["region_id"] == "me-west1"
+    assert refreshed["client_info"]["notifications"]["email_enabled"] is True
+    assert refreshed["client_info"]["notifications"]["email"] == "ops@example.com"
+    assert refreshed.get("infra", {}).get("components", []) == []
+    assert refreshed.get("apps", {}).get("charts", []) == []
 
 
 def test_create_force_noninteractive_warns_before_overwrite(tmp_path: Path) -> None:
@@ -539,13 +831,86 @@ def test_create_force_noninteractive_warns_before_overwrite(tmp_path: Path) -> N
 
     forced = _create_non_interactive(deployments_root, "--force")
     assert forced.exit_code == 0, forced.output
-    assert "`create --force` will overwrite" in forced.output
-    normalized_output = " ".join(forced.output.lower().split())
-    assert "does not delete the deployments root" in normalized_output
-    assert "arbitrary files in the target folder" in normalized_output
+    assert "Existing project detected." in forced.output
+    assert "`--force` confirms the overwrite in non-interactive mode." in forced.output
+    assert "component list/add/remove" in forced.output
 
 
-def test_create_interactive_force_existing_project_requires_confirmation(
+def test_create_force_overwrite_recreates_project_folder_and_removes_stale_files(
+    tmp_path: Path,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    first = _create_non_interactive(deployments_root)
+    assert first.exit_code == 0, first.output
+
+    project_dir = _project_dir(deployments_root)
+    stale_note = project_dir / "notes.txt"
+    stale_manifest = project_dir / "generated" / "nebius-cxcli-manifest.json"
+    stale_flux_file = project_dir / "generated" / "flux" / "stale-release.yaml"
+    stale_note.write_text("delete me", encoding="utf-8")
+    stale_manifest.write_text("{}", encoding="utf-8")
+    stale_flux_file.write_text("kind: HelmRelease\n", encoding="utf-8")
+
+    forced = _create_non_interactive(
+        deployments_root,
+        "--force",
+        "--infra",
+        "none",
+        "--app",
+        "none",
+    )
+    assert forced.exit_code == 0, forced.output
+
+    assert "Overwritten project:" in forced.output
+    assert not stale_note.exists()
+    assert not stale_manifest.exists()
+    assert not stale_flux_file.exists()
+    assert (project_dir / "config.yaml").exists()
+    assert (project_dir / "generated" / "infra").is_dir()
+    assert (project_dir / "generated" / "flux").is_dir()
+    assert (project_dir / "generated" / "inventory" / "inventory.md").exists()
+
+
+def test_create_force_overwrite_does_not_touch_other_projects(tmp_path: Path) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    first = _create_non_interactive(deployments_root)
+    assert first.exit_code == 0, first.output
+    second = _create_named_non_interactive(
+        deployments_root,
+        client_name="client-b",
+        tenant_id="tenant-999",
+        project_id="project-999",
+    )
+    assert second.exit_code == 0, second.output
+
+    other_project_dir = _project_dir(
+        deployments_root,
+        tenant_id="tenant-999",
+        project_id="project-999",
+    )
+    other_marker = other_project_dir / "keep.txt"
+    other_marker.write_text("keep me", encoding="utf-8")
+
+    forced = _create_non_interactive(
+        deployments_root,
+        "--force",
+        "--infra",
+        "none",
+        "--app",
+        "none",
+    )
+    assert forced.exit_code == 0, forced.output
+
+    assert other_marker.exists()
+    assert other_marker.read_text(encoding="utf-8") == "keep me"
+    assert (other_project_dir / "config.yaml").exists()
+
+
+def test_create_interactive_force_existing_project_still_requires_confirmation(
     tmp_path: Path,
 ) -> None:
     deployments_root = tmp_path / "deployments"
@@ -565,14 +930,14 @@ def test_create_interactive_force_existing_project_requires_confirmation(
             "--force",
             "--no-validate-sources",
         ],
-        input="y\n\n\n\nn\n",
+        input="\n\nn\n",
     )
 
     assert result.exit_code == 0, result.output
-    assert "Existing deployments root detected." in result.output
-    assert "`create --force` will overwrite" in result.output
-    assert "Continue with forced project overwrite?" in result.output
+    assert "Existing project detected." in result.output
+    assert "Continue and overwrite the existing tenant/project folder from scratch?" in result.output
     assert "(y/n, q=stop wizard) [n]" in result.output
+    assert "Existing deployments root detected." not in result.output
     assert "No changes applied." in result.output
     assert config_path.read_text(encoding="utf-8") == original
 
@@ -650,9 +1015,14 @@ def test_create_prunes_redundant_live_chart_default_values_from_existing_config(
     }
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
-    refreshed = _create_non_interactive(deployments_root, "--app", "gateway-helm")
+    refreshed = _create_non_interactive(
+        deployments_root,
+        "--force",
+        "--app",
+        "gateway-helm",
+    )
     assert refreshed.exit_code == 0, refreshed.output
-    assert "Updated:" in refreshed.output
+    assert "Overwritten project:" in refreshed.output
 
     cleaned = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     cleaned_gateway = next(
@@ -710,7 +1080,7 @@ def test_create_does_not_warn_when_early_exit_leaves_only_optional_fields(
             "gateway-helm",
             "--no-validate-sources",
         ],
-        input="client-a\ntenant-123\nproject-456\n\n\nq\n",
+        input="tenant-123\nproject-456\nclient-a\n\n\nq\n",
     )
 
     assert result.exit_code == 0, result.output
@@ -827,6 +1197,180 @@ def test_load_context_does_not_require_embedded_component_sources(tmp_path: Path
 
     config_path = _project_config_path(deployments_root)
     _config, _paths = _load_context(config_path)
+
+
+def test_load_context_rejects_missing_materialized_shared_app_defaults(tmp_path: Path) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            {
+                "shared": {
+                    "admin_ssh": {
+                        "user_name": "adminuser",
+                    }
+                },
+                "components": {
+                    "infra": {},
+                    "apps": {
+                        "demo-app": {
+                            "source": {
+                                "repo": "https://example.invalid/charts",
+                                "chart": "demo-app",
+                                "version": "1.0.0",
+                            },
+                            "release": {
+                                "namespace": "demo",
+                                "name": "demo-app",
+                            },
+                            "ui": {
+                                "group": "Workloads",
+                                "enabled": False,
+                            },
+                            "defaults": {
+                                "values.admin.sshUser": "shared.admin_ssh.user_name",
+                            },
+                        }
+                    },
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    set_component_sources_file_override(sources_file)
+    reset_component_sources_cache()
+    reset_component_entry_cache()
+
+    deployments_root = tmp_path / "deployments"
+    config_path = _project_config_path(deployments_root)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-456",
+                "region_id": "eu-north1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {"components": []},
+        "apps": {
+            "charts": [
+                {
+                    "id": "demo-app",
+                    "instance_id": "demo-app",
+                    "group": "workloads",
+                    "enabled": True,
+                    "repo": "https://example.invalid/charts",
+                    "version": "1.0.0",
+                    "namespace": "demo",
+                    "release-name": "demo-app",
+                    "values": {},
+                }
+            ]
+        },
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"apps\.charts\[id=demo-app\]\.values\.admin\.sshUser is required; "
+            r"shared-derived defaults must be materialized into config\.yaml"
+        ),
+    ):
+        _load_context(config_path)
+
+
+def test_load_runtime_context_runs_full_non_strict_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_paths = SimpleNamespace(config_path=tmp_path / "config.yaml")
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(cli_module, "_load_context", lambda _path: ("cfg", fake_paths))
+    monkeypatch.setattr(
+        cli_module,
+        "_validate_active_component_sources",
+        lambda config, *, chart_meta_cache=None: captured.update(
+            {
+                "active_config": config,
+                "active_cache": chart_meta_cache,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_validate_component_dependencies",
+        lambda config, *, chart_meta_cache=None: (
+            captured.update(
+                {
+                    "dependency_config": config,
+                    "dependency_cache": chart_meta_cache,
+                }
+            )
+            or []
+        ),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "rendered_module_sources",
+        lambda config, *, source_profile: (
+            captured.update(
+                {
+                    "module_config": config,
+                    "source_profile": source_profile,
+                }
+            )
+            or ()
+        ),
+    )
+
+    config, paths = _load_runtime_context(tmp_path / "config.yaml")
+
+    assert config == "cfg"
+    assert paths is fake_paths
+    assert captured["active_config"] == "cfg"
+    assert captured["dependency_config"] == "cfg"
+    assert captured["module_config"] == "cfg"
+    assert captured["source_profile"] == SourceProfile.PORTABLE
+    assert isinstance(captured["active_cache"], dict)
+    assert captured["active_cache"] is captured["dependency_cache"]
+
+
+def test_load_runtime_context_fails_on_dependency_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_paths = SimpleNamespace(config_path=tmp_path / "config.yaml")
+
+    monkeypatch.setattr(cli_module, "_load_context", lambda _path: ("cfg", fake_paths))
+    monkeypatch.setattr(
+        cli_module,
+        "_validate_active_component_sources",
+        lambda _cfg, *, chart_meta_cache=None: None,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_validate_component_dependencies",
+        lambda _cfg, *, chart_meta_cache=None: ["apps:n8n requires apps:redis"],
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "rendered_module_sources",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("module schema validation should not run after dependency failure")
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"Runtime validation failed:\n  - apps:n8n requires apps:redis",
+    ):
+        _load_runtime_context(tmp_path / "config.yaml")
 
 
 def test_create_does_not_embed_component_sources_block(tmp_path: Path) -> None:
@@ -949,6 +1493,277 @@ def test_create_seeds_mk8s_cpu_node_count_into_config(tmp_path: Path) -> None:
     assert mk8s["inputs"]["cpu_nodes_count"] == 2
 
 
+def test_create_materializes_shared_admin_ssh_username_into_config(tmp_path: Path) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    result = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "wireguard-jumphost",
+        "--infra",
+        "ssh-jumphost",
+    )
+    assert result.exit_code == 0, result.output
+
+    payload = yaml.safe_load(_project_config_path(deployments_root).read_text(encoding="utf-8"))
+    jump_hosts = {
+        item["id"]: item
+        for item in payload["infra"]["components"]
+        if isinstance(item, dict)
+        and item.get("id") in {"wireguard-jumphost", "ssh-jumphost"}
+    }
+
+    assert jump_hosts["wireguard-jumphost"]["inputs"]["ssh_user_name"] == "ubuntu"
+    assert jump_hosts["ssh-jumphost"]["inputs"]["ssh_user_name"] == "ubuntu"
+
+
+def test_create_materializes_shared_app_defaults_into_config(tmp_path: Path) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            {
+                "shared": {
+                    "admin_ssh": {
+                        "user_name": "adminuser",
+                    }
+                },
+                "components": {
+                    "infra": {},
+                    "apps": {
+                        "demo-app": {
+                            "source": {
+                                "repo": "https://example.invalid/charts",
+                                "chart": "demo-app",
+                                "version": "1.0.0",
+                            },
+                            "release": {
+                                "namespace": "demo",
+                                "name": "demo-app",
+                            },
+                            "ui": {
+                                "enabled": True,
+                            },
+                            "defaults": {
+                                "values.admin.sshUser": "shared.admin_ssh.user_name",
+                            },
+                        }
+                    },
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    result = runner.invoke(
+        app,
+        [
+            "--component-sources-file",
+            str(sources_file),
+            "--source-profile",
+            "local",
+            "create",
+            str(deployments_root),
+            "--no-interactive",
+            "--client-name",
+            "client-a",
+            "--tenant-id",
+            "tenant-123",
+            "--project-id",
+            "project-456",
+            "--no-validate-sources",
+            "--app",
+            "demo-app",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+    payload = yaml.safe_load(_project_config_path(deployments_root).read_text(encoding="utf-8"))
+    demo_app = next(
+        item
+        for item in payload["apps"]["charts"]
+        if isinstance(item, dict) and item.get("id") == "demo-app"
+    )
+    assert demo_app["values"]["admin"]["sshUser"] == "adminuser"
+
+
+def test_create_seeds_private_shared_admin_ssh_public_key_into_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module_dir = tmp_path / "modules" / "demo-jumphost"
+    module_dir.mkdir(parents=True, exist_ok=True)
+    (module_dir / "main.tf").write_text("terraform {}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_variable_names",
+        lambda _source: ("parent_id", "ssh_public_key"),
+    )
+
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            {
+                "shared": {
+                    "admin_ssh": {
+                        "user_name": "ubuntu",
+                        "public_key": _VALID_ED25519_PUBLIC_KEY,
+                    }
+                },
+                "components": {
+                    "infra": {
+                        "demo-jumphost": {
+                            "source": {
+                                "portable": (
+                                    "git::https://github.com/example/infra.git//modules/demo-jumphost"
+                                    "?ref=v1.2.3"
+                                ),
+                                "local": str(module_dir),
+                            },
+                            "ui": {
+                                "enabled": True,
+                            },
+                        }
+                    },
+                    "apps": {},
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    result = runner.invoke(
+        app,
+        [
+            "--component-sources-file",
+            str(sources_file),
+            "--source-profile",
+            "local",
+            "create",
+            str(deployments_root),
+            "--no-interactive",
+            "--client-name",
+            "client-a",
+            "--tenant-id",
+            "tenant-123",
+            "--project-id",
+            "project-456",
+            "--no-validate-sources",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+    payload = yaml.safe_load(_project_config_path(deployments_root).read_text(encoding="utf-8"))
+    demo_jumphost = next(
+        item
+        for item in payload["infra"]["components"]
+        if isinstance(item, dict) and item.get("id") == "demo-jumphost"
+    )
+    assert demo_jumphost["inputs"]["parent_id"] == "project-456"
+    assert demo_jumphost["inputs"]["ssh_public_key"] == _VALID_ED25519_PUBLIC_KEY
+
+
+def test_component_add_seeds_private_shared_admin_ssh_public_key_into_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module_dir = tmp_path / "modules" / "demo-jumphost"
+    module_dir.mkdir(parents=True, exist_ok=True)
+    (module_dir / "main.tf").write_text("terraform {}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_variable_names",
+        lambda _source: ("parent_id", "ssh_public_key"),
+    )
+
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            {
+                "shared": {
+                    "admin_ssh": {
+                        "user_name": "ubuntu",
+                        "public_key": _VALID_ED25519_PUBLIC_KEY,
+                    }
+                },
+                "components": {
+                    "infra": {
+                        "demo-jumphost": {
+                            "source": {
+                                "portable": (
+                                    "git::https://github.com/example/infra.git//modules/demo-jumphost"
+                                    "?ref=v1.2.3"
+                                ),
+                                "local": str(module_dir),
+                            },
+                            "ui": {
+                                "enabled": False,
+                            },
+                        }
+                    },
+                    "apps": {},
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    created = runner.invoke(
+        app,
+        [
+            "--component-sources-file",
+            str(sources_file),
+            "--source-profile",
+            "local",
+            "create",
+            str(deployments_root),
+            "--no-interactive",
+            "--client-name",
+            "client-a",
+            "--tenant-id",
+            "tenant-123",
+            "--project-id",
+            "project-456",
+            "--no-validate-sources",
+        ],
+    )
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    result = runner.invoke(
+        app,
+        [
+            "--component-sources-file",
+            str(sources_file),
+            "--source-profile",
+            "local",
+            "component",
+            "add",
+            str(config_path),
+            "--no-validate-sources",
+            "demo-jumphost",
+            "--no-interactive",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    demo_jumphost = next(
+        item
+        for item in payload["infra"]["components"]
+        if isinstance(item, dict) and item.get("id") == "demo-jumphost"
+    )
+    assert demo_jumphost["inputs"]["parent_id"] == "project-456"
+    assert demo_jumphost["inputs"]["ssh_public_key"] == _VALID_ED25519_PUBLIC_KEY
+
+
 def test_create_app_namespace_and_releasename_overrides(tmp_path: Path) -> None:
     deployments_root = tmp_path / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)
@@ -978,7 +1793,7 @@ def test_create_app_namespace_and_releasename_overrides(tmp_path: Path) -> None:
     assert n8n_row.get("release-name") == "workflow-core"
 
 
-def test_create_updates_existing_instance_component_selection(tmp_path: Path) -> None:
+def test_create_force_treats_components_as_new_selection(tmp_path: Path) -> None:
     deployments_root = tmp_path / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)
 
@@ -1007,28 +1822,21 @@ def test_create_updates_existing_instance_component_selection(tmp_path: Path) ->
 
     second = _create_non_interactive(
         deployments_root,
+        "--force",
         "--infra",
-        "mk8s",
+        "none",
         "--app",
         "n8n",
     )
     assert second.exit_code == 0, second.output
-    assert "Updated:" in second.output or "Config up-to-date:" in second.output
+    assert "Overwritten project:" in second.output
 
     refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     infra_enabled = _infra_enabled_map(refreshed)
     apps_enabled = _apps_enabled_map(refreshed)
     refreshed_components = refreshed.get("infra", {}).get("components", [])
     assert isinstance(refreshed_components, list)
-    refreshed_mk8s = next(
-        row
-        for row in refreshed_components
-        if isinstance(row, dict) and str(row.get("id", "")).strip() == "mk8s"
-    )
-    refreshed_inputs = refreshed_mk8s.get("inputs", {})
-    assert isinstance(refreshed_inputs, dict)
-    assert refreshed_inputs["cluster_name"] == "custom-cluster"
-    assert infra_enabled["mk8s"] is True
+    assert refreshed_components == []
     assert "object-storage" not in infra_enabled
     assert apps_enabled["n8n"] is True
     assert "component_sources" not in refreshed
@@ -1049,6 +1857,7 @@ def test_create_existing_config_selection_uses_full_component_registry(tmp_path:
 
     second = _create_non_interactive(
         deployments_root,
+        "--force",
         "--infra",
         "mk8s",
         "--app",
@@ -1363,10 +2172,7 @@ def test_component_remove_requires_instance_id_when_multiple_instances_match(
     assert remaining_instance_ids == ["managed-postgresql"]
 
 
-def test_create_dependency_resolution_uses_existing_chart_overrides(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_create_force_does_not_reuse_existing_chart_overrides(tmp_path: Path) -> None:
     deployments_root = tmp_path / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)
 
@@ -1377,33 +2183,30 @@ def test_create_dependency_resolution_uses_existing_chart_overrides(
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     charts = payload.get("apps", {}).get("charts", [])
     assert isinstance(charts, list)
+    original_repo = ""
     for row in charts:
         if not isinstance(row, dict):
             continue
         if str(row.get("id", "")).strip().lower() != "n8n":
             continue
+        original_repo = str(row.get("repo", "")).strip()
         row["repo"] = "https://example.invalid/custom-charts"
         break
+    assert original_repo
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
-    called_repos: list[str] = []
-
-    def _fake_chart_metadata(
-        *,
-        chart_name_or_ref: str,
-        chart_repo: str,
-        chart_version: str,
-        cache,
-    ):
-        _ = (chart_name_or_ref, chart_version, cache)
-        called_repos.append(chart_repo)
-        return chart_name_or_ref, set(), None
-
-    monkeypatch.setattr("nebius_cxcli.cli._helm_chart_metadata", _fake_chart_metadata)
-
-    second = _create_non_interactive(deployments_root)
+    second = _create_non_interactive(deployments_root, "--force", "--app", "n8n")
     assert second.exit_code == 0, second.output
-    assert "https://example.invalid/custom-charts" in called_repos
+
+    refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    refreshed_charts = refreshed.get("apps", {}).get("charts", [])
+    assert isinstance(refreshed_charts, list)
+    n8n_row = next(
+        row
+        for row in refreshed_charts
+        if isinstance(row, dict) and str(row.get("id", "")).strip().lower() == "n8n"
+    )
+    assert str(n8n_row.get("repo", "")).strip() == original_repo
 
 
 def test_bootstrap_ci_no_auth_writes_workflow_in_repo_root(
@@ -1449,7 +2252,7 @@ def test_bootstrap_ci_no_auth_writes_workflow_in_repo_root(
         'nebius-cxcli discover --all "${{ env.NEBIUS_DISCOVER_TARGET }}" > discover.json' in content
     )
     assert "name: ${{ matrix.github_environment }}" in content
-    assert "**/customer/deployments-root/**/generated/**" in content
+    assert "**/customer/deployments-root/*/*/generated/**" in content
     assert "**/customer/deployments-root/**/config.yaml" not in content
     assert "Validate source contract changes" not in content
     assert 'nebius-cxcli validate-generated --portable "${{ matrix.generated }}"' in content
@@ -1550,9 +2353,9 @@ def test_bootstrap_ci_recreates_deployments_gitignore_in_git_repo(
     assert gitignore_path.exists()
 
     content = gitignore_path.read_text(encoding="utf-8")
-    assert "projects/*/*/generated/infra/.terraform/" in content
-    assert "projects/*/*/generated/infra/crash.*.log" in content
-    assert "projects/*/*/generated/infra/terraform.auto.tfvars.json" in content
+    assert "*/*/generated/infra/.terraform/" in content
+    assert "*/*/generated/infra/crash.*.log" in content
+    assert "*/*/generated/infra/terraform.auto.tfvars.json" in content
 
 
 def test_bootstrap_ci_cli_ref_overrides_generated_workflow_pin(
@@ -1976,11 +2779,9 @@ def test_auth_rejects_github_flags_when_no_bootstrap_ci() -> None:
 
 def test_discover_accepts_non_git_directory(tmp_path: Path) -> None:
     deployments_root = tmp_path / "deployments"
-    config_path = (
-        deployments_root / "projects" / "client-a--tenant-123" / "project-456" / "config.yaml"
-    )
+    config_path = deployments_root / "tenant-123" / "project-456" / "config.yaml"
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text("version: v1\n", encoding="utf-8")
+    config_path.write_text(_discover_config_payload(), encoding="utf-8")
 
     result = runner.invoke(app, ["discover", str(deployments_root), "--all"])
     assert result.exit_code == 0, result.output
@@ -1989,8 +2790,8 @@ def test_discover_accepts_non_git_directory(tmp_path: Path) -> None:
     assert payload == {
         "include": [
             {
-                "config": "deployments/projects/client-a--tenant-123/project-456/config.yaml",
-                "generated": "deployments/projects/client-a--tenant-123/project-456/generated",
+                "config": "deployments/tenant-123/project-456/config.yaml",
+                "generated": "deployments/tenant-123/project-456/generated",
                 "config_changed": False,
                 "generated_changed": False,
                 "github_environment": "client-a-project-456",
@@ -2005,11 +2806,9 @@ def test_discover_in_git_repo_outputs_repo_relative_paths(tmp_path: Path) -> Non
     _git_init(repo_root)
 
     deployments_root = repo_root / "deployments"
-    config_path = (
-        deployments_root / "projects" / "client-a--tenant-123" / "project-456" / "config.yaml"
-    )
+    config_path = deployments_root / "tenant-123" / "project-456" / "config.yaml"
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text("version: v1\n", encoding="utf-8")
+    config_path.write_text(_discover_config_payload(), encoding="utf-8")
 
     result = runner.invoke(app, ["discover", str(deployments_root), "--all"])
     assert result.exit_code == 0, result.output
@@ -2018,8 +2817,8 @@ def test_discover_in_git_repo_outputs_repo_relative_paths(tmp_path: Path) -> Non
     assert payload == {
         "include": [
             {
-                "config": "deployments/projects/client-a--tenant-123/project-456/config.yaml",
-                "generated": "deployments/projects/client-a--tenant-123/project-456/generated",
+                "config": "deployments/tenant-123/project-456/config.yaml",
+                "generated": "deployments/tenant-123/project-456/generated",
                 "config_changed": False,
                 "generated_changed": False,
                 "github_environment": "client-a-project-456",
@@ -2034,12 +2833,10 @@ def test_discover_accepts_generated_subdirectory_scope(tmp_path: Path) -> None:
     _git_init(repo_root)
 
     deployments_root = repo_root / "deployments"
-    generated_dir = (
-        deployments_root / "projects" / "client-a--tenant-123" / "project-456" / "generated"
-    )
+    generated_dir = deployments_root / "tenant-123" / "project-456" / "generated"
     config_path = generated_dir.parent / "config.yaml"
     generated_dir.mkdir(parents=True, exist_ok=True)
-    config_path.write_text("version: v1\n", encoding="utf-8")
+    config_path.write_text(_discover_config_payload(), encoding="utf-8")
 
     result = runner.invoke(app, ["discover", str(generated_dir), "--all"])
     assert result.exit_code == 0, result.output
@@ -2048,8 +2845,8 @@ def test_discover_accepts_generated_subdirectory_scope(tmp_path: Path) -> None:
     assert payload == {
         "include": [
             {
-                "config": "deployments/projects/client-a--tenant-123/project-456/config.yaml",
-                "generated": "deployments/projects/client-a--tenant-123/project-456/generated",
+                "config": "deployments/tenant-123/project-456/config.yaml",
+                "generated": "deployments/tenant-123/project-456/generated",
                 "config_changed": False,
                 "generated_changed": False,
                 "github_environment": "client-a-project-456",

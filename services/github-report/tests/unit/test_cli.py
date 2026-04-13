@@ -230,7 +230,9 @@ def test_list_repos_output_csv_infers_format_from_extension(tmp_path) -> None:
         result = runner.invoke(app, ["list-repos", "--owner", "acme", "--output", str(output_path)])
 
     assert result.exit_code == 0
-    assert output_path.read_text(encoding="utf-8").startswith("repo_name,default_branch,archived")
+    assert output_path.read_text(encoding="utf-8").startswith(
+        "repo_name,visibility,default_branch,archived"
+    )
 
 
 def test_top_users_output_html_infers_format_from_extension(tmp_path) -> None:
@@ -330,9 +332,10 @@ def test_list_repos_output_text_infers_format_from_extension(tmp_path) -> None:
 
     assert result.exit_code == 0
     text_output = output_path.read_text(encoding="utf-8")
-    assert "Accessible Repositories for acme" in text_output
+    assert "Public Repositories for acme" in text_output
     assert "Repositories" in text_output
     assert " 1. acme/pysdk" in text_output
+    assert "    Visibility     : public" in text_output
 
 
 def test_list_repos_output_html_infers_format_from_extension(tmp_path) -> None:
@@ -352,7 +355,9 @@ def test_list_repos_output_html_infers_format_from_extension(tmp_path) -> None:
     assert result.exit_code == 0
     html_output = output_path.read_text(encoding="utf-8")
     assert "<!DOCTYPE html>" in html_output
-    assert "<h1>Accessible Repositories for acme</h1>" in html_output
+    assert "<h1>Public Repositories for acme</h1>" in html_output
+    assert '<th class="text">visibility</th>' in html_output
+    assert '<td class="text">public</td>' in html_output
 
 
 def test_list_repos_command_renders_markdown() -> None:
@@ -369,8 +374,30 @@ def test_list_repos_command_renders_markdown() -> None:
         result = runner.invoke(app, ["list-repos", "--owner", "acme"])
 
     assert result.exit_code == 0
-    assert "# Accessible Repositories for acme" in result.stdout
+    assert "# Public Repositories for acme" in result.stdout
     assert "acme/pysdk" in result.stdout
+    assert "| repo_name | visibility | default_branch | archived |" in result.stdout
+
+
+def test_list_repos_all_flag_passes_include_private() -> None:
+    runner = CliRunner()
+    with patch("github_report.cli.build_list_repos_options") as mock_build_options, patch(
+        "github_report.cli.service.list_repositories", return_value=[]
+    ):
+        mock_build_options.return_value = type(
+            "Options",
+            (),
+            {
+                "owner": "acme",
+                "include_private": True,
+                "format": "markdown",
+                "output": None,
+            },
+        )()
+        result = runner.invoke(app, ["list-repos", "--owner", "acme", "--all"])
+
+    assert result.exit_code == 0
+    assert mock_build_options.call_args.kwargs["include_private"] is True
 
 
 def test_list_repos_requires_owner() -> None:
@@ -388,7 +415,13 @@ def test_root_help_mentions_owner_requirement() -> None:
     assert "--owner" in output
     assert "Each command requires `--owner`" in output
     assert "Examples:" in output
+    assert "github-report top-users --owner nebius" in output
     assert "github-report top-users --owner lm-academy --top 5 --days 60 --output report.txt" in output
+    assert "Output formats:" in output
+    assert "markdown (default): raw Markdown;" in output
+    assert "text: plain text; inferred from .txt." in output
+    assert "html: Word-friendly HTML; inferred from .html or .htm." in output
+    assert "csv: comma-separated values; inferred from .csv." in output
     assert "github-report list-repos --owner nebius --output repos.txt" in output
     assert "repo-breakdown" not in output
 
@@ -404,6 +437,9 @@ def test_top_users_help_mentions_exclude_option() -> None:
     assert "[default: (30)]" in output
     assert "--no-all-time" not in output
     assert "--exclude" in output
+    assert "--format" in output
+    assert "--output" in output
+    assert "text: plain text; inferred from .txt." in output
 
 
 def test_top_users_help_includes_examples() -> None:
@@ -413,7 +449,10 @@ def test_top_users_help_includes_examples() -> None:
     assert result.exit_code == 0
     assert "Examples:" in output
     assert "github-report top-users --owner lm-academy --top 5 --days 60" in output
-    assert "github-report top-users --owner dashabalashova --exclude old-app --output report.txt" in output
+    assert "github-report top-users --owner nebius --exclude old-app --output report.txt" in output
+    assert "github-report top-users --owner nebius --output report.md" in output
+    assert "github-report top-users --owner nebius --output report.html" in output
+    assert "github-report top-users --owner nebius --format csv --output report.csv" in output
 
 
 def test_list_repos_help_includes_examples() -> None:
@@ -421,5 +460,13 @@ def test_list_repos_help_includes_examples() -> None:
     output = _normalize_help_output(result.stdout)
 
     assert result.exit_code == 0
+    assert "List public repositories for an owner; use `--all` to include private ones." in output
     assert "Examples:" in output
+    assert "--all" in output
+    assert "Include private repositories in" in output
+    assert "github-report list-repos --owner nebius --all" in output
+    assert "github-report list-repos --owner nebius --output repos.txt" in output
+    assert "github-report list-repos --owner nebius --output repos.html" in output
+    assert "github-report list-repos --owner nebius --format csv --output repos.csv" in output
     assert "github-report list-repos --owner lm-academy --output repos.txt" in output
+    assert "github-report list-repos --owner nebius --format html --output repos.html" in output

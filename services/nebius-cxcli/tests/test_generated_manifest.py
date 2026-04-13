@@ -21,14 +21,7 @@ from nebius_cxcli.paths import ProjectPaths
 
 def _project_paths(tmp_path: Path) -> ProjectPaths:
     repo_root = tmp_path / "repo"
-    generated_dir = (
-        repo_root
-        / "deployments"
-        / "projects"
-        / "client-a--tenant-123"
-        / "project-456"
-        / "generated"
-    )
+    generated_dir = repo_root / "deployments" / "tenant-123" / "project-456" / "generated"
     project_dir = generated_dir.parent
     return ProjectPaths(
         config_path=project_dir / "config.yaml",
@@ -39,7 +32,6 @@ def _project_paths(tmp_path: Path) -> ProjectPaths:
         infra_dir=generated_dir / "infra",
         flux_dir=generated_dir / "flux",
         inventory_dir=generated_dir / "inventory",
-        path_client_name="client-a",
         path_tenant_id="tenant-123",
         path_project_id="project-456",
     )
@@ -91,14 +83,12 @@ def test_build_generated_manifest_uses_repo_relative_paths(tmp_path: Path) -> No
     )
 
     assert manifest["schema"] == GENERATED_MANIFEST_SCHEMA
-    assert manifest["source_contract"]["config_path"] == (
-        "deployments/projects/client-a--tenant-123/project-456/config.yaml"
-    )
+    assert manifest["source_contract"]["config_path"] == "deployments/tenant-123/project-456/config.yaml"
     assert manifest["paths"] == {
-        "generated_dir": "deployments/projects/client-a--tenant-123/project-456/generated",
-        "infra_dir": "deployments/projects/client-a--tenant-123/project-456/generated/infra",
-        "flux_dir": "deployments/projects/client-a--tenant-123/project-456/generated/flux",
-        "inventory_dir": "deployments/projects/client-a--tenant-123/project-456/generated/inventory",
+        "generated_dir": "deployments/tenant-123/project-456/generated",
+        "infra_dir": "deployments/tenant-123/project-456/generated/infra",
+        "flux_dir": "deployments/tenant-123/project-456/generated/flux",
+        "inventory_dir": "deployments/tenant-123/project-456/generated/inventory",
     }
     assert manifest["tools"] == {
         "flux_version": "v2.8.0",
@@ -119,6 +109,7 @@ def test_build_generated_manifest_uses_repo_relative_paths(tmp_path: Path) -> No
     assert manifest["render"]["source_profile"] == "portable"
     assert "portable" not in manifest["render"]
     assert manifest["render"]["terraform_tfvars"] == {"mk8s_cluster_name": "clust1"}
+    assert manifest["quota"] == {}
 
 
 def test_write_load_and_runtime_config_round_trip(tmp_path: Path) -> None:
@@ -168,8 +159,53 @@ def test_write_generated_manifest_to_path_uses_explicit_output_path(tmp_path: Pa
 
     assert written_path == explicit_path
     assert json.loads(explicit_path.read_text(encoding="utf-8"))["paths"]["generated_dir"] == (
-        "deployments/projects/client-a--tenant-123/project-456/generated"
+        "deployments/tenant-123/project-456/generated"
     )
+
+
+def test_build_generated_manifest_includes_quota_report(tmp_path: Path) -> None:
+    paths = _project_paths(tmp_path)
+
+    manifest = build_generated_manifest(
+        config=_runtime_payload(),
+        paths=paths,
+        handoffs=[],
+        required_component_outputs=[],
+        quota_report={
+            "tenant_id": "tenant-123",
+            "project_id": "project-456",
+            "confirmed_insufficient": True,
+            "checks": [
+                {
+                    "component_id": "ssh-jumphost",
+                    "instance_id": "ssh-jumphost",
+                    "component_label": "ssh-jumphost",
+                    "quota_name": "compute.instance.count",
+                    "region": "eu-north1",
+                    "required": 1,
+                    "reason": "one VM",
+                    "unit": "",
+                    "available": 0,
+                    "sufficient": False,
+                    "tenant_limit": 0,
+                    "tenant_usage": 0,
+                    "project_limit": None,
+                    "project_usage": 0,
+                    "source_scope": "tenant",
+                    "description": "VM count",
+                    "contributors": [],
+                }
+            ],
+            "coverage_gaps": [],
+            "errors": [],
+        },
+        terraform_tfvars={"mk8s_cluster_name": "clust1"},
+        flux_version="v2.8.0",
+        terraform_version="1.14.1",
+    )
+
+    assert manifest["quota"]["confirmed_insufficient"] is True
+    assert manifest["quota"]["checks"][0]["quota_name"] == "compute.instance.count"
 
 
 def test_load_generated_manifest_rejects_missing_manifest(tmp_path: Path) -> None:

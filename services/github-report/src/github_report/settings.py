@@ -80,6 +80,7 @@ class ListReposOptions(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     owner: str = Field(min_length=1)
+    include_private: bool = False
     format: OutputFormat = OutputFormat.markdown
     output: Path | None = None
 
@@ -259,12 +260,18 @@ def build_report_options(
 def build_list_repos_options(
     *,
     owner: str,
+    include_private: bool = False,
     format: OutputFormat = OutputFormat.markdown,
     output: Path | None = None,
 ) -> ListReposOptions:
     """Build a validated repository list settings object from raw CLI input."""
 
-    return ListReposOptions(owner=owner, format=format, output=output)
+    return ListReposOptions(
+        owner=owner,
+        include_private=include_private,
+        format=format,
+        output=output,
+    )
 
 
 def model_dump_any(model: BaseModel) -> dict[str, Any]:

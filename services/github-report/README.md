@@ -28,6 +28,10 @@ When `--format` is omitted, `--output report.csv`, `--output report.txt`, and
 `--output report.md` infer the format from the file extension.
 If you pass `--format` explicitly, that takes precedence over the output file
 extension.
+Supported `--format` values are `markdown`, `text`, `html`, and `csv`.
+`--output report.markdown`, `--output report.txt`, `--output report.html`,
+`--output report.htm`, and `--output report.csv` infer those formats when
+`--format` is omitted.
 If the output file already exists, the CLI overwrites it.
 Use `--output report.html` when you want to paste the report into Microsoft
 Word or Google Docs with table formatting preserved.
@@ -41,6 +45,8 @@ Word or Google Docs with table formatting preserved.
 - top rows: `10`
 - bots: excluded when GitHub classifies the account type as `Bot`
 - repositories: all accessible repos under the selected owner
+- `list-repos` visibility: public repos only by default; pass `--all` to include
+  private repos that are accessible with the current token
 - branch scope: repository default branch only
 
 When you omit `--since` and `--all-time`, the CLI uses a relative-days window.
@@ -52,6 +58,26 @@ If you also omit `--days`, it behaves as if `--days 30` was provided.
 
 Use `--all-time` when you want the entire reachable history of the default
 branch instead of the default `--days 30` window.
+
+## Output Formats
+
+Both `top-users` and `list-repos` support the same output formats:
+
+- `markdown`: default format. Use `--format markdown`, or let `--output` infer
+  it from `.md` or `.markdown`.
+- `text`: plain text for copy/paste into chat or editors. Use `--format text`,
+  or let `--output` infer it from `.txt`.
+- `html`: HTML for pasting into Microsoft Word or Google Docs with table
+  formatting preserved. Use `--format html`, or let `--output` infer it from
+  `.html` or `.htm`.
+- `csv`: comma-separated values for spreadsheets or further processing. Use
+  `--format csv`, or let `--output` infer it from `.csv`.
+
+If `--output` is omitted, the CLI writes to stdout.
+If `--format` is omitted, the CLI falls back to `markdown` unless the output
+filename extension implies another supported format.
+If `--format markdown` is used without `--output` in an interactive terminal,
+the CLI renders a rich terminal table instead of raw Markdown text.
 
 ## Install
 
@@ -112,13 +138,13 @@ github-report top-users --owner nebius --days 30
 Run the same report against another organization:
 
 ```bash
-github-report --owner lm-academy top-users
+github-report top-users --owner lm-academy
 ```
 
 Run the same report against a personal account:
 
 ```bash
-github-report top-users --owner dashabalashova
+github-report top-users --owner nebius
 ```
 
 Show the top 50 contributors since a specific date. This already ranks by
@@ -161,7 +187,7 @@ Show contributor rows per repository instead of aggregating across the selected
 repos:
 
 ```bash
-github-report top-users --owner dashabalashova --per-repo --top 50 --since 2026-01-01
+github-report top-users --owner nebius --per-repo --top 50 --since 2026-01-01
 ```
 
 Limit the report to a small repo set:
@@ -190,7 +216,7 @@ Limit the report to one repo under an organization or personal account:
 ```bash
 github-report top-users --owner lm-academy --repos github-actions-course --all-time
 
-github-report top-users --owner dashabalashova --repos boltz-benchmark --all-time
+github-report top-users --owner nebius --repos boltz-benchmark --all-time
 ```
 
 Write CSV output to a file:
@@ -217,17 +243,31 @@ Write HTML output for easier copy/paste into Word:
 github-report top-users --owner nebius --output report.html
 ```
 
-List accessible repositories before building a filter file:
+List public repositories before building a filter file:
 
 ```bash
 github-report list-repos --owner nebius
 ```
 
+List public and private repositories that are accessible with the current
+token:
+
+```bash
+github-report list-repos --owner nebius --all
+```
+
 List repositories for a personal account:
 
 ```bash
-github-report list-repos --owner dashabalashova
+github-report list-repos --owner nebius
 ```
+
+`list-repos` shows public repositories by default.
+Use `--all` when you also want private repositories that the current token can
+access.
+This visibility filter applies only to `list-repos`.
+`top-users` still scans all accessible repositories by default unless you limit
+the scope with `--repos`, `--repos-file`, or `--exclude`.
 
 ## Repo Filter File
 

@@ -36,14 +36,7 @@ class FakeSMTP:
 
 def _project_paths(tmp_path: Path) -> ProjectPaths:
     repo_root = tmp_path / "repo"
-    generated_dir = (
-        repo_root
-        / "deployments"
-        / "projects"
-        / "client-a--tenant-123"
-        / "project-456"
-        / "generated"
-    )
+    generated_dir = repo_root / "deployments" / "tenant-123" / "project-456" / "generated"
     project_dir = generated_dir.parent
     return ProjectPaths(
         config_path=project_dir / "config.yaml",
@@ -54,7 +47,6 @@ def _project_paths(tmp_path: Path) -> ProjectPaths:
         infra_dir=generated_dir / "infra",
         flux_dir=generated_dir / "flux",
         inventory_dir=generated_dir / "inventory",
-        path_client_name="client-a",
         path_tenant_id="tenant-123",
         path_project_id="project-456",
     )

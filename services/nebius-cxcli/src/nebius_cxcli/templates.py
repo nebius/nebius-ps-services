@@ -33,12 +33,12 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
         on:
           pull_request:
             paths:
-              - "**/{deployments_dir}/**/generated/**"
+              - "**/{deployments_dir}/*/*/generated/**"
               - ".github/workflows/nebius-deployments.yml"
           push:
             branches: [ "main" ]
             paths:
-              - "**/{deployments_dir}/**/generated/**"
+              - "**/{deployments_dir}/*/*/generated/**"
               - ".github/workflows/nebius-deployments.yml"
           workflow_dispatch:
 

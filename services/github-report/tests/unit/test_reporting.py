@@ -3,7 +3,13 @@ from __future__ import annotations
 import pytest
 
 from github_report.models import RepoContributorRow, RepositoryRef
-from github_report.services.reporting import select_repositories, sort_repo_rows, summarize_users
+from github_report.services.reporting import (
+    GitHubReportService,
+    select_repositories,
+    sort_repo_rows,
+    summarize_users,
+)
+from github_report.settings import ListReposOptions
 from github_report.settings import SortBy
 
 
@@ -105,3 +111,41 @@ def test_select_repositories_rejects_unknown_excluded_repo() -> None:
 
     with pytest.raises(ValueError, match="Excluded repositories are not accessible"):
         select_repositories(repositories, (), ("nebius/gosdk",))
+
+
+class _FakeMetadataClient:
+    calls: list[tuple[str]]
+
+    def __init__(self, token: str) -> None:
+        self.token = token
+        self.calls = []
+
+    def list_accessible_repositories(self, owner_name: str) -> list[RepositoryRef]:
+        self.calls.append((owner_name,))
+        return [
+            RepositoryRef("api", "nebius/api", "main", False, False),
+            RepositoryRef("internal", "nebius/internal", "main", False, True),
+        ]
+
+
+def test_list_repositories_defaults_to_public_only(monkeypatch) -> None:
+    monkeypatch.setattr("github_report.services.reporting.resolve_github_token", lambda: "token")
+    service = GitHubReportService(metadata_client_cls=_FakeMetadataClient)
+
+    repositories = service.list_repositories(ListReposOptions(owner="nebius"))
+
+    assert [repo.full_name for repo in repositories] == ["nebius/api"]
+
+
+def test_list_repositories_all_includes_private(monkeypatch) -> None:
+    monkeypatch.setattr("github_report.services.reporting.resolve_github_token", lambda: "token")
+    service = GitHubReportService(metadata_client_cls=_FakeMetadataClient)
+
+    repositories = service.list_repositories(
+        ListReposOptions(owner="nebius", include_private=True)
+    )
+
+    assert [repo.full_name for repo in repositories] == [
+        "nebius/api",
+        "nebius/internal",
+    ]

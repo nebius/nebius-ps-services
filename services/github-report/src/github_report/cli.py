@@ -36,19 +36,54 @@ from github_report.settings import (
     build_report_options,
 )
 
-ROOT_EPILOG = dedent(
+OUTPUT_FORMAT_GUIDE = dedent(
     """
+    Output formats:
+
+      markdown (default): raw Markdown; inferred from .md or .markdown. When
+      writing to stdout in an interactive terminal, the CLI renders a rich table
+      instead of raw Markdown.
+
+      text: plain text; inferred from .txt.
+
+      html: Word-friendly HTML; inferred from .html or .htm.
+
+      csv: comma-separated values; inferred from .csv.
+    """
+).strip()
+
+OUTPUT_FORMAT_HELP = (
+    "Output format. Supported values: markdown, text, html, csv. "
+    "When --output is omitted, markdown renders as a rich table in interactive terminals. "
+    "When --output is set and --format is omitted, infer from .md/.markdown, .txt, "
+    ".html/.htm, or .csv."
+)
+
+OUTPUT_FILE_HELP = (
+    "Write the report to a file instead of stdout. "
+    "With --format omitted, infer markdown from .md/.markdown, text from .txt, "
+    "html from .html/.htm, and csv from .csv."
+)
+
+ROOT_EPILOG = dedent(
+    f"""
     Examples:
 
-      github-report --owner nebius top-users
+      github-report top-users --owner nebius
 
       github-report top-users --owner lm-academy --top 5 --days 60 --output report.txt
 
-      github-report top-users --owner dashabalashova --exclude old-app --output report.txt
+      github-report top-users --owner nebius --exclude old-app --output report.txt
+
+      github-report top-users --owner nebius --output report.html
+
+      github-report top-users --owner nebius --format csv --output report.csv
 
       github-report top-users --owner nebius --repos app-a,app-b --since 2026-01-01
 
       github-report list-repos --owner nebius --output repos.txt
+
+    {OUTPUT_FORMAT_GUIDE}
     """
 ).strip()
 
@@ -66,30 +101,48 @@ output_console = Console()
 service = GitHubReportService()
 
 TOP_USERS_EPILOG = dedent(
-    """
+    f"""
     Examples:
 
       github-report top-users --owner nebius
 
       github-report top-users --owner lm-academy --top 5 --days 60
 
-      github-report top-users --owner dashabalashova --exclude old-app --output report.txt
+      github-report top-users --owner nebius --exclude old-app --output report.txt
+
+      github-report top-users --owner nebius --output report.md
+
+      github-report top-users --owner nebius --output report.html
+
+      github-report top-users --owner nebius --format csv --output report.csv
 
       github-report top-users --owner nebius --repos app-a,app-b --since 2026-01-01
 
-      github-report top-users --owner dashabalashova --per-repo --output report.html
+      github-report top-users --owner nebius --per-repo --output report.html
+
+    {OUTPUT_FORMAT_GUIDE}
     """
 ).strip()
 
 LIST_REPOS_EPILOG = dedent(
-    """
+    f"""
     Examples:
 
       github-report list-repos --owner nebius
 
+      github-report list-repos --owner nebius --all
+
+      github-report list-repos --owner nebius --output repos.txt
+
+      github-report list-repos --owner nebius --output repos.html
+
+      github-report list-repos --owner nebius --format csv --output repos.csv
+
       github-report list-repos --owner lm-academy --output repos.txt
 
-      github-report list-repos --owner dashabalashova --format html --output repos.html
+      github-report list-repos --owner nebius --format html --output repos.html
+
+    {OUTPUT_FORMAT_GUIDE}
     """
 ).strip()
 
@@ -198,7 +251,7 @@ def top_users(
     ] = False,
     format: Annotated[
         OutputFormat,
-        typer.Option(help="Output format. Inferred from --output extension when omitted."),
+        typer.Option(help=OUTPUT_FORMAT_HELP),
     ] = OutputFormat.markdown,
     per_repo: Annotated[
         bool,
@@ -209,7 +262,7 @@ def top_users(
     ] = False,
     output: Annotated[
         Path | None,
-        typer.Option(help="Write the report to a file instead of stdout."),
+        typer.Option(help=OUTPUT_FILE_HELP),
     ] = None,
     concurrency: Annotated[
         int,
@@ -272,20 +325,28 @@ def list_repos(
             show_default=False,
         ),
     ] = None,
+    all_repos: Annotated[
+        bool,
+        typer.Option(
+            "--all",
+            help="Include private repositories in addition to public repositories.",
+        ),
+    ] = False,
     format: Annotated[
         OutputFormat,
-        typer.Option(help="Output format. Inferred from --output extension when omitted."),
+        typer.Option(help=OUTPUT_FORMAT_HELP),
     ] = OutputFormat.markdown,
     output: Annotated[
         Path | None,
-        typer.Option(help="Write the report to a file instead of stdout."),
+        typer.Option(help=OUTPUT_FILE_HELP),
     ] = None,
 ) -> None:
-    """List repositories visible to the configured token for an owner."""
+    """List public repositories for an owner; use `--all` to include private ones."""
 
     try:
         options = build_list_repos_options(
             owner=_resolve_owner(ctx, owner),
+            include_private=all_repos,
             format=_resolve_output_format(ctx, format, output),
             output=output,
         )
@@ -296,10 +357,19 @@ def list_repos(
         _exit_with_error(str(exc), code=1)
 
     _write_output(
-        render_repo_list(repositories, owner=options.owner, output_format=options.format),
+        render_repo_list(
+            repositories,
+            owner=options.owner,
+            output_format=options.format,
+            include_private=options.include_private,
+        ),
         options.output,
         renderable=(
-            render_repo_list_terminal(repositories, owner=options.owner)
+            render_repo_list_terminal(
+                repositories,
+                owner=options.owner,
+                include_private=options.include_private,
+            )
             if options.output is None and options.format is OutputFormat.markdown
             else None
         ),

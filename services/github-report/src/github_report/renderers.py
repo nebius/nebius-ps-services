@@ -96,36 +96,45 @@ def render_repo_breakdown(report: ReportBundle, *, limit: int, output_format: Ou
 
 
 def render_repo_list(
-    repositories: list[RepositoryRef], *, owner: str, output_format: OutputFormat
+    repositories: list[RepositoryRef],
+    *,
+    owner: str,
+    output_format: OutputFormat,
+    include_private: bool,
 ) -> str:
     """Render accessible repository metadata."""
 
     if output_format is OutputFormat.csv:
         buffer = StringIO()
         writer = csv.writer(buffer)
-        writer.writerow(["repo_name", "default_branch", "archived"])
+        writer.writerow(["repo_name", "visibility", "default_branch", "archived"])
         for repo in repositories:
             writer.writerow(
-                [repo.full_name, repo.default_branch or "", str(repo.is_archived).lower()]
+                [
+                    repo.full_name,
+                    repo_visibility(repo),
+                    repo.default_branch or "",
+                    str(repo.is_archived).lower(),
+                ]
             )
         return buffer.getvalue()
     if output_format is OutputFormat.html:
-        return render_repo_list_html(repositories, owner=owner)
+        return render_repo_list_html(repositories, owner=owner, include_private=include_private)
     if output_format is OutputFormat.text:
-        return render_repo_list_text(repositories, owner=owner)
+        return render_repo_list_text(repositories, owner=owner, include_private=include_private)
 
     lines = [
-        f"# Accessible Repositories for {owner}",
+        f"# {repo_list_title(owner, include_private=include_private)}",
         "",
         f"Total repositories: {len(repositories)}",
         "",
-        "| repo_name | default_branch | archived |",
-        "| --- | --- | ---: |",
+        "| repo_name | visibility | default_branch | archived |",
+        "| --- | --- | --- | ---: |",
     ]
     for repo in repositories:
         lines.append(
-            f"| {escape_markdown_cell(repo.full_name)} | {repo.default_branch or ''} | "
-            f"{'yes' if repo.is_archived else 'no'} |"
+            f"| {escape_markdown_cell(repo.full_name)} | {repo_visibility(repo)} | "
+            f"{repo.default_branch or ''} | {'yes' if repo.is_archived else 'no'} |"
         )
     lines.append("")
     return "\n".join(lines)
@@ -185,23 +194,30 @@ def render_repo_breakdown_terminal(report: ReportBundle, *, limit: int) -> Rende
     )
 
 
-def render_repo_list_terminal(repositories: list[RepositoryRef], *, owner: str) -> RenderableType:
+def render_repo_list_terminal(
+    repositories: list[RepositoryRef],
+    *,
+    owner: str,
+    include_private: bool,
+) -> RenderableType:
     """Render repository metadata for interactive terminals."""
 
     table = Table(box=box.ROUNDED, header_style="bold cyan")
     table.add_column("Repository", overflow="fold")
+    table.add_column("Visibility")
     table.add_column("Default Branch")
     table.add_column("Archived", justify="center")
 
     for repo in repositories:
         table.add_row(
             repo.full_name,
+            repo_visibility(repo),
             repo.default_branch or "",
             "yes" if repo.is_archived else "no",
         )
 
     return Group(
-        Text(f"Accessible Repositories for {owner}", style="bold"),
+        Text(repo_list_title(owner, include_private=include_private), style="bold"),
         Text(f"Total repositories: {len(repositories)}", style="dim"),
         table,
     )
@@ -293,7 +309,12 @@ def render_repo_breakdown_text(report: ReportBundle, rows: list[RepoContributorR
     )
 
 
-def render_repo_list_text(repositories: list[RepositoryRef], *, owner: str) -> str:
+def render_repo_list_text(
+    repositories: list[RepositoryRef],
+    *,
+    owner: str,
+    include_private: bool,
+) -> str:
     """Render repository metadata as plain text."""
 
     entry_lines: list[str] = []
@@ -303,13 +324,14 @@ def render_repo_list_text(repositories: list[RepositoryRef], *, owner: str) -> s
                 rank=index,
                 title=repo.full_name,
                 fields=[
+                    ("Visibility", repo_visibility(repo)),
                     ("Default branch", repo.default_branch or "-"),
                     ("Archived", "yes" if repo.is_archived else "no"),
                 ],
             )
         )
     return render_text_document(
-        title=f"Accessible Repositories for {owner}",
+        title=repo_list_title(owner, include_private=include_private),
         summary_rows=[("Total repositories", str(len(repositories)))],
         body_title="Repositories",
         body_lines=entry_lines,
@@ -425,26 +447,47 @@ def render_repo_breakdown_html(report: ReportBundle, rows: list[RepoContributorR
     )
 
 
-def render_repo_list_html(repositories: list[RepositoryRef], *, owner: str) -> str:
+def render_repo_list_html(
+    repositories: list[RepositoryRef],
+    *,
+    owner: str,
+    include_private: bool,
+) -> str:
     """Render repository metadata as HTML."""
 
     return render_html_document(
-        title=f"Accessible Repositories for {owner}",
+        title=repo_list_title(owner, include_private=include_private),
         summary_rows=[("Total repositories", str(len(repositories)))],
         headers=[
             ("repo_name", "text"),
+            ("visibility", "text"),
             ("default_branch", "text"),
             ("archived", "text"),
         ],
         rows=[
             [
                 repo.full_name,
+                repo_visibility(repo),
                 repo.default_branch or "",
                 "yes" if repo.is_archived else "no",
             ]
             for repo in repositories
         ],
     )
+
+
+def repo_visibility(repository: RepositoryRef) -> str:
+    """Render repository visibility in a stable, user-facing form."""
+
+    return "private" if repository.is_private else "public"
+
+
+def repo_list_title(owner: str, *, include_private: bool) -> str:
+    """Return the list title that matches the selected visibility scope."""
+
+    if include_private:
+        return f"Accessible Repositories for {owner}"
+    return f"Public Repositories for {owner}"
 
 
 def build_summary_rows(report: ReportBundle) -> list[tuple[str, str]]:

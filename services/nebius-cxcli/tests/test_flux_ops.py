@@ -10,7 +10,7 @@ from nebius_cxcli.paths import ProjectPaths
 
 
 def _fake_paths(tmp_path: Path) -> ProjectPaths:
-    project_dir = tmp_path / "deployments" / "projects" / "client-a--tenant-123" / "project-456"
+    project_dir = tmp_path / "deployments" / "tenant-123" / "project-456"
     project_dir.mkdir(parents=True, exist_ok=True)
     return ProjectPaths(
         config_path=project_dir / "config.yaml",
@@ -21,9 +21,27 @@ def _fake_paths(tmp_path: Path) -> ProjectPaths:
         infra_dir=project_dir / "generated" / "infra",
         flux_dir=project_dir / "generated" / "flux",
         inventory_dir=project_dir / "generated" / "inventory",
-        path_client_name="client-a",
         path_tenant_id="tenant-123",
         path_project_id="project-456",
+    )
+
+
+def _write_rendered_flux_bundle(flux_dir: Path) -> None:
+    flux_dir.mkdir(parents=True, exist_ok=True)
+    (flux_dir / "kustomization.yaml").write_text(
+        "apiVersion: kustomize.config.k8s.io/v1beta1\n"
+        "kind: Kustomization\n"
+        "resources:\n"
+        "  - release.yaml\n",
+        encoding="utf-8",
+    )
+    (flux_dir / "release.yaml").write_text(
+        "apiVersion: helm.toolkit.fluxcd.io/v2\n"
+        "kind: HelmRelease\n"
+        "metadata:\n"
+        "  name: demo\n"
+        "  namespace: flux-system\n",
+        encoding="utf-8",
     )
 
 
@@ -31,7 +49,7 @@ def test_delete_rendered_flux_uses_kubectl_delete_kustomize(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    fake_paths.flux_dir.mkdir(parents=True, exist_ok=True)
+    _write_rendered_flux_bundle(fake_paths.flux_dir)
     calls: list[list[str]] = []
 
     monkeypatch.setattr(
@@ -64,7 +82,7 @@ def test_delete_rendered_flux_fails_fast_when_cluster_is_unreachable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    fake_paths.flux_dir.mkdir(parents=True, exist_ok=True)
+    _write_rendered_flux_bundle(fake_paths.flux_dir)
 
     monkeypatch.setattr(
         flux_ops.shutil, "which", lambda name: "/usr/bin/kubectl" if name == "kubectl" else None
@@ -88,7 +106,7 @@ def test_delete_rendered_flux_private_handoff_reports_network_guidance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    fake_paths.flux_dir.mkdir(parents=True, exist_ok=True)
+    _write_rendered_flux_bundle(fake_paths.flux_dir)
 
     monkeypatch.setattr(
         flux_ops.shutil, "which", lambda name: "/usr/bin/kubectl" if name == "kubectl" else None

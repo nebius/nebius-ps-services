@@ -7,6 +7,7 @@ S_RESET=""
 S_BOLD=""
 S_DIM=""
 S_RED=""
+S_AMBER=""
 S_YELLOW=""
 S_GREEN=""
 S_CYAN=""
@@ -17,6 +18,7 @@ init_output_style() {
     S_BOLD=$'\033[1m'
     S_DIM=$'\033[2m'
     S_RED=$'\033[31m'
+    S_AMBER=$'\033[38;5;214m'
     S_YELLOW=$'\033[33m'
     S_GREEN=$'\033[32m'
     S_CYAN=$'\033[36m'
@@ -28,7 +30,7 @@ log_error() {
 }
 
 log_warn() {
-  printf '%b\n' "${S_YELLOW}${1}${S_RESET}" >&2
+  printf '%b\n' "${S_AMBER}${1}${S_RESET}" >&2
 }
 
 log_note() {

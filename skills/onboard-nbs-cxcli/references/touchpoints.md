@@ -11,8 +11,8 @@ Open these files first:
 - `services/nebius-cxcli/README.md`
 - `services/nebius-cxcli/docs/design.md`
 - `services/nebius-cxcli/src/nebius_cxcli/component_sources.py`
-- the target Terraform module's `variables.tf`, `outputs.tf`, `locals.tf`, and
-  `main.tf`
+- the target Terraform module's `README.md`, `variables.tf`, `outputs.tf`,
+  `locals.tf`, and `main.tf`
 
 ## Public Catalog Contract
 
@@ -59,9 +59,12 @@ Catalog-only onboarding is usually enough when:
 - the module inputs are already well-described in Terraform
 - required values can be entered as normal strings, bools, numbers, lists, or
   maps
+- no feature toggle or upstream selection needs same-pass prompt expansion to
+  reveal dependent fields
 - status polling can be expressed with an existing `status.kind`
 - no cross-field runtime rule is needed beyond Terraform validation
 - no deploy/bootstrap cluster handoff is needed
+- empty optional outputs do not require special render/apply handling
 
 If all of those are true, touch:
 
@@ -82,7 +85,9 @@ Use it for:
 
 - repeated component-specific guided choices
 - existing live provider lookups that should be wired by default
+- common or base components where bundled UX should be intentional
 - stable fixed enums that belong in the bundled UX
+- exposing important module defaults explicitly in the wizard
 
 Do not use it to create new Terraform inputs.
 
@@ -106,12 +111,27 @@ Provider-layer changes are appropriate for:
 - project-scoped Nebius inventory
 - compatibility-filtered live choices
 - chained lookups driven by another selected field
+- dynamic lookup paths that must resolve against sibling or override fields
 
 Keep provider args path-based so the CLI can normalize them correctly:
 
 - `project_id_path`
 - `fallback_project_id_path`
 - `platform_path`
+- `version_path`
+
+### `services/nebius-cxcli/src/nebius_cxcli/cli.py`
+
+Touch this when onboarding exposes a generic wizard or orchestration gap rather
+than a component-local catalog issue.
+
+Typical reasons:
+
+- dependent prompts must appear immediately after a toggle or upstream choice
+- prompt ordering needs to account for newly required fields
+- render/apply should treat an empty generated artifact set as a no-op
+- a provider-backed field now depends on normalized path resolution in the
+  wizard loop
 
 ### `services/nebius-cxcli/src/nebius_cxcli/validation_profiles.py`
 
@@ -120,7 +140,8 @@ Add a mapping here only when the component needs code-owned runtime rules.
 ### `services/nebius-cxcli/src/nebius_cxcli/runtime_component_validation.py`
 
 Touch this when the module needs cross-field validation that Terraform alone
-cannot express cleanly at CLI/runtime level.
+cannot express cleanly at CLI/runtime level, or when the wizard can otherwise
+produce a Terraform-invalid conditional shape.
 
 ### `services/nebius-cxcli/src/nebius_cxcli/cluster_handoffs.py`
 
@@ -151,6 +172,19 @@ Current examples:
   stay static because they are fixed service enums in the module contract.
 - jump-host `platform` and `preset` are live-lookups because they represent
   current compute inventory.
+- MK8s `k8s_version`, platform, and preset guidance should stay provider-backed
+  because they depend on current compatibility and available inventory.
+
+## End-to-End UX Checks
+
+Before calling onboarding complete, walk the user path:
+
+- `create`: does the wizard surface every field required by an enabled feature
+  in the same run
+- `render`: does the generated output stay syntactically valid when optional
+  sections are empty
+- `deploy`: does the first failure happen in CLI validation instead of at an
+  avoidable Terraform precondition when practical
 
 ## Focused Test Map
 
@@ -162,8 +196,10 @@ Update and run the tests that match the touched layer:
 - `services/nebius-cxcli/tests/test_tf_variable_discovery_and_provider_checks.py`
 - `services/nebius-cxcli/tests/test_provider_option_plugins.py`
 - `services/nebius-cxcli/tests/test_strict_runtime_dynamic_validation.py`
+- `services/nebius-cxcli/tests/test_runtime_plugin_validation.py`
 - `services/nebius-cxcli/tests/test_deployment_status.py`
 - `services/nebius-cxcli/tests/test_render.py`
+- `services/nebius-cxcli/tests/test_cli_command_coverage.py`
 
 ## Common Validation Commands
 
@@ -179,8 +215,11 @@ Provider/wizard-heavy changes:
 ```bash
 cd services/nebius-cxcli
 python -m pytest \
+  tests/test_cli_command_coverage.py \
   tests/test_provider_option_plugins.py \
   tests/test_tf_variable_discovery_and_provider_checks.py \
+  tests/test_runtime_plugin_validation.py \
+  tests/test_strict_runtime_dynamic_validation.py \
   tests/test_wizard_provider_field_specs.py \
   tests/test_wizard_prompt_interrupts.py
 ```

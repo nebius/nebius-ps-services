@@ -1,4 +1,4 @@
 interface:
   display_name: "Nebius"
-  short_description: "Build Nebius IAM and VPC workflows"
-  default_prompt: "Use $nebius to implement Nebius IAM/Object Storage flows or inspect Nebius VPC pools, subnets, and route tables safely."
+  short_description: "Build Nebius IAM, VPC, and quota workflows"
+  default_prompt: "Use $nebius to implement Nebius IAM/Object Storage flows, inspect Nebius VPC pools/subnets/route tables, or add live quota-aware provisioning checks with the Nebius SDK."

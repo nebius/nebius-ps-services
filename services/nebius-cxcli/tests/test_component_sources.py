@@ -21,6 +21,12 @@ from nebius_cxcli.component_sources import (
 )
 from nebius_cxcli.runtime_introspection import reset_runtime_introspection_cache
 
+_VALID_ED25519_PUBLIC_KEY = (
+    "ssh-ed25519 "
+    "AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f "
+    "demo@example"
+)
+
 
 def _reset_sources_state() -> None:
     set_component_sources_file_override(None)
@@ -222,6 +228,58 @@ def test_component_sources_resolution_precedence(monkeypatch, tmp_path: Path) ->
     assert resolve_component_sources_file() == default_file
 
 
+def test_component_sources_shared_admin_ssh_public_key_accepts_relative_file_path(
+    tmp_path: Path,
+) -> None:
+    key_path = tmp_path / "id_rsa.pub"
+    key_path.write_text(
+        "ssh-rsa "
+        "AAAAB3NzaC1yc2EAAAADAQABAAAAgAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB"
+        "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBA"
+        "QEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB "
+        "demo@example\n",
+        encoding="utf-8",
+    )
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                shared={
+                    "admin_ssh": {
+                        "user_name": "ubuntu",
+                        "public_key": "./id_rsa.pub",
+                    }
+                }
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_component_sources(explicit=sources_file, source_profile=SourceProfile.PORTABLE)
+    assert loaded.shared["admin_ssh"]["public_key"].startswith("ssh-rsa ")
+
+
+def test_component_sources_reject_invalid_shared_admin_ssh_user_name(tmp_path: Path) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                shared={
+                    "admin_ssh": {
+                        "user_name": "BAD USER",
+                    }
+                }
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="shared.admin_ssh.user_name"):
+        load_component_sources(explicit=sources_file, source_profile=SourceProfile.PORTABLE)
+
+
 def test_component_sources_profile_resolution_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
     set_component_sources_profile_override(None)
 
@@ -254,7 +312,7 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(
                 shared={
                     "admin_ssh": {
                         "user_name": "ubuntu",
-                        "public_key": "ssh-ed25519 AAAA demo",
+                        "public_key": _VALID_ED25519_PUBLIC_KEY,
                     }
                 },
                 infra={
@@ -849,6 +907,36 @@ def test_bundled_object_storage_declares_bucket_status_watcher() -> None:
     assert object_storage.status.name_input == "name"
 
 
+def test_bundled_mysterybox_declares_secret_status_watcher() -> None:
+    loaded = load_component_sources(
+        explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml"
+    )
+    mysterybox = next(item for item in loaded.tf_modules if item.module == "mysterybox")
+
+    assert mysterybox.status is not None
+    assert mysterybox.status.kind == "nebius.mysterybox.secret"
+    assert mysterybox.status.parent_input == "parent_id"
+    assert mysterybox.status.name_input == "secrets"
+
+
+def test_bundled_jump_hosts_declare_compute_instance_status_watchers() -> None:
+    loaded = load_component_sources(
+        explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml"
+    )
+    wireguard = next(item for item in loaded.tf_modules if item.module == "wireguard-jumphost")
+    ssh = next(item for item in loaded.tf_modules if item.module == "ssh-jumphost")
+
+    assert wireguard.status is not None
+    assert wireguard.status.kind == "nebius.compute.instance"
+    assert wireguard.status.parent_input == "parent_id"
+    assert wireguard.status.name_input == "name"
+
+    assert ssh.status is not None
+    assert ssh.status.kind == "nebius.compute.instance"
+    assert ssh.status.parent_input == "parent_id"
+    assert ssh.status.name_input == "name"
+
+
 def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
     loaded = load_component_sources(
         explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml"
@@ -859,6 +947,11 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         "inputs.subnet_id": {
             "options": {
                 "from": "project_subnets",
+            }
+        },
+        "inputs.k8s_version": {
+            "options": {
+                "from": "mk8s_control_plane_versions",
             }
         },
         "inputs.cpu_nodes_platform": {
@@ -882,13 +975,28 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         "inputs.gpu_nodes_preset": {
             "options": {
                 "from": "compute_platform_presets",
-                "args": {"platform_path": "inputs.gpu_nodes_platform"},
+                "args": {
+                    "platform_path": "inputs.gpu_nodes_platform",
+                    "gpu_cluster_required_path": "inputs.infiniband_fabric",
+                },
+                "auto_select_single": True,
             }
         },
         "inputs.infiniband_fabric": {
             "options": {
                 "from": "mk8s_infiniband_fabrics",
+                "args": {
+                    "platform_path": "inputs.gpu_nodes_platform",
+                    "preset_path": "inputs.gpu_nodes_preset",
+                },
+                "skip_prompt_if_no_choices": True,
+            }
+        },
+        "inputs.gpu_drivers_preset": {
+            "options": {
+                "from": "mk8s_gpu_driver_presets",
                 "args": {"platform_path": "inputs.gpu_nodes_platform"},
+                "auto_select_single": True,
             }
         },
         "inputs.mk8s_cluster_overrides": {

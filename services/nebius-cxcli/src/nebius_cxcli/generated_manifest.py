@@ -28,6 +28,7 @@ def build_generated_manifest(
     handoffs: Sequence[Mapping[str, Any]],
     required_component_outputs: Sequence[Mapping[str, Any]],
     status_watchers: Sequence[Mapping[str, Any]] = (),
+    quota_report: Mapping[str, Any] | None = None,
     source_profile: str | None = None,
     module_sources: Sequence[Mapping[str, Any]] = (),
     terraform_tfvars: Mapping[str, Any] | None = None,
@@ -37,6 +38,10 @@ def build_generated_manifest(
     payload = to_plain_data(config)
     if not isinstance(payload, Mapping):
         raise ValueError("Runtime config payload must be a mapping")
+    client_info = payload.get("client_info")
+    client_info_map = client_info if isinstance(client_info, Mapping) else {}
+    nebius = client_info_map.get("nebius")
+    nebius_map = nebius if isinstance(nebius, Mapping) else {}
 
     return {
         "schema": GENERATED_MANIFEST_SCHEMA,
@@ -44,9 +49,10 @@ def build_generated_manifest(
             "config_path": _repo_relative_path(paths.config_path, root=paths.repo_root),
         },
         "project": {
-            "client_name": paths.path_client_name,
-            "tenant_id": paths.path_tenant_id,
-            "project_id": paths.path_project_id,
+            "client_name": str(client_info_map.get("client_name", "") or "").strip(),
+            "tenant_id": str(nebius_map.get("tenant_id", "") or "").strip() or paths.path_tenant_id,
+            "project_id": str(nebius_map.get("project_id", "") or "").strip()
+            or paths.path_project_id,
         },
         "paths": {
             "generated_dir": _repo_relative_path(paths.generated_dir, root=paths.repo_root),
@@ -58,6 +64,7 @@ def build_generated_manifest(
             "flux_version": str(flux_version or "").strip(),
             "terraform_version": str(terraform_version or "").strip(),
         },
+        "quota": dict(quota_report or {}),
         "render": {
             "source_profile": str(source_profile or "").strip(),
             "module_sources": [dict(item) for item in module_sources],
@@ -84,6 +91,7 @@ def write_generated_manifest_to_path(
     handoffs: Sequence[Mapping[str, Any]],
     required_component_outputs: Sequence[Mapping[str, Any]],
     status_watchers: Sequence[Mapping[str, Any]] = (),
+    quota_report: Mapping[str, Any] | None = None,
     source_profile: str | None = None,
     module_sources: Sequence[Mapping[str, Any]] = (),
     terraform_tfvars: Mapping[str, Any] | None = None,
@@ -96,6 +104,7 @@ def write_generated_manifest_to_path(
         handoffs=handoffs,
         required_component_outputs=required_component_outputs,
         status_watchers=status_watchers,
+        quota_report=quota_report,
         source_profile=source_profile,
         module_sources=module_sources,
         terraform_tfvars=terraform_tfvars,
@@ -114,6 +123,7 @@ def write_generated_manifest(
     handoffs: Sequence[Mapping[str, Any]],
     required_component_outputs: Sequence[Mapping[str, Any]],
     status_watchers: Sequence[Mapping[str, Any]] = (),
+    quota_report: Mapping[str, Any] | None = None,
     source_profile: str | None = None,
     module_sources: Sequence[Mapping[str, Any]] = (),
     terraform_tfvars: Mapping[str, Any] | None = None,
@@ -127,6 +137,7 @@ def write_generated_manifest(
         handoffs=handoffs,
         required_component_outputs=required_component_outputs,
         status_watchers=status_watchers,
+        quota_report=quota_report,
         source_profile=source_profile,
         module_sources=module_sources,
         terraform_tfvars=terraform_tfvars,

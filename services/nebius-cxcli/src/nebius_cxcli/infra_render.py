@@ -13,7 +13,6 @@ from .cluster_handoffs import Handoff
 from .component_defaults import (
     resolve_component_defaults,
     set_component_path,
-    shared_default_conflicts,
 )
 from .component_instances import component_instance_id, component_instance_label, component_type_id
 from .component_sources import (
@@ -381,15 +380,8 @@ def _build_module_plans(
                 entry=entry,
                 preserve_existing_literal=True,
                 preserve_existing_shared=False,
+                include_shared=False,
             )
-        if entry is not None:
-            conflicts = shared_default_conflicts(item, entry)
-            if conflicts:
-                target_path, source_path = conflicts[0]
-                raise ValueError(
-                    f"infra component '{component_label}' field '{target_path}' is managed by shared default "
-                    f"'{source_path}' and must not be set explicitly"
-                )
         inputs = resolved_item.get("inputs", {})
         if not isinstance(inputs, dict):
             inputs = {}

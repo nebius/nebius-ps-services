@@ -18,13 +18,8 @@ class ProjectPaths:
     infra_dir: Path
     flux_dir: Path
     inventory_dir: Path
-    path_client_name: str
     path_tenant_id: str
     path_project_id: str
-
-    @property
-    def client_tenant_slug(self) -> str:
-        return f"{self.path_client_name}--{self.path_tenant_id}"
 
 
 def find_git_root(start: Path) -> Path:
@@ -54,14 +49,14 @@ def _locate_deployments_dir(config_path: Path, repo_root: Path, hint: str | None
         raise ValueError(f"Deployments dir does not exist: {hinted}")
 
     # Infer deployments root from canonical config path shape:
-    # <deployments-root>/projects/<client>--<tenant>/<project>/config.yaml
+    # <deployments-root>/<tenant>/<project>/config.yaml
     parents = config_path.parents
-    if len(parents) >= 4 and parents[2].name == "projects":
-        return parents[3].resolve()
+    if len(parents) >= 3:
+        return parents[2].resolve()
 
     raise ValueError(
         "Unable to infer deployments root from config path. "
-        "Expected <deployments-root>/projects/<client>--<tenant>/<project>/config.yaml"
+        "Expected <deployments-root>/<tenant>/<project>/config.yaml"
     )
 
 
@@ -81,14 +76,13 @@ def resolve_project_paths(
         raise ValueError(f"{resolved} is not inside {deployments_dir}") from exc
 
     parts = relative.parts
-    if len(parts) != 4 or parts[0] != "projects":
-        raise ValueError("Config path must match projects/<client>--<tenant>/<project>/config.yaml")
+    if len(parts) != 3 or parts[-1] != "config.yaml":
+        raise ValueError("Config path must match <tenant>/<project>/config.yaml")
 
-    client_tenant = parts[1]
-    if "--" not in client_tenant:
-        raise ValueError("Expected client and tenant in path segment '<client>--<tenant>'")
-
-    client_name, tenant_id = client_tenant.split("--", maxsplit=1)
+    tenant_id = parts[0]
+    project_id = parts[1]
+    if not tenant_id or not project_id:
+        raise ValueError("Config path must include non-empty tenant_id and project_id segments")
     project_dir = resolved.parent
     generated_dir = project_dir / "generated"
 
@@ -101,9 +95,8 @@ def resolve_project_paths(
         infra_dir=generated_dir / "infra",
         flux_dir=generated_dir / "flux",
         inventory_dir=generated_dir / "inventory",
-        path_client_name=client_name,
         path_tenant_id=tenant_id,
-        path_project_id=parts[2],
+        path_project_id=project_id,
     )
 
 
@@ -134,11 +127,6 @@ def resolve_generated_paths(
 def validate_path_alignment(config: Any, paths: ProjectPaths) -> None:
     """Ensure canonical config values and path hierarchy are synchronized."""
     errors: list[str] = []
-    if config.client_info.client_name != paths.path_client_name:
-        errors.append(
-            "client_name mismatch: "
-            f"config='{config.client_info.client_name}', path='{paths.path_client_name}'"
-        )
     if config.client_info.nebius.tenant_id != paths.path_tenant_id:
         errors.append(
             "tenant_id mismatch: "

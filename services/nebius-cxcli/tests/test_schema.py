@@ -9,6 +9,12 @@ from nebius_cxcli.components import component_entries
 from nebius_cxcli.config_loader import load_config
 from nebius_cxcli.config_template import starter_config_yaml
 
+_VALID_ED25519_PUBLIC_KEY = (
+    "ssh-ed25519 "
+    "AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f "
+    "demo@example"
+)
+
 
 def _dynamic_payload() -> dict:
     payload = yaml.safe_load(
@@ -36,6 +42,30 @@ def test_schema_valid_dynamic_file(tmp_path: Path) -> None:
     assert loaded.client_info.client_name == "client-a"
     assert isinstance(loaded.infra.components, list)
     assert isinstance(loaded.apps.charts, list)
+
+
+def test_schema_accepts_ssh_public_key_local_file_path(tmp_path: Path) -> None:
+    key_path = tmp_path / "id_ed25519.pub"
+    key_path.write_text(_VALID_ED25519_PUBLIC_KEY + "\n", encoding="utf-8")
+
+    payload = _dynamic_payload()
+    payload["infra"]["components"] = [
+        {
+            "id": "wireguard-jumphost",
+            "enabled": True,
+            "inputs": {
+                "ssh_user_name": "ubuntu",
+                "ssh_public_key": "./id_ed25519.pub",
+            },
+        }
+    ]
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    loaded = load_config(config_path)
+    component = loaded.infra.components[0]
+    assert component["inputs"]["ssh_public_key"] == _VALID_ED25519_PUBLIC_KEY
 
 
 def test_schema_rejects_static_shape(tmp_path: Path) -> None:
@@ -138,7 +168,7 @@ def test_schema_rejects_unknown_root_key(tmp_path: Path) -> None:
 def test_schema_rejects_shared_root_key(tmp_path: Path) -> None:
     payload = _dynamic_payload()
     payload["shared"] = {
-        "admin_ssh": {"user_name": "ubuntu", "public_key": "ssh-ed25519 AAAA demo"}
+        "admin_ssh": {"user_name": "ubuntu", "public_key": _VALID_ED25519_PUBLIC_KEY}
     }
 
     config_path = tmp_path / "config.yaml"

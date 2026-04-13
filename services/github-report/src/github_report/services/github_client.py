@@ -87,6 +87,7 @@ class GitHubMetadataClient:
                     full_name=repo.full_name,
                     default_branch=repo.default_branch,
                     is_archived=repo.archived,
+                    is_private=repo.private,
                 )
                 for repo in repositories_iterable
             ]

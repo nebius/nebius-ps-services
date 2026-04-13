@@ -18,6 +18,7 @@ import yaml
 
 from .cluster_handoffs import Handoff, resolve_builtin_handoff
 from .component_instances import INSTANCE_ID_PATTERN, normalize_component_token
+from .ssh_public_keys import normalize_ssh_public_key_value
 from .validation_profiles import resolve_builtin_validation_profile
 from .wizard_profiles import resolve_builtin_wizard_profile
 
@@ -35,6 +36,7 @@ DEFAULT_FLUX_VERSION = "v2.8.0"
 DEFAULT_FLUX_RELEASE_TIMEOUT = "5m"
 DEFAULT_TERRAFORM_VERSION = "1.14.1"
 GO_DURATION_RE = re.compile(r"(?:\d+(?:\.\d+)?(?:ns|us|µs|ms|s|m|h))+")
+LINUX_USER_NAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 
 _CLI_COMPONENT_SOURCES_FILE_OVERRIDE: Path | None = None
 _CLI_COMPONENT_SOURCES_PROFILE_OVERRIDE: SourceProfile | None = None
@@ -324,7 +326,7 @@ def _metadata_module_source(
     return portable_source or resolved_source
 
 
-def _parse_shared_values(raw: Any) -> dict[str, Any]:
+def _parse_shared_values(raw: Any, *, source_root: Path | None = None) -> dict[str, Any]:
     if raw is None:
         return {}
     if not isinstance(raw, dict):
@@ -354,10 +356,22 @@ def _parse_shared_values(raw: Any) -> dict[str, Any]:
     public_key = admin_ssh_raw.get("public_key", "")
     if user_name is not None and not isinstance(user_name, str):
         raise ValueError("shared.admin_ssh.user_name must be a string when set")
+    if isinstance(user_name, str) and user_name.strip() and not LINUX_USER_NAME_RE.fullmatch(user_name):
+        raise ValueError(
+            "shared.admin_ssh.user_name must match Linux username format (for example ubuntu, admin_user)"
+        )
     if not isinstance(public_key, str):
         raise ValueError("shared.admin_ssh.public_key must be a string")
+    normalized = copy.deepcopy(dict(raw))
+    admin_ssh = normalized.get("admin_ssh")
+    if isinstance(admin_ssh, dict) and "public_key" in admin_ssh:
+        admin_ssh["public_key"] = normalize_ssh_public_key_value(
+            admin_ssh.get("public_key"),
+            field_label="shared.admin_ssh.public_key",
+            base_dir=source_root,
+        )
 
-    return copy.deepcopy(dict(raw))
+    return normalized
 
 
 def _parse_cli_settings(raw: Any) -> CliSettings:
@@ -604,7 +618,8 @@ def _parse_wizard_fields(
             filter_regex = _as_text(options.get("filter_regex"))
             if filter_regex:
                 normalized_options["filter"] = filter_regex
-            args: dict[str, Any] = {}
+            args_raw = options.get("args")
+            args: dict[str, Any] = copy.deepcopy(args_raw) if isinstance(args_raw, dict) else {}
             prefix = _as_text(options.get("prefix"))
             if prefix:
                 args["platform_prefix"] = prefix
@@ -613,6 +628,12 @@ def _parse_wizard_fields(
                 args["platform_path"] = depends_on
             if args:
                 normalized_options["args"] = args
+            auto_select_single = options.get("auto_select_single")
+            if isinstance(auto_select_single, bool):
+                normalized_options["auto_select_single"] = auto_select_single
+            skip_prompt_if_no_choices = options.get("skip_prompt_if_no_choices")
+            if isinstance(skip_prompt_if_no_choices, bool):
+                normalized_options["skip_prompt_if_no_choices"] = skip_prompt_if_no_choices
             spec["options"] = normalized_options
         wizard_fields[field_path] = spec
     return wizard_fields
@@ -730,7 +751,7 @@ def _parse_sources_payload(
         )
 
     cli = _parse_cli_settings(payload.get("cli"))
-    shared = _parse_shared_values(payload.get("shared"))
+    shared = _parse_shared_values(payload.get("shared"), source_root=source_root)
     components = payload.get("components", {})
     if components is None:
         components = {}

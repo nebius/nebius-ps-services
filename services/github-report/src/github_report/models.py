@@ -16,6 +16,7 @@ class RepositoryRef:
     full_name: str
     default_branch: str | None
     is_archived: bool
+    is_private: bool = False
 
 
 @dataclass(slots=True)

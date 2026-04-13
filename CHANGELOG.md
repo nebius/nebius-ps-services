@@ -14,6 +14,10 @@ All notable changes to this repository will be documented in this file.
 
 ### Added
 
+- Added the `align` Codex skill under `skills/` for end-to-end project review
+  and repair passes that inspect a codebase broadly before editing, then fix
+  inconsistencies across implementation, tests, CI, CLI/help output,
+  documentation, and formatting instead of only reporting them.
 - Added the `attach-ubuntu` Codex skill with a Bash helper that creates or
   reuses a per-project Ubuntu container, mounts the current project at
   `/workdir`, updates VS Code attached-container defaults, bootstraps Ubuntu

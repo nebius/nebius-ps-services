@@ -6,12 +6,22 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+from .component_defaults import (
+    component_path_has_material_value,
+    read_component_path,
+    shared_default_target_paths,
+)
 from .component_instances import (
     INSTANCE_ID_PATTERN,
     component_instance_id,
     component_type_id,
 )
-from .components import ComponentScope, component_entries, component_lookup, parse_dependency_ref
+from .components import (
+    ComponentScope,
+    component_entries,
+    component_lookup,
+    parse_dependency_ref,
+)
 from .runtime_config import read_path_with_catalog
 from .runtime_plugin_validation import run_runtime_validation_plugins
 
@@ -128,6 +138,57 @@ def _expected_app_group(config_path: str) -> str | None:
     if parts[0] != "apps":
         return None
     return parts[1]
+
+
+def _component_config_path_label(
+    *,
+    scope: ComponentScope,
+    component_id: str,
+    instance_id: str,
+    target_path: str,
+) -> str:
+    collection = "components" if scope == "infra" else "charts"
+    selector = f"id={component_id}"
+    if instance_id and instance_id != component_id:
+        selector = f"{selector},instance_id={instance_id}"
+    return f"{scope}.{collection}[{selector}].{target_path}"
+
+
+def _validate_materialized_shared_defaults(payload: Mapping[str, Any]) -> None:
+    scopes: tuple[tuple[ComponentScope, str, str], ...] = (
+        ("infra", "infra", "components"),
+        ("apps", "apps", "charts"),
+    )
+    for scope, section_name, collection_name in scopes:
+        section = payload.get(section_name)
+        if not isinstance(section, Mapping):
+            continue
+        rows = section.get(collection_name)
+        if not isinstance(rows, list):
+            continue
+        entry_by_id = {entry.id: entry for entry in component_entries(scope)}
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            if not bool(row.get("enabled", False)):
+                continue
+            component_id = component_type_id(row)
+            if not component_id:
+                continue
+            entry = entry_by_id.get(component_id)
+            if entry is None:
+                continue
+            instance_id = component_instance_id(row)
+            if not instance_id:
+                continue
+            for target_path in sorted(shared_default_target_paths(entry)):
+                value = read_component_path(row, target_path)
+                if component_path_has_material_value(value):
+                    continue
+                raise ValueError(
+                    f"{_component_config_path_label(scope=scope, component_id=component_id, instance_id=instance_id, target_path=target_path)} "
+                    "is required; shared-derived defaults must be materialized into config.yaml during create/component add"
+                )
 
 
 def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
@@ -302,8 +363,9 @@ def validate_runtime_payload(payload: Mapping[str, Any]) -> None:
                 "infra.ssh_user_name and infra.ssh_public_key are no longer root infra fields. "
                 "Set ssh_user_name/ssh_public_key on the selected jump-host component inputs instead "
                 "(for example infra.components[id=wireguard-jumphost].inputs.ssh_public_key). "
-                "component_sources.yaml shared.admin_ssh.user_name remains available for a non-sensitive "
-                "catalog-level default username."
+                "component_sources.yaml shared.admin_ssh.user_name remains available as a "
+                "catalog-level seed that create/component add materialize into jump-host "
+                "component inputs."
             )
 
     selected_by_scope: dict[ComponentScope, set[str]] = {
@@ -326,6 +388,8 @@ def validate_runtime_payload(payload: Mapping[str, Any]) -> None:
                         f"component dependency '{typed_scope}:{entry_id}' requires "
                         f"'{dep_scope}:{dep_id}' to be enabled"
                     )
+
+    _validate_materialized_shared_defaults(payload)
 
     run_runtime_validation_plugins(
         payload=payload,

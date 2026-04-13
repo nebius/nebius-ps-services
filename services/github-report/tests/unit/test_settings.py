@@ -4,7 +4,13 @@ from datetime import UTC, datetime
 
 import pytest
 
-from github_report.settings import OutputFormat, SortBy, WindowKind, build_report_options
+from github_report.settings import (
+    OutputFormat,
+    SortBy,
+    WindowKind,
+    build_list_repos_options,
+    build_report_options,
+)
 
 
 def test_build_report_options_merges_repo_filters(tmp_path) -> None:
@@ -96,3 +102,11 @@ def test_build_report_options_rejects_other_owner_repos() -> None:
 def test_build_report_options_rejects_days_with_since() -> None:
     with pytest.raises(ValueError, match="--days cannot be combined with --since"):
         build_report_options(owner="acme", since="2026-01-01", days=60)
+
+
+def test_build_list_repos_options_defaults_to_public_only() -> None:
+    options = build_list_repos_options(owner="acme")
+
+    assert options.owner == "acme"
+    assert options.include_private is False
+    assert options.format is OutputFormat.markdown

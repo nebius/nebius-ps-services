@@ -11,6 +11,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
+from google.rpc import code_pb2
 from nebius.api.nebius.common.v1 import GetOperationRequest, ListOperationsRequest
 from nebius.api.nebius.mk8s.v1 import (
     ClusterServiceClient,
@@ -60,6 +61,20 @@ def _event_level_rank(level: str) -> int:
     return 0
 
 
+def _enum_value_name(value: Any, *, prefixes: tuple[str, ...] = ()) -> str:
+    if isinstance(value, Enum):
+        name = _as_text(getattr(value, "name", None)).upper()
+    else:
+        name = _as_text(value).upper()
+    if not name:
+        return "UNKNOWN"
+    for prefix in prefixes:
+        if name.startswith(prefix):
+            name = name[len(prefix) :]
+            break
+    return name or "UNKNOWN"
+
+
 def _is_transient_node_group_warning(*, level: str, message: str, state_name: str) -> bool:
     if _as_text(level).upper() != "WARN":
         return False
@@ -79,6 +94,28 @@ def _transient_node_group_note(message: str) -> str | None:
     if "node condition ready is false" in normalized:
         return "waiting for node readiness"
     return None
+
+
+def _resource_event_message(last_occurrence: Any) -> str:
+    message = _as_text(getattr(last_occurrence, "message", None))
+    error_text = _event_error_text(getattr(last_occurrence, "error", None))
+    if error_text and error_text not in message:
+        if message:
+            return f"{message}; {error_text}"
+        return error_text
+    return message
+
+
+def _event_error_text(error: Any) -> str:
+    if isinstance(error, str):
+        return error.strip()
+    if error is None:
+        return ""
+    for field_name in ("message", "detail", "details", "description"):
+        value = getattr(error, field_name, None)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 @dataclass(frozen=True)
@@ -190,7 +227,7 @@ def _enum_field_name(message: Any, field_name: str, *, prefixes: tuple[str, ...]
     return text or "UNKNOWN"
 
 
-def _latest_operation_summary(operation_service: Any, resource_id: str) -> str | None:
+def _latest_operation(operation_service: Any, resource_id: str) -> Any | None:
     response = operation_service.list(ListOperationsRequest(resource_id=resource_id)).wait()
     operations = list(getattr(response, "operations", []) or [])
     if not operations:
@@ -203,18 +240,71 @@ def _latest_operation_summary(operation_service: Any, resource_id: str) -> str |
         if created_at and (not latest_created or created_at > latest_created):
             latest = item
             latest_created = created_at
+    return latest
+
+
+def _load_full_operation(operation_service: Any, operation: Any) -> Any:
+    operation_id = _as_text(getattr(operation, "id", None))
+    if operation_id:
+        with suppress(Exception):
+            return operation_service.get(GetOperationRequest(id=operation_id)).wait()
+    return operation
+
+
+def _rpc_status_code_name(raw_code: Any) -> str:
+    if raw_code is None:
+        return ""
+    with suppress(Exception):
+        return _as_text(code_pb2.Code.Name(int(raw_code))).upper()
+    return _enum_value_name(raw_code)
+
+
+def _latest_operation_failure(operation_service: Any, resource_id: str) -> str | None:
+    latest = _latest_operation(operation_service, resource_id)
+    if latest is None:
+        return None
+    full = _load_full_operation(operation_service, latest)
+    done = False
+    with suppress(Exception):
+        done = bool(full.done())
+    if not done:
+        return None
+
+    status = getattr(full, "status", None)
+    raw_code = getattr(status, "code", None)
+    with suppress(Exception):
+        if int(raw_code) == code_pb2.OK:
+            return None
+
+    description = _as_text(getattr(full, "description", None)) or _as_text(
+        getattr(latest, "description", None)
+    )
+    description = description or "operation"
+    code_name = _rpc_status_code_name(raw_code)
+    message = _event_error_text(status)
+    detail_summary = f" [{code_name}]" if code_name and code_name != "OK" else ""
+    if message:
+        return f"{description}{detail_summary}: {message}"
+    return f"{description}{detail_summary}"
+
+
+def _latest_operation_summary(operation_service: Any, resource_id: str) -> str | None:
+    latest = _latest_operation(operation_service, resource_id)
+    if latest is None:
+        return None
 
     operation_id = _as_text(getattr(latest, "id", None))
     description = _as_text(getattr(latest, "description", None)) or "operation"
     age_summary = ""
+    latest_created = getattr(latest, "created_at", None)
     if latest_created is not None:
         with suppress(Exception):
             age_summary = _format_elapsed(
                 max(0.0, (datetime.now(latest_created.tzinfo) - latest_created).total_seconds())
             )
     done_summary = "state unknown"
+    full = _load_full_operation(operation_service, latest)
     with suppress(Exception):
-        full = operation_service.get(GetOperationRequest(id=operation_id)).wait()
         done_summary = "done" if full.done() else "running"
     parts = [description]
     if operation_id:
@@ -225,9 +315,21 @@ def _latest_operation_summary(operation_service: Any, resource_id: str) -> str |
     return "op " + " ".join(parts)
 
 
+def _terminal_operation_failure_message(
+    *,
+    resource_label: str,
+    resource_name: str,
+    operation_failure: str,
+) -> str:
+    return f"{resource_label} '{resource_name}' reported a terminal API error: {operation_failure}"
+
+
 class _HeartbeatPoller:
     def summary(self) -> str:
         return "API unavailable; heartbeat only"
+
+    def terminal_failure(self) -> str | None:
+        return None
 
     def close(self) -> None:
         return
@@ -285,10 +387,10 @@ class _Mk8sStatusPoller:
         transient_notes: list[str] = []
         for event in events:
             last_occurrence = getattr(event, "last_occurrence", None)
-            level = _as_text(getattr(last_occurrence, "level", None)).upper()
+            level = _enum_value_name(getattr(last_occurrence, "level", None))
             if _event_level_rank(level) < _event_level_rank("WARN"):
                 continue
-            message = _as_text(getattr(last_occurrence, "message", None))
+            message = _resource_event_message(last_occurrence)
             if not message:
                 continue
             if _is_transient_node_group_warning(
@@ -308,6 +410,49 @@ class _Mk8sStatusPoller:
             getattr(metadata, "id", None) or getattr(item, "id", None)
         )
         return f"{best_level} {name}: {_shorten(best_message, limit=96)}", tuple(transient_notes)
+
+    def _node_group_terminal_failure(self, item: Any, *, state_name: str) -> str | None:
+        status = getattr(item, "status", None)
+        ready = getattr(status, "ready_node_count", None)
+        target = getattr(status, "target_node_count", None)
+        state_normalized = _as_text(state_name).upper()
+        if state_normalized in {"DELETING", "DELETED"}:
+            return None
+        if (
+            state_normalized in {"RUNNING", "READY"}
+            and isinstance(ready, int)
+            and isinstance(target, int)
+            and ready >= target
+        ):
+            return None
+
+        events = list(getattr(status, "events", []) or [])
+        metadata = getattr(item, "metadata", None)
+        name = _as_text(getattr(metadata, "name", None)) or _as_text(
+            getattr(metadata, "id", None) or getattr(item, "id", None)
+        )
+        for event in events:
+            last_occurrence = getattr(event, "last_occurrence", None)
+            level = _enum_value_name(getattr(last_occurrence, "level", None))
+            if level != "ERROR":
+                continue
+            message = _resource_event_message(last_occurrence)
+            if not message:
+                continue
+            error = getattr(last_occurrence, "error", None)
+            details: list[str] = []
+            event_code = _as_text(getattr(last_occurrence, "code", None))
+            if event_code:
+                details.append(event_code)
+            status_code = _enum_value_name(getattr(error, "code", None))
+            if status_code and status_code != "UNKNOWN":
+                details.append(status_code)
+            detail_summary = f" [{' / '.join(details)}]" if details else ""
+            return (
+                f"mk8s node group '{name}' reported a terminal API error"
+                f"{detail_summary}: {message}"
+            )
+        return None
 
     def _latest_operation_summary(self, cluster_id: str) -> str | None:
         return _latest_operation_summary(self._cluster_client.operation_service(), cluster_id)
@@ -386,6 +531,20 @@ class _Mk8sStatusPoller:
         rendered = "; ".join(parts) + "."
         return f"{rendered}{note_summary}{alert_summary}"
 
+    def terminal_failure(self) -> str | None:
+        cluster = self._find_cluster()
+        if cluster is None:
+            return None
+        cluster_id = _resource_metadata_id(cluster)
+        node_groups = self._list_node_groups(cluster_id) if cluster_id else []
+        for item in node_groups:
+            group_status = getattr(item, "status", None)
+            state = self._node_group_state_name(getattr(group_status, "state", None))
+            failure = self._node_group_terminal_failure(item, state_name=state)
+            if failure:
+                return failure
+        return None
+
     def close(self) -> None:
         self._sdk.sync_close()
 
@@ -454,6 +613,49 @@ class _PostgreSQLStatusPoller:
             parts.append(operation_summary)
         return "; ".join(parts) + "."
 
+    def terminal_failure(self) -> str | None:
+        cluster = self._find_cluster()
+        if cluster is None:
+            return None
+
+        status = getattr(cluster, "status", None)
+        cluster_id = _resource_metadata_id(cluster)
+        phase = _enum_field_name(status, "phase", prefixes=("PHASE_",))
+        state = _enum_field_name(status, "state", prefixes=("STATE_",))
+        normalized = {phase.upper(), state.upper()}
+        if normalized & {"FAILED", "ERROR"}:
+            failure = (
+                _latest_operation_failure(self._cluster_client.operation_service(), cluster_id)
+                if cluster_id
+                else None
+            )
+            if failure:
+                return _terminal_operation_failure_message(
+                    resource_label="managed-postgresql",
+                    resource_name=self._target.resource_name,
+                    operation_failure=failure,
+                )
+            return (
+                f"managed-postgresql '{self._target.resource_name}' entered terminal state "
+                f"phase={phase} state={state}"
+            )
+
+        if normalized & {"RUNNING", "READY", "FINISHED"}:
+            return None
+
+        failure = (
+            _latest_operation_failure(self._cluster_client.operation_service(), cluster_id)
+            if cluster_id
+            else None
+        )
+        if failure:
+            return _terminal_operation_failure_message(
+                resource_label="managed-postgresql",
+                resource_name=self._target.resource_name,
+                operation_failure=failure,
+            )
+        return None
+
     def close(self) -> None:
         self._sdk.sync_close()
 
@@ -519,6 +721,36 @@ class _FilesystemStatusPoller:
             parts.append(operation_summary)
         return "; ".join(parts) + "."
 
+    def terminal_failure(self) -> str | None:
+        filesystem = self._find_filesystem()
+        if filesystem is None:
+            return None
+
+        status = getattr(filesystem, "status", None)
+        filesystem_id = _resource_metadata_id(filesystem)
+        state = _enum_field_name(status, "state")
+        state_normalized = state.upper()
+        if state_normalized in {"DELETING", "DELETED"}:
+            return None
+        if state_normalized == "READY":
+            return None
+        failure = (
+            _latest_operation_failure(self._filesystem_client.operation_service(), filesystem_id)
+            if filesystem_id
+            else None
+        )
+        if failure:
+            return _terminal_operation_failure_message(
+                resource_label="sfs",
+                resource_name=self._target.resource_name,
+                operation_failure=failure,
+            )
+        if state_normalized in {"ERROR", "FAILED"}:
+            state_description = _as_text(getattr(status, "state_description", None))
+            suffix = f": {state_description}" if state_description else ""
+            return f"sfs '{self._target.resource_name}' entered terminal state {state}{suffix}"
+        return None
+
     def close(self) -> None:
         self._sdk.sync_close()
 
@@ -570,6 +802,208 @@ class _ObjectStorageBucketStatusPoller:
             parts.append(operation_summary)
         return "; ".join(parts) + "."
 
+    def terminal_failure(self) -> str | None:
+        bucket = self._find_bucket()
+        if bucket is None:
+            return None
+
+        status = getattr(bucket, "status", None)
+        bucket_id = _resource_metadata_id(bucket)
+        state = _enum_field_name(status, "state", prefixes=("STATE_",))
+        state_normalized = state.upper()
+        if state_normalized in {"ACTIVE", "SCHEDULED_FOR_DELETION", "DELETING", "DELETED"}:
+            return None
+        failure = (
+            _latest_operation_failure(self._bucket_client.operation_service(), bucket_id)
+            if bucket_id
+            else None
+        )
+        if failure:
+            return _terminal_operation_failure_message(
+                resource_label="object-storage",
+                resource_name=self._target.resource_name,
+                operation_failure=failure,
+            )
+        if state_normalized in {"ERROR", "FAILED"}:
+            return f"object-storage '{self._target.resource_name}' entered terminal state {state}"
+        return None
+
+    def close(self) -> None:
+        self._sdk.sync_close()
+
+
+class _ComputeInstanceStatusPoller:
+    def __init__(self, target: StatusWatcherTarget) -> None:
+        self._target = target
+        self._sdk = init_nebius_sdk(
+            parent_id=target.parent_id,
+            context="deployment status polling",
+        )
+
+        from nebius.api.nebius.compute.v1 import InstanceServiceClient, ListInstancesRequest
+
+        self._instance_client = InstanceServiceClient(self._sdk)
+        self._list_request = ListInstancesRequest
+
+    def _find_instance(self):
+        response = self._instance_client.list(
+            self._list_request(parent_id=self._target.parent_id)
+        ).wait()
+        items = _response_collection(response, "items", "instances")
+        for item in items:
+            if _resource_metadata_name(item) == self._target.resource_name:
+                return item
+        return None
+
+    def summary(self) -> str:
+        instance = self._find_instance()
+        if instance is None:
+            return (
+                f"compute instance '{self._target.resource_name}' is not visible yet in "
+                f"project {self._target.parent_id}."
+            )
+
+        status = getattr(instance, "status", None)
+        instance_id = _resource_metadata_id(instance)
+        state = _enum_field_name(status, "state")
+        network_interfaces = tuple(getattr(status, "network_interfaces", []) or [])
+        public_ip_ready = False
+        for interface in network_interfaces:
+            public_ip = getattr(interface, "public_ip_address", None)
+            if _as_text(getattr(public_ip, "address", None)):
+                public_ip_ready = True
+                break
+        network_summary = (
+            "public IP ready"
+            if public_ip_ready
+            else "network pending"
+            if network_interfaces
+            else "interfaces pending"
+        )
+        if bool(getattr(status, "reconciling", False)):
+            network_summary = f"{network_summary}; reconciling"
+
+        operation_summary = (
+            _latest_operation_summary(self._instance_client.operation_service(), instance_id)
+            if instance_id
+            else None
+        )
+        instance_label = self._target.resource_name
+        if instance_id:
+            instance_label = f"{instance_label} ({instance_id})"
+        parts = [f"compute instance {instance_label}: {state}", network_summary]
+        if operation_summary:
+            parts.append(operation_summary)
+        return "; ".join(parts) + "."
+
+    def terminal_failure(self) -> str | None:
+        instance = self._find_instance()
+        if instance is None:
+            return None
+
+        status = getattr(instance, "status", None)
+        instance_id = _resource_metadata_id(instance)
+        state = _enum_field_name(status, "state")
+        state_normalized = state.upper()
+        if state_normalized in {"RUNNING", "STOPPED", "STOPPING", "DELETING", "DELETED"}:
+            return None
+        failure = (
+            _latest_operation_failure(self._instance_client.operation_service(), instance_id)
+            if instance_id
+            else None
+        )
+        if failure:
+            return _terminal_operation_failure_message(
+                resource_label="compute instance",
+                resource_name=self._target.resource_name,
+                operation_failure=failure,
+            )
+        if state_normalized in {"ERROR", "FAILED"}:
+            return (
+                f"compute instance '{self._target.resource_name}' entered terminal state {state}"
+            )
+        return None
+
+    def close(self) -> None:
+        self._sdk.sync_close()
+
+
+class _MysteryBoxSecretStatusPoller:
+    def __init__(self, target: StatusWatcherTarget) -> None:
+        self._target = target
+        self._sdk = init_nebius_sdk(
+            parent_id=target.parent_id,
+            context="deployment status polling",
+        )
+
+        from nebius.api.nebius.mysterybox.v1 import GetSecretByNameRequest, SecretServiceClient
+
+        self._secret_client = SecretServiceClient(self._sdk)
+        self._get_by_name_request = GetSecretByNameRequest
+
+    def _find_secret(self):
+        with suppress(Exception):
+            return self._secret_client.get_by_name(
+                self._get_by_name_request(
+                    parent_id=self._target.parent_id,
+                    name=self._target.resource_name,
+                )
+            ).wait()
+        return None
+
+    def summary(self) -> str:
+        secret = self._find_secret()
+        if secret is None:
+            return (
+                f"mysterybox secret '{self._target.resource_name}' is not visible yet in "
+                f"project {self._target.parent_id}."
+            )
+
+        status = getattr(secret, "status", None)
+        secret_id = _resource_metadata_id(secret)
+        state = _enum_field_name(status, "state", prefixes=("STATE_",))
+        kms_key_id = _as_text(getattr(status, "effective_kms_key_id", None))
+        operation_summary = (
+            _latest_operation_summary(self._secret_client.operation_service(), secret_id)
+            if secret_id
+            else None
+        )
+        secret_label = self._target.resource_name
+        if secret_id:
+            secret_label = f"{secret_label} ({secret_id})"
+        parts = [f"mysterybox secret {secret_label}: {state}"]
+        if kms_key_id:
+            parts.append(f"kms key {kms_key_id}")
+        if operation_summary:
+            parts.append(operation_summary)
+        return "; ".join(parts) + "."
+
+    def terminal_failure(self) -> str | None:
+        secret = self._find_secret()
+        if secret is None:
+            return None
+
+        status = getattr(secret, "status", None)
+        secret_id = _resource_metadata_id(secret)
+        state = _enum_field_name(status, "state", prefixes=("STATE_",))
+        state_normalized = state.upper()
+        if state_normalized in {"ACTIVE", "SCHEDULED_FOR_DELETION", "DELETING", "DELETED"}:
+            return None
+        failure = (
+            _latest_operation_failure(self._secret_client.operation_service(), secret_id)
+            if secret_id
+            else None
+        )
+        if failure:
+            return _terminal_operation_failure_message(
+                resource_label="mysterybox secret",
+                resource_name=self._target.resource_name,
+                operation_failure=failure,
+            )
+        if state_normalized in {"ERROR", "FAILED"}:
+            return f"mysterybox secret '{self._target.resource_name}' entered terminal state {state}"
+        return None
+
     def close(self) -> None:
         self._sdk.sync_close()
 
@@ -590,6 +1024,16 @@ class _CompositeStatusPoller:
             or "API unavailable; heartbeat only"
         )
 
+    def terminal_failure(self) -> str | None:
+        for label, poller in self._pollers:
+            try:
+                failure = poller.terminal_failure()
+            except Exception:
+                continue
+            if failure:
+                return f"{label}: {failure}"
+        return None
+
     def close(self) -> None:
         for _label, poller in self._pollers:
             with suppress(Exception):
@@ -606,6 +1050,8 @@ _STATUS_POLLER_FACTORIES: dict[str, Callable[[StatusWatcherTarget], Any]] = {
     "nebius.mk8s.cluster": _mk8s_status_poller_from_target,
     "nebius.msp.postgresql.cluster": _PostgreSQLStatusPoller,
     "nebius.compute.filesystem": _FilesystemStatusPoller,
+    "nebius.compute.instance": _ComputeInstanceStatusPoller,
+    "nebius.mysterybox.secret": _MysteryBoxSecretStatusPoller,
     "nebius.storage.bucket": _ObjectStorageBucketStatusPoller,
 }
 
@@ -763,6 +1209,8 @@ class DeploymentStatusReporter:
         self._terraform = TerraformApplyProgress()
         self._thread: threading.Thread | None = None
         self._startup_notices: list[str] = []
+        self._terminal_failure: str | None = None
+        self._terminal_failure_emitted = False
 
         explicit_watchers = tuple(status_watchers or ())
         if explicit_watchers:
@@ -840,14 +1288,22 @@ class DeploymentStatusReporter:
                     )
         try:
             self._api_summary = self._poller.summary()
+            self._terminal_failure = self._poller_terminal_failure()
         except Exception as exc:
             self._poller.close()
             self._poller = _HeartbeatPoller()
             self._api_summary = self._poller.summary()
+            self._terminal_failure = None
             self._startup_notices.append(
                 "Nebius API initial status lookup failed; falling back to Terraform + elapsed heartbeat. "
                 f"Reason: {exc}"
             )
+
+    def _poller_terminal_failure(self) -> str | None:
+        terminal_failure = getattr(self._poller, "terminal_failure", None)
+        if not callable(terminal_failure):
+            return None
+        return terminal_failure()
 
     def _build_status_message(self, *, force: bool = False) -> str | None:
         with self._lock:
@@ -881,10 +1337,27 @@ class DeploymentStatusReporter:
             elapsed = _format_elapsed(time.monotonic() - self._started_at)
             return f"Status [{elapsed}] TF: {self._terraform.summary()} | API: {self._api_summary}"
 
+    def abort_reason(self) -> str | None:
+        with self._lock:
+            failure = self._terminal_failure
+        if not failure:
+            return None
+        return f"Nebius API reported a terminal deployment error: {failure}"
+
+    def _emit_terminal_failure_notice(self, failure: str) -> None:
+        if self._terminal_failure_emitted:
+            return
+        self._terminal_failure_emitted = True
+        self._emit(
+            "Nebius API reported terminal deployment error; aborting Terraform wait early: "
+            f"{failure}"
+        )
+
     def _run(self) -> None:
         while not self._stop_event.wait(self._poll_interval_seconds):
             try:
                 api_summary = self._poller.summary()
+                terminal_failure = self._poller_terminal_failure()
             except Exception as exc:
                 self._emit(
                     "Nebius API status reporter failed; continuing with Terraform + elapsed heartbeat: "
@@ -893,14 +1366,21 @@ class DeploymentStatusReporter:
                 self._poller.close()
                 self._poller = _HeartbeatPoller()
                 api_summary = self._poller.summary()
+                terminal_failure = None
             with self._lock:
                 self._api_summary = api_summary
+                failure_changed = terminal_failure and terminal_failure != self._terminal_failure
+                self._terminal_failure = terminal_failure
+            if failure_changed:
+                self._emit_terminal_failure_notice(terminal_failure)
             self._emit_status()
 
     def start(self) -> DeploymentStatusReporter:
         for notice in self._startup_notices:
             self._emit(notice)
         self._emit_status(force=True)
+        if self._terminal_failure:
+            self._emit_terminal_failure_notice(self._terminal_failure)
         self._thread = threading.Thread(
             target=self._run,
             name="nebius-cxcli-deploy-status",

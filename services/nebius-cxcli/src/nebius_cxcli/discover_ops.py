@@ -98,7 +98,7 @@ def _to_repo_relative(path: Path, *, repo_root: Path) -> str:
 
 def _project_config_relative(config_path: Path, *, repo_root: Path) -> str | None:
     relative = _to_repo_relative(config_path, repo_root=repo_root)
-    if _infer_client_project_from_path(relative) is None:
+    if _infer_tenant_project_from_path(relative) is None:
         return None
     return relative
 
@@ -129,28 +129,18 @@ def _generated_relative_for_config(config_relative: str) -> str:
     return config_path.parent.joinpath("generated").as_posix()
 
 
-def _infer_client_project_from_path(config_relative: str) -> tuple[str, str] | None:
+def _infer_tenant_project_from_path(config_relative: str) -> tuple[str, str] | None:
     parts = [token for token in _normalize(config_relative).split("/") if token]
-    if len(parts) < 4 or parts[-1] != "config.yaml":
+    if len(parts) < 3 or parts[-1] != "config.yaml":
         return None
-    if parts[-4] != "projects":
-        return None
-    client_tenant = parts[-3]
+    tenant_id = parts[-3]
     project_id = parts[-2]
-    if not project_id:
+    if not tenant_id or not project_id:
         return None
-    client_name, sep, _tenant_id = client_tenant.partition("--")
-    if not sep or not client_name:
-        return None
-    return client_name, project_id
+    return tenant_id, project_id
 
 
 def _environment_name_for_config(*, root: Path, config_relative: str) -> str:
-    client_project = _infer_client_project_from_path(config_relative)
-    if client_project is not None:
-        client_name, project_id = client_project
-        return build_github_environment_name(client_name=client_name, project_id=project_id)
-
     config_file = (root / config_relative).resolve()
     payload = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
     if not isinstance(payload, dict):
@@ -171,19 +161,20 @@ def _environment_name_for_config(*, root: Path, config_relative: str) -> str:
 def _config_relative_from_changed(path: str) -> str | None:
     normalized = _normalize(path)
     parts = [token for token in normalized.split("/") if token]
-    if len(parts) < 4:
+    if len(parts) < 3:
         return None
-    if normalized.endswith("config.yaml") and parts[-4] == "projects":
+    if normalized.endswith("config.yaml") and _infer_tenant_project_from_path(normalized) is not None:
         return normalized
     if "generated" not in parts:
         return None
     generated_index = parts.index("generated")
-    if generated_index < 3:
-        return None
-    if parts[generated_index - 3] != "projects":
+    if generated_index < 2:
         return None
     prefix = parts[:generated_index]
-    return "/".join([*prefix, "config.yaml"])
+    candidate = "/".join([*prefix, "config.yaml"])
+    if _infer_tenant_project_from_path(candidate) is None:
+        return None
+    return candidate
 
 
 def discover_configs(
