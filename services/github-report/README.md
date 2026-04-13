@@ -307,6 +307,9 @@ make test-unit
 make build
 ```
 
+`make fmt` runs `ruff check --fix` before `ruff format`, so it also normalizes
+imports and other safe auto-fixes before `make lint`.
+
 Optional local automation:
 
 ```bash

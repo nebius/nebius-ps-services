@@ -9,8 +9,7 @@ from github_report.services.reporting import (
     sort_repo_rows,
     summarize_users,
 )
-from github_report.settings import ListReposOptions
-from github_report.settings import SortBy
+from github_report.settings import ListReposOptions, SortBy
 
 
 def test_summarize_users_aggregates_across_repositories() -> None:

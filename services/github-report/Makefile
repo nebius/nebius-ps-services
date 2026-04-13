@@ -23,6 +23,7 @@ $(VENV_STAMP): pyproject.toml Makefile | $(VENV_PYTHON)
 	touch $(VENV_STAMP)
 
 fmt: $(VENV_STAMP)
+	$(VENV_PYTHON) -m ruff check --fix src tests
 	$(VENV_PYTHON) -m ruff format src tests
 
 lint: $(VENV_STAMP)

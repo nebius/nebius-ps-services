@@ -16,6 +16,7 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- make `make fmt` apply Ruff safe fixes before formatting so import-order issues are resolved before CI `lint`
 - replace personal-owner examples in the README and CLI help output with `nebius`
 - normalize example command ordering in the README and CLI help to `github-report <command> --owner <owner>`
 - document supported output formats and filename-based format inference in CLI help and add a dedicated README section
