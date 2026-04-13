@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from nebius_cxcli.terraform_ops import (
     _run,
+    _stream_json_events,
     _terraform_failure_text_from_events,
     _translate_terraform_failure,
     terraform_apply,
@@ -236,3 +240,166 @@ def test_terraform_plan_and_apply_can_skip_init(monkeypatch) -> None:
         ("run", ("terraform", "plan", "-input=false", "-lock-timeout=5m")),
         ("run", ("terraform", "apply", "-input=false", "-auto-approve", "-lock-timeout=5m")),
     ]
+
+
+def test_stream_json_events_aborts_early_when_abort_check_requests_it(
+    monkeypatch, tmp_path: Path
+) -> None:
+    class _DelayedStream:
+        def __init__(self, delay_seconds: float) -> None:
+            self._delay_seconds = delay_seconds
+            self._done = False
+
+        def readline(self) -> str:
+            if self._done:
+                return ""
+            time.sleep(self._delay_seconds)
+            self._done = True
+            return ""
+
+        def close(self) -> None:
+            return
+
+    class _FakeProcess:
+        def __init__(self) -> None:
+            self.stdout = _DelayedStream(0.5)
+            self.stderr = _DelayedStream(0.5)
+            self.terminated = False
+            self.killed = False
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+        def kill(self) -> None:
+            self.killed = True
+
+        def poll(self) -> int | None:
+            return None if not (self.terminated or self.killed) else 1
+
+        def wait(self, timeout=None) -> int:
+            return 1
+
+    process = _FakeProcess()
+
+    monkeypatch.setattr(
+        "nebius_cxcli.terraform_ops.subprocess.Popen",
+        lambda *args, **kwargs: process,
+    )
+
+    with pytest.raises(RuntimeError, match="aborted early"):
+        _stream_json_events(
+            ["terraform", "apply", "-json"],
+            cwd=tmp_path,
+            timeout=10,
+            abort_check=lambda: "Nebius API reported a terminal deployment error: demo",
+        )
+
+    assert process.terminated is True
+
+
+def test_terraform_apply_passes_abort_check_to_streaming_runner(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    def abort_check() -> None:
+        return None
+
+    monkeypatch.setattr("nebius_cxcli.terraform_ops._require_terraform", lambda: "terraform")
+    monkeypatch.setattr(
+        "nebius_cxcli.terraform_ops.terraform_init",
+        lambda infra_dir, *, extra_env=None: calls.update({"init": infra_dir}),
+    )
+
+    def _fake_stream_json_events(
+        cmd,
+        *,
+        cwd,
+        timeout,
+        extra_env=None,
+        event_callback=None,
+        abort_check=None,
+    ) -> None:
+        calls.update(
+            {
+                "cmd": tuple(cmd),
+                "cwd": cwd,
+                "timeout": timeout,
+                "event_callback": event_callback,
+                "abort_check": abort_check,
+            }
+        )
+
+    monkeypatch.setattr(
+        "nebius_cxcli.terraform_ops._stream_json_events",
+        _fake_stream_json_events,
+    )
+
+    terraform_apply(
+        Path("/tmp/demo"),
+        event_callback=lambda event: None,
+        abort_check=abort_check,
+    )
+
+    assert calls["cmd"] == (
+        "terraform",
+        "apply",
+        "-json",
+        "-input=false",
+        "-auto-approve",
+        "-lock-timeout=5m",
+    )
+    assert calls["abort_check"] is abort_check
+
+
+def test_terraform_destroy_passes_abort_check_to_streaming_runner(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    def abort_check() -> None:
+        return None
+
+    monkeypatch.setattr("nebius_cxcli.terraform_ops._require_terraform", lambda: "terraform")
+    monkeypatch.setattr(
+        "nebius_cxcli.terraform_ops.terraform_init",
+        lambda infra_dir, *, extra_env=None: calls.update({"init": infra_dir}),
+    )
+
+    def _fake_stream_json_events(
+        cmd,
+        *,
+        cwd,
+        timeout,
+        extra_env=None,
+        event_callback=None,
+        abort_check=None,
+    ) -> None:
+        calls.update(
+            {
+                "cmd": tuple(cmd),
+                "cwd": cwd,
+                "timeout": timeout,
+                "event_callback": event_callback,
+                "abort_check": abort_check,
+            }
+        )
+
+    monkeypatch.setattr(
+        "nebius_cxcli.terraform_ops._stream_json_events",
+        _fake_stream_json_events,
+    )
+
+    from nebius_cxcli.terraform_ops import terraform_destroy
+
+    terraform_destroy(
+        Path("/tmp/demo"),
+        event_callback=lambda event: None,
+        abort_check=abort_check,
+    )
+
+    assert calls["cmd"] == (
+        "terraform",
+        "destroy",
+        "-json",
+        "-input=false",
+        "-auto-approve",
+        "-lock-timeout=5m",
+    )
+    assert calls["abort_check"] is abort_check

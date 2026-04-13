@@ -97,6 +97,7 @@ def validate_mk8s_network_preflight(config: Any) -> None:
                 payload=payload,
                 component_node=dict(item),
                 entry=mk8s_entry,
+                include_shared=False,
             )
             inputs = resolved.get("inputs")
             if not isinstance(inputs, Mapping):

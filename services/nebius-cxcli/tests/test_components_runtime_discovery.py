@@ -90,6 +90,11 @@ def test_components_discovered_from_source_file(monkeypatch, tmp_path: Path) -> 
                 "from": "project_subnets",
             }
         },
+        "inputs.k8s_version": {
+            "options": {
+                "from": "mk8s_control_plane_versions",
+            }
+        },
         "inputs.cpu_nodes_platform": {
             "options": {
                 "from": "mk8s_compatible_platforms",
@@ -111,13 +116,28 @@ def test_components_discovered_from_source_file(monkeypatch, tmp_path: Path) -> 
         "inputs.gpu_nodes_preset": {
             "options": {
                 "from": "compute_platform_presets",
-                "args": {"platform_path": "inputs.gpu_nodes_platform"},
+                "args": {
+                    "platform_path": "inputs.gpu_nodes_platform",
+                    "gpu_cluster_required_path": "inputs.infiniband_fabric",
+                },
+                "auto_select_single": True,
             }
         },
         "inputs.infiniband_fabric": {
             "options": {
                 "from": "mk8s_infiniband_fabrics",
+                "args": {
+                    "platform_path": "inputs.gpu_nodes_platform",
+                    "preset_path": "inputs.gpu_nodes_preset",
+                },
+                "skip_prompt_if_no_choices": True,
+            }
+        },
+        "inputs.gpu_drivers_preset": {
+            "options": {
+                "from": "mk8s_gpu_driver_presets",
                 "args": {"platform_path": "inputs.gpu_nodes_platform"},
+                "auto_select_single": True,
             }
         },
         "inputs.mk8s_cluster_overrides": {

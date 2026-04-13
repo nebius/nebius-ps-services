@@ -130,6 +130,7 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
     client_info = _mapping(_lookup(payload_data, "client_info"))
     nebius = _mapping(_lookup(client_info, "nebius"))
     project_id = str(_coalesce(_lookup(nebius, "project_id"), paths.path_project_id))
+    tenant_id = str(_coalesce(_lookup(nebius, "tenant_id"), paths.path_tenant_id))
     region_id = str(_coalesce(_lookup(nebius, "region_id"), ""))
 
     infra_rows = _infra_component_rows(payload_data)
@@ -169,13 +170,13 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
         _coalesce(
             _lookup(mk8s_inputs, "cluster_name"),
             project_id,
-            f"{paths.client_tenant_slug}/{project_id}",
+            f"{tenant_id}/{project_id}",
         )
     )
 
     return {
         "infra": {
-            "project_scope": f"{paths.client_tenant_slug}/{project_id}",
+            "project_scope": f"{tenant_id}/{project_id}",
             "project_id": project_id,
             "region": region_id,
             "mk8s_enabled": bool(_lookup(mk8s_row or {}, "enabled")),
@@ -288,7 +289,7 @@ def write_inventory(config: Any, paths: ProjectPaths) -> InventoryArtifacts:
     lines = [
         f"# Inventory: {payload['infra']['project_id']}",
         "",
-        f"- Client: `{_coalesce(_lookup(client_info, 'client_name'), paths.path_client_name)}`",
+        f"- Client: `{_coalesce(_lookup(client_info, 'client_name'), '')}`",
         f"- Tenant: `{_coalesce(_lookup(nebius, 'tenant_id'), paths.path_tenant_id)}`",
         f"- Project: `{_coalesce(_lookup(nebius, 'project_id'), '')}`",
         f"- Region: `{payload['infra']['region']}`",

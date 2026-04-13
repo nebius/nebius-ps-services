@@ -260,6 +260,7 @@ def _stream_json_events(
     timeout: int,
     extra_env: dict[str, str] | None = None,
     event_callback: Callable[[dict[str, Any]], None] | None = None,
+    abort_check: Callable[[], str | None] | None = None,
 ) -> None:
     env = os.environ.copy()
     if extra_env:
@@ -307,6 +308,21 @@ def _stream_json_events(
     closed_streams = 0
     try:
         while closed_streams < 2:
+            if abort_check is not None:
+                abort_reason = abort_check()
+                if abort_reason:
+                    with suppress(Exception):
+                        process.terminate()
+                    with suppress(Exception):
+                        process.wait(timeout=5)
+                    with suppress(Exception):
+                        if process.poll() is None:
+                            process.kill()
+                            process.wait(timeout=5)
+                    raise RuntimeError(
+                        f"Terraform command `{_format_command(cmd)}` aborted early in {cwd}: "
+                        f"{abort_reason}"
+                    )
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 process.kill()
@@ -424,6 +440,7 @@ def terraform_apply(
     extra_env: dict[str, str] | None = None,
     initialize: bool = True,
     event_callback: Callable[[dict[str, Any]], None] | None = None,
+    abort_check: Callable[[], str | None] | None = None,
 ) -> None:
     """Run terraform apply in the rendered infra directory."""
     terraform_bin = _require_terraform()
@@ -443,6 +460,7 @@ def terraform_apply(
         timeout=7200,
         extra_env=extra_env,
         event_callback=event_callback,
+        abort_check=abort_check,
     )
 
 
@@ -452,6 +470,7 @@ def terraform_destroy(
     extra_env: dict[str, str] | None = None,
     initialize: bool = True,
     event_callback: Callable[[dict[str, Any]], None] | None = None,
+    abort_check: Callable[[], str | None] | None = None,
 ) -> None:
     """Run terraform destroy in the rendered infra directory."""
     terraform_bin = _require_terraform()
@@ -471,6 +490,7 @@ def terraform_destroy(
         timeout=7200,
         extra_env=extra_env,
         event_callback=event_callback,
+        abort_check=abort_check,
     )
 
 

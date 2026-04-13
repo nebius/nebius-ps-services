@@ -39,7 +39,10 @@ class GitHubReportService:
 
         token = resolve_github_token()
         client = self._metadata_client_cls(token)
-        return client.list_accessible_repositories(options.owner)
+        repositories = client.list_accessible_repositories(options.owner)
+        if options.include_private:
+            return repositories
+        return [repo for repo in repositories if not repo.is_private]
 
     async def build_report(self, options: ReportOptions) -> ReportBundle:
         """Build both the aggregated and detailed report views."""

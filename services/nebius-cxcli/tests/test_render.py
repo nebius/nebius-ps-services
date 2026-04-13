@@ -23,6 +23,12 @@ from nebius_cxcli.render import render_project
 from nebius_cxcli.runtime_introspection import ModuleVariable, reset_runtime_introspection_cache
 from nebius_cxcli.terraform_provider import build_provider_module_name
 
+_VALID_ED25519_PUBLIC_KEY = (
+    "ssh-ed25519 "
+    "AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f "
+    "demo@example"
+)
+
 
 def _reset_catalog_override() -> None:
     set_component_sources_file_override(None)
@@ -70,9 +76,7 @@ def _stub_catalog_output_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _project_config_path(base: Path) -> Path:
-    return (
-        base / "deployments" / "projects" / "client-a--tenant-123" / "project-456" / "config.yaml"
-    )
+    return base / "deployments" / "tenant-123" / "project-456" / "config.yaml"
 
 
 def _starter_payload(*, selected_infra: set[str], selected_apps: set[str]) -> dict:
@@ -143,7 +147,7 @@ def _catalog_with_shared_admin_ssh(
     tmp_path: Path,
     *,
     user_name: str = "ubuntu",
-    public_key: str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB8Yq7Rr0x2GdQ8gJ5Q40gF4yHahx7s6vH8kKf+demo",
+    public_key: str = _VALID_ED25519_PUBLIC_KEY,
 ) -> Path:
     source_catalog = _local_catalog_path()
     payload = yaml.safe_load(source_catalog.read_text(encoding="utf-8"))
@@ -244,6 +248,59 @@ def test_render_creates_source_only_module_and_flux_outputs(
 
     n8n_release = paths.flux_dir / "helmrelease-workloads-n8n.yaml"
     assert n8n_release.exists()
+
+
+def test_render_skips_empty_flux_repository_file_when_no_apps_are_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_catalog_override(_local_catalog_path(), source_profile=SourceProfile.PORTABLE)
+    reset_component_entry_cache()
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
+    mk8s = _infra_component_row(payload, "mk8s")
+    mk8s_inputs = mk8s.setdefault("inputs", {})
+    if isinstance(mk8s_inputs, dict):
+        mk8s_inputs["subnet_id"] = "subnet-abc123"
+        mk8s_inputs["cpu_nodes_platform"] = "cpu-d3"
+        mk8s_inputs["cpu_nodes_preset"] = "4vcpu-16gb"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    monkeypatch.setattr(
+        "nebius_cxcli.infra_render.module_variables",
+        lambda _source: (
+            ModuleVariable(name="parent_id", required=False, type_hint="string"),
+            ModuleVariable(name="cluster_name", required=False, type_hint="string"),
+            ModuleVariable(name="cpu_nodes_count", required=False, type_hint="number"),
+            ModuleVariable(name="cpu_nodes_platform", required=False, type_hint="string"),
+            ModuleVariable(name="cpu_nodes_preset", required=False, type_hint="string"),
+            ModuleVariable(name="subnet_id", required=False, type_hint="string"),
+            ModuleVariable(name="gpu_enabled", required=False, type_hint="bool"),
+            ModuleVariable(
+                name="mk8s_cluster_public_endpoint",
+                required=False,
+                type_hint="bool",
+            ),
+            ModuleVariable(
+                name="kube_network_service_cidrs",
+                required=False,
+                type_hint="list(string)",
+            ),
+        ),
+    )
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+
+    render_project(config, paths, source_profile=SourceProfile.PORTABLE)
+
+    assert not (paths.flux_dir / "helm-repositories.yaml").exists()
+    kustomization_doc = yaml.safe_load(
+        (paths.flux_dir / "kustomization.yaml").read_text(encoding="utf-8")
+    )
+    assert kustomization_doc["resources"] == []
 
 
 def test_render_keeps_duplicate_component_instances_distinct(
@@ -649,7 +706,7 @@ def test_render_rejects_unknown_custom_module_input(tmp_path: Path) -> None:
         "parent_id": "project-456",
         "cluster_name": "demo-cluster",
         "subnet_id": "subnet-123",
-        "ssh_public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB8Yq7Rr0x2GdQ8gJ5Q40gF4yHahx7s6vH8kKf+demo",
+        "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
     }
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
@@ -661,7 +718,7 @@ def test_render_rejects_unknown_custom_module_input(tmp_path: Path) -> None:
         render_project(config, paths, source_profile=SourceProfile.LOCAL)
 
 
-def test_render_uses_shared_admin_ssh_username_binding_for_wireguard_jumphost(
+def test_render_uses_materialized_shared_admin_ssh_username_for_wireguard_jumphost(
     tmp_path: Path,
 ) -> None:
     reset_component_entry_cache()
@@ -679,6 +736,7 @@ def test_render_uses_shared_admin_ssh_username_binding_for_wireguard_jumphost(
         "region": "eu-north1",
         "subnet_id": "subnet-123",
         "name": "wg-jumphost",
+        "ssh_user_name": "adminuser",
     }
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
@@ -697,7 +755,44 @@ def test_render_uses_shared_admin_ssh_username_binding_for_wireguard_jumphost(
     assert "wireguard_jumphost_ssh_public_key" not in tfvars
 
 
-def test_render_uses_shared_defaults_for_app_chart_values(
+def test_render_uses_materialized_shared_admin_ssh_username_for_ssh_jumphost(
+    tmp_path: Path,
+) -> None:
+    reset_component_entry_cache()
+    _set_catalog_override(
+        _catalog_with_shared_admin_ssh(tmp_path, user_name="adminuser"),
+        source_profile=SourceProfile.LOCAL,
+    )
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"ssh-jumphost"}, selected_apps=set())
+    jumphost = _infra_component_row(payload, "ssh-jumphost")
+    jumphost["inputs"] = {
+        "parent_id": "project-456",
+        "region": "eu-north1",
+        "subnet_id": "subnet-123",
+        "name": "ssh-jumphost",
+        "ssh_user_name": "adminuser",
+        "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
+        "allowed_cidrs": ["203.0.113.10/32"],
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+
+    render_project(config, paths, source_profile=SourceProfile.LOCAL)
+    main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
+    tfvars = (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
+
+    assert 'module "ssh_jumphost" {' in main_tf
+    assert "ssh_user_name = var.ssh_jumphost_ssh_user_name" in main_tf
+    assert '"ssh_jumphost_ssh_user_name": "adminuser"' in tfvars
+
+
+def test_render_uses_materialized_shared_defaults_for_app_chart_values(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     sources_file = tmp_path / "component_sources.yaml"
@@ -707,7 +802,7 @@ def test_render_uses_shared_defaults_for_app_chart_values(
                 shared={
                     "admin_ssh": {
                         "user_name": "adminuser",
-                        "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB8demo",
+                        "public_key": _VALID_ED25519_PUBLIC_KEY,
                     }
                 },
                 apps={
@@ -758,7 +853,7 @@ def test_render_uses_shared_defaults_for_app_chart_values(
                     "version": "1.0.0",
                     "namespace": "demo",
                     "release-name": "demo-app",
-                    "values": {},
+                    "values": {"admin": {"sshUser": "adminuser"}},
                 }
             ]
         },

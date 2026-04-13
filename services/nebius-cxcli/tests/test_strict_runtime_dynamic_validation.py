@@ -17,6 +17,12 @@ from nebius_cxcli.config_loader import load_config
 from nebius_cxcli.config_template import starter_config_yaml
 from nebius_cxcli.runtime_introspection import reset_runtime_introspection_cache
 
+_VALID_ED25519_PUBLIC_KEY = (
+    "ssh-ed25519 "
+    "AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f "
+    "demo@example"
+)
+
 
 @pytest.fixture(autouse=True)
 def _reset_component_cache(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -62,7 +68,7 @@ def _catalog_with_shared_admin_ssh(
     tmp_path: Path,
     *,
     user_name: str = "ubuntu",
-    public_key: str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB8Yq7Rr0x2GdQ8gJ5Q40gF4yHahx7s6vH8kKf+demo",
+    public_key: str = _VALID_ED25519_PUBLIC_KEY,
 ) -> Path:
     source_catalog = Path(__file__).resolve().parents[1] / "component_sources.yaml"
     payload = yaml.safe_load(source_catalog.read_text(encoding="utf-8"))
@@ -140,7 +146,7 @@ def test_strict_validation_rejects_unknown_custom_module_inputs(tmp_path: Path) 
         "parent_id": "project-456",
         "cluster_name": "demo-cluster",
         "subnet_id": "subnet-123",
-        "ssh_public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB8Yq7Rr0x2GdQ8gJ5Q40gF4yHahx7s6vH8kKf+demo",
+        "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
     }
 
     config_path = tmp_path / "config.yaml"
@@ -182,13 +188,10 @@ def test_strict_validation_requires_managed_postgresql_name_when_enabled(
     assert "infra.components[managed-postgresql].inputs.name is required" in str(exc_info.value)
 
 
-def test_strict_validation_mk8s_cpu_shape_not_required_when_has_default(
+def test_strict_validation_requires_mk8s_cpu_shape_when_baseline_pool_is_enabled(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """cpu_nodes_platform/cpu_nodes_preset have default="" in TF, so they are
-    not auto-detected as required.  Only truly required variables (no default,
-    nullable!=true) are enforced."""
     payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
     mk8s = _infra_component_row(payload, "mk8s")
     mk8s["inputs"] = {
@@ -209,13 +212,47 @@ def test_strict_validation_mk8s_cpu_shape_not_required_when_has_default(
         "nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: []
     )
 
-    try:
+    with pytest.raises(RuntimeError) as exc_info:
         _validate_strict_config(config)
-        message = ""
-    except RuntimeError as exc:
-        message = str(exc)
-    assert "cpu_nodes_platform is required" not in message
-    assert "cpu_nodes_preset is required" not in message
+    message = str(exc_info.value)
+    assert "infra.components[mk8s].inputs.cpu_nodes_platform is required" in message
+    assert "infra.components[mk8s].inputs.cpu_nodes_preset is required" in message
+
+
+def test_strict_validation_requires_mk8s_gpu_shape_when_gpu_enabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
+    mk8s = _infra_component_row(payload, "mk8s")
+    mk8s["inputs"] = {
+        "parent_id": "project-456",
+        "cluster_name": "demo-cluster",
+        "subnet_id": "subnet-123",
+        "cpu_nodes_platform": "cpu-d3",
+        "cpu_nodes_preset": "4vcpu-16gb",
+        "gpu_enabled": True,
+    }
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    config = load_config(config_path)
+
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_required_variables",
+        lambda _source: ("parent_id", "cluster_name", "subnet_id"),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: []
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        _validate_strict_config(config)
+    message = str(exc_info.value)
+    assert "infra.components[mk8s].inputs.gpu_node_groups is required" in message
+    assert "infra.components[mk8s].inputs.gpu_nodes_count_per_group is required" in message
+    assert "infra.components[mk8s].inputs.gpu_nodes_platform is required" in message
+    assert "infra.components[mk8s].inputs.gpu_nodes_preset is required" in message
 
 
 def test_strict_validation_requires_object_storage_name_when_enabled(
@@ -257,7 +294,8 @@ def test_strict_validation_ssh_jumphost_allowed_cidrs_not_required_when_has_defa
         "region": "eu-north1",
         "subnet_id": "subnet-123",
         "name": "ssh-jh",
-        "ssh_public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB8Yq7Rr0x2GdQ8gJ5Q40gF4yHahx7s6vH8kKf+demo",
+        "ssh_user_name": "ubuntu",
+        "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
     }
 
     config_path = tmp_path / "config.yaml"
@@ -323,7 +361,8 @@ def test_strict_validation_allows_explicit_ssh_public_key_for_jumphost(tmp_path:
         "region": "eu-north1",
         "subnet_id": "subnet-123",
         "name": "wg-jumphost",
-        "ssh_public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB8Yq7Rr0x2GdQ8gJ5Q40gF4yHahx7s6vH8kKf+demo",
+        "ssh_user_name": "ubuntu",
+        "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
     }
 
     config_path = tmp_path / "config.yaml"

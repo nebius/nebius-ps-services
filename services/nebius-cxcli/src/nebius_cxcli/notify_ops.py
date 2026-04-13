@@ -124,7 +124,7 @@ def send_inventory_email(
     project_id = (
         str(config.client_info.nebius.project_id or "").strip()
         or paths.path_project_id
-        or f"{paths.client_tenant_slug}/{paths.path_project_id}"
+        or f"{paths.path_tenant_id}/{paths.path_project_id}"
     )
     tenant_id = str(config.client_info.nebius.tenant_id or "").strip() or paths.path_tenant_id
     masked_project_id = _mask_identifier(project_id)

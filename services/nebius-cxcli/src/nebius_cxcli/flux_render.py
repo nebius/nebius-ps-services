@@ -12,7 +12,6 @@ import yaml
 from .component_defaults import (
     resolve_component_defaults,
     set_component_path,
-    shared_default_conflicts,
 )
 from .component_sources import component_input_binding_ref
 from .component_wiring import (
@@ -178,15 +177,8 @@ def _configured_app_release_specs(
                         entry=entry,
                         preserve_existing_literal=True,
                         preserve_existing_shared=False,
+                        include_shared=False,
                     )
-                if entry is not None:
-                    conflicts = shared_default_conflicts(raw_chart, entry)
-                    if conflicts:
-                        target_path, source_path = conflicts[0]
-                        raise ValueError(
-                            f"apps chart '{entry_id}' field '{target_path}' is managed by shared default "
-                            f"'{source_path}' and must not be set explicitly"
-                        )
 
                 if entry is not None and entry.input_bindings:
                     conflicts = input_binding_conflicts(chart_node, entry)
@@ -350,7 +342,7 @@ def _helm_release_doc(
 class _FluxRenderState:
     paths: ProjectPaths
     files: list[Path] = field(default_factory=list)
-    resources: list[str] = field(default_factory=lambda: ["./helm-repositories.yaml"])
+    resources: list[str] = field(default_factory=list)
     repositories: list[dict[str, Any]] = field(default_factory=list)
     seen_repo_names: set[str] = field(default_factory=set)
     seen_namespaces: set[str] = field(default_factory=set)
@@ -450,18 +442,19 @@ def render_flux(
     )
 
     repos_path = paths.flux_dir / "helm-repositories.yaml"
-    _ensure_parent(repos_path)
     if state.repositories:
+        _ensure_parent(repos_path)
         repo_yaml = (
             "\n---\n".join(
                 yaml.safe_dump(doc, sort_keys=False).strip() for doc in state.repositories
             )
             + "\n"
         )
+        repos_path.write_text(repo_yaml, encoding="utf-8")
+        state.files.append(repos_path)
+        state.resources.insert(0, "./helm-repositories.yaml")
     else:
-        repo_yaml = "# No Helm repositories are enabled for this project\n"
-    repos_path.write_text(repo_yaml, encoding="utf-8")
-    state.files.append(repos_path)
+        repos_path.unlink(missing_ok=True)
 
     kustomization_doc = {
         "apiVersion": "kustomize.config.k8s.io/v1beta1",

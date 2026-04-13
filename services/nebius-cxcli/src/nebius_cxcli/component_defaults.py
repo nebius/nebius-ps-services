@@ -125,20 +125,6 @@ def shared_default_payload_paths(
     return result
 
 
-def shared_default_conflicts(
-    component_node: Mapping[str, Any],
-    entry: ComponentEntry,
-) -> tuple[tuple[str, str], ...]:
-    conflicts: list[tuple[str, str]] = []
-    for default in entry.defaults:
-        if default.kind != "shared":
-            continue
-        existing_value = read_component_path(component_node, default.target_path)
-        if _has_material_value(existing_value):
-            conflicts.append((default.target_path, default.source_path))
-    return tuple(conflicts)
-
-
 def resolve_component_defaults(
     *,
     payload: Mapping[str, Any] | None = None,
@@ -147,7 +133,7 @@ def resolve_component_defaults(
     preserve_existing_literal: bool = True,
     preserve_existing_shared: bool = False,
     include_literal: bool = True,
-    include_shared: bool = True,
+    include_shared: bool = False,
 ) -> dict[str, Any]:
     resolved = copy.deepcopy(dict(component_node)) if isinstance(component_node, dict) else {}
     for default in entry.defaults:
@@ -171,6 +157,67 @@ def resolve_component_defaults(
     return resolved
 
 
+def _materialize_scope_shared_defaults(
+    *,
+    payload: dict[str, Any],
+    section: str,
+    collection: str,
+    entries: tuple[ComponentEntry, ...],
+) -> bool:
+    section_node = payload.get(section)
+    if not isinstance(section_node, dict):
+        return False
+    rows = section_node.get(collection)
+    if not isinstance(rows, list):
+        return False
+
+    entry_by_id = {entry.id: entry for entry in entries}
+    changed = False
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        entry_id = str(row.get("id", "")).strip().lower()
+        entry = entry_by_id.get(entry_id)
+        if entry is None or not entry.defaults:
+            continue
+        resolved = resolve_component_defaults(
+            payload=payload,
+            component_node=row,
+            entry=entry,
+            preserve_existing_literal=True,
+            preserve_existing_shared=True,
+            include_literal=False,
+            include_shared=True,
+        )
+        if resolved == row:
+            continue
+        row.clear()
+        row.update(resolved)
+        changed = True
+    return changed
+
+
+def materialize_shared_defaults(
+    *,
+    payload: dict[str, Any],
+    infra_entries: tuple[ComponentEntry, ...],
+    app_entries: tuple[ComponentEntry, ...],
+) -> bool:
+    changed = _materialize_scope_shared_defaults(
+        payload=payload,
+        section="infra",
+        collection="components",
+        entries=infra_entries,
+    )
+    changed |= _materialize_scope_shared_defaults(
+        payload=payload,
+        section="apps",
+        collection="charts",
+        entries=app_entries,
+    )
+    return changed
+
+
 __all__ = [
     "component_path_has_material_value",
     "default_input_leaf_names",
@@ -178,11 +225,11 @@ __all__ = [
     "literal_default_input_leaf_names",
     "literal_default_target_paths",
     "managed_default_payload_paths",
+    "materialize_shared_defaults",
     "read_component_path",
     "resolve_component_defaults",
     "set_component_path",
     "shared_default_payload_paths",
-    "shared_default_conflicts",
     "shared_default_input_sources",
     "shared_default_target_paths",
 ]

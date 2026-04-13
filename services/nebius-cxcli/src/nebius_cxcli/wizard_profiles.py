@@ -54,6 +54,11 @@ def _suppressed_prompt_fields(*field_paths: str) -> dict[str, dict[str, Any]]:
 BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
     "mk8s": {
         **_project_subnets_field(),
+        "inputs.k8s_version": {
+            "options": {
+                "from": "mk8s_control_plane_versions",
+            }
+        },
         "inputs.cpu_nodes_platform": {
             "options": {
                 "from": "mk8s_compatible_platforms",
@@ -76,12 +81,23 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
             "options": {
                 "from": "compute_platform_presets",
                 "depends_on": "inputs.gpu_nodes_platform",
+                "args": {"gpu_cluster_required_path": "inputs.infiniband_fabric"},
+                "auto_select_single": True,
             }
         },
         "inputs.infiniband_fabric": {
             "options": {
                 "from": "mk8s_infiniband_fabrics",
                 "depends_on": "inputs.gpu_nodes_platform",
+                "args": {"preset_path": "inputs.gpu_nodes_preset"},
+                "skip_prompt_if_no_choices": True,
+            }
+        },
+        "inputs.gpu_drivers_preset": {
+            "options": {
+                "from": "mk8s_gpu_driver_presets",
+                "depends_on": "inputs.gpu_nodes_platform",
+                "auto_select_single": True,
             }
         },
         **_suppressed_prompt_fields(

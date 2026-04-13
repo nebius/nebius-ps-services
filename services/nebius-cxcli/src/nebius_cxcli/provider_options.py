@@ -16,6 +16,7 @@ from .sdk_auth import init_nebius_sdk
 SUPPORTED_PROVIDER_OPTION_SOURCES = frozenset(
     {
         "mk8s_compatible_platforms",
+        "mk8s_gpu_driver_presets",
         "mk8s_infiniband_fabrics",
         "compute_platforms",
         "compute_platform_presets",
@@ -48,6 +49,22 @@ class _Mk8sInfiniBandFabric:
     value: str
     platform: str
     region: str
+
+
+@dataclass(frozen=True)
+class _Mk8sCompatibilityItem:
+    compatible_platforms: tuple[str, ...]
+    drivers_preset: str | None
+    os: str | None
+
+
+@dataclass(frozen=True)
+class _ComputePlatformPreset:
+    name: str
+    vcpu_count: int | None
+    memory_gibibytes: int | None
+    gpu_count: int | None
+    allow_gpu_clustering: bool
 
 
 # Keep this in the documented Nebius fabric order for stable prompt rendering.
@@ -183,6 +200,16 @@ def _as_str(value: object | None) -> str | None:
     return text or None
 
 
+def _component_input_sibling_path(field_path: str, input_name: str) -> str | None:
+    marker = ".inputs."
+    if marker not in field_path:
+        return None
+    prefix = field_path.rsplit(".", maxsplit=1)[0]
+    if not prefix or not input_name.strip():
+        return None
+    return f"{prefix}.{input_name.strip()}"
+
+
 def _provider_error_message(provider: str, exc: Exception) -> str:
     message = str(exc).strip() or exc.__class__.__name__
     return f"{provider}: {message}"
@@ -211,6 +238,10 @@ class ProviderOptionLookup:
         self._sdk: Any | None = None
         self._sdk_failed = False
         self._cache: dict[tuple[object, ...], tuple[OptionChoice, ...]] = {}
+        self._mk8s_compatibility_cache: dict[str, tuple[_Mk8sCompatibilityItem, ...]] = {}
+        self._compute_platform_preset_cache: dict[
+            tuple[str, str], tuple[_ComputePlatformPreset, ...]
+        ] = {}
         self._last_error: str | None = None
 
     def resolve(
@@ -225,6 +256,7 @@ class ProviderOptionLookup:
         try:
             resolver = {
                 "mk8s_compatible_platforms": self._resolve_mk8s_compatible_platforms,
+                "mk8s_gpu_driver_presets": self._resolve_mk8s_gpu_driver_presets,
                 "mk8s_infiniband_fabrics": self._resolve_mk8s_infiniband_fabrics,
                 "compute_platforms": self._resolve_compute_platforms,
                 "compute_platform_presets": self._resolve_compute_platform_presets,
@@ -273,6 +305,32 @@ class ProviderOptionLookup:
 
     def last_error(self) -> str | None:
         return self._last_error
+
+    def compute_platform_preset_allows_gpu_clustering(
+        self,
+        *,
+        project_id: str,
+        platform_name: str,
+        preset_name: str,
+    ) -> bool | None:
+        normalized_project_id = _as_str(project_id)
+        normalized_platform_name = _as_str(platform_name)
+        normalized_preset_name = _as_str(preset_name)
+        if (
+            not normalized_project_id
+            or not normalized_platform_name
+            or not normalized_preset_name
+        ):
+            return None
+
+        presets = self._resolve_compute_platform_preset_inventory(
+            project_id=normalized_project_id,
+            platform_name=normalized_platform_name,
+        )
+        for preset in presets:
+            if preset.name == normalized_preset_name:
+                return preset.allow_gpu_clustering
+        return None
 
     def validate_tenant_project_scope(
         self,
@@ -391,14 +449,36 @@ class ProviderOptionLookup:
         tenant_path = _as_str(args.get("tenant_id_path")) or "client_info.nebius.tenant_id"
         return _as_str(_payload_value(payload, tenant_path))
 
-    def _resolve_k8s_version(self, payload: dict[str, Any], args: dict[str, Any]) -> str | None:
-        version_path = (
-            _as_str(args.get("kubernetes_version_path"))
-            or "infra.mk8s.cluster_overrides.control_plane.version"
+    def _resolve_k8s_version(
+        self,
+        payload: dict[str, Any],
+        args: dict[str, Any],
+        field_path: str = "",
+    ) -> str | None:
+        candidate_paths: list[str] = []
+        explicit_path = _as_str(args.get("kubernetes_version_path"))
+        if explicit_path:
+            candidate_paths.append(explicit_path)
+        sibling_version_path = _component_input_sibling_path(field_path, "k8s_version")
+        if sibling_version_path:
+            candidate_paths.append(sibling_version_path)
+        sibling_override_path = _component_input_sibling_path(
+            field_path,
+            "mk8s_cluster_overrides.control_plane.version",
         )
-        explicit = _as_str(_payload_value(payload, version_path))
-        if explicit:
-            return explicit
+        if sibling_override_path:
+            candidate_paths.append(sibling_override_path)
+        candidate_paths.append("infra.mk8s.cluster_overrides.control_plane.version")
+
+        seen_paths: set[str] = set()
+        for version_path in candidate_paths:
+            normalized_path = version_path.strip()
+            if not normalized_path or normalized_path in seen_paths:
+                continue
+            seen_paths.add(normalized_path)
+            explicit = _as_str(_payload_value(payload, normalized_path))
+            if explicit:
+                return explicit
 
         configured_default = _as_str(args.get("kubernetes_version_default"))
         if configured_default:
@@ -457,7 +537,7 @@ class ProviderOptionLookup:
         payload: dict[str, Any],
         field_path: str,
     ) -> tuple[OptionChoice, ...]:
-        version = self._resolve_k8s_version(payload, args)
+        version = self._resolve_k8s_version(payload, args, field_path)
         if not version:
             return ()
         prefix = _as_str(args.get("platform_prefix"))
@@ -466,32 +546,12 @@ class ProviderOptionLookup:
         if cache_key in self._cache:
             return self._cache[cache_key]
 
-        sdk = self._sdk_or_none()
-        if sdk is None:
-            return ()
-        from nebius.api.nebius.mk8s.v1 import (
-            GetNodeGroupCompatibilityMatrixRequest,
-            NodeGroupServiceClient,
-        )
-
-        response = (
-            NodeGroupServiceClient(sdk)
-            .get_compatibility_matrix(
-                GetNodeGroupCompatibilityMatrixRequest(cluster_kubernetes_version=version)
-            )
-            .wait()
-        )
-
         platforms: set[str] = set()
-        for version_item in list(getattr(response, "versions", [])):
-            for item in list(getattr(version_item, "items", [])):
-                for platform in list(getattr(item, "compatible_platforms", [])):
-                    text = _as_str(platform)
-                    if not text:
-                        continue
-                    if prefix and not text.startswith(prefix):
-                        continue
-                    platforms.add(text)
+        for item in self._resolve_mk8s_compatibility_items(version):
+            for platform in item.compatible_platforms:
+                if prefix and not platform.startswith(prefix):
+                    continue
+                platforms.add(platform)
 
         compatible_names = sorted(platforms)
         if project_id:
@@ -502,6 +562,47 @@ class ProviderOptionLookup:
             )
         else:
             resolved = tuple(OptionChoice(value=name, label=name) for name in compatible_names)
+        self._cache[cache_key] = resolved
+        return resolved
+
+    def _resolve_mk8s_gpu_driver_presets(
+        self,
+        *,
+        args: dict[str, Any],
+        payload: dict[str, Any],
+        field_path: str,
+    ) -> tuple[OptionChoice, ...]:
+        version = self._resolve_k8s_version(payload, args, field_path)
+        if not version:
+            return ()
+
+        platform_path = _as_str(args.get("platform_path"))
+        if not platform_path and field_path.endswith(".gpu_drivers_preset"):
+            platform_path = f"{field_path.rsplit('.', maxsplit=1)[0]}.gpu_nodes_platform"
+
+        platform_name = _as_str(args.get("platform"))
+        if not platform_name and platform_path:
+            platform_name = _as_str(_payload_value(payload, platform_path))
+        if not platform_name:
+            return ()
+
+        cache_key = ("mk8s_gpu_driver_presets", version, platform_name)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        options: list[OptionChoice] = []
+        seen: set[str] = set()
+        for item in self._resolve_mk8s_compatibility_items(version):
+            if platform_name not in item.compatible_platforms:
+                continue
+            preset = item.drivers_preset
+            if not preset or preset in seen:
+                continue
+            label = f"{preset}  ({item.os})" if item.os else preset
+            options.append(OptionChoice(value=preset, label=label))
+            seen.add(preset)
+
+        resolved = tuple(options)
         self._cache[cache_key] = resolved
         return resolved
 
@@ -521,6 +622,18 @@ class ProviderOptionLookup:
             platform_name = _as_str(_payload_value(payload, platform_path))
         if not platform_name:
             return ()
+
+        project_id = self._resolve_project_id(payload, args)
+        preset_path = _as_str(args.get("preset_path"))
+        preset_name = _as_str(_payload_value(payload, preset_path)) if preset_path else None
+        if project_id and preset_name:
+            allow_gpu_clustering = self.compute_platform_preset_allows_gpu_clustering(
+                project_id=project_id,
+                platform_name=platform_name,
+                preset_name=preset_name,
+            )
+            if allow_gpu_clustering is False:
+                return ()
 
         region_id = _as_str(args.get("region_id")) or _as_str(
             _payload_value(payload, "client_info.nebius.region_id")
@@ -586,9 +699,54 @@ class ProviderOptionLookup:
         if not platform_name:
             return ()
 
-        cache_key = ("compute_platform_presets", project_id, platform_name)
+        require_gpu_clustering = False
+        gpu_cluster_required_path = _as_str(args.get("gpu_cluster_required_path"))
+        if gpu_cluster_required_path:
+            require_gpu_clustering = bool(_as_str(_payload_value(payload, gpu_cluster_required_path)))
+
+        cache_key = (
+            "compute_platform_presets",
+            project_id,
+            platform_name,
+            require_gpu_clustering,
+        )
         if cache_key in self._cache:
             return self._cache[cache_key]
+
+        options: list[OptionChoice] = []
+        for preset in self._resolve_compute_platform_preset_inventory(
+            project_id=project_id,
+            platform_name=platform_name,
+        ):
+            preset_name = preset.name
+            allow_gpu_clustering = preset.allow_gpu_clustering
+            if require_gpu_clustering and not allow_gpu_clustering:
+                continue
+            suffix_parts: list[str] = []
+            if preset.vcpu_count is not None:
+                suffix_parts.append(f"vCPU={preset.vcpu_count}")
+            if preset.memory_gibibytes is not None:
+                suffix_parts.append(f"RAM={preset.memory_gibibytes}GiB")
+            if preset.gpu_count not in (None, 0):
+                suffix_parts.append(f"GPU={preset.gpu_count}")
+            if allow_gpu_clustering:
+                suffix_parts.append("GPU cluster")
+            label = f"{preset_name}  ({', '.join(suffix_parts)})" if suffix_parts else preset_name
+            options.append(OptionChoice(value=preset_name, label=label))
+
+        resolved = tuple(options)
+        self._cache[cache_key] = resolved
+        return resolved
+
+    def _resolve_compute_platform_preset_inventory(
+        self,
+        *,
+        project_id: str,
+        platform_name: str,
+    ) -> tuple[_ComputePlatformPreset, ...]:
+        cache_key = (project_id, platform_name)
+        if cache_key in self._compute_platform_preset_cache:
+            return self._compute_platform_preset_cache[cache_key]
 
         sdk = self._sdk_or_none()
         if sdk is None:
@@ -604,28 +762,58 @@ class ProviderOptionLookup:
         except Exception:
             return ()
 
-        presets = list(getattr(getattr(platform, "spec", None), "presets", []))
-        options: list[OptionChoice] = []
-        for preset in presets:
-            preset_name = _as_str(getattr(preset, "name", None))
-            if not preset_name:
-                continue
-            resources = getattr(preset, "resources", None)
-            cpu = getattr(resources, "vcpu_count", None) if resources is not None else None
-            memory = getattr(resources, "memory_gibibytes", None) if resources is not None else None
-            gpu = getattr(resources, "gpu_count", None) if resources is not None else None
-            suffix_parts: list[str] = []
-            if cpu is not None:
-                suffix_parts.append(f"vCPU={cpu}")
-            if memory is not None:
-                suffix_parts.append(f"RAM={memory}GiB")
-            if gpu not in (None, 0):
-                suffix_parts.append(f"GPU={gpu}")
-            label = f"{preset_name}  ({', '.join(suffix_parts)})" if suffix_parts else preset_name
-            options.append(OptionChoice(value=preset_name, label=label))
+        resolved = tuple(
+            _ComputePlatformPreset(
+                name=preset_name,
+                vcpu_count=getattr(resources, "vcpu_count", None),
+                memory_gibibytes=getattr(resources, "memory_gibibytes", None),
+                gpu_count=getattr(resources, "gpu_count", None),
+                allow_gpu_clustering=bool(getattr(preset, "allow_gpu_clustering", False)),
+            )
+            for preset in list(getattr(getattr(platform, "spec", None), "presets", []))
+            if (preset_name := _as_str(getattr(preset, "name", None)))
+            for resources in (getattr(preset, "resources", None),)
+        )
+        self._compute_platform_preset_cache[cache_key] = resolved
+        return resolved
 
-        resolved = tuple(options)
-        self._cache[cache_key] = resolved
+    def _resolve_mk8s_compatibility_items(
+        self,
+        version: str,
+    ) -> tuple[_Mk8sCompatibilityItem, ...]:
+        if version in self._mk8s_compatibility_cache:
+            return self._mk8s_compatibility_cache[version]
+
+        sdk = self._sdk_or_none()
+        if sdk is None:
+            return ()
+        from nebius.api.nebius.mk8s.v1 import (
+            GetNodeGroupCompatibilityMatrixRequest,
+            NodeGroupServiceClient,
+        )
+
+        response = (
+            NodeGroupServiceClient(sdk)
+            .get_compatibility_matrix(
+                GetNodeGroupCompatibilityMatrixRequest(cluster_kubernetes_version=version)
+            )
+            .wait()
+        )
+
+        resolved: tuple[_Mk8sCompatibilityItem, ...] = tuple(
+            _Mk8sCompatibilityItem(
+                compatible_platforms=tuple(
+                    platform_name
+                    for platform in list(getattr(item, "compatible_platforms", []))
+                    if (platform_name := _as_str(platform))
+                ),
+                drivers_preset=_as_str(getattr(item, "drivers_preset", None)),
+                os=_as_str(getattr(item, "os", None)),
+            )
+            for version_item in list(getattr(response, "versions", []))
+            for item in list(getattr(version_item, "items", []))
+        )
+        self._mk8s_compatibility_cache[version] = resolved
         return resolved
 
     def _resolve_project_subnets(

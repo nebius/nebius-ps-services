@@ -66,6 +66,9 @@ components:
         title: MysteryBox secrets
         group: Security
         enabled: false
+      status:
+        kind: nebius.mysterybox.secret
+        name_input: secrets
     wireguard-jumphost:
       source:
         portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/wireguard-jumphost?ref=main
@@ -74,6 +77,8 @@ components:
         title: WireGuard jump host
         group: Network
         enabled: false
+      status:
+        kind: nebius.compute.instance
       wizard_profile: wireguard-jumphost
       defaults:
         inputs.ssh_user_name: shared.admin_ssh.user_name
@@ -85,6 +90,8 @@ components:
         title: SSH-only hardened jump host
         group: Security
         enabled: false
+      status:
+        kind: nebius.compute.instance
       wizard_profile: ssh-jumphost
       defaults:
         inputs.ssh_user_name: shared.admin_ssh.user_name

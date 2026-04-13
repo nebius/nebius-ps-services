@@ -4,9 +4,14 @@ from pathlib import Path
 
 import yaml
 
-from nebius_cxcli.cli import _dynamic_provider_field_checks, _run_component_field_wizard
+from nebius_cxcli.cli import (
+    _dynamic_provider_field_checks,
+    _materialize_singleton_provider_defaults,
+    _run_component_field_wizard,
+)
 from nebius_cxcli.component_sources import ComponentDefault
 from nebius_cxcli.components import ComponentEntry
+from nebius_cxcli.provider_options import OptionChoice
 from nebius_cxcli.runtime_introspection import (
     ModuleVariable,
     module_required_variables,
@@ -425,6 +430,251 @@ def test_wizard_declared_nested_app_value_path_is_prompted_and_created(
     assert payload["apps"]["charts"][0]["values"] == {"image": {"tag": "1.2.3"}}
 
 
+def test_wizard_auto_selects_single_provider_option_for_optional_field(
+    monkeypatch,
+) -> None:
+    config_yaml = yaml.safe_dump(
+        {
+            "version": "v1",
+            "client_info": {
+                "client_name": "demo",
+                "nebius": {
+                    "tenant_id": "tenant-1",
+                    "project_id": "project-1",
+                    "region_id": "us-central1",
+                },
+                "notifications": {"email_enabled": True, "email": None},
+            },
+            "infra": {
+                "components": [
+                    {
+                        "id": "mk8s",
+                        "enabled": True,
+                        "source": "../../platform-infra/modules/mk8s",
+                        "inputs": {
+                            "gpu_nodes_platform": "gpu-b200-sxm",
+                        },
+                    }
+                ],
+            },
+            "apps": {"charts": []},
+        },
+        sort_keys=False,
+    )
+
+    entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="Managed Kubernetes",
+        source="../../platform-infra/modules/mk8s",
+        wizard_fields={
+            "inputs.gpu_drivers_preset": {
+                "options": {
+                    "from": "mk8s_gpu_driver_presets",
+                    "args": {"platform_path": "inputs.gpu_nodes_platform"},
+                    "auto_select_single": True,
+                }
+            }
+        },
+    )
+
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_required_variables",
+        lambda _source: (),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_variables",
+        lambda _source: (
+            ModuleVariable(name="gpu_drivers_preset", required=False, type_hint="string"),
+        ),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._wizard_continue_phase",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._runtime_required_input_leaf_names",
+        lambda _entry: set(),
+    )
+
+    prompted: list[tuple[str, object]] = []
+
+    def _fake_prompt(
+        path_label: str,
+        current: object,
+        *,
+        choices=None,
+        type_hint=None,
+        required=False,
+    ) -> tuple[object, bool]:
+        _ = choices, type_hint, required
+        prompted.append((path_label, current))
+        return current, False
+
+    class _Lookup:
+        def resolve(self, *, provider, args, payload, field_path):
+            _ = args, payload
+            if provider == "mk8s_gpu_driver_presets" and field_path.endswith(
+                ".gpu_drivers_preset"
+            ):
+                return [OptionChoice(value="cuda13.0", label="cuda13.0")]
+            return []
+
+        def last_error(self):
+            return None
+
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
+
+    updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=config_yaml,
+        selected_infra={"mk8s"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=_Lookup(),
+    )
+
+    assert completed is True
+    assert prompted == [("infra.components[0].inputs.gpu_drivers_preset", "cuda13.0")]
+    payload = yaml.safe_load(updated_yaml)
+    assert payload["infra"]["components"][0]["inputs"]["gpu_drivers_preset"] == "cuda13.0"
+
+
+def test_materialize_singleton_provider_defaults_sets_missing_single_choice_field() -> None:
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "us-central1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "inputs": {
+                        "gpu_nodes_platform": "gpu-b200-sxm",
+                    },
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="Managed Kubernetes",
+        source="../../platform-infra/modules/mk8s",
+        wizard_fields={
+            "inputs.gpu_drivers_preset": {
+                "options": {
+                    "from": "mk8s_gpu_driver_presets",
+                    "args": {"platform_path": "inputs.gpu_nodes_platform"},
+                    "auto_select_single": True,
+                }
+            }
+        },
+    )
+
+    class _Lookup:
+        def resolve(self, *, provider, args, payload, field_path):
+            _ = args, payload
+            if provider == "mk8s_gpu_driver_presets" and field_path.endswith(
+                ".gpu_drivers_preset"
+            ):
+                return [OptionChoice(value="cuda13.0", label="cuda13.0")]
+            return []
+
+        def last_error(self):
+            return None
+
+    _materialize_singleton_provider_defaults(
+        payload=payload,
+        selected_infra={"mk8s"},
+        infra_entries=(entry,),
+        provider_lookup=_Lookup(),
+    )
+
+    assert payload["infra"]["components"][0]["inputs"]["gpu_drivers_preset"] == "cuda13.0"
+
+
+def test_materialize_singleton_provider_defaults_sets_clusterable_gpu_preset() -> None:
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "us-central1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "inputs": {
+                        "gpu_nodes_platform": "gpu-b200-sxm",
+                        "infiniband_fabric": "us-central1-b",
+                    },
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="Managed Kubernetes",
+        source="../../platform-infra/modules/mk8s",
+        wizard_fields={
+            "inputs.gpu_nodes_preset": {
+                "options": {
+                    "from": "compute_platform_presets",
+                    "args": {
+                        "platform_path": "inputs.gpu_nodes_platform",
+                        "gpu_cluster_required_path": "inputs.infiniband_fabric",
+                    },
+                    "auto_select_single": True,
+                }
+            }
+        },
+    )
+
+    class _Lookup:
+        def resolve(self, *, provider, args, payload, field_path):
+            _ = args, payload
+            if provider == "compute_platform_presets" and field_path.endswith(".gpu_nodes_preset"):
+                return [OptionChoice(value="8gpu-160vcpu-1792gb", label="8gpu-160vcpu-1792gb")]
+            return []
+
+        def last_error(self):
+            return None
+
+    _materialize_singleton_provider_defaults(
+        payload=payload,
+        selected_infra={"mk8s"},
+        infra_entries=(entry,),
+        provider_lookup=_Lookup(),
+    )
+
+    assert payload["infra"]["components"][0]["inputs"]["gpu_nodes_preset"] == "8gpu-160vcpu-1792gb"
+
+
 def test_wizard_skips_empty_top_level_app_values_prompt_without_known_leaf_fields(
     monkeypatch,
 ) -> None:
@@ -726,6 +976,10 @@ def test_wizard_prompts_literal_component_defaults_for_custom_module_fields(
         lambda _source: ("cluster_name",),
     )
     monkeypatch.setattr(
+        "nebius_cxcli.cli._runtime_required_input_leaf_names",
+        lambda _entry: set(),
+    )
+    monkeypatch.setattr(
         "nebius_cxcli.cli.module_variables",
         lambda _source: (
             ModuleVariable(name="cluster_name", required=True, type_hint="string"),
@@ -817,6 +1071,10 @@ def test_wizard_skips_optional_module_field_marked_prompt_false(
     monkeypatch.setattr(
         "nebius_cxcli.cli.module_required_variables",
         lambda _source: ("cluster_name",),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._runtime_required_input_leaf_names",
+        lambda _entry: set(),
     )
     monkeypatch.setattr(
         "nebius_cxcli.cli.module_variables",
@@ -1291,3 +1549,616 @@ def test_wizard_prompts_gpu_preset_only_after_platform_is_selected(
     assert completed is True
     assert "infra.components[0].inputs.gpu_nodes_platform" in prompted_paths
     assert "infra.components[0].inputs.gpu_nodes_preset" in prompted_paths
+
+
+def test_wizard_expands_mk8s_gpu_followup_prompts_immediately(
+    monkeypatch,
+) -> None:
+    config_yaml = yaml.safe_dump(
+        {
+            "version": "v1",
+            "client_info": {
+                "client_name": "demo",
+                "nebius": {
+                    "tenant_id": "tenant-1",
+                    "project_id": "project-1",
+                    "region_id": "us-central1",
+                },
+                "notifications": {"email_enabled": True, "email": None},
+            },
+            "infra": {
+                "components": [
+                    {
+                        "id": "mk8s",
+                        "enabled": True,
+                        "source": "../../platform-infra/modules/mk8s",
+                        "inputs": {},
+                    }
+                ],
+            },
+            "apps": {"charts": []},
+        },
+        sort_keys=False,
+    )
+    entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="Managed Kubernetes",
+        source="../../platform-infra/modules/mk8s",
+        wizard_fields={
+            "inputs.gpu_nodes_platform": {
+                "options": {
+                    "from": "mk8s_compatible_platforms",
+                    "args": {"platform_prefix": "gpu-"},
+                }
+            },
+            "inputs.gpu_nodes_preset": {
+                "options": {
+                    "from": "compute_platform_presets",
+                    "args": {"platform_path": "inputs.gpu_nodes_platform"},
+                }
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_required_variables",
+        lambda _source: ("cluster_name",),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._runtime_required_input_leaf_names",
+        lambda _entry: set(),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_variables",
+        lambda _source: (
+            ModuleVariable(name="cluster_name", required=True, type_hint="string"),
+            ModuleVariable(
+                name="gpu_enabled",
+                required=False,
+                type_hint="bool",
+                has_default=True,
+                default=False,
+            ),
+            ModuleVariable(
+                name="gpu_node_groups",
+                required=False,
+                type_hint="number",
+                has_default=True,
+                default=0,
+            ),
+            ModuleVariable(
+                name="gpu_nodes_count_per_group",
+                required=False,
+                type_hint="number",
+                has_default=True,
+                default=0,
+            ),
+            ModuleVariable(
+                name="gpu_nodes_platform",
+                required=False,
+                type_hint="string",
+                has_default=True,
+                default="",
+            ),
+            ModuleVariable(
+                name="gpu_nodes_preset",
+                required=False,
+                type_hint="string",
+                has_default=True,
+                default="",
+            ),
+            ModuleVariable(
+                name="k8s_version",
+                required=False,
+                type_hint="string",
+                has_default=True,
+                default=None,
+            ),
+        ),
+    )
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
+
+    prompted_paths: list[str] = []
+
+    def _fake_prompt(
+        path_label: str,
+        current: object,
+        *,
+        choices=None,
+        type_hint=None,
+        required=False,
+    ) -> tuple[object, bool]:
+        _ = current, choices, type_hint, required
+        prompted_paths.append(path_label)
+        if path_label.endswith(".gpu_enabled"):
+            return True, False
+        if path_label.endswith(".gpu_nodes_platform"):
+            return "gpu-h100-sxm", False
+        return current, False
+
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
+
+    _updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=config_yaml,
+        selected_infra={"mk8s"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=None,
+    )
+
+    assert completed is True
+    assert prompted_paths == [
+        "infra.components[0].inputs.cluster_name",
+        "infra.components[0].inputs.gpu_enabled",
+        "infra.components[0].inputs.gpu_node_groups",
+        "infra.components[0].inputs.gpu_nodes_count_per_group",
+        "infra.components[0].inputs.gpu_nodes_platform",
+        "infra.components[0].inputs.gpu_nodes_preset",
+        "infra.components[0].inputs.k8s_version",
+    ]
+
+
+def test_wizard_prompts_infiniband_after_clusterable_gpu_preset(
+    monkeypatch,
+) -> None:
+    config_yaml = yaml.safe_dump(
+        {
+            "version": "v1",
+            "client_info": {
+                "client_name": "demo",
+                "nebius": {
+                    "tenant_id": "tenant-1",
+                    "project_id": "project-1",
+                    "region_id": "us-central1",
+                },
+                "notifications": {"email_enabled": True, "email": None},
+            },
+            "infra": {
+                "components": [
+                    {
+                        "id": "mk8s",
+                        "enabled": True,
+                        "source": "../../platform-infra/modules/mk8s",
+                        "inputs": {},
+                    }
+                ],
+            },
+            "apps": {"charts": []},
+        },
+        sort_keys=False,
+    )
+    entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="Managed Kubernetes",
+        source="../../platform-infra/modules/mk8s",
+        wizard_fields={
+            "inputs.gpu_nodes_preset": {
+                "options": {
+                    "from": "compute_platform_presets",
+                    "args": {
+                        "platform_path": "inputs.gpu_nodes_platform",
+                        "gpu_cluster_required_path": "inputs.infiniband_fabric",
+                    },
+                    "auto_select_single": True,
+                }
+            },
+            "inputs.infiniband_fabric": {
+                "options": {
+                    "from": "mk8s_infiniband_fabrics",
+                    "args": {
+                        "platform_path": "inputs.gpu_nodes_platform",
+                        "preset_path": "inputs.gpu_nodes_preset",
+                    },
+                    "skip_prompt_if_no_choices": True,
+                }
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_required_variables",
+        lambda _source: ("cluster_name",),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._runtime_required_input_leaf_names",
+        lambda _entry: set(),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_variables",
+        lambda _source: (
+            ModuleVariable(name="cluster_name", required=True, type_hint="string"),
+            ModuleVariable(
+                name="gpu_enabled",
+                required=False,
+                type_hint="bool",
+                has_default=True,
+                default=False,
+            ),
+            ModuleVariable(
+                name="gpu_nodes_platform",
+                required=False,
+                type_hint="string",
+                has_default=True,
+                default="",
+            ),
+            ModuleVariable(
+                name="gpu_nodes_preset",
+                required=False,
+                type_hint="string",
+                has_default=True,
+                default="",
+            ),
+            ModuleVariable(
+                name="infiniband_fabric",
+                required=False,
+                type_hint="string",
+                has_default=True,
+                default="",
+            ),
+        ),
+    )
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
+
+    prompted: list[tuple[str, object]] = []
+
+    def _fake_prompt(
+        path_label: str,
+        current: object,
+        *,
+        choices=None,
+        type_hint=None,
+        required=False,
+    ) -> tuple[object, bool]:
+        _ = choices, type_hint, required
+        prompted.append((path_label, current))
+        if path_label.endswith(".gpu_enabled"):
+            return True, False
+        if path_label.endswith(".gpu_nodes_platform"):
+            return "gpu-b200-sxm", False
+        if path_label.endswith(".gpu_nodes_preset"):
+            return current, False
+        if path_label.endswith(".infiniband_fabric"):
+            return "us-central1-b", False
+        return current, False
+
+    class _Lookup:
+        def resolve(self, *, provider, args, payload, field_path):
+            _ = args, payload
+            if provider == "compute_platform_presets" and field_path.endswith(".gpu_nodes_preset"):
+                return [
+                    OptionChoice(
+                        value="8gpu-160vcpu-1792gb",
+                        label="8gpu-160vcpu-1792gb",
+                    )
+                ]
+            if provider == "mk8s_infiniband_fabrics" and field_path.endswith(".infiniband_fabric"):
+                return [OptionChoice(value="us-central1-b", label="us-central1-b")]
+            return []
+
+        def last_error(self):
+            return None
+
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
+
+    _updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=config_yaml,
+        selected_infra={"mk8s"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=_Lookup(),
+    )
+
+    assert completed is True
+    assert prompted == [
+        ("infra.components[0].inputs.cluster_name", None),
+        ("infra.components[0].inputs.gpu_enabled", False),
+        ("infra.components[0].inputs.gpu_nodes_platform", ""),
+        ("infra.components[0].inputs.gpu_nodes_preset", "8gpu-160vcpu-1792gb"),
+        ("infra.components[0].inputs.infiniband_fabric", ""),
+    ]
+
+
+def test_wizard_skips_infiniband_for_non_clusterable_gpu_preset(
+    monkeypatch,
+) -> None:
+    config_yaml = yaml.safe_dump(
+        {
+            "version": "v1",
+            "client_info": {
+                "client_name": "demo",
+                "nebius": {
+                    "tenant_id": "tenant-1",
+                    "project_id": "project-1",
+                    "region_id": "us-central1",
+                },
+                "notifications": {"email_enabled": True, "email": None},
+            },
+            "infra": {
+                "components": [
+                    {
+                        "id": "mk8s",
+                        "enabled": True,
+                        "source": "../../platform-infra/modules/mk8s",
+                        "inputs": {},
+                    }
+                ],
+            },
+            "apps": {"charts": []},
+        },
+        sort_keys=False,
+    )
+    entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="Managed Kubernetes",
+        source="../../platform-infra/modules/mk8s",
+        wizard_fields={
+            "inputs.gpu_nodes_preset": {
+                "options": {
+                    "from": "compute_platform_presets",
+                    "args": {"platform_path": "inputs.gpu_nodes_platform"},
+                }
+            },
+            "inputs.infiniband_fabric": {
+                "options": {
+                    "from": "mk8s_infiniband_fabrics",
+                    "args": {
+                        "platform_path": "inputs.gpu_nodes_platform",
+                        "preset_path": "inputs.gpu_nodes_preset",
+                    },
+                    "skip_prompt_if_no_choices": True,
+                }
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_required_variables",
+        lambda _source: ("cluster_name",),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._runtime_required_input_leaf_names",
+        lambda _entry: set(),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_variables",
+        lambda _source: (
+            ModuleVariable(name="cluster_name", required=True, type_hint="string"),
+            ModuleVariable(
+                name="gpu_enabled",
+                required=False,
+                type_hint="bool",
+                has_default=True,
+                default=False,
+            ),
+            ModuleVariable(
+                name="gpu_nodes_platform",
+                required=False,
+                type_hint="string",
+                has_default=True,
+                default="",
+            ),
+            ModuleVariable(
+                name="gpu_nodes_preset",
+                required=False,
+                type_hint="string",
+                has_default=True,
+                default="",
+            ),
+            ModuleVariable(
+                name="infiniband_fabric",
+                required=False,
+                type_hint="string",
+                has_default=True,
+                default="",
+            ),
+        ),
+    )
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
+
+    prompted_paths: list[str] = []
+
+    def _fake_prompt(
+        path_label: str,
+        current: object,
+        *,
+        choices=None,
+        type_hint=None,
+        required=False,
+    ) -> tuple[object, bool]:
+        _ = current, choices, type_hint, required
+        prompted_paths.append(path_label)
+        if path_label.endswith(".gpu_enabled"):
+            return True, False
+        if path_label.endswith(".gpu_nodes_platform"):
+            return "gpu-b200-sxm", False
+        if path_label.endswith(".gpu_nodes_preset"):
+            return "1gpu-20vcpu-224gb", False
+        return current, False
+
+    class _Lookup:
+        def resolve(self, *, provider, args, payload, field_path):
+            _ = args, payload
+            if provider == "compute_platform_presets" and field_path.endswith(".gpu_nodes_preset"):
+                return [
+                    OptionChoice(value="1gpu-20vcpu-224gb", label="1gpu-20vcpu-224gb"),
+                    OptionChoice(value="8gpu-160vcpu-1792gb", label="8gpu-160vcpu-1792gb"),
+                ]
+            if provider == "mk8s_infiniband_fabrics" and field_path.endswith(".infiniband_fabric"):
+                return []
+            return []
+
+        def last_error(self):
+            return None
+
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
+
+    _updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=config_yaml,
+        selected_infra={"mk8s"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=_Lookup(),
+    )
+
+    assert completed is True
+    assert "infra.components[0].inputs.gpu_nodes_preset" in prompted_paths
+    assert "infra.components[0].inputs.infiniband_fabric" not in prompted_paths
+
+
+def test_wizard_clears_stale_infiniband_when_gpu_preset_loses_cluster_support(
+    monkeypatch,
+) -> None:
+    config_yaml = yaml.safe_dump(
+        {
+            "version": "v1",
+            "client_info": {
+                "client_name": "demo",
+                "nebius": {
+                    "tenant_id": "tenant-1",
+                    "project_id": "project-1",
+                    "region_id": "us-central1",
+                },
+                "notifications": {"email_enabled": True, "email": None},
+            },
+            "infra": {
+                "components": [
+                    {
+                        "id": "mk8s",
+                        "enabled": True,
+                        "source": "../../platform-infra/modules/mk8s",
+                        "inputs": {
+                            "cluster_name": "cluster1",
+                            "gpu_enabled": True,
+                            "gpu_nodes_platform": "gpu-b200-sxm",
+                            "gpu_nodes_preset": "8gpu-160vcpu-1792gb",
+                            "infiniband_fabric": "us-central1-b",
+                        },
+                    }
+                ],
+            },
+            "apps": {"charts": []},
+        },
+        sort_keys=False,
+    )
+    entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="Managed Kubernetes",
+        source="../../platform-infra/modules/mk8s",
+        wizard_fields={
+            "inputs.gpu_nodes_preset": {
+                "options": {
+                    "from": "compute_platform_presets",
+                    "args": {"platform_path": "inputs.gpu_nodes_platform"},
+                }
+            },
+            "inputs.infiniband_fabric": {
+                "options": {
+                    "from": "mk8s_infiniband_fabrics",
+                    "args": {
+                        "platform_path": "inputs.gpu_nodes_platform",
+                        "preset_path": "inputs.gpu_nodes_preset",
+                    },
+                    "skip_prompt_if_no_choices": True,
+                }
+            },
+        },
+    )
+    monkeypatch.setattr("nebius_cxcli.cli.module_required_variables", lambda _source: ())
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._runtime_required_input_leaf_names",
+        lambda _entry: set(),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_variables",
+        lambda _source: (
+            ModuleVariable(
+                name="cluster_name",
+                required=True,
+                type_hint="string",
+                has_default=True,
+                default="cluster1",
+            ),
+            ModuleVariable(
+                name="gpu_enabled",
+                required=False,
+                type_hint="bool",
+                has_default=True,
+                default=False,
+            ),
+            ModuleVariable(
+                name="gpu_nodes_platform",
+                required=False,
+                type_hint="string",
+                has_default=True,
+                default="",
+            ),
+            ModuleVariable(
+                name="gpu_nodes_preset",
+                required=False,
+                type_hint="string",
+                has_default=True,
+                default="",
+            ),
+            ModuleVariable(
+                name="infiniband_fabric",
+                required=False,
+                type_hint="string",
+                has_default=True,
+                default="",
+            ),
+        ),
+    )
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
+
+    def _fake_prompt(
+        path_label: str,
+        current: object,
+        *,
+        choices=None,
+        type_hint=None,
+        required=False,
+    ) -> tuple[object, bool]:
+        _ = choices, type_hint, required
+        if path_label.endswith(".gpu_nodes_preset"):
+            return "1gpu-20vcpu-224gb", False
+        return current, False
+
+    class _Lookup:
+        def resolve(self, *, provider, args, payload, field_path):
+            _ = args, payload
+            if provider == "compute_platform_presets" and field_path.endswith(".gpu_nodes_preset"):
+                return [
+                    OptionChoice(value="1gpu-20vcpu-224gb", label="1gpu-20vcpu-224gb"),
+                    OptionChoice(value="8gpu-160vcpu-1792gb", label="8gpu-160vcpu-1792gb"),
+                ]
+            if provider == "mk8s_infiniband_fabrics" and field_path.endswith(".infiniband_fabric"):
+                return []
+            return []
+
+        def last_error(self):
+            return None
+
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
+
+    updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=config_yaml,
+        selected_infra={"mk8s"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=_Lookup(),
+    )
+
+    assert completed is True
+    payload = yaml.safe_load(updated_yaml)
+    inputs = payload["infra"]["components"][0]["inputs"]
+    assert inputs["gpu_nodes_preset"] == "1gpu-20vcpu-224gb"
+    assert "infiniband_fabric" not in inputs

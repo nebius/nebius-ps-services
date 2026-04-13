@@ -4,6 +4,7 @@ This folder contains multiple ready-to-use Codex skills for developers.
 
 ## Included Skills
 
+- `align`
 - `attach-ubuntu`
 - `gitignore`
 - `github-workflows`
@@ -17,6 +18,11 @@ This folder contains multiple ready-to-use Codex skills for developers.
 - `release-generator`
 - `shell-scripting`
 - `terraform`
+
+`align` is the end-to-end project reconciliation skill for fixing incorrect,
+inconsistent, incomplete, or misleading code, tests, CI workflows, CLI/help
+output, documentation, and formatting after first inspecting how the project
+fits together.
 
 `attach-ubuntu` launches or reuses a per-project `ubuntu:24.04` Docker
 container, bind-mounts the current folder at `/workdir`, preconfigures VS Code

@@ -25,7 +25,12 @@ def _install_module(monkeypatch, name: str, module: ModuleType) -> None:
         setattr(sys.modules[parent_name], parts[-1], module)
 
 
-def _install_fake_mk8s_module(monkeypatch, *, compatible_platforms: list[str]) -> None:
+def _install_fake_mk8s_module(
+    monkeypatch,
+    *,
+    compatible_platforms: list[str] | None = None,
+    compatibility_items: list[dict[str, object]] | None = None,
+) -> None:
     mk8s_module = ModuleType("nebius.api.nebius.mk8s.v1")
 
     class GetNodeGroupCompatibilityMatrixRequest:
@@ -38,12 +43,23 @@ def _install_fake_mk8s_module(monkeypatch, *, compatible_platforms: list[str]) -
 
         def get_compatibility_matrix(self, request: object) -> SimpleNamespace:
             _ = request
+            if compatibility_items is not None:
+                items = [
+                    SimpleNamespace(
+                        compatible_platforms=list(item.get("compatible_platforms", [])),
+                        drivers_preset=item.get("drivers_preset"),
+                        os=item.get("os"),
+                    )
+                    for item in compatibility_items
+                ]
+            else:
+                items = [
+                    SimpleNamespace(compatible_platforms=list(compatible_platforms or [])),
+                ]
             response = SimpleNamespace(
                 versions=[
                     SimpleNamespace(
-                        items=[
-                            SimpleNamespace(compatible_platforms=list(compatible_platforms)),
-                        ]
+                        items=items,
                     )
                 ]
             )
@@ -58,6 +74,7 @@ def _install_fake_compute_module(
     monkeypatch,
     *,
     platforms: list[tuple[str, str | None]],
+    presets_by_platform: dict[str, list[dict[str, object]]] | None = None,
 ) -> None:
     compute_module = ModuleType("nebius.api.nebius.compute.v1")
 
@@ -82,6 +99,27 @@ def _install_fake_compute_module(
                     for name, short_name in platforms
                 ],
                 next_page_token="",
+            )
+            return SimpleNamespace(wait=lambda: response)
+
+        def get_by_name(self, request: object) -> SimpleNamespace:
+            platform_name = getattr(request, "name", "")
+            presets = [
+                SimpleNamespace(
+                    name=item.get("name"),
+                    resources=SimpleNamespace(
+                        vcpu_count=item.get("vcpu_count"),
+                        memory_gibibytes=item.get("memory_gibibytes"),
+                        gpu_count=item.get("gpu_count"),
+                    ),
+                    allow_gpu_clustering=bool(item.get("allow_gpu_clustering", False)),
+                )
+                for item in (presets_by_platform or {}).get(platform_name, [])
+            ]
+            response = SimpleNamespace(
+                spec=SimpleNamespace(
+                    presets=presets,
+                )
             )
             return SimpleNamespace(wait=lambda: response)
 
@@ -262,7 +300,7 @@ def test_mk8s_compatible_platforms_intersect_project_inventory(monkeypatch) -> N
 
     lookup = ProviderOptionLookup()
     monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
-    monkeypatch.setattr(lookup, "_resolve_k8s_version", lambda payload, args: "1.31")
+    monkeypatch.setattr(lookup, "_resolve_k8s_version", lambda payload, args, field_path="": "1.31")
     monkeypatch.setattr(
         lookup,
         "_resolve_project_compute_platform_inventory",
@@ -292,7 +330,7 @@ def test_mk8s_compatible_platforms_fall_back_to_matrix_without_project_scope(mon
 
     lookup = ProviderOptionLookup()
     monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
-    monkeypatch.setattr(lookup, "_resolve_k8s_version", lambda payload, args: "1.31")
+    monkeypatch.setattr(lookup, "_resolve_k8s_version", lambda payload, args, field_path="": "1.31")
 
     resolved = lookup.resolve(
         provider="mk8s_compatible_platforms",
@@ -304,6 +342,167 @@ def test_mk8s_compatible_platforms_fall_back_to_matrix_without_project_scope(mon
     assert [(choice.value, choice.label) for choice in resolved] == [
         ("cpu-d3", "cpu-d3"),
     ]
+
+
+def test_mk8s_gpu_driver_presets_follow_selected_platform(monkeypatch) -> None:
+    _install_fake_mk8s_module(
+        monkeypatch,
+        compatibility_items=[
+            {
+                "compatible_platforms": ["gpu-b200-sxm"],
+                "os": "ubuntu24.04",
+            },
+            {
+                "compatible_platforms": ["gpu-b200-sxm"],
+                "drivers_preset": "cuda13.0",
+                "os": "ubuntu24.04",
+            },
+            {
+                "compatible_platforms": ["gpu-h100-sxm"],
+                "drivers_preset": "cuda12.8",
+                "os": "ubuntu22.04",
+            },
+        ],
+    )
+
+    lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
+    monkeypatch.setattr(lookup, "_resolve_k8s_version", lambda payload, args, field_path="": "1.33")
+
+    resolved = lookup.resolve(
+        provider="mk8s_gpu_driver_presets",
+        args={"platform_path": "infra.components[0].inputs.gpu_nodes_platform"},
+        payload={
+            "infra": {
+                "components": [
+                    {
+                        "inputs": {
+                            "gpu_nodes_platform": "gpu-b200-sxm",
+                        }
+                    }
+                ]
+            }
+        },
+        field_path="infra.components[0].inputs.gpu_drivers_preset",
+    )
+
+    assert [(choice.value, choice.label) for choice in resolved] == [
+        ("cuda13.0", "cuda13.0  (ubuntu24.04)"),
+    ]
+
+
+def test_compute_platform_presets_filter_gpu_clusterable_shapes(monkeypatch) -> None:
+    _install_fake_compute_module(
+        monkeypatch,
+        platforms=[("gpu-b200-sxm", "GPU B200 SXM")],
+        presets_by_platform={
+            "gpu-b200-sxm": [
+                {
+                    "name": "1gpu-20vcpu-224gb",
+                    "vcpu_count": 20,
+                    "memory_gibibytes": 224,
+                    "gpu_count": 1,
+                    "allow_gpu_clustering": False,
+                },
+                {
+                    "name": "8gpu-160vcpu-1792gb",
+                    "vcpu_count": 160,
+                    "memory_gibibytes": 1792,
+                    "gpu_count": 8,
+                    "allow_gpu_clustering": True,
+                },
+            ]
+        },
+    )
+
+    lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
+
+    resolved = lookup.resolve(
+        provider="compute_platform_presets",
+        args={
+            "platform_path": "infra.components[0].inputs.gpu_nodes_platform",
+            "gpu_cluster_required_path": "infra.components[0].inputs.infiniband_fabric",
+        },
+        payload={
+            "client_info": {"nebius": {"project_id": "project-123"}},
+            "infra": {
+                "components": [
+                    {
+                        "inputs": {
+                            "gpu_nodes_platform": "gpu-b200-sxm",
+                            "infiniband_fabric": "us-central1-b",
+                        }
+                    }
+                ]
+            },
+        },
+        field_path="infra.components[0].inputs.gpu_nodes_preset",
+    )
+
+    assert [(choice.value, choice.label) for choice in resolved] == [
+        (
+            "8gpu-160vcpu-1792gb",
+            "8gpu-160vcpu-1792gb  (vCPU=160, RAM=1792GiB, GPU=8, GPU cluster)",
+        ),
+    ]
+
+
+def test_mk8s_infiniband_fabrics_skip_non_clusterable_gpu_presets(monkeypatch) -> None:
+    _install_fake_compute_module(
+        monkeypatch,
+        platforms=[("gpu-b200-sxm", "GPU B200 SXM")],
+        presets_by_platform={
+            "gpu-b200-sxm": [
+                {
+                    "name": "1gpu-20vcpu-224gb",
+                    "vcpu_count": 20,
+                    "memory_gibibytes": 224,
+                    "gpu_count": 1,
+                    "allow_gpu_clustering": False,
+                },
+                {
+                    "name": "8gpu-160vcpu-1792gb",
+                    "vcpu_count": 160,
+                    "memory_gibibytes": 1792,
+                    "gpu_count": 8,
+                    "allow_gpu_clustering": True,
+                },
+            ]
+        },
+    )
+
+    lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
+
+    resolved = lookup.resolve(
+        provider="mk8s_infiniband_fabrics",
+        args={
+            "platform_path": "infra.components[0].inputs.gpu_nodes_platform",
+            "preset_path": "infra.components[0].inputs.gpu_nodes_preset",
+        },
+        payload={
+            "client_info": {
+                "nebius": {
+                    "project_id": "project-123",
+                    "region_id": "us-central1",
+                }
+            },
+            "infra": {
+                "components": [
+                    {
+                        "inputs": {
+                            "gpu_nodes_platform": "gpu-b200-sxm",
+                            "gpu_nodes_preset": "1gpu-20vcpu-224gb",
+                        }
+                    }
+                ]
+            },
+        },
+        field_path="infra.components[0].inputs.infiniband_fabric",
+    )
+
+    assert resolved == []
 
 
 def test_mk8s_infiniband_fabrics_filter_by_selected_region_and_gpu_platform() -> None:
@@ -334,6 +533,31 @@ def test_mk8s_infiniband_fabrics_filter_by_selected_region_and_gpu_platform() ->
     assert [(choice.value, choice.label) for choice in resolved] == [
         ("us-central1-a", "us-central1-a  (gpu-h200-sxm, us-central1)"),
     ]
+
+
+def test_resolve_k8s_version_prefers_dynamic_component_input_path() -> None:
+    lookup = ProviderOptionLookup()
+    lookup._cache[("mk8s_control_plane_versions",)] = (
+        OptionChoice(value="1.32", label="1.32"),
+    )
+
+    resolved = lookup._resolve_k8s_version(
+        payload={
+            "infra": {
+                "components": [
+                    {
+                        "inputs": {
+                            "k8s_version": "1.31",
+                        }
+                    }
+                ]
+            }
+        },
+        args={},
+        field_path="infra.components[0].inputs.cpu_nodes_platform",
+    )
+
+    assert resolved == "1.31"
 
 
 def test_mk8s_infiniband_fabrics_return_all_platform_matches_without_region_filter() -> None:

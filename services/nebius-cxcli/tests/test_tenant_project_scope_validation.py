@@ -135,7 +135,7 @@ def test_seed_infra_project_scope_defaults_uses_client_project_id(
     assert inputs["project_id"] == "project-456"
 
 
-def test_seed_infra_project_scope_defaults_does_not_copy_shared_ssh_fields(
+def test_seed_infra_shared_admin_ssh_public_key_copies_into_matching_inputs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -143,14 +143,17 @@ def test_seed_infra_project_scope_defaults_does_not_copy_shared_ssh_fields(
         "module_variable_names",
         lambda _source: ("parent_id", "ssh_public_key"),
     )
+    monkeypatch.setattr(
+        cli,
+        "read_path_with_catalog",
+        lambda _payload, dotted_path: (
+            "ssh-ed25519 AAAA-shared"
+            if dotted_path == "shared.admin_ssh.public_key"
+            else None
+        ),
+    )
     payload = {
         "client_info": {"nebius": {"project_id": "project-456"}},
-        "shared": {
-            "admin_ssh": {
-                "user_name": "ubuntu",
-                "public_key": "ssh-ed25519 AAAA-shared",
-            }
-        },
         "infra": {
             "components": [
                 {
@@ -173,6 +176,51 @@ def test_seed_infra_project_scope_defaults_does_not_copy_shared_ssh_fields(
     )
 
     cli._seed_infra_project_scope_defaults(payload=payload, infra_entries=entries)
+    cli._seed_infra_shared_admin_ssh_public_key(payload=payload, infra_entries=entries)
     inputs = payload["infra"]["components"][0]["inputs"]
     assert inputs["parent_id"] == "project-456"
-    assert "ssh_public_key" not in inputs
+    assert inputs["ssh_public_key"] == "ssh-ed25519 AAAA-shared"
+
+
+def test_seed_infra_shared_admin_ssh_public_key_preserves_existing_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "module_variable_names",
+        lambda _source: ("ssh_public_key",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "read_path_with_catalog",
+        lambda _payload, dotted_path: (
+            "ssh-ed25519 AAAA-shared"
+            if dotted_path == "shared.admin_ssh.public_key"
+            else None
+        ),
+    )
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "enabled": True,
+                    "source": "../../platform-infra/modules/mk8s",
+                    "inputs": {"ssh_public_key": "ssh-ed25519 AAAA-existing"},
+                }
+            ],
+        },
+    }
+    entries = (
+        ComponentEntry(
+            id="mk8s",
+            scope="infra",
+            config_path="infra.components.mk8s",
+            description="mk8s",
+            source="../../platform-infra/modules/mk8s",
+        ),
+    )
+
+    cli._seed_infra_shared_admin_ssh_public_key(payload=payload, infra_entries=entries)
+    inputs = payload["infra"]["components"][0]["inputs"]
+    assert inputs["ssh_public_key"] == "ssh-ed25519 AAAA-existing"

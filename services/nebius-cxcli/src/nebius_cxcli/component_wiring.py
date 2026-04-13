@@ -117,6 +117,7 @@ def _component_rows(
                 entry=entry,
                 preserve_existing_literal=True,
                 preserve_existing_shared=False,
+                include_shared=False,
             )
         instance_id = component_instance_id(resolved_row)
         if not instance_id:

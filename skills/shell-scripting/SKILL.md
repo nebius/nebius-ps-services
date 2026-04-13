@@ -25,7 +25,7 @@ For new scripts, start from `assets/script-template.sh`.
 Use structured output helpers:
 
 - `log_error`: red + bold prefix (`ERROR:`), stderr
-- `log_warn`: yellow, stderr
+- `log_warn`: amber, stderr
 - `log_note`: dim informational note
 - `log_success`: green success output
 

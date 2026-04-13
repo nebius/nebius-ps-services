@@ -191,6 +191,10 @@ def _kustomization_resource_files(flux_dir: Path) -> list[Path]:
     return files
 
 
+def flux_dir_has_rendered_resources(flux_dir: Path) -> bool:
+    return bool(_kustomization_resource_files(flux_dir))
+
+
 def _iter_yaml_docs(path: Path) -> list[dict[str, Any]]:
     payload = path.read_text(encoding="utf-8")
     docs: list[dict[str, Any]] = []
@@ -612,6 +616,8 @@ def delete_rendered_flux(
     extra_env: dict[str, str] | None = None,
 ) -> None:
     """Delete rendered Flux manifests in local destroy mode."""
+    if not flux_dir_has_rendered_resources(paths.flux_dir):
+        return
     _require_binary("kubectl")
     env = os.environ.copy()
     if extra_env:
