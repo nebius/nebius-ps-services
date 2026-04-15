@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "fullnameOverride": { "type": "string" },
+    "nameOverride": { "type": "string" },
+    "global": {
+      "type": "object",
+      "properties": {
+        "imagePullSecrets": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              { "type": "string", "minLength": 1 },
+              {
+                "type": "object",
+                "properties": { "name": { "type": "string", "minLength": 1 } },
+                "required": ["name"],
+                "additionalProperties": false
+              }
+            ]
+          }
+        }
+      }
+    },
+    "image": {
+      "type": "object",
+      "required": ["repository", "pullPolicy"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string", "minLength": 1 },
+        "digest": { "type": "string" },
+        "pullPolicy": { "type": "string", "minLength": 1 }
+      }
+    },
+    "initContainer": {
+      "type": "object",
+      "required": ["repository", "tag", "pullPolicy"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string", "minLength": 1 },
+        "digest": { "type": "string" },
+        "pullPolicy": { "type": "string", "minLength": 1 }
+      }
+    },
+    "benchmark": {
+      "type": "object",
+      "required": ["binaryPath", "resultJsonPath", "mpiBaseArgs", "args"],
+      "properties": {
+        "binaryPath": { "type": "string", "minLength": 1 },
+        "resultJsonPath": { "type": "string", "minLength": 1 },
+        "mpiBaseArgs": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "mpiExtraArgs": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "args": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "launcher": {
+      "type": "object",
+      "properties": {
+        "resources": {
+          "type": "object",
+          "properties": {
+            "requests": {
+              "type": "object",
+              "required": ["cpu", "memory"],
+              "properties": {
+                "cpu": { "type": "string", "minLength": 1 },
+                "memory": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "worker": {
+      "type": "object",
+      "required": ["replicas", "gpus", "resources"],
+      "properties": {
+        "replicas": { "type": "integer", "minimum": 1 },
+        "gpus": { "type": "integer", "minimum": 1 },
+        "resources": {
+          "type": "object",
+          "properties": {
+            "requests": {
+              "type": "object",
+              "required": ["cpu", "memory"],
+              "properties": {
+                "cpu": { "type": "string", "minLength": 1 },
+                "memory": { "type": "string", "minLength": 1 }
+              }
+            },
+            "limits": {
+              "type": "object",
+              "properties": {
+                "cpu": { "type": "string", "minLength": 1 },
+                "memory": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "report": {
+      "type": "object",
+      "required": ["jsonBeginMarker", "jsonEndMarker"],
+      "properties": {
+        "jsonBeginMarker": { "type": "string", "minLength": 1 },
+        "jsonEndMarker": { "type": "string", "minLength": 1 }
+      }
+    },
+    "job": {
+      "type": "object",
+      "required": ["cleanPodPolicy", "launcherPrivileged", "workerPrivileged"],
+      "properties": {
+        "cleanPodPolicy": { "type": "string", "minLength": 1 },
+        "launcherPrivileged": { "type": "boolean" },
+        "workerPrivileged": { "type": "boolean" }
+      }
+    }
+  }
+}

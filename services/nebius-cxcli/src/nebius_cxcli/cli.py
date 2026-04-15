@@ -157,6 +157,13 @@ from .mk8s_destroy_recovery import (
 from .mk8s_destroy_recovery import (
     find_stuck_node_groups as find_stuck_mk8s_node_groups,
 )
+from .mk8s_gpu import (
+    materialize_mk8s_gpu_app_values,
+    mk8s_gpu_dependency_issues,
+    mk8s_gpu_validation_specs,
+    resolve_mk8s_gpu_app_selection,
+    run_mk8s_gpu_validations,
+)
 from .mk8s_preflight import validate_mk8s_network_preflight
 from .notify_ops import InventoryEmailResult, send_inventory_email
 from .paths import (
@@ -1151,6 +1158,45 @@ def _starter_component_payload(
         infra_entries=infra_entries,
     )
     return starter_payload
+
+
+def _ensure_payload_contains_component_rows(
+    *,
+    payload: dict[str, Any],
+    seed_payload: dict[str, Any],
+) -> None:
+    scopes = (
+        ("infra", "components"),
+        ("apps", "charts"),
+    )
+    for scope_name, collection_name in scopes:
+        section = payload.get(scope_name)
+        if not isinstance(section, dict):
+            section = {}
+            payload[scope_name] = section
+        seed_section = seed_payload.get(scope_name)
+        if not isinstance(seed_section, dict):
+            continue
+        rows = section.get(collection_name)
+        if not isinstance(rows, list):
+            rows = []
+            section[collection_name] = rows
+        seed_rows = seed_section.get(collection_name)
+        if not isinstance(seed_rows, list):
+            continue
+        existing_keys = {
+            (component_type_id(item), component_instance_id(item))
+            for item in rows
+            if isinstance(item, dict)
+        }
+        for item in seed_rows:
+            if not isinstance(item, dict):
+                continue
+            dedupe_key = (component_type_id(item), component_instance_id(item))
+            if dedupe_key in existing_keys:
+                continue
+            rows.append(copy.deepcopy(item))
+            existing_keys.add(dedupe_key)
 
 
 def _component_selector_scope_label(scope: ComponentScope) -> str:
@@ -2591,6 +2637,20 @@ def _provider_auto_select_single_enabled(
     return bool(options.get("auto_select_single"))
 
 
+def _provider_auto_select_first_enabled(
+    *,
+    entry: ComponentEntry,
+    full_path_label: str,
+) -> bool:
+    spec = _resolve_wizard_field_spec(entry=entry, full_path_label=full_path_label)
+    if spec is None:
+        return False
+    options = spec.get("options") if isinstance(spec, dict) else None
+    if not isinstance(options, dict):
+        return False
+    return bool(options.get("auto_select_first"))
+
+
 def _provider_skip_prompt_if_no_choices_enabled(
     *,
     entry: ComponentEntry,
@@ -2870,7 +2930,7 @@ def _prompt_path_sort_key(
         "gpu_nodes_platform": 12,
         "gpu_nodes_preset": 13,
         "infiniband_fabric": 14,
-        "gpu_drivers_preset": 15,
+        "gpu_stack_preset": 15,
     }
     full_label = _format_payload_path(path)
     leaf = path[-1] if path else ""
@@ -3835,6 +3895,16 @@ def _run_component_field_wizard(
                         current,
                         type_hint=field_type_hints.get(full_path_label),
                     )
+                ) or (
+                    _provider_auto_select_first_enabled(
+                        entry=entry,
+                        full_path_label=full_path_label,
+                    )
+                    and field_choices
+                    and not _has_required_prompt_value(
+                        current,
+                        type_hint=field_type_hints.get(full_path_label),
+                    )
                 ):
                     current = field_choices[0].value
                 allowed_provider_values, providers = provider_allowed_cache.get(
@@ -4407,6 +4477,7 @@ def _component_dependency_issues_from_payload(
                 f"'apps:{adjustment.source_app_id}' is enabled "
                 f"(chart dependency: {adjustment.dependency_chart_name})"
             )
+    issues.extend(mk8s_gpu_dependency_issues(payload))
     return issues
 
 
@@ -4557,6 +4628,10 @@ def _resolve_local_module_source_path(module_source: str) -> Path | None:
     return None
 
 
+def _resolve_local_chart_source_path(chart_source: str) -> Path | None:
+    return _resolve_local_module_source_path(chart_source)
+
+
 def _normalize_component_token(value: str) -> str:
     token = value.strip().lower().replace("_", "-")
     token = re.sub(r"[^a-z0-9-]+", "-", token)
@@ -4610,6 +4685,7 @@ def _resolve_helm_chart_validation_issues(
     chart_id = chart_name.strip()
     repo = chart_repo.strip()
     version = chart_version.strip()
+    local_chart_dir = _resolve_local_chart_source_path(chart_id) if not repo else None
     github_tree_repo = _is_github_tree_chart_repo(repo)
     source_display = (
         repo
@@ -4619,6 +4695,8 @@ def _resolve_helm_chart_validation_issues(
 
     if not chart_id:
         return ("name is required",)
+    if local_chart_dir is not None:
+        return ()
     if not repo:
         return ("repo is required",)
 
@@ -4780,6 +4858,7 @@ def _validate_component_sources_registry(
         chart_component_id = chart.name.strip()
         chart_name = str(chart.chart_name or chart.name).strip()
         chart_id = _normalize_component_token(chart_component_id)
+        chart_path = str(getattr(chart, "path", "") or "").strip()
         repo = str(chart.repo or "").strip()
         version = str(chart.version or "").strip()
         chart_label = f"components.apps.{chart_component_id}"
@@ -4792,19 +4871,26 @@ def _validate_component_sources_registry(
             duplicate_ids.add(chart_id)
         else:
             declared_entries[chart_id] = ("apps", chart)
+        if not chart_path and not repo:
+            issues.append(
+                f"{chart_label} source.portable is required for portable validation; "
+                "local-only charts are supported only with the local source profile"
+            )
+            continue
         chart_source_issues = _resolve_helm_chart_validation_issues(
-            chart_name=chart_name,
-            chart_repo=repo,
-            chart_version=version,
+            chart_name=chart_path or chart_name,
+            chart_repo="" if chart_path else repo,
+            chart_version="" if chart_path else version,
             chart_meta_cache=chart_meta_cache,
         )
         for issue in chart_source_issues:
             issues.append(f"{chart_label} {issue}")
         if not chart_source_issues:
             chart_contract_issues, chart_contract_warnings = chart_cli_contract_findings(
-                chart_name=chart_name,
-                chart_repo=repo,
-                chart_version=version,
+                chart_name=chart_path or chart_name,
+                chart_repo="" if chart_path else repo,
+                chart_version="" if chart_path else version,
+                expected_chart_name=chart_name,
             )
             for issue in chart_contract_issues:
                 issues.append(f"{chart_label} {issue}")
@@ -4816,6 +4902,57 @@ def _validate_component_sources_registry(
             f"component id '{component_id}' is declared more than once across infra/apps. "
             "Cross-component bindings require globally unique component ids."
         )
+
+    declared_app_ids = {
+        component_id for component_id, (scope, _source_entry) in declared_entries.items() if scope == "apps"
+    }
+    mk8s_entry = next(
+        (
+            source_entry
+            for component_id, (scope, source_entry) in declared_entries.items()
+            if scope == "infra" and component_id == "mk8s"
+        ),
+        None,
+    )
+    mk8s_gpu_settings = getattr(mk8s_entry, "mk8s_gpu", None)
+    role_to_app_ids: dict[str, list[str]] = {}
+    for app_id in sorted(declared_app_ids):
+        app_entry = declared_entries[app_id][1]
+        app_policy = getattr(app_entry, "mk8s_gpu", None)
+        role_name = _non_empty_text(getattr(app_policy, "role", ""))
+        if role_name:
+            role_to_app_ids.setdefault(role_name, []).append(app_id)
+        for dependency_id in getattr(app_policy, "install_after", ()):
+            dependency = _non_empty_text(dependency_id).lower()
+            if dependency and dependency not in declared_app_ids:
+                issues.append(
+                    f"components.apps.{app_id}.cli.mk8s_gpu.install_after references unknown apps component '{dependency}'"
+                )
+    for role_name, app_ids in sorted(role_to_app_ids.items()):
+        if len(app_ids) > 1:
+            issues.append(
+                f"mk8s gpu app role '{role_name}' is declared more than once: {', '.join(sorted(app_ids))}"
+            )
+    if mk8s_gpu_settings is not None:
+        gpu_visibility_settings = mk8s_gpu_settings.validations.gpu_visibility
+        if gpu_visibility_settings.enabled_by_default and (
+            not gpu_visibility_settings.namespace
+            or not gpu_visibility_settings.image
+            or not gpu_visibility_settings.timeout
+        ):
+            issues.append(
+                "components.infra.mk8s.cli.gpu.validations.gpu_visibility must set namespace, image, and timeout when enabled_by_default=true"
+            )
+        nccl_settings = mk8s_gpu_settings.validations.nccl
+        if nccl_settings.enabled_by_default and (
+            not nccl_settings.chart_component_id
+            or not nccl_settings.timeout
+            or not nccl_settings.training_operator_manifest
+            or not nccl_settings.training_operator_namespace
+        ):
+            issues.append(
+                "components.infra.mk8s.cli.gpu.validations.nccl must set chart_component_id, timeout, and training operator settings when enabled_by_default=true"
+            )
 
     for component_id, (scope, source_entry) in declared_entries.items():
         output_by_name = {output.name: output for output in source_entry.outputs}
@@ -5091,6 +5228,18 @@ def _mk8s_conditionally_required_input_leaf_names(component_node: Mapping[str, A
     return required
 
 
+def _vm_conditionally_required_input_leaf_names(component_node: Mapping[str, Any]) -> set[str]:
+    inputs = component_node.get("inputs", {})
+    if not isinstance(inputs, Mapping):
+        return set()
+
+    boot_disk_existing_id = _non_empty_text(_resolve_mapping_segment(inputs, "boot_disk_existing_id"))
+    source_image_id = _non_empty_text(_resolve_mapping_segment(inputs, "source_image_id"))
+    if boot_disk_existing_id or source_image_id:
+        return set()
+    return {"source_image_family"}
+
+
 def _conditionally_required_input_leaf_names(
     *,
     entry: ComponentEntry | None,
@@ -5100,6 +5249,8 @@ def _conditionally_required_input_leaf_names(
         return set()
     if getattr(entry, "validation_profile", "") == "mk8s_cluster":
         return _mk8s_conditionally_required_input_leaf_names(component_node)
+    if getattr(entry, "validation_profile", "") == "vm_instance":
+        return _vm_conditionally_required_input_leaf_names(component_node)
     return set()
 
 
@@ -5223,10 +5374,15 @@ def _materialize_singleton_provider_defaults(
             continue
 
         for full_path_label in _declared_wizard_field_labels(entry, component_path=component_path):
-            if not _provider_auto_select_single_enabled(
+            auto_select_single = _provider_auto_select_single_enabled(
                 entry=entry,
                 full_path_label=full_path_label,
-            ):
+            )
+            auto_select_first = _provider_auto_select_first_enabled(
+                entry=entry,
+                full_path_label=full_path_label,
+            )
+            if not auto_select_single and not auto_select_first:
                 continue
             if not _provider_field_path_is_active(payload, full_path_label):
                 continue
@@ -5245,12 +5401,181 @@ def _materialize_singleton_provider_defaults(
                 full_path_label=full_path_label,
                 provider_lookup=provider_lookup,
             )
-            if len(choices) != 1:
+            if auto_select_single and len(choices) != 1:
+                continue
+            if auto_select_first and not choices:
                 continue
             target_path = _parse_payload_path_label(full_path_label)
             if target_path is None:
                 continue
             _set_payload_value_creating_containers(payload, target_path, choices[0].value)
+
+
+def _materialize_mk8s_image_defaults(
+    *,
+    payload: dict[str, Any],
+    selected_infra: set[str],
+    infra_entries: tuple[ComponentEntry, ...],
+    provider_lookup: ProviderOptionLookup | None,
+) -> None:
+    if provider_lookup is None or not selected_infra:
+        return
+
+    entry_by_id = {entry.id: entry for entry in infra_entries}
+
+    def _set_first_provider_choice(
+        *,
+        entry: ComponentEntry,
+        full_path_label: str,
+        replace_if_invalid: bool = False,
+    ) -> None:
+        if not _provider_field_path_is_active(payload, full_path_label):
+            return
+        if not _provider_prompt_dependencies_ready(
+            payload=payload,
+            entry=entry,
+            full_path_label=full_path_label,
+        ):
+            return
+        choices = _resolve_dynamic_field_choices(
+            payload=payload,
+            entry=entry,
+            full_path_label=full_path_label,
+            provider_lookup=provider_lookup,
+        )
+        if not choices:
+            return
+        current_value = _read_payload_field(payload, full_path_label)
+        allowed_values = {choice.value for choice in choices}
+        if _has_required_prompt_value(current_value, type_hint=None):
+            if not replace_if_invalid:
+                return
+            if str(current_value).strip() in allowed_values:
+                return
+        target_path = _parse_payload_path_label(full_path_label)
+        if target_path is None:
+            return
+        _set_payload_value_creating_containers(payload, target_path, choices[0].value)
+
+    for row in _dynamic_enabled_infra_component_rows(payload):
+        instance_id = str(row["instance_id"])
+        if instance_id not in selected_infra:
+            continue
+        component_id = str(row["id"])
+        entry = entry_by_id.get(component_id)
+        if entry is None or entry.validation_profile != "mk8s_cluster":
+            continue
+        component_path = _dynamic_infra_component_path(
+            payload,
+            component_id,
+            instance_id=instance_id,
+        )
+        if component_path is None:
+            continue
+        component_path_label = _format_payload_path(component_path)
+
+        cpu_os_field = f"{component_path_label}.inputs.cpu_nodes_os"
+        _set_first_provider_choice(entry=entry, full_path_label=cpu_os_field)
+
+        gpu_enabled = bool(_read_payload_field(payload, f"{component_path_label}.inputs.gpu_enabled"))
+        if not gpu_enabled:
+            continue
+
+        stack_source_field = f"{component_path_label}.inputs.gpu_stack_source"
+        stack_source = (
+            _non_empty_text(_read_payload_field(payload, stack_source_field)) or "nebius_image"
+        ).lower()
+        if stack_source not in {"nebius_image", "manual"}:
+            raise RuntimeError(
+                f"{stack_source_field} must be 'nebius_image' or 'manual' for GPU-enabled MK8s clusters"
+            )
+        if not _non_empty_text(_read_payload_field(payload, stack_source_field)):
+            target_path = _parse_payload_path_label(stack_source_field)
+            if target_path is not None:
+                _set_payload_value_creating_containers(payload, target_path, stack_source)
+
+        gpu_stack_preset_field = f"{component_path_label}.inputs.gpu_stack_preset"
+        if stack_source == "nebius_image":
+            _set_first_provider_choice(
+                entry=entry,
+                full_path_label=gpu_stack_preset_field,
+            )
+        else:
+            target_path = _parse_payload_path_label(gpu_stack_preset_field)
+            if target_path is not None:
+                _delete_payload_value(payload, target_path)
+
+        gpu_os_field = f"{component_path_label}.inputs.gpu_nodes_os"
+        _set_first_provider_choice(
+            entry=entry,
+            full_path_label=gpu_os_field,
+            replace_if_invalid=(stack_source == "manual"),
+        )
+
+
+def _materialize_vm_image_defaults(
+    *,
+    payload: dict[str, Any],
+    selected_infra: set[str],
+    infra_entries: tuple[ComponentEntry, ...],
+    provider_lookup: ProviderOptionLookup | None,
+) -> None:
+    if provider_lookup is None or not selected_infra:
+        return
+
+    entry_by_id = {entry.id: entry for entry in infra_entries}
+
+    for row in _dynamic_enabled_infra_component_rows(payload):
+        instance_id = str(row["instance_id"])
+        if instance_id not in selected_infra:
+            continue
+        component_id = str(row["id"])
+        entry = entry_by_id.get(component_id)
+        if entry is None or entry.validation_profile != "vm_instance":
+            continue
+        component_path = _dynamic_infra_component_path(
+            payload,
+            component_id,
+            instance_id=instance_id,
+        )
+        if component_path is None:
+            continue
+        component_path_label = _format_payload_path(component_path)
+
+        boot_disk_existing_id = _non_empty_text(
+            _read_payload_field(payload, f"{component_path_label}.inputs.boot_disk_existing_id")
+        )
+        source_image_id = _non_empty_text(
+            _read_payload_field(payload, f"{component_path_label}.inputs.source_image_id")
+        )
+        if boot_disk_existing_id or source_image_id:
+            continue
+
+        full_path_label = f"{component_path_label}.inputs.source_image_family"
+        if not _provider_field_path_is_active(payload, full_path_label):
+            continue
+        if not _provider_prompt_dependencies_ready(
+            payload=payload,
+            entry=entry,
+            full_path_label=full_path_label,
+        ):
+            continue
+        choices = _resolve_dynamic_field_choices(
+            payload=payload,
+            entry=entry,
+            full_path_label=full_path_label,
+            provider_lookup=provider_lookup,
+        )
+        if not choices:
+            continue
+        current_value = _non_empty_text(_read_payload_field(payload, full_path_label))
+        allowed_values = {choice.value for choice in choices}
+        if current_value and current_value in allowed_values:
+            continue
+        target_path = _parse_payload_path_label(full_path_label)
+        if target_path is None:
+            continue
+        _set_payload_value_creating_containers(payload, target_path, choices[0].value)
 
 
 def _required_enabled_infra_field_issues(
@@ -6454,6 +6779,7 @@ def _write_generated_runtime_manifest(
         handoffs=_enabled_cluster_handoffs(config),
         required_component_outputs=_required_runtime_component_output_specs(config),
         status_watchers=_enabled_status_watcher_specs(config),
+        validations=mk8s_gpu_validation_specs(config),
         quota_report=quota_report.to_manifest_dict() if quota_report is not None else None,
         source_profile=source_profile.value,
         module_sources=_rendered_module_source_payload(config, source_profile=source_profile),
@@ -6676,6 +7002,16 @@ def _manifest_status_watchers(manifest: Mapping[str, Any]) -> list[dict[str, str
         and item["parent_id"]
         and item["resource_name"]
     ]
+
+
+def _manifest_deploy_validations(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
+    deploy_node = manifest.get("deploy")
+    if not isinstance(deploy_node, Mapping):
+        return []
+    raw_validations = deploy_node.get("validations")
+    if not isinstance(raw_validations, list):
+        return []
+    return [dict(item) for item in raw_validations if isinstance(item, Mapping)]
 
 
 def _manifest_requires_flux_terraform_state(manifest: Mapping[str, Any]) -> bool:
@@ -7447,12 +7783,14 @@ def _deploy_generated_artifacts(
     terraform_init(paths.infra_dir, extra_env=runtime_env)
     terraform_validate(paths.infra_dir, extra_env=runtime_env, initialize=False)
     status_watchers = _manifest_status_watchers(manifest) or _enabled_status_watcher_specs(config)
+    deploy_validations = _manifest_deploy_validations(manifest)
     apply_kwargs: dict[str, Any] = {"initialize": False}
     if status_watchers:
         apply_kwargs["status_watchers"] = status_watchers
     _run_terraform_apply_with_status(config, paths, **apply_kwargs)
     write_inventory(config, paths)
     has_enabled_app_charts = _active_chart_count(config) > 0
+    needs_cluster_ready = has_enabled_app_charts or bool(deploy_validations)
     with ExitStack() as stack:
         kube_env = _prepare_cluster_handoff_kube_env(
             config,
@@ -7460,12 +7798,25 @@ def _deploy_generated_artifacts(
             stack=stack,
             handoffs=_manifest_cluster_handoffs(manifest),
         )
-        if has_enabled_app_charts:
+        if needs_cluster_ready:
             _wait_for_cluster_nodes_ready(
                 extra_env=kube_env, emit=lambda message: console.print(message)
             )
+        if has_enabled_app_charts:
             _apply_rendered_flux(paths, extra_env=kube_env)
             _warn_if_flux_gitops_not_bootstrapped(config, paths, extra_env=kube_env)
+        if deploy_validations:
+            report_paths = run_mk8s_gpu_validations(
+                deploy_validations,
+                inventory_dir=paths.inventory_dir,
+                extra_env=kube_env,
+                emit=lambda message: console.print(message),
+            )
+            if report_paths:
+                console.print(
+                    "GPU validation reports: "
+                    + ", ".join(str(path) for path in report_paths)
+                )
 
 
 def _destroy_rendered_flux_bundle(
@@ -8978,12 +9329,56 @@ def create_command(
                 raise RuntimeError("Updated config payload must be a mapping")
             final_payload = parsed_override
 
+        _materialize_mk8s_image_defaults(
+            payload=final_payload,
+            selected_infra=selected_infra,
+            infra_entries=infra_entries,
+            provider_lookup=provider_lookup,
+        )
+        _materialize_vm_image_defaults(
+            payload=final_payload,
+            selected_infra=selected_infra,
+            infra_entries=infra_entries,
+            provider_lookup=provider_lookup,
+        )
         _materialize_singleton_provider_defaults(
             payload=final_payload,
             selected_infra=selected_infra,
             infra_entries=infra_entries,
             provider_lookup=provider_lookup,
         )
+        gpu_app_selection = resolve_mk8s_gpu_app_selection(
+            final_payload,
+            selected_app_ids=selected_apps,
+            app_entries=app_entries,
+        )
+        if gpu_app_selection.issues:
+            raise RuntimeError("MK8s GPU app defaults are incomplete:\n  - " + "\n  - ".join(gpu_app_selection.issues))
+        if gpu_app_selection.auto_enabled_app_ids:
+            selected_apps = set(gpu_app_selection.selected_app_ids)
+            auto_enabled_seed = _starter_component_payload(
+                client_name=resolved_client_name,
+                tenant_id=resolved_tenant_id,
+                project_id=resolved_project_id,
+                region_id=resolved_region_id,
+                email=resolved_email,
+                selected_infra=selected_infra,
+                selected_apps=selected_apps,
+                infra_entries=infra_entries,
+                app_entries=app_entries,
+                app_namespace_overrides=app_namespace_overrides,
+                app_releasename_overrides=app_releasename_overrides,
+            )
+            _ensure_payload_contains_component_rows(
+                payload=final_payload,
+                seed_payload=auto_enabled_seed,
+            )
+            console.print(
+                f"{warning_markup('Adjusted component selection:')} enabling "
+                + ", ".join(f"'apps:{item}'" for item in gpu_app_selection.auto_enabled_app_ids)
+                + " because the selected MK8s GPU configuration requires them."
+            )
+        materialize_mk8s_gpu_app_values(final_payload)
 
         create_required_field_issues = (
             _wizard_followup_required_field_issues(
@@ -9362,12 +9757,64 @@ def component_add_command(
                 raise RuntimeError("Updated config payload must be a mapping")
             next_payload = parsed_override
 
+        _materialize_mk8s_image_defaults(
+            payload=next_payload,
+            selected_infra=set(added_infra_instances),
+            infra_entries=infra_entries,
+            provider_lookup=provider_lookup,
+        )
+        _materialize_vm_image_defaults(
+            payload=next_payload,
+            selected_infra=set(added_infra_instances),
+            infra_entries=infra_entries,
+            provider_lookup=provider_lookup,
+        )
         _materialize_singleton_provider_defaults(
             payload=next_payload,
             selected_infra=set(added_infra_instances),
             infra_entries=infra_entries,
             provider_lookup=provider_lookup,
         )
+        gpu_app_selection = resolve_mk8s_gpu_app_selection(
+            next_payload,
+            selected_app_ids=selected_apps,
+            app_entries=app_entries,
+        )
+        if gpu_app_selection.issues:
+            raise RuntimeError("MK8s GPU app defaults are incomplete:\n  - " + "\n  - ".join(gpu_app_selection.issues))
+        if gpu_app_selection.auto_enabled_app_ids:
+            selected_apps = set(gpu_app_selection.selected_app_ids)
+            identity_client_name, identity_tenant_id, identity_project_id, identity_region_id, identity_email = _identity_values_from_payload(next_payload)
+            auto_enabled_seed = _starter_component_payload(
+                client_name=identity_client_name,
+                tenant_id=identity_tenant_id,
+                project_id=identity_project_id,
+                region_id=identity_region_id,
+                email=identity_email,
+                selected_infra=selected_infra,
+                selected_apps=selected_apps,
+                infra_entries=infra_entries,
+                app_entries=app_entries,
+            )
+            _ensure_payload_contains_component_rows(
+                payload=next_payload,
+                seed_payload=auto_enabled_seed,
+            )
+            next_payload = _filter_runtime_payload_for_selected_components(
+                payload=next_payload,
+                selected_infra=selected_infra,
+                selected_apps=selected_apps,
+                infra_entries=infra_entries,
+                app_entries=app_entries,
+            )
+            for component_id in gpu_app_selection.auto_enabled_app_ids:
+                added_apps_labels.append(component_instance_label(component_id, component_id))
+            console.print(
+                f"{warning_markup('Adjusted component selection:')} enabling "
+                + ", ".join(f"'apps:{item}'" for item in gpu_app_selection.auto_enabled_app_ids)
+                + " because the selected MK8s GPU configuration requires them."
+            )
+        materialize_mk8s_gpu_app_values(next_payload)
 
         add_required_field_issues = (
             _wizard_followup_required_field_issues(
@@ -10273,6 +10720,7 @@ def render_command(
     """Render and transactionally replace generated artifacts from one project config.yaml, prompting before overwrite unless --force is provided."""
     try:
         config, paths = _load_runtime_context(config_path)
+        materialize_mk8s_gpu_app_values(config)
         resolved_source_profile = resolve_component_sources_profile()
         if not _confirm_render_overwrite(paths, force=force):
             console.print(

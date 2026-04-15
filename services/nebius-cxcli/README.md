@@ -108,8 +108,8 @@ Schema:
 - `cli.flux.version`: Flux controller install version used by local `deploy` when controllers are missing and by managed `flux bootstrap` CLI download
 - `cli.flux.release_timeout`: global default Flux `HelmRelease.spec.timeout` for rendered app releases when a chart does not set `release.timeout`
 - `cli.terraform.version`: Terraform CLI version used by the managed Terraform download path
-- `components.infra.<component-id>`: `source.portable`, optional `source.local`, optional `ui`, optional `status`, optional `defaults`, optional `wizard_profile`, optional `wizard`, optional `input`
-- `components.apps.<component-id>`: `source.repo`, optional `source.chart`, optional `source.version`, optional `ui`, optional `release`, optional `defaults`, optional `input`
+- `components.infra.<component-id>`: `source.portable`, optional `source.local`, optional `ui`, optional `status`, optional `defaults`, optional component-local `cli`, optional `wizard_profile`, optional `wizard`, optional `input`
+- `components.apps.<component-id>`: optional `source.portable`, optional `source.local`, optional `ui`, optional `release`, optional `defaults`, optional component-local `cli`, optional `input`
 
 ## component_sources.yaml Reference
 
@@ -119,12 +119,11 @@ Minimal structure:
 
 ```yaml
 cli:
+  terraform:
+    version: 1.14.1
   flux:
     version: v2.8.0
     release_timeout: 5m
-  terraform:
-    version: 1.14.1
-
 shared:
   admin_ssh:
     user_name: ubuntu
@@ -132,48 +131,67 @@ shared:
 
 components:
   infra:
-    <component-id>:
+    mk8s:
       source:
-        portable: git::https://github.com/org/repo.git//modules/example?ref=v1.2.3
-        local: ../../modules/example
-      ui:
-        title: Example infra component
-        group: Compute
-        enabled: false
-      status:
-        kind: nebius.mk8s.cluster
-        parent_input: parent_id
-        name_input: cluster_name
+        portable: git::https://github.com/org/repo.git//modules/mk8s?ref=v1.2.3
       defaults:
-        inputs.cpu_nodes_count: 2
-        inputs.ssh_user_name: shared.admin_ssh.user_name
-      wizard_profile: mk8s
-      input:
-        inputs.some_value: other-component.output_alias
+        inputs.gpu_stack_source: nebius_image
+      cli:
+        gpu:
+          image_preferences:
+            preferred_gpu_stack_presets: [cuda13.0, cuda12.8, cuda12.4, cuda12]
+            preferred_os: [ubuntu24.04, ubuntu22.04]
+          validations:
+            operator_readiness:
+              enabled_by_default: true
+              timeout: 20m
+            gpu_visibility:
+              enabled_by_default: true
+              namespace: gpu-validation
+              image: nvcr.io/nvidia/k8s/cuda-sample:vectoradd-cuda11.7.1-ubuntu20.04
+              timeout: 10m
+    vm:
+      source:
+        portable: git::https://github.com/org/repo.git//modules/vm?ref=v1.2.3
+      cli:
+        image_preferences:
+          preferred_cpu_image_families: [ubuntu24.04-driverless, ubuntu22.04-driverless]
+          preferred_gpu_image_families: [ubuntu24.04-cuda13.0, ubuntu24.04-cuda12]
 
   apps:
-    <component-id>:
+    nvidia-network-operator:
       source:
-        repo: oci://docker.io/example
-        chart: example-chart
-        version: 1.2.3
-      ui:
-        title: Example app chart
-        group: Platform
-        enabled: false
+        portable:
+          repo: oci://example.invalid/network-operator
+          chart: network-operator
+          version: 1.0.0
       release:
-        namespace: example-system
-        name: example
-        timeout: 10m
-      defaults:
-        values.replicaCount: 2
-      wizard:
-        values.targetProject:
-          options:
-            from: tenant_projects
-            filter_regex: "prod|staging"
-      input:
-        values.global.clusterId: mk8s.cluster_id
+        namespace: nvidia-network-operator
+        name: network-operator
+      cli:
+        mk8s_gpu:
+          role: network_operator
+          auto_enable:
+            - gpu_cluster_enabled: true
+    nvidia-gpu-operator:
+      source:
+        portable:
+          repo: oci://example.invalid/gpu-operator
+          chart: gpu-operator
+          version: 1.0.0
+      release:
+        namespace: nvidia-gpu-operator
+        name: gpu-operator
+      cli:
+        mk8s_gpu:
+          role: gpu_operator
+          auto_enable:
+            - {}
+          install_after: [nvidia-network-operator]
+          value_overrides:
+            - gpu_stack_source: nebius_image
+              values:
+                values.driver.enabled: false
 ```
 
 Field guide:
@@ -189,19 +207,22 @@ Field guide:
   - `ui.title`, `ui.group`, `ui.enabled`: display metadata and default wizard checkbox state.
   - `status`: optional Nebius deployment-status watcher metadata. When present, `status.kind` is required, `status.parent_input` defaults to `parent_id`, and `status.name_input` defaults to `name`.
   - `defaults`: target-path map for seeded or fallback values. Infra defaults must target `inputs.*`.
+  - `cli`: optional cxcli-owned policy for that component. The bundled `mk8s` component uses `cli.gpu.*` for MK8s GPU image preferences and deploy-time validation defaults. The bundled `vm` component uses `cli.image_preferences.*` for VM public-image ordering.
   - `wizard_profile`: optional built-in shorthand that expands to a tested `wizard` mapping for that exact infra component id.
   - `wizard`: optional prompt metadata keyed by target field path such as `inputs.cpu_nodes_platform`.
     - Set `prompt: false` on an optional field when it should stay available for manual `config.yaml` editing but should be suppressed from the interactive wizard.
   - Terraform module outputs are exported automatically under normalized output names such as `cluster_id` and can be consumed from other components through `input` bindings.
   - `input`: consumer-side binding map. Values must use `<component-id>.<output-alias>` or `<component-id>@<instance-id>.<output-alias>`.
 - `components.apps.<component-id>`:
-  - `source.repo`: Helm source location. Supports HTTP/S chart repos, `oci://` repos, and GitHub tree URLs.
-  - `source.chart`: optional chart name. Defaults to the component id when omitted.
-  - `source.version`: optional chart version.
+  - `source.portable`: optional portable Helm source mapping. Supports HTTP/S chart repos, `oci://` repos, and GitHub tree URLs.
+  - `source.local`: optional developer-local chart mapping with `path`.
+  - `source.portable.chart`: optional chart name. Defaults to the component id when omitted.
+  - `source.portable.version`: optional chart version.
   - `ui.title`, `ui.group`, `ui.enabled`: display metadata and default wizard checkbox state.
   - `release.namespace`, `release.name`: default Helm namespace and release name used during `create`.
   - `release.timeout`: optional Flux `HelmRelease.spec.timeout` duration such as `10m` or `12m30s`. When omitted, the chart inherits `cli.flux.release_timeout`.
   - `defaults`: target-path map for chart values. App defaults must target `values.*`.
+  - `cli.mk8s_gpu`: optional MK8s GPU automation contract for that app entry. `role` declares what operator role the chart plays, `auto_enable` declares when cxcli should auto-select it for GPU-enabled MK8s, `install_after` adds Flux ordering edges, and `value_overrides` materializes chart-native Helm values when the selected MK8s GPU context matches.
   - `wizard`: optional prompt metadata keyed by chart value path such as `values.image.tag`.
   - `input`: same binding syntax as infra, but target paths should land under `values.*`.
 
@@ -225,6 +246,7 @@ Built-in wizard profiles:
 
 - `mk8s`: subnet lookup plus MK8s platform/preset chaining, live GPU driver-preset choices keyed by the selected GPU platform and Kubernetes version, and InfiniBand fabric choices keyed by the selected GPU platform and region.
 - `managed-postgresql`: VPC network lookup plus static `tier` choices.
+- `vm`: subnet lookup plus live compute platform/preset chaining, live Nebius public image-family choices keyed by the selected platform and region, static public-IP mode choices, and optional InfiniBand fabric choices for GPU-cluster VM shapes.
 - `wireguard-jumphost`: subnet lookup plus live compute platform/preset chaining for the WireGuard jump-host module.
 - `ssh-jumphost`: subnet lookup plus live compute platform/preset chaining for the SSH jump-host module.
 - `object-storage`: static choices for `versioning_policy` and `object_audit_logging`.
@@ -233,10 +255,21 @@ Bundled infra component alignment:
 
 - `mk8s` uses `wizard_profile: mk8s` because its subnet, platform, preset, GPU driver-preset, and optional `infiniband_fabric` fields need guided choices.
 - `managed-postgresql` uses `wizard_profile: managed-postgresql` because `network_id` is Nebius-backed and `tier` is intentionally guided as a fixed choice.
+- `vm` uses `wizard_profile: vm` because `subnet_id`, `platform`, `preset`, `source_image_family`, `public_ip_mode`, and optional GPU-cluster fabric choices should come from guided catalog wiring instead of raw manual entry.
 - `wireguard-jumphost` and `ssh-jumphost` use their matching `wizard_profile` names because `subnet_id`, `platform`, and `preset` should come from live project discovery.
 - `object-storage` uses `wizard_profile: object-storage` because `versioning_policy` and `object_audit_logging` are intentionally guided as fixed choices.
 - `sfs` and `mysterybox` currently omit `wizard_profile` and `wizard`; they rely on ordinary Terraform variable introspection today.
 - App components do not support `wizard_profile`; they rely on Helm metadata plus optional explicit `wizard` entries when a chart value needs guided choices.
+
+Bundled MK8s GPU app policy:
+
+- MK8s GPU software defaults are policy-driven in code and source-driven in the catalog.
+- The bundled catalog keeps chart source selection, release metadata, default Helm values, activation rules, validation images, thresholds, and timeouts in `component_sources.yaml`, while the CLI only evaluates those rules against the selected MK8s context.
+- The same `source.portable` / `source.local` contract now applies to first-party Helm charts as well as Terraform modules.
+- The canonical GPU role is `nvidia-gpu-operator` for both Nebius-image and manual node groups. On Nebius-managed images the CLI materializes Helm values that disable the driver and toolkit operands while keeping the device plugin and DCGM exporter enabled.
+- When the selected MK8s shape enables GPU clustering / InfiniBand, or when a manual B200/B200A node group requires RDMA plumbing, the CLI auto-enables `nvidia-network-operator` and renders a Flux `dependsOn` edge so the network operator reconciles before the GPU operator.
+- GPU Visibility test is enabled by default for GPU-backed MK8s deploys.
+- NCCL test is enabled by default only for MK8s GPU-cluster shapes, not for every GPU-enabled MK8s cluster. Its workload manifest now comes from the first-party `helm-charts/nccl-test` chart: the catalog currently points to the local chart for developer workflows, and release builds will require `source.portable` once that chart is published in a portable registry. The CLI keeps the Kubeflow training-operator bootstrap and report capture as deploy-time validation behavior.
 
 What `wizard` is doing:
 
@@ -269,8 +302,8 @@ That shorthand expands to the equivalent wiring for the built-in MK8s flow, incl
 - `inputs.k8s_version` from the Nebius MK8s control-plane version lookup
 - `inputs.cpu_nodes_platform` and `inputs.gpu_nodes_platform` from the MK8s compatibility lookup intersected with the selected project's live compute-platform inventory
 - `inputs.cpu_nodes_preset` and `inputs.gpu_nodes_preset` from the compute-preset lookup chained off the selected platform
+- `inputs.cpu_nodes_os`, `inputs.gpu_stack_preset`, and `inputs.gpu_nodes_os` materialized from the live MK8s compatibility matrix using the catalog preference order
 - `inputs.infiniband_fabric` is prompted only after `inputs.gpu_nodes_preset`, and only when the chosen preset's live SDK metadata says that GPU clustering is supported for that shape
-- `inputs.gpu_drivers_preset` from the MK8s compatibility matrix for the selected GPU platform; when exactly one live compatible driver preset exists, the wizard preselects it while keeping the field editable
 
 Profile-plus-override example:
 
@@ -320,6 +353,7 @@ Regex and pattern behavior:
 - `wizard.<field>.options.prefix` is a plain literal prefix helper for provider lookups. It is not regex.
 - `wizard.<field>.options.depends_on` is a plain field-path reference such as `inputs.cpu_nodes_platform`. It is not regex.
 - `wizard.<field>.options.auto_select_single: true` tells the wizard to preselect a live provider value when exactly one compatible option exists and the field is currently unset.
+- `wizard.<field>.options.auto_select_first: true` tells the wizard to preselect the first live provider value after catalog preference ordering when the field is currently unset.
 - `wizard.<field>.options.args` passes provider-specific lookup arguments through directly; the shorthand helpers `prefix` and `depends_on` are merged into that args mapping during catalog load.
 - `wizard.<field>.options.skip_prompt_if_no_choices: true` suppresses an optional provider-backed prompt when the live lookup succeeds but returns no valid choices for the current shape.
 - Component ids and instance selectors are validated against the repo's lowercase letters/digits/hyphens naming rules.
@@ -333,6 +367,7 @@ Wizard option keys:
 - `args`: optional provider-specific argument mapping; use this for extra lookup inputs beyond the `prefix` / `depends_on` shorthands
 - `filter_regex`: optional regex post-filter for returned option values
 - `auto_select_single`: optional boolean for provider-backed fields; when true, the wizard preselects the one live compatible value if the lookup resolves to exactly one option
+- `auto_select_first`: optional boolean for provider-backed fields; when true, the wizard materializes the first live compatible value after provider-side sorting
 - `skip_prompt_if_no_choices`: optional boolean for provider-backed optional fields; when true, the wizard skips the prompt entirely if the live lookup returns no valid choices and no current value is set
 
 Reference syntax:
@@ -363,7 +398,7 @@ Source profile selection:
 - Or set `NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE={portable|local}`.
 - For schema/output introspection, nebius-cxcli prefers a resolvable `source.local` when one exists, even while the active profile is `portable`. This keeps workstation/CI validation fast without changing the emitted portable module source addresses.
 
-`components.apps.<id>.source.repo` supports:
+`components.apps.<id>.source.portable.repo` supports:
 
 - HTTP/S Helm repositories (must serve `index.yaml`)
 - OCI chart repositories (`oci://...`)
@@ -395,9 +430,14 @@ Source requirements enforced by `validate-sources`:
   - All Terraform outputs exposed by the module are exported automatically under their normalized names.
   - If you provide a custom module for the bundled `mk8s` component and plan to use `deploy` or CI kubeconfig bootstrap, that module must still expose the Terraform output `cluster_id`.
 - App charts (`components.apps.<id>`):
-  - HTTP repo format: `source.repo` must be a Helm repo base URL, `repo/index.yaml` must be readable, chart must exist in `entries`, and configured version must exist.
-  - OCI format: `source.repo` must be an OCI repo prefix (`oci://...`), and `source.chart` supplies the chart name.
-  - GitHub tree format: `source.repo` may point at a chart directory in git (`https://github.com/<owner>/<repo>/tree/<ref>/<chart-path>`). Helm validates the chart from that path directly.
+  - `source.portable` is the release-ready chart source.
+  - `source.local` is optional and is intended for developer-local chart work.
+  - HTTP repo format: `source.portable.repo` must be a Helm repo base URL, `repo/index.yaml` must be readable, chart must exist in `entries`, and configured version must exist.
+  - OCI format: `source.portable.repo` must be an OCI repo prefix (`oci://...`), and `source.portable.chart` supplies the chart name.
+  - Git-hosted chart format: `source.portable.repo` may be a GitHub tree URL, and `source.portable.chart` supplies the logical chart name.
+  - Local chart format: `source.local.path` must resolve to an existing chart directory when the active source profile is `local`.
+  - Portable build/release verification strips `source.local` and fails if an app chart still has no usable `source.portable`.
+  - GitHub tree format: `source.portable.repo` may point at a chart directory in git (`https://github.com/<owner>/<repo>/tree/<ref>/<chart-path>`). Helm validates the chart from that path directly.
   - Helm chart sources are fail-fast validated with `helm show chart`; missing Helm, unreachable repos, bad refs, missing charts, and version mismatches are hard failures.
   - Set `NEBIUS_CXCLI_HELM_TIMEOUT_SECONDS` to raise the Helm validation timeout for slow OCI registries or chart sources without changing the catalog.
   - `validate-sources` also materializes the resolved chart and checks the CLI-facing chart contract:
@@ -476,18 +516,20 @@ components:
   apps:
     external-dns:
       source:
-        repo: https://kubernetes-sigs.github.io/external-dns
-        chart: external-dns
-        version: 1.18.0
+        portable:
+          repo: https://kubernetes-sigs.github.io/external-dns
+          chart: external-dns
+          version: 1.18.0
       release:
         namespace: external-dns
         name: external-dns
 
     gateway-helm:
       source:
-        repo: oci://docker.io/envoyproxy
-        chart: gateway-helm
-        version: 1.7.0
+        portable:
+          repo: oci://docker.io/envoyproxy
+          chart: gateway-helm
+          version: 1.7.0
       release:
         namespace: envoy-gateway-system
         name: envoy-gateway
@@ -502,6 +544,7 @@ Portable build/release behavior:
 
 - `component_sources.yaml` is the only checked-in catalog.
 - Build/package steps bundle a portable view of that catalog into the wheel by stripping `source.local`.
+- Any app chart that still lacks `source.portable` is intentionally local-only and will fail portable release verification until a portable chart source is published.
 - CI/release workflows rewrite internal `source.portable` refs from `?ref=main` to the current commit or tag before publishing wheel or catalog assets.
 
 Recommended workflow:
@@ -626,7 +669,7 @@ Wizard field behavior:
 - The bundled `mk8s` catalog entry defaults `inputs.mk8s_cluster_public_endpoint: true`, and the built-in MK8s cluster handoff derives access dynamically from that input. If you switch the control plane to private-only, local app operations still work, but only from a machine that already has private network reachability to the MK8s API endpoint.
 - The bundled `mk8s` catalog entry also defaults `inputs.kube_network_service_cidrs: ["/20"]`. Nebius treats an omitted MK8s service CIDR as `["/16"]`; on a single-pool `/16` subnet that can consume the whole pool and leave no address space for control-plane allocations, which looks like a long `PROVISIONING` stall.
 - The bundled `mk8s` catalog entry also defaults `inputs.cpu_nodes_count: 2`. That keeps the baseline cluster footprint explicit in `config.yaml` and editable in the wizard instead of relying on a hidden Terraform module default for CPU node-group size.
-- The bundled `mk8s` catalog entry now uses `wizard_profile: mk8s`, which wires `inputs.subnet_id` to the live `project_subnets` provider, wires `inputs.k8s_version` to the MK8s control-plane version lookup, wires MK8s platform/preset prompts to project-scoped Nebius lookups, wires `inputs.gpu_drivers_preset` to the live MK8s compatibility matrix, and only offers the optional `inputs.infiniband_fabric` prompt after a selected GPU preset is confirmed by the live SDK to support GPU clustering for that shape.
+- The bundled `mk8s` catalog entry now uses `wizard_profile: mk8s`, which wires `inputs.subnet_id` to the live `project_subnets` provider, wires `inputs.k8s_version` to the MK8s control-plane version lookup, wires MK8s platform/preset prompts to project-scoped Nebius lookups, and materializes `inputs.cpu_nodes_os`, `inputs.gpu_stack_preset`, and `inputs.gpu_nodes_os` from the live MK8s compatibility matrix using the catalog preference order.
 - That same bundled `mk8s` profile suppresses the advanced passthrough maps `inputs.mk8s_cluster_overrides`, `inputs.mk8s_cpu_node_group_overrides`, and `inputs.mk8s_gpu_node_group_overrides` from the interactive wizard; operators can still set them directly in `config.yaml` when needed.
 - Fields behind a sibling `<prefix>_enabled` toggle, such as MK8s GPU settings behind `gpu_enabled`, stay hidden until that toggle is true, and enabling the toggle expands the dependent prompts immediately into the remaining wizard flow instead of deferring them to a later pass.
 - The bundled MK8s flow also treats effective node-group prerequisites as conditionally required: when the baseline CPU pool is enabled, `cpu_nodes_platform` / `cpu_nodes_preset` must be set unless the CPU override template supplies them, and when `gpu_enabled=true`, the wizard plus strict validation require `gpu_node_groups`, `gpu_nodes_count_per_group` unless GPU autoscaling override is configured, and effective GPU platform/preset values.
@@ -635,9 +678,9 @@ Wizard field behavior:
 - If live provider choices are unavailable for a field, the CLI prints a field-specific warning immediately before that prompt and explains whether the next manual-input prompt is required or can be skipped with Enter.
 - When a built-in resolver or provider plugin fails internally, the fallback warning now includes that resolver error text instead of silently degrading to a generic unavailable-options message.
 - Optional provider-backed fields now accept blank/skip answers as “leave unset” without revalidating that blank value against the live option list.
-- Provider-backed fields can now opt into `auto_select_single`, which materializes the one live compatible value into `config.yaml` during `create` and `component add` while still leaving the field editable in the wizard.
+- Provider-backed fields can now opt into `auto_select_single` or `auto_select_first`, which materialize the resolved live value into `config.yaml` during `create` and `component add` while still leaving the field editable in the wizard when prompting is enabled.
 - Helm chart default values discovered from the live chart are not copied into `config.yaml`; the app wizard can show them as prompt defaults, but only explicit overrides are written back.
-- Current built-in provider option sources include `mk8s_compatible_platforms` (mk8s platform fields), `mk8s_gpu_driver_presets` (mk8s GPU driver-preset selection from the compatibility matrix), `mk8s_infiniband_fabrics` (optional mk8s GPU-cluster fabric selection gated by the selected preset's live clustering capability), `compute_platforms`, `compute_platform_presets`, `project_subnets`, `project_networks`, `tenant_projects`, and `mk8s_control_plane_versions`.
+- Current built-in provider option sources include `mk8s_compatible_platforms` (mk8s platform fields), `mk8s_gpu_stack_presets` and `mk8s_node_group_os_values` (mk8s image selection from the compatibility matrix), `mk8s_infiniband_fabrics` (optional mk8s GPU-cluster fabric selection gated by the selected preset's live clustering capability), `compute_platforms`, `compute_platform_presets`, `project_subnets`, `project_networks`, `tenant_projects`, and `mk8s_control_plane_versions`.
 - When live provider options are unavailable, the wizard falls back to manual input.
 
 Shared-derived default example:
@@ -696,9 +739,10 @@ components:
   apps:
     demo-app:
       source:
-        repo: https://example.invalid/charts
-        chart: demo-app
-        version: 1.0.0
+        portable:
+          repo: https://example.invalid/charts
+          chart: demo-app
+          version: 1.0.0
       release:
         namespace: demo
         name: demo-app
@@ -723,9 +767,10 @@ components:
   apps:
     demo-app:
       source:
-        repo: https://example.invalid/charts
-        chart: demo-app
-        version: 1.0.0
+        portable:
+          repo: https://example.invalid/charts
+          chart: demo-app
+          version: 1.0.0
       release:
         namespace: demo
         name: demo-app
@@ -803,6 +848,7 @@ Local `deploy`/`flux bootstrap` behavior when apps + the bundled `mk8s` componen
 - `destroy` and `flux destroy` still use the same built-in MK8s handoff for temporary cluster access when app resources must be removed first, but they do not persist or switch the user's local `~/.kube/config`.
 - When the selected cluster-access endpoint is private, `deploy`, `flux apply`, `flux bootstrap`, `destroy`, and `flux destroy` require the current machine to already have a private network path to the MK8s API. The CLI does not hardcode or auto-provision that path; customer environments can satisfy it with VPNs, routed private networks, subnet routers, SSH/WireGuard tunnels, or by running the command from an in-network runner.
 - When app charts are enabled, `deploy`, `flux apply`, and `flux bootstrap` first check Kubernetes node readiness against a handed-off MK8s cluster and only wait when the nodes are not `Ready` yet. When the cluster is already healthy, they proceed to Flux work immediately instead of presenting that probe as a wait.
+- When the generated manifest declares deploy-time MK8s GPU validations, local `deploy` uses the same handed-off kubeconfig after Terraform/Flux work to run them directly with `kubectl`, writes JSON reports into `generated/inventory/`, and keeps those validation workflows independent from persistent in-cluster app reconciliation.
 - Once the built-in MK8s handoff is ready, the local Flux phase now keeps one continuous spinner alive and updates its message through cluster reachability, Flux API discovery, rendered manifest apply, and the final rendered-resource readiness wait so the command does not go visually idle between phases.
 - When no app charts are enabled, `render` now emits an empty Flux kustomization without a placeholder repository file. Local `deploy` still prepares the built-in MK8s handoff and refreshes local kubeconfig when that handoff exists, but it skips the node-readiness and Flux apply phases; `flux apply` still refuses to run because there are no enabled charts.
 - In non-interactive logs such as GitHub Actions, those same phase updates fall back to stable printed lines instead of transient spinner frames, so CI logs remain readable and do not depend on TTY animation support.

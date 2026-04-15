@@ -157,3 +157,108 @@ def test_runtime_validation_plugins_reject_non_clusterable_mk8s_gpu_preset_with_
             id_pattern=re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
             env_var_pattern=re.compile(r"^[A-Z_][A-Z0-9_]*$"),
         )
+
+
+def test_runtime_validation_plugins_reject_preemptible_cpu_vm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "NEBIUS_CXCLI_RUNTIME_VALIDATION_PLUGINS",
+        "nebius_cxcli.runtime_component_validation:validate_component_runtime_rules",
+    )
+    payload = {
+        "__shared_admin_ssh_user_name__": "ubuntu",
+        "infra": {
+            "vm": {
+                "enabled": True,
+                "name": "demo-vm",
+                "ssh_user_name": "ubuntu",
+                "platform": "cpu-d3",
+                "preset": "4vcpu-16gb",
+                "source_image_family": "ubuntu24.04-driverless",
+                "preemptible_enabled": True,
+                "recovery_policy": "FAIL",
+            }
+        },
+    }
+
+    with pytest.raises(ValueError, match="preemptible_enabled requires a GPU platform"):
+        run_runtime_validation_plugins(
+            payload=payload,
+            get_path=_get_path,
+            as_text=_as_text,
+            id_pattern=re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
+            env_var_pattern=re.compile(r"^[A-Z_][A-Z0-9_]*$"),
+        )
+
+
+def test_runtime_validation_plugins_require_vm_boot_image_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "NEBIUS_CXCLI_RUNTIME_VALIDATION_PLUGINS",
+        "nebius_cxcli.runtime_component_validation:validate_component_runtime_rules",
+    )
+    payload = {
+        "__shared_admin_ssh_user_name__": "ubuntu",
+        "infra": {
+            "vm": {
+                "enabled": True,
+                "name": "demo-vm",
+                "ssh_user_name": "ubuntu",
+                "platform": "cpu-d3",
+                "preset": "4vcpu-16gb",
+            }
+        },
+    }
+
+    with pytest.raises(ValueError, match="source_image_family is required"):
+        run_runtime_validation_plugins(
+            payload=payload,
+            get_path=_get_path,
+            as_text=_as_text,
+            id_pattern=re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
+            env_var_pattern=re.compile(r"^[A-Z_][A-Z0-9_]*$"),
+        )
+
+
+def test_runtime_validation_plugins_reject_non_clusterable_vm_gpu_preset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "NEBIUS_CXCLI_RUNTIME_VALIDATION_PLUGINS",
+        "nebius_cxcli.runtime_component_validation:validate_component_runtime_rules",
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.provider_options.ProviderOptionLookup.compute_platform_preset_allows_gpu_clustering",
+        lambda self, *, project_id, platform_name, preset_name: False,
+    )
+    payload = {
+        "__shared_admin_ssh_user_name__": "ubuntu",
+        "client_info": {
+            "nebius": {
+                "project_id": "project-1",
+            }
+        },
+        "infra": {
+            "vm": {
+                "enabled": True,
+                "name": "demo-vm",
+                "ssh_user_name": "ubuntu",
+                "platform": "gpu-b200-sxm",
+                "preset": "8gpu-160vcpu-1792gb",
+                "source_image_family": "ubuntu24.04-cuda13.0",
+                "gpu_cluster_enabled": True,
+                "gpu_cluster_infiniband_fabric": "us-central1-b",
+            }
+        },
+    }
+
+    with pytest.raises(ValueError, match="does not support GPU clustering"):
+        run_runtime_validation_plugins(
+            payload=payload,
+            get_path=_get_path,
+            as_text=_as_text,
+            id_pattern=re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
+            env_var_pattern=re.compile(r"^[A-Z_][A-Z0-9_]*$"),
+        )

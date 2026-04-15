@@ -16,10 +16,12 @@ from .sdk_auth import init_nebius_sdk
 SUPPORTED_PROVIDER_OPTION_SOURCES = frozenset(
     {
         "mk8s_compatible_platforms",
-        "mk8s_gpu_driver_presets",
+        "mk8s_gpu_stack_presets",
+        "mk8s_node_group_os_values",
         "mk8s_infiniband_fabrics",
         "compute_platforms",
         "compute_platform_presets",
+        "compute_public_image_families",
         "project_subnets",
         "project_networks",
         "tenant_projects",
@@ -54,6 +56,8 @@ class _Mk8sInfiniBandFabric:
 @dataclass(frozen=True)
 class _Mk8sCompatibilityItem:
     compatible_platforms: tuple[str, ...]
+    # Nebius compatibility matrix field name. Although the API calls this
+    # `drivers_preset`, it selects the bundled GPU image/software-stack family.
     drivers_preset: str | None
     os: str | None
 
@@ -65,6 +69,13 @@ class _ComputePlatformPreset:
     memory_gibibytes: int | None
     gpu_count: int | None
     allow_gpu_clustering: bool
+
+
+@dataclass(frozen=True)
+class _ComputePublicImageFamily:
+    family: str
+    human_name: str
+    compatibility: str
 
 
 # Keep this in the documented Nebius fabric order for stable prompt rendering.
@@ -215,6 +226,17 @@ def _provider_error_message(provider: str, exc: Exception) -> str:
     return f"{provider}: {message}"
 
 
+def _unsupported_platform_names(value: object) -> tuple[str, ...]:
+    if isinstance(value, dict):
+        return tuple(str(key).strip() for key in value if str(key).strip())
+    names: list[str] = []
+    for item in list(value or []):
+        key = _as_str(getattr(item, "key", None))
+        if key:
+            names.append(key)
+    return tuple(names)
+
+
 def _apply_choice_filter(
     choices: Iterable[OptionChoice],
     *,
@@ -231,6 +253,47 @@ def _apply_choice_filter(
     return [choice for choice in resolved if compiled.search(choice.value)]
 
 
+def _mk8s_gpu_preference_lists() -> tuple[tuple[str, ...], tuple[str, ...]]:
+    try:
+        from .component_sources import load_component_sources, tf_module_source_by_id
+    except Exception:
+        return (), ()
+    settings = tf_module_source_by_id("mk8s", sources=load_component_sources())
+    if settings is None:
+        return (), ()
+    preferences = settings.mk8s_gpu.image_preferences
+    return preferences.preferred_gpu_stack_presets, preferences.preferred_os
+
+
+def _vm_image_preference_lists() -> tuple[tuple[str, ...], tuple[str, ...]]:
+    try:
+        from .component_sources import load_component_sources, tf_module_source_by_id
+    except Exception:
+        return (), ()
+    settings = tf_module_source_by_id("vm", sources=load_component_sources())
+    if settings is None:
+        return (), ()
+    preferences = settings.vm_images
+    return preferences.preferred_cpu_image_families, preferences.preferred_gpu_image_families
+
+
+def _sort_choices_by_preference(
+    choices: Iterable[OptionChoice],
+    *,
+    preferred_values: tuple[str, ...],
+) -> tuple[OptionChoice, ...]:
+    preferred_index = {value: index for index, value in enumerate(preferred_values)}
+    return tuple(
+        sorted(
+            choices,
+            key=lambda choice: (
+                preferred_index.get(choice.value, len(preferred_index)),
+                choice.value,
+            ),
+        )
+    )
+
+
 class ProviderOptionLookup:
     """Resolve dynamic field choices from Nebius APIs with in-process caching."""
 
@@ -241,6 +304,9 @@ class ProviderOptionLookup:
         self._mk8s_compatibility_cache: dict[str, tuple[_Mk8sCompatibilityItem, ...]] = {}
         self._compute_platform_preset_cache: dict[
             tuple[str, str], tuple[_ComputePlatformPreset, ...]
+        ] = {}
+        self._compute_public_image_family_cache: dict[
+            tuple[str, str], tuple[_ComputePublicImageFamily, ...]
         ] = {}
         self._last_error: str | None = None
 
@@ -256,10 +322,12 @@ class ProviderOptionLookup:
         try:
             resolver = {
                 "mk8s_compatible_platforms": self._resolve_mk8s_compatible_platforms,
-                "mk8s_gpu_driver_presets": self._resolve_mk8s_gpu_driver_presets,
+                "mk8s_gpu_stack_presets": self._resolve_mk8s_gpu_stack_presets,
+                "mk8s_node_group_os_values": self._resolve_mk8s_node_group_os_values,
                 "mk8s_infiniband_fabrics": self._resolve_mk8s_infiniband_fabrics,
                 "compute_platforms": self._resolve_compute_platforms,
                 "compute_platform_presets": self._resolve_compute_platform_presets,
+                "compute_public_image_families": self._resolve_compute_public_image_families,
                 "project_subnets": self._resolve_project_subnets,
                 "project_networks": self._resolve_project_networks,
                 "tenant_projects": self._resolve_tenant_projects,
@@ -442,6 +510,23 @@ class ProviderOptionLookup:
                 return fallback_project
         return None
 
+    def _resolve_region_id(self, payload: dict[str, Any], args: dict[str, Any]) -> str | None:
+        explicit_region = _as_str(args.get("region_id"))
+        if explicit_region:
+            return explicit_region
+
+        region_path = _as_str(args.get("region_id_path")) or "client_info.nebius.region_id"
+        resolved_region = _as_str(_payload_value(payload, region_path))
+        if resolved_region:
+            return resolved_region
+
+        fallback_region_path = _as_str(args.get("fallback_region_id_path"))
+        if fallback_region_path:
+            fallback_region = _as_str(_payload_value(payload, fallback_region_path))
+            if fallback_region:
+                return fallback_region
+        return None
+
     def _resolve_tenant_id(self, payload: dict[str, Any], args: dict[str, Any]) -> str | None:
         explicit_tenant = _as_str(args.get("tenant_id"))
         if explicit_tenant:
@@ -565,7 +650,7 @@ class ProviderOptionLookup:
         self._cache[cache_key] = resolved
         return resolved
 
-    def _resolve_mk8s_gpu_driver_presets(
+    def _resolve_mk8s_gpu_stack_presets(
         self,
         *,
         args: dict[str, Any],
@@ -577,7 +662,7 @@ class ProviderOptionLookup:
             return ()
 
         platform_path = _as_str(args.get("platform_path"))
-        if not platform_path and field_path.endswith(".gpu_drivers_preset"):
+        if not platform_path and field_path.endswith(".gpu_stack_preset"):
             platform_path = f"{field_path.rsplit('.', maxsplit=1)[0]}.gpu_nodes_platform"
 
         platform_name = _as_str(args.get("platform"))
@@ -586,7 +671,7 @@ class ProviderOptionLookup:
         if not platform_name:
             return ()
 
-        cache_key = ("mk8s_gpu_driver_presets", version, platform_name)
+        cache_key = ("mk8s_gpu_stack_presets", version, platform_name)
         if cache_key in self._cache:
             return self._cache[cache_key]
 
@@ -602,7 +687,63 @@ class ProviderOptionLookup:
             options.append(OptionChoice(value=preset, label=label))
             seen.add(preset)
 
-        resolved = tuple(options)
+        preferred_gpu_stack_presets, _preferred_os = _mk8s_gpu_preference_lists()
+        resolved = _sort_choices_by_preference(
+            options,
+            preferred_values=preferred_gpu_stack_presets,
+        )
+        self._cache[cache_key] = resolved
+        return resolved
+
+    def _resolve_mk8s_node_group_os_values(
+        self,
+        *,
+        args: dict[str, Any],
+        payload: dict[str, Any],
+        field_path: str,
+    ) -> tuple[OptionChoice, ...]:
+        version = self._resolve_k8s_version(payload, args, field_path)
+        if not version:
+            return ()
+
+        platform_path = _as_str(args.get("platform_path"))
+        if not platform_path:
+            if field_path.endswith(".gpu_nodes_os"):
+                platform_path = f"{field_path.rsplit('.', maxsplit=1)[0]}.gpu_nodes_platform"
+            elif field_path.endswith(".cpu_nodes_os"):
+                platform_path = f"{field_path.rsplit('.', maxsplit=1)[0]}.cpu_nodes_platform"
+        platform_name = _as_str(args.get("platform"))
+        if not platform_name and platform_path:
+            platform_name = _as_str(_payload_value(payload, platform_path))
+        if not platform_name:
+            return ()
+
+        stack_preset_path = _as_str(args.get("stack_preset_path"))
+        if not stack_preset_path and field_path.endswith(".gpu_nodes_os"):
+            stack_preset_path = f"{field_path.rsplit('.', maxsplit=1)[0]}.gpu_stack_preset"
+        stack_preset = _as_str(args.get("stack_preset"))
+        if not stack_preset and stack_preset_path:
+            stack_preset = _as_str(_payload_value(payload, stack_preset_path))
+
+        cache_key = ("mk8s_node_group_os_values", version, platform_name, stack_preset)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        options: list[OptionChoice] = []
+        seen: set[str] = set()
+        for item in self._resolve_mk8s_compatibility_items(version):
+            if platform_name not in item.compatible_platforms:
+                continue
+            if item.drivers_preset != stack_preset:
+                continue
+            os_value = item.os
+            if not os_value or os_value in seen:
+                continue
+            options.append(OptionChoice(value=os_value, label=os_value))
+            seen.add(os_value)
+
+        _preferred_gpu_stack_presets, preferred_os = _mk8s_gpu_preference_lists()
+        resolved = _sort_choices_by_preference(options, preferred_values=preferred_os)
         self._cache[cache_key] = resolved
         return resolved
 
@@ -775,6 +916,119 @@ class ProviderOptionLookup:
             for resources in (getattr(preset, "resources", None),)
         )
         self._compute_platform_preset_cache[cache_key] = resolved
+        return resolved
+
+    def _resolve_compute_public_image_families(
+        self,
+        *,
+        args: dict[str, Any],
+        payload: dict[str, Any],
+        field_path: str,
+    ) -> tuple[OptionChoice, ...]:
+        region_id = self._resolve_region_id(payload, args)
+        if not region_id:
+            return ()
+
+        platform_path = _as_str(args.get("platform_path"))
+        if not platform_path:
+            platform_path = _component_input_sibling_path(field_path, "platform")
+        platform_name = _as_str(_payload_value(payload, platform_path)) if platform_path else None
+        if not platform_name:
+            return ()
+
+        is_gpu_platform = platform_name.startswith("gpu-")
+        preferred_cpu_image_families, preferred_gpu_image_families = _vm_image_preference_lists()
+        preferred_families = (
+            preferred_gpu_image_families if is_gpu_platform else preferred_cpu_image_families
+        )
+        preferred_index = {value: index for index, value in enumerate(preferred_families)}
+        ranked = tuple(
+            sorted(
+                self._resolve_compute_public_image_family_inventory(
+                    region_id=region_id,
+                    platform_name=platform_name,
+                ),
+                key=lambda item: (
+                    0 if item.compatibility == "recommended" else 1,
+                    preferred_index.get(item.family, len(preferred_index)),
+                    item.family,
+                ),
+            )
+        )
+        return tuple(
+            OptionChoice(
+                value=item.family,
+                label=(
+                    f"{item.family}  ({item.human_name}, {item.compatibility})"
+                    if item.human_name
+                    else f"{item.family}  ({item.compatibility})"
+                ),
+            )
+            for item in ranked
+        )
+
+    def _resolve_compute_public_image_family_inventory(
+        self,
+        *,
+        region_id: str,
+        platform_name: str,
+    ) -> tuple[_ComputePublicImageFamily, ...]:
+        cache_key = (region_id, platform_name)
+        if cache_key in self._compute_public_image_family_cache:
+            return self._compute_public_image_family_cache[cache_key]
+
+        sdk = self._sdk_or_none()
+        if sdk is None:
+            return ()
+        from nebius.api.nebius.compute.v1 import ImageServiceClient, ListPublicRequest
+
+        client = ImageServiceClient(sdk)
+        items = self._paged_list(
+            request_factory=lambda page_token: ListPublicRequest(
+                region=region_id,
+                page_size=1000,
+                page_token=page_token,
+            ),
+            request_call=client.list_public,
+        )
+
+        families: dict[str, _ComputePublicImageFamily] = {}
+        for item in items:
+            spec = getattr(item, "spec", None)
+            family = _as_str(getattr(spec, "image_family", None))
+            if not family:
+                continue
+            recommended_platforms: set[str] = set()
+            for raw_platform_name in list(getattr(spec, "recommended_platforms", [])):
+                normalized_platform_name = _as_str(raw_platform_name)
+                if normalized_platform_name:
+                    recommended_platforms.add(normalized_platform_name)
+            unsupported_platforms = set(
+                _unsupported_platform_names(getattr(spec, "unsupported_platforms", {}))
+            )
+            if platform_name in unsupported_platforms:
+                continue
+            compatibility = "recommended" if platform_name in recommended_platforms else "compatible"
+            human_name = _as_str(getattr(spec, "image_family_human_readable", None)) or ""
+            current = families.get(family)
+            if current is not None and current.compatibility == "recommended":
+                continue
+            families[family] = _ComputePublicImageFamily(
+                family=family,
+                human_name=human_name,
+                compatibility=compatibility,
+            )
+
+        resolved = tuple(
+            sorted(
+                families.values(),
+                key=lambda item: (
+                    0 if item.compatibility == "recommended" else 1,
+                    item.family,
+                ),
+            )
+        )
+        self._compute_public_image_family_cache[cache_key] = resolved
         return resolved
 
     def _resolve_mk8s_compatibility_items(

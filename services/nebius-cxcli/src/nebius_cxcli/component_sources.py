@@ -91,6 +91,87 @@ class TerraformSettings:
 
 
 @dataclass(frozen=True)
+class Mk8sGpuImagePreferenceSettings:
+    preferred_gpu_stack_presets: tuple[str, ...] = ()
+    preferred_os: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Mk8sGpuAppActivationRule:
+    gpu_stack_source: str = ""
+    gpu_cluster_enabled: bool | None = None
+    match_platforms: tuple[str, ...] = ()
+    match_presets: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Mk8sGpuAppValueRule:
+    gpu_stack_source: str = ""
+    gpu_cluster_enabled: bool | None = None
+    match_platforms: tuple[str, ...] = ()
+    match_presets: tuple[str, ...] = ()
+    values: tuple[ComponentDefault, ...] = ()
+
+
+@dataclass(frozen=True)
+class Mk8sGpuOperatorReadinessSettings:
+    enabled_by_default: bool = False
+    timeout: str = ""
+
+
+@dataclass(frozen=True)
+class Mk8sGpuVisibilitySettings:
+    enabled_by_default: bool = False
+    namespace: str = ""
+    image: str = ""
+    timeout: str = ""
+    cleanup: bool = True
+
+
+@dataclass(frozen=True)
+class Mk8sNcclSettings:
+    enabled_by_default: bool = False
+    chart_component_id: str = ""
+    timeout: str = ""
+    training_operator_manifest: str = ""
+    training_operator_namespace: str = ""
+    average_bus_bandwidth_threshold_gbps: float = 0.0
+
+
+@dataclass(frozen=True)
+class Mk8sGpuHealthCheckerSettings:
+    enabled_by_default: bool = False
+
+
+@dataclass(frozen=True)
+class Mk8sGpuValidationSettings:
+    operator_readiness: Mk8sGpuOperatorReadinessSettings = Mk8sGpuOperatorReadinessSettings()
+    gpu_visibility: Mk8sGpuVisibilitySettings = Mk8sGpuVisibilitySettings()
+    nccl: Mk8sNcclSettings = Mk8sNcclSettings()
+    health_checker: Mk8sGpuHealthCheckerSettings = Mk8sGpuHealthCheckerSettings()
+
+
+@dataclass(frozen=True)
+class Mk8sGpuSettings:
+    image_preferences: Mk8sGpuImagePreferenceSettings = Mk8sGpuImagePreferenceSettings()
+    validations: Mk8sGpuValidationSettings = Mk8sGpuValidationSettings()
+
+
+@dataclass(frozen=True)
+class Mk8sGpuAppPolicy:
+    role: str = ""
+    auto_enable: tuple[Mk8sGpuAppActivationRule, ...] = ()
+    value_overrides: tuple[Mk8sGpuAppValueRule, ...] = ()
+    install_after: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class VmImagePreferenceSettings:
+    preferred_cpu_image_families: tuple[str, ...] = ()
+    preferred_gpu_image_families: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class CliSettings:
     flux: FluxSettings = FluxSettings()
     terraform: TerraformSettings = TerraformSettings()
@@ -134,24 +215,52 @@ class TFModuleSource:
     input_bindings: tuple[ComponentInputBinding, ...] = ()
     handoff: Handoff | None = None
     status: StatusWatcher | None = None
+    mk8s_gpu: Mk8sGpuSettings = Mk8sGpuSettings()
+    vm_images: VmImagePreferenceSettings = VmImagePreferenceSettings()
+
+
+@dataclass(frozen=True)
+class HelmChartLocator:
+    repo: str = ""
+    chart_name: str | None = None
+    version: str | None = None
+    path: str | None = None
 
 
 @dataclass(frozen=True)
 class HelmChartSource:
     name: str
-    chart_name: str | None = None
-    repo: str | None = None
-    version: str | None = None
+    source: HelmChartLocator = HelmChartLocator()
+    portable_source: HelmChartLocator = HelmChartLocator()
+    local_source: HelmChartLocator = HelmChartLocator()
     namespace: str | None = None
     release_name: str | None = None
     release_timeout: str | None = None
     enable: bool = False
+    selectable: bool = True
     description: str | None = None
     group: str | None = None
     wizard_fields: dict[str, dict[str, Any]] | None = None
     defaults: tuple[ComponentDefault, ...] = ()
     outputs: tuple[ComponentOutput, ...] = ()
     input_bindings: tuple[ComponentInputBinding, ...] = ()
+    mk8s_gpu: Mk8sGpuAppPolicy = Mk8sGpuAppPolicy()
+
+    @property
+    def chart_name(self) -> str | None:
+        return self.source.chart_name
+
+    @property
+    def repo(self) -> str | None:
+        return self.source.repo or None
+
+    @property
+    def version(self) -> str | None:
+        return self.source.version
+
+    @property
+    def path(self) -> str | None:
+        return self.source.path
 
 
 @dataclass(frozen=True)
@@ -160,6 +269,32 @@ class ComponentSources:
     shared: dict[str, Any]
     tf_modules: tuple[TFModuleSource, ...]
     helm_charts: tuple[HelmChartSource, ...]
+
+
+def tf_module_source_by_id(
+    component_id: str,
+    *,
+    sources: ComponentSources | None = None,
+) -> TFModuleSource | None:
+    resolved_sources = sources or load_component_sources()
+    normalized = _as_text(component_id).lower()
+    for module in resolved_sources.tf_modules:
+        if _as_text(module.module).lower() == normalized:
+            return module
+    return None
+
+
+def helm_chart_source_by_id(
+    component_id: str,
+    *,
+    sources: ComponentSources | None = None,
+) -> HelmChartSource | None:
+    resolved_sources = sources or load_component_sources()
+    normalized = _as_text(component_id).lower()
+    for chart in resolved_sources.helm_charts:
+        if _as_text(chart.name).lower() == normalized:
+            return chart
+    return None
 
 
 def set_component_sources_file_override(path: Path | None) -> None:
@@ -372,6 +507,535 @@ def _parse_shared_values(raw: Any, *, source_root: Path | None = None) -> dict[s
         )
 
     return normalized
+
+
+def _parse_string_list(
+    raw: Any,
+    *,
+    field_label: str,
+) -> tuple[str, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ValueError(f"{field_label} must be a list of strings when set")
+    values: list[str] = []
+    for item in raw:
+        token = _as_text(item)
+        if not token:
+            raise ValueError(f"{field_label} entries must be non-empty strings")
+        values.append(token)
+    return tuple(values)
+
+
+def _parse_target_value_overrides(
+    raw: Any,
+    *,
+    field_label: str,
+    required_prefix: str,
+) -> tuple[ComponentDefault, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    overrides: list[ComponentDefault] = []
+    for target_path_raw, value_raw in raw.items():
+        target_path = _as_text(target_path_raw)
+        if not target_path:
+            raise ValueError(f"{field_label} keys must be non-empty")
+        if not target_path.startswith(required_prefix):
+            raise ValueError(
+                f"{field_label} keys must start with '{required_prefix}'"
+            )
+        overrides.append(
+            ComponentDefault(
+                target_path=target_path,
+                value=copy.deepcopy(value_raw),
+            )
+        )
+    return tuple(overrides)
+
+
+def _parse_value_overrides(
+    raw: Any,
+    *,
+    field_label: str,
+) -> tuple[ComponentDefault, ...]:
+    return _parse_target_value_overrides(
+        raw,
+        field_label=field_label,
+        required_prefix="",
+    )
+
+
+def _parse_portable_local_source_block(
+    raw: Any,
+    *,
+    field_label: str,
+    source_profile: SourceProfile,
+    source_root: Path | None = None,
+) -> tuple[str, str, str | None]:
+    if raw is None:
+        raise ValueError(f"{field_label} must be a mapping")
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {"portable", "local"}
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    portable_source = _as_text(raw.get("portable"))
+    local_source = _as_text(raw.get("local")) or None
+    resolved_source = _resolved_portable_local_source(
+        field_label=field_label,
+        portable_source=portable_source,
+        local_source=local_source,
+        source_profile=source_profile,
+        source_root=source_root,
+    )
+    return resolved_source, portable_source, local_source
+
+def _parse_mk8s_gpu_image_preference_settings(
+    raw: Any,
+    *,
+    field_label: str,
+) -> Mk8sGpuImagePreferenceSettings:
+    if raw is None:
+        return Mk8sGpuImagePreferenceSettings()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {
+        "preferred_gpu_stack_presets",
+        "preferred_os",
+    }
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    return Mk8sGpuImagePreferenceSettings(
+        preferred_gpu_stack_presets=_parse_string_list(
+            raw.get("preferred_gpu_stack_presets"),
+            field_label=f"{field_label}.preferred_gpu_stack_presets",
+        ),
+        preferred_os=_parse_string_list(
+            raw.get("preferred_os"),
+            field_label=f"{field_label}.preferred_os",
+        ),
+    )
+
+
+def _parse_mk8s_gpu_stack_source(
+    raw: Any,
+    *,
+    field_label: str,
+    required: bool = False,
+) -> str:
+    value = _as_text(raw)
+    if not value:
+        if required:
+            raise ValueError(f"{field_label} is required")
+        return ""
+    if value not in {"nebius_image", "manual"}:
+        raise ValueError(f"{field_label} must be 'nebius_image' or 'manual'")
+    return value
+
+
+def _parse_optional_bool(raw: Any, *, field_label: str) -> bool | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, bool):
+        raise ValueError(f"{field_label} must be a boolean when provided")
+    return raw
+
+
+def _parse_mk8s_gpu_app_activation_rules(
+    raw: Any,
+    *,
+    field_label: str,
+) -> tuple[Mk8sGpuAppActivationRule, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ValueError(f"{field_label} must be a list")
+    rules: list[Mk8sGpuAppActivationRule] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ValueError(f"{field_label}[{index}] must be a mapping")
+        supported_keys = {
+            "gpu_stack_source",
+            "gpu_cluster_enabled",
+            "match_platforms",
+            "match_presets",
+        }
+        unknown = sorted(str(key) for key in item if str(key) not in supported_keys)
+        if unknown:
+            raise ValueError(f"{field_label}[{index}] has unsupported field(s): " + ", ".join(unknown))
+        rules.append(
+            Mk8sGpuAppActivationRule(
+                gpu_stack_source=_parse_mk8s_gpu_stack_source(
+                    item.get("gpu_stack_source"),
+                    field_label=f"{field_label}[{index}].gpu_stack_source",
+                ),
+                gpu_cluster_enabled=_parse_optional_bool(
+                    item.get("gpu_cluster_enabled"),
+                    field_label=f"{field_label}[{index}].gpu_cluster_enabled",
+                ),
+                match_platforms=_parse_string_list(
+                    item.get("match_platforms"),
+                    field_label=f"{field_label}[{index}].match_platforms",
+                ),
+                match_presets=_parse_string_list(
+                    item.get("match_presets"),
+                    field_label=f"{field_label}[{index}].match_presets",
+                ),
+            )
+        )
+    return tuple(rules)
+
+
+def _parse_mk8s_gpu_app_value_rules(
+    raw: Any,
+    *,
+    field_label: str,
+) -> tuple[Mk8sGpuAppValueRule, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ValueError(f"{field_label} must be a list")
+    rules: list[Mk8sGpuAppValueRule] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ValueError(f"{field_label}[{index}] must be a mapping")
+        supported_keys = {
+            "gpu_stack_source",
+            "gpu_cluster_enabled",
+            "match_platforms",
+            "match_presets",
+            "values",
+        }
+        unknown = sorted(str(key) for key in item if str(key) not in supported_keys)
+        if unknown:
+            raise ValueError(f"{field_label}[{index}] has unsupported field(s): " + ", ".join(unknown))
+        rule = Mk8sGpuAppValueRule(
+            gpu_stack_source=_parse_mk8s_gpu_stack_source(
+                item.get("gpu_stack_source"),
+                field_label=f"{field_label}[{index}].gpu_stack_source",
+            ),
+            gpu_cluster_enabled=_parse_optional_bool(
+                item.get("gpu_cluster_enabled"),
+                field_label=f"{field_label}[{index}].gpu_cluster_enabled",
+            ),
+            match_platforms=_parse_string_list(
+                item.get("match_platforms"),
+                field_label=f"{field_label}[{index}].match_platforms",
+            ),
+            match_presets=_parse_string_list(
+                item.get("match_presets"),
+                field_label=f"{field_label}[{index}].match_presets",
+            ),
+            values=_parse_target_value_overrides(
+                item.get("values"),
+                field_label=f"{field_label}[{index}].values",
+                required_prefix="values.",
+            ),
+        )
+        rules.append(rule)
+    return tuple(rules)
+
+
+def _parse_mk8s_gpu_operator_readiness_settings(
+    raw: Any,
+    *,
+    field_label: str,
+) -> Mk8sGpuOperatorReadinessSettings:
+    if raw is None:
+        return Mk8sGpuOperatorReadinessSettings()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {"enabled_by_default", "timeout"}
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    timeout = _as_text(raw.get("timeout"))
+    if timeout and not GO_DURATION_RE.fullmatch(timeout):
+        raise ValueError(f"{field_label}.timeout must be a Go-style duration like '5m' or '45s'")
+    return Mk8sGpuOperatorReadinessSettings(
+        enabled_by_default=bool(raw.get("enabled_by_default", False)),
+        timeout=timeout,
+    )
+
+
+def _parse_mk8s_gpu_visibility_settings(
+    raw: Any,
+    *,
+    field_label: str,
+) -> Mk8sGpuVisibilitySettings:
+    if raw is None:
+        return Mk8sGpuVisibilitySettings()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {"enabled_by_default", "namespace", "image", "timeout", "cleanup"}
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    timeout = _as_text(raw.get("timeout"))
+    if timeout and not GO_DURATION_RE.fullmatch(timeout):
+        raise ValueError(f"{field_label}.timeout must be a Go-style duration like '10m' or '45s'")
+    return Mk8sGpuVisibilitySettings(
+        enabled_by_default=bool(raw.get("enabled_by_default", True)),
+        namespace=_as_text(raw.get("namespace")),
+        image=_as_text(raw.get("image")),
+        timeout=timeout,
+        cleanup=bool(raw.get("cleanup", True)),
+    )
+
+
+def _parse_mk8s_nccl_settings(
+    raw: Any,
+    *,
+    field_label: str,
+) -> Mk8sNcclSettings:
+    if raw is None:
+        return Mk8sNcclSettings()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {
+        "enabled_by_default",
+        "chart_component_id",
+        "timeout",
+        "training_operator_manifest",
+        "training_operator_namespace",
+        "average_bus_bandwidth_threshold_gbps",
+    }
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    timeout = _as_text(raw.get("timeout"))
+    if timeout and not GO_DURATION_RE.fullmatch(timeout):
+        raise ValueError(f"{field_label}.timeout must be a Go-style duration like '45m'")
+    threshold_raw = raw.get("average_bus_bandwidth_threshold_gbps", 0)
+    try:
+        threshold = float(threshold_raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_label}.average_bus_bandwidth_threshold_gbps must be numeric") from exc
+    if threshold < 0:
+        raise ValueError(f"{field_label}.average_bus_bandwidth_threshold_gbps must be >= 0")
+    return Mk8sNcclSettings(
+        enabled_by_default=bool(raw.get("enabled_by_default", True)),
+        chart_component_id=_as_text(raw.get("chart_component_id")),
+        timeout=timeout,
+        training_operator_manifest=_as_text(raw.get("training_operator_manifest")),
+        training_operator_namespace=_as_text(raw.get("training_operator_namespace")),
+        average_bus_bandwidth_threshold_gbps=threshold,
+    )
+
+
+def _parse_mk8s_gpu_health_checker_settings(
+    raw: Any,
+    *,
+    field_label: str,
+) -> Mk8sGpuHealthCheckerSettings:
+    if raw is None:
+        return Mk8sGpuHealthCheckerSettings()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {"enabled_by_default"}
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    return Mk8sGpuHealthCheckerSettings(
+        enabled_by_default=bool(raw.get("enabled_by_default", False))
+    )
+
+
+def _parse_mk8s_gpu_validation_settings(
+    raw: Any,
+    *,
+    field_label: str,
+    source_profile: SourceProfile,
+    source_root: Path | None = None,
+) -> Mk8sGpuValidationSettings:
+    if raw is None:
+        return Mk8sGpuValidationSettings()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {"operator_readiness", "gpu_visibility", "nccl", "health_checker"}
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    return Mk8sGpuValidationSettings(
+        operator_readiness=_parse_mk8s_gpu_operator_readiness_settings(
+            raw.get("operator_readiness"),
+            field_label=f"{field_label}.operator_readiness",
+        ),
+        gpu_visibility=_parse_mk8s_gpu_visibility_settings(
+            raw.get("gpu_visibility"),
+            field_label=f"{field_label}.gpu_visibility",
+        ),
+        nccl=_parse_mk8s_nccl_settings(
+            raw.get("nccl"),
+            field_label=f"{field_label}.nccl",
+        ),
+        health_checker=_parse_mk8s_gpu_health_checker_settings(
+            raw.get("health_checker"),
+            field_label=f"{field_label}.health_checker",
+        ),
+    )
+
+
+def _parse_mk8s_gpu_settings(
+    raw: Any,
+    *,
+    field_label: str,
+    source_profile: SourceProfile,
+    source_root: Path | None = None,
+) -> Mk8sGpuSettings:
+    if raw is None:
+        return Mk8sGpuSettings()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {"image_preferences", "validations"}
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    return Mk8sGpuSettings(
+        image_preferences=_parse_mk8s_gpu_image_preference_settings(
+            raw.get("image_preferences"),
+            field_label=f"{field_label}.image_preferences",
+        ),
+        validations=_parse_mk8s_gpu_validation_settings(
+            raw.get("validations"),
+            field_label=f"{field_label}.validations",
+            source_profile=source_profile,
+            source_root=source_root,
+        ),
+    )
+
+
+def _parse_mk8s_gpu_app_policy(
+    raw: Any,
+    *,
+    field_label: str,
+) -> Mk8sGpuAppPolicy:
+    if raw is None:
+        return Mk8sGpuAppPolicy()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {"role", "auto_enable", "value_overrides", "install_after"}
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    role = _as_text(raw.get("role"))
+    if role and role not in {"gpu_operator", "network_operator", "health_checker"}:
+        raise ValueError(
+            f"{field_label}.role must be one of: gpu_operator, network_operator, health_checker"
+        )
+    return Mk8sGpuAppPolicy(
+        role=role,
+        auto_enable=_parse_mk8s_gpu_app_activation_rules(
+            raw.get("auto_enable"),
+            field_label=f"{field_label}.auto_enable",
+        ),
+        value_overrides=_parse_mk8s_gpu_app_value_rules(
+            raw.get("value_overrides"),
+            field_label=f"{field_label}.value_overrides",
+        ),
+        install_after=_parse_string_list(
+            raw.get("install_after"),
+            field_label=f"{field_label}.install_after",
+        ),
+    )
+
+
+def _parse_vm_image_preference_settings(
+    raw: Any,
+    *,
+    field_label: str,
+) -> VmImagePreferenceSettings:
+    if raw is None:
+        return VmImagePreferenceSettings()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {
+        "preferred_cpu_image_families",
+        "preferred_gpu_image_families",
+    }
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    return VmImagePreferenceSettings(
+        preferred_cpu_image_families=_parse_string_list(
+            raw.get("preferred_cpu_image_families"),
+            field_label=f"{field_label}.preferred_cpu_image_families",
+        ),
+        preferred_gpu_image_families=_parse_string_list(
+            raw.get("preferred_gpu_image_families"),
+            field_label=f"{field_label}.preferred_gpu_image_families",
+        ),
+    )
+
+
+def _parse_infra_component_cli(
+    raw: Any,
+    *,
+    module_name: str,
+    field_label: str,
+    source_profile: SourceProfile,
+    source_root: Path | None = None,
+) -> tuple[Mk8sGpuSettings, VmImagePreferenceSettings]:
+    if raw is None:
+        return Mk8sGpuSettings(), VmImagePreferenceSettings()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+
+    if module_name == "mk8s":
+        supported_keys = {"gpu"}
+        unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+        if unknown:
+            raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+        return (
+            _parse_mk8s_gpu_settings(
+                raw.get("gpu"),
+                field_label=f"{field_label}.gpu",
+                source_profile=source_profile,
+                source_root=source_root,
+            ),
+            VmImagePreferenceSettings(),
+        )
+
+    if module_name == "vm":
+        supported_keys = {"image_preferences"}
+        unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+        if unknown:
+            raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+        return (
+            Mk8sGpuSettings(),
+            _parse_vm_image_preference_settings(
+                raw.get("image_preferences"),
+                field_label=f"{field_label}.image_preferences",
+            ),
+        )
+
+    unknown = sorted(str(key) for key in raw)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    return Mk8sGpuSettings(), VmImagePreferenceSettings()
+
+
+def _parse_app_component_cli(
+    raw: Any,
+    *,
+    field_label: str,
+) -> Mk8sGpuAppPolicy:
+    if raw is None:
+        return Mk8sGpuAppPolicy()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {"mk8s_gpu"}
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    return _parse_mk8s_gpu_app_policy(
+        raw.get("mk8s_gpu"),
+        field_label=f"{field_label}.mk8s_gpu",
+    )
 
 
 def _parse_cli_settings(raw: Any) -> CliSettings:
@@ -631,6 +1295,9 @@ def _parse_wizard_fields(
             auto_select_single = options.get("auto_select_single")
             if isinstance(auto_select_single, bool):
                 normalized_options["auto_select_single"] = auto_select_single
+            auto_select_first = options.get("auto_select_first")
+            if isinstance(auto_select_first, bool):
+                normalized_options["auto_select_first"] = auto_select_first
             skip_prompt_if_no_choices = options.get("skip_prompt_if_no_choices")
             if isinstance(skip_prompt_if_no_choices, bool):
                 normalized_options["skip_prompt_if_no_choices"] = skip_prompt_if_no_choices
@@ -712,17 +1379,139 @@ def _resolved_module_source(
     return portable_source
 
 
+def _resolved_portable_local_source(
+    *,
+    field_label: str,
+    portable_source: str,
+    local_source: str | None,
+    source_profile: SourceProfile,
+    source_root: Path | None = None,
+) -> str:
+    if not portable_source:
+        raise ValueError(f"{field_label}.portable is required")
+    if source_profile == SourceProfile.LOCAL:
+        resolved_local = _resolve_existing_local_module_source(
+            str(local_source or ""),
+            source_root=source_root,
+        )
+        if resolved_local:
+            return resolved_local
+        if str(local_source or "").strip():
+            return str(local_source).strip()
+    return portable_source
+
+
+def _compose_chart_source_ref(*, repo: str, chart_name: str, path: str = "") -> str:
+    if str(path).strip():
+        return str(path).strip()
+    normalized_repo = str(repo).strip().rstrip("/")
+    normalized_chart = str(chart_name).strip().strip("/")
+    if not normalized_repo:
+        return normalized_chart
+    if normalized_repo.startswith("oci://") and normalized_chart:
+        repo_tail = normalized_repo.rsplit("/", maxsplit=1)[-1].strip().lower()
+        if repo_tail == normalized_chart.lower():
+            return normalized_repo
+    if not normalized_chart:
+        return normalized_repo
+    return f"{normalized_repo}/{normalized_chart}"
+
+
+def _parse_helm_chart_locator(
+    raw: Any,
+    *,
+    field_label: str,
+    default_chart_name: str,
+    allow_path: bool,
+    source_root: Path | None = None,
+) -> HelmChartLocator:
+    if raw is None:
+        return HelmChartLocator()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {"repo", "chart", "version"} if not allow_path else {"path", "chart", "version"}
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+
+    path = ""
+    if allow_path:
+        path = _as_text(raw.get("path"))
+        if path:
+            resolved_path = _resolve_existing_local_module_source(path, source_root=source_root)
+            path = resolved_path or path
+
+    repo = _as_text(raw.get("repo")).rstrip("/")
+    raw_chart_name = _as_text(raw.get("chart"))
+    version = _as_text(raw.get("version")) or None
+    if not path and not repo and not raw_chart_name and not version:
+        return HelmChartLocator()
+    if path:
+        chart_name = raw_chart_name or default_chart_name
+        return HelmChartLocator(chart_name=chart_name, version=version, path=path)
+    if allow_path:
+        raise ValueError(f"{field_label}.path is required")
+    if not repo:
+        raise ValueError(f"{field_label}.repo is required")
+    chart_name = raw_chart_name or default_chart_name
+    return HelmChartLocator(repo=repo, chart_name=chart_name, version=version)
+
+
+def _parse_helm_chart_source_block(
+    raw: Any,
+    *,
+    field_label: str,
+    default_chart_name: str,
+    source_profile: SourceProfile,
+    source_root: Path | None = None,
+) -> tuple[HelmChartLocator, HelmChartLocator, HelmChartLocator]:
+    if raw is None:
+        raise ValueError(f"{field_label} must be a mapping")
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {"portable", "local"}
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+
+    portable_raw = raw.get("portable")
+    local_raw = raw.get("local")
+    portable = _parse_helm_chart_locator(
+        portable_raw,
+        field_label=f"{field_label}.portable",
+        default_chart_name=default_chart_name,
+        allow_path=False,
+        source_root=source_root,
+    )
+    local = _parse_helm_chart_locator(
+        local_raw,
+        field_label=f"{field_label}.local",
+        default_chart_name=default_chart_name,
+        allow_path=True,
+        source_root=source_root,
+    )
+    if not portable.repo and not str(local.path or "").strip():
+        raise ValueError(
+            f"{field_label} must define at least one of source.portable or source.local.path"
+        )
+    if source_profile == SourceProfile.LOCAL and str(local.path or "").strip():
+        return local, portable, local
+    if portable.repo and portable.chart_name:
+        return portable, portable, local
+    return portable, portable, local
+
+
 def _parse_ui_block(
     raw: Any,
     *,
     field_label: str,
-) -> tuple[str | None, str | None, bool]:
+) -> tuple[str | None, str | None, bool, bool]:
     if raw is None:
-        return None, None, False
+        return None, None, False, True
     if not isinstance(raw, dict):
         raise ValueError(f"{field_label} ui must be a mapping")
 
-    supported_ui_keys = {"title", "group", "enabled"}
+    supported_ui_keys = {"title", "group", "enabled", "selectable"}
     unknown_ui_keys = sorted(str(key) for key in raw if str(key) not in supported_ui_keys)
     if unknown_ui_keys:
         raise ValueError(
@@ -732,7 +1521,8 @@ def _parse_ui_block(
     title = _as_text(raw.get("title")) or None
     group = _as_text(raw.get("group")) or None
     enabled = bool(raw.get("enabled", False))
-    return title, group, enabled
+    selectable = bool(raw.get("selectable", True))
+    return title, group, enabled, selectable
 
 
 def _parse_sources_payload(
@@ -787,6 +1577,7 @@ def _parse_sources_payload(
             "ui",
             "status",
             "defaults",
+            "cli",
             "wizard_profile",
             "wizard",
             "input",
@@ -826,7 +1617,7 @@ def _parse_sources_payload(
             resolved_source=source,
             source_root=source_root,
         )
-        description, group, enable = _parse_ui_block(
+        description, group, enable, _selectable = _parse_ui_block(
             raw.get("ui"),
             field_label=f"components.infra.{module_name}",
         )
@@ -840,6 +1631,13 @@ def _parse_sources_payload(
         defaults = _parse_component_defaults(
             raw.get("defaults"),
             field_label=f"components.infra.{module_name}",
+        )
+        mk8s_gpu, vm_images = _parse_infra_component_cli(
+            raw.get("cli"),
+            module_name=module_name,
+            field_label=f"components.infra.{module_name}.cli",
+            source_profile=source_profile,
+            source_root=source_root,
         )
         handoff = resolve_builtin_handoff(module_name)
         outputs = _component_outputs_with_builtin_handoff(
@@ -866,6 +1664,8 @@ def _parse_sources_payload(
                 input_bindings=input_bindings,
                 handoff=handoff,
                 status=status,
+                mk8s_gpu=mk8s_gpu,
+                vm_images=vm_images,
             )
         )
 
@@ -881,6 +1681,7 @@ def _parse_sources_payload(
             "ui",
             "release",
             "defaults",
+            "cli",
             "wizard",
             "input",
         }
@@ -891,21 +1692,13 @@ def _parse_sources_payload(
                 + ", ".join(unknown_chart_keys)
             )
 
-        source_block = raw.get("source", {})
-        if not isinstance(source_block, dict):
-            raise ValueError(f"components.apps.{component_id} source must be a mapping")
-        supported_app_source_keys = {"repo", "chart", "version"}
-        unknown_app_source_keys = sorted(
-            str(key) for key in source_block if str(key) not in supported_app_source_keys
+        source, portable_source, local_source = _parse_helm_chart_source_block(
+            raw.get("source"),
+            field_label=f"components.apps.{component_id}.source",
+            default_chart_name=component_id,
+            source_profile=source_profile,
+            source_root=source_root,
         )
-        if unknown_app_source_keys:
-            raise ValueError(
-                f"components.apps.{component_id} source has unsupported field(s): "
-                + ", ".join(unknown_app_source_keys)
-            )
-        repo = _as_text(source_block.get("repo")).rstrip("/") or None
-        chart_name = _as_text(source_block.get("chart")) or component_id
-        version = _as_text(source_block.get("version")) or None
 
         release_block = raw.get("release", {})
         if release_block is None:
@@ -930,7 +1723,7 @@ def _parse_sources_payload(
                 "like '5m' or '12m30s'"
             )
 
-        description, group, enable = _parse_ui_block(
+        description, group, enable, selectable = _parse_ui_block(
             raw.get("ui"),
             field_label=f"components.apps.{component_id}",
         )
@@ -944,23 +1737,29 @@ def _parse_sources_payload(
             raw.get("defaults"),
             field_label=f"components.apps.{component_id}",
         )
+        mk8s_gpu = _parse_app_component_cli(
+            raw.get("cli"),
+            field_label=f"components.apps.{component_id}.cli",
+        )
         input_bindings = _parse_component_input_bindings(raw.get("input"))
         helm_charts.append(
             HelmChartSource(
                 name=component_id,
-                chart_name=chart_name,
-                repo=repo,
-                version=version,
+                source=source,
+                portable_source=portable_source,
+                local_source=local_source,
                 namespace=namespace,
                 release_name=release_name,
                 release_timeout=release_timeout,
                 enable=enable,
+                selectable=selectable,
                 description=description,
                 group=group,
                 wizard_fields=wizard_fields,
                 defaults=defaults,
                 outputs=(),
                 input_bindings=input_bindings,
+                mk8s_gpu=mk8s_gpu,
             )
         )
 

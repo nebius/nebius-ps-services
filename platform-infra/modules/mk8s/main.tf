@@ -38,6 +38,17 @@ resource "nebius_mk8s_v1_cluster" "this" {
       )
       error_message = "GPU node group resources.platform and resources.preset must be set when gpu_enabled=true."
     }
+    precondition {
+      condition = (
+        !var.gpu_enabled ||
+        var.gpu_stack_source == "manual" ||
+        (
+          local.gpu_effective_stack_preset != null &&
+          length(trimspace(local.gpu_effective_stack_preset)) > 0
+        )
+      )
+      error_message = "gpu_stack_preset must be set when gpu_enabled=true and gpu_stack_source=nebius_image."
+    }
   }
 }
 

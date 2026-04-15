@@ -116,11 +116,11 @@ def _write_sources_file(
                     },
                     "apps": {
                         "demo-app": {
-                            "source": {
-                                "repo": "https://example.invalid/charts",
-                                "chart": "demo-app",
-                                "version": "1.0.0",
-                            },
+                            "source": _portable_chart_source(
+                                repo="https://example.invalid/charts",
+                                chart="demo-app",
+                                version="1.0.0",
+                            ),
                             "release": {
                                 "namespace": "demo",
                                 "name": "demo-app",
@@ -156,6 +156,16 @@ def _catalog(
     if shared is not None:
         payload["shared"] = shared
     return payload
+
+
+def _portable_chart_source(*, repo: str, chart: str, version: str = "") -> dict[str, object]:
+    portable: dict[str, object] = {
+        "repo": repo,
+        "chart": chart,
+    }
+    if version:
+        portable["version"] = version
+    return {"portable": portable}
 
 
 def _normalized_catalog_signature(path: Path) -> dict[str, object]:
@@ -349,11 +359,11 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(
                 },
                 apps={
                     "gateway-helm": {
-                        "source": {
-                            "repo": "oci://docker.io/envoyproxy",
-                            "chart": "gateway-helm",
-                            "version": "1.4.2",
-                        },
+                        "source": _portable_chart_source(
+                            repo="oci://docker.io/envoyproxy",
+                            chart="gateway-helm",
+                            version="1.4.2",
+                        ),
                         "release": {
                             "namespace": "envoy-gateway-system",
                             "name": "envoy-gateway",
@@ -449,11 +459,11 @@ def test_app_release_timeout_inherits_global_flux_default(tmp_path: Path) -> Non
                 },
                 apps={
                     "demo-app": {
-                        "source": {
-                            "repo": "https://example.invalid/charts",
-                            "chart": "demo-app",
-                            "version": "1.0.0",
-                        },
+                        "source": _portable_chart_source(
+                            repo="https://example.invalid/charts",
+                            chart="demo-app",
+                            version="1.0.0",
+                        ),
                         "release": {
                             "namespace": "demo",
                             "name": "demo-app",
@@ -539,11 +549,11 @@ def test_load_component_sources_rejects_release_name_alias_for_helm_chart(tmp_pa
             _catalog(
                 apps={
                     "gateway-helm": {
-                        "source": {
-                            "repo": "oci://docker.io/envoyproxy",
-                            "chart": "gateway-helm",
-                            "version": "1.4.2",
-                        },
+                        "source": _portable_chart_source(
+                            repo="oci://docker.io/envoyproxy",
+                            chart="gateway-helm",
+                            version="1.4.2",
+                        ),
                         "release": {
                             "namespace": "envoy-gateway-system",
                             "release-name": "envoy-gateway",
@@ -577,11 +587,11 @@ def test_load_component_sources_parses_instance_qualified_input_binding(tmp_path
                 },
                 apps={
                     "demo-app": {
-                        "source": {
-                            "repo": "https://example.invalid/charts",
-                            "chart": "demo-app",
-                            "version": "1.0.0",
-                        },
+                        "source": _portable_chart_source(
+                            repo="https://example.invalid/charts",
+                            chart="demo-app",
+                            version="1.0.0",
+                        ),
                         "release": {
                             "namespace": "demo",
                             "name": "demo-app",
@@ -919,12 +929,19 @@ def test_bundled_mysterybox_declares_secret_status_watcher() -> None:
     assert mysterybox.status.name_input == "secrets"
 
 
-def test_bundled_jump_hosts_declare_compute_instance_status_watchers() -> None:
+def test_bundled_vm_like_modules_declare_compute_instance_status_watchers() -> None:
     loaded = load_component_sources(
         explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml"
     )
+    vm = next(item for item in loaded.tf_modules if item.module == "vm")
     wireguard = next(item for item in loaded.tf_modules if item.module == "wireguard-jumphost")
     ssh = next(item for item in loaded.tf_modules if item.module == "ssh-jumphost")
+
+    assert vm.validation_profile == "vm_instance"
+    assert vm.status is not None
+    assert vm.status.kind == "nebius.compute.instance"
+    assert vm.status.parent_input == "parent_id"
+    assert vm.status.name_input == "name"
 
     assert wireguard.status is not None
     assert wireguard.status.kind == "nebius.compute.instance"
@@ -972,6 +989,14 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
                 "args": {"platform_path": "inputs.cpu_nodes_platform"},
             }
         },
+        "inputs.cpu_nodes_os": {
+            "options": {
+                "from": "mk8s_node_group_os_values",
+                "args": {"platform_path": "inputs.cpu_nodes_platform"},
+                "auto_select_first": True,
+            },
+            "prompt": False,
+        },
         "inputs.gpu_nodes_preset": {
             "options": {
                 "from": "compute_platform_presets",
@@ -992,12 +1017,23 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
                 "skip_prompt_if_no_choices": True,
             }
         },
-        "inputs.gpu_drivers_preset": {
+        "inputs.gpu_nodes_os": {
             "options": {
-                "from": "mk8s_gpu_driver_presets",
+                "from": "mk8s_node_group_os_values",
+                "args": {
+                    "platform_path": "inputs.gpu_nodes_platform",
+                    "stack_preset_path": "inputs.gpu_stack_preset",
+                },
+                "auto_select_first": True,
+            },
+            "prompt": False,
+        },
+        "inputs.gpu_stack_preset": {
+            "options": {
+                "from": "mk8s_gpu_stack_presets",
                 "args": {"platform_path": "inputs.gpu_nodes_platform"},
-                "auto_select_single": True,
-            }
+            },
+            "prompt": False,
         },
         "inputs.mk8s_cluster_overrides": {
             "prompt": False,
@@ -1050,14 +1086,121 @@ def test_bundled_managed_postgresql_uses_wizard_profile() -> None:
     }
 
 
-def test_bundled_jump_hosts_use_component_scoped_wizard_profiles() -> None:
+def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> None:
     loaded = load_component_sources(
         explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml"
     )
 
+    vm = next(item for item in loaded.tf_modules if item.module == "vm")
     wireguard = next(item for item in loaded.tf_modules if item.module == "wireguard-jumphost")
     ssh = next(item for item in loaded.tf_modules if item.module == "ssh-jumphost")
 
+    assert vm.wizard_fields == {
+        "inputs.subnet_id": {
+            "options": {
+                "from": "project_subnets",
+            }
+        },
+        "inputs.platform": {
+            "options": {
+                "from": "compute_platforms",
+            }
+        },
+        "inputs.preset": {
+            "options": {
+                "from": "compute_platform_presets",
+                "args": {"platform_path": "inputs.platform"},
+            }
+        },
+        "inputs.source_image_family": {
+            "options": {
+                "from": "compute_public_image_families",
+                "args": {"platform_path": "inputs.platform"},
+                "auto_select_first": True,
+            }
+        },
+        "inputs.public_ip_mode": {
+            "sources": [
+                {
+                    "source": "static",
+                    "values": ["dynamic", "none", "static", "allocation"],
+                }
+            ]
+        },
+        "inputs.gpu_cluster_infiniband_fabric": {
+            "options": {
+                "from": "mk8s_infiniband_fabrics",
+                "args": {
+                    "platform_path": "inputs.platform",
+                    "preset_path": "inputs.preset",
+                },
+                "skip_prompt_if_no_choices": True,
+            }
+        },
+        "inputs.boot_disk_existing_id": {
+            "prompt": False,
+        },
+        "inputs.source_image_id": {
+            "prompt": False,
+        },
+        "inputs.boot_disk_device_id": {
+            "prompt": False,
+        },
+        "inputs.public_ip_allocation_id": {
+            "prompt": False,
+        },
+        "inputs.private_ip_allocation_id": {
+            "prompt": False,
+        },
+        "inputs.security_group_ids": {
+            "prompt": False,
+        },
+        "inputs.hostname": {
+            "prompt": False,
+        },
+        "inputs.service_account_id": {
+            "prompt": False,
+        },
+        "inputs.stopped": {
+            "prompt": False,
+        },
+        "inputs.labels": {
+            "prompt": False,
+        },
+        "inputs.data_disks": {
+            "prompt": False,
+        },
+        "inputs.existing_data_disks": {
+            "prompt": False,
+        },
+        "inputs.filesystems": {
+            "prompt": False,
+        },
+        "inputs.preemptible_priority": {
+            "prompt": False,
+        },
+        "inputs.gpu_cluster_id": {
+            "prompt": False,
+        },
+        "inputs.gpu_cluster_name": {
+            "prompt": False,
+        },
+        "inputs.container_entrypoint": {
+            "prompt": False,
+        },
+        "inputs.container_args": {
+            "prompt": False,
+        },
+        "inputs.container_env": {
+            "prompt": False,
+        },
+        "inputs.container_ports": {
+            "prompt": False,
+        },
+        "inputs.container_mounts": {
+            "prompt": False,
+        },
+    }
     assert wireguard.wizard_fields == {
         "inputs.subnet_id": {
             "options": {
@@ -1187,7 +1330,7 @@ def test_shipped_catalogs_do_not_embed_jump_host_public_key_defaults() -> None:
     loaded = load_component_sources(
         explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml"
     )
-    for module_id in ("wireguard-jumphost", "ssh-jumphost"):
+    for module_id in ("vm", "wireguard-jumphost", "ssh-jumphost"):
         module = next(item for item in loaded.tf_modules if item.module == module_id)
         default_targets = {default.target_path for default in module.defaults}
         assert "inputs.ssh_user_name" in default_targets
@@ -1291,6 +1434,301 @@ def test_load_component_sources_rejects_invalid_terraform_version(
 
     with pytest.raises(ValueError, match="cli\\.terraform\\.version must be a semantic version"):
         load_component_sources()
+
+
+def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                infra={
+                    "mk8s": {
+                        "source": {
+                            "portable": "git::https://example.invalid/modules/mk8s?ref=main",
+                            "local": "../../platform-infra/modules/mk8s",
+                        },
+                        "ui": {"enabled": True},
+                        "cli": {
+                            "gpu": {
+                                "image_preferences": {
+                                    "preferred_gpu_stack_presets": ["cuda13.0", "cuda12.8"],
+                                    "preferred_os": ["ubuntu24.04", "ubuntu22.04"],
+                                },
+                                "validations": {
+                                    "operator_readiness": {
+                                        "enabled_by_default": True,
+                                        "timeout": "20m",
+                                    },
+                                    "gpu_visibility": {
+                                        "enabled_by_default": True,
+                                        "namespace": "gpu-validation",
+                                        "image": "nvcr.io/example/vectoradd:latest",
+                                        "timeout": "10m",
+                                    },
+                                    "nccl": {
+                                        "enabled_by_default": True,
+                                        "chart_component_id": "nccl-test",
+                                        "timeout": "45m",
+                                        "training_operator_manifest": "github.com/example/training-operator?ref=v1.0.0",
+                                        "training_operator_namespace": "kubeflow",
+                                        "average_bus_bandwidth_threshold_gbps": 300,
+                                    },
+                                },
+                            }
+                        },
+                    }
+                },
+                apps={
+                    "gpu-operator": {
+                        "source": _portable_chart_source(
+                            repo="https://example.invalid/charts",
+                            chart="gpu-operator",
+                            version="1.0.0",
+                        ),
+                        "release": {
+                            "namespace": "gpu-system",
+                            "name": "gpu-operator",
+                        },
+                        "ui": {"enabled": False},
+                        "cli": {
+                            "mk8s_gpu": {
+                                "role": "gpu_operator",
+                                "auto_enable": [{}],
+                                "install_after": ["network-op"],
+                                "value_overrides": [
+                                    {
+                                        "gpu_stack_source": "nebius_image",
+                                        "values": {
+                                            "values.driver.enabled": False,
+                                            "values.toolkit.enabled": False,
+                                        },
+                                    }
+                                ],
+                            }
+                        },
+                    },
+                    "network-op": {
+                        "source": _portable_chart_source(
+                            repo="https://example.invalid/charts",
+                            chart="network-operator",
+                            version="1.0.0",
+                        ),
+                        "release": {
+                            "namespace": "network-system",
+                            "name": "network-operator",
+                        },
+                        "ui": {"enabled": False},
+                        "cli": {
+                            "mk8s_gpu": {
+                                "role": "network_operator",
+                                "auto_enable": [
+                                    {
+                                        "gpu_stack_source": "manual",
+                                        "match_platforms": ["gpu-b200-sxm"],
+                                    }
+                                ],
+                            }
+                        },
+                    },
+                    "nccl-test": {
+                        "source": {
+                            "local": {
+                                "path": "../../helm-charts/nccl-test",
+                            }
+                        },
+                        "release": {
+                            "namespace": "nccl-test",
+                            "name": "nccl-test",
+                        },
+                        "ui": {
+                            "enabled": False,
+                            "selectable": False,
+                        },
+                        "cli": {
+                            "mk8s_gpu": {
+                                "value_overrides": [
+                                    {
+                                        "match_platforms": ["gpu-h100-sxm"],
+                                        "values": {
+                                            "values.image.repository": "registry.example/nccl",
+                                            "values.image.tag": "latest",
+                                        },
+                                    }
+                                ]
+                            }
+                        },
+                    },
+                },
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_component_sources(explicit=sources_file)
+    mk8s = next(module for module in loaded.tf_modules if module.module == "mk8s")
+    gpu_operator = next(chart for chart in loaded.helm_charts if chart.name == "gpu-operator")
+    network_operator = next(chart for chart in loaded.helm_charts if chart.name == "network-op")
+
+    assert mk8s.mk8s_gpu.image_preferences.preferred_gpu_stack_presets == (
+        "cuda13.0",
+        "cuda12.8",
+    )
+    assert network_operator.mk8s_gpu.role == "network_operator"
+    assert network_operator.mk8s_gpu.auto_enable[0].gpu_stack_source == "manual"
+    assert network_operator.mk8s_gpu.auto_enable[0].match_platforms == ("gpu-b200-sxm",)
+    assert gpu_operator.mk8s_gpu.value_overrides[0].values[0].target_path == "values.driver.enabled"
+    assert mk8s.mk8s_gpu.validations.operator_readiness.timeout == "20m"
+    assert mk8s.mk8s_gpu.validations.gpu_visibility.namespace == "gpu-validation"
+    assert mk8s.mk8s_gpu.validations.nccl.chart_component_id == "nccl-test"
+
+
+def test_load_component_sources_parses_vm_cli_settings(tmp_path: Path) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                infra={
+                    "vm": {
+                        "source": {
+                            "portable": "git::https://example.invalid/modules/vm?ref=main",
+                            "local": "../../platform-infra/modules/vm",
+                        },
+                        "ui": {"enabled": False},
+                        "cli": {
+                            "image_preferences": {
+                                "preferred_cpu_image_families": [
+                                    "ubuntu24.04-driverless",
+                                    "ubuntu22.04-driverless",
+                                ],
+                                "preferred_gpu_image_families": [
+                                    "ubuntu24.04-cuda13.0",
+                                    "ubuntu24.04-cuda12",
+                                ],
+                            }
+                        },
+                    }
+                },
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_component_sources(explicit=sources_file)
+    vm = next(module for module in loaded.tf_modules if module.module == "vm")
+
+    assert vm.vm_images.preferred_cpu_image_families == (
+        "ubuntu24.04-driverless",
+        "ubuntu22.04-driverless",
+    )
+    assert vm.vm_images.preferred_gpu_image_families == (
+        "ubuntu24.04-cuda13.0",
+        "ubuntu24.04-cuda12",
+    )
+
+
+def test_load_component_sources_resolves_local_nccl_chart_source(tmp_path: Path) -> None:
+    chart_dir = tmp_path / "helm-charts" / "nccl-test"
+    chart_dir.mkdir(parents=True)
+    (chart_dir / "Chart.yaml").write_text(
+        "apiVersion: v2\nname: nccl-test\nversion: 0.1.0\n",
+        encoding="utf-8",
+    )
+    (chart_dir / "values.yaml").write_text("image: {}\n", encoding="utf-8")
+    (chart_dir / "templates").mkdir()
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                infra={
+                    "mk8s": {
+                        "source": {
+                            "portable": "git::https://example.invalid/modules/mk8s?ref=main",
+                            "local": "../../platform-infra/modules/mk8s",
+                        },
+                        "ui": {"enabled": True},
+                        "cli": {
+                            "gpu": {
+                                "validations": {
+                                    "nccl": {
+                                        "enabled_by_default": True,
+                                        "chart_component_id": "nccl-test",
+                                        "timeout": "45m",
+                                        "training_operator_manifest": "github.com/example/training-operator?ref=v1.0.0",
+                                        "training_operator_namespace": "kubeflow",
+                                    }
+                                }
+                            }
+                        },
+                    }
+                },
+                apps={
+                    "nccl-test": {
+                        "source": {
+                            "local": {
+                                "path": "./helm-charts/nccl-test",
+                            }
+                        },
+                        "release": {
+                            "namespace": "nccl-test",
+                            "name": "nccl-test",
+                        },
+                        "ui": {
+                            "enabled": False,
+                            "selectable": False,
+                        },
+                    }
+                },
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_component_sources(explicit=sources_file, source_profile=SourceProfile.LOCAL)
+    mk8s = next(module for module in loaded.tf_modules if module.module == "mk8s")
+    nccl_chart = next(chart for chart in loaded.helm_charts if chart.name == "nccl-test")
+
+    assert mk8s.mk8s_gpu.validations.nccl.chart_component_id == "nccl-test"
+    assert nccl_chart.path == str(chart_dir.resolve())
+
+
+def test_load_component_sources_rejects_invalid_mk8s_gpu_app_role_value(tmp_path: Path) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                apps={
+                    "gpu-operator": {
+                        "source": _portable_chart_source(
+                            repo="https://example.invalid/charts",
+                            chart="gpu-operator",
+                            version="1.0.0",
+                        ),
+                        "release": {
+                            "namespace": "gpu-system",
+                            "name": "gpu-operator",
+                        },
+                        "ui": {"enabled": False},
+                        "cli": {
+                            "mk8s_gpu": {
+                                "role": "device_plugin",
+                            }
+                        },
+                    }
+                },
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="components\\.apps\\.gpu-operator\\.cli\\.mk8s_gpu\\.role must be one of: gpu_operator, network_operator, health_checker",
+    ):
+        load_component_sources(explicit=sources_file)
 
 
 def test_validate_sources_resolves_relative_local_module_path_from_component_sources_file(
@@ -1508,11 +1946,11 @@ def test_validate_sources_reports_chart_contract_findings(
             _catalog(
                 apps={
                     "gateway-helm": {
-                        "source": {
-                            "repo": "oci://docker.io/envoyproxy",
-                            "chart": "gateway-helm",
-                            "version": "1.4.2",
-                        },
+                        "source": _portable_chart_source(
+                            repo="oci://docker.io/envoyproxy",
+                            chart="gateway-helm",
+                            version="1.4.2",
+                        ),
                         "ui": {
                             "enabled": True,
                         },
@@ -1628,11 +2066,11 @@ def test_validate_sources_accepts_github_tree_chart_repo(
             _catalog(
                 apps={
                     "n8n": {
-                        "source": {
-                            "repo": "https://github.com/example/charts/tree/main/charts/n8n",
-                            "chart": "n8n",
-                            "version": "1.2.3",
-                        },
+                        "source": _portable_chart_source(
+                            repo="https://github.com/example/charts/tree/main/charts/n8n",
+                            chart="n8n",
+                            version="1.2.3",
+                        ),
                         "ui": {
                             "enabled": True,
                         },
@@ -1675,11 +2113,11 @@ def test_validate_sources_fails_when_helm_is_required_but_unavailable(
             _catalog(
                 apps={
                     "gateway-helm": {
-                        "source": {
-                            "repo": "oci://docker.io/envoyproxy",
-                            "chart": "gateway-helm",
-                            "version": "1.4.2",
-                        },
+                        "source": _portable_chart_source(
+                            repo="oci://docker.io/envoyproxy",
+                            chart="gateway-helm",
+                            version="1.4.2",
+                        ),
                         "ui": {
                             "enabled": True,
                         },

@@ -223,7 +223,10 @@ def test_strict_validation_requires_mk8s_gpu_shape_when_gpu_enabled(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
+    payload = _starter_payload(
+        selected_infra={"mk8s"},
+        selected_apps={"nvidia-gpu-operator"},
+    )
     mk8s = _infra_component_row(payload, "mk8s")
     mk8s["inputs"] = {
         "parent_id": "project-456",

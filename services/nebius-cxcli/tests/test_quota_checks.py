@@ -9,6 +9,7 @@ from nebius_cxcli.quota_checks import (
     QuotaRequirement,
     RegionalQuotaAvailability,
     _aggregate_requirements,
+    _estimate_vm_requirements,
     _evaluate_requirement,
     format_quota_report_lines,
 )
@@ -373,3 +374,80 @@ def test_format_quota_report_lines_include_regional_availability() -> None:
     )
     assert any("us-central1 (current): available 2 (insufficient)" in line for line in lines)
     assert any("eu-north1: available 18 (sufficient)" in line for line in lines)
+
+
+def test_estimate_vm_requirements_cover_regular_gpu_and_boot_disk() -> None:
+    class _Session:
+        def preset_resources(self, *, project_id: str, platform: str, preset: str):
+            assert project_id == "project-1"
+            assert platform == "gpu-h100-sxm"
+            assert preset == "1gpu-16vcpu-200gb"
+            return type(
+                "_Resources",
+                (),
+                {"platform": platform, "preset": preset, "vcpu_count": 16, "memory_gibibytes": 200, "gpu_count": 1},
+            )()
+
+    requirements: list[QuotaRequirement] = []
+    gaps: list[QuotaCoverageGap] = []
+
+    _estimate_vm_requirements(
+        session=_Session(),
+        project_id="project-1",
+        region="eu-north1",
+        component_id="vm",
+        instance_id="vm",
+        inputs={
+            "platform": "gpu-h100-sxm",
+            "preset": "1gpu-16vcpu-200gb",
+            "boot_disk_size_gib": 50,
+            "boot_disk_type": "NETWORK_SSD",
+            "public_ip_mode": "dynamic",
+        },
+        requirements=requirements,
+        gaps=gaps,
+    )
+
+    quota_names = [item.quota_name for item in requirements]
+    assert "compute.instance.count" in quota_names
+    assert "compute.instance.gpu.h100" in quota_names
+    assert "compute.disk.count" in quota_names
+    assert "compute.disk.size.network-ssd" in quota_names
+    assert "vpc.ipv4-address.public.count" in quota_names
+    assert gaps == []
+
+
+def test_estimate_vm_requirements_report_preemptible_gpu_quota_gap() -> None:
+    class _Session:
+        def preset_resources(self, *, project_id: str, platform: str, preset: str):
+            return type(
+                "_Resources",
+                (),
+                {"platform": platform, "preset": preset, "vcpu_count": 16, "memory_gibibytes": 200, "gpu_count": 1},
+            )()
+
+    requirements: list[QuotaRequirement] = []
+    gaps: list[QuotaCoverageGap] = []
+
+    _estimate_vm_requirements(
+        session=_Session(),
+        project_id="project-1",
+        region="us-central1",
+        component_id="vm",
+        instance_id="vm",
+        inputs={
+            "platform": "gpu-h100-sxm",
+            "preset": "1gpu-16vcpu-200gb",
+            "preemptible_enabled": True,
+            "public_ip_mode": "none",
+            "boot_disk_existing_id": "disk-existing",
+        },
+        requirements=requirements,
+        gaps=gaps,
+    )
+
+    assert [item.quota_name for item in requirements] == ["compute.instance.preemptible.count"]
+    assert any(
+        "GPU-type quota mapping for preemptible standalone VMs is not exposed" in gap.message
+        for gap in gaps
+    )

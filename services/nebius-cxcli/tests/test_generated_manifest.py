@@ -62,6 +62,13 @@ def _runtime_payload() -> dict:
 
 def test_build_generated_manifest_uses_repo_relative_paths(tmp_path: Path) -> None:
     paths = _project_paths(tmp_path)
+    validations = [
+        {
+            "kind": "mk8s_gpu_visibility",
+            "name": "GPU Visibility test",
+            "namespace": "gpu-validation",
+        }
+    ]
 
     manifest = build_generated_manifest(
         config=_runtime_payload(),
@@ -76,6 +83,7 @@ def test_build_generated_manifest_uses_repo_relative_paths(tmp_path: Path) -> No
                 "resource_name": "clust1",
             }
         ],
+        validations=validations,
         source_profile="portable",
         terraform_tfvars={"mk8s_cluster_name": "clust1"},
         flux_version="v2.8.0",
@@ -106,6 +114,7 @@ def test_build_generated_manifest_uses_repo_relative_paths(tmp_path: Path) -> No
             "resource_name": "clust1",
         }
     ]
+    assert manifest["deploy"]["validations"] == validations
     assert manifest["render"]["source_profile"] == "portable"
     assert "portable" not in manifest["render"]
     assert manifest["render"]["terraform_tfvars"] == {"mk8s_cluster_name": "clust1"}

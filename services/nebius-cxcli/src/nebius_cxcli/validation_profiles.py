@@ -7,6 +7,7 @@ _BUILTIN_VALIDATION_PROFILES: dict[str, str] = {
     "managed-postgresql": "postgresql_cluster",
     "sfs": "shared_filesystem",
     "mysterybox": "mysterybox",
+    "vm": "vm_instance",
     "wireguard-jumphost": "wireguard_jumphost",
     "ssh-jumphost": "ssh_jumphost",
 }

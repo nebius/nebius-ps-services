@@ -85,6 +85,14 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
                 "auto_select_single": True,
             }
         },
+        "inputs.cpu_nodes_os": {
+            "options": {
+                "from": "mk8s_node_group_os_values",
+                "depends_on": "inputs.cpu_nodes_platform",
+                "auto_select_first": True,
+            },
+            "prompt": False,
+        },
         "inputs.infiniband_fabric": {
             "options": {
                 "from": "mk8s_infiniband_fabrics",
@@ -93,12 +101,21 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
                 "skip_prompt_if_no_choices": True,
             }
         },
-        "inputs.gpu_drivers_preset": {
+        "inputs.gpu_stack_preset": {
             "options": {
-                "from": "mk8s_gpu_driver_presets",
+                "from": "mk8s_gpu_stack_presets",
                 "depends_on": "inputs.gpu_nodes_platform",
-                "auto_select_single": True,
-            }
+            },
+            "prompt": False,
+        },
+        "inputs.gpu_nodes_os": {
+            "options": {
+                "from": "mk8s_node_group_os_values",
+                "depends_on": "inputs.gpu_nodes_platform",
+                "args": {"stack_preset_path": "inputs.gpu_stack_preset"},
+                "auto_select_first": True,
+            },
+            "prompt": False,
         },
         **_suppressed_prompt_fields(
             "inputs.mk8s_cluster_overrides",
@@ -126,6 +143,52 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
         **_compute_platform_and_preset_fields(
             platform_field="inputs.platform",
             preset_field="inputs.preset",
+        ),
+    },
+    "vm": {
+        **_project_subnets_field(),
+        **_compute_platform_and_preset_fields(
+            platform_field="inputs.platform",
+            preset_field="inputs.preset",
+        ),
+        "inputs.source_image_family": {
+            "options": {
+                "from": "compute_public_image_families",
+                "depends_on": "inputs.platform",
+                "auto_select_first": True,
+            }
+        },
+        "inputs.public_ip_mode": _static_sources("dynamic", "none", "static", "allocation"),
+        "inputs.gpu_cluster_infiniband_fabric": {
+            "options": {
+                "from": "mk8s_infiniband_fabrics",
+                "depends_on": "inputs.platform",
+                "args": {"preset_path": "inputs.preset"},
+                "skip_prompt_if_no_choices": True,
+            }
+        },
+        **_suppressed_prompt_fields(
+            "inputs.boot_disk_existing_id",
+            "inputs.source_image_id",
+            "inputs.boot_disk_device_id",
+            "inputs.public_ip_allocation_id",
+            "inputs.private_ip_allocation_id",
+            "inputs.security_group_ids",
+            "inputs.hostname",
+            "inputs.service_account_id",
+            "inputs.stopped",
+            "inputs.labels",
+            "inputs.data_disks",
+            "inputs.existing_data_disks",
+            "inputs.filesystems",
+            "inputs.preemptible_priority",
+            "inputs.gpu_cluster_id",
+            "inputs.gpu_cluster_name",
+            "inputs.container_entrypoint",
+            "inputs.container_args",
+            "inputs.container_env",
+            "inputs.container_ports",
+            "inputs.container_mounts",
         ),
     },
     "object-storage": {

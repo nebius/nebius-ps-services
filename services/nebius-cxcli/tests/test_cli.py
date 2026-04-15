@@ -33,6 +33,16 @@ _VALID_ED25519_PUBLIC_KEY = (
 )
 
 
+def _portable_chart_source(*, repo: str, chart: str, version: str = "") -> dict[str, object]:
+    portable: dict[str, object] = {
+        "repo": repo,
+        "chart": chart,
+    }
+    if version:
+        portable["version"] = version
+    return {"portable": portable}
+
+
 def _empty_quota_report() -> cli_module.QuotaReport:
     return cli_module.QuotaReport(
         tenant_id="tenant-123",
@@ -1160,11 +1170,10 @@ def test_load_context_uses_component_sources_override_file(tmp_path: Path) -> No
             _catalog(
                 apps={
                     "nginx": {
-                        "source": {
-                            "repo": "https://charts.bitnami.com/bitnami",
-                            "chart": "nginx",
-                            "version": "",
-                        },
+                        "source": _portable_chart_source(
+                            repo="https://charts.bitnami.com/bitnami",
+                            chart="nginx",
+                        ),
                         "release": {
                             "namespace": "default",
                             "name": "external-app",
@@ -1213,11 +1222,11 @@ def test_load_context_rejects_missing_materialized_shared_app_defaults(tmp_path:
                     "infra": {},
                     "apps": {
                         "demo-app": {
-                            "source": {
-                                "repo": "https://example.invalid/charts",
-                                "chart": "demo-app",
-                                "version": "1.0.0",
-                            },
+                            "source": _portable_chart_source(
+                                repo="https://example.invalid/charts",
+                                chart="demo-app",
+                                version="1.0.0",
+                            ),
                             "release": {
                                 "namespace": "demo",
                                 "name": "demo-app",
@@ -1413,11 +1422,11 @@ def test_create_seeds_component_source_defaults_into_config(tmp_path: Path) -> N
                 },
                 apps={
                     "demo-app": {
-                        "source": {
-                            "repo": "https://example.invalid/charts",
-                            "chart": "demo-app",
-                            "version": "1.0.0",
-                        },
+                        "source": _portable_chart_source(
+                            repo="https://example.invalid/charts",
+                            chart="demo-app",
+                            version="1.0.0",
+                        ),
                         "release": {
                             "namespace": "demo",
                             "name": "demo-app",
@@ -1532,11 +1541,11 @@ def test_create_materializes_shared_app_defaults_into_config(tmp_path: Path) -> 
                     "infra": {},
                     "apps": {
                         "demo-app": {
-                            "source": {
-                                "repo": "https://example.invalid/charts",
-                                "chart": "demo-app",
-                                "version": "1.0.0",
-                            },
+                            "source": _portable_chart_source(
+                                repo="https://example.invalid/charts",
+                                chart="demo-app",
+                                version="1.0.0",
+                            ),
                             "release": {
                                 "namespace": "demo",
                                 "name": "demo-app",

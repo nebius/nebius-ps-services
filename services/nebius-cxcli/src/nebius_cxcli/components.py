@@ -93,6 +93,15 @@ def _compose_chart_source(*, repo: str | None, chart_name: str) -> str:
     return f"{normalized_repo}/{normalized_chart}"
 
 
+def _compose_chart_source_for_entry(*, chart: Any, fallback_name: str) -> str:
+    source_path = str(getattr(chart, "path", "") or "").strip()
+    if source_path:
+        return source_path
+    chart_name = str(getattr(chart, "chart_name", "") or fallback_name).strip()
+    chart_repo = str(getattr(chart, "repo", "") or "").strip() or None
+    return _compose_chart_source(repo=chart_repo, chart_name=chart_name)
+
+
 @lru_cache(maxsize=2)
 def _infra_component_entries(
     source_profile: SourceProfile | None = None,
@@ -140,12 +149,14 @@ def _entry_from_helm_chart(
     release_name: str,
     description: str,
     group: str | None,
+    source_ref: str,
     repo: str | None,
     chart_name: str,
     version: str | None,
     namespace: str | None,
     release_timeout: str | None,
     default_enabled: bool = False,
+    selectable: bool = True,
     wizard_fields: dict[str, dict[str, Any]] | None = None,
     defaults: tuple[ComponentDefault, ...] = (),
     outputs: tuple[ComponentOutput, ...] = (),
@@ -154,7 +165,6 @@ def _entry_from_helm_chart(
     config_key = _normalize_config_key(component_id)
     normalized_group = (group or "").strip()
     normalized_section = _normalize_app_section(normalized_group)
-    source = _compose_chart_source(repo=repo, chart_name=chart_name)
     return ComponentEntry(
         id=component_id,
         scope="apps",
@@ -162,10 +172,10 @@ def _entry_from_helm_chart(
         description=description or _humanize_component_id(component_id),
         name=release_name,
         default_enabled=default_enabled,
-        selectable=True,
+        selectable=selectable,
         enabled_path=("apps", normalized_section, config_key, "enabled"),
         engine_type="helm_release",
-        source=source,
+        source=source_ref,
         version=version,
         dependency_match_names=(
             component_id,
@@ -203,18 +213,22 @@ def _app_component_entries(
             continue
         if not COMPONENT_ID_PATTERN.fullmatch(component_id):
             continue
+        if not chart.selectable:
+            continue
         entries.append(
             _entry_from_helm_chart(
                 component_id=component_id,
                 release_name=release_name,
                 description=chart.description or f"Helm chart ({component_id})",
                 group=chart.group,
+                source_ref=_compose_chart_source_for_entry(chart=chart, fallback_name=component_id),
                 repo=chart.repo,
                 chart_name=chart_name,
                 version=chart.version,
                 namespace=chart.namespace,
                 release_timeout=chart.release_timeout,
                 default_enabled=bool(chart.enable),
+                selectable=bool(chart.selectable),
                 wizard_fields=chart.wizard_fields,
                 defaults=chart.defaults,
                 outputs=chart.outputs,

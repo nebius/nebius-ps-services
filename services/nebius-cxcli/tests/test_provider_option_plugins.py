@@ -75,12 +75,19 @@ def _install_fake_compute_module(
     *,
     platforms: list[tuple[str, str | None]],
     presets_by_platform: dict[str, list[dict[str, object]]] | None = None,
+    public_images: list[dict[str, object]] | None = None,
 ) -> None:
     compute_module = ModuleType("nebius.api.nebius.compute.v1")
 
     class ListPlatformsRequest:
         def __init__(self, *, parent_id: str, page_size: int, page_token: str) -> None:
             self.parent_id = parent_id
+            self.page_size = page_size
+            self.page_token = page_token
+
+    class ListPublicRequest:
+        def __init__(self, *, region: str, page_size: int, page_token: str) -> None:
+            self.region = region
             self.page_size = page_size
             self.page_token = page_token
 
@@ -123,8 +130,41 @@ def _install_fake_compute_module(
             )
             return SimpleNamespace(wait=lambda: response)
 
+    class ImageServiceClient:
+        def __init__(self, sdk: object) -> None:
+            self.sdk = sdk
+
+        def list_public(self, request: object) -> SimpleNamespace:
+            _ = request
+            response = SimpleNamespace(
+                items=[
+                    SimpleNamespace(
+                        spec=SimpleNamespace(
+                            image_family=item.get("image_family"),
+                            image_family_human_readable=item.get(
+                                "image_family_human_readable"
+                            ),
+                            recommended_platforms=list(
+                                item.get("recommended_platforms", [])
+                            ),
+                            unsupported_platforms=[
+                                SimpleNamespace(key=key, value=value)
+                                for key, value in dict(
+                                    item.get("unsupported_platforms", {})
+                                ).items()
+                            ],
+                        )
+                    )
+                    for item in (public_images or [])
+                ],
+                next_page_token="",
+            )
+            return SimpleNamespace(wait=lambda: response)
+
     compute_module.ListPlatformsRequest = ListPlatformsRequest
+    compute_module.ListPublicRequest = ListPublicRequest
     compute_module.PlatformServiceClient = PlatformServiceClient
+    compute_module.ImageServiceClient = ImageServiceClient
     _install_module(monkeypatch, "nebius.api.nebius.compute.v1", compute_module)
 
 
@@ -292,6 +332,67 @@ def test_compute_platforms_use_live_project_inventory(monkeypatch) -> None:
     ]
 
 
+def test_compute_public_image_families_follow_platform_and_catalog_preferences(
+    monkeypatch,
+) -> None:
+    _install_fake_compute_module(
+        monkeypatch,
+        platforms=[("gpu-h100-sxm", "GPU H100 SXM"), ("cpu-d3", "CPU D3")],
+        public_images=[
+            {
+                "image_family": "ubuntu24.04-cuda12",
+                "image_family_human_readable": "Ubuntu 24.04 CUDA 12",
+                "recommended_platforms": ["gpu-h100-sxm"],
+            },
+            {
+                "image_family": "ubuntu24.04-cuda13.0",
+                "image_family_human_readable": "Ubuntu 24.04 CUDA 13",
+                "recommended_platforms": ["gpu-h100-sxm"],
+            },
+            {
+                "image_family": "ubuntu24.04-driverless",
+                "image_family_human_readable": "Ubuntu 24.04 Driverless",
+                "recommended_platforms": ["cpu-d3"],
+            },
+        ],
+    )
+
+    monkeypatch.setattr(
+        "nebius_cxcli.provider_options._vm_image_preference_lists",
+        lambda: (
+            ("ubuntu24.04-driverless",),
+            ("ubuntu24.04-cuda13.0", "ubuntu24.04-cuda12"),
+        ),
+    )
+    lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
+
+    resolved = lookup.resolve(
+        provider="compute_public_image_families",
+        args={"platform_path": "infra.components[0].inputs.platform"},
+        payload={
+            "client_info": {"nebius": {"region_id": "eu-north1"}},
+            "infra": {"components": [{"inputs": {"platform": "gpu-h100-sxm"}}]},
+        },
+        field_path="infra.components[0].inputs.source_image_family",
+    )
+
+    assert [(choice.value, choice.label) for choice in resolved] == [
+        (
+            "ubuntu24.04-cuda13.0",
+            "ubuntu24.04-cuda13.0  (Ubuntu 24.04 CUDA 13, recommended)",
+        ),
+        (
+            "ubuntu24.04-cuda12",
+            "ubuntu24.04-cuda12  (Ubuntu 24.04 CUDA 12, recommended)",
+        ),
+        (
+            "ubuntu24.04-driverless",
+            "ubuntu24.04-driverless  (Ubuntu 24.04 Driverless, compatible)",
+        ),
+    ]
+
+
 def test_mk8s_compatible_platforms_intersect_project_inventory(monkeypatch) -> None:
     _install_fake_mk8s_module(
         monkeypatch,
@@ -344,7 +445,7 @@ def test_mk8s_compatible_platforms_fall_back_to_matrix_without_project_scope(mon
     ]
 
 
-def test_mk8s_gpu_driver_presets_follow_selected_platform(monkeypatch) -> None:
+def test_mk8s_gpu_stack_presets_follow_selected_platform(monkeypatch) -> None:
     _install_fake_mk8s_module(
         monkeypatch,
         compatibility_items=[
@@ -370,7 +471,7 @@ def test_mk8s_gpu_driver_presets_follow_selected_platform(monkeypatch) -> None:
     monkeypatch.setattr(lookup, "_resolve_k8s_version", lambda payload, args, field_path="": "1.33")
 
     resolved = lookup.resolve(
-        provider="mk8s_gpu_driver_presets",
+        provider="mk8s_gpu_stack_presets",
         args={"platform_path": "infra.components[0].inputs.gpu_nodes_platform"},
         payload={
             "infra": {
@@ -383,11 +484,58 @@ def test_mk8s_gpu_driver_presets_follow_selected_platform(monkeypatch) -> None:
                 ]
             }
         },
-        field_path="infra.components[0].inputs.gpu_drivers_preset",
+        field_path="infra.components[0].inputs.gpu_stack_preset",
     )
 
     assert [(choice.value, choice.label) for choice in resolved] == [
         ("cuda13.0", "cuda13.0  (ubuntu24.04)"),
+    ]
+
+
+def test_mk8s_node_group_os_values_follow_selected_driver_preset(monkeypatch) -> None:
+    _install_fake_mk8s_module(
+        monkeypatch,
+        compatibility_items=[
+            {
+                "compatible_platforms": ["gpu-h100-sxm"],
+                "drivers_preset": "cuda12.8",
+                "os": "ubuntu22.04",
+            },
+            {
+                "compatible_platforms": ["gpu-h100-sxm"],
+                "drivers_preset": "cuda13.0",
+                "os": "ubuntu24.04",
+            },
+        ],
+    )
+
+    lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
+    monkeypatch.setattr(lookup, "_resolve_k8s_version", lambda payload, args, field_path="": "1.33")
+
+    resolved = lookup.resolve(
+        provider="mk8s_node_group_os_values",
+        args={
+            "platform_path": "infra.components[0].inputs.gpu_nodes_platform",
+            "stack_preset_path": "infra.components[0].inputs.gpu_stack_preset",
+        },
+        payload={
+            "infra": {
+                "components": [
+                    {
+                        "inputs": {
+                            "gpu_nodes_platform": "gpu-h100-sxm",
+                            "gpu_stack_preset": "cuda13.0",
+                        }
+                    }
+                ]
+            }
+        },
+        field_path="infra.components[0].inputs.gpu_nodes_os",
+    )
+
+    assert [(choice.value, choice.label) for choice in resolved] == [
+        ("ubuntu24.04", "ubuntu24.04"),
     ]
 
 

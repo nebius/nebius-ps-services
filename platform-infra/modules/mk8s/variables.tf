@@ -113,6 +113,20 @@ variable "cpu_nodes_preset" {
   nullable    = false
 }
 
+variable "cpu_nodes_os" {
+  description = "Default CPU node group template.os. When null, provider defaults or override template.os apply."
+  type        = string
+  default     = null
+  nullable    = true
+  validation {
+    condition = (
+      var.cpu_nodes_os == null ||
+      length(trimspace(var.cpu_nodes_os)) > 0
+    )
+    error_message = "cpu_nodes_os cannot be empty when provided."
+  }
+}
+
 variable "cpu_nodes_preemptible" {
   description = "Use preemptible CPU nodes."
   type        = bool
@@ -176,6 +190,20 @@ variable "gpu_nodes_preset" {
   nullable    = false
 }
 
+variable "gpu_nodes_os" {
+  description = "Default GPU node group template.os. When null, provider defaults or override template.os apply."
+  type        = string
+  default     = null
+  nullable    = true
+  validation {
+    condition = (
+      var.gpu_nodes_os == null ||
+      length(trimspace(var.gpu_nodes_os)) > 0
+    )
+    error_message = "gpu_nodes_os cannot be empty when provided."
+  }
+}
+
 variable "gpu_nodes_preemptible" {
   description = "Use preemptible GPU nodes."
   type        = bool
@@ -190,44 +218,28 @@ variable "gpu_nodes_public_ips" {
   nullable    = false
 }
 
-variable "gpu_drivers_preset" {
-  description = "Explicit drivers_preset for GPU node groups. If null, gpu_driver_preset_map lookup and gpu_default_drivers_preset are used."
+variable "gpu_stack_preset" {
+  description = "Nebius GPU software-stack preset for GPU node groups when gpu_stack_source=nebius_image. This maps to the Nebius API field template.gpu_settings.drivers_preset."
   type        = string
   default     = null
   nullable    = true
   validation {
     condition = (
-      var.gpu_drivers_preset == null ||
-      length(trimspace(var.gpu_drivers_preset)) > 0
+      var.gpu_stack_preset == null ||
+      length(trimspace(var.gpu_stack_preset)) > 0
     )
-    error_message = "gpu_drivers_preset cannot be empty when provided."
+    error_message = "gpu_stack_preset cannot be empty when provided."
   }
 }
 
-variable "gpu_default_drivers_preset" {
-  description = "Fallback drivers_preset used when gpu_drivers_preset is null and gpu_nodes_platform is not found in gpu_driver_preset_map."
+variable "gpu_stack_source" {
+  description = "How the GPU software stack reaches MK8s nodes: nebius_image renders template.gpu_settings.drivers_preset so Managed Kubernetes preinstalls the Nebius image stack; manual omits gpu_settings so operators or other tooling can manage drivers, toolkit, and kernels."
   type        = string
-  default     = "cuda13.0"
+  default     = "nebius_image"
   nullable    = false
   validation {
-    condition     = length(trimspace(var.gpu_default_drivers_preset)) > 0
-    error_message = "gpu_default_drivers_preset cannot be empty."
-  }
-}
-
-variable "gpu_driver_preset_map" {
-  description = "Fallback mapping from gpu_nodes_platform to drivers_preset when gpu_drivers_preset is null."
-  type        = map(string)
-  default = {
-    "gpu-b200-sxm"   = "cuda12.8"
-    "gpu-b200-sxm-a" = "cuda12.8"
-  }
-  nullable = false
-  validation {
-    condition = alltrue([
-      for preset in values(var.gpu_driver_preset_map) : length(trimspace(preset)) > 0
-    ])
-    error_message = "gpu_driver_preset_map values must be non-empty strings."
+    condition     = contains(["nebius_image", "manual"], trimspace(var.gpu_stack_source))
+    error_message = "gpu_stack_source must be 'nebius_image' or 'manual'."
   }
 }
 
@@ -236,20 +248,6 @@ variable "infiniband_fabric" {
   type        = string
   default     = ""
   nullable    = false
-}
-
-variable "mig_strategy" {
-  description = "MIG strategy hint for upper layers (currently passthrough metadata only)."
-  type        = string
-  default     = null
-  nullable    = true
-}
-
-variable "mig_parted_config" {
-  description = "MIG partition profile mapped to node label nvidia.com/mig.config."
-  type        = string
-  default     = null
-  nullable    = true
 }
 
 variable "mk8s_cluster_overrides" {

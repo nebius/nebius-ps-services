@@ -946,6 +946,197 @@ def _estimate_jump_host_requirements(
         )
 
 
+def _estimate_vm_requirements(
+    *,
+    session: _QuotaSession,
+    project_id: str,
+    region: str,
+    component_id: str,
+    instance_id: str,
+    inputs: dict[str, Any],
+    requirements: list[QuotaRequirement],
+    gaps: list[QuotaCoverageGap],
+) -> None:
+    platform = _mapping_text(inputs, "platform")
+    preset = _mapping_text(inputs, "preset")
+    preemptible = _mapping_bool(inputs, "preemptible_enabled", default=False)
+    gpu_cluster_enabled = _mapping_bool(inputs, "gpu_cluster_enabled", default=False)
+    gpu_cluster_id = _mapping_text(inputs, "gpu_cluster_id")
+    gpu_cluster_fabric = _mapping_text(inputs, "gpu_cluster_infiniband_fabric")
+
+    resources = (
+        session.preset_resources(project_id=project_id, platform=platform, preset=preset)
+        if platform and preset
+        else None
+    )
+    if resources is None:
+        _append_gap(
+            gaps,
+            component_id=component_id,
+            instance_id=instance_id,
+            message=(
+                f"unable to resolve compute preset '{platform}/{preset}' live via the Nebius SDK; "
+                "instance vCPU/GPU quotas were not checked"
+            ),
+        )
+    elif preemptible:
+        _append_requirement(
+            requirements,
+            component_id=component_id,
+            instance_id=instance_id,
+            quota_name="compute.instance.preemptible.count",
+            region=region,
+            required=1,
+            reason=f"one preemptible VM at {platform}/{preset}",
+        )
+        if resources.gpu_count > 0:
+            _append_gap(
+                gaps,
+                component_id=component_id,
+                instance_id=instance_id,
+                message=(
+                    "GPU-type quota mapping for preemptible standalone VMs is not exposed by the "
+                    "current quota API surface; only preemptible VM count was checked"
+                ),
+            )
+        else:
+            _append_gap(
+                gaps,
+                component_id=component_id,
+                instance_id=instance_id,
+                message=(
+                    f"preemptible VM {platform}/{preset} did not resolve to a GPU shape; "
+                    "non-GPU preemptible quota semantics were not checked"
+                ),
+            )
+    else:
+        _append_requirement(
+            requirements,
+            component_id=component_id,
+            instance_id=instance_id,
+            quota_name="compute.instance.count",
+            region=region,
+            required=1,
+            reason="one regular VM",
+        )
+        if resources.gpu_count > 0:
+            gpu_suffix = _gpu_quota_suffix(platform)
+            if gpu_suffix:
+                _append_requirement(
+                    requirements,
+                    component_id=component_id,
+                    instance_id=instance_id,
+                    quota_name=f"compute.instance.gpu.{gpu_suffix}",
+                    region=region,
+                    required=resources.gpu_count,
+                    reason=f"{resources.gpu_count} GPU(s) from {platform}/{preset}",
+                )
+            else:
+                _append_gap(
+                    gaps,
+                    component_id=component_id,
+                    instance_id=instance_id,
+                    message=(
+                        f"unable to derive GPU quota name from platform '{platform}'; "
+                        "GPU-type quota was not checked"
+                    ),
+                )
+        else:
+            _append_requirement(
+                requirements,
+                component_id=component_id,
+                instance_id=instance_id,
+                quota_name="compute.instance.non-gpu.vcpu",
+                region=region,
+                required=resources.vcpu_count,
+                reason=f"{resources.vcpu_count} vCPU(s) from {platform}/{preset}",
+            )
+
+    if not _mapping_text(inputs, "boot_disk_existing_id"):
+        disk_type = _disk_quota_suffix(_mapping_text(inputs, "boot_disk_type", default="NETWORK_SSD"))
+        disk_size_gib = _positive_int(inputs.get("boot_disk_size_gib")) or 60
+        _append_requirement(
+            requirements,
+            component_id=component_id,
+            instance_id=instance_id,
+            quota_name="compute.disk.count",
+            region=region,
+            required=1,
+            reason="one managed boot disk",
+        )
+        if disk_type:
+            _append_requirement(
+                requirements,
+                component_id=component_id,
+                instance_id=instance_id,
+                quota_name=f"compute.disk.size.{disk_type}",
+                region=region,
+                required=disk_size_gib * _GIB,
+                reason=f"{disk_size_gib} GiB boot disk",
+            )
+
+    data_disks = inputs.get("data_disks")
+    if isinstance(data_disks, list):
+        for disk in data_disks:
+            if not isinstance(disk, dict):
+                continue
+            disk_type = _disk_quota_suffix(_mapping_text(disk, "type", default="NETWORK_SSD"))
+            disk_size_gib = _positive_int(disk.get("size_gib"))
+            disk_name = _mapping_text(disk, "name", default="data disk")
+            _append_requirement(
+                requirements,
+                component_id=component_id,
+                instance_id=instance_id,
+                quota_name="compute.disk.count",
+                region=region,
+                required=1,
+                reason=f"managed data disk {disk_name}",
+            )
+            if disk_type and disk_size_gib is not None:
+                _append_requirement(
+                    requirements,
+                    component_id=component_id,
+                    instance_id=instance_id,
+                    quota_name=f"compute.disk.size.{disk_type}",
+                    region=region,
+                    required=disk_size_gib * _GIB,
+                    reason=f"{disk_size_gib} GiB managed data disk {disk_name}",
+                )
+
+    public_ip_mode = _mapping_text(inputs, "public_ip_mode", default="dynamic").lower()
+    if public_ip_mode in {"dynamic", "static", "allocation"}:
+        _append_requirement(
+            requirements,
+            component_id=component_id,
+            instance_id=instance_id,
+            quota_name="vpc.ipv4-address.public.count",
+            region=region,
+            required=1,
+            reason=f"one {public_ip_mode} public IP",
+        )
+    if public_ip_mode == "static":
+        _append_requirement(
+            requirements,
+            component_id=component_id,
+            instance_id=instance_id,
+            quota_name="vpc.allocation.count",
+            region=region,
+            required=1,
+            reason="one static public IP allocation managed with the VM",
+        )
+
+    if gpu_cluster_enabled and not gpu_cluster_id and gpu_cluster_fabric:
+        _append_requirement(
+            requirements,
+            component_id=component_id,
+            instance_id=instance_id,
+            quota_name="compute.gpucluster.count",
+            region=region,
+            required=1,
+            reason=f"one new GPU cluster in fabric {gpu_cluster_fabric}",
+        )
+
+
 def _estimate_sfs_requirements(
     *,
     region: str,
@@ -1383,6 +1574,17 @@ def _requirements_for_component(
     gaps: list[QuotaCoverageGap] = []
     if component_id in {"ssh-jumphost", "wireguard-jumphost"}:
         _estimate_jump_host_requirements(
+            session=session,
+            project_id=project_id,
+            region=region,
+            component_id=component_id,
+            instance_id=instance_id,
+            inputs=inputs,
+            requirements=requirements,
+            gaps=gaps,
+        )
+    elif component_id == "vm":
+        _estimate_vm_requirements(
             session=session,
             project_id=project_id,
             region=region,

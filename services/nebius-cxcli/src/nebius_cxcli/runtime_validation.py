@@ -22,6 +22,7 @@ from .components import (
     component_lookup,
     parse_dependency_ref,
 )
+from .mk8s_gpu import mk8s_gpu_dependency_issues
 from .runtime_config import read_path_with_catalog
 from .runtime_plugin_validation import run_runtime_validation_plugins
 
@@ -388,6 +389,9 @@ def validate_runtime_payload(payload: Mapping[str, Any]) -> None:
                         f"component dependency '{typed_scope}:{entry_id}' requires "
                         f"'{dep_scope}:{dep_id}' to be enabled"
                     )
+    gpu_issues = mk8s_gpu_dependency_issues(payload)
+    if gpu_issues:
+        raise ValueError(gpu_issues[0])
 
     _validate_materialized_shared_defaults(payload)
 
