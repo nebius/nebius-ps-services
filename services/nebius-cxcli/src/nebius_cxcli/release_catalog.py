@@ -168,6 +168,20 @@ def verify_catalog(*, catalog_path: Path, release_ref: str) -> None:
 
 
 def verify_wheel(*, wheel_path: Path, release_ref: str) -> None:
+    payload = _load_bundled_wheel_catalog(wheel_path)
+    modules = _infra_modules(payload, subject=str(wheel_path))
+    charts = _app_charts(payload, subject=str(wheel_path))
+    _validate_module_sources(modules, subject=str(wheel_path), release_ref=release_ref)
+    _validate_chart_sources(charts, subject=str(wheel_path), release_ref=release_ref)
+
+
+def verify_wheel_bundle(*, wheel_path: Path) -> None:
+    payload = _load_bundled_wheel_catalog(wheel_path)
+    _infra_modules(payload, subject=str(wheel_path))
+    _app_charts(payload, subject=str(wheel_path))
+
+
+def _load_bundled_wheel_catalog(wheel_path: Path) -> dict[str, Any]:
     with zipfile.ZipFile(wheel_path) as zf:
         candidate_names = [
             name for name in zf.namelist() if name.endswith(BUNDLED_COMPONENT_SOURCES_SUFFIX)
@@ -177,10 +191,7 @@ def verify_wheel(*, wheel_path: Path, release_ref: str) -> None:
         payload = yaml.safe_load(zf.read(candidate_names[0]).decode("utf-8")) or {}
     if not isinstance(payload, dict):
         raise ValueError(f"{wheel_path} bundled component sources root must be a mapping")
-    modules = _infra_modules(payload, subject=str(wheel_path))
-    charts = _app_charts(payload, subject=str(wheel_path))
-    _validate_module_sources(modules, subject=str(wheel_path), release_ref=release_ref)
-    _validate_chart_sources(charts, subject=str(wheel_path), release_ref=release_ref)
+    return payload
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -205,6 +216,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     verify_wheel_parser.add_argument("--wheel", required=True, dest="wheel_path")
     verify_wheel_parser.add_argument("--release-ref", required=True)
+
+    verify_wheel_bundle_parser = subparsers.add_parser(
+        "verify-wheel-bundle",
+        help="Verify a wheel bundles component_sources.yaml with a valid catalog shape.",
+    )
+    verify_wheel_bundle_parser.add_argument("--wheel", required=True, dest="wheel_path")
     return parser
 
 
@@ -223,6 +240,9 @@ def main() -> None:
         return
     if args.command == "verify-wheel":
         verify_wheel(wheel_path=Path(args.wheel_path), release_ref=args.release_ref)
+        return
+    if args.command == "verify-wheel-bundle":
+        verify_wheel_bundle(wheel_path=Path(args.wheel_path))
         return
     parser.error(f"Unsupported command: {args.command}")
 
