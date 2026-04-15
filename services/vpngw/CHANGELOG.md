@@ -14,6 +14,8 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [nebius-vpngw-v0.5.8] - 2026-04-15
+
 - Fixed explicit `gateway_group.external_ips` reuse for pre-created public IP allocations:
   - `apply` and `prep-network` now resolve existing public allocations by the requested IP in the current project before attempting to create a new one
   - explicit-IP runs now fail fast when the found allocation is still attached to another resource instead of warning and continuing
