@@ -1453,6 +1453,112 @@ def test_deploy_generated_artifacts_without_apps_still_prepares_kube_env(
     ]
 
 
+def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    config = {
+        "apps": {"charts": []},
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-456",
+                "region_id": "eu-north1",
+            },
+        },
+    }
+    manifest = {
+        "deploy": {
+            "handoffs": [
+                {
+                    "component_id": "mk8s",
+                    "instance_id": "mk8s",
+                    "cluster_id_output_name": "mk8s_cluster_id",
+                    "component_output_ref": "mk8s.cluster_id",
+                    "access": "external",
+                }
+            ],
+            "validations": [
+                {
+                    "kind": "mk8s_gpu_visibility",
+                    "name": "GPU Visibility test",
+                    "namespace": "gpu-validation",
+                }
+            ],
+        }
+    }
+    calls: list[tuple[object, ...]] = []
+
+    monkeypatch.setattr(cli, "_ensure_terraform_backend_ready", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _config: {"TF_VAR_DEMO": "1"})
+    monkeypatch.setattr(cli, "terraform_init", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "terraform_validate", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_run_terraform_apply_with_status", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        cli,
+        "write_inventory",
+        lambda config, paths: (
+            calls.append(("inventory", config, paths))
+            or SimpleNamespace(markdown=paths.inventory_dir / "inventory.md")
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_prepare_cluster_handoff_kube_env",
+        lambda config, paths, *, stack, handoffs=None: (
+            calls.append(("kube_env", config, paths, handoffs)) or {"KUBECONFIG": "/tmp/kubeconfig"}
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_wait_for_cluster_nodes_ready",
+        lambda *, extra_env, emit: calls.append(("wait_nodes", extra_env)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_mk8s_gpu_validations",
+        lambda validations, *, inventory_dir, extra_env, emit=None: (
+            calls.append(("gpu_validations", validations, inventory_dir, extra_env))
+            or [inventory_dir / "gpu-visibility-report.json"]
+        ),
+    )
+    monkeypatch.setattr(cli.console, "print", lambda *args, **kwargs: None)
+
+    cli._deploy_generated_artifacts(config, fake_paths, manifest, auto_auth_bootstrap=True)
+
+    assert calls == [
+        ("inventory", config, fake_paths),
+        (
+            "kube_env",
+            config,
+            fake_paths,
+            [
+                {
+                    "component_id": "mk8s",
+                    "instance_id": "mk8s",
+                    "cluster_id_output_name": "mk8s_cluster_id",
+                    "component_output_ref": "mk8s.cluster_id",
+                    "access": "external",
+                }
+            ],
+        ),
+        ("wait_nodes", {"KUBECONFIG": "/tmp/kubeconfig"}),
+        (
+            "gpu_validations",
+            [
+                {
+                    "kind": "mk8s_gpu_visibility",
+                    "name": "GPU Visibility test",
+                    "namespace": "gpu-validation",
+                }
+            ],
+            fake_paths.inventory_dir,
+            {"KUBECONFIG": "/tmp/kubeconfig"},
+        ),
+    ]
+
+
 def test_raise_on_live_quota_issues_fails_only_on_confirmed_insufficiency(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

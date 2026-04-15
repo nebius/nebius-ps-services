@@ -50,6 +50,7 @@ locals {
       platform = var.cpu_nodes_platform
       preset   = var.cpu_nodes_preset
     }
+    os = var.cpu_nodes_os
     network_interfaces = [
       {
         subnet_id         = var.subnet_id
@@ -80,31 +81,14 @@ locals {
     if key != "metadata"
   }
   gpu_template_override_metadata = coalesce(try(local.gpu_template_override.metadata, null), {})
-
-  gpu_base_labels = merge(
-    var.mig_parted_config != null ? { "nvidia.com/mig.config" = var.mig_parted_config } : {},
-    var.mig_strategy != null ? { "nvidia.com/mig.strategy" = var.mig_strategy } : {}
-  )
-
-  gpu_override_labels = coalesce(try(local.gpu_template_override_metadata.labels, null), {})
-  gpu_metadata = merge(
-    local.gpu_template_override_metadata,
-    length(merge(local.gpu_base_labels, local.gpu_override_labels)) > 0 ? {
-      labels = merge(local.gpu_base_labels, local.gpu_override_labels)
-    } : {}
-  )
-
-  gpu_effective_drivers_preset = coalesce(
-    var.gpu_drivers_preset,
-    lookup(var.gpu_driver_preset_map, var.gpu_nodes_platform, null),
-    var.gpu_default_drivers_preset
-  )
+  gpu_effective_stack_preset     = var.gpu_stack_source == "nebius_image" ? var.gpu_stack_preset : null
 
   gpu_template_base = {
     resources = {
       platform = var.gpu_nodes_platform
       preset   = var.gpu_nodes_preset
     }
+    os = var.gpu_nodes_os
     network_interfaces = [
       {
         subnet_id         = var.subnet_id
@@ -112,8 +96,8 @@ locals {
       }
     ]
     preemptible = var.gpu_nodes_preemptible ? {} : null
-    gpu_settings = local.gpu_effective_drivers_preset != null ? {
-      drivers_preset = local.gpu_effective_drivers_preset
+    gpu_settings = local.gpu_effective_stack_preset != null ? {
+      drivers_preset = local.gpu_effective_stack_preset
     } : null
     gpu_cluster = try(one(nebius_compute_v1_gpu_cluster.this), null)
   }
@@ -125,7 +109,9 @@ locals {
 
   gpu_template = merge(
     local.gpu_template_merged_no_metadata,
-    length(local.gpu_metadata) > 0 ? { metadata = local.gpu_metadata } : {}
+    length(local.gpu_template_override_metadata) > 0 ? {
+      metadata = local.gpu_template_override_metadata
+    } : {}
   )
   gpu_effective_platform = try(trimspace(local.gpu_template.resources.platform), "")
   gpu_effective_preset   = try(trimspace(local.gpu_template.resources.preset), "")

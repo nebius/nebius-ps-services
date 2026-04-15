@@ -1,0 +1,10 @@
+1. Confirm the Kubeflow Training Operator is installed:
+   kubectl get deployment -n kubeflow training-operator
+
+2. Inspect the MPIJob:
+   kubectl get mpijob -n {{ .Release.Namespace }} {{ include "nccl-test.fullname" . }}
+
+3. Follow the launcher logs for the NCCL JSON report markers:
+   kubectl get pods -n {{ .Release.Namespace }} \
+     -l training.kubeflow.org/job-name={{ include "nccl-test.fullname" . }},training.kubeflow.org/replica-type=launcher
+   kubectl logs -n {{ .Release.Namespace }} -f <launcher-pod-name>

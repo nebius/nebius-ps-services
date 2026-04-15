@@ -219,7 +219,7 @@ def test_prompt_scalar_override_uses_blank_default_for_empty_optional_map(monkey
     monkeypatch.setattr(cli.typer, "prompt", _fake_prompt)
 
     value, should_stop = cli._prompt_scalar_override(
-        "infra.components[0].inputs.gpu_driver_preset_map",
+        "infra.components[0].inputs.gpu_nodes_os",
         {},
         type_hint="map(string)",
         required=False,
@@ -234,7 +234,7 @@ def test_prompt_scalar_override_uses_blank_default_for_empty_optional_map(monkey
 
 def test_provider_fallback_warning_for_optional_field_mentions_blank_is_allowed() -> None:
     warning = cli._provider_fallback_warning(
-        field_path_label="infra.components[0].inputs.gpu_default_drivers_preset",
+        field_path_label="infra.components[0].inputs.gpu_nodes_os",
         provider_names="compute_platform_presets",
         required=False,
         provider_lookup=None,

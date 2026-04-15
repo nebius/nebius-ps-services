@@ -164,6 +164,37 @@ def _run_helm_pull(ref: str, *, repo: str = "", version: str = "") -> Path:
     return directories[0]
 
 
+def _run_helm_template(
+    *,
+    release_name: str,
+    chart_path: Path,
+    namespace: str,
+    values_file: Path | None,
+) -> str:
+    command = ["helm", "template", release_name, str(chart_path)]
+    if namespace:
+        command.extend(["--namespace", namespace])
+    if values_file is not None:
+        command.extend(["-f", str(values_file)])
+    timeout_seconds = _helm_timeout_seconds(default=DEFAULT_HELM_COMMAND_TIMEOUT_SECONDS)
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"helm template timed out after {timeout_seconds} seconds for '{chart_path}'. "
+            f"Set {HELM_TIMEOUT_ENV} to a larger value for slow chart sources."
+        ) from exc
+    if result.returncode != 0:
+        stderr = result.stderr.strip() or result.stdout.strip() or "unknown error"
+        raise RuntimeError(stderr)
+    return result.stdout
+
+
 def _resolve_show_ref(reference: HelmChartReference) -> tuple[str, str, str, Path | None]:
     chart_name = reference.chart_name.strip()
     chart_repo = reference.chart_repo.strip().rstrip("/")
@@ -184,6 +215,16 @@ def _resolve_show_ref(reference: HelmChartReference) -> tuple[str, str, str, Pat
         return f"{oci_repo}/{oci_name}", "", chart_version, None
 
     github_tree = _github_tree_ref(chart_repo)
+    if github_tree is not None:
+        git_url, git_ref, chart_path = github_tree
+        checkout = _run_git_clone(git_url, git_ref)
+        local_path = (checkout / chart_path).resolve()
+        if not local_path.exists() or not local_path.is_dir():
+            shutil.rmtree(checkout.parent, ignore_errors=True)
+            raise RuntimeError(f"Chart path not found in git source: {chart_path}")
+        return str(local_path), "", "", checkout.parent
+
+    github_tree = _github_tree_ref(chart_name)
     if github_tree is not None:
         git_url, git_ref, chart_path = github_tree
         checkout = _run_git_clone(git_url, git_ref)
@@ -233,12 +274,56 @@ def _materialize_chart_dir(reference: HelmChartReference):
             shutil.rmtree(root, ignore_errors=True)
 
 
+def render_chart_template_documents(
+    *,
+    chart_name: str,
+    chart_repo: str,
+    chart_version: str,
+    release_name: str,
+    namespace: str,
+    values: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    reference = HelmChartReference(
+        chart_name=chart_name,
+        chart_repo=chart_repo,
+        chart_version=chart_version,
+    )
+    temp_values_dir: Path | None = None
+    values_file: Path | None = None
+    try:
+        if values:
+            temp_values_dir = Path(tempfile.mkdtemp(prefix="nebius-cxcli-helm-values-"))
+            values_file = temp_values_dir / "values.yaml"
+            values_file.write_text(yaml.safe_dump(values, sort_keys=False), encoding="utf-8")
+        with _materialize_chart_dir(reference) as chart_dir:
+            rendered = _run_helm_template(
+                release_name=release_name,
+                chart_path=chart_dir,
+                namespace=namespace,
+                values_file=values_file,
+            )
+        documents: list[dict[str, Any]] = []
+        for item in yaml.safe_load_all(rendered):
+            if item is None:
+                continue
+            if not isinstance(item, dict):
+                raise RuntimeError(
+                    f"helm template rendered a non-object document for release '{release_name}'"
+                )
+            documents.append(item)
+        return documents
+    finally:
+        if temp_values_dir is not None:
+            shutil.rmtree(temp_values_dir, ignore_errors=True)
+
+
 @lru_cache(maxsize=64)
 def chart_cli_contract_findings(
     *,
     chart_name: str,
     chart_repo: str,
     chart_version: str,
+    expected_chart_name: str | None = None,
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     issues: list[str] = []
     warnings: list[str] = []
@@ -298,9 +383,11 @@ def chart_cli_contract_findings(
                         issues.append(
                             f"materialized chart Chart.yaml is missing name in {chart_dir}"
                         )
-                    elif resolved_name != chart_name:
+                    elif resolved_name != (expected_chart_name or chart_name):
                         issues.append(
-                            f"materialized chart name '{resolved_name}' does not match configured chart name '{chart_name}'"
+                            "materialized chart name "
+                            f"'{resolved_name}' does not match configured chart name "
+                            f"'{expected_chart_name or chart_name}'"
                         )
                     if not resolved_version:
                         issues.append(

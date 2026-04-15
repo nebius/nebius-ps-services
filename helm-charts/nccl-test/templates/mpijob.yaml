@@ -1,0 +1,195 @@
+{{- $workerReplicas := int .Values.worker.replicas -}}
+{{- $workerGpus := int .Values.worker.gpus -}}
+{{- if lt $workerReplicas 1 -}}
+{{- fail "worker.replicas must be at least 1" -}}
+{{- end -}}
+{{- if lt $workerGpus 1 -}}
+{{- fail "worker.gpus must be at least 1" -}}
+{{- end -}}
+{{- $runtimeImage := include "nccl-test.imageRef" .Values.image -}}
+{{- $initImage := include "nccl-test.imageRef" .Values.initContainer -}}
+apiVersion: kubeflow.org/v1
+kind: MPIJob
+metadata:
+  name: {{ include "nccl-test.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nccl-test.labels" . | nindent 4 }}
+    {{- with .Values.commonLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  slotsPerWorker: {{ $workerGpus }}
+  runPolicy:
+    cleanPodPolicy: {{ required "job.cleanPodPolicy is required" .Values.job.cleanPodPolicy | quote }}
+  mpiReplicaSpecs:
+    Launcher:
+      replicas: 1
+      template:
+        metadata:
+          labels:
+            {{- include "nccl-test.selectorLabels" . | nindent 12 }}
+            {{- with .Values.commonLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- with .Values.launcher.podLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if or .Values.commonAnnotations .Values.launcher.podAnnotations }}
+          annotations:
+            {{- with .Values.commonAnnotations }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- with .Values.launcher.podAnnotations }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+        spec:
+          automountServiceAccountToken: false
+          enableServiceLinks: false
+          {{- include "nccl-test.imagePullSecrets" . | nindent 10 }}
+          {{- with .Values.launcher.priorityClassName }}
+          priorityClassName: {{ . | quote }}
+          {{- end }}
+          {{- with .Values.launcher.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.launcher.affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.launcher.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: nccl
+              image: {{ $runtimeImage | quote }}
+              imagePullPolicy: {{ required "image.pullPolicy is required" .Values.image.pullPolicy | quote }}
+              command:
+                - /bin/bash
+                - -c
+              args:
+                - |
+                  set -uo pipefail
+                  status=0
+                  {{ include "nccl-test.mpiCommand" . }} || status=$?
+                  if [ -f {{ .Values.benchmark.resultJsonPath | squote }} ]; then
+                    printf '\n{{ .Values.report.jsonBeginMarker }}\n'
+                    cat {{ .Values.benchmark.resultJsonPath | squote }}
+                    printf '\n{{ .Values.report.jsonEndMarker }}\n'
+                  fi
+                  exit $status
+              env:
+                - name: OMPI_ALLOW_RUN_AS_ROOT
+                  value: "1"
+                - name: OMPI_ALLOW_RUN_AS_ROOT_CONFIRM
+                  value: "1"
+              resources:
+                requests:
+                  cpu: {{ required "launcher.resources.requests.cpu is required" .Values.launcher.resources.requests.cpu | quote }}
+                  memory: {{ required "launcher.resources.requests.memory is required" .Values.launcher.resources.requests.memory | quote }}
+                {{- with .Values.launcher.resources.limits }}
+                limits:
+                  {{- toYaml . | nindent 18 }}
+                {{- end }}
+              securityContext:
+                privileged: {{ .Values.job.launcherPrivileged }}
+          initContainers:
+            - name: init-limit
+              image: {{ $initImage | quote }}
+              imagePullPolicy: {{ required "initContainer.pullPolicy is required" .Values.initContainer.pullPolicy | quote }}
+              command:
+                - sh
+                - -c
+                - ulimit -Hl unlimited && ulimit -Sl unlimited
+              securityContext:
+                privileged: true
+    Worker:
+      replicas: {{ $workerReplicas }}
+      template:
+        metadata:
+          labels:
+            {{- include "nccl-test.selectorLabels" . | nindent 12 }}
+            {{- with .Values.commonLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- with .Values.worker.podLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if or .Values.commonAnnotations .Values.worker.podAnnotations }}
+          annotations:
+            {{- with .Values.commonAnnotations }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- with .Values.worker.podAnnotations }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+        spec:
+          automountServiceAccountToken: false
+          enableServiceLinks: false
+          {{- include "nccl-test.imagePullSecrets" . | nindent 10 }}
+          {{- with .Values.worker.priorityClassName }}
+          priorityClassName: {{ . | quote }}
+          {{- end }}
+          {{- with .Values.worker.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.worker.affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.worker.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: nccl
+              image: {{ $runtimeImage | quote }}
+              imagePullPolicy: {{ required "image.pullPolicy is required" .Values.image.pullPolicy | quote }}
+              resources:
+                requests:
+                  cpu: {{ required "worker.resources.requests.cpu is required" .Values.worker.resources.requests.cpu | quote }}
+                  memory: {{ required "worker.resources.requests.memory is required" .Values.worker.resources.requests.memory | quote }}
+                  nvidia.com/gpu: {{ $workerGpus }}
+                limits:
+                  nvidia.com/gpu: {{ $workerGpus }}
+                  {{- with .Values.worker.resources.limits.cpu }}
+                  cpu: {{ . | quote }}
+                  {{- end }}
+                  {{- with .Values.worker.resources.limits.memory }}
+                  memory: {{ . | quote }}
+                  {{- end }}
+              securityContext:
+                privileged: {{ .Values.job.workerPrivileged }}
+              {{- if .Values.dshm.enabled }}
+              volumeMounts:
+                - name: dshm
+                  mountPath: /dev/shm
+              {{- end }}
+          initContainers:
+            - name: init-limit
+              image: {{ $initImage | quote }}
+              imagePullPolicy: {{ required "initContainer.pullPolicy is required" .Values.initContainer.pullPolicy | quote }}
+              command:
+                - sh
+                - -c
+                - ulimit -Hl unlimited && ulimit -Sl unlimited
+              securityContext:
+                privileged: true
+          {{- if .Values.dshm.enabled }}
+          volumes:
+            - name: dshm
+              emptyDir:
+                medium: Memory
+                {{- with .Values.dshm.sizeLimit }}
+                sizeLimit: {{ . | quote }}
+                {{- end }}
+          {{- end }}

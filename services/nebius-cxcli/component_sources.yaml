@@ -1,9 +1,9 @@
 cli:
+  terraform:
+    version: 1.14.1
   flux:
     version: v2.8.0
     release_timeout: 5m
-  terraform:
-    version: 1.14.1
 shared:
   admin_ssh:
     user_name: ubuntu
@@ -22,9 +22,48 @@ components:
         name_input: cluster_name
       defaults:
         inputs.cpu_nodes_count: 2
+        # Default to Nebius-managed GPU images and stack presets. Advanced
+        # manual/operator-managed stacks can switch this to `manual`.
+        inputs.gpu_stack_source: nebius_image
         inputs.mk8s_cluster_public_endpoint: true
         inputs.kube_network_service_cidrs:
           - /20
+      cli:
+        gpu:
+          # Preference order only. cxcli still resolves the live Nebius
+          # compatibility matrix first. Nebius calls the provider field
+          # `drivers_preset`, but these values select the bundled GPU software
+          # stack/image family, not only a kernel driver.
+          image_preferences:
+            preferred_gpu_stack_presets:
+              - cuda13.0
+              - cuda12.8
+              - cuda12.4
+              - cuda12
+            preferred_os:
+              - ubuntu24.04
+              - ubuntu22.04
+          validations:
+            operator_readiness:
+              enabled_by_default: true
+              timeout: 20m
+            gpu_visibility:
+              enabled_by_default: true
+              namespace: gpu-validation
+              image: nvcr.io/nvidia/k8s/cuda-sample:vectoradd-cuda11.7.1-ubuntu20.04
+              timeout: 10m
+              cleanup: true
+            nccl:
+              enabled_by_default: true
+              chart_component_id: nccl-test
+              timeout: 45m
+              # Pinned to the current Nebius tutorial revision rather than a
+              # floating "latest" manifest reference.
+              training_operator_manifest: github.com/kubeflow/training-operator/manifests/overlays/standalone?ref=v1.9.3
+              training_operator_namespace: kubeflow
+              average_bus_bandwidth_threshold_gbps: 300
+            health_checker:
+              enabled_by_default: false
       wizard_profile: mk8s
     managed-postgresql:
       source:
@@ -69,6 +108,34 @@ components:
       status:
         kind: nebius.mysterybox.secret
         name_input: secrets
+    vm:
+      source:
+        portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/vm?ref=main
+        local: ../../platform-infra/modules/vm
+      ui:
+        title: Compute virtual machine
+        group: Compute
+        enabled: false
+      status:
+        kind: nebius.compute.instance
+      wizard_profile: vm
+      defaults:
+        # Materialize the shared admin SSH username into customer config.yaml.
+        inputs.ssh_user_name: shared.admin_ssh.user_name
+      cli:
+        image_preferences:
+          # Preference order only. cxcli resolves the live Nebius public image
+          # inventory through the SDK and keeps only families compatible with
+          # the selected VM platform and region.
+          preferred_cpu_image_families:
+            - ubuntu24.04-driverless
+            - ubuntu22.04-driverless
+          # GPU VMs prefer Nebius GPU images first. Driverless families remain
+          # compatible for manual stacks, but they sort after the recommended
+          # GPU image families returned by the live Nebius inventory.
+          preferred_gpu_image_families:
+            - ubuntu24.04-cuda13.0
+            - ubuntu24.04-cuda12
     wireguard-jumphost:
       source:
         portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/wireguard-jumphost?ref=main
@@ -96,11 +163,133 @@ components:
       defaults:
         inputs.ssh_user_name: shared.admin_ssh.user_name
   apps:
+    nvidia-network-operator:
+      source:
+        portable:
+          repo: oci://cr.eu-north1.nebius.cloud/marketplace/nebius/nvidia-network-operator/chart/network-operator
+          chart: network-operator
+          version: 25.7.0
+      ui:
+        title: NVIDIA Network Operator
+        group: Platform
+        enabled: false
+      release:
+        namespace: nvidia-network-operator
+        name: network-operator
+      defaults:
+        values.operator.resources.limits.cpu: 500m
+        values.operator.resources.limits.memory: 350Mi
+        values.operator.ofedDriver.livenessProbe.enabled: false
+      cli:
+        mk8s_gpu:
+          role: network_operator
+          # cxcli auto-enables this app when the selected MK8s GPU context
+          # matches any rule below.
+          auto_enable:
+            - gpu_cluster_enabled: true
+            - gpu_stack_source: manual
+              # Separate Nebius platform ids and regions; both are NVIDIA B200.
+              match_platforms:
+                - gpu-b200-sxm
+                - gpu-b200-sxm-a
+          # These value overrides are only materialized when the matching
+          # MK8s GPU context is selected and the chart value is not already set
+          # in config.yaml.
+          value_overrides:
+            - gpu_stack_source: nebius_image
+              values:
+                values.operator.ofedDriver.deploy: false
+            - gpu_stack_source: manual
+              values:
+                values.operator.ofedDriver.deploy: true
+    nvidia-gpu-operator:
+      source:
+        portable:
+          repo: oci://cr.eu-north1.nebius.cloud/marketplace/nebius/nvidia-gpu-operator/chart/gpu-operator
+          chart: gpu-operator
+          version: v25.10.0
+      ui:
+        title: NVIDIA GPU Operator
+        group: Platform
+        enabled: false
+      release:
+        namespace: nvidia-gpu-operator
+        name: gpu-operator
+      defaults:
+        values.devicePlugin.enabled: true
+        values.dcgmExporter.enabled: true
+        values.migManager.enabled: false
+      cli:
+        mk8s_gpu:
+          role: gpu_operator
+          # GPU Operator is the default GPU software controller for GPU-enabled
+          # MK8s clusters.
+          auto_enable:
+            - {}
+          # When both operators are present, wait for Network Operator first.
+          install_after:
+            - nvidia-network-operator
+          value_overrides:
+            - gpu_stack_source: nebius_image
+              values:
+                values.driver.enabled: false
+                values.toolkit.enabled: false
+            - gpu_stack_source: manual
+              values:
+                values.driver.enabled: true
+                values.toolkit.enabled: true
+            - gpu_stack_source: manual
+              match_platforms:
+                - gpu-b300-sxm
+              values:
+                # Nebius docs pin the B300 manual-install path to this driver
+                # version. Keep it catalog-owned rather than hardcoded in Python.
+                values.driver.version: 580.95.05
+    nccl-test:
+      source:
+        local:
+          path: ../../helm-charts/nccl-test
+      # This chart is currently local-only for developer workflows. Add
+      # `source.portable` once the chart is published to a portable registry.
+      ui:
+        title: NCCL benchmark validation chart
+        group: Validations
+        enabled: false
+        selectable: false
+      release:
+        namespace: nccl-test
+        name: nccl-test
+      defaults: {}
+      cli:
+        mk8s_gpu:
+          value_overrides:
+            - match_platforms:
+                - gpu-b200-sxm
+                - gpu-b200-sxm-a
+              values:
+                values.image.repository: cr.eu-north1.nebius.cloud/nebius-benchmarks/nccl-tests
+                values.image.tag: 2.26.5-ubu22.04-cu12.8
+                # Nebius B200 example adds `-mca coll ^hcoll` to disable hcoll.
+                values.benchmark.mpiExtraArgs:
+                  - -mca
+                  - coll
+                  - ^hcoll
+            - match_platforms:
+                - gpu-b300-sxm
+                - gpu-h100-sxm
+                - gpu-h200-sxm
+              values:
+                # Nebius docs publish an explicit H100/H200 example with this
+                # image. B300 currently reuses the same pinned profile until
+                # Nebius publishes a dedicated MK8s B300 example.
+                values.image.repository: cr.eu-north1.nebius.cloud/nebius-benchmarks/nccl-tests
+                values.image.tag: 2.23.4-ubu22.04-cu12.4
     gateway-helm:
       source:
-        repo: oci://docker.io/envoyproxy
-        chart: gateway-helm
-        version: 1.7.0
+        portable:
+          repo: oci://docker.io/envoyproxy
+          chart: gateway-helm
+          version: 1.7.0
       ui:
         title: Envoy Gateway control plane
         group: Platform
@@ -115,9 +304,10 @@ components:
       defaults: {}
     cert-manager:
       source:
-        repo: oci://quay.io/jetstack/charts
-        chart: cert-manager
-        version: v1.19.2
+        portable:
+          repo: oci://quay.io/jetstack/charts
+          chart: cert-manager
+          version: v1.19.2
       ui:
         title: cert-manager for certificate automation
         group: Platform
@@ -129,9 +319,10 @@ components:
         values.crds.enabled: true
     external-dns:
       source:
-        repo: https://kubernetes-sigs.github.io/external-dns
-        chart: external-dns
-        version: 1.20.0
+        portable:
+          repo: https://kubernetes-sigs.github.io/external-dns
+          chart: external-dns
+          version: 1.20.0
       ui:
         title: ExternalDNS controller
         group: Platform
@@ -141,9 +332,10 @@ components:
         name: external-dns
     external-secrets:
       source:
-        repo: https://charts.external-secrets.io
-        chart: external-secrets
-        version: 2.0.1
+        portable:
+          repo: https://charts.external-secrets.io
+          chart: external-secrets
+          version: 2.0.1
       ui:
         title: External Secrets Operator
         group: Platform
@@ -153,9 +345,10 @@ components:
         name: external-secrets
     n8n:
       source:
-        repo: oci://8gears.container-registry.com/library/n8n
-        chart: n8n
-        version: 2.0.1
+        portable:
+          repo: oci://8gears.container-registry.com/library/n8n
+          chart: n8n
+          version: 2.0.1
       ui:
         title: n8n workflow automation
         group: Workloads

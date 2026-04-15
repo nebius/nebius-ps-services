@@ -19,6 +19,16 @@ def teardown_function() -> None:
     _reset_component_state()
 
 
+def _portable_chart_source(*, repo: str, chart: str, version: str = "") -> dict[str, object]:
+    portable: dict[str, object] = {
+        "repo": repo,
+        "chart": chart,
+    }
+    if version:
+        portable["version"] = version
+    return {"portable": portable}
+
+
 def test_components_discovered_from_source_file(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     sources_file = tmp_path / "component-sources.yaml"
@@ -53,11 +63,11 @@ def test_components_discovered_from_source_file(monkeypatch, tmp_path: Path) -> 
                     },
                     "apps": {
                         "n8n": {
-                            "source": {
-                                "repo": "https://community-charts.github.io/helm-charts",
-                                "chart": "n8n",
-                                "version": "1.16.29",
-                            },
+                            "source": _portable_chart_source(
+                                repo="https://community-charts.github.io/helm-charts",
+                                chart="n8n",
+                                version="1.16.29",
+                            ),
                             "release": {
                                 "namespace": "n8n",
                                 "name": "n8n",
@@ -113,6 +123,14 @@ def test_components_discovered_from_source_file(monkeypatch, tmp_path: Path) -> 
                 "args": {"platform_path": "inputs.cpu_nodes_platform"},
             }
         },
+        "inputs.cpu_nodes_os": {
+            "options": {
+                "from": "mk8s_node_group_os_values",
+                "args": {"platform_path": "inputs.cpu_nodes_platform"},
+                "auto_select_first": True,
+            },
+            "prompt": False,
+        },
         "inputs.gpu_nodes_preset": {
             "options": {
                 "from": "compute_platform_presets",
@@ -133,12 +151,23 @@ def test_components_discovered_from_source_file(monkeypatch, tmp_path: Path) -> 
                 "skip_prompt_if_no_choices": True,
             }
         },
-        "inputs.gpu_drivers_preset": {
+        "inputs.gpu_stack_preset": {
             "options": {
-                "from": "mk8s_gpu_driver_presets",
+                "from": "mk8s_gpu_stack_presets",
                 "args": {"platform_path": "inputs.gpu_nodes_platform"},
-                "auto_select_single": True,
-            }
+            },
+            "prompt": False,
+        },
+        "inputs.gpu_nodes_os": {
+            "options": {
+                "from": "mk8s_node_group_os_values",
+                "args": {
+                    "platform_path": "inputs.gpu_nodes_platform",
+                    "stack_preset_path": "inputs.gpu_stack_preset",
+                },
+                "auto_select_first": True,
+            },
+            "prompt": False,
         },
         "inputs.mk8s_cluster_overrides": {
             "prompt": False,
@@ -169,11 +198,11 @@ def test_app_chart_name_becomes_component_id(monkeypatch, tmp_path: Path) -> Non
                     "infra": {},
                     "apps": {
                         "gateway-helm": {
-                            "source": {
-                                "repo": "oci://docker.io/envoyproxy",
-                                "chart": "gateway-helm",
-                                "version": "1.4.2",
-                            },
+                            "source": _portable_chart_source(
+                                repo="oci://docker.io/envoyproxy",
+                                chart="gateway-helm",
+                                version="1.4.2",
+                            ),
                             "release": {
                                 "namespace": "envoy-gateway-system",
                                 "name": "envoy-gateway",

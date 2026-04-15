@@ -7,6 +7,7 @@ import yaml
 from nebius_cxcli.cli import (
     _dynamic_provider_field_checks,
     _materialize_singleton_provider_defaults,
+    _materialize_vm_image_defaults,
     _run_component_field_wizard,
 )
 from nebius_cxcli.component_sources import ComponentDefault
@@ -92,15 +93,27 @@ variable "gpu_driver_preset_map" {
     }
 
 
-def test_mk8s_gpu_driver_preset_map_default_is_full_mapping() -> None:
+def test_mk8s_gpu_module_uses_explicit_stack_source_contract() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     mk8s_dir = repo_root / "platform-infra" / "modules" / "mk8s"
     specs = {item.name: item for item in module_variables(str(mk8s_dir))}
 
-    assert specs["gpu_driver_preset_map"].default == {
-        "gpu-b200-sxm": "cuda12.8",
-        "gpu-b200-sxm-a": "cuda12.8",
-    }
+    assert specs["gpu_stack_source"].default == "nebius_image"
+    assert specs["cpu_nodes_os"].required is False
+    assert specs["gpu_nodes_os"].required is False
+    assert "gpu_driver_preset_map" not in specs
+    assert "gpu_default_drivers_preset" not in specs
+    assert "mig_strategy" not in specs
+    assert "mig_parted_config" not in specs
+
+
+def test_vm_module_requires_explicit_boot_image_source() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    vm_dir = repo_root / "platform-infra" / "modules" / "vm"
+    specs = {item.name: item for item in module_variables(str(vm_dir))}
+
+    assert specs["source_image_family"].has_default is True
+    assert specs["source_image_family"].default is None
 
 
 def test_dynamic_provider_checks_cover_custom_tf_module_fields() -> None:
@@ -469,9 +482,9 @@ def test_wizard_auto_selects_single_provider_option_for_optional_field(
         description="Managed Kubernetes",
         source="../../platform-infra/modules/mk8s",
         wizard_fields={
-            "inputs.gpu_drivers_preset": {
+            "inputs.gpu_stack_preset": {
                 "options": {
-                    "from": "mk8s_gpu_driver_presets",
+                    "from": "mk8s_gpu_stack_presets",
                     "args": {"platform_path": "inputs.gpu_nodes_platform"},
                     "auto_select_single": True,
                 }
@@ -486,7 +499,7 @@ def test_wizard_auto_selects_single_provider_option_for_optional_field(
     monkeypatch.setattr(
         "nebius_cxcli.cli.module_variables",
         lambda _source: (
-            ModuleVariable(name="gpu_drivers_preset", required=False, type_hint="string"),
+            ModuleVariable(name="gpu_stack_preset", required=False, type_hint="string"),
         ),
     )
     monkeypatch.setattr(
@@ -515,8 +528,8 @@ def test_wizard_auto_selects_single_provider_option_for_optional_field(
     class _Lookup:
         def resolve(self, *, provider, args, payload, field_path):
             _ = args, payload
-            if provider == "mk8s_gpu_driver_presets" and field_path.endswith(
-                ".gpu_drivers_preset"
+            if provider == "mk8s_gpu_stack_presets" and field_path.endswith(
+                ".gpu_stack_preset"
             ):
                 return [OptionChoice(value="cuda13.0", label="cuda13.0")]
             return []
@@ -536,9 +549,9 @@ def test_wizard_auto_selects_single_provider_option_for_optional_field(
     )
 
     assert completed is True
-    assert prompted == [("infra.components[0].inputs.gpu_drivers_preset", "cuda13.0")]
+    assert prompted == [("infra.components[0].inputs.gpu_stack_preset", "cuda13.0")]
     payload = yaml.safe_load(updated_yaml)
-    assert payload["infra"]["components"][0]["inputs"]["gpu_drivers_preset"] == "cuda13.0"
+    assert payload["infra"]["components"][0]["inputs"]["gpu_stack_preset"] == "cuda13.0"
 
 
 def test_materialize_singleton_provider_defaults_sets_missing_single_choice_field() -> None:
@@ -575,9 +588,9 @@ def test_materialize_singleton_provider_defaults_sets_missing_single_choice_fiel
         description="Managed Kubernetes",
         source="../../platform-infra/modules/mk8s",
         wizard_fields={
-            "inputs.gpu_drivers_preset": {
+            "inputs.gpu_stack_preset": {
                 "options": {
-                    "from": "mk8s_gpu_driver_presets",
+                    "from": "mk8s_gpu_stack_presets",
                     "args": {"platform_path": "inputs.gpu_nodes_platform"},
                     "auto_select_single": True,
                 }
@@ -588,8 +601,8 @@ def test_materialize_singleton_provider_defaults_sets_missing_single_choice_fiel
     class _Lookup:
         def resolve(self, *, provider, args, payload, field_path):
             _ = args, payload
-            if provider == "mk8s_gpu_driver_presets" and field_path.endswith(
-                ".gpu_drivers_preset"
+            if provider == "mk8s_gpu_stack_presets" and field_path.endswith(
+                ".gpu_stack_preset"
             ):
                 return [OptionChoice(value="cuda13.0", label="cuda13.0")]
             return []
@@ -604,7 +617,7 @@ def test_materialize_singleton_provider_defaults_sets_missing_single_choice_fiel
         provider_lookup=_Lookup(),
     )
 
-    assert payload["infra"]["components"][0]["inputs"]["gpu_drivers_preset"] == "cuda13.0"
+    assert payload["infra"]["components"][0]["inputs"]["gpu_stack_preset"] == "cuda13.0"
 
 
 def test_materialize_singleton_provider_defaults_sets_clusterable_gpu_preset() -> None:
@@ -673,6 +686,81 @@ def test_materialize_singleton_provider_defaults_sets_clusterable_gpu_preset() -
     )
 
     assert payload["infra"]["components"][0]["inputs"]["gpu_nodes_preset"] == "8gpu-160vcpu-1792gb"
+
+
+def test_materialize_vm_image_defaults_sets_first_live_image_family() -> None:
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "eu-north1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "vm",
+                    "instance_id": "vm",
+                    "enabled": True,
+                    "inputs": {
+                        "platform": "gpu-h100-sxm",
+                        "preset": "1gpu-16vcpu-200gb",
+                    },
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    entry = ComponentEntry(
+        id="vm",
+        scope="infra",
+        config_path="infra.vm",
+        description="Compute VM",
+        source="../../platform-infra/modules/vm",
+        validation_profile="vm_instance",
+        wizard_fields={
+            "inputs.source_image_family": {
+                "options": {
+                    "from": "compute_public_image_families",
+                    "args": {"platform_path": "inputs.platform"},
+                    "auto_select_first": True,
+                }
+            }
+        },
+    )
+
+    class _Lookup:
+        def resolve(self, *, provider, args, payload, field_path):
+            _ = args, payload
+            if provider == "compute_public_image_families" and field_path.endswith(
+                ".source_image_family"
+            ):
+                return [
+                    OptionChoice(
+                        value="ubuntu24.04-cuda13.0",
+                        label="ubuntu24.04-cuda13.0  (recommended)",
+                    )
+                ]
+            return []
+
+        def last_error(self):
+            return None
+
+    _materialize_vm_image_defaults(
+        payload=payload,
+        selected_infra={"vm"},
+        infra_entries=(entry,),
+        provider_lookup=_Lookup(),
+    )
+
+    assert payload["infra"]["components"][0]["inputs"]["source_image_family"] == (
+        "ubuntu24.04-cuda13.0"
+    )
 
 
 def test_wizard_skips_empty_top_level_app_values_prompt_without_known_leaf_fields(

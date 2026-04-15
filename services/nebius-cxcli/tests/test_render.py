@@ -30,6 +30,16 @@ _VALID_ED25519_PUBLIC_KEY = (
 )
 
 
+def _portable_chart_source(*, repo: str, chart: str, version: str = "") -> dict[str, object]:
+    portable: dict[str, object] = {
+        "repo": repo,
+        "chart": chart,
+    }
+    if version:
+        portable["version"] = version
+    return {"portable": portable}
+
+
 def _reset_catalog_override() -> None:
     set_component_sources_file_override(None)
     set_component_sources_profile_override(None)
@@ -188,6 +198,7 @@ def test_render_creates_source_only_module_and_flux_outputs(
             ModuleVariable(name="cpu_nodes_preset", required=False, type_hint="string"),
             ModuleVariable(name="subnet_id", required=False, type_hint="string"),
             ModuleVariable(name="gpu_enabled", required=False, type_hint="bool"),
+            ModuleVariable(name="gpu_stack_source", required=False, type_hint="string"),
             ModuleVariable(
                 name="mk8s_cluster_public_endpoint",
                 required=False,
@@ -277,6 +288,7 @@ def test_render_skips_empty_flux_repository_file_when_no_apps_are_enabled(
             ModuleVariable(name="cpu_nodes_preset", required=False, type_hint="string"),
             ModuleVariable(name="subnet_id", required=False, type_hint="string"),
             ModuleVariable(name="gpu_enabled", required=False, type_hint="bool"),
+            ModuleVariable(name="gpu_stack_source", required=False, type_hint="string"),
             ModuleVariable(
                 name="mk8s_cluster_public_endpoint",
                 required=False,
@@ -347,6 +359,7 @@ def test_render_keeps_duplicate_component_instances_distinct(
             ModuleVariable(name="cpu_nodes_platform", required=False, type_hint="string"),
             ModuleVariable(name="cpu_nodes_preset", required=False, type_hint="string"),
             ModuleVariable(name="gpu_enabled", required=False, type_hint="bool"),
+            ModuleVariable(name="gpu_stack_source", required=False, type_hint="string"),
             ModuleVariable(
                 name="mk8s_cluster_public_endpoint",
                 required=False,
@@ -586,11 +599,11 @@ def test_render_uses_component_source_release_timeout_for_helm_release(
             _catalog(
                 apps={
                     "demo-app": {
-                        "source": {
-                            "repo": "https://example.invalid/charts",
-                            "chart": "demo-app",
-                            "version": "1.0.0",
-                        },
+                        "source": _portable_chart_source(
+                            repo="https://example.invalid/charts",
+                            chart="demo-app",
+                            version="1.0.0",
+                        ),
                         "release": {
                             "namespace": "demo",
                             "name": "demo-app",
@@ -638,11 +651,11 @@ def test_render_uses_global_flux_release_timeout_when_chart_omits_override(
                 },
                 apps={
                     "demo-app": {
-                        "source": {
-                            "repo": "https://example.invalid/charts",
-                            "chart": "demo-app",
-                            "version": "1.0.0",
-                        },
+                        "source": _portable_chart_source(
+                            repo="https://example.invalid/charts",
+                            chart="demo-app",
+                            version="1.0.0",
+                        ),
                         "release": {
                             "namespace": "demo",
                             "name": "demo-app",
@@ -807,11 +820,11 @@ def test_render_uses_materialized_shared_defaults_for_app_chart_values(
                 },
                 apps={
                     "demo-app": {
-                        "source": {
-                            "repo": "https://example.invalid/charts",
-                            "chart": "demo-app",
-                            "version": "1.0.0",
-                        },
+                        "source": _portable_chart_source(
+                            repo="https://example.invalid/charts",
+                            chart="demo-app",
+                            version="1.0.0",
+                        ),
                         "release": {
                             "namespace": "demo",
                             "name": "demo-app",
@@ -976,11 +989,11 @@ def test_render_supports_app_input_binding_from_component_output(
                 },
                 apps={
                     "demo-app": {
-                        "source": {
-                            "repo": "https://example.invalid/charts",
-                            "chart": "demo-app",
-                            "version": "1.0.0",
-                        },
+                        "source": _portable_chart_source(
+                            repo="https://example.invalid/charts",
+                            chart="demo-app",
+                            version="1.0.0",
+                        ),
                         "release": {
                             "namespace": "demo",
                             "name": "demo-app",
@@ -1079,11 +1092,11 @@ def test_render_supports_explicit_instance_qualified_app_input_binding(
                 },
                 apps={
                     "demo-app": {
-                        "source": {
-                            "repo": "https://example.invalid/charts",
-                            "chart": "demo-app",
-                            "version": "1.0.0",
-                        },
+                        "source": _portable_chart_source(
+                            repo="https://example.invalid/charts",
+                            chart="demo-app",
+                            version="1.0.0",
+                        ),
                         "release": {
                             "namespace": "demo",
                             "name": "demo-app",
@@ -1195,11 +1208,11 @@ def test_render_uses_component_source_defaults_when_config_omits_values(
                 },
                 apps={
                     "demo-app": {
-                        "source": {
-                            "repo": "https://example.invalid/charts",
-                            "chart": "demo-app",
-                            "version": "1.0.0",
-                        },
+                        "source": _portable_chart_source(
+                            repo="https://example.invalid/charts",
+                            chart="demo-app",
+                            version="1.0.0",
+                        ),
                         "release": {
                             "namespace": "demo",
                             "name": "demo-app",

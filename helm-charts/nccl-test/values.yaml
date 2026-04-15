@@ -1,0 +1,98 @@
+# Default MPIJob contract for the NCCL validation workflow. cxcli overrides
+# only the worker replica count and the platform-specific runtime image/extra
+# MPI args at deploy time.
+
+nameOverride: ""
+fullnameOverride: ""
+
+global:
+  imagePullSecrets: []
+
+commonLabels: {}
+commonAnnotations: {}
+
+image:
+  repository: cr.eu-north1.nebius.cloud/nebius-benchmarks/nccl-tests
+  tag: 2.23.4-ubu22.04-cu12.4
+  digest: ""
+  pullPolicy: IfNotPresent
+
+initContainer:
+  repository: busybox
+  tag: "1.36.1"
+  digest: ""
+  pullPolicy: IfNotPresent
+
+benchmark:
+  binaryPath: /opt/nccl_tests/build/all_reduce_perf
+  resultJsonPath: /tmp/nccl-tests-results.json
+  mpiBaseArgs:
+    - -bind-to
+    - none
+    - -x
+    - LD_LIBRARY_PATH
+    - -x
+    - NCCL_DEBUG=INFO
+    - -x
+    - NCCL_SOCKET_IFNAME=eth0
+    - -x
+    - NCCL_IB_HCA=mlx5
+    - -x
+    - UCX_NET_DEVICES=eth0
+    - -x
+    - SHARP_COLL_ENABLE_PCI_RELAXED_ORDERING=1
+    - -x
+    - NCCL_COLLNET_ENABLE=0
+  mpiExtraArgs: []
+  args:
+    - -b
+    - 512M
+    - -e
+    - 8G
+    - -f
+    - "2"
+    - -g
+    - "1"
+
+launcher:
+  podLabels: {}
+  podAnnotations: {}
+  priorityClassName: ""
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  resources:
+    requests:
+      cpu: "2"
+      memory: 1208Mi
+    limits: {}
+
+worker:
+  replicas: 1
+  gpus: 8
+  podLabels: {}
+  podAnnotations: {}
+  priorityClassName: ""
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  resources:
+    requests:
+      cpu: "96"
+      memory: 1600G
+    limits:
+      cpu: "96"
+      memory: 1600G
+
+dshm:
+  enabled: true
+  sizeLimit: ""
+
+report:
+  jsonBeginMarker: __NCCL_JSON_BEGIN__
+  jsonEndMarker: __NCCL_JSON_END__
+
+job:
+  cleanPodPolicy: Running
+  launcherPrivileged: true
+  workerPrivileged: true

@@ -48,15 +48,12 @@ jobs:
 
       - name: Validate active component sources catalog
         env:
-          NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE: portable
+          NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE: local
         run: |
           set -euo pipefail
           .venv/bin/python -m nebius_cxcli validate-sources component_sources.yaml
 
-      - name: Verify bundled component sources in wheel
-        env:
-          RELEASE_REF: ${{ github.sha }}
-          NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE: portable
+      - name: Verify bundled component sources are packaged in wheel
         run: |
           set -euo pipefail
           wheel="$(find dist -maxdepth 1 -name '*.whl' | sort | head -n 1)"
@@ -64,7 +61,6 @@ jobs:
             echo "::error::No wheel found in dist/"
             exit 1
           fi
-          .venv/bin/python -m nebius_cxcli.release_catalog verify-wheel \
-            --wheel "${wheel}" \
-            --release-ref "${RELEASE_REF}"
-          echo "Verified bundled portable component_sources.yaml in ${wheel}"
+          .venv/bin/python -m nebius_cxcli.release_catalog verify-wheel-bundle \
+            --wheel "${wheel}"
+          echo "Verified bundled component_sources.yaml is packaged in ${wheel}"

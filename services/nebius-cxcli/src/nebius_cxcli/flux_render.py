@@ -24,6 +24,7 @@ from .component_wiring import (
     resolve_input_binding_source,
 )
 from .components import component_entries
+from .mk8s_gpu import mk8s_gpu_flux_release_dependencies
 from .paths import ProjectPaths
 from .runtime_config import to_plain_data
 
@@ -295,8 +296,34 @@ def _configured_app_release_specs(
                         "interval": interval,
                         "timeout": release_timeout,
                         "values": chart_values,
+                        "depends_on": [],
                     }
                 )
+    dependency_map = mk8s_gpu_flux_release_dependencies(
+        payload,
+        release_entry_ids={
+            str(item.get("entry_id", "")).strip()
+            for item in specs
+            if str(item.get("entry_id", "")).strip()
+        },
+    )
+    spec_by_entry_id = {
+        str(item.get("entry_id", "")).strip(): item
+        for item in specs
+        if str(item.get("entry_id", "")).strip()
+    }
+    for entry_id, dependency_ids in dependency_map.items():
+        release = spec_by_entry_id.get(entry_id)
+        if release is None:
+            continue
+        release["depends_on"] = [
+            {
+                "name": str(spec_by_entry_id[dependency_id]["release_name"]),
+                "namespace": str(spec_by_entry_id[dependency_id]["namespace"]),
+            }
+            for dependency_id in dependency_ids
+            if dependency_id in spec_by_entry_id
+        ]
     return specs
 
 
@@ -311,6 +338,7 @@ def _helm_release_doc(
     interval: str,
     timeout: str | None,
     values: dict[str, Any],
+    depends_on: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     chart_spec: dict[str, Any] = {
         "chart": chart_ref,
@@ -330,6 +358,8 @@ def _helm_release_doc(
     }
     if timeout:
         spec["timeout"] = timeout
+    if depends_on:
+        spec["dependsOn"] = depends_on
     return {
         "apiVersion": "helm.toolkit.fluxcd.io/v2",
         "kind": "HelmRelease",
@@ -409,6 +439,7 @@ def _render_flux_app_helm_releases(
                 interval=release["interval"],
                 timeout=release["timeout"] or None,
                 values=release["values"],
+                depends_on=release.get("depends_on") or None,
             ),
         )
 

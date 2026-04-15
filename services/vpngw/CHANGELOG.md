@@ -14,6 +14,15 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [nebius-vpngw-v0.5.8] - 2026-04-15
+
+- Fixed explicit `gateway_group.external_ips` reuse for pre-created public IP allocations:
+  - `apply` and `prep-network` now resolve existing public allocations by the requested IP in the current project before attempting to create a new one
+  - explicit-IP runs now fail fast when the found allocation is still attached to another resource instead of warning and continuing
+  - stale CLI-owned allocation names no longer silently override a different requested IP from YAML
+  - removed cross-subnet public-allocation migration attempts; Nebius marks public allocation `subnet_id`, `cidr`, and `pool_id` immutable, so explicit-IP runs now require the allocation to already belong to the target gateway subnet
+- Aligned CI/release wheel builds with the local `Makefile` build path so GitHub Actions suppresses the known transient `GlobalOverrides` warning during `python -m build --wheel --no-isolation`.
+
 ## [nebius-vpngw-v0.5.7] - 2026-04-08
 
 - Fixed `add-routes-local` safety checks and output:

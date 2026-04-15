@@ -49,6 +49,17 @@ def test_nebius_cxcli_ci_workflow_tracks_platform_modules_and_parses() -> None:
         ".venv/bin/python -m nebius_cxcli validate-sources component_sources.yaml"
         in serialized_steps
     )
+    assert "Verify bundled component sources are packaged in wheel" in serialized_steps
+    assert ".venv/bin/python -m nebius_cxcli.release_catalog verify-wheel-bundle" in serialized_steps
+    validate_step = next(
+        step
+        for step in steps
+        if isinstance(step, dict) and step.get("name") == "Validate active component sources catalog"
+    )
+    assert isinstance(validate_step, dict)
+    env = validate_step.get("env")
+    assert isinstance(env, dict)
+    assert env.get("NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE") == "local"
 
 
 def test_nebius_cxcli_release_workflow_parses() -> None:
@@ -68,3 +79,13 @@ def test_nebius_cxcli_release_workflow_parses() -> None:
         ".venv/bin/python -m nebius_cxcli validate-sources component_sources.yaml"
         in serialized_steps
     )
+    assert ".venv/bin/python -m nebius_cxcli.release_catalog verify-wheel \\" in serialized_steps
+    validate_step = next(
+        step
+        for step in steps
+        if isinstance(step, dict) and step.get("name") == "Validate active component sources catalog"
+    )
+    assert isinstance(validate_step, dict)
+    env = validate_step.get("env")
+    assert isinstance(env, dict)
+    assert env.get("NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE") == "portable"

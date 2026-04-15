@@ -53,6 +53,8 @@ def validate_component_runtime_rules(
             _validate_mk8s_gpu(payload, get_path, as_text, base)
         elif profile == "shared_filesystem":
             _validate_sfs_csi(payload, get_path, as_text, base)
+        elif profile == "vm_instance":
+            _validate_vm(payload, get_path, as_text, base, id_pattern)
         elif profile == "wireguard_jumphost":
             _validate_wireguard(payload, get_path, as_text, base, id_pattern)
         elif profile == "ssh_jumphost":
@@ -182,6 +184,126 @@ def _validate_sfs_csi(
                     static_pv_name is not None or static_sub_path is not None
                 ):
                     raise ValueError("sfs.csi.pvcs[].static_* fields require sfs.csi.mode='static'")
+
+
+def _validate_vm(
+    payload: Mapping[str, Any],
+    get_path: Callable,
+    as_text: Callable,
+    base: str,
+    id_pattern: Pattern[str],
+) -> None:
+    vm_enabled = bool(get_path(payload, f"{base}.enabled", False))
+    if not vm_enabled:
+        return
+
+    name = as_text(get_path(payload, f"{base}.name"))
+    if not name:
+        raise ValueError(f"{base}.name is required when enabled=true")
+    if not id_pattern.fullmatch(name):
+        raise ValueError(f"{base}.name must use lowercase letters, digits, and hyphens")
+
+    ssh_user_name = as_text(get_path(payload, f"{base}.ssh_user_name"))
+    _validate_linux_user_name(ssh_user_name, field_label=f"{base}.ssh_user_name")
+    if ssh_user_name.lower() in {"root", "admin"}:
+        raise ValueError(f"{base}.ssh_user_name must not be root or admin")
+
+    platform = as_text(get_path(payload, f"{base}.platform"))
+    preset = as_text(get_path(payload, f"{base}.preset"))
+    if not platform:
+        raise ValueError(f"{base}.platform is required when enabled=true")
+    if not preset:
+        raise ValueError(f"{base}.preset is required when enabled=true")
+
+    source_image_family = as_text(get_path(payload, f"{base}.source_image_family"))
+    source_image_id = as_text(get_path(payload, f"{base}.source_image_id"))
+    boot_disk_existing_id = as_text(get_path(payload, f"{base}.boot_disk_existing_id"))
+    if source_image_family and source_image_id:
+        raise ValueError(
+            f"{base}.source_image_family and {base}.source_image_id are mutually exclusive"
+        )
+    if boot_disk_existing_id and (source_image_family or source_image_id):
+        raise ValueError(
+            f"{base}.boot_disk_existing_id cannot be combined with source_image_family or source_image_id"
+        )
+    if not boot_disk_existing_id and not source_image_id and not source_image_family:
+        raise ValueError(
+            f"{base}.source_image_family is required when creating a boot disk unless source_image_id or boot_disk_existing_id is set"
+        )
+
+    public_ip_mode = as_text(get_path(payload, f"{base}.public_ip_mode", "dynamic")) or "dynamic"
+    public_ip_mode = public_ip_mode.lower()
+    if public_ip_mode not in {"none", "dynamic", "static", "allocation"}:
+        raise ValueError(f"{base}.public_ip_mode must be one of: none, dynamic, static, allocation")
+    public_ip_allocation_id = as_text(get_path(payload, f"{base}.public_ip_allocation_id"))
+    if public_ip_mode == "allocation" and not public_ip_allocation_id:
+        raise ValueError(f"{base}.public_ip_allocation_id is required when public_ip_mode=allocation")
+    if public_ip_mode != "allocation" and public_ip_allocation_id:
+        raise ValueError(
+            f"{base}.public_ip_allocation_id can only be used when public_ip_mode=allocation"
+        )
+
+    preemptible_enabled = bool(get_path(payload, f"{base}.preemptible_enabled", False))
+    recovery_policy = as_text(get_path(payload, f"{base}.recovery_policy", "RECOVER")).upper()
+    if preemptible_enabled and not platform.lower().startswith("gpu-"):
+        raise ValueError(f"{base}.preemptible_enabled requires a GPU platform")
+    if preemptible_enabled and recovery_policy != "FAIL":
+        raise ValueError(f"{base}.recovery_policy must be FAIL when preemptible_enabled=true")
+
+    gpu_cluster_enabled = bool(get_path(payload, f"{base}.gpu_cluster_enabled", False))
+    gpu_cluster_id = as_text(get_path(payload, f"{base}.gpu_cluster_id"))
+    gpu_cluster_fabric = as_text(get_path(payload, f"{base}.gpu_cluster_infiniband_fabric"))
+    gpu_cluster_name = as_text(get_path(payload, f"{base}.gpu_cluster_name"))
+    if gpu_cluster_enabled:
+        if not platform.lower().startswith("gpu-"):
+            raise ValueError(f"{base}.gpu_cluster_enabled requires a GPU platform")
+        if not preset.lower().startswith("8gpu-"):
+            raise ValueError(f"{base}.gpu_cluster_enabled requires an 8-GPU preset")
+        if bool(gpu_cluster_id) == bool(gpu_cluster_fabric):
+            raise ValueError(
+                f"{base} requires exactly one of gpu_cluster_id or gpu_cluster_infiniband_fabric when gpu_cluster_enabled=true"
+            )
+        if gpu_cluster_fabric:
+            project_id = as_text(get_path(payload, "client_info.nebius.project_id"))
+            if project_id:
+                from .provider_options import ProviderOptionLookup
+
+                allow_gpu_clustering = ProviderOptionLookup().compute_platform_preset_allows_gpu_clustering(
+                    project_id=project_id,
+                    platform_name=platform,
+                    preset_name=preset,
+                )
+                if allow_gpu_clustering is False:
+                    raise ValueError(
+                        "gpu_cluster_infiniband_fabric requires a GPU preset whose live Nebius "
+                        f"metadata allows GPU clustering; selected {platform}/{preset} does not "
+                        "support GPU clustering"
+                    )
+    elif gpu_cluster_id or gpu_cluster_fabric or gpu_cluster_name:
+        raise ValueError(f"{base}.gpu_cluster_* fields require gpu_cluster_enabled=true")
+
+    container_enabled = bool(get_path(payload, f"{base}.container_enabled", False))
+    container_image = as_text(get_path(payload, f"{base}.container_image"))
+    container_use_gpu = bool(get_path(payload, f"{base}.container_use_gpu", False))
+    if container_enabled:
+        if not container_image:
+            raise ValueError(f"{base}.container_image is required when container_enabled=true")
+        if preemptible_enabled:
+            raise ValueError(f"{base}.container_enabled requires a regular VM")
+        if (
+            not boot_disk_existing_id
+            and not source_image_id
+            and source_image_family
+            and "ubuntu" not in source_image_family.lower()
+        ):
+            raise ValueError(
+                f"{base}.source_image_family must be Ubuntu-based when container_enabled=true "
+                "unless you supply source_image_id or boot_disk_existing_id"
+            )
+    if container_use_gpu and not container_enabled:
+        raise ValueError(f"{base}.container_use_gpu requires container_enabled=true")
+    if container_use_gpu and not platform.lower().startswith("gpu-"):
+        raise ValueError(f"{base}.container_use_gpu requires a GPU platform")
 
 
 def _validate_wireguard(

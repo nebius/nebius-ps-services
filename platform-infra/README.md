@@ -17,6 +17,7 @@ Reusable modules under `modules/`:
 - [`sfs`](modules/sfs/README.md): Nebius Shared File System.
 - [`object-storage`](modules/object-storage/README.md): Nebius Object Storage buckets.
 - [`mysterybox`](modules/mysterybox/README.md): Nebius MysteryBox secrets and initial secret versions.
+- [`vm`](modules/vm/README.md): General Nebius Compute virtual machine provisioning.
 - [`wireguard-jumphost`](modules/wireguard-jumphost/README.md): WireGuard VPN jump host VM.
 - [`ssh-jumphost`](modules/ssh-jumphost/README.md): SSH bastion/jump host VM.
 
@@ -199,6 +200,27 @@ to help users choose the right module quickly.
 - Example:
   - `modules/mysterybox/examples/minimal`
 
+### [`vm`](modules/vm/README.md)
+
+- Creates one Nebius Compute virtual machine with explicit platform/preset
+  selection
+- Required inputs:
+  - `parent_id`
+  - `subnet_id`
+  - `name`
+  - `platform`
+  - `preset`
+  - `ssh_public_key`
+- Key optional capabilities:
+  - regular or preemptible GPU VMs
+  - managed boot/data disks and attached filesystems
+  - optional GPU cluster creation or attachment
+  - optional Docker-based container bootstrap on the VM
+- Examples:
+  - `modules/vm/examples/minimal`
+  - `modules/vm/examples/gpu-preemptible`
+  - `modules/vm/examples/containerized`
+
 ### [`ssh-jumphost`](modules/ssh-jumphost/README.md)
 
 - Creates an SSH jump host VM
@@ -237,6 +259,9 @@ terraform -chdir=modules/mk8s/examples/minimal validate
 
 terraform -chdir=modules/managed-postgresql/examples/minimal init -backend=false
 terraform -chdir=modules/managed-postgresql/examples/minimal validate
+
+terraform -chdir=modules/vm/examples/minimal init -backend=false
+terraform -chdir=modules/vm/examples/minimal validate
 ```
 
 If you want repo-wide checks from `platform-infra/`:
@@ -279,6 +304,12 @@ platform-infra/
       README.md
       examples/
         minimal/
+    vm/
+      README.md
+      examples/
+        minimal/
+        gpu-preemptible/
+        containerized/
     wireguard-jumphost/
       README.md
       examples/

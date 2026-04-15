@@ -117,7 +117,8 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf build dist
-          python -m build --wheel --no-isolation
+          PYTHONWARNINGS="ignore:No GlobalOverrides context is active:UserWarning" \
+            python -m build --wheel --no-isolation
 
   integration-tests:
     if: github.event_name == 'workflow_dispatch'
@@ -196,7 +197,8 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf build dist
-          python -m build --wheel --no-isolation
+          PYTHONWARNINGS="ignore:No GlobalOverrides context is active:UserWarning" \
+            python -m build --wheel --no-isolation
       - name: Upload wheel
         uses: actions/upload-artifact@v7
         with:
