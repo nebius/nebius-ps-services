@@ -41,6 +41,15 @@ All notable changes to this chart are tracked here. This changelog follows
 - Bumped the chart to `0.2.5` so the portable OCI release can become the
   single source of truth for those shared NCCL runtime defaults, letting
   `nebius-cxcli` keep only the B200-specific MPI overlay in its catalog.
+- Fixed the chart publish workflow so `helm push` targets the OCI repository
+  root `.../charts` instead of the chart-specific path, avoiding the incorrect
+  nested registry location `.../charts/nccl-test/nccl-test:<version>` and
+  making the anonymous post-publish pull probe check the same canonical
+  `oci://.../charts/nccl-test` reference used by customers.
+- Added a pre-push workflow guard that probes the bad nested repository path
+  `.../charts/nccl-test/nccl-test` and fails fast with a cleanup message if it
+  still exists, preventing future duplicate NCCL chart repository layouts in
+  the registry.
 
 ## [nccl-test-chart-v0.2.4] - 2026-04-16
 

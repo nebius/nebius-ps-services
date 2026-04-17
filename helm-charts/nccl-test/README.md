@@ -95,6 +95,14 @@ helm pull \
   --version <chart-version>
 ```
 
+The OCI repository root for `helm push` is `.../charts`; Helm appends the
+packaged chart name automatically. Pushing to `.../charts/nccl-test` creates
+the wrong nested path `.../charts/nccl-test/nccl-test:<version>`.
+
+The GitHub publish workflow now probes that nested path before every publish
+attempt and fails fast if it already exists, so an old duplicate repository has
+to be deleted before another chart release can proceed.
+
 Direct OCI publish commands for debugging only:
 
 ```bash

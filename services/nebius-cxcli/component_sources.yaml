@@ -264,7 +264,7 @@ components:
         portable:
           repo: oci://cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/charts/nccl-test
           chart: nccl-test
-          version: 0.2.5
+          version: 0.2.6
         local:
           path: ../../helm-charts/nccl-test
       ui:

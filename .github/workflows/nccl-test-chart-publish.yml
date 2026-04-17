@@ -104,14 +104,18 @@ jobs:
           registry_name="${NB_REGISTRY_NAME:-${registry_id}}"
           registry_path="${registry_id#registry-}"
           registry_host="cr.${NB_REGION_ID}.nebius.cloud"
-          oci_ref="oci://${registry_host}/${registry_path}/${OCI_REPOSITORY_PREFIX}/${CHART_NAME}"
+          push_ref="oci://${registry_host}/${registry_path}/${OCI_REPOSITORY_PREFIX}"
+          chart_ref="${push_ref}/${CHART_NAME}"
+          duplicate_chart_ref="${chart_ref}/${CHART_NAME}"
 
           {
             echo "registry_id=${registry_id}"
             echo "registry_name=${registry_name}"
             echo "registry_path=${registry_path}"
             echo "registry_host=${registry_host}"
-            echo "oci_ref=${oci_ref}"
+            echo "push_ref=${push_ref}"
+            echo "chart_ref=${chart_ref}"
+            echo "duplicate_chart_ref=${duplicate_chart_ref}"
           } >> "${GITHUB_OUTPUT}"
 
       - name: Package chart
@@ -160,12 +164,12 @@ jobs:
           mkdir -p "${HELM_CONFIG_HOME}" "${HELM_CACHE_HOME}" "${HELM_DATA_HOME}"
 
           pull_dir="$(mktemp -d)"
-          if pull_output="$(helm pull "${{ steps.registry.outputs.oci_ref }}" --version "${{ steps.release.outputs.publish_version }}" -d "${pull_dir}" 2>&1)"; then
+          if pull_output="$(helm pull "${{ steps.registry.outputs.chart_ref }}" --version "${{ steps.release.outputs.publish_version }}" -d "${pull_dir}" 2>&1)"; then
             printf '%s\n' "${pull_output}"
             remote_package="${pull_dir}/${CHART_NAME}-${{ steps.release.outputs.publish_version }}.tgz"
             remote_sha256="$(sha256sum "${remote_package}" | awk '{print $1}')"
             if [[ "${remote_sha256}" != "${{ steps.package.outputs.package_sha256 }}" ]]; then
-              echo "::error::Registry already contains ${{ steps.registry.outputs.oci_ref }}:${{ steps.release.outputs.publish_version }} with different content"
+              echo "::error::Registry already contains ${{ steps.registry.outputs.chart_ref }}:${{ steps.release.outputs.publish_version }} with different content"
               echo "::error::Local package sha256=${{ steps.package.outputs.package_sha256 }}, remote package sha256=${remote_sha256}"
               exit 1
             fi
@@ -186,6 +190,35 @@ jobs:
           set -euo pipefail
           curl -sSL https://storage.eu-north1.nebius.cloud/cli/install.sh | bash
           echo "${HOME}/.nebius/bin" >> "${GITHUB_PATH}"
+
+      - name: Guard against duplicate nested chart repository
+        if: steps.existing.outputs.publish_needed == 'true'
+        run: |
+          set -euo pipefail
+
+          helm_tmp="$(mktemp -d)"
+          export HELM_CONFIG_HOME="${helm_tmp}/config"
+          export HELM_CACHE_HOME="${helm_tmp}/cache"
+          export HELM_DATA_HOME="${helm_tmp}/data"
+          export HELM_REGISTRY_CONFIG="${helm_tmp}/registry.json"
+          mkdir -p "${HELM_CONFIG_HOME}" "${HELM_CACHE_HOME}" "${HELM_DATA_HOME}"
+
+          duplicate_ref="${{ steps.registry.outputs.duplicate_chart_ref }}"
+          if duplicate_output="$(helm show chart "${duplicate_ref}" 2>&1)"; then
+            printf '%s\n' "${duplicate_output}"
+            echo "::error::Duplicate nested chart repository detected at ${duplicate_ref}."
+            echo "::error::Delete the nested repository/artifacts first, then rerun the publish workflow."
+            echo "::error::The canonical public chart reference must stay ${{
+              steps.registry.outputs.chart_ref
+            }}."
+            exit 1
+          fi
+
+          if ! grep -Eiq 'not found|manifest unknown|404' <<< "${duplicate_output}"; then
+            printf '%s\n' "${duplicate_output}" >&2
+            echo "::error::Unable to verify whether duplicate nested chart repository ${duplicate_ref} exists."
+            exit 1
+          fi
 
       - name: Configure Nebius CLI profile
         if: steps.existing.outputs.publish_needed == 'true'
@@ -240,8 +273,12 @@ jobs:
         id: push
         run: |
           set -euo pipefail
-          push_output="$(helm push "${{ steps.package.outputs.package_path }}" "${{ steps.registry.outputs.oci_ref }}" 2>&1)"
-          printf '%s\n' "${push_output}"
+          if push_output="$(helm push "${{ steps.package.outputs.package_path }}" "${{ steps.registry.outputs.push_ref }}" 2>&1)"; then
+            printf '%s\n' "${push_output}"
+          else
+            printf '%s\n' "${push_output}" >&2
+            exit 1
+          fi
           digest="$(printf '%s\n' "${push_output}" | awk '/^Digest:/ {print $2; exit}')"
           if [[ -z "${digest}" ]]; then
             echo "::error::Unable to resolve OCI digest from helm push output"
@@ -262,8 +299,12 @@ jobs:
           mkdir -p "${HELM_CONFIG_HOME}" "${HELM_CACHE_HOME}" "${HELM_DATA_HOME}"
 
           pull_dir="$(mktemp -d)"
-          pull_output="$(helm pull "${{ steps.registry.outputs.oci_ref }}" --version "${{ steps.release.outputs.publish_version }}" -d "${pull_dir}" 2>&1)"
-          printf '%s\n' "${pull_output}"
+          if pull_output="$(helm pull "${{ steps.registry.outputs.chart_ref }}" --version "${{ steps.release.outputs.publish_version }}" -d "${pull_dir}" 2>&1)"; then
+            printf '%s\n' "${pull_output}"
+          else
+            printf '%s\n' "${pull_output}" >&2
+            exit 1
+          fi
           public_package="${pull_dir}/${CHART_NAME}-${{ steps.release.outputs.publish_version }}.tgz"
           public_sha256="$(sha256sum "${public_package}" | awk '{print $1}')"
 
@@ -299,7 +340,7 @@ jobs:
             --arg registry_name "${{ steps.registry.outputs.registry_name }}" \
             --arg registry_id "${{ steps.registry.outputs.registry_id }}" \
             --arg registry_path "${{ steps.registry.outputs.registry_path }}" \
-            --arg oci_ref "${{ steps.registry.outputs.oci_ref }}" \
+            --arg oci_ref "${{ steps.registry.outputs.chart_ref }}" \
             --arg package_path "${{ steps.package.outputs.package_path }}" \
             --arg package_sha256 "${{ steps.package.outputs.package_sha256 }}" \
             --arg published_digest "${{ steps.verify_public.outputs.digest }}" \
@@ -348,7 +389,7 @@ jobs:
             echo "- Commit: \`${{ steps.release.outputs.commit }}\`"
             echo "- Registry name: \`${{ steps.registry.outputs.registry_name }}\`"
             echo "- Registry: \`${{ steps.registry.outputs.registry_id }}\`"
-            echo "- OCI reference: \`${{ steps.registry.outputs.oci_ref }}:${{ steps.release.outputs.publish_version }}\`"
+            echo "- OCI reference: \`${{ steps.registry.outputs.chart_ref }}:${{ steps.release.outputs.publish_version }}\`"
             echo "- Package sha256: \`${{ steps.package.outputs.package_sha256 }}\`"
             echo "- OCI digest: \`${{ steps.verify_public.outputs.digest }}\`"
             echo "- Anonymous pull sha256: \`${{ steps.verify_public.outputs.public_sha256 }}\`"
@@ -357,6 +398,6 @@ jobs:
             echo "Public pull example:"
             echo ""
             echo '```bash'
-            echo "helm pull ${{ steps.registry.outputs.oci_ref }} --version ${{ steps.release.outputs.publish_version }}"
+            echo "helm pull ${{ steps.registry.outputs.chart_ref }} --version ${{ steps.release.outputs.publish_version }}"
             echo '```'
           } >> "${GITHUB_STEP_SUMMARY}"
