@@ -1,4 +1,5 @@
 # Changelog
+<!-- markdownlint-configure-file {"MD024": {"siblings_only": true}} -->
 
 All notable changes to this chart are tracked here. This changelog follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
@@ -19,13 +20,25 @@ All notable changes to this chart are tracked here. This changelog follows
 
 ## [Unreleased]
 
+### Changed
+
+- Aligned the chart-local README and `publish-helm.sh` examples with the
+  current release contract, including a markdownlint-clean install example and
+  a non-stale next-release helper example.
+
 ## [nccl-test-chart-v0.2.6] - 2026-04-16
 
 ### Changed
 
-- Recut the chart release after the previous `0.2.5` workflow published to the wrong nested OCI path in Nebius Container Registry.
-- Fixed the publish workflow so `helm push` targets the canonical OCI repository root `oci://cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/charts`, and customer pulls resolve through `oci://cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/charts/nccl-test`.
-- Added a fail-fast guard that stops the workflow if the bad nested repository path `.../charts/nccl-test/nccl-test` still exists.
+- Recut the chart release after the previous `0.2.5` workflow published to the
+  wrong nested OCI path in Nebius Container Registry.
+- Fixed the publish workflow so `helm push` targets the canonical OCI
+  repository root
+  `oci://cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/charts`, and customer
+  pulls resolve through
+  `oci://cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/charts/nccl-test`.
+- Added a fail-fast guard that stops the workflow if the bad nested repository
+  path `.../charts/nccl-test/nccl-test` still exists.
 
 ## [nccl-test-chart-v0.2.5] - 2026-04-16
 

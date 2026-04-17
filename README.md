@@ -18,7 +18,10 @@ Ubuntu test container, bootstrapping project build dependencies into a
 container-specific virtual environment, preserving Git metadata for
 subprojects, and attaching VS Code to it on macOS with Docker Desktop, plus
 the `align` Codex skill for end-to-end project review and fix passes that
-reconcile code, tests, CI workflows, CLI/help output, and documentation.
+reconcile code, tests, CI workflows, CLI/help output, and documentation. The
+same `skills/` set also includes `create-pr` and `review-pr` for branch-safe
+GitHub pull request creation and merge-readiness review/fix flows with safer
+default-branch handling and conservative branch-update guidance.
 
 ---
 
