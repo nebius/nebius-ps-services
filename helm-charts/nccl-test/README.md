@@ -101,7 +101,8 @@ the wrong nested path `.../charts/nccl-test/nccl-test:<version>`.
 
 The GitHub publish workflow now probes that nested path before every publish
 attempt and fails fast if it already exists, so an old duplicate repository has
-to be deleted before another chart release can proceed.
+to be deleted before another chart release can proceed. An empty nested path
+with no tags is treated as already cleaned up and does not block publication.
 
 Direct OCI publish commands for debugging only:
 

@@ -58,6 +58,9 @@ All notable changes to this chart are tracked here. This changelog follows
   `.../charts/nccl-test/nccl-test` and fails fast with a cleanup message if it
   still exists, preventing future duplicate NCCL chart repository layouts in
   the registry.
+- Refined that duplicate-repository guard so an already-cleaned nested path
+  with no remaining tags is treated as safe instead of failing the workflow
+  with a generic verification error.
 
 ## [nccl-test-chart-v0.2.4] - 2026-04-16
 
