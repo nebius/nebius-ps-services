@@ -1,6 +1,7 @@
-# Default MPIJob contract for the NCCL validation workflow. cxcli overrides
-# only the worker replica count and the platform-specific runtime image/extra
-# MPI args at deploy time.
+# Default MPIJob contract for the NCCL validation workflow. The shared
+# first-party image tag and practical benchmark shape now live here in the
+# source chart; cxcli only needs to override worker replica count and
+# platform-specific MPI extras such as the B200 `-mca coll ^hcoll` overlay.
 
 nameOverride: ""
 fullnameOverride: ""
@@ -8,12 +9,14 @@ fullnameOverride: ""
 global:
   imagePullSecrets: []
 
+imagePullSecrets: []
+
 commonLabels: {}
 commonAnnotations: {}
 
 image:
-  repository: cr.eu-north1.nebius.cloud/nebius-benchmarks/nccl-tests
-  tag: 2.23.4-ubu22.04-cu12.4
+  repository: cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/images/nccl-test
+  tag: 0.2.0
   digest: ""
   pullPolicy: IfNotPresent
 
@@ -32,17 +35,11 @@ benchmark:
     - -x
     - LD_LIBRARY_PATH
     - -x
-    - NCCL_DEBUG=INFO
+    - NCCL_DEBUG=WARN
     - -x
     - NCCL_SOCKET_IFNAME=eth0
     - -x
     - NCCL_IB_HCA=mlx5
-    - -x
-    - UCX_NET_DEVICES=eth0
-    - -x
-    - SHARP_COLL_ENABLE_PCI_RELAXED_ORDERING=1
-    - -x
-    - NCCL_COLLNET_ENABLE=0
   mpiExtraArgs: []
   args:
     - -b
@@ -53,6 +50,12 @@ benchmark:
     - "2"
     - -g
     - "1"
+    - -n
+    - "10"
+    - -w
+    - "3"
+    - -T
+    - "180"
 
 launcher:
   podLabels: {}

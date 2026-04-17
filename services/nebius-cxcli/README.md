@@ -144,12 +144,13 @@ components:
           validations:
             operator_readiness:
               enabled_by_default: true
-              timeout: 20m
+              timeout: 10m
             gpu_visibility:
               enabled_by_default: true
               namespace: gpu-validation
               image: nvcr.io/nvidia/k8s/cuda-sample:vectoradd-cuda11.7.1-ubuntu20.04
-              timeout: 10m
+              timeout: 5m
+              max_nodes: 3
     vm:
       source:
         portable: git::https://github.com/org/repo.git//modules/vm?ref=v1.2.3
@@ -169,10 +170,11 @@ components:
         namespace: nvidia-network-operator
         name: network-operator
       cli:
-        mk8s_gpu:
+        mk8s_gpu_policy:
           role: network_operator
-          auto_enable:
+          rules:
             - gpu_cluster_enabled: true
+              auto_enable: true
     nvidia-gpu-operator:
       source:
         portable:
@@ -183,15 +185,14 @@ components:
         namespace: nvidia-gpu-operator
         name: gpu-operator
       cli:
-        mk8s_gpu:
+        mk8s_gpu_policy:
           role: gpu_operator
-          auto_enable:
-            - {}
-          install_after: [nvidia-network-operator]
-          value_overrides:
+          rules:
+            - auto_enable: true
             - gpu_stack_source: nebius_image
-              values:
+              defaults:
                 values.driver.enabled: false
+          install_after: [nvidia-network-operator]
 ```
 
 Field guide:
@@ -221,8 +222,8 @@ Field guide:
   - `ui.title`, `ui.group`, `ui.enabled`: display metadata and default wizard checkbox state.
   - `release.namespace`, `release.name`: default Helm namespace and release name used during `create`.
   - `release.timeout`: optional Flux `HelmRelease.spec.timeout` duration such as `10m` or `12m30s`. When omitted, the chart inherits `cli.flux.release_timeout`.
-  - `defaults`: target-path map for chart values. App defaults must target `values.*`.
-  - `cli.mk8s_gpu`: optional MK8s GPU automation contract for that app entry. `role` declares what operator role the chart plays, `auto_enable` declares when cxcli should auto-select it for GPU-enabled MK8s, `install_after` adds Flux ordering edges, and `value_overrides` materializes chart-native Helm values when the selected MK8s GPU context matches.
+  - `defaults`: unconditional target-path map for chart values. App defaults must target `values.*`.
+  - `cli.mk8s_gpu_policy`: optional MK8s GPU automation contract for that app entry. `role` declares what operator role the chart plays, `install_after` adds Flux `dependsOn` ordering edges between app releases, and `rules` is the conditional policy list. Each `rules[]` item can set `auto_enable: true` to let cxcli auto-select the app for a matching MK8s GPU context and/or define conditional `defaults` for chart values. Top-level app `defaults` remain unconditional; `rules[].defaults` are the conditional version of the same mechanism.
   - `wizard`: optional prompt metadata keyed by chart value path such as `values.image.tag`.
   - `input`: same binding syntax as infra, but target paths should land under `values.*`.
 
@@ -266,10 +267,10 @@ Bundled MK8s GPU app policy:
 - MK8s GPU software defaults are policy-driven in code and source-driven in the catalog.
 - The bundled catalog keeps chart source selection, release metadata, default Helm values, activation rules, validation images, thresholds, and timeouts in `component_sources.yaml`, while the CLI only evaluates those rules against the selected MK8s context.
 - The same `source.portable` / `source.local` contract now applies to first-party Helm charts as well as Terraform modules.
-- The canonical GPU role is `nvidia-gpu-operator` for both Nebius-image and manual node groups. On Nebius-managed images the CLI materializes Helm values that disable the driver and toolkit operands while keeping the device plugin and DCGM exporter enabled.
+- The canonical GPU role is `nvidia-gpu-operator` for both Nebius-image and manual node groups. On Nebius-managed images the CLI materializes Helm values that disable the driver and toolkit operands while relying on the chart defaults that keep the device plugin and DCGM exporter enabled. The catalog now keeps only the Nebius-specific operator deltas instead of restating live chart defaults.
 - When the selected MK8s shape enables GPU clustering / InfiniBand, or when a manual B200/B200A node group requires RDMA plumbing, the CLI auto-enables `nvidia-network-operator` and renders a Flux `dependsOn` edge so the network operator reconciles before the GPU operator.
-- GPU Visibility test is enabled by default for GPU-backed MK8s deploys.
-- NCCL test is enabled by default only for MK8s GPU-cluster shapes, not for every GPU-enabled MK8s cluster. Its workload manifest now comes from the first-party `helm-charts/nccl-test` chart: the catalog currently points to the local chart for developer workflows, and release builds will require `source.portable` once that chart is published in a portable registry. The CLI keeps the Kubeflow training-operator bootstrap and report capture as deploy-time validation behavior.
+- GPU Visibility test is enabled by default for GPU-backed MK8s deploys, but it is now a bounded sampled validation: by default it runs the CUDA sample on at most 3 Ready GPU nodes, reports live pod phase progress, and bulk-cleans the validation pods afterward instead of fanning out one blocking wait per node across the whole cluster.
+- NCCL test is enabled by default only for MK8s GPU-cluster shapes, not for every GPU-enabled MK8s cluster. Its workload manifest comes from the first-party `helm-charts/nccl-test` chart with both `source.local` and `source.portable` catalog entries pinned to `oci://cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/charts/nccl-test --version 0.2.5`; the shared image/tag plus the pragmatic benchmark defaults are now sourced directly from the chart's own `values.yaml`, and the app entry keeps only the B200-only `-mca coll ^hcoll` overlay. `nebius-cxcli` also keeps the Kubeflow Training Operator as a transient NCCL prerequisite pinned in the catalog and installs/removes it on demand, and the saved GPU validation reports are intentionally compact ordered JSON: practical summary fields stay up front, success cases omit noisy raw logs, and failures keep only the relevant log excerpts.
 
 What `wizard` is doing:
 
@@ -847,10 +848,11 @@ Local `deploy`/`flux bootstrap` behavior when apps + the bundled `mk8s` componen
 - On non-CI local runs, that same built-in MK8s handoff also updates the user kubeconfig at `~/.kube/config` with a `nebius-cxcli` exec-based credential entry, so `kubectl` can be used against the target cluster after `deploy`, `flux apply`, or `flux bootstrap` without installing a separate Nebius CLI.
 - `destroy` and `flux destroy` still use the same built-in MK8s handoff for temporary cluster access when app resources must be removed first, but they do not persist or switch the user's local `~/.kube/config`.
 - When the selected cluster-access endpoint is private, `deploy`, `flux apply`, `flux bootstrap`, `destroy`, and `flux destroy` require the current machine to already have a private network path to the MK8s API. The CLI does not hardcode or auto-provision that path; customer environments can satisfy it with VPNs, routed private networks, subnet routers, SSH/WireGuard tunnels, or by running the command from an in-network runner.
-- When app charts are enabled, `deploy`, `flux apply`, and `flux bootstrap` first check Kubernetes node readiness against a handed-off MK8s cluster and only wait when the nodes are not `Ready` yet. When the cluster is already healthy, they proceed to Flux work immediately instead of presenting that probe as a wait.
-- When the generated manifest declares deploy-time MK8s GPU validations, local `deploy` uses the same handed-off kubeconfig after Terraform/Flux work to run them directly with `kubectl`, writes JSON reports into `generated/inventory/`, and keeps those validation workflows independent from persistent in-cluster app reconciliation.
+- When app charts are enabled, `deploy`, `flux apply`, and `flux bootstrap` now print a Kubernetes node-status snapshot first, then proceed directly into Flux or validation-specific readiness checks instead of blocking on a generic "all nodes Ready" gate before useful work starts.
+- When the generated manifest declares deploy-time MK8s GPU validations, local `deploy` uses the same handed-off kubeconfig after Terraform/Flux work to run them directly with `kubectl`, writes compact ordered JSON reports into `generated/inventory/`, prints the report paths one-per-line for easy copy/paste, and keeps those validation workflows independent from persistent in-cluster app reconciliation.
+- During those deploy-time MK8s GPU validations, `deploy` now keeps one continuous spinner alive across validation boundaries and live in-cluster progress updates, so the command does not go visually idle between operator readiness, GPU visibility, or NCCL phases.
 - Once the built-in MK8s handoff is ready, the local Flux phase now keeps one continuous spinner alive and updates its message through cluster reachability, Flux API discovery, rendered manifest apply, and the final rendered-resource readiness wait so the command does not go visually idle between phases.
-- When no app charts are enabled, `render` now emits an empty Flux kustomization without a placeholder repository file. Local `deploy` still prepares the built-in MK8s handoff and refreshes local kubeconfig when that handoff exists, but it skips the node-readiness and Flux apply phases; `flux apply` still refuses to run because there are no enabled charts.
+- When no app charts are enabled, `render` now emits an empty Flux kustomization without a placeholder repository file. Local `deploy` still prepares the built-in MK8s handoff and refreshes local kubeconfig when that handoff exists, but it skips Flux apply entirely; `flux apply` still refuses to run because there are no enabled charts to apply.
 - In non-interactive logs such as GitHub Actions, those same phase updates fall back to stable printed lines instead of transient spinner frames, so CI logs remain readable and do not depend on TTY animation support.
 - Generated Flux artifacts are treated as the deploy truth. If an app chart depends on Terraform-backed component outputs, you must rerender after the needed Terraform state exists before treating `generated/flux` as the final GitOps payload.
 - Flux render writes explicit Namespace manifests for chart target namespaces before namespaced `HelmRelease` resources, so local `kubectl apply -k generated/flux` does not fail with `namespaces "<name>" not found`.

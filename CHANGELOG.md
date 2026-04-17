@@ -39,6 +39,19 @@ All notable changes to this repository will be documented in this file.
 
 ### Changed
 
+- Added a canonical Helm chart publication flow for `helm-charts/nccl-test`
+  with chart-local `CHANGELOG.md`, `publish-helm.sh` prep/publish helper, a
+  simplified tag-driven Nebius OCI publish workflow, anonymous public-pull
+  verification, and a matching `publish-helm` skill under `skills/`.
+- Hardened `helm-charts/nccl-test` by aligning the chart `appVersion` with the
+  default NCCL image, merging local and global image pull secrets for both pod
+  types, tightening Helm values schema validation, and expanding the chart
+  README plus chart-local ignore rules.
+- Expanded the repo-level Dependabot auto-merge policy so Dependabot-authored
+  semver `uv` and `pip` dependency bumps can be auto-approved and auto-merged
+  when every changed file is limited to Python dependency manifests or
+  lockfiles, while source-code edits and other non-dependency file changes
+  remain ineligible.
 - Expanded `nebius-cxcli validate-sources` so it now validates fast
   Terraform-module and Helm-chart source contracts in addition to catalog
   shape and source-address resolution, including module `versions.tf`

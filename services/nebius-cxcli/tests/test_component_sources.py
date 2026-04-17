@@ -1464,6 +1464,7 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                                         "namespace": "gpu-validation",
                                         "image": "nvcr.io/example/vectoradd:latest",
                                         "timeout": "10m",
+                                        "max_nodes": 4,
                                     },
                                     "nccl": {
                                         "enabled_by_default": True,
@@ -1472,6 +1473,7 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                                         "training_operator_manifest": "github.com/example/training-operator?ref=v1.0.0",
                                         "training_operator_namespace": "kubeflow",
                                         "average_bus_bandwidth_threshold_gbps": 300,
+                                        "max_nodes": 6,
                                     },
                                 },
                             }
@@ -1491,19 +1493,21 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                         },
                         "ui": {"enabled": False},
                         "cli": {
-                            "mk8s_gpu": {
+                            "mk8s_gpu_policy": {
                                 "role": "gpu_operator",
-                                "auto_enable": [{}],
-                                "install_after": ["network-op"],
-                                "value_overrides": [
+                                "rules": [
+                                    {
+                                        "auto_enable": True,
+                                    },
                                     {
                                         "gpu_stack_source": "nebius_image",
-                                        "values": {
+                                        "defaults": {
                                             "values.driver.enabled": False,
                                             "values.toolkit.enabled": False,
                                         },
-                                    }
+                                    },
                                 ],
+                                "install_after": ["network-op"],
                             }
                         },
                     },
@@ -1519,12 +1523,13 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                         },
                         "ui": {"enabled": False},
                         "cli": {
-                            "mk8s_gpu": {
+                            "mk8s_gpu_policy": {
                                 "role": "network_operator",
-                                "auto_enable": [
+                                "rules": [
                                     {
                                         "gpu_stack_source": "manual",
                                         "match_platforms": ["gpu-b200-sxm"],
+                                        "auto_enable": True,
                                     }
                                 ],
                             }
@@ -1545,11 +1550,11 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                             "selectable": False,
                         },
                         "cli": {
-                            "mk8s_gpu": {
-                                "value_overrides": [
+                            "mk8s_gpu_policy": {
+                                "rules": [
                                     {
                                         "match_platforms": ["gpu-h100-sxm"],
-                                        "values": {
+                                        "defaults": {
                                             "values.image.repository": "registry.example/nccl",
                                             "values.image.tag": "latest",
                                         },
@@ -1575,12 +1580,16 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
         "cuda12.8",
     )
     assert network_operator.mk8s_gpu.role == "network_operator"
-    assert network_operator.mk8s_gpu.auto_enable[0].gpu_stack_source == "manual"
-    assert network_operator.mk8s_gpu.auto_enable[0].match_platforms == ("gpu-b200-sxm",)
-    assert gpu_operator.mk8s_gpu.value_overrides[0].values[0].target_path == "values.driver.enabled"
+    assert network_operator.mk8s_gpu.rules[0].gpu_stack_source == "manual"
+    assert network_operator.mk8s_gpu.rules[0].match_platforms == ("gpu-b200-sxm",)
+    assert network_operator.mk8s_gpu.rules[0].auto_enable is True
+    gpu_defaults_rule = next(rule for rule in gpu_operator.mk8s_gpu.rules if rule.defaults)
+    assert gpu_defaults_rule.defaults[0].target_path == "values.driver.enabled"
     assert mk8s.mk8s_gpu.validations.operator_readiness.timeout == "20m"
     assert mk8s.mk8s_gpu.validations.gpu_visibility.namespace == "gpu-validation"
+    assert mk8s.mk8s_gpu.validations.gpu_visibility.max_nodes == 4
     assert mk8s.mk8s_gpu.validations.nccl.chart_component_id == "nccl-test"
+    assert mk8s.mk8s_gpu.validations.nccl.max_nodes == 6
 
 
 def test_load_component_sources_parses_vm_cli_settings(tmp_path: Path) -> None:
@@ -1712,7 +1721,7 @@ def test_load_component_sources_rejects_invalid_mk8s_gpu_app_role_value(tmp_path
                         },
                         "ui": {"enabled": False},
                         "cli": {
-                            "mk8s_gpu": {
+                            "mk8s_gpu_policy": {
                                 "role": "device_plugin",
                             }
                         },
@@ -1726,7 +1735,86 @@ def test_load_component_sources_rejects_invalid_mk8s_gpu_app_role_value(tmp_path
 
     with pytest.raises(
         ValueError,
-        match="components\\.apps\\.gpu-operator\\.cli\\.mk8s_gpu\\.role must be one of: gpu_operator, network_operator, health_checker",
+        match="components\\.apps\\.gpu-operator\\.cli\\.mk8s_gpu_policy\\.role must be one of: gpu_operator, network_operator, health_checker",
+    ):
+        load_component_sources(explicit=sources_file)
+
+
+def test_load_component_sources_rejects_legacy_mk8s_gpu_app_cli_key(tmp_path: Path) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                apps={
+                    "gpu-operator": {
+                        "source": _portable_chart_source(
+                            repo="https://example.invalid/charts",
+                            chart="gpu-operator",
+                            version="1.0.0",
+                        ),
+                        "release": {
+                            "namespace": "gpu-system",
+                            "name": "gpu-operator",
+                        },
+                        "ui": {"enabled": False},
+                        "cli": {
+                            "mk8s_gpu": {
+                                "role": "gpu_operator",
+                            }
+                        },
+                    }
+                },
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="components\\.apps\\.gpu-operator\\.cli has unsupported field\\(s\\): mk8s_gpu",
+    ):
+        load_component_sources(explicit=sources_file)
+
+
+def test_load_component_sources_rejects_empty_mk8s_gpu_rule(tmp_path: Path) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                apps={
+                    "gpu-operator": {
+                        "source": _portable_chart_source(
+                            repo="https://example.invalid/charts",
+                            chart="gpu-operator",
+                            version="1.0.0",
+                        ),
+                        "release": {
+                            "namespace": "gpu-system",
+                            "name": "gpu-operator",
+                        },
+                        "ui": {"enabled": False},
+                        "cli": {
+                            "mk8s_gpu_policy": {
+                                "role": "gpu_operator",
+                                "rules": [
+                                    {
+                                        "gpu_stack_source": "manual",
+                                    }
+                                ],
+                            }
+                        },
+                    }
+                },
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="components\\.apps\\.gpu-operator\\.cli\\.mk8s_gpu_policy\\.rules\\[0\\] must set auto_enable: true and/or defaults",
     ):
         load_component_sources(explicit=sources_file)
 

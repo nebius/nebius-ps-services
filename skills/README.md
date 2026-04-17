@@ -1,76 +1,153 @@
 # Skills
 
-This folder contains multiple ready-to-use Codex skills for developers.
+This repository contains public, reusable Codex skills for common engineering
+workflows. Each skill lives in its own folder and is discovered by the
+presence of `SKILL.md`.
 
 ## Included Skills
 
-- `align`
-- `attach-ubuntu`
-- `gitignore`
-- `github-workflows`
-- `helmchart`
-- `linter`
-- `nebius`
-- `onboard-nbs-cxcli`
-- `python-project`
-- `publish-image`
-- `publish-release`
-- `release-generator`
-- `shell-scripting`
-- `terraform`
+- End-to-end project alignment: `align`
+- Disposable Ubuntu project container setup: `attach-ubuntu`
+- GitHub Actions authoring and review: `github-workflows`
+- Stack-aware `.gitignore` generation and cleanup: `gitignore`
+- Helm chart hardening and validation: `helmchart`
+- Shell, Markdown, and Python linting: `linter`
+- Nebius cloud automation and quota workflows: `nebius`
+- Nebius cxcli component onboarding: `onboard-nbs-cxcli`
+- Helm chart release publishing: `publish-helm`
+- Container image release publishing: `publish-image`
+- Application release publishing: `publish-release`
+- Python project scaffolding and hardening: `python-project`
+- Manual release-script generation: `release-generator`
+- Bash and shell automation engineering: `shell-scripting`
+- Terraform module and repo engineering: `terraform`
 
-`align` is the end-to-end project reconciliation skill for fixing incorrect,
-inconsistent, incomplete, or misleading code, tests, CI workflows, CLI/help
-output, documentation, and formatting after first inspecting how the project
-fits together.
+## Using Skills in Codex Chat
+
+Use the exact skill name with a leading `$` in the Codex chat box, then add
+the task you want. For example, use `$align` for this project,
+`$shell-scripting` to harden a Bash script, or `$terraform` to scaffold or
+review Terraform code.
+
+## Skill Details
+
+### `align`
+
+`align` is the end-to-end repair and consistency skill. Use it when a project
+needs code, tests, CI, CLI behavior, examples, help output, and docs reviewed
+together so broken flows, stale wording, and mismatched contracts are fixed in
+one pass instead of being reported separately.
+
+### `attach-ubuntu`
 
 `attach-ubuntu` launches or reuses a per-project `ubuntu:24.04` Docker
-container, bind-mounts the current folder at `/workdir`, preconfigures VS Code
-attached-container defaults, bootstraps base build tools plus project Python
-dependencies when `pyproject.toml` is present, mounts repo Git metadata for
-subproject versioning workflows, isolates dependencies in a container-only
-virtual environment so the host repo stays clean, and best-effort opens the
-project in a new Dev Containers window on macOS with Docker Desktop.
+container, mounts the project at `/workdir`, prepares attached-container VS
+Code defaults, and helps create a disposable Ubuntu environment for local
+testing on macOS with Docker Desktop and the Dev Containers extension.
 
-`github-workflows` provides repo-aligned GitHub Actions assets and references
-for PR/merge CI, release publication, container image publishing, and workflow
-hardening.
+### `github-workflows`
 
-`onboard-nbs-cxcli` is the repo-specific onboarding guide for adding Nebius
-Terraform modules to `services/nebius-cxcli`, including when a change stops at
-`component_sources.yaml` and when it must also touch wizard/provider/status,
-runtime validation, or cluster handoff code.
+`github-workflows` is the repository workflow skill for creating, reviewing,
+and standardizing GitHub Actions. Use it for PR and merge CI, release
+automation, container publication, merge-bot safety, permissions hardening, and
+monorepo-friendly workflow structure.
 
-`publish-release` scaffolds the local release helper script and changelog flow,
-including first-push upstream setup for new local release branches during
-`--prep`, strict clean-worktree checks that include untracked files, duplicate
-tag blocking before changelog edits, local publish blocking when the target
-release section is empty, markdownlint-safe blank-line preservation between
-release sections, idempotent reruns while the tag remains unreleased, and
-source-checkout runtime-version verification before the tag push.
+### `gitignore`
 
-`release-generator` is the manual-only fallback for projects where the user
-explicitly wants release prep/publish driven by a local `release.sh` script and
-no CI workflow. Otherwise prefer `publish-release`.
+`gitignore` creates or updates a project `.gitignore` with sensible macOS and
+VS Code defaults, then extends it for the detected stack. Use it when you want
+a clean ignore policy for languages and tools such as Python, Node, Go, Java,
+Rust, or Terraform.
+
+### `helmchart`
+
+`helmchart` applies Helm chart best practices across metadata, values,
+templates, schema, and validation. Use it to create or harden charts, improve
+default safety, add missing chart structure, and verify the chart renders and
+lints cleanly.
+
+### `linter`
+
+`linter` runs a fix-first linting workflow for shell scripts, Markdown, and
+Python. Use it when you want syntax checks, `shellcheck`, `markdownlint`, or
+`ruff` cleanup applied conservatively, with source fixes preferred over
+config-level suppressions.
+
+### `nebius`
+
+`nebius` is the cloud automation skill for Nebius SDK-based workflows,
+including IAM bootstrap, object storage, VPC inspection, route analysis, quota
+checks, and MK8s compatibility decisions. Use it when the task depends on live
+Nebius service behavior rather than generic cloud assumptions.
+
+### `onboard-nbs-cxcli`
+
+`onboard-nbs-cxcli` is the repo-specific onboarding skill for adding Nebius
+Terraform-backed components into `nebius-cxcli`. It helps decide whether a
+change stays catalog-only or also needs wizard, validation, runtime handoff,
+status, and documentation updates.
+
+### `publish-helm`
+
+`publish-helm` generates a Nebius OCI Helm chart publication flow with a
+chart-local `CHANGELOG.md`, `publish-helm.sh`, and a tag-driven GitHub Actions
+workflow. Use it when a chart needs a repeatable prep and publish process with
+version checks and public pull verification.
+
+### `publish-image`
+
+`publish-image` generates the release assets for container images, including
+`CHANGELOG.md`, `publish-image.sh`, and a tag-driven image publication
+workflow. Use it when a project needs immutable image tagging and a standard
+release path for container artifacts.
+
+### `publish-release`
+
+`publish-release` generates the default application release flow for this skill
+set: a `CHANGELOG.md`, `publish-release.sh`, and a tag-driven GitHub Release
+workflow. Use it when the preferred model is CI-backed release publication with
+artifact and version verification.
+
+### `python-project`
+
+`python-project` scaffolds and hardens Python repositories with reusable modern
+defaults such as `pyproject.toml`, setuptools-scm, `src/` layout, Ruff, pytest,
+Typer, and Pydantic. Use it when you need a strong starting point for CLIs,
+services, APIs, automation tools, or AI-oriented Python projects.
+
+### `release-generator`
+
+`release-generator` is the manual-only fallback for projects that explicitly
+want a local `release.sh` workflow and no CI release pipeline. Use it only when
+that manual operating model is required; otherwise prefer `publish-release`.
+
+### `shell-scripting`
+
+`shell-scripting` is the Bash engineering skill for creating, reviewing, and
+hardening `.sh` automation. Use it for strict-mode scripts, safe argument
+parsing, idempotent behavior, readable usage output, and practical shell
+maintainability.
+
+### `terraform`
+
+`terraform` generates and improves Terraform modules and infrastructure
+repositories with reusable structure, state guidance, validation, security
+controls, examples, and CI expectations. Use it when the work is about module
+interfaces, environment layout, provider strategy, or Terraform quality gates.
 
 ## Skills Installer
 
-Script helper to install Codex skills into `~/.agents/skills`.
-
-## What it does
-
-- Installs/updates skills from a local source folder or GitHub URL.
-- Recognizes skill folders by `SKILL.md`.
-- Keeps installs idempotent across repeated runs.
-- Avoids overwriting skills that belong to a different source.
-- Supports removing one installed skill by its visible Codex skill name.
-- Removes stale skills only for the same source.
+`install-skills.sh` installs or updates skills into `~/.agents/skills` by
+default. It accepts a local source directory or a supported GitHub URL, treats
+only folders containing `SKILL.md` as installable skills, keeps reruns
+idempotent with `rsync`, skips unmanaged or other-source-owned destinations,
+and can remove one installed skill by visible Codex skill name or folder name.
 
 ## Requirements
 
 - `bash`
 - `rsync`
-- `git` (required for GitHub sources)
+- `git` for GitHub sources
 
 ## Usage
 
@@ -79,46 +156,41 @@ Script helper to install Codex skills into `~/.agents/skills`.
 ./install-skills.sh --remove-skill <skill_name> [destination_dir]
 ```
 
-### Source
+## Supported Sources
 
-- Local directory path (default: script directory). Can be either:
-  - a folder containing multiple skills
-  - a single skill folder (contains `SKILL.md`)
-- GitHub repository URL: `https://github.com/<owner>/<repo>`
-- GitHub nested folder URL: `https://github.com/<owner>/<repo>/tree/<ref>/<subpath>`
-
-### Destination
-
-- Default: `~/.agents/skills`
-
-### Options
-
-- `-h`, `--help`: Show help.
-- `--remove-skill <skill_name>`: Remove one installed skill from the destination.
-  You can pass either:
-  - the skill `name:` from `SKILL.md`, which is the name Codex shows in VS Code
-    and uses for routing
-  - the installed skill folder name under `~/.agents/skills`
+- Local directory path. The default source is the script directory, and it can
+  be either a multi-skill folder or a single skill folder containing
+  `SKILL.md`.
+- GitHub repository URL:
+  `https://github.com/<owner>/<repo>`
+- GitHub tree URL:
+  `https://github.com/<owner>/<repo>/tree/<ref>/<subpath>`
 
 ## Examples
 
 ```bash
-# Install from default source (script directory) to the default destination
+# Install all skills from this repository into the default destination
 ./install-skills.sh
 
-# Install from explicit local source folder
+# Install from an explicit local source directory
 ./install-skills.sh /Users/example/test
 
-# Install from GitHub nested skills folder
+# Install from a GitHub repository root
+./install-skills.sh "https://github.com/openai/skills"
+
+# Install from a nested GitHub skills folder
 ./install-skills.sh "https://github.com/openai/skills/tree/main/skills"
 
 # Install one specific skill from a nested GitHub path
-./install-skills.sh "https://github.com/openai/skills/tree/main/skills/.curated/openai-docs"
+./install-skills.sh \
+  "https://github.com/openai/skills/tree/main/skills/.curated/openai-docs"
 
-# Install from GitHub nested skills folder to custom destination
-./install-skills.sh "https://github.com/openai/skills/tree/main/skills" "~/.agents/skills"
+# Install to a custom destination
+./install-skills.sh \
+  "https://github.com/openai/skills/tree/main/skills" \
+  "~/.agents/skills"
 
-# Remove an installed skill by the same name shown in Codex chat
+# Remove an installed skill by its visible Codex skill name
 ./install-skills.sh --remove-skill nebius
 
 # Remove an installed skill by its folder name
@@ -127,14 +199,16 @@ Script helper to install Codex skills into `~/.agents/skills`.
 
 ## Notes
 
-- Existing unmanaged folders in destination are never overwritten.
-- If a skill exists but belongs to another source, it is skipped.
+- If newly installed skills are not visible, run `Developer: Restart Extension
+  Host` in VS Code.
 - A valid skill folder must contain `SKILL.md`.
-- `--remove-skill` deletes the matching skill folder from the destination and
-  removes its local manifest entries.
-- After removing a skill, reload the VS Code extension host to refresh skill
-  discovery.
-- Reinstalling from a source that still contains the skill will add it back.
-- The installer uses `rsync --delete` inside each managed skill directory, and
-  it also removes stale skills that were previously installed from the same
+- Existing unmanaged folders in the destination are never overwritten.
+- If a skill exists but belongs to another source, it is skipped.
+- `--remove-skill` accepts either the exact `name:` from `SKILL.md` or the
+  installed folder name.
+- `--remove-skill` removes the destination skill folder and its local manifest
+  entries.
+- Reinstalling from a source that still contains a removed skill will add it
+  back.
+- Stale skill cleanup only applies to skills previously installed from the same
   source.

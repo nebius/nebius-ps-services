@@ -6,6 +6,9 @@
 {{- if lt $workerGpus 1 -}}
 {{- fail "worker.gpus must be at least 1" -}}
 {{- end -}}
+{{- if eq .Values.report.jsonBeginMarker .Values.report.jsonEndMarker -}}
+{{- fail "report.jsonBeginMarker and report.jsonEndMarker must differ" -}}
+{{- end -}}
 {{- $runtimeImage := include "nccl-test.imageRef" .Values.image -}}
 {{- $initImage := include "nccl-test.imageRef" .Values.initContainer -}}
 apiVersion: kubeflow.org/v1

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Publish Helm"
+  short_description: "Generate Nebius OCI Helm chart release artifacts"
+  default_prompt: "Use $publish-helm to create a chart-local CHANGELOG.md, publish-helm.sh, and a tag-driven Nebius OCI GitHub Actions chart publish workflow with public pull verification."

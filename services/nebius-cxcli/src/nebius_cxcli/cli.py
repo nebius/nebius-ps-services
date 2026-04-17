@@ -4926,7 +4926,7 @@ def _validate_component_sources_registry(
             dependency = _non_empty_text(dependency_id).lower()
             if dependency and dependency not in declared_app_ids:
                 issues.append(
-                    f"components.apps.{app_id}.cli.mk8s_gpu.install_after references unknown apps component '{dependency}'"
+                    f"components.apps.{app_id}.cli.mk8s_gpu_policy.install_after references unknown apps component '{dependency}'"
                 )
     for role_name, app_ids in sorted(role_to_app_ids.items()):
         if len(app_ids) > 1:
@@ -7769,6 +7769,24 @@ def _wait_for_cluster_nodes_ready(
             )
 
 
+def _report_cluster_nodes_status(
+    *,
+    extra_env: dict[str, str] | None,
+    emit: Callable[[str], None],
+) -> None:
+    if not extra_env or not extra_env.get("KUBECONFIG"):
+        return
+    ready, summary = _node_readiness_summary(extra_env=extra_env)
+    message = f"[bold white]Kubernetes[/bold white] {escape(summary)}"
+    if ready:
+        emit(f"{message}; proceeding with in-cluster deployment.")
+        return
+    emit(
+        f"{message}; proceeding without waiting for every node because Flux and validation checks "
+        "report live in-cluster progress."
+    )
+
+
 def _deploy_generated_artifacts(
     config: Any,
     paths: ProjectPaths,
@@ -7799,24 +7817,36 @@ def _deploy_generated_artifacts(
             handoffs=_manifest_cluster_handoffs(manifest),
         )
         if needs_cluster_ready:
-            _wait_for_cluster_nodes_ready(
+            _report_cluster_nodes_status(
                 extra_env=kube_env, emit=lambda message: console.print(message)
             )
         if has_enabled_app_charts:
             _apply_rendered_flux(paths, extra_env=kube_env)
             _warn_if_flux_gitops_not_bootstrapped(config, paths, extra_env=kube_env)
         if deploy_validations:
-            report_paths = run_mk8s_gpu_validations(
-                deploy_validations,
-                inventory_dir=paths.inventory_dir,
-                extra_env=kube_env,
-                emit=lambda message: console.print(message),
-            )
-            if report_paths:
-                console.print(
-                    "GPU validation reports: "
-                    + ", ".join(str(path) for path in report_paths)
+            with console.status(
+                "[cyan]Running MK8s GPU validations...[/cyan]",
+                spinner="dots",
+            ) as status:
+                last_validation_phase = ""
+
+                def _emit_validation_phase(message: str) -> None:
+                    nonlocal last_validation_phase
+                    status.update(message)
+                    if not _console_is_terminal() and message != last_validation_phase:
+                        console.print(message)
+                    last_validation_phase = message
+
+                report_paths = run_mk8s_gpu_validations(
+                    deploy_validations,
+                    inventory_dir=paths.inventory_dir,
+                    extra_env=kube_env,
+                    emit=_emit_validation_phase,
                 )
+            if report_paths:
+                console.print("GPU validation reports:")
+                for path in report_paths:
+                    console.print(f"  {path}")
 
 
 def _destroy_rendered_flux_bundle(
@@ -11239,7 +11269,7 @@ def flux_bootstrap_command(
                 if requires_cluster_handoff
                 else None
             )
-            _wait_for_cluster_nodes_ready(
+            _report_cluster_nodes_status(
                 extra_env=kube_env, emit=lambda message: console.print(message)
             )
             action = ensure_flux(paths, extra_env=kube_env)
@@ -11284,7 +11314,7 @@ def flux_apply_command(
                 stack=stack,
                 handoffs=_manifest_cluster_handoffs(manifest),
             )
-            _wait_for_cluster_nodes_ready(
+            _report_cluster_nodes_status(
                 extra_env=kube_env, emit=lambda message: console.print(message)
             )
             _apply_rendered_flux(paths, extra_env=kube_env)

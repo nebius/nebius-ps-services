@@ -104,6 +104,33 @@ def test_render_release_catalog_rewrites_internal_chart_tree_refs(tmp_path: Path
     assert "local" not in payload["components"]["apps"]["nccl-test"]["source"]
 
 
+def test_render_release_catalog_keeps_oci_chart_refs_unchanged(tmp_path: Path) -> None:
+    input_path = tmp_path / "component_sources.yaml"
+    output_path = tmp_path / "component_sources.yaml"
+    input_path.write_text(
+        yaml.safe_dump(
+            _catalog_payload(
+                "git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mk8s?ref=main",
+                chart_portable_repo="oci://cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/charts/nccl-test",
+                chart_local_path="../../helm-charts/nccl-test",
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    render_release_catalog(
+        input_path=input_path,
+        output_path=output_path,
+        release_ref="nebius-cxcli-v0.1.1",
+    )
+
+    payload = yaml.safe_load(output_path.read_text(encoding="utf-8"))
+    chart_repo = payload["components"]["apps"]["nccl-test"]["source"]["portable"]["repo"]
+    assert chart_repo == "oci://cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/charts/nccl-test"
+    assert "local" not in payload["components"]["apps"]["nccl-test"]["source"]
+
+
 def test_verify_catalog_rejects_external_main_ref(tmp_path: Path) -> None:
     catalog_path = tmp_path / "component_sources.yaml"
     catalog_path.write_text(
