@@ -67,8 +67,8 @@ show_usage() {
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Examples:${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./publish-helm.sh --prep 0.2.5${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./publish-helm.sh --publish 0.2.5${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./publish-helm.sh --prep 0.2.7${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./publish-helm.sh --publish 0.2.7${S_RESET}"
 }
 
 require_cmd() {

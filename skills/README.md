@@ -8,6 +8,7 @@ presence of `SKILL.md`.
 
 - End-to-end project alignment: `align`
 - Disposable Ubuntu project container setup: `attach-ubuntu`
+- Branch-safe GitHub pull request creation: `create-pr`
 - GitHub Actions authoring and review: `github-workflows`
 - Stack-aware `.gitignore` generation and cleanup: `gitignore`
 - Helm chart hardening and validation: `helmchart`
@@ -19,6 +20,7 @@ presence of `SKILL.md`.
 - Application release publishing: `publish-release`
 - Python project scaffolding and hardening: `python-project`
 - Manual release-script generation: `release-generator`
+- GitHub pull request review and merge-readiness repair: `review-pr`
 - Bash and shell automation engineering: `shell-scripting`
 - Terraform module and repo engineering: `terraform`
 
@@ -28,6 +30,35 @@ Use the exact skill name with a leading `$` in the Codex chat box, then add
 the task you want. For example, use `$align` for this project,
 `$shell-scripting` to harden a Bash script, or `$terraform` to scaffold or
 review Terraform code.
+
+### Prompt Examples
+
+Use short, direct prompts. These are the intended invocation style:
+
+```text
+$create-pr Create a PR for the current local work, using a new prep branch if I am still on the default branch.
+
+$review-pr Review PR #110 against the base branch, fix safe issues on the branch, and tell me whether it is ready to merge.
+```
+
+You can also be more specific when needed:
+
+```text
+$create-pr Open or reuse the PR for this branch and return the PR number and URL.
+
+$review-pr Review this Helm chart PR, apply the relevant sibling skills, resolve straightforward conflicts if they exist, and rerun the focused validation.
+```
+
+These prompts should work when the skill is installed and the local environment
+matches the task. For GitHub-backed flows such as `create-pr` and `review-pr`,
+that means:
+
+- the repository has an `origin` remote
+- `gh` is authenticated for the target repository
+- the branch state allows the requested operation
+
+If those prerequisites are missing, the skill should stop and explain the
+blocker instead of guessing.
 
 ## Skill Details
 
@@ -44,6 +75,14 @@ one pass instead of being reported separately.
 container, mounts the project at `/workdir`, prepares attached-container VS
 Code defaults, and helps create a disposable Ubuntu environment for local
 testing on macOS with Docker Desktop and the Dev Containers extension.
+
+### `create-pr`
+
+`create-pr` turns local work into a GitHub pull request without leaving it on
+the default branch. It creates a feature branch only when needed, reuses an
+existing non-default branch, avoids duplicate PRs for the same head branch,
+expects reviewable commits instead of a dirty tree, and returns the PR number
+and URL.
 
 ### `github-workflows`
 
@@ -120,6 +159,16 @@ services, APIs, automation tools, or AI-oriented Python projects.
 `release-generator` is the manual-only fallback for projects that explicitly
 want a local `release.sh` workflow and no CI release pipeline. Use it only when
 that manual operating model is required; otherwise prefer `publish-release`.
+
+### `review-pr`
+
+`review-pr` is the merge-readiness skill for pull requests. Use it to review a
+PR against its base branch, inspect GitHub checks and review state, fix safe
+issues on the branch, prefer non-destructive branch updates when ownership is
+unclear, route to the relevant sibling skills for workflow, Helm, Python,
+Nebius, shell, lint, Terraform, or release-helper changes, resolve
+straightforward conflicts when possible, and report whether the PR is ready to
+merge.
 
 ### `shell-scripting`
 

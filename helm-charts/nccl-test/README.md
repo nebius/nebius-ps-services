@@ -182,7 +182,8 @@ helm template smoke ./helm-charts/nccl-test \
 helm template smoke ./helm-charts/nccl-test \
   --namespace nccl-test \
   --set worker.replicas=2 \
-  --set image.repository=cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/images/nccl-test \
+  --set image.repository=cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/\
+images/nccl-test \
   --set image.tag=0.2.0 \
   --set 'imagePullSecrets[0]=registry-creds'
 ```
