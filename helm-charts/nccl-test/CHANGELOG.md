@@ -34,9 +34,9 @@ All notable changes to this chart are tracked here. This changelog follows
   wrong nested OCI path in Nebius Container Registry.
 - Fixed the publish workflow so `helm push` targets the canonical OCI
   repository root
-  `oci://cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/charts`, and customer
+  `oci://cr.<region>.nebius.cloud/<registry-short-id>/charts`, and customer
   pulls resolve through
-  `oci://cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/charts/nccl-test`.
+  `oci://cr.<region>.nebius.cloud/<registry-short-id>/charts/nccl-test`.
 - Added a fail-fast guard that stops the workflow if the bad nested repository
   path `.../charts/nccl-test/nccl-test` still exists.
 
@@ -54,7 +54,7 @@ All notable changes to this chart are tracked here. This changelog follows
 - Simplified the chart publish workflow to the tag-only OCI path driven by the
   release helper and anonymous public-pull verification.
 - Switched the default NCCL runtime image to
-  `cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/images/nccl-test:0.2.0` and
+  `cr.<region>.nebius.cloud/<registry-short-id>/images/nccl-test:0.2.0` and
   aligned the source-chart `values.yaml` benchmark defaults with the practical
   `nebius-cxcli` deploy-time profile (`NCCL_DEBUG=WARN`, bounded iteration
   count, warmups, and timeout) so the first-party chart owns the shared
@@ -82,6 +82,5 @@ All notable changes to this chart are tracked here. This changelog follows
 - Hardened the chart metadata, values schema, and image pull-secret handling so
   the default NCCL benchmark payload, launcher pods, and worker pods render
   consistently for Nebius GPU validation.
-- Switched publication to the fixed shared Nebius Professional Services
-  registry `nebius-proserv` and verified that the published OCI chart is
-  anonymously pullable.
+- Switched publication to the fixed shared Nebius registry and verified that
+  the published OCI chart is anonymously pullable.

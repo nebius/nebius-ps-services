@@ -239,9 +239,9 @@ Wizard shorthand and wiring:
 
 Implementation note:
 
-- Built-in infra `wizard_profile` definitions are currently centralized in [src/nebius_cxcli/wizard_profiles.py](/Users/rezab/repos/nebius-ps-services/services/nebius-cxcli/src/nebius_cxcli/wizard_profiles.py). They are not split into one Python file per component today.
-- Bundled infra runtime validation selection is centralized in [src/nebius_cxcli/validation_profiles.py](/Users/rezab/repos/nebius-ps-services/services/nebius-cxcli/src/nebius_cxcli/validation_profiles.py). It is code-owned internal metadata, not a supported public `component_sources.yaml` field.
-- Central onboarding guidance for new Nebius Terraform modules lives in [../../skills/onboard-nbs-cxcli/SKILL.md](/Users/rezab/repos/nebius-ps-services/skills/onboard-nbs-cxcli/SKILL.md). Use it when a module needs to be added to `component_sources.yaml` and you need to decide whether onboarding also requires wizard/provider/status/validation/handoff code changes.
+- Built-in infra `wizard_profile` definitions are currently centralized in [src/nebius_cxcli/wizard_profiles.py](src/nebius_cxcli/wizard_profiles.py). They are not split into one Python file per component today.
+- Bundled infra runtime validation selection is centralized in [src/nebius_cxcli/validation_profiles.py](src/nebius_cxcli/validation_profiles.py). It is code-owned internal metadata, not a supported public `component_sources.yaml` field.
+- Central onboarding guidance for new Nebius Terraform modules lives in [../../skills/onboard-nbs-cxcli/SKILL.md](../../skills/onboard-nbs-cxcli/SKILL.md). Use it when a module needs to be added to `component_sources.yaml` and you need to decide whether onboarding also requires wizard/provider/status/validation/handoff code changes.
 
 Built-in wizard profiles:
 
@@ -270,7 +270,7 @@ Bundled MK8s GPU app policy:
 - The canonical GPU role is `nvidia-gpu-operator` for both Nebius-image and manual node groups. On Nebius-managed images the CLI materializes Helm values that disable the driver and toolkit operands while relying on the chart defaults that keep the device plugin and DCGM exporter enabled. The catalog now keeps only the Nebius-specific operator deltas instead of restating live chart defaults.
 - When the selected MK8s shape enables GPU clustering / InfiniBand, or when a manual B200/B200A node group requires RDMA plumbing, the CLI auto-enables `nvidia-network-operator` and renders a Flux `dependsOn` edge so the network operator reconciles before the GPU operator.
 - GPU Visibility test is enabled by default for GPU-backed MK8s deploys, but it is now a bounded sampled validation: by default it runs the CUDA sample on at most 3 Ready GPU nodes, reports live pod phase progress, and bulk-cleans the validation pods afterward instead of fanning out one blocking wait per node across the whole cluster.
-- NCCL test is enabled by default only for MK8s GPU-cluster shapes, not for every GPU-enabled MK8s cluster. Its workload manifest comes from the first-party `helm-charts/nccl-test` chart with both `source.local` and `source.portable` catalog entries pinned to `oci://cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/charts/nccl-test --version 0.2.5`; the shared image/tag plus the pragmatic benchmark defaults are now sourced directly from the chart's own `values.yaml`, and the app entry keeps only the B200-only `-mca coll ^hcoll` overlay. `nebius-cxcli` also keeps the Kubeflow Training Operator as a transient NCCL prerequisite pinned in the catalog and installs/removes it on demand, and the saved GPU validation reports are intentionally compact ordered JSON: practical summary fields stay up front, success cases omit noisy raw logs, and failures keep only the relevant log excerpts.
+- NCCL test is enabled by default only for MK8s GPU-cluster shapes, not for every GPU-enabled MK8s cluster. Its workload manifest comes from the first-party `helm-charts/nccl-test` chart with both `source.local` and `source.portable` catalog entries pinned to `oci://cr.<region>.nebius.cloud/<registry-short-id>/charts/nccl-test --version 0.2.5`; the shared image/tag plus the pragmatic benchmark defaults are now sourced directly from the chart's own `values.yaml`, and the app entry keeps only the B200-only `-mca coll ^hcoll` overlay. `nebius-cxcli` also keeps the Kubeflow Training Operator as a transient NCCL prerequisite pinned in the catalog and installs/removes it on demand, and the saved GPU validation reports are intentionally compact ordered JSON: practical summary fields stay up front, success cases omit noisy raw logs, and failures keep only the relevant log excerpts.
 
 What `wizard` is doing:
 
@@ -475,8 +475,8 @@ Supported `--component-sources-file` examples:
 - Relative file in the current directory: `nebius-cxcli --component-sources-file ./component_sources.yaml validate-sources`
 - Positional file in the current directory: `nebius-cxcli validate-sources ./component_sources.yaml`
 - Relative file elsewhere: `nebius-cxcli --component-sources-file ../../shared/component_sources.yaml validate-sources`
-- Absolute file: `nebius-cxcli --component-sources-file /Users/alice/catalogs/component_sources.yaml validate-sources`
-- Environment override: `NEBIUS_CXCLI_COMPONENT_SOURCES_FILE=/Users/alice/catalogs/component_sources.yaml nebius-cxcli validate-sources`
+- Home-relative file: `nebius-cxcli --component-sources-file ~/catalogs/component_sources.yaml validate-sources`
+- Environment override: `NEBIUS_CXCLI_COMPONENT_SOURCES_FILE=~/catalogs/component_sources.yaml nebius-cxcli validate-sources`
 
 Supported source-profile examples:
 
