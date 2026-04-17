@@ -153,10 +153,10 @@ The actual OCI repository shape is:
 cr.<region>.nebius.cloud/<registry-short-id>/images/nccl-test
 ```
 
-For the shared Professional Services registry today, that resolves to:
+Example placeholder:
 
 ```text
-cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/images/nccl-test
+cr.<region>.nebius.cloud/<registry-short-id>/images/nccl-test
 ```
 
 ## Manual publish override

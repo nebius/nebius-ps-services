@@ -1827,7 +1827,7 @@ Bump **PATCH** for fixes only.
 1. On your feature branch (or dedicated release-prep branch), run: `./publish-release.sh --prep X.Y.Z`
 2. Open a PR from that branch and merge it to `main`.
 3. After the PR is merged, switch to `main`, pull the merged commit, and run: `./publish-release.sh --publish X.Y.Z`
-4. GitHub Actions workflow [`vpngw-release.yml`](/Users/rezab/repos/nebius-ps-services/.github/workflows/vpngw-release.yml) runs from that tag and publishes the GitHub Release.
+4. GitHub Actions workflow [`vpngw-release.yml`](../../.github/workflows/vpngw-release.yml) runs from that tag and publishes the GitHub Release.
 
 Notes:
 

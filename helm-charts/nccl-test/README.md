@@ -55,22 +55,22 @@ For GitHub Actions, use the environment `nccl-test-chart-publish` and set:
 - Secret:
   `NB_SERVICE_ACCOUNT_PRIVATE_KEY`
 
-The current shared Professional Services registry is:
+Use placeholder values in docs and replace them with your own registry values:
 
 ```text
-tenant_id: tenant-e00cxgebz7zwkgw6fw
-project_id: project-e00vgt12pr00c24ak1qdfj
-registry_id: registry-e00th0mgv3zddz7468
-registry_name: nebius-proserv
-oci://cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/charts/nccl-test
+tenant_id: tenant-id-example
+project_id: project-id-example
+registry_id: registry-id-example
+registry_name: registry-name-example
+oci://cr.<region>.nebius.cloud/<registry-short-id>/charts/nccl-test
 ```
 
-The publish workflow uses that fixed registry ID. It does not create tenants,
-projects, or registries.
+The publish workflow uses the registry ID you configure in the GitHub
+environment. It does not create tenants, projects, or registries.
 
 The canonical release flow is:
 
-1. Add release notes to [CHANGELOG.md](/Users/rezab/repos/nebius-ps-services/helm-charts/nccl-test/CHANGELOG.md).
+1. Add release notes to [CHANGELOG.md](CHANGELOG.md).
 2. Run `./publish-helm.sh --prep X.Y.Z` from this chart directory.
 3. Merge the prep branch to `main`.
 4. Run `./publish-helm.sh --publish X.Y.Z` on clean synced `main`.
@@ -91,7 +91,7 @@ Public pull example:
 
 ```bash
 helm pull \
-  oci://cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/charts/nccl-test \
+  oci://cr.<region>.nebius.cloud/<registry-short-id>/charts/nccl-test \
   --version <chart-version>
 ```
 
@@ -160,7 +160,7 @@ helm template smoke ./helm-charts/nccl-test \
   overrides and `global.*` for shared platform wiring.
 - `image.repository`, `image.tag`, `image.digest`: NCCL runtime image reference.
   The default repository is
-  `cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/images/nccl-test`, and the tag
+  `cr.<region>.nebius.cloud/<registry-short-id>/images/nccl-test`, and the tag
   defaults to `0.2.0`. Use a digest for immutable production pinning.
 - `benchmark.mpiBaseArgs`: shared `mpirun` arguments applied on every platform.
 - `benchmark.mpiExtraArgs`: platform-specific extra `mpirun` arguments.
@@ -182,7 +182,7 @@ helm template smoke ./helm-charts/nccl-test \
 helm template smoke ./helm-charts/nccl-test \
   --namespace nccl-test \
   --set worker.replicas=2 \
-  --set image.repository=cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/\
+  --set image.repository=cr.<region>.nebius.cloud/<registry-short-id>/\
 images/nccl-test \
   --set image.tag=0.2.0 \
   --set 'imagePullSecrets[0]=registry-creds'
@@ -221,7 +221,7 @@ kubectl logs -n nccl-test -f <launcher-pod-name>
   and common benchmark shape now live in the chart defaults; only
   platform-specific overlays stay catalog-owned.
 - The canonical release helper is
-  [publish-helm.sh](/Users/rezab/repos/nebius-ps-services/helm-charts/nccl-test/publish-helm.sh).
+  [publish-helm.sh](publish-helm.sh).
   The tag-driven publish workflow lives at
   `.github/workflows/nccl-test-chart-publish.yml` and triggers only on tags
   matching `nccl-test-chart-vMAJOR.MINOR.PATCH`.

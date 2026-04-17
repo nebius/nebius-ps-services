@@ -222,7 +222,7 @@ and can remove one installed skill by visible Codex skill name or folder name.
 ./install-skills.sh
 
 # Install from an explicit local source directory
-./install-skills.sh /Users/example/test
+./install-skills.sh ~/test
 
 # Install from a GitHub repository root
 ./install-skills.sh "https://github.com/openai/skills"
