@@ -1286,8 +1286,8 @@ def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env
     )
     monkeypatch.setattr(
         cli,
-        "_wait_for_cluster_nodes_ready",
-        lambda *, extra_env, emit: calls.append(("wait_nodes", extra_env)),
+        "_report_cluster_nodes_status",
+        lambda *, extra_env, emit: calls.append(("cluster_status", extra_env)),
     )
     monkeypatch.setattr(
         cli,
@@ -1332,7 +1332,7 @@ def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env
                 }
             ],
         ),
-        ("wait_nodes", {"KUBECONFIG": "/tmp/kubeconfig"}),
+        ("cluster_status", {"KUBECONFIG": "/tmp/kubeconfig"}),
         ("flux", fake_paths, {"KUBECONFIG": "/tmp/kubeconfig"}),
         ("warn_bootstrap", config, fake_paths, {"KUBECONFIG": "/tmp/kubeconfig"}),
     ]
@@ -1404,8 +1404,8 @@ def test_deploy_generated_artifacts_without_apps_still_prepares_kube_env(
     )
     monkeypatch.setattr(
         cli,
-        "_wait_for_cluster_nodes_ready",
-        lambda *, extra_env, emit: calls.append(("wait_nodes", extra_env)),
+        "_report_cluster_nodes_status",
+        lambda *, extra_env, emit: calls.append(("cluster_status", extra_env)),
     )
     monkeypatch.setattr(
         cli,
@@ -1512,8 +1512,8 @@ def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
     )
     monkeypatch.setattr(
         cli,
-        "_wait_for_cluster_nodes_ready",
-        lambda *, extra_env, emit: calls.append(("wait_nodes", extra_env)),
+        "_report_cluster_nodes_status",
+        lambda *, extra_env, emit: calls.append(("cluster_status", extra_env)),
     )
     monkeypatch.setattr(
         cli,
@@ -1523,6 +1523,16 @@ def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
             or [inventory_dir / "gpu-visibility-report.json"]
         ),
     )
+
+    class _FakeStatus:
+        def update(self, _message: str, **_kwargs: object) -> None:
+            return
+
+    @contextmanager
+    def _fake_status(_message: str, **_kwargs: object):
+        yield _FakeStatus()
+
+    monkeypatch.setattr(cli.console, "status", _fake_status)
     monkeypatch.setattr(cli.console, "print", lambda *args, **kwargs: None)
 
     cli._deploy_generated_artifacts(config, fake_paths, manifest, auto_auth_bootstrap=True)
@@ -1543,7 +1553,7 @@ def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
                 }
             ],
         ),
-        ("wait_nodes", {"KUBECONFIG": "/tmp/kubeconfig"}),
+        ("cluster_status", {"KUBECONFIG": "/tmp/kubeconfig"}),
         (
             "gpu_validations",
             [
@@ -1556,6 +1566,218 @@ def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
             fake_paths.inventory_dir,
             {"KUBECONFIG": "/tmp/kubeconfig"},
         ),
+    ]
+
+
+def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    config = {
+        "apps": {"charts": []},
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-456",
+                "region_id": "eu-north1",
+            },
+        },
+    }
+    manifest = {
+        "deploy": {
+            "handoffs": [
+                {
+                    "component_id": "mk8s",
+                    "instance_id": "mk8s",
+                    "cluster_id_output_name": "mk8s_cluster_id",
+                    "component_output_ref": "mk8s.cluster_id",
+                    "access": "external",
+                }
+            ],
+            "validations": [
+                {
+                    "kind": "mk8s_gpu_operator_readiness",
+                    "name": "GPU operator readiness",
+                    "namespace": "gpu-operator",
+                },
+                {
+                    "kind": "mk8s_gpu_visibility",
+                    "name": "GPU Visibility test",
+                    "namespace": "gpu-validation",
+                },
+            ],
+        }
+    }
+    status_start: list[tuple[str, str | None]] = []
+    status_updates: list[str] = []
+    printed: list[str] = []
+
+    monkeypatch.setattr(cli, "_ensure_terraform_backend_ready", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _config: {"TF_VAR_DEMO": "1"})
+    monkeypatch.setattr(cli, "terraform_init", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "terraform_validate", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_run_terraform_apply_with_status", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        cli,
+        "write_inventory",
+        lambda config, paths: SimpleNamespace(markdown=paths.inventory_dir / "inventory.md"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_prepare_cluster_handoff_kube_env",
+        lambda *_args, **_kwargs: {"KUBECONFIG": "/tmp/kubeconfig"},
+    )
+    monkeypatch.setattr(cli, "_report_cluster_nodes_status", lambda *, extra_env, emit: None)
+    monkeypatch.setattr(cli, "_console_is_terminal", lambda: True)
+
+    def _fake_run_mk8s_gpu_validations(
+        validations: list[dict[str, object]],
+        *,
+        inventory_dir: Path,
+        extra_env: dict[str, str] | None,
+        emit=None,
+    ) -> list[Path]:
+        assert validations == manifest["deploy"]["validations"]
+        assert inventory_dir == fake_paths.inventory_dir
+        assert extra_env == {"KUBECONFIG": "/tmp/kubeconfig"}
+        assert emit is not None
+        emit("Starting validation 1/2: GPU operator readiness.")
+        emit("[bold white]GPU Operator[/bold white] [dim][5s][/dim] clusterpolicy state=ready")
+        emit("Starting validation 2/2: GPU Visibility test.")
+        emit("[bold white]GPU Visibility[/bold white] [dim][9s][/dim] pods 3/3 Succeeded")
+        return [inventory_dir / "gpu-visibility-report.json"]
+
+    monkeypatch.setattr(cli, "run_mk8s_gpu_validations", _fake_run_mk8s_gpu_validations)
+
+    class _FakeStatus:
+        def update(self, message: str, **_kwargs: object) -> None:
+            status_updates.append(message)
+
+    @contextmanager
+    def _fake_status(message: str, **kwargs: object):
+        spinner = kwargs.get("spinner")
+        status_start.append((message, spinner if isinstance(spinner, str) else None))
+        yield _FakeStatus()
+
+    monkeypatch.setattr(cli.console, "status", _fake_status)
+    monkeypatch.setattr(
+        cli.console, "print", lambda message, *args, **kwargs: printed.append(str(message))
+    )
+
+    cli._deploy_generated_artifacts(config, fake_paths, manifest, auto_auth_bootstrap=True)
+
+    assert status_start == [("[cyan]Running MK8s GPU validations...[/cyan]", "dots")]
+    assert status_updates == [
+        "Starting validation 1/2: GPU operator readiness.",
+        "[bold white]GPU Operator[/bold white] [dim][5s][/dim] clusterpolicy state=ready",
+        "Starting validation 2/2: GPU Visibility test.",
+        "[bold white]GPU Visibility[/bold white] [dim][9s][/dim] pods 3/3 Succeeded",
+    ]
+    assert printed == [
+        "GPU validation reports:",
+        f"  {fake_paths.inventory_dir / 'gpu-visibility-report.json'}",
+    ]
+
+
+def test_deploy_generated_artifacts_prints_validation_phase_lines_when_console_is_not_terminal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    config = {
+        "apps": {"charts": []},
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-456",
+                "region_id": "eu-north1",
+            },
+        },
+    }
+    manifest = {
+        "deploy": {
+            "handoffs": [
+                {
+                    "component_id": "mk8s",
+                    "instance_id": "mk8s",
+                    "cluster_id_output_name": "mk8s_cluster_id",
+                    "component_output_ref": "mk8s.cluster_id",
+                    "access": "external",
+                }
+            ],
+            "validations": [
+                {
+                    "kind": "mk8s_gpu_visibility",
+                    "name": "GPU Visibility test",
+                    "namespace": "gpu-validation",
+                }
+            ],
+        }
+    }
+    status_updates: list[str] = []
+    printed: list[str] = []
+
+    monkeypatch.setattr(cli, "_ensure_terraform_backend_ready", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _config: {"TF_VAR_DEMO": "1"})
+    monkeypatch.setattr(cli, "terraform_init", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "terraform_validate", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_run_terraform_apply_with_status", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        cli,
+        "write_inventory",
+        lambda config, paths: SimpleNamespace(markdown=paths.inventory_dir / "inventory.md"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_prepare_cluster_handoff_kube_env",
+        lambda *_args, **_kwargs: {"KUBECONFIG": "/tmp/kubeconfig"},
+    )
+    monkeypatch.setattr(cli, "_report_cluster_nodes_status", lambda *, extra_env, emit: None)
+    monkeypatch.setattr(cli, "_console_is_terminal", lambda: False)
+
+    def _fake_run_mk8s_gpu_validations(
+        _validations: list[dict[str, object]],
+        *,
+        inventory_dir: Path,
+        extra_env: dict[str, str] | None,
+        emit=None,
+    ) -> list[Path]:
+        assert inventory_dir == fake_paths.inventory_dir
+        assert extra_env == {"KUBECONFIG": "/tmp/kubeconfig"}
+        assert emit is not None
+        emit("Starting validation 1/1: GPU Visibility test.")
+        emit("Starting validation 1/1: GPU Visibility test.")
+        emit("[bold white]GPU Visibility[/bold white] [dim][7s][/dim] pods 3/3 Succeeded")
+        return [inventory_dir / "gpu-visibility-report.json"]
+
+    monkeypatch.setattr(cli, "run_mk8s_gpu_validations", _fake_run_mk8s_gpu_validations)
+
+    class _FakeStatus:
+        def update(self, message: str, **_kwargs: object) -> None:
+            status_updates.append(message)
+
+    @contextmanager
+    def _fake_status(_message: str, **_kwargs: object):
+        yield _FakeStatus()
+
+    monkeypatch.setattr(cli.console, "status", _fake_status)
+    monkeypatch.setattr(
+        cli.console, "print", lambda message, *args, **kwargs: printed.append(str(message))
+    )
+
+    cli._deploy_generated_artifacts(config, fake_paths, manifest, auto_auth_bootstrap=True)
+
+    assert status_updates == [
+        "Starting validation 1/1: GPU Visibility test.",
+        "Starting validation 1/1: GPU Visibility test.",
+        "[bold white]GPU Visibility[/bold white] [dim][7s][/dim] pods 3/3 Succeeded",
+    ]
+    assert printed == [
+        "Starting validation 1/1: GPU Visibility test.",
+        "[bold white]GPU Visibility[/bold white] [dim][7s][/dim] pods 3/3 Succeeded",
+        "GPU validation reports:",
+        f"  {fake_paths.inventory_dir / 'gpu-visibility-report.json'}",
     ]
 
 
@@ -4211,6 +4433,50 @@ def test_wait_for_cluster_nodes_ready_announces_wait_only_when_nodes_are_not_rea
     assert sleeps == [10.0]
 
 
+def test_report_cluster_nodes_status_reports_ready_snapshot_without_waiting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    messages: list[str] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_node_readiness_summary",
+        lambda *, extra_env: (True, "nodes 2/2 Ready; compute-1:Ready, compute-2:Ready"),
+    )
+
+    cli._report_cluster_nodes_status(
+        extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
+        emit=messages.append,
+    )
+
+    assert messages == [
+        "[bold white]Kubernetes[/bold white] nodes 2/2 Ready; compute-1:Ready, compute-2:Ready; "
+        "proceeding with in-cluster deployment."
+    ]
+
+
+def test_report_cluster_nodes_status_reports_not_ready_snapshot_without_blocking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    messages: list[str] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_node_readiness_summary",
+        lambda *, extra_env: (False, "nodes 1/2 Ready; compute-1:Ready, compute-2:NotReady"),
+    )
+
+    cli._report_cluster_nodes_status(
+        extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
+        emit=messages.append,
+    )
+
+    assert messages == [
+        "[bold white]Kubernetes[/bold white] nodes 1/2 Ready; compute-1:Ready, compute-2:NotReady; "
+        "proceeding without waiting for every node because Flux and validation checks report live in-cluster progress."
+    ]
+
+
 def test_flux_bootstrap_command_uses_cluster_handoff_when_config_declares_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -4265,8 +4531,8 @@ def test_flux_bootstrap_command_uses_cluster_handoff_when_config_declares_it(
     )
     monkeypatch.setattr(
         cli,
-        "_wait_for_cluster_nodes_ready",
-        lambda *, extra_env, emit: captured.update({"wait_nodes": extra_env}),
+        "_report_cluster_nodes_status",
+        lambda *, extra_env, emit: captured.update({"cluster_status": extra_env}),
     )
     monkeypatch.setattr(
         cli,
@@ -4303,7 +4569,7 @@ def test_flux_bootstrap_command_uses_cluster_handoff_when_config_declares_it(
         ],
     )
     assert captured["flux"] == (fake_paths, {"KUBECONFIG": "/tmp/kubeconfig"})
-    assert captured["wait_nodes"] == {"KUBECONFIG": "/tmp/kubeconfig"}
+    assert captured["cluster_status"] == {"KUBECONFIG": "/tmp/kubeconfig"}
 
 
 def test_flux_apply_command_applies_rendered_flux_with_cluster_handoff(
@@ -4360,8 +4626,8 @@ def test_flux_apply_command_applies_rendered_flux_with_cluster_handoff(
     )
     monkeypatch.setattr(
         cli,
-        "_wait_for_cluster_nodes_ready",
-        lambda *, extra_env, emit: captured.update({"wait_nodes": extra_env}),
+        "_report_cluster_nodes_status",
+        lambda *, extra_env, emit: captured.update({"cluster_status": extra_env}),
     )
     monkeypatch.setattr(
         cli,
@@ -4409,7 +4675,7 @@ def test_flux_apply_command_applies_rendered_flux_with_cluster_handoff(
         fake_paths,
         {"KUBECONFIG": "/tmp/kubeconfig"},
     )
-    assert captured["wait_nodes"] == {"KUBECONFIG": "/tmp/kubeconfig"}
+    assert captured["cluster_status"] == {"KUBECONFIG": "/tmp/kubeconfig"}
 
 
 def test_flux_destroy_command_deletes_rendered_flux_with_cluster_handoff(

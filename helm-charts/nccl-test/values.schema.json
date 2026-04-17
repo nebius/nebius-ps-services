@@ -2,47 +2,114 @@
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
   "additionalProperties": true,
+  "definitions": {
+    "stringMap": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "pullSecretEntry": {
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string", "minLength": 1 }
+          },
+          "required": ["name"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "pullSecretList": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/pullSecretEntry" }
+    },
+    "workloadPlacement": {
+      "type": "object",
+      "properties": {
+        "podLabels": { "$ref": "#/definitions/stringMap" },
+        "podAnnotations": { "$ref": "#/definitions/stringMap" },
+        "priorityClassName": { "type": "string" },
+        "nodeSelector": { "$ref": "#/definitions/stringMap" },
+        "tolerations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "affinity": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    }
+  },
   "properties": {
     "fullnameOverride": { "type": "string" },
     "nameOverride": { "type": "string" },
+    "commonLabels": { "$ref": "#/definitions/stringMap" },
+    "commonAnnotations": { "$ref": "#/definitions/stringMap" },
     "global": {
       "type": "object",
       "properties": {
-        "imagePullSecrets": {
-          "type": "array",
-          "items": {
-            "oneOf": [
-              { "type": "string", "minLength": 1 },
-              {
-                "type": "object",
-                "properties": { "name": { "type": "string", "minLength": 1 } },
-                "required": ["name"],
-                "additionalProperties": false
-              }
-            ]
-          }
-        }
+        "imagePullSecrets": { "$ref": "#/definitions/pullSecretList" }
       }
     },
+    "imagePullSecrets": { "$ref": "#/definitions/pullSecretList" },
     "image": {
       "type": "object",
       "required": ["repository", "pullPolicy"],
       "properties": {
         "repository": { "type": "string", "minLength": 1 },
-        "tag": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string" },
         "digest": { "type": "string" },
-        "pullPolicy": { "type": "string", "minLength": 1 }
-      }
+        "pullPolicy": {
+          "type": "string",
+          "enum": ["Always", "IfNotPresent", "Never"]
+        }
+      },
+      "anyOf": [
+        {
+          "properties": {
+            "tag": { "minLength": 1 }
+          }
+        },
+        {
+          "properties": {
+            "digest": {
+              "pattern": "^sha256:[0-9a-fA-F]{64}$"
+            }
+          }
+        }
+      ]
     },
     "initContainer": {
       "type": "object",
-      "required": ["repository", "tag", "pullPolicy"],
+      "required": ["repository", "pullPolicy"],
       "properties": {
         "repository": { "type": "string", "minLength": 1 },
-        "tag": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string" },
         "digest": { "type": "string" },
-        "pullPolicy": { "type": "string", "minLength": 1 }
-      }
+        "pullPolicy": {
+          "type": "string",
+          "enum": ["Always", "IfNotPresent", "Never"]
+        }
+      },
+      "anyOf": [
+        {
+          "properties": {
+            "tag": { "minLength": 1 }
+          }
+        },
+        {
+          "properties": {
+            "digest": {
+              "pattern": "^sha256:[0-9a-fA-F]{64}$"
+            }
+          }
+        }
+      ]
     },
     "benchmark": {
       "type": "object",
@@ -50,55 +117,87 @@
       "properties": {
         "binaryPath": { "type": "string", "minLength": 1 },
         "resultJsonPath": { "type": "string", "minLength": 1 },
-        "mpiBaseArgs": { "type": "array", "items": { "type": "string", "minLength": 1 } },
-        "mpiExtraArgs": { "type": "array", "items": { "type": "string", "minLength": 1 } },
-        "args": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+        "mpiBaseArgs": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "mpiExtraArgs": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "args": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
       }
     },
     "launcher": {
-      "type": "object",
-      "properties": {
-        "resources": {
+      "allOf": [
+        { "$ref": "#/definitions/workloadPlacement" },
+        {
           "type": "object",
           "properties": {
-            "requests": {
+            "resources": {
               "type": "object",
-              "required": ["cpu", "memory"],
               "properties": {
-                "cpu": { "type": "string", "minLength": 1 },
-                "memory": { "type": "string", "minLength": 1 }
+                "requests": {
+                  "type": "object",
+                  "required": ["cpu", "memory"],
+                  "properties": {
+                    "cpu": { "type": "string", "minLength": 1 },
+                    "memory": { "type": "string", "minLength": 1 }
+                  }
+                },
+                "limits": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": ["string", "integer", "number"]
+                  }
+                }
               }
             }
           }
         }
-      }
+      ]
     },
     "worker": {
-      "type": "object",
-      "required": ["replicas", "gpus", "resources"],
-      "properties": {
-        "replicas": { "type": "integer", "minimum": 1 },
-        "gpus": { "type": "integer", "minimum": 1 },
-        "resources": {
+      "allOf": [
+        { "$ref": "#/definitions/workloadPlacement" },
+        {
           "type": "object",
+          "required": ["replicas", "gpus", "resources"],
           "properties": {
-            "requests": {
-              "type": "object",
-              "required": ["cpu", "memory"],
-              "properties": {
-                "cpu": { "type": "string", "minLength": 1 },
-                "memory": { "type": "string", "minLength": 1 }
-              }
-            },
-            "limits": {
+            "replicas": { "type": "integer", "minimum": 1 },
+            "gpus": { "type": "integer", "minimum": 1 },
+            "resources": {
               "type": "object",
               "properties": {
-                "cpu": { "type": "string", "minLength": 1 },
-                "memory": { "type": "string", "minLength": 1 }
+                "requests": {
+                  "type": "object",
+                  "required": ["cpu", "memory"],
+                  "properties": {
+                    "cpu": { "type": "string", "minLength": 1 },
+                    "memory": { "type": "string", "minLength": 1 }
+                  }
+                },
+                "limits": {
+                  "type": "object",
+                  "properties": {
+                    "cpu": { "type": "string", "minLength": 1 },
+                    "memory": { "type": "string", "minLength": 1 }
+                  }
+                }
               }
             }
           }
         }
+      ]
+    },
+    "dshm": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "sizeLimit": { "type": "string" }
       }
     },
     "report": {

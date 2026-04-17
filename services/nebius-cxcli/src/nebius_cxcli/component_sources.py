@@ -97,20 +97,13 @@ class Mk8sGpuImagePreferenceSettings:
 
 
 @dataclass(frozen=True)
-class Mk8sGpuAppActivationRule:
+class Mk8sGpuAppRule:
     gpu_stack_source: str = ""
     gpu_cluster_enabled: bool | None = None
     match_platforms: tuple[str, ...] = ()
     match_presets: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class Mk8sGpuAppValueRule:
-    gpu_stack_source: str = ""
-    gpu_cluster_enabled: bool | None = None
-    match_platforms: tuple[str, ...] = ()
-    match_presets: tuple[str, ...] = ()
-    values: tuple[ComponentDefault, ...] = ()
+    auto_enable: bool = False
+    defaults: tuple[ComponentDefault, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -126,6 +119,7 @@ class Mk8sGpuVisibilitySettings:
     image: str = ""
     timeout: str = ""
     cleanup: bool = True
+    max_nodes: int = 3
 
 
 @dataclass(frozen=True)
@@ -136,6 +130,7 @@ class Mk8sNcclSettings:
     training_operator_manifest: str = ""
     training_operator_namespace: str = ""
     average_bus_bandwidth_threshold_gbps: float = 0.0
+    max_nodes: int = 8
 
 
 @dataclass(frozen=True)
@@ -160,8 +155,7 @@ class Mk8sGpuSettings:
 @dataclass(frozen=True)
 class Mk8sGpuAppPolicy:
     role: str = ""
-    auto_enable: tuple[Mk8sGpuAppActivationRule, ...] = ()
-    value_overrides: tuple[Mk8sGpuAppValueRule, ...] = ()
+    rules: tuple[Mk8sGpuAppRule, ...] = ()
     install_after: tuple[str, ...] = ()
 
 
@@ -645,16 +639,16 @@ def _parse_optional_bool(raw: Any, *, field_label: str) -> bool | None:
     return raw
 
 
-def _parse_mk8s_gpu_app_activation_rules(
+def _parse_mk8s_gpu_app_rules(
     raw: Any,
     *,
     field_label: str,
-) -> tuple[Mk8sGpuAppActivationRule, ...]:
+) -> tuple[Mk8sGpuAppRule, ...]:
     if raw is None:
         return ()
     if not isinstance(raw, list):
         raise ValueError(f"{field_label} must be a list")
-    rules: list[Mk8sGpuAppActivationRule] = []
+    rules: list[Mk8sGpuAppRule] = []
     for index, item in enumerate(raw):
         if not isinstance(item, dict):
             raise ValueError(f"{field_label}[{index}] must be a mapping")
@@ -663,57 +657,26 @@ def _parse_mk8s_gpu_app_activation_rules(
             "gpu_cluster_enabled",
             "match_platforms",
             "match_presets",
+            "auto_enable",
+            "defaults",
         }
         unknown = sorted(str(key) for key in item if str(key) not in supported_keys)
         if unknown:
             raise ValueError(f"{field_label}[{index}] has unsupported field(s): " + ", ".join(unknown))
-        rules.append(
-            Mk8sGpuAppActivationRule(
-                gpu_stack_source=_parse_mk8s_gpu_stack_source(
-                    item.get("gpu_stack_source"),
-                    field_label=f"{field_label}[{index}].gpu_stack_source",
-                ),
-                gpu_cluster_enabled=_parse_optional_bool(
-                    item.get("gpu_cluster_enabled"),
-                    field_label=f"{field_label}[{index}].gpu_cluster_enabled",
-                ),
-                match_platforms=_parse_string_list(
-                    item.get("match_platforms"),
-                    field_label=f"{field_label}[{index}].match_platforms",
-                ),
-                match_presets=_parse_string_list(
-                    item.get("match_presets"),
-                    field_label=f"{field_label}[{index}].match_presets",
-                ),
-            )
+        auto_enable = _parse_optional_bool(
+            item.get("auto_enable"),
+            field_label=f"{field_label}[{index}].auto_enable",
         )
-    return tuple(rules)
-
-
-def _parse_mk8s_gpu_app_value_rules(
-    raw: Any,
-    *,
-    field_label: str,
-) -> tuple[Mk8sGpuAppValueRule, ...]:
-    if raw is None:
-        return ()
-    if not isinstance(raw, list):
-        raise ValueError(f"{field_label} must be a list")
-    rules: list[Mk8sGpuAppValueRule] = []
-    for index, item in enumerate(raw):
-        if not isinstance(item, dict):
-            raise ValueError(f"{field_label}[{index}] must be a mapping")
-        supported_keys = {
-            "gpu_stack_source",
-            "gpu_cluster_enabled",
-            "match_platforms",
-            "match_presets",
-            "values",
-        }
-        unknown = sorted(str(key) for key in item if str(key) not in supported_keys)
-        if unknown:
-            raise ValueError(f"{field_label}[{index}] has unsupported field(s): " + ", ".join(unknown))
-        rule = Mk8sGpuAppValueRule(
+        defaults = _parse_target_value_overrides(
+            item.get("defaults"),
+            field_label=f"{field_label}[{index}].defaults",
+            required_prefix="values.",
+        )
+        if not auto_enable and not defaults:
+            raise ValueError(
+                f"{field_label}[{index}] must set auto_enable: true and/or defaults"
+            )
+        rule = Mk8sGpuAppRule(
             gpu_stack_source=_parse_mk8s_gpu_stack_source(
                 item.get("gpu_stack_source"),
                 field_label=f"{field_label}[{index}].gpu_stack_source",
@@ -730,11 +693,8 @@ def _parse_mk8s_gpu_app_value_rules(
                 item.get("match_presets"),
                 field_label=f"{field_label}[{index}].match_presets",
             ),
-            values=_parse_target_value_overrides(
-                item.get("values"),
-                field_label=f"{field_label}[{index}].values",
-                required_prefix="values.",
-            ),
+            auto_enable=bool(auto_enable),
+            defaults=defaults,
         )
         rules.append(rule)
     return tuple(rules)
@@ -771,19 +731,27 @@ def _parse_mk8s_gpu_visibility_settings(
         return Mk8sGpuVisibilitySettings()
     if not isinstance(raw, dict):
         raise ValueError(f"{field_label} must be a mapping")
-    supported_keys = {"enabled_by_default", "namespace", "image", "timeout", "cleanup"}
+    supported_keys = {"enabled_by_default", "namespace", "image", "timeout", "cleanup", "max_nodes"}
     unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
     if unknown:
         raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
     timeout = _as_text(raw.get("timeout"))
     if timeout and not GO_DURATION_RE.fullmatch(timeout):
         raise ValueError(f"{field_label}.timeout must be a Go-style duration like '10m' or '45s'")
+    max_nodes_raw = raw.get("max_nodes", Mk8sGpuVisibilitySettings().max_nodes)
+    try:
+        max_nodes = int(max_nodes_raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_label}.max_nodes must be an integer >= 1") from exc
+    if max_nodes < 1:
+        raise ValueError(f"{field_label}.max_nodes must be >= 1")
     return Mk8sGpuVisibilitySettings(
         enabled_by_default=bool(raw.get("enabled_by_default", True)),
         namespace=_as_text(raw.get("namespace")),
         image=_as_text(raw.get("image")),
         timeout=timeout,
         cleanup=bool(raw.get("cleanup", True)),
+        max_nodes=max_nodes,
     )
 
 
@@ -803,6 +771,7 @@ def _parse_mk8s_nccl_settings(
         "training_operator_manifest",
         "training_operator_namespace",
         "average_bus_bandwidth_threshold_gbps",
+        "max_nodes",
     }
     unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
     if unknown:
@@ -817,6 +786,13 @@ def _parse_mk8s_nccl_settings(
         raise ValueError(f"{field_label}.average_bus_bandwidth_threshold_gbps must be numeric") from exc
     if threshold < 0:
         raise ValueError(f"{field_label}.average_bus_bandwidth_threshold_gbps must be >= 0")
+    max_nodes_raw = raw.get("max_nodes", Mk8sNcclSettings().max_nodes)
+    try:
+        max_nodes = int(max_nodes_raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_label}.max_nodes must be an integer >= 1") from exc
+    if max_nodes < 1:
+        raise ValueError(f"{field_label}.max_nodes must be >= 1")
     return Mk8sNcclSettings(
         enabled_by_default=bool(raw.get("enabled_by_default", True)),
         chart_component_id=_as_text(raw.get("chart_component_id")),
@@ -824,6 +800,7 @@ def _parse_mk8s_nccl_settings(
         training_operator_manifest=_as_text(raw.get("training_operator_manifest")),
         training_operator_namespace=_as_text(raw.get("training_operator_namespace")),
         average_bus_bandwidth_threshold_gbps=threshold,
+        max_nodes=max_nodes,
     )
 
 
@@ -918,7 +895,7 @@ def _parse_mk8s_gpu_app_policy(
         return Mk8sGpuAppPolicy()
     if not isinstance(raw, dict):
         raise ValueError(f"{field_label} must be a mapping")
-    supported_keys = {"role", "auto_enable", "value_overrides", "install_after"}
+    supported_keys = {"role", "rules", "install_after"}
     unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
     if unknown:
         raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
@@ -929,13 +906,9 @@ def _parse_mk8s_gpu_app_policy(
         )
     return Mk8sGpuAppPolicy(
         role=role,
-        auto_enable=_parse_mk8s_gpu_app_activation_rules(
-            raw.get("auto_enable"),
-            field_label=f"{field_label}.auto_enable",
-        ),
-        value_overrides=_parse_mk8s_gpu_app_value_rules(
-            raw.get("value_overrides"),
-            field_label=f"{field_label}.value_overrides",
+        rules=_parse_mk8s_gpu_app_rules(
+            raw.get("rules"),
+            field_label=f"{field_label}.rules",
         ),
         install_after=_parse_string_list(
             raw.get("install_after"),
@@ -1028,13 +1001,13 @@ def _parse_app_component_cli(
         return Mk8sGpuAppPolicy()
     if not isinstance(raw, dict):
         raise ValueError(f"{field_label} must be a mapping")
-    supported_keys = {"mk8s_gpu"}
+    supported_keys = {"mk8s_gpu_policy"}
     unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
     if unknown:
         raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
     return _parse_mk8s_gpu_app_policy(
-        raw.get("mk8s_gpu"),
-        field_label=f"{field_label}.mk8s_gpu",
+        raw.get("mk8s_gpu_policy"),
+        field_label=f"{field_label}.mk8s_gpu_policy",
     )
 
 

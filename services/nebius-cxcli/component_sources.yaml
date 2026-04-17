@@ -46,19 +46,22 @@ components:
           validations:
             operator_readiness:
               enabled_by_default: true
-              timeout: 20m
+              timeout: 10m
             gpu_visibility:
               enabled_by_default: true
               namespace: gpu-validation
               image: nvcr.io/nvidia/k8s/cuda-sample:vectoradd-cuda11.7.1-ubuntu20.04
-              timeout: 10m
+              timeout: 5m
+              max_nodes: 3
               cleanup: true
             nccl:
               enabled_by_default: true
               chart_component_id: nccl-test
-              timeout: 45m
-              # Pinned to the current Nebius tutorial revision rather than a
-              # floating "latest" manifest reference.
+              timeout: 20m
+              max_nodes: 8
+              # MPIJob v1 still lives on the Training Operator v1.x line.
+              # Keep the transient prerequisite pinned instead of following a
+              # floating latest manifest.
               training_operator_manifest: github.com/kubeflow/training-operator/manifests/overlays/standalone?ref=v1.9.3
               training_operator_namespace: kubeflow
               average_bus_bandwidth_threshold_gbps: 300
@@ -177,30 +180,33 @@ components:
         namespace: nvidia-network-operator
         name: network-operator
       defaults:
-        values.operator.resources.limits.cpu: 500m
+        # Keep only Nebius-specific deltas here. The live chart already defaults
+        # the operator CPU limit to 500m and disables the OFED liveness probe.
         values.operator.resources.limits.memory: 350Mi
-        values.operator.ofedDriver.livenessProbe.enabled: false
       cli:
-        mk8s_gpu:
+        mk8s_gpu_policy:
           role: network_operator
-          # cxcli auto-enables this app when the selected MK8s GPU context
-          # matches any rule below.
-          auto_enable:
+          # Top-level app defaults above are unconditional. These rules are
+          # conditional: each one can auto-enable the app and/or add chart
+          # defaults only when the selected MK8s GPU context matches.
+          rules:
             - gpu_cluster_enabled: true
+              auto_enable: true
             - gpu_stack_source: manual
+              auto_enable: true
               # Separate Nebius platform ids and regions; both are NVIDIA B200.
               match_platforms:
                 - gpu-b200-sxm
                 - gpu-b200-sxm-a
-          # These value overrides are only materialized when the matching
-          # MK8s GPU context is selected and the chart value is not already set
-          # in config.yaml.
-          value_overrides:
             - gpu_stack_source: nebius_image
-              values:
+              # Nebius-managed GPU images already contain the matching OFED
+              # stack, so keep the network operator in CR-only mode.
+              defaults:
                 values.operator.ofedDriver.deploy: false
             - gpu_stack_source: manual
-              values:
+              # Manual GPU stacks still need the Network Operator to lay down
+              # host OFED/RDMA bits for GPUDirect and NCCL validation.
+              defaults:
                 values.operator.ofedDriver.deploy: true
     nvidia-gpu-operator:
       source:
@@ -216,41 +222,51 @@ components:
         namespace: nvidia-gpu-operator
         name: gpu-operator
       defaults:
-        values.devicePlugin.enabled: true
-        values.dcgmExporter.enabled: true
+        # The live chart already defaults devicePlugin/DCGM Exporter to enabled.
+        # Keep only the Nebius-specific override that disables MIG management in
+        # the shared deploy-time baseline.
         values.migManager.enabled: false
       cli:
-        mk8s_gpu:
+        mk8s_gpu_policy:
           role: gpu_operator
           # GPU Operator is the default GPU software controller for GPU-enabled
-          # MK8s clusters.
-          auto_enable:
-            - {}
-          # When both operators are present, wait for Network Operator first.
-          install_after:
-            - nvidia-network-operator
-          value_overrides:
+          # MK8s clusters. Rules can both auto-enable the app and add
+          # conditional chart defaults.
+          rules:
+            - auto_enable: true
             - gpu_stack_source: nebius_image
-              values:
+              # Nebius-managed GPU images already ship the host driver/runtime,
+              # so GPU Operator should keep the host stack untouched.
+              defaults:
                 values.driver.enabled: false
                 values.toolkit.enabled: false
             - gpu_stack_source: manual
-              values:
+              # Manual GPU stacks expect GPU Operator to install and manage the
+              # host driver + toolkit path.
+              defaults:
                 values.driver.enabled: true
                 values.toolkit.enabled: true
             - gpu_stack_source: manual
               match_platforms:
                 - gpu-b300-sxm
-              values:
-                # Nebius docs pin the B300 manual-install path to this driver
-                # version. Keep it catalog-owned rather than hardcoded in Python.
+              defaults:
+                # Ref: https://docs.nebius.com/kubernetes/gpu/set-up
+                # Nebius docs pin the B300 manual-install path to
+                # --set driver.version=580.95.05. Keep it catalog-owned rather
+                # than hardcoded in Python.
                 values.driver.version: 580.95.05
+          # App-only Flux release ordering: when both operators are present,
+          # wait for Network Operator first.
+          install_after:
+            - nvidia-network-operator
     nccl-test:
       source:
+        portable:
+          repo: oci://cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/charts/nccl-test
+          chart: nccl-test
+          version: 0.2.5
         local:
           path: ../../helm-charts/nccl-test
-      # This chart is currently local-only for developer workflows. Add
-      # `source.portable` once the chart is published to a portable registry.
       ui:
         title: NCCL benchmark validation chart
         group: Validations
@@ -259,31 +275,21 @@ components:
       release:
         namespace: nccl-test
         name: nccl-test
-      defaults: {}
       cli:
-        mk8s_gpu:
-          value_overrides:
+        mk8s_gpu_policy:
+          # Shared NCCL image and benchmark defaults come from the chart's own
+          # values.yaml. Keep only platform-specific MPI overlays here.
+          rules:
             - match_platforms:
                 - gpu-b200-sxm
                 - gpu-b200-sxm-a
-              values:
-                values.image.repository: cr.eu-north1.nebius.cloud/nebius-benchmarks/nccl-tests
-                values.image.tag: 2.26.5-ubu22.04-cu12.8
-                # Nebius B200 example adds `-mca coll ^hcoll` to disable hcoll.
+              defaults:
+                # B200 keeps the `-mca coll ^hcoll` overlay on top of the
+                # shared first-party NCCL image release.
                 values.benchmark.mpiExtraArgs:
                   - -mca
                   - coll
                   - ^hcoll
-            - match_platforms:
-                - gpu-b300-sxm
-                - gpu-h100-sxm
-                - gpu-h200-sxm
-              values:
-                # Nebius docs publish an explicit H100/H200 example with this
-                # image. B300 currently reuses the same pinned profile until
-                # Nebius publishes a dedicated MK8s B300 example.
-                values.image.repository: cr.eu-north1.nebius.cloud/nebius-benchmarks/nccl-tests
-                values.image.tag: 2.23.4-ubu22.04-cu12.4
     gateway-helm:
       source:
         portable:

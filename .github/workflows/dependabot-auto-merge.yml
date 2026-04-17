@@ -47,18 +47,39 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           AUTOMERGE_TOKEN: ${{ steps.automerge_token.outputs.token || env.DEPENDABOT_AUTOMERGE_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PACKAGE_ECOSYSTEM: ${{ steps.metadata.outputs.package-ecosystem }}
           UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
         run: |
           set -euo pipefail
+          package_ecosystem="${PACKAGE_ECOSYSTEM}"
           update_type="${UPDATE_TYPE}"
           eligible=false
           reason=""
 
+          is_allowed_ecosystem() {
+            local package_ecosystem="$1"
+            [[ "${package_ecosystem}" == "github_actions" ]] || \
+              [[ "${package_ecosystem}" == "uv" ]] || \
+              [[ "${package_ecosystem}" == "pip" ]]
+          }
+
           is_allowed_path() {
-            local path="$1"
-            [[ "${path}" =~ ^\.github/workflows/[^/]+\.ya?ml$ ]] || \
-              [[ "${path}" =~ ^\.github/actions/.+/action\.ya?ml$ ]]
+            local package_ecosystem="$1"
+            local path="$2"
+
+            case "${package_ecosystem}" in
+              github_actions)
+                [[ "${path}" =~ ^\.github/workflows/[^/]+\.ya?ml$ ]] || \
+                  [[ "${path}" =~ ^\.github/actions/.+/action\.ya?ml$ ]]
+                ;;
+              uv|pip)
+                [[ "${path}" =~ (^|/)(pyproject\.toml|uv\.lock|poetry\.lock|pdm\.lock|Pipfile|Pipfile\.lock)$ ]] || \
+                  [[ "${path}" =~ (^|/)(requirements|constraints)([-._/][^/]+)?\.txt$ ]]
+                ;;
+              *)
+                return 1
+                ;;
+            esac
           }
 
           is_allowed_update_type() {
@@ -68,8 +89,8 @@ jobs:
               [[ "${update_type}" == "version-update:semver-minor" ]]
           }
 
-          if [[ "${HEAD_REF}" != dependabot/github_actions/* ]]; then
-            reason="Dependabot PR is not from the github-actions ecosystem (${HEAD_REF})."
+          if ! is_allowed_ecosystem "${package_ecosystem}"; then
+            reason="Dependabot package ecosystem '${package_ecosystem}' is not eligible for automerge."
           elif [[ -z "${AUTOMERGE_TOKEN}" ]]; then
             reason="No automerge credential is configured. Set GitHub App secrets DEPENDABOT_AUTOMERGE_APP_ID and DEPENDABOT_AUTOMERGE_APP_PRIVATE_KEY, or set DEPENDABOT_AUTOMERGE_TOKEN."
           elif ! is_allowed_update_type "${update_type}"; then
@@ -80,8 +101,12 @@ jobs:
               reason="Dependabot PR has no changed files."
             else
               for path in "${files[@]}"; do
-                if ! is_allowed_path "${path}"; then
-                  reason="Changed file '${path}' is outside workflow automation scope."
+                if ! is_allowed_path "${package_ecosystem}" "${path}"; then
+                  if [[ "${package_ecosystem}" == "github_actions" ]]; then
+                    reason="Changed file '${path}' is outside workflow automation scope."
+                  else
+                    reason="Changed file '${path}' is outside Python dependency manifest and lockfile scope."
+                  fi
                   eligible=false
                   break
                 fi
@@ -93,9 +118,11 @@ jobs:
             fi
           fi
 
-          echo "eligible=${eligible}" >> "$GITHUB_OUTPUT"
-          echo "update_type=${update_type}" >> "$GITHUB_OUTPUT"
-          echo "reason=${reason}" >> "$GITHUB_OUTPUT"
+          {
+            echo "eligible=${eligible}"
+            echo "update_type=${update_type}"
+            echo "reason=${reason}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Auto-approve Dependabot update
         if: steps.eligibility.outputs.eligible == 'true'
@@ -111,7 +138,7 @@ jobs:
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: gh pr merge --auto --squash "${PR_URL}"
 
-      - name: Skip auto-merge for non-workflow or non-github-actions updates
+      - name: Skip auto-merge for ineligible Dependabot updates
         if: steps.eligibility.outputs.eligible != 'true'
         env:
           DEPENDENCY_NAMES: ${{ steps.metadata.outputs.dependency-names }}

@@ -40,9 +40,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{- define "nccl-test.imagePullSecrets" -}}
-{{- if .Values.global.imagePullSecrets }}
+{{- $pullSecrets := concat (default (list) .Values.global.imagePullSecrets) (default (list) .Values.imagePullSecrets) -}}
+{{- if $pullSecrets }}
 imagePullSecrets:
-  {{- range $_, $secret := .Values.global.imagePullSecrets }}
+  {{- range $_, $secret := $pullSecrets }}
   {{- if kindIs "string" $secret }}
   - name: {{ $secret | quote }}
   {{- else }}
