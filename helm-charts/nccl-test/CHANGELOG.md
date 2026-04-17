@@ -19,6 +19,8 @@ All notable changes to this chart are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [nccl-test-chart-v0.2.5] - 2026-04-16
+
 ### Added
 
 - Added chart-local release metadata and `publish-helm.sh` so future chart
