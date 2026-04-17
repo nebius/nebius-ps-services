@@ -20,6 +20,8 @@ All notable changes to this chart are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [nccl-test-chart-v0.2.7] - 2026-04-17
+
 ### Changed
 
 - Aligned the chart-local README and `publish-helm.sh` examples with the
