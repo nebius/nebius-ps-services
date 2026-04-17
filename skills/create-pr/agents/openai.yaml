@@ -1,4 +1,4 @@
 interface:
   display_name: "Create PR"
   short_description: "Open or reuse a feature branch pull request"
-  default_prompt: "Use $create-pr to refresh the base-branch context, move local work onto the right feature branch if needed, ensure the branch has reviewable commits, open or reuse the GitHub pull request, and return the PR number and URL."
+  default_prompt: "Use $create-pr to refresh the base-branch context, move local work onto the right feature branch if needed, ensure the branch has reviewable commits, honor any explicit PR title or body from the user request, open or reuse the GitHub pull request, and return the PR number and URL."

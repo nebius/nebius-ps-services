@@ -20,6 +20,13 @@ All notable changes to this chart are tracked here. This changelog follows
 
 ## [Unreleased]
 
+### Changed
+
+- Clarified in `values.yaml` and `README.md` why the shared chart leaves
+  `benchmark.mpiExtraArgs` empty by default: the official Nebius NCCL guide
+  adds `-mca coll ^hcoll` only for B200 and omits it for H100/H200, so that
+  overlay stays caller-owned instead of becoming a global chart default.
+
 ## [nccl-test-chart-v0.2.7] - 2026-04-17
 
 ### Changed

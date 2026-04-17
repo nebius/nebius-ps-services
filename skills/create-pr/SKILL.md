@@ -1,6 +1,6 @@
 ---
 name: create-pr
-description: Create or reuse a feature branch, push it, open or reuse a GitHub pull request, and return the PR number and URL. Use when a user wants local work turned into a reviewable PR without hand-driving the branch and GitHub steps.
+description: Create or reuse a feature branch, push it, open or reuse a GitHub pull request, and return the PR number and URL. Use when a user wants local work turned into a reviewable PR without hand-driving the branch and GitHub steps, including when they provide the exact PR title or body to use.
 ---
 
 # Create PR
@@ -13,6 +13,7 @@ safe default-branch workflow.
 - Opening a PR from local changes or local commits.
 - Moving in-progress work off the default branch before publishing it.
 - Reusing the current feature branch instead of creating extra branches.
+- Honoring an explicit user-provided PR title or body instead of inventing one.
 - Returning the PR number and URL so the user can review or merge it.
 
 ## Requirements
@@ -59,10 +60,18 @@ safe default-branch workflow.
    Check for an existing open PR for the current head branch. If one already
    exists, return that PR instead of creating another.
 8. Open the PR with the right readiness state.
-   Use explicit user-provided title/body when available. Otherwise prefer a
-   concise generated title/body or `gh pr create --fill` when the commit
-   history is clean enough to support it. Prefer a draft PR when the branch is
-   intentionally incomplete or validation has not run yet.
+   Treat any explicit user-provided PR title as authoritative. Use it verbatim
+   unless the user explicitly asks for refinement. Do not substitute a generic
+   title such as "Preparation" and do not derive the PR title from a branch
+   prefix such as `prep/<topic>`.
+   - If the user provides both title and body, use both.
+   - If the user provides only a title, use that title and generate or fill the
+     body as needed.
+   - If the user provides neither, prefer a concise generated title/body or
+     `gh pr create --fill` when the commit history is clean enough to support
+     it.
+   Prefer a draft PR when the branch is intentionally incomplete or validation
+   has not run yet.
 9. Return the result.
    Report:
    - head branch name
@@ -94,6 +103,8 @@ safe default-branch workflow.
   can be safely fast-forwarded to `origin/<base>` first.
 - If local uncommitted work is present on the default branch, create the new
   branch first so those changes move off the default branch safely.
+- Do not let a suggested branch slug such as `prep/<topic>` determine the PR
+  title when the user supplied a title explicitly.
 - Prefer a draft PR over a misleading ready-for-review PR when the work is
   intentionally still in progress.
 

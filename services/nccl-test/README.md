@@ -18,8 +18,9 @@ multi-node `MPIJob` flow used by Kubeflow Training Operator.
   - run in `nvidia/cuda:<tag>-runtime-ubuntu24.04`
 
 That keeps the runtime image smaller than a single-stage build while preserving
-the CUDA, NCCL, Open MPI, SSH, and RDMA userspace pieces needed by an
-`MPIJob`.
+the CUDA, NCCL, Ubuntu Open MPI, SSH, and RDMA userspace pieces needed by an
+`MPIJob`. This image intentionally uses the distro MPI stack from the CUDA
+Ubuntu base rather than bundling NVIDIA HPC-X.
 
 ## Runtime contract
 
@@ -42,11 +43,15 @@ the CUDA, NCCL, Open MPI, SSH, and RDMA userspace pieces needed by an
   tag `0.2.0` and the practical deploy-time benchmark defaults directly in the
   source chart.
 - `services/nebius-cxcli/component_sources.yaml` now points portable consumers
-  at chart version `0.2.5`, and the NCCL validation path reads the shared
+  at chart version `0.2.7`, and the NCCL validation path reads the shared
   image/tag plus benchmark defaults directly from the chart instead of
   duplicating them in the catalog.
 - The only NCCL chart behavior that remains catalog-owned is the
   platform-specific B200 `-mca coll ^hcoll` overlay.
+- That B200 overlay reflects the Nebius benchmark recipe, not an HCOLL toggle
+  baked into this image: the local runtime currently ships Ubuntu Open MPI with
+  UCX-capable components, but not the HPC-X `coll:hcoll` / `coll:ucc`
+  component stack used by the Nebius reference benchmark images.
 
 ## Files
 

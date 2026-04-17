@@ -163,7 +163,12 @@ helm template smoke ./helm-charts/nccl-test \
   `cr.<region>.nebius.cloud/<registry-short-id>/images/nccl-test`, and the tag
   defaults to `0.2.0`. Use a digest for immutable production pinning.
 - `benchmark.mpiBaseArgs`: shared `mpirun` arguments applied on every platform.
-- `benchmark.mpiExtraArgs`: platform-specific extra `mpirun` arguments.
+- `benchmark.mpiExtraArgs`: platform-specific extra `mpirun` arguments. Keep
+  the shared chart default empty. In the official Nebius NCCL guide, the B200
+  example adds `-mca coll ^hcoll` while the H100/H200 example omits it, so
+  `nebius-cxcli` injects that flag only for B200 platforms instead of baking
+  it into global chart defaults. See:
+  https://docs.nebius.com/kubernetes/gpu/nccl-test.
 - `benchmark.args`: arguments passed directly to `all_reduce_perf`.
 - The source chart carries the shared first-party image/tag and the practical
   deploy-time benchmark args directly in `values.yaml`. In the bundled
@@ -219,7 +224,9 @@ kubectl logs -n nccl-test -f <launcher-pod-name>
 - `nebius-cxcli` owns deploy-time image overrides and platform-specific MPI
   flags such as the B200 `-mca coll ^hcoll` overlay. The shared runtime image
   and common benchmark shape now live in the chart defaults; only
-  platform-specific overlays stay catalog-owned.
+  platform-specific overlays stay catalog-owned. The official Nebius NCCL
+  guide shows that flag only in the B200 example, not in the H100/H200 one:
+  https://docs.nebius.com/kubernetes/gpu/nccl-test.
 - The canonical release helper is
   [publish-helm.sh](publish-helm.sh).
   The tag-driven publish workflow lives at

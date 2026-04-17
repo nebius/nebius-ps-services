@@ -264,7 +264,7 @@ components:
         portable:
           repo: oci://cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/charts/nccl-test
           chart: nccl-test
-          version: 0.2.6
+          version: 0.2.7
         local:
           path: ../../helm-charts/nccl-test
       ui:
@@ -278,14 +278,20 @@ components:
       cli:
         mk8s_gpu_policy:
           # Shared NCCL image and benchmark defaults come from the chart's own
-          # values.yaml. Keep only platform-specific MPI overlays here.
+          # values.yaml. Keep only platform-specific MPI overlays here. Nebius
+          # docs add `-mca coll ^hcoll` only for the B200 MPIJob example while
+          # the H100/H200 example omits it, so this stays catalog-owned rather
+          # than becoming a shared chart default.
+          # Ref: https://docs.nebius.com/kubernetes/gpu/nccl-test
           rules:
             - match_platforms:
                 - gpu-b200-sxm
                 - gpu-b200-sxm-a
               defaults:
                 # B200 keeps the `-mca coll ^hcoll` overlay on top of the
-                # shared first-party NCCL image release.
+                # shared first-party NCCL image release because the official
+                # Nebius B200 NCCL example includes it while the H100/H200
+                # example does not.
                 values.benchmark.mpiExtraArgs:
                   - -mca
                   - coll

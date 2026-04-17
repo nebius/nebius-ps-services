@@ -1,7 +1,10 @@
 # Default MPIJob contract for the NCCL validation workflow. The shared
 # first-party image tag and practical benchmark shape now live here in the
 # source chart; cxcli only needs to override worker replica count and
-# platform-specific MPI extras such as the B200 `-mca coll ^hcoll` overlay.
+# platform-specific MPI extras. Nebius docs add `-mca coll ^hcoll` only in the
+# B200 example while the H100/H200 example omits it, so the shared chart keeps
+# `benchmark.mpiExtraArgs: []` and leaves that overlay to the caller.
+# Ref: https://docs.nebius.com/kubernetes/gpu/nccl-test
 
 nameOverride: ""
 fullnameOverride: ""

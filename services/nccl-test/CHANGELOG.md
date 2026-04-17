@@ -28,10 +28,14 @@ All notable changes to this project are tracked here. This changelog follows
   practical benchmark profile, and the built image now exposes its CUDA base
   tag plus upstream `NCCL_TESTS_REF` in runtime metadata for easier inspection.
 - Aligned the portable NCCL chart release contract with that source-owned
-  default model: the next chart publish moves to `0.2.5`, and
+  default model: the next chart publish moves to `0.2.7`, and
   `nebius-cxcli` now reads the shared image/tag plus benchmark defaults
   directly from `helm-charts/nccl-test/values.yaml` instead of duplicating
   them in its app catalog.
+- Clarified the service README so it no longer implies NVIDIA HPC-X parity for
+  the locally built image: the runtime currently uses Ubuntu Open MPI packages,
+  while the B200-only `-mca coll ^hcoll` note remains a catalog-level Nebius
+  benchmark override rather than an image-baked HCOLL default.
 - Hardened `publish-image.sh` so `--prep` now requires a strictly clean
   worktree including untracked files, auto-sets upstream on a first branch
   push, and rejects duplicate release tags before editing the changelog;

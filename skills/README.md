@@ -44,7 +44,7 @@ $review-pr Review PR #110 against the base branch, fix safe issues on the branch
 You can also be more specific when needed:
 
 ```text
-$create-pr Open or reuse the PR for this branch and return the PR number and URL.
+$create-pr Open or reuse the PR for this branch with title "Expose nccl-test 0.2.7 in the bundled catalog" and return the PR number and URL.
 
 $review-pr Review this Helm chart PR, apply the relevant sibling skills, resolve straightforward conflicts if they exist, and rerun the focused validation.
 ```
@@ -81,8 +81,10 @@ testing on macOS with Docker Desktop and the Dev Containers extension.
 `create-pr` turns local work into a GitHub pull request without leaving it on
 the default branch. It creates a feature branch only when needed, reuses an
 existing non-default branch, avoids duplicate PRs for the same head branch,
-expects reviewable commits instead of a dirty tree, and returns the PR number
-and URL.
+expects reviewable commits instead of a dirty tree, treats an explicit
+user-supplied PR title/body as authoritative instead of inferring a generic
+preparation-style title from the branch name, and returns the PR number and
+URL.
 
 ### `github-workflows`
 
