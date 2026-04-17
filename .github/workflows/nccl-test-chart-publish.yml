@@ -214,7 +214,13 @@ jobs:
             exit 1
           fi
 
-          if ! grep -Eiq 'not found|manifest unknown|404' <<< "${duplicate_output}"; then
+          if grep -Eiq 'not found|manifest unknown|404|unable to locate any tags' <<< "${duplicate_output}"; then
+            printf '%s\n' "${duplicate_output}"
+            echo "::notice::No tagged duplicate nested chart repository detected at ${duplicate_ref}."
+            exit 0
+          fi
+
+          if ! grep -Eiq 'not found|manifest unknown|404|unable to locate any tags' <<< "${duplicate_output}"; then
             printf '%s\n' "${duplicate_output}" >&2
             echo "::error::Unable to verify whether duplicate nested chart repository ${duplicate_ref} exists."
             exit 1
