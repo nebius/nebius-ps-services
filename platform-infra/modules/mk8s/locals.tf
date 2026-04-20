@@ -43,7 +43,24 @@ locals {
 
   cpu_overrides         = coalesce(try(var.mk8s_cpu_node_group_overrides, null), {})
   cpu_template_override = coalesce(try(local.cpu_overrides.template, null), {})
-  cpu_labels            = coalesce(try(local.cpu_overrides.labels, null), {})
+  cpu_template_override_without_boot_disk = {
+    for key, value in local.cpu_template_override : key => value
+    if key != "boot_disk"
+  }
+  cpu_template_boot_disk_override = coalesce(try(local.cpu_template_override.boot_disk, null), {})
+  cpu_labels                      = coalesce(try(local.cpu_overrides.labels, null), {})
+  cpu_template_boot_disk_base = merge(
+    var.cpu_nodes_boot_disk_size_gib != null ? {
+      size_gibibytes = var.cpu_nodes_boot_disk_size_gib
+    } : {},
+    var.cpu_nodes_boot_disk_type != null ? {
+      type = var.cpu_nodes_boot_disk_type
+    } : {}
+  )
+  cpu_template_boot_disk = merge(
+    local.cpu_template_boot_disk_base,
+    local.cpu_template_boot_disk_override
+  )
 
   cpu_template_base = {
     resources = {
@@ -60,7 +77,13 @@ locals {
     preemptible = var.cpu_nodes_preemptible ? {} : null
   }
 
-  cpu_template           = merge(local.cpu_template_base, local.cpu_template_override)
+  cpu_template = merge(
+    local.cpu_template_base,
+    local.cpu_template_override_without_boot_disk,
+    length(local.cpu_template_boot_disk) > 0 ? {
+      boot_disk = local.cpu_template_boot_disk
+    } : {}
+  )
   cpu_effective_platform = try(trimspace(local.cpu_template.resources.platform), "")
   cpu_effective_preset   = try(trimspace(local.cpu_template.resources.preset), "")
   cpu_autoscaling        = try(local.cpu_overrides.autoscaling, null)
@@ -78,10 +101,23 @@ locals {
   gpu_template_override = coalesce(try(local.gpu_overrides.template, null), {})
   gpu_template_override_without_metadata = {
     for key, value in local.gpu_template_override : key => value
-    if key != "metadata"
+    if key != "metadata" && key != "boot_disk"
   }
-  gpu_template_override_metadata = coalesce(try(local.gpu_template_override.metadata, null), {})
-  gpu_effective_stack_preset     = var.gpu_stack_source == "nebius_image" ? var.gpu_stack_preset : null
+  gpu_template_override_metadata  = coalesce(try(local.gpu_template_override.metadata, null), {})
+  gpu_effective_stack_preset      = var.gpu_stack_source == "nebius_image" ? var.gpu_stack_preset : null
+  gpu_template_boot_disk_override = coalesce(try(local.gpu_template_override.boot_disk, null), {})
+  gpu_template_boot_disk_base = merge(
+    var.gpu_nodes_boot_disk_size_gib != null ? {
+      size_gibibytes = var.gpu_nodes_boot_disk_size_gib
+    } : {},
+    var.gpu_nodes_boot_disk_type != null ? {
+      type = var.gpu_nodes_boot_disk_type
+    } : {}
+  )
+  gpu_template_boot_disk = merge(
+    local.gpu_template_boot_disk_base,
+    local.gpu_template_boot_disk_override
+  )
 
   gpu_template_base = {
     resources = {
@@ -109,6 +145,9 @@ locals {
 
   gpu_template = merge(
     local.gpu_template_merged_no_metadata,
+    length(local.gpu_template_boot_disk) > 0 ? {
+      boot_disk = local.gpu_template_boot_disk
+    } : {},
     length(local.gpu_template_override_metadata) > 0 ? {
       metadata = local.gpu_template_override_metadata
     } : {}

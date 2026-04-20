@@ -1,6 +1,6 @@
 ---
 name: nebius
-description: Implement Nebius cloud automation in Python using the Nebius SDK, including IAM/Object Storage workflows, VPC networking inspection/design, live quota management, and MK8s compatibility/readiness checks. Use when building or reviewing Nebius auth bootstrap, service accounts, access keys, Terraform state buckets, VPC pools, subnet inheritance, route tables, quota-aware Nebius provisioning checks, or MK8s GPU/image compatibility.
+description: Implement Nebius cloud automation in Python using the Nebius SDK, including IAM/Object Storage workflows, VPC networking inspection/design, live quota management, and MK8s compatibility/readiness checks. Use when building or reviewing Nebius auth bootstrap, service accounts, access keys, Terraform state buckets, VPC pools, subnet inheritance, route tables, quota-aware Nebius provisioning checks, or MK8s GPU/image/operator compatibility.
 ---
 
 # Nebius
@@ -32,6 +32,9 @@ Implement Nebius IAM/Object Storage, VPC networking, quota-management, and MK8s 
   - control-plane version and node-group compatibility-matrix checks
   - GPU platform, OS, and `drivers_preset` selection
   - GPU preset eligibility checks for InfiniBand / GPU clustering
+  - driverful Nebius-image versus manual/operator-managed GPU stack decisions
+  - GPU Operator and Network Operator ordering, ownership, and NFD scoping
+  - scheduler-visible RDMA exposure checks such as `rdma/shared_device`
   - image-family selection for CPU/GPU platforms
   - rolling-update quota and public-IP headroom review
   - node infra-version drift checks when provisioning or autoscaling behaves unexpectedly
@@ -54,12 +57,16 @@ Implement Nebius IAM/Object Storage, VPC networking, quota-management, and MK8s 
      - use `quota-check --all-regions` style regional replay only as a quota diagnostic; it does not prove platform/preset support in those other regions
    - MK8s compatibility/readiness:
      - start with `references/mk8s-compatibility.md`
+     - load `references/mk8s-gpu-setup.md` when the task is about GPU-enabled cluster setup, operator selection, or GPUDirect RDMA readiness
      - query the live MK8s compatibility matrix before choosing GPU platform, OS, or `drivers_preset`
      - query the live compute platform preset inventory before deciding whether `infiniband_fabric` is valid for the chosen GPU shape
      - prefer the Nebius SDK API for automation; use the CLI only for ad hoc manual inspection
      - prefer exact `drivers_preset` strings returned by the matrix, not shorthand guesses
      - treat GPU clustering as a property of the selected preset's live metadata, not a platform-only assumption
      - use image-family guidance as a secondary recommendation layer after the matrix confirms compatibility
+     - when the task is specific to `services/nebius-cxcli`, treat `component_sources.yaml` as the authoritative contract for operator auto-enable rules and rendered Helm values
+     - when the host uses a Nebius driverful GPU image, treat host GPU driver, NVIDIA Container Toolkit, and Nebius-provided OFED as separate concerns from Kubernetes-side device plugins and RDMA exposure
+     - when both NVIDIA operators are needed, install or reconcile Network Operator before GPU Operator and keep exactly one NFD owner
 2. For live Nebius VPC inspection, run:
    - `scripts/inspect_vpc_topology.py`
    - `scripts/inspect_vpc_routes.py`
@@ -70,6 +77,7 @@ Implement Nebius IAM/Object Storage, VPC networking, quota-management, and MK8s 
    - `references/route-inspection.md`
    - `references/quota-management.md`
    - `references/mk8s-compatibility.md`
+   - `references/mk8s-gpu-setup.md`
 4. Keep workflows idempotent and safe:
    - look up by name or ID first
    - create only when missing
@@ -109,6 +117,14 @@ Implement Nebius IAM/Object Storage, VPC networking, quota-management, and MK8s 
 - Prefer exact preset/image tags such as `cuda13.0`; do not use shorthand aliases such as `cuda13` or floating tags such as `latest`.
 - If a compatibility lookup returns exactly one valid `drivers_preset` for the selected Kubernetes version and GPU platform, use that as the default while still allowing an explicit override.
 - Do not trust stale static platform-to-driver maps without revalidating them against the live compatibility matrix.
+- Nebius driverful GPU images and manual/operator-managed GPU stacks are different operating modes. Do not install host GPU drivers or the NVIDIA Container Toolkit from GPU Operator on top of a Nebius driverful image unless the task explicitly requires changing that ownership model.
+- `toolkit.enabled` in GPU Operator controls the NVIDIA Container Toolkit runtime, not the CUDA Toolkit.
+- NVIDIA Network Operator is required for Nebius MK8s GPU node groups that do not use the Nebius GPU image and either join a GPU cluster for InfiniBand or use B200/B200A GPUs. In all other cases, follow the current Nebius docs and active automation contract instead of assuming Network Operator is always needed.
+- If both NVIDIA operators are installed, keep exactly one NFD instance. Disable GPU Operator's NFD when Network Operator is the intended NFD owner.
+- Do not treat `nvidia.com/gpu.deploy.operands=true` as a setup requirement. Prefer standard NFD labels, operator policy objects, and allocatable resources as the readiness signals.
+- For GPU-cluster / InfiniBand readiness, a ready `NicClusterPolicy` alone is insufficient. Verify scheduler-visible RDMA resources such as `rdma/shared_device` on Ready GPU nodes.
+- Do not blanket-enable `driver.rdma.enabled=true` in GPU Operator. Use it only when the task explicitly requires the legacy `nvidia-peermem` path instead of the default DMA-BUF path.
+- Use `driver.rdma.useHostMofed=true` only when Mellanox OFED is installed directly on the host outside Network Operator's managed lifecycle.
 - When a workload needs pinned public IPs for MK8s node groups, plan the dedicated subnet/public-pool capacity for the steady-state node count plus rolling-update headroom.
 - For rolling updates, quota and public-IP planning must account for surge behavior; if full utilization leaves no headroom, either free capacity first or use a staged size-reduction/update/restore sequence.
 - When MK8s autoscaling or provisioning looks wrong, check node infra versions and compare them with the latest rollout for that region before assuming a workload-side issue.
@@ -126,6 +142,27 @@ Implement Nebius IAM/Object Storage, VPC networking, quota-management, and MK8s 
 - `assets/iam/create_authorized_key.py`
 - `assets/iam/create_access_key.py`
 - `assets/iam/ensure_state_bucket.py`
+
+### GPU assets
+
+- `assets/gpu/gpu-operator-driverful-values.yaml`
+  - reference values for the Nebius driverful-image path where GPU Operator should leave the host GPU driver and NVIDIA Container Toolkit untouched
+- `assets/gpu/network-operator-driverful-values.yaml`
+  - reference values for the Nebius driverful InfiniBand path where Network Operator owns NFD and host OFED installation stays disabled
+- `assets/gpu/nicclusterpolicy-driverful-rdma-shared.yaml`
+  - reference `NicClusterPolicy` for exposing `rdma/shared_device` on driverful InfiniBand-capable nodes
+- `assets/gpu/gpu-operator-manual-values.yaml`
+  - reference values for a manual/operator-managed host path where GPU Operator owns the host GPU driver and NVIDIA Container Toolkit runtime
+- `assets/gpu/network-operator-manual-values.yaml`
+  - reference values for the manual B200/B200A or InfiniBand path where Network Operator owns host OFED installation
+- `assets/gpu/nicclusterpolicy-manual-rdma-shared.yaml`
+  - reference `NicClusterPolicy` patch for exposing `rdma/shared_device` on manual/operator-managed InfiniBand-capable nodes
+- `assets/gpu/check-cluster-readiness.sh`
+  - quick cluster-wide check for operator policy state, operator pods, daemonsets, labels, and allocatable GPU/RDMA resources
+- `assets/gpu/inspect-driverful-host.sh`
+  - privileged host inspection helper for checking installed GPU packages, NVIDIA Container Toolkit runtime config, and loaded kernel modules on a Nebius driverful GPU node
+- `assets/gpu/proof-rdma-gpu-pod.yaml`
+  - reference proof pod that requests both `nvidia.com/gpu` and `rdma/shared_device`
 
 ### VPC inspection scripts
 
@@ -146,3 +183,4 @@ Run scripts relative to the skill directory.
 - `references/route-inspection.md`
 - `references/quota-management.md`
 - `references/mk8s-compatibility.md`
+- `references/mk8s-gpu-setup.md`

@@ -84,6 +84,26 @@ class RenderedModuleSource:
     source: str
 
 
+def _declared_wizard_input_root_keys(entry: ComponentEntry) -> set[str]:
+    roots: set[str] = set()
+    for raw_path in entry.wizard_fields:
+        field_path = str(raw_path).strip()
+        if not field_path:
+            continue
+        if field_path.startswith("inputs."):
+            relative = field_path[len("inputs.") :]
+        elif field_path.startswith(f"{entry.config_path}.inputs."):
+            relative = field_path[len(f"{entry.config_path}.inputs.") :]
+        else:
+            continue
+        if "." not in relative:
+            continue
+        root = relative.split(".", maxsplit=1)[0].strip().replace("-", "_").lower()
+        if root:
+            roots.add(root)
+    return roots
+
+
 def _ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -388,14 +408,6 @@ def _build_module_plans(
         source = _effective_component_source(row=resolved_item, entry=entry)
         version = _effective_component_version(row=resolved_item, entry=entry) or None
 
-        helper_keys = {
-            "module_name",
-        }
-        module_inputs = {
-            key: value
-            for key, value in inputs.items()
-            if str(key).strip().lower() not in helper_keys
-        }
         default_source = str(entry.source).strip() if entry and entry.source else ""
         default_version = str(entry.version).strip() if entry and entry.version else ""
         raw_module_name = str(inputs.get("module_name") or instance_id).strip()
@@ -423,6 +435,16 @@ def _build_module_plans(
             str(spec.name).strip().lower().replace("-", "_")
             for spec in module_variables(metadata_module_source)
             if str(spec.name).strip()
+        }
+        wizard_input_roots = _declared_wizard_input_root_keys(entry) if entry is not None else set()
+        helper_keys = {
+            "module_name",
+            *(root for root in wizard_input_roots if root not in declared_argument_names),
+        }
+        module_inputs = {
+            key: value
+            for key, value in inputs.items()
+            if str(key).strip().replace("-", "_").lower() not in helper_keys
         }
         if declared_argument_names:
             for raw_arg_name in sorted(module_inputs.keys()):

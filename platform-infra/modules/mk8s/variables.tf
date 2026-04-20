@@ -127,6 +127,45 @@ variable "cpu_nodes_os" {
   }
 }
 
+variable "cpu_nodes_boot_disk_size_gib" {
+  description = "Default CPU node group template.boot_disk.size_gibibytes. When null, provider defaults or override template.boot_disk.size_* apply."
+  type        = number
+  default     = null
+  nullable    = true
+  validation {
+    condition = (
+      var.cpu_nodes_boot_disk_size_gib == null ||
+      (
+        floor(var.cpu_nodes_boot_disk_size_gib) == var.cpu_nodes_boot_disk_size_gib &&
+        var.cpu_nodes_boot_disk_size_gib >= 1
+      )
+    )
+    error_message = "cpu_nodes_boot_disk_size_gib must be null or an integer >= 1."
+  }
+}
+
+variable "cpu_nodes_boot_disk_type" {
+  description = "Default CPU node group template.boot_disk.type. When null, provider defaults or override template.boot_disk.type apply."
+  type        = string
+  default     = null
+  nullable    = true
+  validation {
+    condition = (
+      var.cpu_nodes_boot_disk_type == null ||
+      contains(
+        [
+          "NETWORK_SSD",
+          "NETWORK_HDD",
+          "NETWORK_SSD_NON_REPLICATED",
+          "NETWORK_SSD_IO_M3",
+        ],
+        trimspace(var.cpu_nodes_boot_disk_type)
+      )
+    )
+    error_message = "cpu_nodes_boot_disk_type must be null or one of NETWORK_SSD, NETWORK_HDD, NETWORK_SSD_NON_REPLICATED, NETWORK_SSD_IO_M3."
+  }
+}
+
 variable "cpu_nodes_preemptible" {
   description = "Use preemptible CPU nodes."
   type        = bool
@@ -201,6 +240,45 @@ variable "gpu_nodes_os" {
       length(trimspace(var.gpu_nodes_os)) > 0
     )
     error_message = "gpu_nodes_os cannot be empty when provided."
+  }
+}
+
+variable "gpu_nodes_boot_disk_size_gib" {
+  description = "Default GPU node group template.boot_disk.size_gibibytes. When null, provider defaults or override template.boot_disk.size_* apply."
+  type        = number
+  default     = null
+  nullable    = true
+  validation {
+    condition = (
+      var.gpu_nodes_boot_disk_size_gib == null ||
+      (
+        floor(var.gpu_nodes_boot_disk_size_gib) == var.gpu_nodes_boot_disk_size_gib &&
+        var.gpu_nodes_boot_disk_size_gib >= 1
+      )
+    )
+    error_message = "gpu_nodes_boot_disk_size_gib must be null or an integer >= 1."
+  }
+}
+
+variable "gpu_nodes_boot_disk_type" {
+  description = "Default GPU node group template.boot_disk.type. When null, provider defaults or override template.boot_disk.type apply."
+  type        = string
+  default     = null
+  nullable    = true
+  validation {
+    condition = (
+      var.gpu_nodes_boot_disk_type == null ||
+      contains(
+        [
+          "NETWORK_SSD",
+          "NETWORK_HDD",
+          "NETWORK_SSD_NON_REPLICATED",
+          "NETWORK_SSD_IO_M3",
+        ],
+        trimspace(var.gpu_nodes_boot_disk_type)
+      )
+    )
+    error_message = "gpu_nodes_boot_disk_type must be null or one of NETWORK_SSD, NETWORK_HDD, NETWORK_SSD_NON_REPLICATED, NETWORK_SSD_IO_M3."
   }
 }
 

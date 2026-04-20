@@ -52,8 +52,10 @@ spec:
             {{- end }}
           {{- end }}
         spec:
-          automountServiceAccountToken: false
-          enableServiceLinks: false
+          # The MPI launcher shells out to kubectl exec against worker pods, so it
+          # must keep the in-cluster API token and service env wiring.
+          automountServiceAccountToken: true
+          enableServiceLinks: true
           {{- include "nccl-test.imagePullSecrets" . | nindent 10 }}
           {{- with .Values.launcher.priorityClassName }}
           priorityClassName: {{ . | quote }}

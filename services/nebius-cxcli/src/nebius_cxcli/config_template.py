@@ -9,6 +9,7 @@ import yaml
 
 from .component_defaults import resolve_component_defaults
 from .component_instances import INSTANCE_ID_FIELD
+from .config_loader import normalize_runtime_config_payload
 
 if TYPE_CHECKING:
     from .components import ComponentEntry
@@ -233,4 +234,5 @@ def starter_config_yaml(
         infra_entries=infra_entries,
         app_entries=app_entries,
     )
+    normalize_runtime_config_payload(payload)
     return yaml.safe_dump(payload, sort_keys=False)

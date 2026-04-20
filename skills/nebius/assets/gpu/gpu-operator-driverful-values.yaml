@@ -1,0 +1,22 @@
+# Reference values for a Nebius driverful-image path.
+#
+# Use this when the node image already provides the host GPU driver and the
+# NVIDIA Container Toolkit runtime, but you still want GPU Operator for the
+# Kubernetes-side device plugin / monitoring path.
+#
+# If Network Operator is not part of the design, re-evaluate `nfd.enabled`
+# against the live cluster instead of assuming this file applies unchanged.
+
+driver:
+  enabled: false
+  nvidiaDriverCRD:
+    enabled: false
+
+toolkit:
+  enabled: false
+
+nfd:
+  enabled: false
+
+migManager:
+  enabled: false

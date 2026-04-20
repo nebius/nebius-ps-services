@@ -23,8 +23,11 @@ from .component_wiring import (
     resolve_component_output_value,
     resolve_input_binding_source,
 )
-from .components import component_entries
-from .mk8s_gpu import mk8s_gpu_flux_release_dependencies
+from .components import component_entries, component_entry_chart_name
+from .mk8s_gpu import (
+    mk8s_gpu_flux_release_dependencies,
+    mk8s_gpu_flux_release_post_render_patches,
+)
 from .paths import ProjectPaths
 from .runtime_config import to_plain_data
 
@@ -142,6 +145,24 @@ def _resolve_flux_chart_source(*, chart_name: str, chart_repo: str) -> dict[str,
     )
 
 
+def _runtime_app_chart_name(
+    *,
+    chart_node: dict[str, Any],
+    entry_id: str,
+    configured_chart_name: str | None,
+) -> str:
+    repo = str(chart_node.get("repo", "")).strip().rstrip("/")
+    if repo.startswith("oci://") and "/" in repo:
+        repo_tail = repo.rsplit("/", maxsplit=1)[-1].strip()
+        if configured_chart_name and repo_tail.lower() == configured_chart_name.lower():
+            return repo_tail
+        if repo_tail and not configured_chart_name:
+            return repo_tail
+    if configured_chart_name:
+        return configured_chart_name
+    return entry_id
+
+
 def _file_slug(value: str) -> str:
     return "".join(ch if ch.isalnum() or ch in "-." else "-" for ch in value)
 
@@ -248,7 +269,11 @@ def _configured_app_release_specs(
                     )
 
                 chart_repo = str(chart_node.get("repo", "")).strip()
-                chart_name = entry_id
+                chart_name = _runtime_app_chart_name(
+                    chart_node=chart_node,
+                    entry_id=entry_id,
+                    configured_chart_name=component_entry_chart_name(entry),
+                )
                 chart_version = str(chart_node.get("version", "")).strip()
                 if not chart_repo:
                     raise ValueError(
@@ -312,6 +337,10 @@ def _configured_app_release_specs(
         for item in specs
         if str(item.get("entry_id", "")).strip()
     }
+    post_render_patch_map = mk8s_gpu_flux_release_post_render_patches(
+        payload,
+        release_entry_ids=set(spec_by_entry_id),
+    )
     for entry_id, dependency_ids in dependency_map.items():
         release = spec_by_entry_id.get(entry_id)
         if release is None:
@@ -324,6 +353,11 @@ def _configured_app_release_specs(
             for dependency_id in dependency_ids
             if dependency_id in spec_by_entry_id
         ]
+    for entry_id, patches in post_render_patch_map.items():
+        release = spec_by_entry_id.get(entry_id)
+        if release is None:
+            continue
+        release["post_render_patches"] = [dict(item) for item in patches]
     return specs
 
 
@@ -339,6 +373,7 @@ def _helm_release_doc(
     timeout: str | None,
     values: dict[str, Any],
     depends_on: list[dict[str, str]] | None = None,
+    post_render_patches: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     chart_spec: dict[str, Any] = {
         "chart": chart_ref,
@@ -360,6 +395,23 @@ def _helm_release_doc(
         spec["timeout"] = timeout
     if depends_on:
         spec["dependsOn"] = depends_on
+    if post_render_patches:
+        spec["postRenderers"] = [
+            {
+                "kustomize": {
+                    "patches": [
+                        {
+                            "target": dict(item.get("target", {}))
+                            if isinstance(item.get("target"), dict)
+                            else {},
+                            "patch": str(item.get("patch", "")).strip(),
+                        }
+                        for item in post_render_patches
+                        if str(item.get("patch", "")).strip()
+                    ]
+                }
+            }
+        ]
     return {
         "apiVersion": "helm.toolkit.fluxcd.io/v2",
         "kind": "HelmRelease",
@@ -440,6 +492,7 @@ def _render_flux_app_helm_releases(
                 timeout=release["timeout"] or None,
                 values=release["values"],
                 depends_on=release.get("depends_on") or None,
+                post_render_patches=release.get("post_render_patches") or None,
             ),
         )
 

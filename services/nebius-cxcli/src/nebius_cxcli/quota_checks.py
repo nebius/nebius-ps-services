@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from .component_defaults import resolve_component_defaults
 from .component_instances import component_instance_id, component_instance_label, component_type_id
@@ -95,6 +95,24 @@ def _gpu_quota_suffix(platform: str) -> str | None:
     return None
 
 
+def _capacity_block_group_affinity(
+    *,
+    service: str,
+    platform: str,
+    fabric: str,
+) -> CapacityBlockGroupAffinity | None:
+    normalized_service = _as_text(service).lower()
+    normalized_platform = _as_text(platform).lower()
+    normalized_fabric = _as_text(fabric).lower()
+    if not normalized_service or not normalized_platform or not normalized_fabric:
+        return None
+    return CapacityBlockGroupAffinity(
+        service=normalized_service,
+        platform=normalized_platform,
+        fabric=normalized_fabric,
+    )
+
+
 def _mk8s_effective_node_count(inputs: dict[str, Any], *, gpu: bool) -> int | None:
     override_key = "mk8s_gpu_node_group_overrides" if gpu else "mk8s_cpu_node_group_overrides"
     count_key = "gpu_nodes_count_per_group" if gpu else "cpu_nodes_count"
@@ -168,6 +186,61 @@ def _mk8s_effective_public_ips(inputs: dict[str, Any], *, gpu: bool) -> bool:
     return _mapping_bool(inputs, field_key, default=False)
 
 
+def _mk8s_boot_disk_override(inputs: dict[str, Any], *, gpu: bool) -> dict[str, Any]:
+    override_key = "mk8s_gpu_node_group_overrides" if gpu else "mk8s_cpu_node_group_overrides"
+    overrides = inputs.get(override_key)
+    override_value = _path_value(overrides, "template.boot_disk") if isinstance(overrides, dict) else None
+    return dict(override_value) if isinstance(override_value, dict) else {}
+
+
+def _mk8s_effective_boot_disk_type(inputs: dict[str, Any], *, gpu: bool) -> str:
+    field_key = "gpu_nodes_boot_disk_type" if gpu else "cpu_nodes_boot_disk_type"
+    override_value = _mapping_text(_mk8s_boot_disk_override(inputs, gpu=gpu), "type")
+    return override_value or _mapping_text(inputs, field_key)
+
+
+def _disk_size_bytes(mapping: dict[str, Any]) -> int | None:
+    size_fields = (
+        ("size_bytes", 1),
+        ("size_kibibytes", 1024),
+        ("size_mebibytes", 1024 * 1024),
+        ("size_gibibytes", _GIB),
+    )
+    for key, multiplier in size_fields:
+        resolved = _positive_int(mapping.get(key))
+        if resolved is not None and resolved > 0:
+            return resolved * multiplier
+    return None
+
+
+def _mk8s_effective_boot_disk_bytes(inputs: dict[str, Any], *, gpu: bool) -> int | None:
+    override_bytes = _disk_size_bytes(_mk8s_boot_disk_override(inputs, gpu=gpu))
+    if override_bytes is not None:
+        return override_bytes
+    field_key = "gpu_nodes_boot_disk_size_gib" if gpu else "cpu_nodes_boot_disk_size_gib"
+    resolved = _positive_int(inputs.get(field_key))
+    if resolved is None or resolved <= 0:
+        return None
+    return resolved * _GIB
+
+
+def _mk8s_boot_disk_gap_message(*, gpu: bool) -> str:
+    scope = "gpu" if gpu else "cpu"
+    label = "GPU" if gpu else "CPU"
+    override_root = f"inputs.mk8s_{scope}_node_group_overrides.template.boot_disk"
+    return (
+        f"MK8s {label} node-group boot-disk quota could not be fully evaluated; "
+        f"set inputs.{scope}_nodes_boot_disk_size_gib and inputs.{scope}_nodes_boot_disk_type, "
+        f"or set {override_root}.size_* and {override_root}.type"
+    )
+
+
+def _format_disk_size_bytes(value: int) -> str:
+    if value % _GIB == 0:
+        return f"{value // _GIB} GiB"
+    return f"{value} byte"
+
+
 @dataclass(frozen=True)
 class QuotaRecord:
     name: str
@@ -180,6 +253,33 @@ class QuotaRecord:
     state: str
     usage_state: str
     usage_percentage: str
+    id: str = ""
+
+
+@dataclass(frozen=True)
+class CapacityBlockGroupAffinity:
+    service: str
+    platform: str
+    fabric: str
+
+
+@dataclass(frozen=True)
+class CapacityBlockGroupRecord:
+    id: str
+    parent_id: str
+    region: str
+    service: str
+    platform: str
+    fabric: str
+    current_limit: int
+    usage: int
+    state: str
+    usage_state: str
+    usage_percentage: str
+
+    @property
+    def remaining(self) -> int:
+        return max(self.current_limit - self.usage, 0)
 
 
 @dataclass(frozen=True)
@@ -209,6 +309,7 @@ class QuotaRequirement:
     region: str
     required: int
     reason: str
+    capacity_block_group_affinity: CapacityBlockGroupAffinity | None = None
 
 
 @dataclass(frozen=True)
@@ -229,6 +330,7 @@ class AggregatedQuotaRequirement:
     required: int
     reason: str
     contributors: tuple[QuotaContributor, ...] = ()
+    capacity_block_group_affinity: CapacityBlockGroupAffinity | None = None
 
 
 @dataclass(frozen=True)
@@ -250,6 +352,42 @@ class QuotaCheck:
     source_scope: str
     description: str
     contributors: tuple[QuotaContributor, ...] = ()
+    capacity_block_group_available: int | None = None
+    capacity_block_group_ids: tuple[str, ...] = ()
+    tenant_quota_id: str = ""
+    project_quota_id: str = ""
+
+
+@dataclass(frozen=True)
+class QuotaRequestChange:
+    container_id: str
+    container_scope: str
+    quota_name: str
+    region: str
+    current_limit: int | None
+    current_usage: int
+    required: int
+    requested_limit: int
+    unit: str
+    quota_id: str = ""
+
+
+@dataclass(frozen=True)
+class QuotaRequestFailure:
+    change: QuotaRequestChange
+    message: str
+    permission_denied: bool = False
+
+
+@dataclass(frozen=True)
+class QuotaRequestResult:
+    planned_changes: tuple[QuotaRequestChange, ...]
+    submitted_changes: tuple[QuotaRequestChange, ...] = ()
+    failed_changes: tuple[QuotaRequestFailure, ...] = ()
+
+    @property
+    def permission_denied_failures(self) -> tuple[QuotaRequestFailure, ...]:
+        return tuple(item for item in self.failed_changes if item.permission_denied)
 
 
 @dataclass(frozen=True)
@@ -315,6 +453,27 @@ def _format_amount(amount: int | None, unit: str) -> str:
                 return f"{value:.1f} {suffix}" if suffix != "B" else f"{int(value)} {suffix}"
             value /= 1024
     return str(amount)
+
+
+def _available_quota(limit: int | None, usage: int | None) -> int | None:
+    if limit is None:
+        return None
+    return max(limit - int(usage or 0), 0)
+
+
+def _is_not_found_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "not found" in message or "statuscode.not_found" in message
+
+
+def _is_permission_denied_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return (
+        "permission denied" in message
+        or "permissiondenied" in message
+        or "permission_denied" in message
+        or "unauthorizedmany" in message
+    )
 
 
 def _sorted_quota_regions(
@@ -544,10 +703,135 @@ def format_quota_report_lines(
     return lines
 
 
+def plan_quota_request_changes(report: QuotaReport) -> tuple[QuotaRequestChange, ...]:
+    grouped: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    for item in report.insufficient_checks:
+        scope_specs = (
+            (
+                "tenant",
+                report.tenant_id,
+                item.tenant_limit,
+                item.tenant_usage,
+                item.tenant_quota_id,
+            ),
+            (
+                "project",
+                report.project_id,
+                item.project_limit,
+                item.project_usage,
+                item.project_quota_id,
+            ),
+        )
+        for scope, container_id, limit, usage, quota_id in scope_specs:
+            if not container_id or limit is None:
+                continue
+            available = _available_quota(limit, usage)
+            if available is None or available >= item.required:
+                continue
+            key = (scope, container_id, item.quota_name, item.region)
+            state = grouped.setdefault(
+                key,
+                {
+                    "container_scope": scope,
+                    "container_id": container_id,
+                    "quota_name": item.quota_name,
+                    "region": item.region,
+                    "current_limit": limit,
+                    "current_usage": int(usage or 0),
+                    "required": 0,
+                    "unit": item.unit,
+                    "quota_id": _as_text(quota_id),
+                },
+            )
+            state["required"] = int(state["required"]) + item.required
+            if not state["quota_id"] and quota_id:
+                state["quota_id"] = _as_text(quota_id)
+
+    planned = [
+        QuotaRequestChange(
+            container_id=str(state["container_id"]),
+            container_scope=str(state["container_scope"]),
+            quota_name=str(state["quota_name"]),
+            region=str(state["region"]),
+            current_limit=cast(int | None, state["current_limit"]),
+            current_usage=int(state["current_usage"]),
+            required=int(state["required"]),
+            requested_limit=max(
+                int(state["current_limit"] or 0),
+                int(state["current_usage"]) + int(state["required"]),
+            ),
+            unit=str(state["unit"]),
+            quota_id=str(state["quota_id"]),
+        )
+        for _, state in sorted(grouped.items())
+    ]
+    return tuple(planned)
+
+
+def format_quota_request_lines(changes: tuple[QuotaRequestChange, ...]) -> list[str]:
+    if not changes:
+        return []
+    lines = ["Planned direct quota allowance requests for confirmed shortages:"]
+    for item in changes:
+        current_limit = _format_amount(item.current_limit, item.unit)
+        current_usage = _format_amount(item.current_usage, item.unit)
+        requested_limit = _format_amount(item.requested_limit, item.unit)
+        lines.append(
+            "  - "
+            f"{item.container_scope} {item.container_id}: {item.region} {item.quota_name} "
+            f"target {requested_limit} (current limit {current_limit}, current usage {current_usage})"
+        )
+    return lines
+
+
+def request_quota_allowance_changes(
+    report: QuotaReport,
+    *,
+    context: str = "quota request",
+) -> QuotaRequestResult:
+    changes = plan_quota_request_changes(report)
+    if not changes:
+        return QuotaRequestResult(planned_changes=())
+
+    session = _QuotaSession(context=context, project_id=report.project_id)
+    submitted: list[QuotaRequestChange] = []
+    failures: list[QuotaRequestFailure] = []
+    try:
+        for item in changes:
+            try:
+                session.request_quota_allowance_limit(
+                    parent_id=item.container_id,
+                    quota_name=item.quota_name,
+                    region=item.region,
+                    target_limit=item.requested_limit,
+                    quota_id=item.quota_id,
+                )
+            except Exception as exc:
+                if not _is_permission_denied_error(exc):
+                    raise
+                failures.append(
+                    QuotaRequestFailure(
+                        change=item,
+                        message=str(exc),
+                        permission_denied=True,
+                    )
+                )
+                continue
+            submitted.append(item)
+    finally:
+        session.close()
+    return QuotaRequestResult(
+        planned_changes=changes,
+        submitted_changes=tuple(submitted),
+        failed_changes=tuple(failures),
+    )
+
+
 class _QuotaSession:
     def __init__(self, *, context: str, project_id: str) -> None:
         self._sdk = init_nebius_sdk(parent_id=project_id or None, context=context)
         self._preset_cache: dict[tuple[str, str, str], PlatformPresetResources | None] = {}
+        self._capacity_block_group_cache: dict[str, tuple[CapacityBlockGroupRecord, ...]] = {}
 
     def close(self) -> None:
         self._sdk.sync_close()
@@ -590,10 +874,130 @@ class _QuotaSession:
                         getattr(getattr(status, "usage_state", None), "name", None)
                     ),
                     usage_percentage=_as_text(getattr(status, "usage_percentage", None)),
+                    id=_as_text(getattr(metadata, "id", None)),
                 )
             page_token = _as_text(getattr(response, "next_page_token", None))
             if not page_token:
                 return items
+
+    def request_quota_allowance_limit(
+        self,
+        *,
+        parent_id: str,
+        quota_name: str,
+        region: str,
+        target_limit: int,
+        quota_id: str = "",
+    ) -> str:
+        from nebius.api.nebius.common.v1 import ResourceMetadata
+        from nebius.api.nebius.quotas.v1 import (
+            CreateQuotaAllowanceRequest,
+            GetByNameRequest,
+            QuotaAllowanceServiceClient,
+            QuotaAllowanceSpec,
+            UpdateQuotaAllowanceRequest,
+        )
+
+        client = QuotaAllowanceServiceClient(self._sdk)
+        resolved_quota_id = _as_text(quota_id)
+        if not resolved_quota_id:
+            try:
+                existing = client.get_by_name(
+                    GetByNameRequest(parent_id=parent_id, name=quota_name, region=region)
+                ).wait()
+            except Exception as exc:
+                if not _is_not_found_error(exc):
+                    raise RuntimeError(
+                        f"Failed to look up quota '{quota_name}' in {region} for {parent_id}: {exc}"
+                    ) from exc
+            else:
+                resolved_quota_id = _as_text(getattr(getattr(existing, "metadata", None), "id", None))
+
+        spec = QuotaAllowanceSpec(limit=target_limit, region=region)
+        if resolved_quota_id:
+            try:
+                operation = client.update(
+                    UpdateQuotaAllowanceRequest(
+                        metadata=ResourceMetadata(
+                            id=resolved_quota_id,
+                            parent_id=parent_id,
+                            name=quota_name,
+                        ),
+                        spec=spec,
+                    )
+                ).wait()
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to request quota '{quota_name}' in {region} for {parent_id}: {exc}"
+                ) from exc
+            return _as_text(getattr(operation, "resource_id", None)) or resolved_quota_id
+
+        try:
+            operation = client.create(
+                CreateQuotaAllowanceRequest(
+                    metadata=ResourceMetadata(parent_id=parent_id, name=quota_name),
+                    spec=spec,
+                )
+            ).wait()
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to create quota request '{quota_name}' in {region} for {parent_id}: {exc}"
+            ) from exc
+        return _as_text(getattr(operation, "resource_id", None))
+
+    def list_capacity_block_groups(self, *, parent_id: str) -> tuple[CapacityBlockGroupRecord, ...]:
+        if parent_id in self._capacity_block_group_cache:
+            return self._capacity_block_group_cache[parent_id]
+
+        from nebius.api.nebius.capacity.v1 import (
+            CapacityBlockGroupServiceClient,
+            ListCapacityBlockGroupsRequest,
+        )
+
+        client = CapacityBlockGroupServiceClient(self._sdk)
+        page_token = ""
+        items: list[CapacityBlockGroupRecord] = []
+        while True:
+            response = client.list(
+                ListCapacityBlockGroupsRequest(
+                    parent_id=parent_id,
+                    page_size=200,
+                    page_token=page_token,
+                )
+            ).wait()
+            for item in list(getattr(response, "items", []) or []):
+                metadata = getattr(item, "metadata", None)
+                status = getattr(item, "status", None)
+                affinity = getattr(status, "resource_affinity", None)
+                compute_affinity = getattr(affinity, "compute_v1", None)
+                region = _as_text(getattr(status, "region", None))
+                service = _as_text(getattr(status, "service", None)).lower()
+                platform = _as_text(getattr(compute_affinity, "platform", None)).lower()
+                fabric = _as_text(getattr(compute_affinity, "fabric", None)).lower()
+                if not region or not service or not platform or not fabric:
+                    continue
+                items.append(
+                    CapacityBlockGroupRecord(
+                        id=_as_text(getattr(metadata, "id", None)),
+                        parent_id=_as_text(getattr(metadata, "parent_id", None)),
+                        region=region,
+                        service=service,
+                        platform=platform,
+                        fabric=fabric,
+                        current_limit=int(getattr(status, "current_limit", 0) or 0),
+                        usage=int(getattr(status, "usage", 0) or 0),
+                        state=_as_text(getattr(getattr(status, "state", None), "name", None)),
+                        usage_state=_as_text(
+                            getattr(getattr(status, "usage_state", None), "name", None)
+                        ),
+                        usage_percentage=_as_text(getattr(status, "usage_percentage", None)),
+                    )
+                )
+            page_token = _as_text(getattr(response, "next_page_token", None))
+            if not page_token:
+                resolved = tuple(items)
+                self._capacity_block_group_cache[parent_id] = resolved
+                return resolved
 
     def preset_resources(
         self,
@@ -642,6 +1046,7 @@ def _evaluate_requirement(
     *,
     tenant_quotas: dict[tuple[str, str], QuotaRecord],
     project_quotas: dict[tuple[str, str], QuotaRecord],
+    capacity_block_groups: tuple[CapacityBlockGroupRecord, ...] | None = (),
 ) -> QuotaCheck:
     key = (requirement.quota_name, requirement.region)
     tenant = tenant_quotas.get(key)
@@ -652,29 +1057,79 @@ def _evaluate_requirement(
     project_limit = project.limit if project is not None else None
     project_usage = project.usage if project is not None else None
 
-    tenant_available = (
-        max(tenant_limit - int(tenant_usage or 0), 0) if tenant_limit is not None else None
-    )
-    project_available = (
-        max(project_limit - int(project_usage or 0), 0) if project_limit is not None else None
-    )
+    tenant_available = _available_quota(tenant_limit, tenant_usage)
+    project_available = _available_quota(project_limit, project_usage)
 
     if tenant_available is not None and project_available is not None:
-        available = min(tenant_available, project_available)
+        regular_available = min(tenant_available, project_available)
         source_scope = "tenant+project"
     elif project_available is not None:
-        available = project_available
+        regular_available = project_available
         source_scope = "project"
     elif tenant_available is not None:
-        available = tenant_available
+        regular_available = tenant_available
         source_scope = "tenant"
     else:
-        available = None
+        regular_available = None
         source_scope = "unresolved"
 
     record = project or tenant
     unit = record.unit if record is not None else ""
     description = record.description if record is not None else ""
+    cbg_resolved, cbg_available, cbg_ids = _capacity_block_group_availability(
+        requirement,
+        capacity_block_groups=capacity_block_groups,
+    )
+
+    available = regular_available
+    sufficient = (requirement.required <= regular_available) if regular_available is not None else None
+    if _requirement_supports_capacity_block_group(requirement):
+        if regular_available is not None and regular_available >= requirement.required:
+            available = regular_available
+            sufficient = True
+        elif not cbg_resolved:
+            available = None
+            sufficient = None
+            source_scope = "unresolved"
+        elif regular_available is None:
+            if cbg_available is not None and cbg_available >= requirement.required:
+                available = cbg_available
+                sufficient = True
+                source_scope = "capacity-block-group"
+            else:
+                available = None
+                sufficient = None
+                source_scope = "unresolved"
+        elif cbg_available is None:
+            available = regular_available
+            sufficient = requirement.required <= regular_available
+        elif cbg_available >= requirement.required:
+            available = cbg_available
+            sufficient = True
+            source_scope = _combine_source_scope(source_scope, "capacity-block-group")
+        elif regular_available > 0 and cbg_available > 0:
+            if regular_available + cbg_available >= requirement.required:
+                available = None
+                sufficient = None
+                source_scope = "unresolved"
+            else:
+                available = max(regular_available, cbg_available)
+                sufficient = False
+                source_scope = _combine_source_scope(source_scope, "capacity-block-group")
+        else:
+            available = max(regular_available, cbg_available)
+            sufficient = False
+            source_scope = _combine_source_scope(source_scope, "capacity-block-group")
+    elif regular_available is not None:
+        available = regular_available
+        sufficient = requirement.required <= regular_available
+    else:
+        available = None
+        sufficient = None
+        source_scope = "unresolved"
+
+    if cbg_ids and not description:
+        description = "Matching active Capacity Block Group availability"
 
     return QuotaCheck(
         component_id=requirement.component_id,
@@ -686,7 +1141,7 @@ def _evaluate_requirement(
         reason=requirement.reason,
         unit=unit,
         available=available,
-        sufficient=(requirement.required <= available) if available is not None else None,
+        sufficient=sufficient,
         tenant_limit=tenant_limit,
         tenant_usage=tenant_usage,
         project_limit=project_limit,
@@ -694,6 +1149,10 @@ def _evaluate_requirement(
         source_scope=source_scope,
         description=description,
         contributors=requirement.contributors,
+        capacity_block_group_available=cbg_available,
+        capacity_block_group_ids=cbg_ids,
+        tenant_quota_id=tenant.id if tenant is not None else "",
+        project_quota_id=project.id if project is not None else "",
     )
 
 
@@ -711,6 +1170,7 @@ def _regionalize_requirement(
         required=requirement.required,
         reason=requirement.reason,
         contributors=requirement.contributors,
+        capacity_block_group_affinity=requirement.capacity_block_group_affinity,
     )
 
 
@@ -719,6 +1179,7 @@ def _regional_availability_for_requirement(
     *,
     tenant_quotas: dict[tuple[str, str], QuotaRecord],
     project_quotas: dict[tuple[str, str], QuotaRecord],
+    capacity_block_groups: tuple[CapacityBlockGroupRecord, ...] | None,
     regions: tuple[str, ...],
     current_region: str,
 ) -> RegionalQuotaAvailability:
@@ -727,6 +1188,7 @@ def _regional_availability_for_requirement(
             _regionalize_requirement(requirement, region=region),
             tenant_quotas=tenant_quotas,
             project_quotas=project_quotas,
+            capacity_block_groups=capacity_block_groups,
         )
         for region in regions
     )
@@ -747,9 +1209,12 @@ def _regional_availability_for_requirement(
 def _aggregate_requirements(
     requirements: list[QuotaRequirement],
 ) -> tuple[AggregatedQuotaRequirement, ...]:
-    grouped: dict[tuple[str, str], list[QuotaRequirement]] = {}
+    grouped: dict[tuple[str, str, CapacityBlockGroupAffinity | None], list[QuotaRequirement]] = {}
     for item in requirements:
-        grouped.setdefault((item.quota_name, item.region), []).append(item)
+        grouped.setdefault(
+            (item.quota_name, item.region, item.capacity_block_group_affinity),
+            [],
+        ).append(item)
 
     aggregated: list[AggregatedQuotaRequirement] = []
     for items in grouped.values():
@@ -786,6 +1251,7 @@ def _aggregate_requirements(
                 required=sum(item.required for item in items),
                 reason=reason,
                 contributors=contributors,
+                capacity_block_group_affinity=items[0].capacity_block_group_affinity,
             )
         )
     return tuple(aggregated)
@@ -800,6 +1266,7 @@ def _append_requirement(
     region: str,
     required: int | None,
     reason: str,
+    capacity_block_group_affinity: CapacityBlockGroupAffinity | None = None,
 ) -> None:
     if required is None or required <= 0:
         return
@@ -812,6 +1279,7 @@ def _append_requirement(
             region=region,
             required=required,
             reason=reason,
+            capacity_block_group_affinity=capacity_block_group_affinity,
         )
     )
 
@@ -831,6 +1299,57 @@ def _append_gap(
             message=message,
         )
     )
+
+
+def _requirement_supports_capacity_block_group(
+    requirement: AggregatedQuotaRequirement,
+) -> bool:
+    return requirement.capacity_block_group_affinity is not None and (
+        requirement.quota_name == "compute.gpucluster.count"
+        or requirement.quota_name.startswith("compute.instance.gpu.")
+    )
+
+
+def _capacity_block_group_availability(
+    requirement: AggregatedQuotaRequirement,
+    *,
+    capacity_block_groups: tuple[CapacityBlockGroupRecord, ...] | None,
+) -> tuple[bool, int | None, tuple[str, ...]]:
+    if not _requirement_supports_capacity_block_group(requirement):
+        return True, None, ()
+    if capacity_block_groups is None:
+        return False, None, ()
+
+    affinity = requirement.capacity_block_group_affinity
+    assert affinity is not None
+
+    matches = tuple(
+        item
+        for item in capacity_block_groups
+        if item.state == "STATE_ACTIVE"
+        and item.region == requirement.region
+        and item.service == affinity.service
+        and item.platform == affinity.platform
+        and item.fabric == affinity.fabric
+    )
+    if not matches:
+        return True, None, ()
+
+    if requirement.quota_name == "compute.gpucluster.count":
+        available = sum(1 for item in matches if item.remaining > 0)
+    else:
+        available = sum(item.remaining for item in matches)
+    return True, available, tuple(item.id for item in matches if item.id)
+
+
+def _combine_source_scope(scope: str, extra: str) -> str:
+    if not scope:
+        return extra
+    if scope == extra:
+        return scope
+    if extra in scope.split("+"):
+        return scope
+    return f"{scope}+{extra}"
 
 
 def _estimate_jump_host_requirements(
@@ -963,6 +1482,15 @@ def _estimate_vm_requirements(
     gpu_cluster_enabled = _mapping_bool(inputs, "gpu_cluster_enabled", default=False)
     gpu_cluster_id = _mapping_text(inputs, "gpu_cluster_id")
     gpu_cluster_fabric = _mapping_text(inputs, "gpu_cluster_infiniband_fabric")
+    gpu_capacity_affinity = (
+        _capacity_block_group_affinity(
+            service="compute",
+            platform=platform,
+            fabric=gpu_cluster_fabric,
+        )
+        if gpu_cluster_enabled and gpu_cluster_fabric
+        else None
+    )
 
     resources = (
         session.preset_resources(project_id=project_id, platform=platform, preset=preset)
@@ -1030,6 +1558,7 @@ def _estimate_vm_requirements(
                     region=region,
                     required=resources.gpu_count,
                     reason=f"{resources.gpu_count} GPU(s) from {platform}/{preset}",
+                    capacity_block_group_affinity=gpu_capacity_affinity,
                 )
             else:
                 _append_gap(
@@ -1134,6 +1663,7 @@ def _estimate_vm_requirements(
             region=region,
             required=1,
             reason=f"one new GPU cluster in fabric {gpu_cluster_fabric}",
+            capacity_block_group_affinity=gpu_capacity_affinity,
         )
 
 
@@ -1388,15 +1918,25 @@ def _estimate_mk8s_requirements(
                         required=resources.vcpu_count * cpu_count,
                         reason=f"{cpu_count} CPU node(s) at {cpu_platform}/{cpu_preset}",
                     )
-            _append_gap(
-                gaps,
-                component_id=component_id,
-                instance_id=instance_id,
-                message=(
-                    "MK8s node-group boot disk size/type is not exposed by current module inputs; "
-                    "disk-size quotas were not checked"
-                ),
-            )
+            cpu_disk_type = _disk_quota_suffix(_mk8s_effective_boot_disk_type(inputs, gpu=False))
+            cpu_disk_bytes = _mk8s_effective_boot_disk_bytes(inputs, gpu=False)
+            if cpu_disk_type and cpu_disk_bytes is not None:
+                _append_requirement(
+                    requirements,
+                    component_id=component_id,
+                    instance_id=instance_id,
+                    quota_name=f"compute.disk.size.{cpu_disk_type}",
+                    region=region,
+                    required=cpu_count * cpu_disk_bytes,
+                    reason=f"{cpu_count} CPU node boot disk(s) at {_format_disk_size_bytes(cpu_disk_bytes)}",
+                )
+            else:
+                _append_gap(
+                    gaps,
+                    component_id=component_id,
+                    instance_id=instance_id,
+                    message=_mk8s_boot_disk_gap_message(gpu=False),
+                )
 
     gpu_enabled = _mapping_bool(inputs, "gpu_enabled", default=False)
     if not gpu_enabled:
@@ -1409,6 +1949,11 @@ def _estimate_mk8s_requirements(
     gpu_autoscaling = _path_value(inputs.get("mk8s_gpu_node_group_overrides"), "autoscaling")
     gpu_preemptible = _mk8s_effective_preemptible(inputs, gpu=True)
     gpu_public_ips = _mk8s_effective_public_ips(inputs, gpu=True)
+    gpu_capacity_affinity = _capacity_block_group_affinity(
+        service="compute",
+        platform=gpu_platform,
+        fabric=_mapping_text(inputs, "infiniband_fabric"),
+    )
 
     if _mapping_text(inputs, "infiniband_fabric"):
         _append_requirement(
@@ -1419,6 +1964,7 @@ def _estimate_mk8s_requirements(
             region=region,
             required=1,
             reason="one GPU cluster for InfiniBand fabric",
+            capacity_block_group_affinity=gpu_capacity_affinity,
         )
 
     if group_count is None or group_count <= 0:
@@ -1524,6 +2070,7 @@ def _estimate_mk8s_requirements(
                     region=region,
                     required=resources.gpu_count * total_gpu_nodes,
                     reason=f"{total_gpu_nodes} GPU node(s) at {gpu_platform}/{gpu_preset}",
+                    capacity_block_group_affinity=gpu_capacity_affinity,
                 )
             else:
                 _append_gap(
@@ -1535,15 +2082,25 @@ def _estimate_mk8s_requirements(
                         "GPU-type quota was not checked"
                     ),
                 )
-    _append_gap(
-        gaps,
-        component_id=component_id,
-        instance_id=instance_id,
-        message=(
-            "MK8s GPU node boot disk size/type is not exposed by current module inputs; "
-            "disk-size quotas were not checked"
-        ),
-    )
+    gpu_disk_type = _disk_quota_suffix(_mk8s_effective_boot_disk_type(inputs, gpu=True))
+    gpu_disk_bytes = _mk8s_effective_boot_disk_bytes(inputs, gpu=True)
+    if gpu_disk_type and gpu_disk_bytes is not None:
+        _append_requirement(
+            requirements,
+            component_id=component_id,
+            instance_id=instance_id,
+            quota_name=f"compute.disk.size.{gpu_disk_type}",
+            region=region,
+            required=total_gpu_nodes * gpu_disk_bytes,
+            reason=f"{total_gpu_nodes} GPU node boot disk(s) at {_format_disk_size_bytes(gpu_disk_bytes)}",
+        )
+    else:
+        _append_gap(
+            gaps,
+            component_id=component_id,
+            instance_id=instance_id,
+            message=_mk8s_boot_disk_gap_message(gpu=True),
+        )
 
 
 def _requirements_for_component(
@@ -1715,6 +2272,7 @@ def assess_live_quotas(
     checks: tuple[QuotaCheck, ...] = ()
     regional_availability: tuple[RegionalQuotaAvailability, ...] = ()
     gaps: list[QuotaCoverageGap] = []
+    capacity_block_groups: tuple[CapacityBlockGroupRecord, ...] | None = ()
     try:
         try:
             tenant_quotas = session.list_quotas(parent_id=tenant_id)
@@ -1726,6 +2284,11 @@ def assess_live_quotas(
         except Exception as exc:
             project_quotas = {}
             errors.append(f"project quota lookup failed for {project_id}: {exc}")
+        try:
+            capacity_block_groups = session.list_capacity_block_groups(parent_id=tenant_id)
+        except Exception as exc:
+            capacity_block_groups = None
+            errors.append(f"tenant capacity block group lookup failed for {tenant_id}: {exc}")
 
         requirements: list[QuotaRequirement] = []
         for row in enabled_rows:
@@ -1762,6 +2325,7 @@ def assess_live_quotas(
                 item,
                 tenant_quotas=tenant_quotas,
                 project_quotas=project_quotas,
+                capacity_block_groups=capacity_block_groups,
             )
             for item in aggregated_requirements
         )
@@ -1776,6 +2340,7 @@ def assess_live_quotas(
                     item,
                     tenant_quotas=tenant_quotas,
                     project_quotas=project_quotas,
+                    capacity_block_groups=capacity_block_groups,
                     regions=regions,
                     current_region=region_id,
                 )

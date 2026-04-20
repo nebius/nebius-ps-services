@@ -98,6 +98,8 @@ module "mk8s" {
   - `cpu_nodes_platform` (required when CPU node group is enabled)
   - `cpu_nodes_preset` (required when CPU node group is enabled)
   - `cpu_nodes_os`
+  - `cpu_nodes_boot_disk_size_gib`
+  - `cpu_nodes_boot_disk_type`
   - `cpu_nodes_preemptible`
   - `cpu_nodes_public_ips`
 - GPU controls:
@@ -107,6 +109,8 @@ module "mk8s" {
   - `gpu_nodes_platform`
   - `gpu_nodes_preset`
   - `gpu_nodes_os`
+  - `gpu_nodes_boot_disk_size_gib`
+  - `gpu_nodes_boot_disk_type`
   - `gpu_nodes_preemptible`
   - `gpu_nodes_public_ips`
   - `gpu_stack_source`
@@ -166,6 +170,11 @@ used directly from the example directory.
 - `cpu_nodes_os`, `gpu_stack_source`, `gpu_stack_preset`, and `gpu_nodes_os`
   are intended to be materialized by `nebius-cxcli` from the live MK8s
   compatibility matrix instead of guessed in Terraform.
+- `cpu_nodes_boot_disk_size_gib`, `cpu_nodes_boot_disk_type`,
+  `gpu_nodes_boot_disk_size_gib`, and `gpu_nodes_boot_disk_type` are optional
+  first-class inputs for callers that want deterministic node-storage settings
+  and exact pre-deploy quota estimation. When they are unset, the provider or a
+  full `template.boot_disk` override remains authoritative.
 - If `mk8s_cluster_public_endpoint = false`, local `deploy` / `flux apply` /
   `flux bootstrap` / `destroy` app flows still work, but only from a machine
   that already has private network reachability to the MK8s control-plane

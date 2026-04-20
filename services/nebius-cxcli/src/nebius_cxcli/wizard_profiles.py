@@ -57,6 +57,7 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
         "inputs.k8s_version": {
             "options": {
                 "from": "mk8s_control_plane_versions",
+                "auto_select_first": True,
             }
         },
         "inputs.cpu_nodes_platform": {
@@ -116,6 +117,18 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
                 "auto_select_first": True,
             },
             "prompt": False,
+        },
+        "inputs.cpu_nodes_boot_disk_type": {
+            "options": {
+                "from": "mk8s_boot_disk_types",
+                "auto_select_first": True,
+            }
+        },
+        "inputs.gpu_nodes_boot_disk_type": {
+            "options": {
+                "from": "mk8s_boot_disk_types",
+                "auto_select_first": True,
+            }
         },
         **_suppressed_prompt_fields(
             "inputs.mk8s_cluster_overrides",

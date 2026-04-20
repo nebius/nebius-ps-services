@@ -614,6 +614,7 @@ def delete_rendered_flux(
     paths: ProjectPaths,
     *,
     extra_env: dict[str, str] | None = None,
+    emit: Callable[[str], None] | None = None,
 ) -> None:
     """Delete rendered Flux manifests in local destroy mode."""
     if not flux_dir_has_rendered_resources(paths.flux_dir):
@@ -641,6 +642,13 @@ def delete_rendered_flux(
         if guidance:
             message = f"{message}\n{guidance}"
         raise RuntimeError(message)
+    if not flux_crds_installed(extra_env=extra_env):
+        if emit is not None:
+            emit(
+                "Flux resource APIs are not installed in the target cluster; "
+                "skipping rendered Flux resource deletion."
+            )
+        return
 
     with tempfile.TemporaryDirectory(prefix="nebius-cxcli-kubectl-delete-") as cache_dir:
         cache_path = Path(cache_dir)
@@ -741,13 +749,16 @@ def _get_namespace_payload(
     env = os.environ.copy()
     if extra_env:
         env.update(extra_env)
-    result = subprocess.run(
-        ["kubectl", "get", "namespace", namespace, "-o", "json"],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=20,
-    )
+    try:
+        result = subprocess.run(
+            ["kubectl", "get", "namespace", namespace, "-o", "json"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    except subprocess.TimeoutExpired:
+        return None
     if result.returncode != 0:
         return None
     try:
@@ -765,13 +776,16 @@ def _get_crd_payload(
     env = os.environ.copy()
     if extra_env:
         env.update(extra_env)
-    result = subprocess.run(
-        ["kubectl", "get", "crd", name, "-o", "json"],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=20,
-    )
+    try:
+        result = subprocess.run(
+            ["kubectl", "get", "crd", name, "-o", "json"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    except subprocess.TimeoutExpired:
+        return None
     if result.returncode != 0:
         return None
     try:
@@ -997,13 +1011,17 @@ def wait_for_flux_resource_apis(
                     "--ignore-not-found",
                 ]
             )
-            result = subprocess.run(
-                cmd,
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=20,
-            )
+            try:
+                result = subprocess.run(
+                    cmd,
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                )
+            except subprocess.TimeoutExpired:
+                missing.append(resource_type)
+                continue
             if result.returncode != 0:
                 missing.append(resource_type)
         if not missing:

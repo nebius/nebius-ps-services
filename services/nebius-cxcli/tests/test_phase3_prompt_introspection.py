@@ -142,3 +142,109 @@ def test_run_component_field_wizard_keeps_chart_defaults_virtual_on_stop(monkeyp
     assert completed is False
     updated_payload = yaml.safe_load(updated_yaml)
     assert updated_payload["apps"]["charts"][0]["values"] == {}
+
+
+def test_run_component_field_wizard_uses_scope_specific_phase_defaults(monkeypatch) -> None:
+    prompts: list[tuple[str, bool]] = []
+
+    def _capture_continue_phase(label: str, *, default: bool = True) -> bool:
+        prompts.append((label, default))
+        return False
+
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", _capture_continue_phase)
+
+    infra_entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="mk8s",
+        source="../../platform-infra/modules/mk8s",
+    )
+    app_entry = ComponentEntry(
+        id="gateway-helm",
+        scope="apps",
+        config_path="apps.platform.gateway-helm",
+        description="gateway",
+        group="platform",
+        source="oci://docker.io/envoyproxy/gateway-helm",
+        version="1.0.0",
+        default_namespace="envoy-gateway-system",
+        default_release_name="envoy-gateway",
+    )
+
+    infra_payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "eu-north1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "inputs": {},
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+    app_payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "eu-north1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {"components": []},
+        "apps": {
+            "charts": [
+                {
+                    "id": "gateway-helm",
+                    "instance_id": "gateway-helm",
+                    "group": "platform",
+                    "enabled": True,
+                    "repo": "oci://docker.io/envoyproxy",
+                    "version": "1.0.0",
+                    "namespace": "envoy-gateway-system",
+                    "release-name": "envoy-gateway",
+                    "values": {},
+                }
+            ]
+        },
+    }
+
+    _updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=yaml.safe_dump(infra_payload, sort_keys=False),
+        selected_infra={"mk8s"},
+        selected_apps=set(),
+        infra_entries=(infra_entry,),
+        app_entries=(),
+        provider_lookup=None,
+    )
+    assert completed is True
+
+    _updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=yaml.safe_dump(app_payload, sort_keys=False),
+        selected_infra=set(),
+        selected_apps={"gateway-helm"},
+        infra_entries=(),
+        app_entries=(app_entry,),
+        provider_lookup=None,
+    )
+    assert completed is True
+
+    assert prompts == [
+        ("Configure 'mk8s' component fields now?", True),
+        ("Configure 'gateway-helm' component fields now?", False),
+    ]

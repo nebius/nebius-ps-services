@@ -6,6 +6,7 @@ import copy
 import os
 import re
 import sys
+from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from enum import StrEnum
@@ -37,9 +38,32 @@ DEFAULT_FLUX_RELEASE_TIMEOUT = "5m"
 DEFAULT_TERRAFORM_VERSION = "1.14.1"
 GO_DURATION_RE = re.compile(r"(?:\d+(?:\.\d+)?(?:ns|us|µs|ms|s|m|h))+")
 LINUX_USER_NAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
+COMPUTE_DISK_TYPES = frozenset(
+    {
+        "NETWORK_SSD",
+        "NETWORK_HDD",
+        "NETWORK_SSD_NON_REPLICATED",
+        "NETWORK_SSD_IO_M3",
+    }
+)
 
 _CLI_COMPONENT_SOURCES_FILE_OVERRIDE: Path | None = None
 _CLI_COMPONENT_SOURCES_PROFILE_OVERRIDE: SourceProfile | None = None
+
+
+class _MultilineYamlDumper(yaml.SafeDumper):
+    pass
+
+
+def _represent_multiline_yaml_str(
+    dumper: yaml.SafeDumper,
+    data: str,
+) -> yaml.nodes.ScalarNode:
+    style = "|" if "\n" in data else None
+    return dumper.represent_scalar("tag:yaml.org,2002:str", data, style=style)
+
+
+_MultilineYamlDumper.add_representer(str, _represent_multiline_yaml_str)
 
 
 class SourceProfile(StrEnum):
@@ -97,6 +121,33 @@ class Mk8sGpuImagePreferenceSettings:
 
 
 @dataclass(frozen=True)
+class FluxPostRenderPatchTarget:
+    group: str = ""
+    version: str = ""
+    kind: str = ""
+    name: str = ""
+    namespace: str = ""
+
+
+@dataclass(frozen=True)
+class FluxPostRenderPatch:
+    target: FluxPostRenderPatchTarget = FluxPostRenderPatchTarget()
+    patch: str = ""
+
+
+@dataclass(frozen=True)
+class Mk8sGpuAppDefaultSet:
+    name: str
+    defaults: tuple[ComponentDefault, ...] = ()
+
+
+@dataclass(frozen=True)
+class Mk8sGpuAppPostRenderPatchSet:
+    name: str
+    patches: tuple[FluxPostRenderPatch, ...] = ()
+
+
+@dataclass(frozen=True)
 class Mk8sGpuAppRule:
     gpu_stack_source: str = ""
     gpu_cluster_enabled: bool | None = None
@@ -104,6 +155,9 @@ class Mk8sGpuAppRule:
     match_presets: tuple[str, ...] = ()
     auto_enable: bool = False
     defaults: tuple[ComponentDefault, ...] = ()
+    defaults_from: tuple[str, ...] = ()
+    post_render_patches: tuple[FluxPostRenderPatch, ...] = ()
+    post_render_patches_from: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -155,8 +209,37 @@ class Mk8sGpuSettings:
 @dataclass(frozen=True)
 class Mk8sGpuAppPolicy:
     role: str = ""
+    default_sets: tuple[Mk8sGpuAppDefaultSet, ...] = ()
+    post_render_patch_sets: tuple[Mk8sGpuAppPostRenderPatchSet, ...] = ()
     rules: tuple[Mk8sGpuAppRule, ...] = ()
     install_after: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Mk8sBootDiskRule:
+    min_vcpu: int | None = None
+    max_vcpu: int | None = None
+    min_memory_gib: int | None = None
+    max_memory_gib: int | None = None
+    min_gpu: int | None = None
+    max_gpu: int | None = None
+    gpu_cluster_enabled: bool | None = None
+    match_platforms: tuple[str, ...] = ()
+    match_presets: tuple[str, ...] = ()
+    size_gib: int | None = None
+    type: str = ""
+
+
+@dataclass(frozen=True)
+class Mk8sNodeBootDiskPolicy:
+    default_type: str = ""
+    rules: tuple[Mk8sBootDiskRule, ...] = ()
+
+
+@dataclass(frozen=True)
+class Mk8sBootDiskSettings:
+    cpu: Mk8sNodeBootDiskPolicy = Mk8sNodeBootDiskPolicy()
+    gpu: Mk8sNodeBootDiskPolicy = Mk8sNodeBootDiskPolicy()
 
 
 @dataclass(frozen=True)
@@ -210,6 +293,7 @@ class TFModuleSource:
     handoff: Handoff | None = None
     status: StatusWatcher | None = None
     mk8s_gpu: Mk8sGpuSettings = Mk8sGpuSettings()
+    mk8s_boot_disks: Mk8sBootDiskSettings = Mk8sBootDiskSettings()
     vm_images: VmImagePreferenceSettings = VmImagePreferenceSettings()
 
 
@@ -561,6 +645,133 @@ def _parse_value_overrides(
     )
 
 
+def _parse_flux_post_render_patch_target(
+    raw: Any,
+    *,
+    field_label: str,
+) -> FluxPostRenderPatchTarget:
+    if raw is None:
+        raise ValueError(f"{field_label} must be a mapping")
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {"group", "version", "kind", "name", "namespace"}
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    kind = _as_text(raw.get("kind"))
+    if not kind:
+        raise ValueError(f"{field_label}.kind is required")
+    return FluxPostRenderPatchTarget(
+        group=_as_text(raw.get("group")),
+        version=_as_text(raw.get("version")),
+        kind=kind,
+        name=_as_text(raw.get("name")),
+        namespace=_as_text(raw.get("namespace")),
+    )
+
+
+def _parse_flux_post_render_patch_text(
+    raw: Any,
+    *,
+    field_label: str,
+) -> str:
+    if raw is None:
+        raise ValueError(f"{field_label} is required")
+    if isinstance(raw, str):
+        patch = raw.strip()
+        if not patch:
+            raise ValueError(f"{field_label} must not be empty")
+        return patch
+    if not isinstance(raw, (dict, list)):
+        raise ValueError(f"{field_label} must be a string, mapping, or list")
+    patch = yaml.dump(raw, Dumper=_MultilineYamlDumper, sort_keys=False).strip()
+    if not patch:
+        raise ValueError(f"{field_label} must not be empty")
+    return patch
+
+
+def _parse_flux_post_render_patches(
+    raw: Any,
+    *,
+    field_label: str,
+) -> tuple[FluxPostRenderPatch, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ValueError(f"{field_label} must be a list")
+    patches: list[FluxPostRenderPatch] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ValueError(f"{field_label}[{index}] must be a mapping")
+        supported_keys = {"target", "patch"}
+        unknown = sorted(str(key) for key in item if str(key) not in supported_keys)
+        if unknown:
+            raise ValueError(f"{field_label}[{index}] has unsupported field(s): " + ", ".join(unknown))
+        patches.append(
+            FluxPostRenderPatch(
+                target=_parse_flux_post_render_patch_target(
+                    item.get("target"),
+                    field_label=f"{field_label}[{index}].target",
+                ),
+                patch=_parse_flux_post_render_patch_text(
+                    item.get("patch"),
+                    field_label=f"{field_label}[{index}].patch",
+                ),
+            )
+        )
+    return tuple(patches)
+
+
+def _parse_named_target_value_override_sets(
+    raw: Any,
+    *,
+    field_label: str,
+    required_prefix: str = "",
+) -> tuple[Mk8sGpuAppDefaultSet, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    sets: list[Mk8sGpuAppDefaultSet] = []
+    for raw_name, raw_defaults in raw.items():
+        name = _as_text(raw_name)
+        if not name:
+            raise ValueError(f"{field_label} keys must not be empty")
+        defaults = _parse_target_value_overrides(
+            raw_defaults,
+            field_label=f"{field_label}.{name}",
+            required_prefix=required_prefix,
+        )
+        if not defaults:
+            raise ValueError(f"{field_label}.{name} must not be empty")
+        sets.append(Mk8sGpuAppDefaultSet(name=name, defaults=defaults))
+    return tuple(sets)
+
+
+def _parse_named_flux_post_render_patch_sets(
+    raw: Any,
+    *,
+    field_label: str,
+) -> tuple[Mk8sGpuAppPostRenderPatchSet, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    sets: list[Mk8sGpuAppPostRenderPatchSet] = []
+    for raw_name, raw_patches in raw.items():
+        name = _as_text(raw_name)
+        if not name:
+            raise ValueError(f"{field_label} keys must not be empty")
+        patches = _parse_flux_post_render_patches(
+            raw_patches,
+            field_label=f"{field_label}.{name}",
+        )
+        if not patches:
+            raise ValueError(f"{field_label}.{name} must not be empty")
+        sets.append(Mk8sGpuAppPostRenderPatchSet(name=name, patches=patches))
+    return tuple(sets)
+
+
 def _parse_portable_local_source_block(
     raw: Any,
     *,
@@ -639,10 +850,184 @@ def _parse_optional_bool(raw: Any, *, field_label: str) -> bool | None:
     return raw
 
 
+def _parse_optional_positive_int(raw: Any, *, field_label: str) -> int | None:
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_label} must be an integer >= 1 when provided") from exc
+    if value < 1:
+        raise ValueError(f"{field_label} must be an integer >= 1 when provided")
+    return value
+
+
+def _parse_optional_disk_type(raw: Any, *, field_label: str) -> str:
+    value = _as_text(raw)
+    if not value:
+        return ""
+    if value not in COMPUTE_DISK_TYPES:
+        supported = ", ".join(sorted(COMPUTE_DISK_TYPES))
+        raise ValueError(f"{field_label} must be one of: {supported}")
+    return value
+
+
+def _parse_mk8s_boot_disk_rules(
+    raw: Any,
+    *,
+    field_label: str,
+) -> tuple[Mk8sBootDiskRule, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ValueError(f"{field_label} must be a list")
+    rules: list[Mk8sBootDiskRule] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ValueError(f"{field_label}[{index}] must be a mapping")
+        supported_keys = {
+            "min_vcpu",
+            "max_vcpu",
+            "min_memory_gib",
+            "max_memory_gib",
+            "min_gpu",
+            "max_gpu",
+            "gpu_cluster_enabled",
+            "match_platforms",
+            "match_presets",
+            "size_gib",
+            "type",
+        }
+        unknown = sorted(str(key) for key in item if str(key) not in supported_keys)
+        if unknown:
+            raise ValueError(f"{field_label}[{index}] has unsupported field(s): " + ", ".join(unknown))
+        min_vcpu = _parse_optional_positive_int(
+            item.get("min_vcpu"),
+            field_label=f"{field_label}[{index}].min_vcpu",
+        )
+        max_vcpu = _parse_optional_positive_int(
+            item.get("max_vcpu"),
+            field_label=f"{field_label}[{index}].max_vcpu",
+        )
+        min_memory_gib = _parse_optional_positive_int(
+            item.get("min_memory_gib"),
+            field_label=f"{field_label}[{index}].min_memory_gib",
+        )
+        max_memory_gib = _parse_optional_positive_int(
+            item.get("max_memory_gib"),
+            field_label=f"{field_label}[{index}].max_memory_gib",
+        )
+        min_gpu = _parse_optional_positive_int(
+            item.get("min_gpu"),
+            field_label=f"{field_label}[{index}].min_gpu",
+        )
+        max_gpu = _parse_optional_positive_int(
+            item.get("max_gpu"),
+            field_label=f"{field_label}[{index}].max_gpu",
+        )
+        if min_vcpu is not None and max_vcpu is not None and min_vcpu > max_vcpu:
+            raise ValueError(f"{field_label}[{index}] min_vcpu cannot exceed max_vcpu")
+        if (
+            min_memory_gib is not None
+            and max_memory_gib is not None
+            and min_memory_gib > max_memory_gib
+        ):
+            raise ValueError(f"{field_label}[{index}] min_memory_gib cannot exceed max_memory_gib")
+        if min_gpu is not None and max_gpu is not None and min_gpu > max_gpu:
+            raise ValueError(f"{field_label}[{index}] min_gpu cannot exceed max_gpu")
+        size_gib = _parse_optional_positive_int(
+            item.get("size_gib"),
+            field_label=f"{field_label}[{index}].size_gib",
+        )
+        disk_type = _parse_optional_disk_type(
+            item.get("type"),
+            field_label=f"{field_label}[{index}].type",
+        )
+        if size_gib is None and not disk_type:
+            raise ValueError(f"{field_label}[{index}] must set size_gib and/or type")
+        rules.append(
+            Mk8sBootDiskRule(
+                min_vcpu=min_vcpu,
+                max_vcpu=max_vcpu,
+                min_memory_gib=min_memory_gib,
+                max_memory_gib=max_memory_gib,
+                min_gpu=min_gpu,
+                max_gpu=max_gpu,
+                gpu_cluster_enabled=_parse_optional_bool(
+                    item.get("gpu_cluster_enabled"),
+                    field_label=f"{field_label}[{index}].gpu_cluster_enabled",
+                ),
+                match_platforms=_parse_string_list(
+                    item.get("match_platforms"),
+                    field_label=f"{field_label}[{index}].match_platforms",
+                ),
+                match_presets=_parse_string_list(
+                    item.get("match_presets"),
+                    field_label=f"{field_label}[{index}].match_presets",
+                ),
+                size_gib=size_gib,
+                type=disk_type,
+            )
+        )
+    return tuple(rules)
+
+
+def _parse_mk8s_node_boot_disk_policy(
+    raw: Any,
+    *,
+    field_label: str,
+) -> Mk8sNodeBootDiskPolicy:
+    if raw is None:
+        return Mk8sNodeBootDiskPolicy()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {"default_type", "rules"}
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    return Mk8sNodeBootDiskPolicy(
+        default_type=_parse_optional_disk_type(
+            raw.get("default_type"),
+            field_label=f"{field_label}.default_type",
+        ),
+        rules=_parse_mk8s_boot_disk_rules(
+            raw.get("rules"),
+            field_label=f"{field_label}.rules",
+        ),
+    )
+
+
+def _parse_mk8s_boot_disk_settings(
+    raw: Any,
+    *,
+    field_label: str,
+) -> Mk8sBootDiskSettings:
+    if raw is None:
+        return Mk8sBootDiskSettings()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {"cpu", "gpu"}
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    return Mk8sBootDiskSettings(
+        cpu=_parse_mk8s_node_boot_disk_policy(
+            raw.get("cpu"),
+            field_label=f"{field_label}.cpu",
+        ),
+        gpu=_parse_mk8s_node_boot_disk_policy(
+            raw.get("gpu"),
+            field_label=f"{field_label}.gpu",
+        ),
+    )
+
+
 def _parse_mk8s_gpu_app_rules(
     raw: Any,
     *,
     field_label: str,
+    available_default_sets: tuple[str, ...] = (),
+    available_post_render_patch_sets: tuple[str, ...] = (),
 ) -> tuple[Mk8sGpuAppRule, ...]:
     if raw is None:
         return ()
@@ -659,6 +1044,9 @@ def _parse_mk8s_gpu_app_rules(
             "match_presets",
             "auto_enable",
             "defaults",
+            "defaults_from",
+            "post_render_patches",
+            "post_render_patches_from",
         }
         unknown = sorted(str(key) for key in item if str(key) not in supported_keys)
         if unknown:
@@ -672,9 +1060,41 @@ def _parse_mk8s_gpu_app_rules(
             field_label=f"{field_label}[{index}].defaults",
             required_prefix="values.",
         )
-        if not auto_enable and not defaults:
+        defaults_from = _parse_string_list(
+            item.get("defaults_from"),
+            field_label=f"{field_label}[{index}].defaults_from",
+        )
+        unknown_default_sets = sorted(name for name in defaults_from if name not in available_default_sets)
+        if unknown_default_sets:
             raise ValueError(
-                f"{field_label}[{index}] must set auto_enable: true and/or defaults"
+                f"{field_label}[{index}].defaults_from references unknown default_set(s): "
+                + ", ".join(unknown_default_sets)
+            )
+        post_render_patches = _parse_flux_post_render_patches(
+            item.get("post_render_patches"),
+            field_label=f"{field_label}[{index}].post_render_patches",
+        )
+        post_render_patches_from = _parse_string_list(
+            item.get("post_render_patches_from"),
+            field_label=f"{field_label}[{index}].post_render_patches_from",
+        )
+        unknown_patch_sets = sorted(
+            name for name in post_render_patches_from if name not in available_post_render_patch_sets
+        )
+        if unknown_patch_sets:
+            raise ValueError(
+                f"{field_label}[{index}].post_render_patches_from references unknown post_render_patch_set(s): "
+                + ", ".join(unknown_patch_sets)
+            )
+        if (
+            not auto_enable
+            and not defaults
+            and not defaults_from
+            and not post_render_patches
+            and not post_render_patches_from
+        ):
+            raise ValueError(
+                f"{field_label}[{index}] must set auto_enable: true, defaults/defaults_from, and/or post_render_patches/post_render_patches_from"
             )
         rule = Mk8sGpuAppRule(
             gpu_stack_source=_parse_mk8s_gpu_stack_source(
@@ -695,6 +1115,9 @@ def _parse_mk8s_gpu_app_rules(
             ),
             auto_enable=bool(auto_enable),
             defaults=defaults,
+            defaults_from=defaults_from,
+            post_render_patches=post_render_patches,
+            post_render_patches_from=post_render_patches_from,
         )
         rules.append(rule)
     return tuple(rules)
@@ -895,7 +1318,13 @@ def _parse_mk8s_gpu_app_policy(
         return Mk8sGpuAppPolicy()
     if not isinstance(raw, dict):
         raise ValueError(f"{field_label} must be a mapping")
-    supported_keys = {"role", "rules", "install_after"}
+    supported_keys = {
+        "role",
+        "default_sets",
+        "post_render_patch_sets",
+        "rules",
+        "install_after",
+    }
     unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
     if unknown:
         raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
@@ -904,11 +1333,24 @@ def _parse_mk8s_gpu_app_policy(
         raise ValueError(
             f"{field_label}.role must be one of: gpu_operator, network_operator, health_checker"
         )
+    default_sets = _parse_named_target_value_override_sets(
+        raw.get("default_sets"),
+        field_label=f"{field_label}.default_sets",
+        required_prefix="values.",
+    )
+    post_render_patch_sets = _parse_named_flux_post_render_patch_sets(
+        raw.get("post_render_patch_sets"),
+        field_label=f"{field_label}.post_render_patch_sets",
+    )
     return Mk8sGpuAppPolicy(
         role=role,
+        default_sets=default_sets,
+        post_render_patch_sets=post_render_patch_sets,
         rules=_parse_mk8s_gpu_app_rules(
             raw.get("rules"),
             field_label=f"{field_label}.rules",
+            available_default_sets=tuple(item.name for item in default_sets),
+            available_post_render_patch_sets=tuple(item.name for item in post_render_patch_sets),
         ),
         install_after=_parse_string_list(
             raw.get("install_after"),
@@ -952,14 +1394,14 @@ def _parse_infra_component_cli(
     field_label: str,
     source_profile: SourceProfile,
     source_root: Path | None = None,
-) -> tuple[Mk8sGpuSettings, VmImagePreferenceSettings]:
+) -> tuple[Mk8sGpuSettings, Mk8sBootDiskSettings, VmImagePreferenceSettings]:
     if raw is None:
-        return Mk8sGpuSettings(), VmImagePreferenceSettings()
+        return Mk8sGpuSettings(), Mk8sBootDiskSettings(), VmImagePreferenceSettings()
     if not isinstance(raw, dict):
         raise ValueError(f"{field_label} must be a mapping")
 
     if module_name == "mk8s":
-        supported_keys = {"gpu"}
+        supported_keys = {"gpu", "boot_disk_defaults"}
         unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
         if unknown:
             raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
@@ -969,6 +1411,10 @@ def _parse_infra_component_cli(
                 field_label=f"{field_label}.gpu",
                 source_profile=source_profile,
                 source_root=source_root,
+            ),
+            _parse_mk8s_boot_disk_settings(
+                raw.get("boot_disk_defaults"),
+                field_label=f"{field_label}.boot_disk_defaults",
             ),
             VmImagePreferenceSettings(),
         )
@@ -980,6 +1426,7 @@ def _parse_infra_component_cli(
             raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
         return (
             Mk8sGpuSettings(),
+            Mk8sBootDiskSettings(),
             _parse_vm_image_preference_settings(
                 raw.get("image_preferences"),
                 field_label=f"{field_label}.image_preferences",
@@ -989,7 +1436,7 @@ def _parse_infra_component_cli(
     unknown = sorted(str(key) for key in raw)
     if unknown:
         raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
-    return Mk8sGpuSettings(), VmImagePreferenceSettings()
+    return Mk8sGpuSettings(), Mk8sBootDiskSettings(), VmImagePreferenceSettings()
 
 
 def _parse_app_component_cli(
@@ -1284,6 +1731,7 @@ def _parse_component_wizard_fields(
     component_id: str,
     raw_profile: Any,
     raw_wizard: Any,
+    derived_wizard: Mapping[str, Any] | None = None,
     field_label: str,
 ) -> dict[str, dict[str, Any]]:
     merged_raw: dict[str, Any] = {}
@@ -1299,6 +1747,12 @@ def _parse_component_wizard_fields(
             )
         merged_raw.update(profile_fields)
 
+    if derived_wizard is not None:
+        if not isinstance(derived_wizard, Mapping):
+            raise ValueError(f"{field_label} derived wizard fields must be a mapping when set")
+        for key, value in derived_wizard.items():
+            merged_raw.setdefault(str(key), copy.deepcopy(value))
+
     if raw_wizard is not None:
         if not isinstance(raw_wizard, dict):
             raise ValueError(
@@ -1308,6 +1762,51 @@ def _parse_component_wizard_fields(
             merged_raw[key] = copy.deepcopy(value)
 
     return _parse_wizard_fields(merged_raw or None, field_label=field_label)
+
+
+def _derived_mk8s_gpu_validation_wizard_fields(
+    mk8s_gpu: Mk8sGpuSettings,
+) -> dict[str, dict[str, Any]]:
+    validations = mk8s_gpu.validations
+    return {
+        "deploy.validations.mk8s_gpu.operator_readiness.enabled": {
+            "default": validations.operator_readiness.enabled_by_default,
+        },
+        "deploy.validations.mk8s_gpu.gpu_visibility.enabled": {
+            "default": validations.gpu_visibility.enabled_by_default,
+        },
+        "deploy.validations.mk8s_gpu.gpu_visibility.max_nodes": {
+            "default": validations.gpu_visibility.max_nodes,
+        },
+        "deploy.validations.mk8s_gpu.nccl.enabled": {
+            "default": validations.nccl.enabled_by_default,
+        },
+        "deploy.validations.mk8s_gpu.nccl.max_nodes": {
+            "default": validations.nccl.max_nodes,
+        },
+        "deploy.validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps": {
+            "default": validations.nccl.average_bus_bandwidth_threshold_gbps,
+        },
+        "deploy.validations.mk8s_gpu.health_checker.enabled": {
+            "default": validations.health_checker.enabled_by_default,
+        },
+    }
+
+
+def _derived_infra_component_wizard_fields(
+    *,
+    module_name: str,
+    raw_cli: Any,
+    mk8s_gpu: Mk8sGpuSettings,
+) -> dict[str, dict[str, Any]]:
+    if (
+        module_name == "mk8s"
+        and isinstance(raw_cli, dict)
+        and isinstance(raw_cli.get("gpu"), dict)
+        and isinstance(raw_cli.get("gpu", {}).get("validations"), dict)
+    ):
+        return _derived_mk8s_gpu_validation_wizard_fields(mk8s_gpu)
+    return {}
 
 
 def _parse_status_watcher(raw: Any) -> StatusWatcher | None:
@@ -1595,22 +2094,27 @@ def _parse_sources_payload(
             field_label=f"components.infra.{module_name}",
         )
         validation_profile = resolve_builtin_validation_profile(module_name)
-        wizard_fields = _parse_component_wizard_fields(
-            component_id=module_name,
-            raw_profile=raw.get("wizard_profile"),
-            raw_wizard=raw.get("wizard"),
-            field_label=f"components.infra.{module_name}",
-        )
-        defaults = _parse_component_defaults(
-            raw.get("defaults"),
-            field_label=f"components.infra.{module_name}",
-        )
-        mk8s_gpu, vm_images = _parse_infra_component_cli(
+        mk8s_gpu, mk8s_boot_disks, vm_images = _parse_infra_component_cli(
             raw.get("cli"),
             module_name=module_name,
             field_label=f"components.infra.{module_name}.cli",
             source_profile=source_profile,
             source_root=source_root,
+        )
+        wizard_fields = _parse_component_wizard_fields(
+            component_id=module_name,
+            raw_profile=raw.get("wizard_profile"),
+            raw_wizard=raw.get("wizard"),
+            derived_wizard=_derived_infra_component_wizard_fields(
+                module_name=module_name,
+                raw_cli=raw.get("cli"),
+                mk8s_gpu=mk8s_gpu,
+            ),
+            field_label=f"components.infra.{module_name}",
+        )
+        defaults = _parse_component_defaults(
+            raw.get("defaults"),
+            field_label=f"components.infra.{module_name}",
         )
         handoff = resolve_builtin_handoff(module_name)
         outputs = _component_outputs_with_builtin_handoff(
@@ -1638,6 +2142,7 @@ def _parse_sources_payload(
                 handoff=handoff,
                 status=status,
                 mk8s_gpu=mk8s_gpu,
+                mk8s_boot_disks=mk8s_boot_disks,
                 vm_images=vm_images,
             )
         )

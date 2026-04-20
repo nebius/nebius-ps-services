@@ -2,6 +2,9 @@
 
 Use this reference when a task involves Nebius MK8s GPU node groups, driver presets, image-family choices, or cluster/node-group operational readiness.
 
+For operator-install decisions, Nebius driverful-image behavior, and GPUDirect
+RDMA cluster checks, also load `references/mk8s-gpu-setup.md`.
+
 ### Primary use cases
 
 - Choose a compatible GPU `drivers_preset` for a given Kubernetes version and GPU platform.

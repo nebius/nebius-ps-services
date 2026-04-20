@@ -49,6 +49,10 @@ All notable changes to this repository will be documented in this file.
 
 ### Changed
 
+- Updated the `skills/create-pr` guidance and metadata so Codex now treats any
+  explicit user-supplied PR title as authoritative instead of inferring a
+  generic preparation-style title from the branch name, and expanded
+  `skills/README.md` with a copy-pastable custom-title example.
 - Refined the new `create-pr` and `review-pr` skills under `skills/` to follow
   stronger Git and GitHub PR best practices: `create-pr` now explicitly
   refreshes the base-branch context, avoids opening PRs from a dirty tree

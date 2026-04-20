@@ -26,6 +26,7 @@ SUPPORTED_PROVIDER_OPTION_SOURCES = frozenset(
         "project_networks",
         "tenant_projects",
         "mk8s_control_plane_versions",
+        "mk8s_boot_disk_types",
     }
 )
 
@@ -325,6 +326,7 @@ class ProviderOptionLookup:
                 "mk8s_gpu_stack_presets": self._resolve_mk8s_gpu_stack_presets,
                 "mk8s_node_group_os_values": self._resolve_mk8s_node_group_os_values,
                 "mk8s_infiniband_fabrics": self._resolve_mk8s_infiniband_fabrics,
+                "mk8s_boot_disk_types": self._resolve_mk8s_boot_disk_types,
                 "compute_platforms": self._resolve_compute_platforms,
                 "compute_platform_presets": self._resolve_compute_platform_presets,
                 "compute_public_image_families": self._resolve_compute_public_image_families,
@@ -398,6 +400,32 @@ class ProviderOptionLookup:
         for preset in presets:
             if preset.name == normalized_preset_name:
                 return preset.allow_gpu_clustering
+        return None
+
+    def compute_platform_preset_resources(
+        self,
+        *,
+        project_id: str,
+        platform_name: str,
+        preset_name: str,
+    ) -> tuple[int | None, int | None, int | None] | None:
+        normalized_project_id = _as_str(project_id)
+        normalized_platform_name = _as_str(platform_name)
+        normalized_preset_name = _as_str(preset_name)
+        if (
+            not normalized_project_id
+            or not normalized_platform_name
+            or not normalized_preset_name
+        ):
+            return None
+
+        presets = self._resolve_compute_platform_preset_inventory(
+            project_id=normalized_project_id,
+            platform_name=normalized_platform_name,
+        )
+        for preset in presets:
+            if preset.name == normalized_preset_name:
+                return (preset.vcpu_count, preset.memory_gibibytes, preset.gpu_count)
         return None
 
     def validate_tenant_project_scope(
@@ -614,6 +642,38 @@ class ProviderOptionLookup:
         resolved = tuple(options)
         self._cache[cache_key] = resolved
         return resolved
+
+    def _resolve_mk8s_boot_disk_types(
+        self,
+        *,
+        args: dict[str, Any],
+        payload: dict[str, Any],
+        field_path: str,
+    ) -> tuple[OptionChoice, ...]:
+        del args, payload, field_path
+        return (
+            OptionChoice(
+                value="NETWORK_SSD",
+                label=(
+                    "NETWORK_SSD  (1-8192 GiB, 450 MiB/s, 20k/40k IOPS, "
+                    "reliable, encryption always on)"
+                ),
+            ),
+            OptionChoice(
+                value="NETWORK_SSD_NON_REPLICATED",
+                label=(
+                    "NETWORK_SSD_NON_REPLICATED  (93 GiB units, 1 GiB/s, "
+                    "75k/75k IOPS, lowest-cost high-performance, no redundancy)"
+                ),
+            ),
+            OptionChoice(
+                value="NETWORK_SSD_IO_M3",
+                label=(
+                    "NETWORK_SSD_IO_M3  (93 GiB units, 1 GiB/s, 75k/75k IOPS, "
+                    "replicated, most expensive)"
+                ),
+            ),
+        )
 
     def _resolve_mk8s_compatible_platforms(
         self,

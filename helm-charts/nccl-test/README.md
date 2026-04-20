@@ -132,6 +132,11 @@ helm pull \
   credentials.
 - Keep `job.launcherPrivileged` and `job.workerPrivileged` enabled unless you
   have already validated a non-privileged NCCL/RDMA runtime for your cluster.
+- The launcher pod must keep in-cluster Kubernetes API access. This chart
+  intentionally mounts the launcher service-account token and keeps service
+  env links enabled because Kubeflow MPI uses `kubectl exec` from the launcher
+  into worker pods. Removing that wiring makes `kubectl` fall back to
+  `localhost:8080` and the benchmark never starts.
 - Override `benchmark.mpiExtraArgs` for platform-specific MPI flags instead of
   mutating the shared base arguments in the chart.
 - The chart itself assumes the `MPIJob` CRD already exists. In the
@@ -163,7 +168,12 @@ helm template smoke ./helm-charts/nccl-test \
   `cr.<region>.nebius.cloud/<registry-short-id>/images/nccl-test`, and the tag
   defaults to `0.2.0`. Use a digest for immutable production pinning.
 - `benchmark.mpiBaseArgs`: shared `mpirun` arguments applied on every platform.
-- `benchmark.mpiExtraArgs`: platform-specific extra `mpirun` arguments.
+- `benchmark.mpiExtraArgs`: platform-specific extra `mpirun` arguments. Keep
+  the shared chart default empty. In the official Nebius NCCL guide, the B200
+  example adds `-mca coll ^hcoll` while the H100/H200 example omits it, so
+  `nebius-cxcli` injects that flag only for B200 platforms instead of baking
+  it into global chart defaults. See:
+  https://docs.nebius.com/kubernetes/gpu/nccl-test.
 - `benchmark.args`: arguments passed directly to `all_reduce_perf`.
 - The source chart carries the shared first-party image/tag and the practical
   deploy-time benchmark args directly in `values.yaml`. In the bundled
@@ -216,10 +226,15 @@ kubectl logs -n nccl-test -f <launcher-pod-name>
 - The chart intentionally keeps the launcher and worker containers privileged.
   NCCL and RDMA validation on Nebius GPU clusters depends on that runtime
   contract.
+- The launcher pod also intentionally keeps in-cluster API access for the
+  `kubectl exec` hop into MPI worker pods, while worker pods stay without
+  service-account token mounts because they do not need Kubernetes API calls.
 - `nebius-cxcli` owns deploy-time image overrides and platform-specific MPI
   flags such as the B200 `-mca coll ^hcoll` overlay. The shared runtime image
   and common benchmark shape now live in the chart defaults; only
-  platform-specific overlays stay catalog-owned.
+  platform-specific overlays stay catalog-owned. The official Nebius NCCL
+  guide shows that flag only in the B200 example, not in the H100/H200 one:
+  https://docs.nebius.com/kubernetes/gpu/nccl-test.
 - The canonical release helper is
   [publish-helm.sh](publish-helm.sh).
   The tag-driven publish workflow lives at

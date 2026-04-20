@@ -1,0 +1,27 @@
+# Reference values for a manual/operator-managed GPU host stack.
+#
+# Use this when the MK8s node group does not use a Nebius GPU driver image and
+# GPU Operator is expected to install the host GPU driver and the NVIDIA
+# Container Toolkit runtime.
+#
+# For Nebius B300 manual installs, add:
+#   driver:
+#     version: 580.95.05
+#
+# GPUDirect RDMA note:
+# - Do not set `driver.rdma.enabled=true` by default. That is for the legacy
+#   `nvidia-peermem` path.
+# - Set `driver.rdma.useHostMofed=true` only when Mellanox OFED is installed
+#   directly on the host outside Network Operator.
+
+driver:
+  enabled: true
+
+toolkit:
+  enabled: true
+
+nfd:
+  enabled: false
+
+migManager:
+  enabled: false

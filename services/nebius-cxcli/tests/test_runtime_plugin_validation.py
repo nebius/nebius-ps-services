@@ -156,6 +156,46 @@ def test_runtime_validation_plugins_reject_non_clusterable_mk8s_gpu_preset_with_
             as_text=_as_text,
             id_pattern=re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
             env_var_pattern=re.compile(r"^[A-Z_][A-Z0-9_]*$"),
+                )
+
+
+def test_runtime_validation_plugins_reject_invalid_mk8s_gpu_validation_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "NEBIUS_CXCLI_RUNTIME_VALIDATION_PLUGINS",
+        "nebius_cxcli.runtime_component_validation:validate_component_runtime_rules",
+    )
+    payload = {
+        "__shared_admin_ssh_user_name__": "ubuntu",
+        "deploy": {
+            "validations": {
+                "mk8s_gpu": {
+                    "gpu_visibility": {
+                        "enabled": True,
+                        "max_nodes": 0,
+                    }
+                }
+            }
+        },
+        "infra": {
+            "mk8s": {
+                "gpu_enabled": True,
+                "gpu_node_groups": 1,
+                "gpu_nodes_count_per_group": 1,
+                "gpu_nodes_platform": "gpu-h100-sxm",
+                "gpu_nodes_preset": "8gpu-128vcpu-1600gb",
+            }
+        },
+    }
+
+    with pytest.raises(ValueError, match="deploy\\.validations\\.mk8s_gpu\\.gpu_visibility\\.max_nodes must be > 0"):
+        run_runtime_validation_plugins(
+            payload=payload,
+            get_path=_get_path,
+            as_text=_as_text,
+            id_pattern=re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
+            env_var_pattern=re.compile(r"^[A-Z_][A-Z0-9_]*$"),
         )
 
 

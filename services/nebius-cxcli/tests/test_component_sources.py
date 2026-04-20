@@ -969,6 +969,7 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         "inputs.k8s_version": {
             "options": {
                 "from": "mk8s_control_plane_versions",
+                "auto_select_first": True,
             }
         },
         "inputs.cpu_nodes_platform": {
@@ -1035,6 +1036,39 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
             },
             "prompt": False,
         },
+        "inputs.cpu_nodes_boot_disk_type": {
+            "options": {
+                "from": "mk8s_boot_disk_types",
+                "auto_select_first": True,
+            },
+        },
+        "inputs.gpu_nodes_boot_disk_type": {
+            "options": {
+                "from": "mk8s_boot_disk_types",
+                "auto_select_first": True,
+            },
+        },
+        "deploy.validations.mk8s_gpu.operator_readiness.enabled": {
+            "default": True,
+        },
+        "deploy.validations.mk8s_gpu.gpu_visibility.enabled": {
+            "default": True,
+        },
+        "deploy.validations.mk8s_gpu.gpu_visibility.max_nodes": {
+            "default": 3,
+        },
+        "deploy.validations.mk8s_gpu.nccl.enabled": {
+            "default": True,
+        },
+        "deploy.validations.mk8s_gpu.nccl.max_nodes": {
+            "default": 8,
+        },
+        "deploy.validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps": {
+            "default": 300,
+        },
+        "deploy.validations.mk8s_gpu.health_checker.enabled": {
+            "default": False,
+        },
         "inputs.mk8s_cluster_overrides": {
             "prompt": False,
         },
@@ -1045,6 +1079,10 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
             "prompt": False,
         },
     }
+    assert mk8s.mk8s_boot_disks.cpu.default_type == "NETWORK_SSD"
+    assert mk8s.mk8s_boot_disks.gpu.default_type == "NETWORK_SSD"
+    assert tuple(rule.size_gib for rule in mk8s.mk8s_boot_disks.cpu.rules) == (64, 93, 128, 186)
+    assert tuple(rule.size_gib for rule in mk8s.mk8s_boot_disks.gpu.rules) == (256, 512, 1023)
 
 
 def test_bundled_cert_manager_enables_chart_crds_by_default() -> None:
@@ -1504,6 +1542,23 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                                         "defaults": {
                                             "values.driver.enabled": False,
                                             "values.toolkit.enabled": False,
+                                            "values.driver.nvidiaDriverCRD.enabled": False,
+                                        },
+                                    },
+                                    {
+                                        "gpu_cluster_enabled": True,
+                                        "defaults": {
+                                            "values.nfd.enabled": False,
+                                        },
+                                    },
+                                    {
+                                        "gpu_stack_source": "manual",
+                                        "match_platforms": [
+                                            "gpu-b200-sxm",
+                                            "gpu-b200-sxm-a",
+                                        ],
+                                        "defaults": {
+                                            "values.nfd.enabled": False,
                                         },
                                     },
                                 ],
@@ -1525,11 +1580,48 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                         "cli": {
                             "mk8s_gpu_policy": {
                                 "role": "network_operator",
+                                "default_sets": {
+                                    "driverful_infiniband_nfd": {
+                                        "values.nfd.enabled": True,
+                                        "values.nfd.deployNodeFeatureRules": True,
+                                    }
+                                },
+                                "post_render_patch_sets": {
+                                    "rdma_shared_device_plugin": [
+                                        {
+                                            "target": {
+                                                "group": "mellanox.com",
+                                                "version": "v1alpha1",
+                                                "kind": "NicClusterPolicy",
+                                                "name": "nic-cluster-policy",
+                                            },
+                                            "patch": {
+                                                "apiVersion": "mellanox.com/v1alpha1",
+                                                "kind": "NicClusterPolicy",
+                                                "metadata": {"name": "nic-cluster-policy"},
+                                                "spec": {
+                                                    "rdmaSharedDevicePlugin": {
+                                                        "image": "k8s-rdma-shared-dev-plugin",
+                                                        "repository": "nvcr.io/nvidia/mellanox",
+                                                        "version": "network-operator-v25.7.0",
+                                                        "config": "{\"configList\":[]}",
+                                                    }
+                                                },
+                                            },
+                                        }
+                                    ]
+                                },
                                 "rules": [
                                     {
                                         "gpu_stack_source": "manual",
                                         "match_platforms": ["gpu-b200-sxm"],
                                         "auto_enable": True,
+                                    },
+                                    {
+                                        "gpu_stack_source": "nebius_image",
+                                        "gpu_cluster_enabled": True,
+                                        "defaults_from": ["driverful_infiniband_nfd"],
+                                        "post_render_patches_from": ["rdma_shared_device_plugin"],
                                     }
                                 ],
                             }
@@ -1580,11 +1672,59 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
         "cuda12.8",
     )
     assert network_operator.mk8s_gpu.role == "network_operator"
+    assert [item.name for item in network_operator.mk8s_gpu.default_sets] == [
+        "driverful_infiniband_nfd",
+    ]
+    assert [item.target_path for item in network_operator.mk8s_gpu.default_sets[0].defaults] == [
+        "values.nfd.enabled",
+        "values.nfd.deployNodeFeatureRules",
+    ]
+    assert [item.name for item in network_operator.mk8s_gpu.post_render_patch_sets] == [
+        "rdma_shared_device_plugin",
+    ]
     assert network_operator.mk8s_gpu.rules[0].gpu_stack_source == "manual"
     assert network_operator.mk8s_gpu.rules[0].match_platforms == ("gpu-b200-sxm",)
     assert network_operator.mk8s_gpu.rules[0].auto_enable is True
-    gpu_defaults_rule = next(rule for rule in gpu_operator.mk8s_gpu.rules if rule.defaults)
-    assert gpu_defaults_rule.defaults[0].target_path == "values.driver.enabled"
+    assert network_operator.mk8s_gpu.rules[1].gpu_stack_source == "nebius_image"
+    assert network_operator.mk8s_gpu.rules[1].gpu_cluster_enabled is True
+    assert network_operator.mk8s_gpu.rules[1].defaults_from == ("driverful_infiniband_nfd",)
+    assert network_operator.mk8s_gpu.rules[1].post_render_patches_from == (
+        "rdma_shared_device_plugin",
+    )
+    assert (
+        network_operator.mk8s_gpu.post_render_patch_sets[0].patches[0].target.kind
+        == "NicClusterPolicy"
+    )
+    patch_text = network_operator.mk8s_gpu.post_render_patch_sets[0].patches[0].patch
+    assert "kind: NicClusterPolicy" in patch_text
+    assert "image: k8s-rdma-shared-dev-plugin" in patch_text
+    assert "version: network-operator-v25.7.0" in patch_text
+    gpu_defaults_rule = next(
+        rule
+        for rule in gpu_operator.mk8s_gpu.rules
+        if rule.gpu_stack_source == "nebius_image" and rule.defaults
+    )
+    assert [item.target_path for item in gpu_defaults_rule.defaults] == [
+        "values.driver.enabled",
+        "values.toolkit.enabled",
+        "values.driver.nvidiaDriverCRD.enabled",
+    ]
+    gpu_cluster_nfd_rule = next(
+        rule
+        for rule in gpu_operator.mk8s_gpu.rules
+        if rule.gpu_cluster_enabled is True and rule.defaults
+    )
+    assert [item.target_path for item in gpu_cluster_nfd_rule.defaults] == [
+        "values.nfd.enabled",
+    ]
+    manual_b200_nfd_rule = next(
+        rule
+        for rule in gpu_operator.mk8s_gpu.rules
+        if rule.gpu_stack_source == "manual" and rule.match_platforms == ("gpu-b200-sxm", "gpu-b200-sxm-a")
+    )
+    assert [item.target_path for item in manual_b200_nfd_rule.defaults] == [
+        "values.nfd.enabled",
+    ]
     assert mk8s.mk8s_gpu.validations.operator_readiness.timeout == "20m"
     assert mk8s.mk8s_gpu.validations.gpu_visibility.namespace == "gpu-validation"
     assert mk8s.mk8s_gpu.validations.gpu_visibility.max_nodes == 4
@@ -1814,7 +1954,97 @@ def test_load_component_sources_rejects_empty_mk8s_gpu_rule(tmp_path: Path) -> N
 
     with pytest.raises(
         ValueError,
-        match="components\\.apps\\.gpu-operator\\.cli\\.mk8s_gpu_policy\\.rules\\[0\\] must set auto_enable: true and/or defaults",
+        match="components\\.apps\\.gpu-operator\\.cli\\.mk8s_gpu_policy\\.rules\\[0\\] must set auto_enable: true, defaults/defaults_from, and/or post_render_patches/post_render_patches_from",
+    ):
+        load_component_sources(explicit=sources_file)
+
+
+def test_load_component_sources_rejects_unknown_mk8s_gpu_default_set_reference(
+    tmp_path: Path,
+) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                apps={
+                    "network-op": {
+                        "source": _portable_chart_source(
+                            repo="https://example.invalid/charts",
+                            chart="network-operator",
+                            version="1.0.0",
+                        ),
+                        "release": {
+                            "namespace": "network-system",
+                            "name": "network-operator",
+                        },
+                        "ui": {"enabled": False},
+                        "cli": {
+                            "mk8s_gpu_policy": {
+                                "role": "network_operator",
+                                "rules": [
+                                    {
+                                        "gpu_stack_source": "nebius_image",
+                                        "defaults_from": ["missing-set"],
+                                    }
+                                ],
+                            }
+                        },
+                    }
+                },
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="components\\.apps\\.network-op\\.cli\\.mk8s_gpu_policy\\.rules\\[0\\]\\.defaults_from references unknown default_set\\(s\\): missing-set",
+    ):
+        load_component_sources(explicit=sources_file)
+
+
+def test_load_component_sources_rejects_unknown_mk8s_gpu_post_render_patch_set_reference(
+    tmp_path: Path,
+) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                apps={
+                    "network-op": {
+                        "source": _portable_chart_source(
+                            repo="https://example.invalid/charts",
+                            chart="network-operator",
+                            version="1.0.0",
+                        ),
+                        "release": {
+                            "namespace": "network-system",
+                            "name": "network-operator",
+                        },
+                        "ui": {"enabled": False},
+                        "cli": {
+                            "mk8s_gpu_policy": {
+                                "role": "network_operator",
+                                "rules": [
+                                    {
+                                        "gpu_stack_source": "nebius_image",
+                                        "post_render_patches_from": ["missing-patch-set"],
+                                    }
+                                ],
+                            }
+                        },
+                    }
+                },
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="components\\.apps\\.network-op\\.cli\\.mk8s_gpu_policy\\.rules\\[0\\]\\.post_render_patches_from references unknown post_render_patch_set\\(s\\): missing-patch-set",
     ):
         load_component_sources(explicit=sources_file)
 

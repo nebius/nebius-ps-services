@@ -13,7 +13,7 @@ presence of `SKILL.md`.
 - Stack-aware `.gitignore` generation and cleanup: `gitignore`
 - Helm chart hardening and validation: `helmchart`
 - Shell, Markdown, and Python linting: `linter`
-- Nebius cloud automation and quota workflows: `nebius`
+- Nebius cloud automation, quota, and MK8s GPU workflows: `nebius`
 - Nebius cxcli component onboarding: `onboard-nbs-cxcli`
 - Helm chart release publishing: `publish-helm`
 - Container image release publishing: `publish-image`
@@ -44,7 +44,7 @@ $review-pr Review PR #110 against the base branch, fix safe issues on the branch
 You can also be more specific when needed:
 
 ```text
-$create-pr Open or reuse the PR for this branch and return the PR number and URL.
+$create-pr Open or reuse the PR for this branch with title "Expose nccl-test 0.2.7 in the bundled catalog" and return the PR number and URL.
 
 $review-pr Review this Helm chart PR, apply the relevant sibling skills, resolve straightforward conflicts if they exist, and rerun the focused validation.
 ```
@@ -81,8 +81,10 @@ testing on macOS with Docker Desktop and the Dev Containers extension.
 `create-pr` turns local work into a GitHub pull request without leaving it on
 the default branch. It creates a feature branch only when needed, reuses an
 existing non-default branch, avoids duplicate PRs for the same head branch,
-expects reviewable commits instead of a dirty tree, and returns the PR number
-and URL.
+expects reviewable commits instead of a dirty tree, treats an explicit
+user-supplied PR title/body as authoritative instead of inferring a generic
+preparation-style title from the branch name, and returns the PR number and
+URL.
 
 ### `github-workflows`
 
@@ -116,8 +118,8 @@ config-level suppressions.
 
 `nebius` is the cloud automation skill for Nebius SDK-based workflows,
 including IAM bootstrap, object storage, VPC inspection, route analysis, quota
-checks, and MK8s compatibility decisions. Use it when the task depends on live
-Nebius service behavior rather than generic cloud assumptions.
+checks, and MK8s GPU compatibility and operator decisions. Use it when the task
+depends on live Nebius service behavior rather than generic cloud assumptions.
 
 ### `onboard-nbs-cxcli`
 

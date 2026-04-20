@@ -39,6 +39,8 @@ temp/
 # Common caches/build artifacts
 .cache/
 coverage/
+.coverage
+.coverage.*
 dist/
 build/
 node_modules/
@@ -59,6 +61,9 @@ __pycache__/
 .eggs/
 *.egg-info/
 src/nebius_cxcli/_version.py
+
+# Packaged archives
+*.tgz
 
 # Terraform
 .terraform/

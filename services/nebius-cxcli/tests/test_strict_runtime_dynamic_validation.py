@@ -437,3 +437,51 @@ def test_validate_enabled_chart_sources_reports_lookup_error(
     issues = _validate_enabled_chart_sources(config)
     assert any("apps.charts[n8n]" in issue for issue in issues)
     assert any("simulated lookup failure" in issue for issue in issues)
+
+
+def test_validate_enabled_chart_sources_uses_catalog_chart_name_for_oci_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = _starter_payload(selected_infra=set(), selected_apps=set())
+    payload["apps"]["charts"] = [
+        {
+            "id": "nvidia-network-operator",
+            "instance_id": "nvidia-network-operator",
+            "enabled": True,
+            "group": "platform",
+            "repo": "oci://cr.eu-north1.nebius.cloud/marketplace/nebius/nvidia-network-operator/chart/network-operator",
+            "version": "25.7.0",
+            "namespace": "nvidia-network-operator",
+            "release-name": "network-operator",
+            "values": {},
+        }
+    ]
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    config = load_config(config_path)
+
+    captured: dict[str, str] = {}
+
+    def _fake_validate(
+        *,
+        chart_name: str,
+        chart_repo: str,
+        chart_version: str,
+        chart_meta_cache,
+    ) -> tuple[str, ...]:
+        _ = chart_meta_cache
+        captured["chart_name"] = chart_name
+        captured["chart_repo"] = chart_repo
+        captured["chart_version"] = chart_version
+        return ()
+
+    monkeypatch.setattr("nebius_cxcli.cli._resolve_helm_chart_validation_issues", _fake_validate)
+
+    issues = _validate_enabled_chart_sources(config, chart_meta_cache={})
+    assert issues == []
+    assert captured == {
+        "chart_name": "network-operator",
+        "chart_repo": "oci://cr.eu-north1.nebius.cloud/marketplace/nebius/nvidia-network-operator/chart/network-operator",
+        "chart_version": "25.7.0",
+    }

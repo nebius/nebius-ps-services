@@ -77,6 +77,16 @@ def _install_fake_compute_module(
     presets_by_platform: dict[str, list[dict[str, object]]] | None = None,
     public_images: list[dict[str, object]] | None = None,
 ) -> None:
+    common_module = ModuleType("nebius.api.nebius.common.v1")
+
+    class GetByNameRequest:
+        def __init__(self, *, parent_id: str, name: str) -> None:
+            self.parent_id = parent_id
+            self.name = name
+
+    common_module.GetByNameRequest = GetByNameRequest
+    _install_module(monkeypatch, "nebius.api.nebius.common.v1", common_module)
+
     compute_module = ModuleType("nebius.api.nebius.compute.v1")
 
     class ListPlatformsRequest:
@@ -592,6 +602,32 @@ def test_compute_platform_presets_filter_gpu_clusterable_shapes(monkeypatch) -> 
         (
             "8gpu-160vcpu-1792gb",
             "8gpu-160vcpu-1792gb  (vCPU=160, RAM=1792GiB, GPU=8, GPU cluster)",
+        ),
+    ]
+
+
+def test_mk8s_boot_disk_types_labels_match_guided_contract() -> None:
+    lookup = ProviderOptionLookup()
+
+    resolved = lookup.resolve(
+        provider="mk8s_boot_disk_types",
+        args={},
+        payload={},
+        field_path="infra.components[0].inputs.cpu_nodes_boot_disk_type",
+    )
+
+    assert [(choice.value, choice.label) for choice in resolved] == [
+        (
+            "NETWORK_SSD",
+            "NETWORK_SSD  (1-8192 GiB, 450 MiB/s, 20k/40k IOPS, reliable, encryption always on)",
+        ),
+        (
+            "NETWORK_SSD_NON_REPLICATED",
+            "NETWORK_SSD_NON_REPLICATED  (93 GiB units, 1 GiB/s, 75k/75k IOPS, lowest-cost high-performance, no redundancy)",
+        ),
+        (
+            "NETWORK_SSD_IO_M3",
+            "NETWORK_SSD_IO_M3  (93 GiB units, 1 GiB/s, 75k/75k IOPS, replicated, most expensive)",
         ),
     ]
 

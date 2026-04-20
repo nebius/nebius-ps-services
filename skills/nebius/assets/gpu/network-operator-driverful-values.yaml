@@ -1,0 +1,33 @@
+# Reference values for the Nebius driverful InfiniBand path.
+#
+# The host image already owns the OFED path, so Network Operator stays focused
+# on Kubernetes-side discovery and RDMA exposure.
+
+operator:
+  ofedDriver:
+    deploy: false
+
+nfd:
+  enabled: true
+  deployNodeFeatureRules: true
+
+node-feature-discovery:
+  worker:
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: nebius.com/driverful
+                  operator: In
+                  values:
+                    - "true"
+
+nodeAffinity:
+  requiredDuringSchedulingIgnoredDuringExecution:
+    nodeSelectorTerms:
+      - matchExpressions:
+          - key: feature.node.kubernetes.io/pci-15b3.present
+            operator: In
+            values:
+              - "true"
