@@ -1300,12 +1300,25 @@ def _interesting_allocatable_resources(allocatable: Mapping[str, Any]) -> dict[s
         name = _as_text(key)
         if not name:
             continue
-        lowered = name.lower()
-        if name.startswith("nvidia.com/") or any(
-            token in lowered for token in ("rdma", "infiniband", "mlx")
-        ):
+        if _is_nvidia_extended_resource_name(name) or _has_rdma_resource_signal(name):
             interesting[name] = _as_text(value)
     return interesting
+
+
+def _extended_resource_prefix(name: str) -> str:
+    prefix, separator, _resource_name = name.partition("/")
+    if not separator:
+        return ""
+    return prefix.strip().lower()
+
+
+def _is_nvidia_extended_resource_name(name: str) -> bool:
+    return _extended_resource_prefix(name) == "nvidia.com"
+
+
+def _has_rdma_resource_signal(name: str) -> bool:
+    lowered = name.lower()
+    return any(token in lowered for token in ("rdma", "infiniband", "mlx"))
 
 
 def _rdma_resource_keys(allocatable_resources: Mapping[str, str]) -> tuple[str, ...]:
@@ -1313,8 +1326,8 @@ def _rdma_resource_keys(allocatable_resources: Mapping[str, str]) -> tuple[str, 
         sorted(
             key
             for key in allocatable_resources
-            if not key.startswith("nvidia.com/")
-            and any(token in key.lower() for token in ("rdma", "infiniband", "mlx"))
+            if not _is_nvidia_extended_resource_name(key)
+            and _has_rdma_resource_signal(key)
         )
     )
 

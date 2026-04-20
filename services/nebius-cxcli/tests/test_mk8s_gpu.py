@@ -408,6 +408,7 @@ def test_device_plugin_snapshot_filters_interesting_allocatable_resources() -> N
             "cpu": "16",
             "memory": "64Gi",
             "nvidia.com/gpu": "8",
+            "example.nvidia.com/gpu": "1",
             "rdma/shared_device": "16",
             "example.com/ignored": "1",
         }

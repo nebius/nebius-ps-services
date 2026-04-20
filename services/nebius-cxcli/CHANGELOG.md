@@ -74,6 +74,11 @@ All notable changes to this project are tracked here. This changelog follows
   from multiple rules. This keeps the Network Operator RDMA plugin tag and
   selector details catalog-owned without repeating the same patch inline across
   multiple `component_sources.yaml` rules.
+- Fixed the MK8s GPU allocatable-resource filter to parse Kubernetes extended
+  resource prefixes explicitly instead of matching the literal
+  `nvidia.com/` prefix with a raw string prefix check, avoiding a false-positive
+  CodeQL URL-sanitization warning without changing the GPU/RDMA readiness
+  behavior.
 - Clarified and locked in the layered MK8s GPU validation contract: source
   comments, README/design docs, and regression tests now explicitly treat
   `operator_readiness`, `gpu_visibility`, and `nccl` as a cheapest-to-most-
