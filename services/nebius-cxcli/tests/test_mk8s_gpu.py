@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 import nebius_cxcli.component_sources as component_sources
+import nebius_cxcli.mk8s_gpu as mk8s_gpu
 from nebius_cxcli.component_sources import (
     ComponentOutput,
     SourceProfile,
@@ -14,11 +17,16 @@ from nebius_cxcli.component_sources import (
 )
 from nebius_cxcli.components import component_entries, reset_component_entry_cache
 from nebius_cxcli.mk8s_gpu import (
+    _gpu_device_plugin_snapshot,
     _gpu_visibility_node_report,
+    _interesting_allocatable_resources,
     _nccl_json_report_summary,
+    _rdma_resource_keys,
     _report_log_excerpt,
+    _run_operator_readiness_validation,
     mk8s_gpu_dependency_issues,
     mk8s_gpu_flux_release_dependencies,
+    mk8s_gpu_project_validation_defaults,
     mk8s_gpu_validation_specs,
     resolve_mk8s_gpu_app_selection,
 )
@@ -122,6 +130,11 @@ def test_mk8s_gpu_cluster_adds_network_operator_and_nccl_validation() -> None:
         "mk8s_gpu_visibility",
         "mk8s_nccl",
     }
+    assert [item["kind"] for item in validations] == [
+        "mk8s_gpu_operator_readiness",
+        "mk8s_gpu_visibility",
+        "mk8s_nccl",
+    ]
     nccl_spec = next(item for item in validations if item["kind"] == "mk8s_nccl")
     gpu_visibility_spec = next(item for item in validations if item["kind"] == "mk8s_gpu_visibility")
     assert nccl_spec["chart_component_id"] == "nccl-test"
@@ -166,6 +179,62 @@ def test_mk8s_gpu_cluster_adds_network_operator_and_nccl_validation() -> None:
     assert dependencies == {
         "nvidia-gpu-operator": ("nvidia-network-operator",),
     }
+
+
+def test_mk8s_gpu_validation_overrides_can_disable_defaults_and_tune_nccl() -> None:
+    payload = _mk8s_payload(infiniband_fabric="fabric-1")
+    payload["deploy"] = {
+        "validations": {
+            "mk8s_gpu": {
+                "operator_readiness": {"enabled": False},
+                "gpu_visibility": {"enabled": False, "max_nodes": 2},
+                "nccl": {
+                    "enabled": True,
+                    "max_nodes": 4,
+                    "average_bus_bandwidth_threshold_gbps": 350,
+                },
+            }
+        }
+    }
+
+    validations = mk8s_gpu_validation_specs(payload)
+
+    assert {item["kind"] for item in validations} == {"mk8s_nccl"}
+    nccl_spec = validations[0]
+    assert nccl_spec["max_nodes"] == 4
+    assert nccl_spec["average_bus_bandwidth_threshold_gbps"] == 350
+
+
+def test_mk8s_gpu_health_checker_override_reports_missing_catalog_role() -> None:
+    payload = _mk8s_payload()
+    payload["deploy"] = {
+        "validations": {
+            "mk8s_gpu": {
+                "health_checker": {"enabled": True},
+            }
+        }
+    }
+
+    selection = resolve_mk8s_gpu_app_selection(
+        payload,
+        selected_app_ids=set(),
+        app_entries=component_entries("apps"),
+    )
+
+    assert selection.issues == (
+        "deploy.validations.mk8s_gpu.health_checker.enabled requires one apps component "
+        "with cli.mk8s_gpu_policy.role: health_checker",
+    )
+
+
+def test_mk8s_gpu_project_validation_defaults_include_health_checker_for_custom_catalog_role(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(mk8s_gpu, "has_mk8s_gpu_health_checker_app", lambda: True)
+
+    defaults = mk8s_gpu_project_validation_defaults()
+
+    assert defaults["health_checker"] == {"enabled": False}
 
 
 def test_manual_b200_requires_network_operator_without_infiniband() -> None:
@@ -308,6 +377,288 @@ def test_gpu_visibility_node_report_omits_success_logs_and_trims_failure_logs() 
         "phase": "Failed",
         "passed": False,
         "log_excerpt": "x" * 4000,
+    }
+
+
+def test_gpu_visibility_node_report_includes_allocatable_resources_when_provided() -> None:
+    assert _gpu_visibility_node_report(
+        node_name="node-a",
+        pod_name="gpu-visibility-node-a",
+        gpu_count=8,
+        allocatable_resources={"nvidia.com/gpu": "8", "rdma/shared_device": "16"},
+        phase="Succeeded",
+        passed=True,
+        logs="Test PASSED",
+    ) == {
+        "node_name": "node-a",
+        "pod_name": "gpu-visibility-node-a",
+        "gpu_count": 8,
+        "allocatable_resources": {
+            "nvidia.com/gpu": "8",
+            "rdma/shared_device": "16",
+        },
+        "phase": "Succeeded",
+        "passed": True,
+    }
+
+
+def test_device_plugin_snapshot_filters_interesting_allocatable_resources() -> None:
+    resources = _interesting_allocatable_resources(
+        {
+            "cpu": "16",
+            "memory": "64Gi",
+            "nvidia.com/gpu": "8",
+            "rdma/shared_device": "16",
+            "example.com/ignored": "1",
+        }
+    )
+
+    assert resources == {
+        "nvidia.com/gpu": "8",
+        "rdma/shared_device": "16",
+    }
+    assert _rdma_resource_keys(resources) == ("rdma/shared_device",)
+
+    snapshot = _gpu_device_plugin_snapshot(
+        [
+            {"name": "node-a", "gpu_count": 8, "allocatable_resources": resources},
+            {
+                "name": "node-b",
+                "gpu_count": 4,
+                "allocatable_resources": {"nvidia.com/gpu": "4"},
+            },
+        ]
+    )
+
+    assert snapshot == {
+        "ready_gpu_node_count": 2,
+        "rdma_resource_keys": ["rdma/shared_device"],
+        "rdma_resource_node_count": 1,
+        "nodes": [
+            {
+                "node_name": "node-a",
+                "gpu_count": 8,
+                "allocatable_resources": {
+                    "nvidia.com/gpu": "8",
+                    "rdma/shared_device": "16",
+                },
+            },
+            {
+                "node_name": "node-b",
+                "gpu_count": 4,
+                "allocatable_resources": {"nvidia.com/gpu": "4"},
+            },
+        ],
+    }
+
+
+def test_operator_readiness_uses_allocatable_gpu_nodes_for_nebius_images(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "nebius_cxcli.mk8s_gpu._resource_state_snapshot",
+        lambda **_kwargs: (
+            True,
+            {
+                "metadata": {"name": "cluster-policy"},
+                "status": {
+                    "state": "ready",
+                    "conditions": [
+                        {
+                            "type": "Ready",
+                            "status": "True",
+                            "reason": "NoGPUNodes",
+                            "message": "No GPU node found, watching for new nodes to join the cluster.",
+                        }
+                    ],
+                },
+            },
+            "cluster-policy:ready",
+        ),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.mk8s_gpu._gpu_nodes",
+        lambda **_kwargs: [{"name": "gpu-node-a", "gpu_count": 8}],
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.mk8s_gpu._daemonset_summary",
+        lambda **_kwargs: [],
+    )
+
+    emitted: list[str] = []
+    report_path = _run_operator_readiness_validation(
+        spec={
+            "timeout": "30s",
+            "gpu_operator_namespace": "nvidia-gpu-operator",
+            "network_operator_required": False,
+            "report_file": "gpu-operator-readiness-report.json",
+        },
+        inventory_dir=tmp_path,
+        extra_env=None,
+        emit=emitted.append,
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["passed"] is True
+    assert report["gpu_operator"]["ready_condition"]["reason"] == "NoGPUNodes"
+    assert report["gpu_operator"]["gpu_nodes"] == [{"name": "gpu-node-a", "gpu_count": 8}]
+    assert any("allocatable GPUs on 1 Ready node(s)" in line for line in emitted)
+
+
+def test_operator_readiness_collects_daemonset_summaries_only_after_readiness_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "nebius_cxcli.mk8s_gpu._resource_state_snapshot",
+        lambda **kwargs: (
+            True,
+            {
+                "metadata": {
+                    "name": "cluster-policy"
+                    if kwargs.get("resource_type") == "clusterpolicy"
+                    else "nic-cluster-policy"
+                },
+                "status": {"state": "ready"},
+            },
+            f"{kwargs.get('resource_type')}:ready",
+        ),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.mk8s_gpu._gpu_nodes",
+        lambda **_kwargs: [
+            {
+                "name": "gpu-node-a",
+                "gpu_count": 8,
+                "allocatable_resources": {
+                    "nvidia.com/gpu": "8",
+                    "rdma/shared_device": "16",
+                },
+            }
+        ],
+    )
+    daemonset_calls: list[str] = []
+
+    def _fake_daemonset_summary(*, namespace: str, extra_env: dict[str, str] | None) -> list[dict[str, Any]]:
+        daemonset_calls.append(namespace)
+        return []
+
+    monkeypatch.setattr(
+        "nebius_cxcli.mk8s_gpu._daemonset_summary",
+        _fake_daemonset_summary,
+    )
+
+    report_path = _run_operator_readiness_validation(
+        spec={
+            "timeout": "30s",
+            "gpu_operator_namespace": "nvidia-gpu-operator",
+            "network_operator_namespace": "nvidia-network-operator",
+            "network_operator_required": True,
+            "gpu_cluster_enabled": True,
+            "report_file": "gpu-operator-readiness-report.json",
+        },
+        inventory_dir=tmp_path,
+        extra_env=None,
+        emit=None,
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["passed"] is True
+    assert daemonset_calls == [
+        "nvidia-gpu-operator",
+        "nvidia-network-operator",
+    ]
+    assert report["network_operator"]["rdma_ready"] is True
+    assert report["network_operator"]["device_plugin_snapshot"] == {
+        "ready_gpu_node_count": 1,
+        "rdma_resource_keys": ["rdma/shared_device"],
+        "rdma_resource_node_count": 1,
+        "nodes": [
+            {
+                "node_name": "gpu-node-a",
+                "gpu_count": 8,
+                "allocatable_resources": {
+                    "nvidia.com/gpu": "8",
+                    "rdma/shared_device": "16",
+                },
+            }
+        ],
+    }
+
+
+def test_operator_readiness_requires_rdma_resources_for_gpu_cluster_shapes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "nebius_cxcli.mk8s_gpu._resource_state_snapshot",
+        lambda **kwargs: (
+            True,
+            {
+                "metadata": {
+                    "name": "cluster-policy"
+                    if kwargs.get("resource_type") == "clusterpolicy"
+                    else "nic-cluster-policy"
+                },
+                "status": {
+                    "state": "ready",
+                    "appliedStates": [
+                        {"name": "state-OFED", "state": "ignore"},
+                        {"name": "state-RDMA-device-plugin", "state": "ignore"},
+                    ],
+                },
+            },
+            f"{kwargs.get('resource_type')}:ready",
+        ),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.mk8s_gpu._gpu_nodes",
+        lambda **_kwargs: [
+            {
+                "name": "gpu-node-a",
+                "gpu_count": 8,
+                "allocatable_resources": {"nvidia.com/gpu": "8"},
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.mk8s_gpu._daemonset_summary",
+        lambda **_kwargs: [],
+    )
+
+    with pytest.raises(RuntimeError, match="GPU operator readiness check failed"):
+        _run_operator_readiness_validation(
+            spec={
+                "timeout": "30s",
+                "gpu_operator_namespace": "nvidia-gpu-operator",
+                "network_operator_namespace": "nvidia-network-operator",
+                "network_operator_required": True,
+                "gpu_cluster_enabled": True,
+                "report_file": "gpu-operator-readiness-report.json",
+            },
+            inventory_dir=tmp_path,
+            extra_env=None,
+            emit=None,
+        )
+
+    report = json.loads((tmp_path / "gpu-operator-readiness-report.json").read_text(encoding="utf-8"))
+    assert report["passed"] is False
+    assert report["network_operator"]["ready"] is False
+    assert report["network_operator"]["rdma_required"] is True
+    assert report["network_operator"]["rdma_ready"] is False
+    assert report["network_operator"]["applied_states"] == [
+        {"name": "state-OFED", "state": "ignore"},
+        {"name": "state-RDMA-device-plugin", "state": "ignore"},
+    ]
+    assert report["network_operator"]["device_plugin_snapshot"] == {
+        "ready_gpu_node_count": 1,
+        "rdma_resource_keys": [],
+        "rdma_resource_node_count": 0,
+        "nodes": [
+            {
+                "node_name": "gpu-node-a",
+                "gpu_count": 8,
+                "allocatable_resources": {"nvidia.com/gpu": "8"},
+            }
+        ],
     }
 
 

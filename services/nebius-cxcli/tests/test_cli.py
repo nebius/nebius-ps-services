@@ -23,6 +23,7 @@ from nebius_cxcli.component_sources import (
 from nebius_cxcli.components import component_entries, reset_component_entry_cache
 from nebius_cxcli.email_settings import EmailSettings
 from nebius_cxcli.quota_checks import QuotaCheck, QuotaReport
+from nebius_cxcli.runtime_config import to_plain_data
 
 runner = CliRunner()
 
@@ -179,6 +180,64 @@ def _catalog(
             "apps": apps or {},
         }
     }
+
+
+def _write_mk8s_boot_disk_sources_file(path: Path, *, module_dir: Path) -> None:
+    module_dir.mkdir(parents=True, exist_ok=True)
+    (module_dir / "main.tf").write_text("terraform {}\n", encoding="utf-8")
+    (module_dir / "variables.tf").write_text('variable "cpu_nodes_count" { type = number }\n', encoding="utf-8")
+    path.write_text(
+        yaml.safe_dump(
+            _catalog(
+                infra={
+                    "mk8s": {
+                        "source": {
+                            "portable": "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3",
+                            "local": str(module_dir),
+                        },
+                        "ui": {
+                            "enabled": True,
+                        },
+                        "defaults": {
+                            "inputs.cpu_nodes_count": 2,
+                            "inputs.cpu_nodes_platform": "cpu-any",
+                            "inputs.cpu_nodes_preset": "32vcpu-128gb",
+                        },
+                        "cli": {
+                            "boot_disk_defaults": {
+                                "cpu": {
+                                    "default_type": "NETWORK_SSD",
+                                    "rules": [
+                                        {
+                                            "max_vcpu": 8,
+                                            "max_memory_gib": 32,
+                                            "size_gib": 64,
+                                        },
+                                        {
+                                            "max_vcpu": 32,
+                                            "max_memory_gib": 128,
+                                            "size_gib": 93,
+                                        },
+                                        {
+                                            "max_vcpu": 64,
+                                            "max_memory_gib": 256,
+                                            "size_gib": 128,
+                                        },
+                                        {
+                                            "min_vcpu": 65,
+                                            "size_gib": 186,
+                                        },
+                                    ],
+                                }
+                            }
+                        },
+                    }
+                }
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
 
 
 def _create_non_interactive(deployments_root: Path, *extra: str):
@@ -457,12 +516,14 @@ def test_create_interactive_existing_project_requires_confirmation(
             str(deployments_root),
             "--no-validate-sources",
         ],
-        input="\n\nn\n",
+        input="tenant-123\nproject-456\nn\n",
     )
 
     assert result.exit_code == 0, result.output
-    assert "Tenant ID [tenant-123]" in result.output
-    assert "Project ID [project-456]" in result.output
+    assert "Tenant ID" in result.output
+    assert "Project ID" in result.output
+    assert "Tenant ID [tenant-123]" not in result.output
+    assert "Project ID [project-456]" not in result.output
     assert "Existing project detected." in result.output
     assert "Continue and overwrite the existing tenant/project folder from scratch?" in result.output
     assert "(y/n, q=stop wizard) [n]" in result.output
@@ -492,12 +553,14 @@ def test_create_interactive_existing_root_new_project_skips_overwrite_warning(
             str(deployments_root),
             "--no-validate-sources",
         ],
-        input="\nproject-789\nclient-b\n\n\nn\n",
+        input="tenant-123\nproject-789\nclient-b\n\n\nn\n",
     )
 
     assert result.exit_code == 0, result.output
-    assert "Tenant ID [tenant-123]" in result.output
-    assert "Project ID [project-456]" in result.output
+    assert "Tenant ID" in result.output
+    assert "Project ID" in result.output
+    assert "Tenant ID [tenant-123]" not in result.output
+    assert "Project ID [project-456]" not in result.output
     assert "Existing deployments root detected." not in result.output
     assert "Continue and enter project identity?" not in result.output
     assert "Existing project detected." not in result.output
@@ -544,52 +607,6 @@ def test_create_non_interactive_existing_tenant_new_project_creates_config(
     assert (deployments_root / "tenant-123" / "project-789" / "config.yaml").exists()
 
 
-def test_single_existing_project_create_defaults_reads_identity_from_existing_config(
-    tmp_path: Path,
-) -> None:
-    deployments_root = tmp_path / "deployments"
-    deployments_root.mkdir(parents=True, exist_ok=True)
-
-    first = _create_non_interactive(deployments_root)
-    assert first.exit_code == 0, first.output
-
-    defaults = cli_module._single_existing_project_create_defaults(deployments_root)
-    assert defaults is not None
-    assert defaults.tenant_id == "tenant-123"
-    assert defaults.project_id == "project-456"
-    assert defaults.config_path == _project_config_path(deployments_root)
-
-
-def test_single_existing_project_create_defaults_requires_unambiguous_project(
-    tmp_path: Path,
-) -> None:
-    deployments_root = tmp_path / "deployments"
-    deployments_root.mkdir(parents=True, exist_ok=True)
-
-    first = _create_non_interactive(deployments_root)
-    assert first.exit_code == 0, first.output
-
-    second = runner.invoke(
-        app,
-        [
-            "create",
-            str(deployments_root),
-            "--no-interactive",
-            "--client-name",
-            "client-b",
-            "--tenant-id",
-            "tenant-456",
-            "--project-id",
-            "project-789",
-            "--no-validate-sources",
-        ],
-    )
-    assert second.exit_code == 0, second.output
-
-    defaults = cli_module._single_existing_project_create_defaults(deployments_root)
-    assert defaults is None
-
-
 def test_create_writes_deployments_gitignore_when_target_is_in_git_repo(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir(parents=True, exist_ok=True)
@@ -609,6 +626,8 @@ def test_create_writes_deployments_gitignore_when_target_is_in_git_repo(tmp_path
     assert "*/*/generated/infra/.terraform/" in content
     assert "*/*/generated/infra/crash.*.log" in content
     assert "*/*/generated/infra/terraform.auto.tfvars.json" in content
+    assert ".coverage" not in content
+    assert "*.tgz" not in content
 
     second = _create_non_interactive(deployments_root, "--force")
     assert second.exit_code == 0, second.output
@@ -653,6 +672,8 @@ def test_render_recreates_deployments_gitignore_in_git_repo(tmp_path: Path) -> N
     assert "*/*/generated/infra/.terraform/" in content
     assert "*/*/generated/infra/crash.*.log" in content
     assert "*/*/generated/infra/terraform.auto.tfvars.json" in content
+    assert ".coverage" not in content
+    assert "*.tgz" not in content
 
 
 def test_render_normalizes_ssh_public_key_file_path_into_config(
@@ -694,13 +715,13 @@ def test_render_normalizes_ssh_public_key_file_path_into_config(
         "render_terraform_artifacts",
         lambda _config, _paths, *, source_profile: [tmp_path / "main.tf"],
     )
-    monkeypatch.setattr(cli_module, "_runtime_component_output_values", lambda _config, _paths: {})
+    monkeypatch.setattr(cli_module, "_runtime_component_output_values", lambda _config, _paths, **_kwargs: {})
     monkeypatch.setattr(
         cli_module,
         "render_flux",
         lambda _config, _paths, *, component_output_values=None: [],
     )
-    monkeypatch.setattr(cli_module, "write_inventory", lambda _config, _paths: None)
+    monkeypatch.setattr(cli_module, "write_inventory", lambda _config, _paths, **_kwargs: None)
     monkeypatch.setattr(
         cli_module,
         "_write_generated_runtime_manifest",
@@ -709,7 +730,7 @@ def test_render_normalizes_ssh_public_key_file_path_into_config(
     monkeypatch.setattr(
         cli_module,
         "_try_generate_terraform_lock_file",
-        lambda _config, _paths: False,
+        lambda _config, _paths, **_kwargs: False,
     )
 
     result = runner.invoke(app, ["render", "--force", str(config_path)])
@@ -787,7 +808,7 @@ def test_render_rejects_generated_directory_when_config_yaml_is_required(tmp_pat
     assert "Pass <tenant>/<project>/config.yaml." in normalized
 
 
-def test_create_force_overwrites_from_scratch_and_reuses_client_info_defaults(
+def test_create_force_overwrites_from_scratch_without_reusing_client_info_defaults(
     tmp_path: Path,
 ) -> None:
     deployments_root = tmp_path / "deployments"
@@ -825,9 +846,10 @@ def test_create_force_overwrites_from_scratch_and_reuses_client_info_defaults(
 
     refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert "Overwritten project:" in forced.output
-    assert refreshed["client_info"]["nebius"]["region_id"] == "me-west1"
-    assert refreshed["client_info"]["notifications"]["email_enabled"] is True
-    assert refreshed["client_info"]["notifications"]["email"] == "ops@example.com"
+    assert refreshed["client_info"]["client_name"] == "client-a"
+    assert refreshed["client_info"]["nebius"]["region_id"] == "eu-north1"
+    assert refreshed["client_info"]["notifications"]["email_enabled"] is False
+    assert refreshed["client_info"]["notifications"]["email"] is None
     assert refreshed.get("infra", {}).get("components", []) == []
     assert refreshed.get("apps", {}).get("charts", []) == []
 
@@ -843,6 +865,7 @@ def test_create_force_noninteractive_warns_before_overwrite(tmp_path: Path) -> N
     assert forced.exit_code == 0, forced.output
     assert "Existing project detected." in forced.output
     assert "`--force` confirms the overwrite in non-interactive mode." in forced.output
+    assert "normal create defaults" in " ".join(forced.output.split())
     assert "component list/add/remove" in forced.output
 
 
@@ -880,7 +903,7 @@ def test_create_force_overwrite_recreates_project_folder_and_removes_stale_files
     assert (project_dir / "config.yaml").exists()
     assert (project_dir / "generated" / "infra").is_dir()
     assert (project_dir / "generated" / "flux").is_dir()
-    assert (project_dir / "generated" / "inventory" / "inventory.md").exists()
+    assert (project_dir / "generated" / "inventory" / "deploy-report.md").exists()
 
 
 def test_create_force_overwrite_does_not_touch_other_projects(tmp_path: Path) -> None:
@@ -940,7 +963,7 @@ def test_create_interactive_force_existing_project_still_requires_confirmation(
             "--force",
             "--no-validate-sources",
         ],
-        input="\n\nn\n",
+        input="tenant-123\nproject-456\nn\n",
     )
 
     assert result.exit_code == 0, result.output
@@ -950,6 +973,44 @@ def test_create_interactive_force_existing_project_still_requires_confirmation(
     assert "Existing deployments root detected." not in result.output
     assert "No changes applied." in result.output
     assert config_path.read_text(encoding="utf-8") == original
+
+
+def test_create_interactive_overwrite_restarts_client_info_prompts_from_fresh_defaults(
+    tmp_path: Path,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    first = _create_non_interactive(deployments_root)
+    assert first.exit_code == 0, first.output
+
+    config_path = _project_config_path(deployments_root)
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    payload["client_info"]["client_name"] = "proserv1"
+    payload["client_info"]["nebius"]["region_id"] = "me-west1"
+    payload["client_info"]["notifications"]["email_enabled"] = True
+    payload["client_info"]["notifications"]["email"] = "ops@example.com"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "create",
+            str(deployments_root),
+            "--no-validate-sources",
+        ],
+        input="tenant-123\nproject-456\ny\nclient-b\n\n\nn\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Client name [proserv1]" not in result.output
+    assert "Notifications email (optional; leave blank to keep email disabled) [ops@example.com]" not in result.output
+
+    refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert refreshed["client_info"]["client_name"] == "client-b"
+    assert refreshed["client_info"]["nebius"]["region_id"] == "eu-north1"
+    assert refreshed["client_info"]["notifications"]["email_enabled"] is False
+    assert refreshed["client_info"]["notifications"]["email"] is None
 
 
 def test_create_uses_defaults_when_no_component_flags(tmp_path: Path) -> None:
@@ -1206,6 +1267,71 @@ def test_load_context_does_not_require_embedded_component_sources(tmp_path: Path
 
     config_path = _project_config_path(deployments_root)
     _config, _paths = _load_context(config_path)
+
+
+def test_load_context_materializes_mk8s_boot_disk_defaults_for_existing_config(
+    tmp_path: Path,
+) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    _write_mk8s_boot_disk_sources_file(
+        sources_file,
+        module_dir=tmp_path / "modules" / "mk8s",
+    )
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    created = runner.invoke(
+        app,
+        [
+            "--component-sources-file",
+            str(sources_file),
+            "create",
+            str(deployments_root),
+            "--no-interactive",
+            "--client-name",
+            "client-a",
+            "--tenant-id",
+            "tenant-123",
+            "--project-id",
+            "project-456",
+            "--no-validate-sources",
+            "--infra",
+            "mk8s",
+        ],
+    )
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    persisted = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    mk8s = next(
+        item
+        for item in persisted["infra"]["components"]
+        if isinstance(item, dict) and item.get("id") == "mk8s"
+    )
+    mk8s["inputs"].pop("cpu_nodes_boot_disk_size_gib", None)
+    mk8s["inputs"].pop("cpu_nodes_boot_disk_type", None)
+    config_path.write_text(yaml.safe_dump(persisted, sort_keys=False), encoding="utf-8")
+
+    set_component_sources_file_override(sources_file)
+    reset_component_sources_cache()
+    reset_component_entry_cache()
+    config, _paths = _load_context(config_path)
+    loaded = to_plain_data(config)
+    loaded_mk8s = next(
+        item
+        for item in loaded["infra"]["components"]
+        if isinstance(item, dict) and item.get("id") == "mk8s"
+    )
+    assert loaded_mk8s["inputs"]["cpu_nodes_boot_disk_size_gib"] == 93
+    assert loaded_mk8s["inputs"]["cpu_nodes_boot_disk_type"] == "NETWORK_SSD"
+
+    reloaded_from_disk = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    persisted_mk8s = next(
+        item
+        for item in reloaded_from_disk["infra"]["components"]
+        if isinstance(item, dict) and item.get("id") == "mk8s"
+    )
+    assert "cpu_nodes_boot_disk_size_gib" not in persisted_mk8s["inputs"]
+    assert "cpu_nodes_boot_disk_type" not in persisted_mk8s["inputs"]
 
 
 def test_load_context_rejects_missing_materialized_shared_app_defaults(tmp_path: Path) -> None:
@@ -1500,6 +1626,48 @@ def test_create_seeds_mk8s_cpu_node_count_into_config(tmp_path: Path) -> None:
         if isinstance(item, dict) and item.get("id") == "mk8s"
     )
     assert mk8s["inputs"]["cpu_nodes_count"] == 2
+
+
+def test_create_materializes_catalog_owned_mk8s_boot_disk_defaults_into_config(
+    tmp_path: Path,
+) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    _write_mk8s_boot_disk_sources_file(
+        sources_file,
+        module_dir=tmp_path / "modules" / "mk8s",
+    )
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    result = runner.invoke(
+        app,
+        [
+            "--component-sources-file",
+            str(sources_file),
+            "create",
+            str(deployments_root),
+            "--no-interactive",
+            "--client-name",
+            "client-a",
+            "--tenant-id",
+            "tenant-123",
+            "--project-id",
+            "project-456",
+            "--no-validate-sources",
+            "--infra",
+            "mk8s",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+    payload = yaml.safe_load(_project_config_path(deployments_root).read_text(encoding="utf-8"))
+    mk8s = next(
+        item
+        for item in payload["infra"]["components"]
+        if isinstance(item, dict) and item.get("id") == "mk8s"
+    )
+    assert mk8s["inputs"]["cpu_nodes_boot_disk_size_gib"] == 93
+    assert mk8s["inputs"]["cpu_nodes_boot_disk_type"] == "NETWORK_SSD"
 
 
 def test_create_materializes_shared_admin_ssh_username_into_config(tmp_path: Path) -> None:
@@ -1926,6 +2094,10 @@ def test_component_add_noninteractive_preserves_existing_values(tmp_path: Path) 
     result = _component_add(config_path, "managed-postgresql", "--no-interactive")
     assert result.exit_code == 0, result.output
     assert "Added infra components: managed-postgresql" in result.output
+    normalized_output = " ".join(result.output.split())
+    assert "Next steps: run `nebius-cxcli validate <config.yaml>`, optionally " in normalized_output
+    assert "`nebius-cxcli validate --strict <config.yaml>`, then " in normalized_output
+    assert "`nebius-cxcli render <config.yaml>`." in normalized_output
 
     refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     refreshed_components = refreshed.get("infra", {}).get("components", [])
@@ -2137,6 +2309,10 @@ def test_component_remove_noninteractive_removes_app_chart_when_no_dependency_br
     result = _component_remove(config_path, "gateway-helm", "--no-interactive")
     assert result.exit_code == 0, result.output
     assert "Removed apps components: gateway-helm" in result.output
+    normalized_output = " ".join(result.output.split())
+    assert "Next steps: run `nebius-cxcli validate <config.yaml>`, optionally " in normalized_output
+    assert "`nebius-cxcli validate --strict <config.yaml>`, then " in normalized_output
+    assert "`nebius-cxcli render <config.yaml>`." in normalized_output
 
     refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     charts = refreshed.get("apps", {}).get("charts", [])
@@ -2275,10 +2451,12 @@ def test_bootstrap_ci_no_auth_writes_workflow_in_repo_root(
     assert "Bootstrap/reconcile Flux" in content
     assert 'nebius-cxcli flux bootstrap "${{ matrix.generated }}"' in content
     assert 'nebius-cxcli deploy "${{ matrix.generated }}"' not in content
-    assert "Send inventory email" in content
+    assert "Send deploy report email" in content
     assert "vars.SMTP_HOST != ''" not in content
     assert "SMTP_HOST: ${{ vars.SMTP_HOST }}" in content
     assert "SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}" in content
+    assert 'nebius-cxcli email "${{ matrix.config }}"' in content
+    assert 'nebius-cxcli email "${{ matrix.generated }}"' not in content
     assert (
         f"NEBIUS_CXCLI_REF: ${{{{ vars.NEBIUS_CXCLI_REF || '{cli_module.default_cli_ref()}' }}}}"
         in content
@@ -2365,6 +2543,8 @@ def test_bootstrap_ci_recreates_deployments_gitignore_in_git_repo(
     assert "*/*/generated/infra/.terraform/" in content
     assert "*/*/generated/infra/crash.*.log" in content
     assert "*/*/generated/infra/terraform.auto.tfvars.json" in content
+    assert ".coverage" not in content
+    assert "*.tgz" not in content
 
 
 def test_bootstrap_ci_cli_ref_overrides_generated_workflow_pin(

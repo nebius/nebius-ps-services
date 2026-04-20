@@ -6,6 +6,226 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Fixed MK8s deploy status fail-fast handling so `deploy` no longer aborts
+  immediately on stale old node-group error events from a previous failed run
+  when Terraform is about to replace that failed group. Fresh terminal API
+  errors from the current run still abort early.
+- Fixed `generated/inventory/deploy-report.md` formatting so render/report
+  output no longer ends with duplicate blank lines when deploy validations are
+  present, keeping the generated Markdown clean for linting in customer repos.
+- Changed interactive `create` so `tenant_id` / `project_id` no longer
+  default from an existing project under the deployments root. `create`
+  now assumes a new target unless you explicitly pass or type an existing
+  tenant/project, and only then warns before overwriting that resolved folder.
+- Merged the human-readable inventory and deploy-validation markdown outputs
+  into one canonical `generated/inventory/deploy-report.md`. It now combines
+  `Infra`, `Apps`, and `Validations`, `report write` refreshes that single
+  file, `email` sends that same file, deploy-time validations still keep their
+  per-validation JSON detail reports, and stale markdown/report artifacts are
+  cleared before each deploy run so skipped or failed runs do not leave
+  misleading old summaries behind.
+- Tightened the project-level runtime entrypoints to one canonical target:
+  `deploy`, `destroy`, `report write`, and `email` now accept only
+  `config.yaml`, resolve sibling `generated/` automatically, and reject direct
+  `generated/` targets instead of keeping a backward-compatibility dual path.
+  The generated manifest and rendered inventory artifacts remain the
+  authoritative runtime contract after render, so post-render source edits do
+  not silently change what gets applied, destroyed, written, or emailed.
+- Clarified `validate` and `quota-check` help/docs wording so the command
+  surface now matches the actual live quota-plus-capacity checks already used
+  by runtime validation.
+- Tightened `create` overwrite semantics so "from scratch" now includes
+  `client_info`: once an existing resolved tenant/project target is confirmed
+  for overwrite, the client name / region / notification prompts restart from
+  the normal create defaults instead of reusing the old config values.
+- Fixed the MK8s GPU validation wizard to hide the
+  `deploy.validations.mk8s_gpu.health_checker.enabled` toggle unless the active
+  catalog actually exposes an apps component with
+  `cli.mk8s_gpu_policy.role: health_checker`, so bundled catalogs no longer
+  present an impossible health-checker prompt during `create` / `component add`.
+- Fixed component-level wizard phase control flow so answering `n` to
+  `Configure '<component>' component fields now?` skips only that component and
+  continues with the remaining selected components, while `q` still stops the
+  wizard. This fixes the MK8s GPU app case where skipping
+  `nvidia-network-operator` previously prevented the later
+  `nvidia-gpu-operator` prompt from appearing at all.
+- Tightened the MK8s GPU health-checker contract so the bundled NVIDIA path
+  treats it strictly as a custom app-policy hook instead of a built-in deploy
+  validation: bundled project defaults now omit `health_checker` unless the
+  active catalog actually supplies a compatible app, and `deploy
+  --skip-validation` no longer advertises a nonexistent `health-checker`
+  built-in validation kind.
+- Fixed the Nebius `gpu_stack_source: nebius_image` MK8s path so the bundled
+  catalog now renders the missing driverful-node policy: GPU Operator keeps
+  host GPU-driver and NVIDIA Container Toolkit management disabled, and the
+  bundled operator path now suppresses GPU Operator's NFD whenever Network
+  Operator owns the networking stack so only one NFD instance is deployed.
+  Network Operator enables NFD plus Mellanox NodeFeatureRules and adds a Helm
+  post-render patch that exposes `rdma/shared_device` on driverful InfiniBand
+  nodes without deploying the OFED driver container.
+- Fixed the manual MK8s GPU-cluster / InfiniBand path so the bundled Network
+  Operator render also patches `NicClusterPolicy` with `rdma/shared_device`
+  instead of relying on the chart default CR, which only handled OFED. Manual
+  operator-managed InfiniBand nodes now line up with the same scheduler-visible
+  RDMA contract that deploy-time readiness validation already expects.
+- Refactored the bundled MK8s GPU app-policy catalog so reusable driverful NFD
+  overlays and `NicClusterPolicy` RDMA patch bodies can be named once under
+  `cli.mk8s_gpu_policy.default_sets` / `post_render_patch_sets` and referenced
+  from multiple rules. This keeps the Network Operator RDMA plugin tag and
+  selector details catalog-owned without repeating the same patch inline across
+  multiple `component_sources.yaml` rules.
+- Clarified and locked in the layered MK8s GPU validation contract: source
+  comments, README/design docs, and regression tests now explicitly treat
+  `operator_readiness`, `gpu_visibility`, and `nccl` as a cheapest-to-most-
+  expensive chain with distinct responsibilities rather than overlapping
+  duplicate checks.
+- Ignored local coverage data files and packaged chart archives in the service
+  repo `.gitignore`, and clarified that the managed customer deployments
+  `.gitignore` stays intentionally narrow to generated Terraform runtime files
+  and tfvars instead of acting like a generic developer ignore file.
+- Exposed bundled MK8s GPU validation controls as a project-facing deploy
+  contract under `deploy.validations.mk8s_gpu.*`, so these CLI deploy checks
+  no longer masquerade as Terraform inputs. The wizard still surfaces the same
+  toggles from catalog defaults, but the resulting values now persist in
+  `config.yaml` as deploy settings, and local `deploy` also supports one-run
+  `--skip-validations` / `--skip-validation <kind>` overrides.
+- Removed the temporary backward-compatibility shims from that MK8s GPU
+  validation contract: `infra.components[].inputs.gpu_validation_overrides`
+  now fails fast instead of being migrated, and local `deploy` now requires
+  generated-manifest `deploy.validations` metadata instead of recomputing GPU
+  validation specs from older bundles at runtime.
+- Tightened the interactive MK8s GPU app flow: when the infra prompts turn on
+  a GPU shape that requires `nvidia-gpu-operator` or
+  `nvidia-network-operator`, the wizard now auto-enables those app rows before
+  the app phase starts so the same `create` / `component add` pass can still
+  show their prompts instead of only materializing them later in `config.yaml`.
+- Simplified the bundled `mk8s` source catalog by removing the one-off raw
+  `wizard:` block for GPU validation helper defaults. cxcli now derives those
+  virtual prompt defaults directly from `components.infra.mk8s.cli.gpu.validations`
+  during source parsing, so the catalog keeps one source of truth while the
+  interactive wizard behavior stays unchanged.
+- Removed the now-unused YAML anchors from the bundled MK8s
+  `cli.gpu.validations` defaults after the wizard-helper refactor, so the
+  catalog no longer carries dead alias syntax.
+- Clarified the MK8s boot-disk wizard wording for
+  `NETWORK_SSD_NON_REPLICATED`: it now describes the disk as the lowest-cost
+  high-performance SSD-backed option, not the cheapest disk overall.
+- Tightened MK8s GPU operator readiness around live cluster behavior: the
+  readiness report now requires allocatable GPUs on Ready nodes instead of
+  assuming manual `nvidia.com/gpu.deploy.*` labels, which matches the current
+  Nebius-image path where GPUs can be allocatable even while the upstream GPU
+  Operator `ClusterPolicy` still reports `NoGPUNodes`.
+- Tightened MK8s GPU-cluster / InfiniBand readiness further so `deploy` no
+  longer treats a fabric-enabled cluster as ready just because `ClusterPolicy`
+  and `NicClusterPolicy` report `ready`: the saved operator-readiness report
+  now also records `NicClusterPolicy.status.appliedStates`, checks that Ready
+  GPU nodes advertise scheduler-visible RDMA-style allocatable resources (for
+  example `rdma/shared_device`), and fails fast when the control-plane objects
+  are green but pod-facing RDMA exposure is still missing.
+- Simplified the live MK8s operator-readiness polling loop: `ClusterPolicy`
+  and `NicClusterPolicy` remain the primary control-plane signals, allocatable
+  GPUs on Ready nodes remain the GPU data-plane gate, daemonset rollout
+  summaries are now collected once for the saved report instead of being
+  polled on every pass, and local `deploy` now treats manifest
+  `deploy.validations` as a required part of the generated-bundle contract
+  instead of recomputing runtime-derived GPU validation specs from older
+  bundles.
+- Refined the bundled GPU Visibility reporting contract: the validation still
+  uses a sampled CUDA workload as the authoritative pass/fail gate, but its
+  saved report now also captures the Ready GPU nodes' allocatable
+  device-plugin resources so operators can inspect `nvidia.com/gpu` and any
+  RDMA-style resource keys without mistaking raw `allocatable` output for a
+  full runtime proof.
+- Fixed bundled MK8s GPU Operator deploys on Nebius-managed GPU images by
+  also disabling the chart's Nebius `NVIDIADriver` CRD path in the rendered
+  Helm values, avoiding the live `gpu-operator@v25.10.0` Flux install failure
+  on `templates/nvidiadriver_nebius_patch.yaml`.
+
+- Clarified the source-config validation contract: `validate --strict` help now
+  explicitly calls out strict readiness, MK8s preflight, and fail-fast live
+  quota/capacity checks, and `component add` / `component remove` now point
+  operators at the same `validate`, optional `validate --strict`, then
+  `render` day-2 loop already used after `create`.
+- Hardened `deploy <generated-dir>` with an explicit generated-bundle
+  preflight before Terraform apply: strict readiness checks against the
+  manifest runtime config, MK8s network preflight, live Nebius
+  quota/capacity validation, Terraform validation for `generated/infra`, and
+  rendered Flux manifest validation when apps are enabled now all fail fast
+  inside `deploy` itself instead of relying on operators to run separate
+  commands first.
+- Changed plain `validate <config.yaml>` to also run the live Nebius
+  quota/capacity assessment in warning mode, so operators now see confirmed
+  shortages before `deploy` while `validate --strict` keeps the fail-on-
+  insufficiency readiness gate.
+- Added `quota-request <config.yaml>`, which reuses the existing live quota
+  assessment and plans direct tenant/project quota allowance requests for the
+  confirmed insufficient quota dimensions through the published Nebius quota
+  API instead of requiring manual web-console entry; the CLI prints the target
+  limits it plans to request, falls back cleanly to a manual Administration →
+  Limits → Quotas follow-up when Nebius denies the direct API write, now also
+  prints coverage-gap detail when nothing can be submitted, and points
+  operators to the web console for submission or status tracking.
+- Refactored bundled MK8s boot-disk defaulting so the catalog now owns
+  ordered cxcli boot-disk rules under
+  `components.infra.mk8s.cli.boot_disk_defaults.<cpu|gpu>`, keyed by resolved
+  preset resources such as vCPU, RAM, and GPU count. `create`, `component
+  add`, and runtime config loading now materialize explicit
+  `cpu_nodes_boot_disk_*` / `gpu_nodes_boot_disk_*` values from the first
+  matching rule for the selected shape, while unmodeled shapes still fall back
+  to the heuristic. Guided disk-type prompts now show consistent Nebius
+  price/performance labels for all three recommended SSD-backed choices and
+  clarify that MK8s boot-disk encryption is not configurable from cxcli.
+  High-performance SSD types still round to required 93 GiB multiples, regular
+  `NETWORK_SSD` values stay exact GiB sizes, explicit first-class inputs or
+  `template.boot_disk` overrides remain authoritative, and the quota
+  estimator/request planner can now cover the common `compute.disk.size.*`
+  MK8s shortages without waiting for a deploy-time failure. Public MK8s
+  node-group `boot_disk` still exposes size/type only, so cxcli documents but
+  does not attempt to toggle optional SSD NRD / SSD IO M3 encryption.
+- Extended the live bundled infra quota assessment to also consider active
+  tenant Capacity Block Groups for fabric-bound GPU requests, so matching CBG
+  capacity can satisfy `compute.instance.gpu.*` and
+  `compute.gpucluster.count` during `validate --strict`, `create`,
+  `quota-check`, `render`, and deploy-time guard rails instead of emitting
+  false zero-quota warnings.
+- Refined generated-bundle destroy behavior so top-level `destroy` now skips
+  separate Flux app deletion when the generated infra bundle destroys the
+  handed-off MK8s cluster directly, while external-cluster app bundles still
+  delete rendered Flux resources first. `destroy`, `terraform destroy`, and
+  `flux destroy` now print path-specific confirmation warnings for the actual
+  target they remove, and `flux destroy` / pre-destroy app teardown now skip
+  cleanly with a note when the target cluster is reachable but Flux CRDs are
+  already absent instead of surfacing raw `kubectl` resource-mapping errors.
+- Tightened interactive wizard UX: flat Terraform module-input prompts now use
+  `q` to revisit the previous prompt instead of only skipping ahead, while
+  nested value/object prompts keep the existing branch-level backout behavior.
+  The MK8s boot-disk wizard still documents the NRD / IO M3 encryption
+  limitation in the README/design docs, but that note is no longer repeated in
+  the live prompt banner or disk-type option labels.
+- Removed hardcoded dollar figures from the MK8s boot-disk wizard labels so
+  live CLI guidance does not drift as Nebius pricing changes. The README and
+  design doc now point operators to the official Nebius disk-type and pricing
+  pages for current values instead of restating specific amounts in the prompt
+  text.
+- Improved `validate` / `validate --strict` terminal output with one concise
+  validated-scope list that separates `infra` and `apps` and shows their
+  catalog groups such as `Compute`, `Storage`, `Platform`, or `Workloads`,
+  so successful validation is more informative without adding another heavy
+  inspection pass.
+- Fixed bundled app runtime Helm resolution when an app id differs from the
+  chart basename: dependency lookup, post-create source validation, live chart
+  default pruning, and Flux rendering now keep using the catalog chart name
+  (for example `network-operator` / `gpu-operator`) instead of incorrectly
+  reconstructing refs from app ids such as `nvidia-network-operator`.
+- Improved the bundled MK8s wizard default for `inputs.k8s_version`: the
+  first live Nebius control-plane version is now auto-selected into the
+  interactive flow instead of defaulting to an unset value.
+- Refined interactive wizard exit behavior for field prompts: `q` now backs
+  out one prompt-prefix level within the current component instead of aborting
+  the whole wizard immediately, while `qq` preserves the full wizard stop path.
+- Adjusted per-component field-phase defaults in the interactive wizard so
+  infra components still default to `y`, while app chart field prompts now
+  default to `n` because chart overrides are normally optional.
 - Clarified the remaining B200-only NCCL MPI overlay contract in
   `component_sources.yaml`, README, and the design doc: the bundled
   `-mca coll ^hcoll` override stays catalog-owned because the official Nebius
@@ -25,7 +245,7 @@ All notable changes to this project are tracked here. This changelog follows
 - Refactored the bundled MK8s GPU contract around the actual Nebius node-group model: `inputs.gpu_stack_source` and `inputs.gpu_stack_preset` now replace the earlier driver-centric terminology in the customer- and catalog-facing contracts, the MK8s module/docs now describe Nebius-managed `gpu_settings.drivers_preset` vs manual/operator-managed GPU stacks explicitly, and the NCCL path now renders a first-party `helm-charts/nccl-test` chart selected through the same Helm `source.portable` / `source.local` contract used by other bundled charts instead of assembling the raw `MPIJob` manifest in Python.
 - Replaced the old MK8s GPU hardcoded profile split with component-local catalog policy: `component_sources.yaml` now keeps MK8s GPU image preferences and validations under `components.infra.mk8s.cli.gpu`, keeps GPU operator/network operator auto-enable rules and Helm value overrides on the operator app entries themselves under `components.apps.<id>.cli.mk8s_gpu_policy`, removes the unused standalone `nvidia-device-plugin` catalog entry, still materializes Nebius-image vs manual MK8s defaults from the live Nebius compatibility matrix, keeps the GPU Operator B300 driver pin in the catalog instead of Python, and still persists deploy-time GPU readiness/visibility/NCCL reports under `generated/inventory/`.
 - Changed interactive `create` overwrite UX so it now resolves `tenant_id` / `project_id` before showing any overwrite warning: existing deployments roots no longer emit a root-wide pre-warning, and confirmation appears only when the chosen resolved tenant/project already exists.
-- Changed the canonical project layout to match Nebius tenant/project hierarchy: project configs now live at `<deployments-root>/<tenant-id>/<project-id>/config.yaml`, and `create <deployments-root>` is a bootstrap/overwrite command instead of an existing-config reconcile path. Once that resolved tenant/project already exists, interactive reruns now require explicit overwrite confirmation, non-interactive reruns require `--force`, overwrite recreates only that one resolved project folder from scratch, only `client_info` values are reused as create defaults, and infra/apps selections plus component values are rebuilt from the current create inputs instead of being merged from the old config; docs/help/tests were realigned to make `component list/add/remove` the default day-2 editing surface.
+- Changed the canonical project layout to match Nebius tenant/project hierarchy: project configs now live at `<deployments-root>/<tenant-id>/<project-id>/config.yaml`, and `create <deployments-root>` is a bootstrap/overwrite command instead of an existing-config reconcile path. Once that resolved tenant/project already exists, interactive reruns now require explicit overwrite confirmation, non-interactive reruns require `--force`, overwrite recreates only that one resolved project folder from scratch, client-info prompts restart from the normal create defaults, and infra/apps selections plus component values are rebuilt from the current create inputs instead of being merged from the old config; docs/help/tests were realigned to make `component list/add/remove` the default day-2 editing surface.
 - Tightened the remaining help/docs wording around the tenant/project layout so `create --help`, README, and the design doc consistently describe the canonical tenant/project overwrite target and the generated customer workflow's canonical `<tenant-id>/<project-id>/generated/**` watch scope.
 - Tightened the generated customer GitHub workflow trigger to the canonical two-level deployment layout under the deployments root: it now watches only `.../<tenant-id>/<project-id>/generated/**` paths instead of a broader recursive `generated/**` glob that could still match stale pre-refactor layouts.
 - Extended catalog-driven Nebius fail-fast status monitoring beyond MK8s: bundled jump-host modules now declare live `nebius.compute.instance` watchers, bundled `mysterybox` now declares `nebius.mysterybox.secret` watchers that expand one component row into one watcher per configured secret name, supported watcher kinds now include compute instances and MysteryBox secrets, and the MSP PostgreSQL/SFS/object-storage/compute-instance/MysteryBox pollers now abort long-running apply/destroy waits from terminal Nebius SDK operation failures instead of only printing progress summaries.

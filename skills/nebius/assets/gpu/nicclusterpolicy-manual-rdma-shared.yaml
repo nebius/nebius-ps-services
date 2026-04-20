@@ -1,0 +1,22 @@
+apiVersion: mellanox.com/v1alpha1
+kind: NicClusterPolicy
+metadata:
+  name: nic-cluster-policy
+spec:
+  rdmaSharedDevicePlugin:
+    image: k8s-rdma-shared-dev-plugin
+    repository: nvcr.io/nvidia/mellanox
+    version: network-operator-v25.7.0
+    config: |
+      {
+        "configList": [
+          {
+            "resourceName": "shared_device",
+            "rdmaHcaMax": 63,
+            "selectors": {
+              "vendors": ["15b3"],
+              "linkTypes": ["infiniband"]
+            }
+          }
+        ]
+      }

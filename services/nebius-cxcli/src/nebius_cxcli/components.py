@@ -102,6 +102,19 @@ def _compose_chart_source_for_entry(*, chart: Any, fallback_name: str) -> str:
     return _compose_chart_source(repo=chart_repo, chart_name=chart_name)
 
 
+def component_entry_chart_name(entry: ComponentEntry | None) -> str | None:
+    if entry is None:
+        return None
+    chart_name = str(entry.chart_name or "").strip()
+    if chart_name:
+        return chart_name
+    source = str(entry.source or "").strip().rstrip("/")
+    if not source or "/" not in source:
+        return None
+    candidate = source.rsplit("/", maxsplit=1)[-1].strip()
+    return candidate or None
+
+
 @lru_cache(maxsize=2)
 def _infra_component_entries(
     source_profile: SourceProfile | None = None,

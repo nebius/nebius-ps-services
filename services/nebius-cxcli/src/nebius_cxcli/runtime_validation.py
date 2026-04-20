@@ -26,7 +26,7 @@ from .mk8s_gpu import mk8s_gpu_dependency_issues
 from .runtime_config import read_path_with_catalog
 from .runtime_plugin_validation import run_runtime_validation_plugins
 
-_ROOT_KEYS = frozenset({"version", "client_info", "infra", "apps"})
+_ROOT_KEYS = frozenset({"version", "client_info", "deploy", "infra", "apps"})
 _ID_PATTERN = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 _SECTION_PATTERN = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 _ENV_VAR_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
@@ -94,6 +94,38 @@ def _validate_client_info(payload: Mapping[str, Any]) -> None:
     email = notifications.get("email")
     if email is not None and not isinstance(email, str):
         raise ValueError("client_info.notifications.email must be a string or null")
+
+
+def _validate_deploy(payload: Mapping[str, Any]) -> None:
+    deploy = payload.get("deploy")
+    if deploy is None:
+        return
+    if not isinstance(deploy, Mapping):
+        raise ValueError("deploy must be a mapping")
+
+    supported_deploy_keys = {"validations"}
+    unknown_deploy_keys = sorted(str(key) for key in deploy if str(key) not in supported_deploy_keys)
+    if unknown_deploy_keys:
+        raise ValueError("deploy has unsupported field(s): " + ", ".join(unknown_deploy_keys))
+
+    validations = deploy.get("validations")
+    if validations is None:
+        return
+    if not isinstance(validations, Mapping):
+        raise ValueError("deploy.validations must be a mapping")
+
+    supported_validation_keys = {"mk8s_gpu"}
+    unknown_validation_keys = sorted(
+        str(key) for key in validations if str(key) not in supported_validation_keys
+    )
+    if unknown_validation_keys:
+        raise ValueError(
+            "deploy.validations has unsupported field(s): " + ", ".join(unknown_validation_keys)
+        )
+
+    mk8s_gpu = validations.get("mk8s_gpu")
+    if mk8s_gpu is not None and not isinstance(mk8s_gpu, Mapping):
+        raise ValueError("deploy.validations.mk8s_gpu must be a mapping")
 
 
 def _enabled_component_ids(payload: Mapping[str, Any], *, scope: ComponentScope) -> set[str]:
@@ -257,14 +289,18 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
         version_value = raw_component.get("version")
         if version_value is not None and not isinstance(version_value, str):
             raise ValueError(f"infra.components[{index}].version must be a string when set")
-        if not isinstance(raw_component.get("inputs"), Mapping):
+        inputs = raw_component.get("inputs")
+        if not isinstance(inputs, Mapping):
             raise ValueError(f"infra.components[{index}].inputs must be a mapping")
-        if isinstance(raw_component.get("inputs"), Mapping) and "module" in raw_component.get(
-            "inputs", {}
-        ):
+        if "module" in inputs:
             raise ValueError(
                 f"infra.components[{index}].inputs.module is not supported; "
                 "set module source at infra.components[].source and module vars directly under infra.components[].inputs"
+            )
+        if component_id == "mk8s" and "gpu_validation_overrides" in inputs:
+            raise ValueError(
+                "infra.components[].inputs.gpu_validation_overrides is no longer supported; "
+                "use deploy.validations.mk8s_gpu.*"
             )
 
     seen_app_instance_ids: set[str] = set()
@@ -355,6 +391,7 @@ def validate_runtime_payload(payload: Mapping[str, Any]) -> None:
         raise ValueError("version must be 'v1'")
 
     _validate_client_info(payload)
+    _validate_deploy(payload)
 
     infra = payload.get("infra")
     if isinstance(infra, Mapping):

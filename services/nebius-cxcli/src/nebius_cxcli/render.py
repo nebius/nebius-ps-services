@@ -13,6 +13,7 @@ from .component_sources import SourceProfile
 from .flux_render import render_flux
 from .infra_render import render_terraform_artifacts
 from .inventory_ops import write_inventory
+from .mk8s_gpu import mk8s_gpu_validation_specs
 from .paths import ProjectPaths
 
 
@@ -85,7 +86,7 @@ def _render_project_to_paths(
     written: list[Path] = []
     written.extend(render_terraform_artifacts(config, paths, source_profile=source_profile))
     written.extend(render_flux(config, paths, component_output_values=component_output_values))
-    write_inventory(config, paths)
+    write_inventory(config, paths, validations=mk8s_gpu_validation_specs(config))
     return RenderResult(files_written=sorted(written))
 
 

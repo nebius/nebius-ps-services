@@ -90,6 +90,13 @@ def _validate_mk8s_gpu(
     as_text: Callable,
     base: str,
 ) -> None:
+    legacy_gpu_validation_overrides = get_path(payload, f"{base}.gpu_validation_overrides")
+    if legacy_gpu_validation_overrides is not None:
+        raise ValueError(
+            f"{base}.gpu_validation_overrides is no longer supported; use "
+            "deploy.validations.mk8s_gpu.*"
+        )
+
     gpu_enabled = bool(get_path(payload, f"{base}.gpu_enabled", False))
     gpu_node_groups = get_path(payload, f"{base}.gpu_node_groups", 0)
     gpu_nodes_count_per_group = get_path(payload, f"{base}.gpu_nodes_count_per_group", 0)
@@ -114,6 +121,7 @@ def _validate_mk8s_gpu(
     infiniband_fabric = as_text(get_path(payload, f"{base}.infiniband_fabric"))
     mig_strategy = as_text(get_path(payload, f"{base}.mig_strategy"))
     mig_parted_config = as_text(get_path(payload, f"{base}.mig_parted_config"))
+    project_gpu_validations = get_path(payload, "deploy.validations.mk8s_gpu", {})
 
     if gpu_enabled:
         if _coerce_int(gpu_node_groups) <= 0:
@@ -153,6 +161,62 @@ def _validate_mk8s_gpu(
                 )
     if (mig_strategy or mig_parted_config) and not gpu_enabled:
         raise ValueError("mig_strategy/mig_parted_config require gpu_enabled=true")
+
+    if isinstance(project_gpu_validations, Mapping):
+        operator_readiness = project_gpu_validations.get("operator_readiness", {})
+        gpu_visibility = project_gpu_validations.get("gpu_visibility", {})
+        nccl = project_gpu_validations.get("nccl", {})
+        health_checker = project_gpu_validations.get("health_checker", {})
+        operator_enabled = (
+            operator_readiness.get("enabled")
+            if isinstance(operator_readiness, Mapping)
+            else None
+        )
+
+        for field_label, value in (
+            ("deploy.validations.mk8s_gpu.operator_readiness.enabled", operator_enabled),
+            (
+                "deploy.validations.mk8s_gpu.gpu_visibility.enabled",
+                gpu_visibility.get("enabled") if isinstance(gpu_visibility, Mapping) else None,
+            ),
+            (
+                "deploy.validations.mk8s_gpu.nccl.enabled",
+                nccl.get("enabled") if isinstance(nccl, Mapping) else None,
+            ),
+            (
+                "deploy.validations.mk8s_gpu.health_checker.enabled",
+                health_checker.get("enabled") if isinstance(health_checker, Mapping) else None,
+            ),
+        ):
+            if value is not None and not isinstance(value, bool):
+                raise ValueError(f"{field_label} must be true or false when set")
+
+        gpu_visibility_max_nodes = (
+            gpu_visibility.get("max_nodes") if isinstance(gpu_visibility, Mapping) else None
+        )
+        if gpu_visibility_max_nodes is not None and _coerce_int(gpu_visibility_max_nodes, default=0) <= 0:
+            raise ValueError("deploy.validations.mk8s_gpu.gpu_visibility.max_nodes must be > 0")
+
+        nccl_max_nodes = nccl.get("max_nodes") if isinstance(nccl, Mapping) else None
+        if nccl_max_nodes is not None and _coerce_int(nccl_max_nodes, default=0) <= 0:
+            raise ValueError("deploy.validations.mk8s_gpu.nccl.max_nodes must be > 0")
+
+        nccl_threshold = (
+            nccl.get("average_bus_bandwidth_threshold_gbps")
+            if isinstance(nccl, Mapping)
+            else None
+        )
+        if nccl_threshold is not None:
+            try:
+                parsed_threshold = float(nccl_threshold)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "deploy.validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps must be numeric"
+                ) from exc
+            if parsed_threshold <= 0:
+                raise ValueError(
+                    "deploy.validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps must be > 0"
+                )
 
 
 def _validate_sfs_csi(

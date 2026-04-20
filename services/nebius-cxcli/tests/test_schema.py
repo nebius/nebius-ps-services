@@ -192,3 +192,40 @@ def test_schema_rejects_legacy_client_info_fields(tmp_path: Path) -> None:
     with pytest.raises(ValueError) as exc_info:
         load_config(config_path)
     assert "client_info has unsupported field(s)" in str(exc_info.value)
+
+
+def test_schema_rejects_legacy_mk8s_gpu_validation_overrides_input(tmp_path: Path) -> None:
+    payload = _dynamic_payload()
+    payload["infra"]["components"] = [
+        {
+            "id": "mk8s",
+            "enabled": True,
+            "inputs": {
+                "cluster_name": "cluster-a",
+                "parent_id": "project-456",
+                "subnet_id": "subnet-123",
+                "gpu_enabled": True,
+                "gpu_node_groups": 1,
+                "gpu_nodes_count_per_group": 1,
+                "gpu_nodes_platform": "gpu-h100-sxm",
+                "gpu_nodes_preset": "8gpu-128vcpu-1600gb",
+                "gpu_validation_overrides": {
+                    "operator_readiness": {"enabled": False},
+                },
+            },
+        }
+    ]
+    payload["apps"]["charts"] = [
+        {
+            "id": "nvidia-gpu-operator",
+            "enabled": True,
+            "values": {},
+        }
+    ]
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc_info:
+        load_config(config_path)
+    assert "gpu_validation_overrides is no longer supported" in str(exc_info.value)

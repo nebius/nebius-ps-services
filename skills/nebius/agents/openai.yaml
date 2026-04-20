@@ -1,4 +1,4 @@
 interface:
   display_name: "Nebius"
-  short_description: "Build Nebius IAM, VPC, and quota workflows"
-  default_prompt: "Use $nebius to implement Nebius IAM/Object Storage flows, inspect Nebius VPC pools/subnets/route tables, or add live quota-aware provisioning checks with the Nebius SDK."
+  short_description: "Build Nebius IAM, VPC, quota, and MK8s GPU/operator workflows"
+  default_prompt: "Use $nebius to implement Nebius IAM/Object Storage flows, inspect Nebius VPC pools/subnets/route tables, add live quota-aware provisioning checks with the Nebius SDK, or review Nebius MK8s GPU compatibility, driverful versus manual GPU setup, and GPUDirect RDMA/operator readiness."

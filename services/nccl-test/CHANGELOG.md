@@ -32,10 +32,23 @@ All notable changes to this project are tracked here. This changelog follows
   `nebius-cxcli` now reads the shared image/tag plus benchmark defaults
   directly from `helm-charts/nccl-test/values.yaml` instead of duplicating
   them in its app catalog.
-- Clarified the service README so it no longer implies NVIDIA HPC-X parity for
-  the locally built image: the runtime currently uses Ubuntu Open MPI packages,
-  while the B200-only `-mca coll ^hcoll` note remains a catalog-level Nebius
-  benchmark override rather than an image-baked HCOLL default.
+- Clarified the service README so it distinguishes the NVIDIA CUDA Ubuntu base
+  images from the MPI layer installed on top: the runtime uses Ubuntu Open MPI
+  packages rather than NVIDIA HPC-X, while the B200-only `-mca coll ^hcoll`
+  note remains a catalog-level Nebius benchmark override rather than an
+  image-baked HCOLL default.
+- Clarified `build-image.sh` so the script and README now say explicitly that
+  it builds from the selected NVIDIA CUDA tag and `NVIDIA/nccl-tests` ref,
+  loads into local Docker by default, and only pushes to the registry encoded
+  in `--tag` when `--push` is used.
+- Tightened and reformatted `build-image.sh --help` so it now states the local
+  `--load` default, tells users to pass a full remote image name in `--tag`
+  for `--push`, and keeps the examples and column alignment consistent with
+  that contract.
+- Added Nebius registry login to `build-image.sh --push`: when the target tag
+  points at `cr.<region>.nebius.cloud`, the script now reuses
+  `NEBIUS_IAM_TOKEN` when present or fetches a token with
+  `nebius iam get-access-token`, then runs `docker login` before pushing.
 - Hardened `publish-image.sh` so `--prep` now requires a strictly clean
   worktree including untracked files, auto-sets upstream on a first branch
   push, and rejects duplicate release tags before editing the changelog;

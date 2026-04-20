@@ -24,12 +24,16 @@ from nebius_cxcli.component_sources import (
 )
 from nebius_cxcli.components import ComponentEntry
 from nebius_cxcli.email_settings import EmailSettings
+from nebius_cxcli.inventory_ops import write_inventory as write_inventory_artifacts
 from nebius_cxcli.managed_tools import FLUX_VERSION_ENV, TERRAFORM_VERSION_ENV
 from nebius_cxcli.paths import ProjectPaths
 from nebius_cxcli.quota_checks import (
     QuotaCheck,
     QuotaCoverageGap,
     QuotaReport,
+    QuotaRequestChange,
+    QuotaRequestFailure,
+    QuotaRequestResult,
     RegionalQuotaAvailability,
 )
 
@@ -144,6 +148,17 @@ def test_validate_command_non_strict(tmp_path: Path, monkeypatch: pytest.MonkeyP
             captured.update({"config": config, "source_profile": source_profile}) or ()
         ),
     )
+    monkeypatch.setattr(
+        cli,
+        "_validation_scope_summary_lines",
+        lambda *_args, **_kwargs: [
+            "Validated scope:",
+            "  infra:",
+            "    - Compute: mk8s",
+            "  apps:",
+            "    - none",
+        ],
+    )
 
     result = runner.invoke(cli.app, ["validate", str(tmp_path / "config.yaml")])
 
@@ -154,12 +169,19 @@ def test_validate_command_non_strict(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert "Validate active component sources" in output
     assert "Validate component dependencies" in output
     assert "Validate Terraform module inputs" in output
+    assert "Check live Nebius quota/capacity" in output
+    assert "Validated scope:" in output
+    assert "infra:" in output
+    assert "Compute: mk8s" in output
+    assert "apps:" in output
+    assert "- none" in output
     assert "Valid:" in output
     assert captured["source_profile"] == SourceProfile.PORTABLE
 
 
 def test_validate_command_strict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     strict_called: dict[str, bool] = {"called": False}
+    quota_called: dict[str, object] = {}
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(cli, "_load_context", lambda _path: (object(), object()))
@@ -192,6 +214,24 @@ def test_validate_command_strict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         assert include_common_checks is False
 
     monkeypatch.setattr(cli, "_validate_strict_config", _fake_strict)
+    monkeypatch.setattr(
+        cli,
+        "_raise_on_live_quota_issues",
+        lambda config, *, phase: (
+            quota_called.update({"config": config, "phase": phase}) or _empty_quota_report()
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_validation_scope_summary_lines",
+        lambda *_args, **_kwargs: [
+            "Validated scope:",
+            "  infra:",
+            "    - Compute: mk8s",
+            "  apps:",
+            "    - Platform: nvidia-gpu-operator, nvidia-network-operator",
+        ],
+    )
 
     result = runner.invoke(cli.app, ["validate", "--strict", str(tmp_path / "config.yaml")])
 
@@ -199,9 +239,172 @@ def test_validate_command_strict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     output = _plain_output(result.output)
     assert "Validate strict deployment readiness" in output
     assert "Validate MK8s network preflight" in output
+    assert "Validate live Nebius quota/capacity" in output
+    assert "Validated scope:" in output
+    assert "infra:" in output
+    assert "Compute: mk8s" in output
+    assert "apps:" in output
+    assert "Platform: nvidia-gpu-operator" in output
+    assert "nvidia-gpu-operator" in output
+    assert "nvidia-network-operator" in output
     assert "Valid (strict):" in output
     assert strict_called["called"] is True
     assert captured["source_profile"] == SourceProfile.PORTABLE
+    assert quota_called["config"] is captured["config"]
+    assert quota_called["phase"] == "validate --strict"
+
+
+def test_validation_scope_summary_lines_group_enabled_components_concisely(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "component_entries",
+        lambda scope, *, source_profile=None: (
+            (
+                ComponentEntry(
+                    id="mk8s",
+                    scope="infra",
+                    config_path="infra.mk8s",
+                    description="Managed Kubernetes",
+                    group="Compute",
+                ),
+            )
+            if scope == "infra"
+            else (
+                ComponentEntry(
+                    id="nvidia-gpu-operator",
+                    scope="apps",
+                    config_path="apps.platform.nvidia-gpu-operator",
+                    description="GPU Operator",
+                    group="Platform",
+                ),
+                ComponentEntry(
+                    id="nvidia-network-operator",
+                    scope="apps",
+                    config_path="apps.platform.nvidia-network-operator",
+                    description="Network Operator",
+                    group="Platform",
+                ),
+            )
+        ),
+    )
+
+    lines = cli._validation_scope_summary_lines(
+        {
+            "infra": {
+                "components": [
+                    {"id": "mk8s", "enabled": True},
+                ]
+            },
+            "apps": {
+                "charts": [
+                    {"id": "nvidia-gpu-operator", "enabled": True, "group": "platform"},
+                    {"id": "nvidia-network-operator", "enabled": True, "group": "platform"},
+                ]
+            },
+        },
+        source_profile=SourceProfile.PORTABLE,
+    )
+
+    assert (
+        lines
+        == [
+            "Validated scope:",
+            "  infra:",
+            "    - Compute: mk8s",
+            "  apps:",
+            "    - Platform: nvidia-gpu-operator, nvidia-network-operator",
+        ]
+    )
+
+
+def test_validate_command_strict_fails_on_confirmed_live_quota_insufficiency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "_load_context", lambda _path: (object(), object()))
+    monkeypatch.setattr(
+        cli,
+        "_validate_active_component_sources",
+        lambda _cfg, *, chart_meta_cache=None: None,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_validate_component_dependencies",
+        lambda _cfg, *, chart_meta_cache=None: [],
+    )
+    monkeypatch.setattr(cli, "validate_mk8s_network_preflight", lambda _cfg: None)
+    monkeypatch.setattr(cli, "_validate_strict_config", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "rendered_module_sources", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(
+        cli,
+        "_raise_on_live_quota_issues",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("Nebius quota/capacity is insufficient for validate --strict.")
+        ),
+    )
+
+    result = runner.invoke(cli.app, ["validate", "--strict", str(tmp_path / "config.yaml")])
+
+    assert result.exit_code != 0
+    assert "Nebius quota/capacity is insufficient for validate --strict." in _plain_output(
+        result.output
+    )
+
+
+def test_validate_command_non_strict_warns_on_confirmed_live_quota_insufficiency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "_load_context", lambda _path: (object(), object()))
+    monkeypatch.setattr(
+        cli,
+        "_validate_active_component_sources",
+        lambda _cfg, *, chart_meta_cache=None: None,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_validate_component_dependencies",
+        lambda _cfg, *, chart_meta_cache=None: [],
+    )
+    monkeypatch.setattr(cli, "rendered_module_sources", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(
+        cli,
+        "_warn_on_live_quota_issues",
+        lambda *_args, **_kwargs: QuotaReport(
+            tenant_id="tenant-123",
+            project_id="project-456",
+            region_id="eu-north1",
+            checked_at="2026-04-18T00:00:00+00:00",
+            checks=(
+                QuotaCheck(
+                    component_id="mk8s",
+                    instance_id="mk8s",
+                    component_label="mk8s",
+                    quota_name="compute.disk.size.network-ssd",
+                    region="eu-north1",
+                    required=1024,
+                    reason="mk8s boot disks",
+                    unit="byte",
+                    available=0,
+                    sufficient=False,
+                    tenant_limit=0,
+                    tenant_usage=0,
+                    project_limit=None,
+                    project_usage=None,
+                    source_scope="tenant",
+                    description="SSD quota",
+                ),
+            ),
+        ),
+    )
+    monkeypatch.setattr(cli, "_validation_scope_summary_lines", lambda *_args, **_kwargs: None)
+
+    result = runner.invoke(cli.app, ["validate", str(tmp_path / "config.yaml")])
+
+    assert result.exit_code == 0, result.output
+    output = _plain_output(result.output)
+    assert "Valid with quota warnings:" in output
+    assert "nebius-cxcli quota-request" in output
 
 
 def test_validate_command_accepts_local_source_profile(
@@ -411,8 +614,11 @@ def test_quota_check_command_coverage_gap_warns_without_all_regions_next_step(
                     instance_id="mk8s",
                     component_label="mk8s",
                     message=(
-                        "MK8s node-group boot disk size/type is not exposed by current module "
-                        "inputs; disk-size quotas were not checked"
+                        "MK8s CPU node-group boot-disk quota could not be fully evaluated; "
+                        "set inputs.cpu_nodes_boot_disk_size_gib and "
+                        "inputs.cpu_nodes_boot_disk_type, or set "
+                        "inputs.mk8s_cpu_node_group_overrides.template.boot_disk.size_* "
+                        "and inputs.mk8s_cpu_node_group_overrides.template.boot_disk.type"
                     ),
                 ),
                 QuotaCoverageGap(
@@ -420,8 +626,11 @@ def test_quota_check_command_coverage_gap_warns_without_all_regions_next_step(
                     instance_id="mk8s",
                     component_label="mk8s",
                     message=(
-                        "MK8s GPU node boot disk size/type is not exposed by current module "
-                        "inputs; disk-size quotas were not checked"
+                        "MK8s GPU node-group boot-disk quota could not be fully evaluated; "
+                        "set inputs.gpu_nodes_boot_disk_size_gib and "
+                        "inputs.gpu_nodes_boot_disk_type, or set "
+                        "inputs.mk8s_gpu_node_group_overrides.template.boot_disk.size_* "
+                        "and inputs.mk8s_gpu_node_group_overrides.template.boot_disk.type"
                     ),
                 ),
             ),
@@ -452,12 +661,16 @@ def test_quota_check_command_coverage_gap_warns_without_all_regions_next_step(
     assert "  - mk8s" in plain_output
     assert "    gaps:" in plain_output
     assert (
-        "MK8s node-group boot disk size/type is not exposed by current module "
-        "inputs; disk-size quotas were not checked"
+        "MK8s CPU node-group boot-disk quota could not be fully evaluated; "
+        "set inputs.cpu_nodes_boot_disk_size_gib and inputs.cpu_nodes_boot_disk_type, "
+        "or set inputs.mk8s_cpu_node_group_overrides.template.boot_disk.size_* "
+        "and inputs.mk8s_cpu_node_group_overrides.template.boot_disk.type"
     ) in collapsed_output
     assert (
-        "MK8s GPU node boot disk size/type is not exposed by current module "
-        "inputs; disk-size quotas were not checked"
+        "MK8s GPU node-group boot-disk quota could not be fully evaluated; "
+        "set inputs.gpu_nodes_boot_disk_size_gib and inputs.gpu_nodes_boot_disk_type, "
+        "or set inputs.mk8s_gpu_node_group_overrides.template.boot_disk.size_* "
+        "and inputs.mk8s_gpu_node_group_overrides.template.boot_disk.type"
     ) in collapsed_output
     assert "Next step: compare quota availability across regions with:" not in collapsed_output
 
@@ -505,13 +718,226 @@ def test_quota_check_command_fails_on_confirmed_insufficiency(
     plain_output = _plain_output(result.output)
     output = " ".join(plain_output.split())
     output_without_linebreaks = plain_output.replace("\n", "")
-    assert "Nebius quota is insufficient for quota check." in output
-    assert "Increase the quota and" in output
+    assert "Nebius quota/capacity is insufficient for quota check." in output
+    assert "Increase the quota or assign matching Capacity Block Group capacity and" in output
     assert "retry." in output
+    assert "nebius-cxcli quota-request" in output
     assert "compute.instance.count requires 1, available 0" in output
     assert "Next step: compare quota availability across regions with:" in output
     assert "nebius-cxcli quota-check --all-regions" in output
     assert str(fake_paths.config_path) in output_without_linebreaks
+
+
+def test_quota_request_command_submits_confirmed_shortages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    report = QuotaReport(
+        tenant_id="tenant-123",
+        project_id="project-456",
+        region_id="eu-north1",
+        checked_at="2026-04-18T00:00:00+00:00",
+        checks=(
+            QuotaCheck(
+                component_id="mk8s",
+                instance_id="mk8s",
+                component_label="mk8s",
+                quota_name="compute.disk.size.network-ssd",
+                region="eu-north1",
+                required=1024,
+                reason="mk8s boot disks",
+                unit="byte",
+                available=0,
+                sufficient=False,
+                tenant_limit=0,
+                tenant_usage=0,
+                project_limit=None,
+                project_usage=None,
+                source_scope="tenant",
+                description="SSD quota",
+                tenant_quota_id="quota-tenant-1",
+            ),
+        ),
+    )
+    submitted: dict[str, object] = {}
+
+    monkeypatch.setattr(cli, "_load_context", lambda _path: (object(), _fake_paths(tmp_path)))
+    monkeypatch.setattr(cli, "_warn_on_live_quota_issues", lambda *_args, **_kwargs: report)
+    monkeypatch.setattr(
+        cli,
+        "request_quota_allowance_changes",
+        lambda payload, *, context="quota request": (
+            submitted.update({"report": payload, "context": context})
+            or QuotaRequestResult(
+                planned_changes=(
+                    QuotaRequestChange(
+                        container_id="tenant-123",
+                        container_scope="tenant",
+                        quota_name="compute.disk.size.network-ssd",
+                        region="eu-north1",
+                        current_limit=0,
+                        current_usage=0,
+                        required=1024,
+                        requested_limit=1024,
+                        unit="byte",
+                        quota_id="quota-tenant-1",
+                    ),
+                ),
+                submitted_changes=(
+                    QuotaRequestChange(
+                        container_id="tenant-123",
+                        container_scope="tenant",
+                        quota_name="compute.disk.size.network-ssd",
+                        region="eu-north1",
+                        current_limit=0,
+                        current_usage=0,
+                        required=1024,
+                        requested_limit=1024,
+                        unit="byte",
+                        quota_id="quota-tenant-1",
+                    ),
+                ),
+            )
+        ),
+    )
+
+    result = runner.invoke(cli.app, ["quota-request", str(tmp_path / "config.yaml")])
+
+    assert result.exit_code == 0, result.output
+    output = _plain_output(result.output)
+    normalized_output = " ".join(output.split())
+    assert "Planned direct quota allowance requests for confirmed shortages:" in output
+    assert "Quota request submitted:" in output
+    assert "Administration -> Limits -> Quotas" in normalized_output
+    assert submitted["report"] is report
+    assert submitted["context"] == "quota request"
+
+
+def test_quota_request_command_falls_back_cleanly_on_permission_denied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    report = QuotaReport(
+        tenant_id="tenant-123",
+        project_id="project-456",
+        region_id="eu-north1",
+        checked_at="2026-04-18T00:00:00+00:00",
+        checks=(
+            QuotaCheck(
+                component_id="mk8s",
+                instance_id="mk8s",
+                component_label="mk8s",
+                quota_name="compute.disk.size.network-ssd",
+                region="eu-north1",
+                required=1024,
+                reason="mk8s boot disks",
+                unit="byte",
+                available=0,
+                sufficient=False,
+                tenant_limit=0,
+                tenant_usage=0,
+                project_limit=None,
+                project_usage=None,
+                source_scope="tenant",
+                description="SSD quota",
+                tenant_quota_id="quota-tenant-1",
+            ),
+        ),
+    )
+    change = QuotaRequestChange(
+        container_id="tenant-123",
+        container_scope="tenant",
+        quota_name="compute.disk.size.network-ssd",
+        region="eu-north1",
+        current_limit=0,
+        current_usage=0,
+        required=1024,
+        requested_limit=1024,
+        unit="byte",
+        quota_id="quota-tenant-1",
+    )
+
+    monkeypatch.setattr(cli, "_load_context", lambda _path: (object(), _fake_paths(tmp_path)))
+    monkeypatch.setattr(cli, "_warn_on_live_quota_issues", lambda *_args, **_kwargs: report)
+    monkeypatch.setattr(
+        cli,
+        "request_quota_allowance_changes",
+        lambda *_args, **_kwargs: QuotaRequestResult(
+            planned_changes=(change,),
+            failed_changes=(
+                QuotaRequestFailure(
+                    change=change,
+                    message="Failed to request quota 'compute.disk.size.network-ssd': PERMISSION_DENIED",
+                    permission_denied=True,
+                ),
+            ),
+        ),
+    )
+
+    result = runner.invoke(cli.app, ["quota-request", str(tmp_path / "config.yaml")])
+
+    assert result.exit_code == 0, result.output
+    output = _plain_output(result.output)
+    normalized_output = " ".join(output.split())
+    assert "Planned direct quota allowance requests for confirmed shortages:" in output
+    assert "Direct quota request submission was not permitted." in output
+    assert "Manual follow-up is still required for:" in output
+    assert "tenant tenant-123: eu-north1 compute.disk.size.network-ssd" in output
+    assert "Administration -> Limits -> Quotas" in normalized_output
+    assert "Quota request submitted:" not in output
+
+
+def test_quota_request_command_reports_noop_when_no_confirmed_shortage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "_load_context", lambda _path: (object(), _fake_paths(tmp_path)))
+    monkeypatch.setattr(cli, "_warn_on_live_quota_issues", lambda *_args, **_kwargs: _empty_quota_report())
+
+    result = runner.invoke(cli.app, ["quota-request", str(tmp_path / "config.yaml")])
+
+    assert result.exit_code == 0, result.output
+    assert "No quota request needed:" in _plain_output(result.output)
+
+
+def test_quota_request_command_prints_coverage_gaps_when_no_request_is_possible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    report = QuotaReport(
+        tenant_id="tenant-123",
+        project_id="project-456",
+        region_id="uk-south1",
+        checked_at="2026-04-18T00:00:00+00:00",
+        coverage_gaps=(
+            QuotaCoverageGap(
+                component_id="mk8s",
+                instance_id="mk8s",
+                component_label="mk8s",
+                message=(
+                    "MK8s GPU node-group boot-disk quota could not be fully evaluated; "
+                    "set inputs.gpu_nodes_boot_disk_size_gib and "
+                    "inputs.gpu_nodes_boot_disk_type, or set "
+                    "inputs.mk8s_gpu_node_group_overrides.template.boot_disk.size_* "
+                    "and inputs.mk8s_gpu_node_group_overrides.template.boot_disk.type"
+                ),
+            ),
+        ),
+    )
+    monkeypatch.setattr(cli, "_load_context", lambda _path: (object(), _fake_paths(tmp_path)))
+
+    def _fake_warn_on_live_quota_issues(*_args, **_kwargs):
+        cli._print_live_quota_report(report, phase="quota request")
+        return report
+
+    monkeypatch.setattr(cli, "_warn_on_live_quota_issues", _fake_warn_on_live_quota_issues)
+
+    result = runner.invoke(cli.app, ["quota-request", str(tmp_path / "config.yaml")])
+
+    assert result.exit_code == 0, result.output
+    output = _plain_output(result.output)
+    assert (
+        "quota could not be fully evaluated for the following component(s)"
+        in " ".join(output.split())
+    )
+    assert "MK8s GPU node-group boot-disk quota could not be fully evaluated" in output
+    assert "No direct quota request was submitted." in output
 
 
 def test_load_generated_context_exports_manifest_tool_versions(
@@ -615,7 +1041,7 @@ def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.Mon
     monkeypatch.setattr(
         cli,
         "_runtime_component_output_values",
-        lambda config, paths: (
+        lambda config, paths, **kwargs: (
             calls.update({"outputs_config": config, "outputs_paths": paths}) or {}
         ),
     )
@@ -636,7 +1062,7 @@ def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.Mon
     monkeypatch.setattr(
         cli,
         "_try_generate_terraform_lock_file",
-        lambda config, paths: (
+        lambda config, paths, **kwargs: (
             calls.update(
                 {
                     "lock_config": config,
@@ -649,9 +1075,9 @@ def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.Mon
     monkeypatch.setattr(
         cli,
         "write_inventory",
-        lambda config, paths: (
+        lambda config, paths, **kwargs: (
             calls.update({"inventory_config": config, "inventory_paths": paths})
-            or SimpleNamespace(markdown=paths.inventory_dir / "inventory.md")
+            or SimpleNamespace(markdown=paths.inventory_dir / "deploy-report.md")
         ),
     )
     monkeypatch.setattr(
@@ -735,8 +1161,11 @@ def test_render_command_persists_quota_report_and_warns(
                 instance_id="mk8s",
                 component_label="mk8s",
                 message=(
-                    "MK8s node-group boot disk size/type is not exposed by current module "
-                    "inputs; disk-size quotas were not checked"
+                    "MK8s CPU node-group boot-disk quota could not be fully evaluated; "
+                    "set inputs.cpu_nodes_boot_disk_size_gib and "
+                    "inputs.cpu_nodes_boot_disk_type, or set "
+                    "inputs.mk8s_cpu_node_group_overrides.template.boot_disk.size_* "
+                    "and inputs.mk8s_cpu_node_group_overrides.template.boot_disk.type"
                 ),
             ),
         ),
@@ -779,7 +1208,7 @@ def test_render_command_persists_quota_report_and_warns(
     assert captured["quota_report"] is report
     assert "Render completed with quota warnings." in _plain_output(result.output)
     assert "compute.instance.count requires 1, available 0" in _plain_output(result.output)
-    assert "boot disk size/type quotas were not checked" not in _plain_output(result.output)
+    assert "boot-disk quota could not be fully evaluated" not in _plain_output(result.output)
 
 
 def test_render_command_accepts_local_source_profile(
@@ -803,17 +1232,17 @@ def test_render_command_accepts_local_source_profile(
             calls.update({"source_profile": source_profile}) or [tmp_path / "a.tf"]
         ),
     )
-    monkeypatch.setattr(cli, "_runtime_component_output_values", lambda config, paths: {})
+    monkeypatch.setattr(cli, "_runtime_component_output_values", lambda config, paths, **kwargs: {})
     monkeypatch.setattr(
         cli, "render_flux", lambda config, paths, *, component_output_values=None: []
     )
-    monkeypatch.setattr(cli, "write_inventory", lambda config, paths: None)
+    monkeypatch.setattr(cli, "write_inventory", lambda config, paths, **kwargs: None)
     monkeypatch.setattr(
         cli,
         "_write_generated_runtime_manifest",
         lambda config, paths, *, source_profile, **kwargs: paths.generated_dir / "manifest.json",
     )
-    monkeypatch.setattr(cli, "_try_generate_terraform_lock_file", lambda config, paths: False)
+    monkeypatch.setattr(cli, "_try_generate_terraform_lock_file", lambda config, paths, **kwargs: False)
 
     result = runner.invoke(
         cli.app,
@@ -1023,7 +1452,7 @@ def test_render_command_force_allows_noninteractive_overwrite(
         cli,
         "write_inventory",
         lambda *_args, **_kwargs: SimpleNamespace(
-            markdown=fake_paths.inventory_dir / "inventory.md"
+            markdown=fake_paths.inventory_dir / "deploy-report.md"
         ),
     )
     monkeypatch.setattr(
@@ -1060,7 +1489,7 @@ def test_render_command_prompts_before_overwrite_when_interactive(
         cli,
         "write_inventory",
         lambda *_args, **_kwargs: SimpleNamespace(
-            markdown=fake_paths.inventory_dir / "inventory.md"
+            markdown=fake_paths.inventory_dir / "deploy-report.md"
         ),
     )
     monkeypatch.setattr(
@@ -1141,7 +1570,7 @@ def test_deploy_command_passes_auto_auth_flag(
     captured: dict[str, object] = {}
     manifest = {"schema": "nebius-cxcli-generated/v1"}
 
-    monkeypatch.setattr(cli, "_load_generated_context", lambda _path: ("cfg", fake_paths, manifest))
+    monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: ("cfg", fake_paths, manifest))
     monkeypatch.setattr(
         cli,
         "_ensure_ci_workflow_for_deployments_root",
@@ -1163,17 +1592,21 @@ def test_deploy_command_passes_auto_auth_flag(
         loaded_manifest: object,
         *,
         auto_auth_bootstrap: bool,
+        skip_validations: bool,
+        skip_validation_kinds: set[str],
     ) -> None:
         captured["config"] = config
         captured["paths"] = paths
         captured["manifest"] = loaded_manifest
         captured["auto_auth_bootstrap"] = auto_auth_bootstrap
+        captured["skip_validations"] = skip_validations
+        captured["skip_validation_kinds"] = skip_validation_kinds
 
     monkeypatch.setattr(cli, "_deploy_generated_artifacts", _fake_deploy_generated_artifacts)
 
     result = runner.invoke(
         cli.app,
-        ["deploy", str(tmp_path / "generated"), "--auto-auth-bootstrap"],
+        ["deploy", str(fake_paths.config_path), "--auto-auth-bootstrap"],
     )
 
     assert result.exit_code == 0, result.output
@@ -1184,7 +1617,113 @@ def test_deploy_command_passes_auto_auth_flag(
         "paths": fake_paths,
         "manifest": manifest,
         "auto_auth_bootstrap": True,
+        "skip_validations": False,
+        "skip_validation_kinds": set(),
     }
+
+
+def test_deploy_command_passes_one_run_validation_skip_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    captured: dict[str, object] = {}
+    manifest = {"schema": "nebius-cxcli-generated/v1"}
+
+    monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: ("cfg", fake_paths, manifest))
+    monkeypatch.setattr(
+        cli,
+        "_deploy_generated_artifacts",
+        lambda config, paths, loaded_manifest, **kwargs: captured.update(
+            {
+                "config": config,
+                "paths": paths,
+                "manifest": loaded_manifest,
+                **kwargs,
+            }
+        ),
+    )
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "deploy",
+            str(fake_paths.config_path),
+            "--skip-validation",
+            "nccl",
+            "--skip-validation",
+            "gpu-visibility",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["skip_validations"] is False
+    assert captured["skip_validation_kinds"] == {"mk8s_nccl", "mk8s_gpu_visibility"}
+
+
+def test_deploy_command_rejects_unknown_one_run_validation_skip_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    manifest = {"schema": "nebius-cxcli-generated/v1"}
+
+    monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: ("cfg", fake_paths, manifest))
+    monkeypatch.setattr(cli, "_deploy_generated_artifacts", lambda *args, **kwargs: None)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "deploy",
+            str(fake_paths.config_path),
+            "--skip-validation",
+            "health-checker",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Unsupported --skip-validation value(s): health-checker" in result.output
+
+
+def test_deploy_command_accepts_config_yaml_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    manifest = {"schema": "nebius-cxcli-generated/v1"}
+    captured: dict[str, object] = {}
+
+    def _fake_load(target: Path) -> tuple[object, ProjectPaths, dict[str, str]]:
+        captured["target"] = target
+        return "cfg", fake_paths, manifest
+
+    monkeypatch.setattr(cli, "_load_deploy_context", _fake_load)
+    monkeypatch.setattr(cli, "_deploy_generated_artifacts", lambda *args, **kwargs: None)
+
+    result = runner.invoke(cli.app, ["deploy", str(fake_paths.config_path)])
+
+    assert result.exit_code == 0, result.output
+    assert captured["target"] == fake_paths.config_path
+    assert "Local deploy completed from" in _plain_output(result.output)
+
+
+def test_deploy_command_rejects_generated_target_with_guidance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "_load_deploy_context",
+        lambda _path: (_ for _ in ()).throw(
+            ValueError(
+                "Deploy target must be project config.yaml, not generated/. "
+                "Pass <tenant>/<project>/config.yaml; deploy resolves sibling generated/ automatically."
+            )
+        ),
+    )
+
+    result = runner.invoke(cli.app, ["deploy", str(tmp_path / "generated")])
+
+    assert result.exit_code != 0
+    assert (
+        "Deploy target must be project config.yaml, not generated/." in _plain_output(result.output)
+    )
 
 
 def test_destroy_command_passes_auto_auth_flag(
@@ -1194,7 +1733,7 @@ def test_destroy_command_passes_auto_auth_flag(
     captured: dict[str, object] = {}
     manifest = {"schema": "nebius-cxcli-generated/v1"}
 
-    monkeypatch.setattr(cli, "_load_generated_context", lambda _path: ("cfg", fake_paths, manifest))
+    monkeypatch.setattr(cli, "_load_destroy_context", lambda _path: ("cfg", fake_paths, manifest))
     monkeypatch.setattr(cli, "_confirm_generated_destroy", lambda *args, **kwargs: True)
 
     def _fake_destroy_generated_artifacts(
@@ -1215,7 +1754,7 @@ def test_destroy_command_passes_auto_auth_flag(
 
     result = runner.invoke(
         cli.app,
-        ["destroy", str(tmp_path / "generated"), "--auto-auth-bootstrap", "--yes"],
+        ["destroy", str(fake_paths.config_path), "--auto-auth-bootstrap", "--yes"],
     )
 
     assert result.exit_code == 0, result.output
@@ -1228,6 +1767,298 @@ def test_destroy_command_passes_auto_auth_flag(
         "auto_auth_bootstrap": True,
         "yes": True,
     }
+
+
+def test_destroy_command_accepts_config_yaml_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    manifest = {"schema": "nebius-cxcli-generated/v1"}
+    captured: dict[str, object] = {}
+
+    def _fake_load(target: Path) -> tuple[object, ProjectPaths, dict[str, str]]:
+        captured["target"] = target
+        return "cfg", fake_paths, manifest
+
+    monkeypatch.setattr(cli, "_load_destroy_context", _fake_load)
+    monkeypatch.setattr(cli, "_confirm_generated_destroy", lambda *args, **kwargs: True)
+    monkeypatch.setattr(cli, "_destroy_generated_artifacts", lambda *args, **kwargs: None)
+
+    result = runner.invoke(cli.app, ["destroy", str(fake_paths.config_path), "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert captured["target"] == fake_paths.config_path
+    assert "Local destroy completed from" in _plain_output(result.output)
+
+
+def test_destroy_command_rejects_generated_target_with_guidance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "_load_destroy_context",
+        lambda _path: (_ for _ in ()).throw(
+            ValueError(
+                "Destroy target must be project config.yaml, not generated/. "
+                "Pass <tenant>/<project>/config.yaml; destroy resolves sibling generated/ automatically."
+            )
+        ),
+    )
+
+    result = runner.invoke(cli.app, ["destroy", str(tmp_path / "generated")])
+
+    assert result.exit_code != 0
+    assert (
+        "Destroy target must be project config.yaml, not generated/."
+        in _plain_output(result.output)
+    )
+
+
+def test_destroy_command_confirmation_targets_infra_only_when_no_apps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    captured: dict[str, object] = {}
+    config = {"infra": {"components": [{"id": "mk8s", "enabled": True, "inputs": {}}]}}
+    manifest = {"schema": "nebius-cxcli-generated/v1"}
+
+    monkeypatch.setattr(
+        cli,
+        "_load_destroy_context",
+        lambda _path: (config, fake_paths, manifest),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_confirm_generated_destroy",
+        lambda **kwargs: captured.update(kwargs) or False,
+    )
+
+    result = runner.invoke(cli.app, ["destroy", str(fake_paths.config_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "No changes applied." in _plain_output(result.output)
+    assert captured["action_label"] == "Destroy"
+    assert captured["prompt_text"] == "Continue and destroy the rendered infra resources?"
+    assert captured["warning_text"] == (
+        f"Destroy will run Terraform destroy against the rendered infra bundle under "
+        f"{fake_paths.infra_dir}."
+    )
+
+
+def test_destroy_command_confirmation_skips_flux_delete_when_cluster_destroy_covers_apps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    captured: dict[str, object] = {}
+    config = {
+        "infra": {"components": [{"id": "mk8s", "enabled": True, "inputs": {}}]},
+        "apps": {"charts": [{"id": "gateway-helm", "enabled": True}]},
+    }
+    manifest = {
+        "schema": "nebius-cxcli-generated/v1",
+        "deploy": {
+            "handoffs": [
+                {
+                    "component_id": "mk8s",
+                    "instance_id": "mk8s",
+                    "cluster_id_output_name": "mk8s_cluster_id",
+                    "component_output_ref": "mk8s.cluster_id",
+                    "access": "external",
+                }
+            ]
+        },
+    }
+
+    monkeypatch.setattr(
+        cli,
+        "_load_destroy_context",
+        lambda _path: (config, fake_paths, manifest),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_confirm_generated_destroy",
+        lambda **kwargs: captured.update(kwargs) or False,
+    )
+
+    result = runner.invoke(cli.app, ["destroy", str(fake_paths.config_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "No changes applied." in _plain_output(result.output)
+    assert captured["prompt_text"] == "Continue and destroy the rendered apps and infra?"
+    assert captured["warning_text"] == (
+        "Destroy will run Terraform destroy against the rendered infra bundle under "
+        f"{fake_paths.infra_dir}. Because this bundle destroys the handed-off cluster directly, "
+        "it will not delete the rendered app resources under "
+        f"{fake_paths.flux_dir} separately first."
+    )
+
+
+def test_destroy_command_confirmation_deletes_flux_first_for_external_cluster_apps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    captured: dict[str, object] = {}
+    config = {"apps": {"charts": [{"id": "gateway-helm", "enabled": True}]}}
+    manifest = {"schema": "nebius-cxcli-generated/v1"}
+
+    monkeypatch.setattr(
+        cli,
+        "_load_destroy_context",
+        lambda _path: (config, fake_paths, manifest),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_confirm_generated_destroy",
+        lambda **kwargs: captured.update(kwargs) or False,
+    )
+
+    result = runner.invoke(cli.app, ["destroy", str(fake_paths.config_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "No changes applied." in _plain_output(result.output)
+    assert captured["prompt_text"] == "Continue and destroy the rendered apps and infra?"
+    assert captured["warning_text"] == (
+        "Destroy will delete the rendered app resources from the target cluster using "
+        f"{fake_paths.flux_dir} first and then run Terraform destroy against the rendered infra "
+        f"bundle under {fake_paths.infra_dir}."
+    )
+
+
+def test_run_deploy_preflight_runs_strict_quota_backend_terraform_and_flux_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
+    config = {"apps": {"charts": [{"id": "gateway-helm", "enabled": True}]}}
+    calls: list[tuple[object, ...]] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_validate_strict_config",
+        lambda config, *, include_common_checks=False: calls.append(
+            ("strict", config, include_common_checks)
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "validate_mk8s_network_preflight",
+        lambda config: calls.append(("mk8s", config)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_raise_on_live_quota_issues",
+        lambda config, *, phase: calls.append(("quota", config, phase)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_ensure_terraform_backend_ready",
+        lambda config, *, auto_auth_bootstrap: calls.append(
+            ("backend", config, auto_auth_bootstrap)
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_terraform_runtime_env",
+        lambda config: calls.append(("runtime_env", config)) or {"TF_VAR_DEMO": "1"},
+    )
+    monkeypatch.setattr(
+        cli,
+        "terraform_init",
+        lambda infra_dir, *, extra_env=None: calls.append(("init", infra_dir, extra_env)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "terraform_validate",
+        lambda infra_dir, *, extra_env=None, initialize=True: calls.append(
+            ("validate", infra_dir, extra_env, initialize)
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_validate_rendered_flux_manifests",
+        lambda paths, *, command_name: calls.append(("flux", paths, command_name)),
+    )
+
+    cli._run_deploy_preflight(config, fake_paths, auto_auth_bootstrap=True)
+
+    assert calls == [
+        ("strict", config, False),
+        ("mk8s", config),
+        ("quota", config, "deploy"),
+        ("backend", config, True),
+        ("runtime_env", config),
+        ("init", fake_paths.infra_dir, {"TF_VAR_DEMO": "1"}),
+        ("validate", fake_paths.infra_dir, {"TF_VAR_DEMO": "1"}, False),
+        ("flux", fake_paths, "deploy"),
+    ]
+
+
+def test_run_deploy_preflight_skips_flux_validation_when_no_apps_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
+    config = {"apps": {"charts": []}}
+    calls: list[tuple[object, ...]] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_validate_strict_config",
+        lambda config, *, include_common_checks=False: calls.append(
+            ("strict", config, include_common_checks)
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "validate_mk8s_network_preflight",
+        lambda config: calls.append(("mk8s", config)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_raise_on_live_quota_issues",
+        lambda config, *, phase: calls.append(("quota", config, phase)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_ensure_terraform_backend_ready",
+        lambda config, *, auto_auth_bootstrap: calls.append(
+            ("backend", config, auto_auth_bootstrap)
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_terraform_runtime_env",
+        lambda config: calls.append(("runtime_env", config)) or {"TF_VAR_DEMO": "1"},
+    )
+    monkeypatch.setattr(
+        cli,
+        "terraform_init",
+        lambda infra_dir, *, extra_env=None: calls.append(("init", infra_dir, extra_env)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "terraform_validate",
+        lambda infra_dir, *, extra_env=None, initialize=True: calls.append(
+            ("validate", infra_dir, extra_env, initialize)
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_validate_rendered_flux_manifests",
+        lambda paths, *, command_name: calls.append(("flux", paths, command_name)),
+    )
+
+    cli._run_deploy_preflight(config, fake_paths, auto_auth_bootstrap=False)
+
+    assert calls == [
+        ("strict", config, False),
+        ("mk8s", config),
+        ("quota", config, "deploy"),
+        ("backend", config, False),
+        ("runtime_env", config),
+        ("init", fake_paths.infra_dir, {"TF_VAR_DEMO": "1"}),
+        ("validate", fake_paths.infra_dir, {"TF_VAR_DEMO": "1"}, False),
+    ]
 
 
 def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env(
@@ -1245,36 +2076,24 @@ def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env
                     "component_output_ref": "mk8s.cluster_id",
                     "access": "external",
                 }
-            ]
+            ],
+            "validations": [],
         }
     }
     calls: list[tuple[object, ...]] = []
 
     monkeypatch.setattr(
         cli,
-        "_ensure_terraform_backend_ready",
-        lambda config, *, auto_auth_bootstrap: calls.append(
-            ("backend", config, auto_auth_bootstrap)
-        ),
-    )
-    monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _config: {"TF_VAR_DEMO": "1"})
-    monkeypatch.setattr(
-        cli,
-        "terraform_init",
-        lambda infra_dir, *, extra_env=None: calls.append(("init", infra_dir, extra_env)),
-    )
-    monkeypatch.setattr(
-        cli,
-        "terraform_validate",
-        lambda infra_dir, *, extra_env=None, initialize=True: calls.append(
-            ("validate", infra_dir, extra_env, initialize)
+        "_run_deploy_preflight",
+        lambda config, paths, *, auto_auth_bootstrap: calls.append(
+            ("preflight", config, paths, auto_auth_bootstrap)
         ),
     )
     monkeypatch.setattr(
         cli,
         "_run_terraform_apply_with_status",
-        lambda config, paths, *, initialize=True: calls.append(
-            ("apply_with_status", config, paths, initialize)
+        lambda config, paths, *, initialize=True, run_mk8s_preflight=True: calls.append(
+            ("apply_with_status", config, paths, initialize, run_mk8s_preflight)
         ),
     )
     monkeypatch.setattr(
@@ -1304,19 +2123,24 @@ def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env
     monkeypatch.setattr(
         cli,
         "write_inventory",
-        lambda config, paths: (
+        lambda config, paths, **kwargs: (
             calls.append(("inventory", config, paths))
-            or SimpleNamespace(markdown=paths.inventory_dir / "inventory.md")
+            or SimpleNamespace(markdown=paths.inventory_dir / "deploy-report.md")
         ),
     )
 
-    cli._deploy_generated_artifacts(config, fake_paths, manifest, auto_auth_bootstrap=True)
+    cli._deploy_generated_artifacts(
+        config,
+        fake_paths,
+        manifest,
+        auto_auth_bootstrap=True,
+        skip_validations=False,
+        skip_validation_kinds=set(),
+    )
 
     assert calls == [
-        ("backend", config, True),
-        ("init", fake_paths.infra_dir, {"TF_VAR_DEMO": "1"}),
-        ("validate", fake_paths.infra_dir, {"TF_VAR_DEMO": "1"}, False),
-        ("apply_with_status", config, fake_paths, False),
+        ("preflight", config, fake_paths, True),
+        ("apply_with_status", config, fake_paths, False, False),
         ("inventory", config, fake_paths),
         (
             "kube_env",
@@ -1363,36 +2187,24 @@ def test_deploy_generated_artifacts_without_apps_still_prepares_kube_env(
                     "component_output_ref": "mk8s.cluster_id",
                     "access": "external",
                 }
-            ]
+            ],
+            "validations": [],
         }
     }
     calls: list[tuple[object, ...]] = []
 
     monkeypatch.setattr(
         cli,
-        "_ensure_terraform_backend_ready",
-        lambda config, *, auto_auth_bootstrap: calls.append(
-            ("backend", config, auto_auth_bootstrap)
-        ),
-    )
-    monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _config: {"TF_VAR_DEMO": "1"})
-    monkeypatch.setattr(
-        cli,
-        "terraform_init",
-        lambda infra_dir, *, extra_env=None: calls.append(("init", infra_dir, extra_env)),
-    )
-    monkeypatch.setattr(
-        cli,
-        "terraform_validate",
-        lambda infra_dir, *, extra_env=None, initialize=True: calls.append(
-            ("validate", infra_dir, extra_env, initialize)
+        "_run_deploy_preflight",
+        lambda config, paths, *, auto_auth_bootstrap: calls.append(
+            ("preflight", config, paths, auto_auth_bootstrap)
         ),
     )
     monkeypatch.setattr(
         cli,
         "_run_terraform_apply_with_status",
-        lambda config, paths, *, initialize=True: calls.append(
-            ("apply_with_status", config, paths, initialize)
+        lambda config, paths, *, initialize=True, run_mk8s_preflight=True: calls.append(
+            ("apply_with_status", config, paths, initialize, run_mk8s_preflight)
         ),
     )
     monkeypatch.setattr(
@@ -1422,19 +2234,24 @@ def test_deploy_generated_artifacts_without_apps_still_prepares_kube_env(
     monkeypatch.setattr(
         cli,
         "write_inventory",
-        lambda config, paths: (
+        lambda config, paths, **kwargs: (
             calls.append(("inventory", config, paths))
-            or SimpleNamespace(markdown=paths.inventory_dir / "inventory.md")
+            or SimpleNamespace(markdown=paths.inventory_dir / "deploy-report.md")
         ),
     )
 
-    cli._deploy_generated_artifacts(config, fake_paths, manifest, auto_auth_bootstrap=True)
+    cli._deploy_generated_artifacts(
+        config,
+        fake_paths,
+        manifest,
+        auto_auth_bootstrap=True,
+        skip_validations=False,
+        skip_validation_kinds=set(),
+    )
 
     assert calls == [
-        ("backend", config, True),
-        ("init", fake_paths.infra_dir, {"TF_VAR_DEMO": "1"}),
-        ("validate", fake_paths.infra_dir, {"TF_VAR_DEMO": "1"}, False),
-        ("apply_with_status", config, fake_paths, False),
+        ("preflight", config, fake_paths, True),
+        ("apply_with_status", config, fake_paths, False, False),
         ("inventory", config, fake_paths),
         (
             "kube_env",
@@ -1490,17 +2307,14 @@ def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
     }
     calls: list[tuple[object, ...]] = []
 
-    monkeypatch.setattr(cli, "_ensure_terraform_backend_ready", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _config: {"TF_VAR_DEMO": "1"})
-    monkeypatch.setattr(cli, "terraform_init", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "terraform_validate", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_run_deploy_preflight", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "_run_terraform_apply_with_status", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         cli,
         "write_inventory",
-        lambda config, paths: (
+        lambda config, paths, **kwargs: (
             calls.append(("inventory", config, paths))
-            or SimpleNamespace(markdown=paths.inventory_dir / "inventory.md")
+            or SimpleNamespace(markdown=paths.inventory_dir / "deploy-report.md")
         ),
     )
     monkeypatch.setattr(
@@ -1535,7 +2349,14 @@ def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
     monkeypatch.setattr(cli.console, "status", _fake_status)
     monkeypatch.setattr(cli.console, "print", lambda *args, **kwargs: None)
 
-    cli._deploy_generated_artifacts(config, fake_paths, manifest, auto_auth_bootstrap=True)
+    cli._deploy_generated_artifacts(
+        config,
+        fake_paths,
+        manifest,
+        auto_auth_bootstrap=True,
+        skip_validations=False,
+        skip_validation_kinds=set(),
+    )
 
     assert calls == [
         ("inventory", config, fake_paths),
@@ -1566,7 +2387,84 @@ def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
             fake_paths.inventory_dir,
             {"KUBECONFIG": "/tmp/kubeconfig"},
         ),
+        ("inventory", config, fake_paths),
     ]
+
+
+def test_deploy_generated_artifacts_rejects_manifest_missing_deploy_validations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    config = {
+        "apps": {"charts": []},
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-456",
+                "region_id": "eu-north1",
+            },
+        },
+    }
+    manifest = {
+        "deploy": {
+            "handoffs": [
+                {
+                    "component_id": "mk8s",
+                    "instance_id": "mk8s",
+                    "cluster_id_output_name": "mk8s_cluster_id",
+                    "component_output_ref": "mk8s.cluster_id",
+                    "access": "external",
+                }
+            ]
+        }
+    }
+    monkeypatch.setattr(cli, "_run_deploy_preflight", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(
+        RuntimeError,
+        match="Generated manifest is missing deploy\\.validations metadata",
+        ):
+            cli._deploy_generated_artifacts(
+                config,
+                fake_paths,
+                manifest,
+            auto_auth_bootstrap=True,
+            skip_validations=False,
+                skip_validation_kinds=set(),
+            )
+
+
+def test_deploy_generated_artifacts_rejects_manifest_missing_deploy_section(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    config = {
+        "apps": {"charts": []},
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-456",
+                "region_id": "eu-north1",
+            },
+        },
+    }
+    manifest = {"schema": "nebius-cxcli-generated/v1"}
+    monkeypatch.setattr(cli, "_run_deploy_preflight", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(
+        RuntimeError,
+        match="Generated manifest is missing deploy\\.validations metadata",
+    ):
+        cli._deploy_generated_artifacts(
+            config,
+            fake_paths,
+            manifest,
+            auto_auth_bootstrap=True,
+            skip_validations=False,
+            skip_validation_kinds=set(),
+        )
 
 
 def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
@@ -1600,11 +2498,13 @@ def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
                     "kind": "mk8s_gpu_operator_readiness",
                     "name": "GPU operator readiness",
                     "namespace": "gpu-operator",
+                    "report_file": "gpu-operator-readiness-report.json",
                 },
                 {
                     "kind": "mk8s_gpu_visibility",
                     "name": "GPU Visibility test",
                     "namespace": "gpu-validation",
+                    "report_file": "gpu-visibility-report.json",
                 },
             ],
         }
@@ -1613,16 +2513,9 @@ def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
     status_updates: list[str] = []
     printed: list[str] = []
 
-    monkeypatch.setattr(cli, "_ensure_terraform_backend_ready", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _config: {"TF_VAR_DEMO": "1"})
-    monkeypatch.setattr(cli, "terraform_init", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "terraform_validate", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_run_deploy_preflight", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "_run_terraform_apply_with_status", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        cli,
-        "write_inventory",
-        lambda config, paths: SimpleNamespace(markdown=paths.inventory_dir / "inventory.md"),
-    )
+    monkeypatch.setattr(cli, "write_inventory", write_inventory_artifacts)
     monkeypatch.setattr(
         cli,
         "_prepare_cluster_handoff_kube_env",
@@ -1642,11 +2535,39 @@ def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
         assert inventory_dir == fake_paths.inventory_dir
         assert extra_env == {"KUBECONFIG": "/tmp/kubeconfig"}
         assert emit is not None
+        inventory_dir.mkdir(parents=True, exist_ok=True)
         emit("Starting validation 1/2: GPU operator readiness.")
         emit("[bold white]GPU Operator[/bold white] [dim][5s][/dim] clusterpolicy state=ready")
+        (inventory_dir / "gpu-operator-readiness-report.json").write_text(
+            json.dumps(
+                {
+                    "passed": True,
+                    "gpu_operator": {"gpu_nodes": [{"name": "gpu-node-a"}]},
+                    "network_operator": {"required": False},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         emit("Starting validation 2/2: GPU Visibility test.")
         emit("[bold white]GPU Visibility[/bold white] [dim][9s][/dim] pods 3/3 Succeeded")
-        return [inventory_dir / "gpu-visibility-report.json"]
+        (inventory_dir / "gpu-visibility-report.json").write_text(
+            json.dumps(
+                {
+                    "passed": True,
+                    "selected_node_count": 3,
+                    "total_gpu_node_count": 3,
+                    "passed_node_count": 3,
+                    "skipped_node_count": 0,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return [
+            inventory_dir / "gpu-operator-readiness-report.json",
+            inventory_dir / "gpu-visibility-report.json",
+        ]
 
     monkeypatch.setattr(cli, "run_mk8s_gpu_validations", _fake_run_mk8s_gpu_validations)
 
@@ -1665,7 +2586,14 @@ def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
         cli.console, "print", lambda message, *args, **kwargs: printed.append(str(message))
     )
 
-    cli._deploy_generated_artifacts(config, fake_paths, manifest, auto_auth_bootstrap=True)
+    cli._deploy_generated_artifacts(
+        config,
+        fake_paths,
+        manifest,
+        auto_auth_bootstrap=True,
+        skip_validations=False,
+        skip_validation_kinds=set(),
+    )
 
     assert status_start == [("[cyan]Running MK8s GPU validations...[/cyan]", "dots")]
     assert status_updates == [
@@ -1675,8 +2603,13 @@ def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
         "[bold white]GPU Visibility[/bold white] [dim][9s][/dim] pods 3/3 Succeeded",
     ]
     assert printed == [
-        "GPU validation reports:",
-        f"  {fake_paths.inventory_dir / 'gpu-visibility-report.json'}",
+        "Deploy validation summary:",
+        "  Overall: PASS (2/2 completed, 0 not run)",
+        "  PASS GPU operator readiness: GPU Operator ready on 1 Ready GPU node(s).",
+        "  PASS GPU Visibility test: 3/3 selected node(s) passed; total Ready GPU nodes 3.",
+        f"  Combined report: {fake_paths.inventory_dir / 'deploy-report.md'}",
+        f"  JSON detail: {fake_paths.inventory_dir / 'gpu-operator-readiness-report.json'}",
+        f"  JSON detail: {fake_paths.inventory_dir / 'gpu-visibility-report.json'}",
     ]
 
 
@@ -1711,6 +2644,7 @@ def test_deploy_generated_artifacts_prints_validation_phase_lines_when_console_i
                     "kind": "mk8s_gpu_visibility",
                     "name": "GPU Visibility test",
                     "namespace": "gpu-validation",
+                    "report_file": "gpu-visibility-report.json",
                 }
             ],
         }
@@ -1718,16 +2652,9 @@ def test_deploy_generated_artifacts_prints_validation_phase_lines_when_console_i
     status_updates: list[str] = []
     printed: list[str] = []
 
-    monkeypatch.setattr(cli, "_ensure_terraform_backend_ready", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _config: {"TF_VAR_DEMO": "1"})
-    monkeypatch.setattr(cli, "terraform_init", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "terraform_validate", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_run_deploy_preflight", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "_run_terraform_apply_with_status", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        cli,
-        "write_inventory",
-        lambda config, paths: SimpleNamespace(markdown=paths.inventory_dir / "inventory.md"),
-    )
+    monkeypatch.setattr(cli, "write_inventory", write_inventory_artifacts)
     monkeypatch.setattr(
         cli,
         "_prepare_cluster_handoff_kube_env",
@@ -1746,9 +2673,23 @@ def test_deploy_generated_artifacts_prints_validation_phase_lines_when_console_i
         assert inventory_dir == fake_paths.inventory_dir
         assert extra_env == {"KUBECONFIG": "/tmp/kubeconfig"}
         assert emit is not None
+        inventory_dir.mkdir(parents=True, exist_ok=True)
         emit("Starting validation 1/1: GPU Visibility test.")
         emit("Starting validation 1/1: GPU Visibility test.")
         emit("[bold white]GPU Visibility[/bold white] [dim][7s][/dim] pods 3/3 Succeeded")
+        (inventory_dir / "gpu-visibility-report.json").write_text(
+            json.dumps(
+                {
+                    "passed": True,
+                    "selected_node_count": 3,
+                    "total_gpu_node_count": 3,
+                    "passed_node_count": 3,
+                    "skipped_node_count": 0,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         return [inventory_dir / "gpu-visibility-report.json"]
 
     monkeypatch.setattr(cli, "run_mk8s_gpu_validations", _fake_run_mk8s_gpu_validations)
@@ -1766,7 +2707,14 @@ def test_deploy_generated_artifacts_prints_validation_phase_lines_when_console_i
         cli.console, "print", lambda message, *args, **kwargs: printed.append(str(message))
     )
 
-    cli._deploy_generated_artifacts(config, fake_paths, manifest, auto_auth_bootstrap=True)
+    cli._deploy_generated_artifacts(
+        config,
+        fake_paths,
+        manifest,
+        auto_auth_bootstrap=True,
+        skip_validations=False,
+        skip_validation_kinds=set(),
+    )
 
     assert status_updates == [
         "Starting validation 1/1: GPU Visibility test.",
@@ -1776,8 +2724,124 @@ def test_deploy_generated_artifacts_prints_validation_phase_lines_when_console_i
     assert printed == [
         "Starting validation 1/1: GPU Visibility test.",
         "[bold white]GPU Visibility[/bold white] [dim][7s][/dim] pods 3/3 Succeeded",
-        "GPU validation reports:",
-        f"  {fake_paths.inventory_dir / 'gpu-visibility-report.json'}",
+        "Deploy validation summary:",
+        "  Overall: PASS (1/1 completed, 0 not run)",
+        "  PASS GPU Visibility test: 3/3 selected node(s) passed; total Ready GPU nodes 3.",
+        f"  Combined report: {fake_paths.inventory_dir / 'deploy-report.md'}",
+        f"  JSON detail: {fake_paths.inventory_dir / 'gpu-visibility-report.json'}",
+    ]
+
+
+def test_deploy_generated_artifacts_writes_summary_even_when_validation_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    config = {
+        "apps": {"charts": []},
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-456",
+                "region_id": "eu-north1",
+            },
+        },
+    }
+    manifest = {
+        "deploy": {
+            "handoffs": [
+                {
+                    "component_id": "mk8s",
+                    "instance_id": "mk8s",
+                    "cluster_id_output_name": "mk8s_cluster_id",
+                    "component_output_ref": "mk8s.cluster_id",
+                    "access": "external",
+                }
+            ],
+            "validations": [
+                {
+                    "kind": "mk8s_gpu_operator_readiness",
+                    "name": "GPU Operator readiness",
+                    "report_file": "gpu-operator-readiness-report.json",
+                },
+                {
+                    "kind": "mk8s_gpu_visibility",
+                    "name": "GPU Visibility test",
+                    "report_file": "gpu-visibility-report.json",
+                },
+            ],
+        }
+    }
+    printed: list[str] = []
+
+    monkeypatch.setattr(cli, "_run_deploy_preflight", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_run_terraform_apply_with_status", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "write_inventory", write_inventory_artifacts)
+    monkeypatch.setattr(
+        cli,
+        "_prepare_cluster_handoff_kube_env",
+        lambda *_args, **_kwargs: {"KUBECONFIG": "/tmp/kubeconfig"},
+    )
+    monkeypatch.setattr(cli, "_report_cluster_nodes_status", lambda *, extra_env, emit: None)
+    monkeypatch.setattr(cli, "_console_is_terminal", lambda: True)
+
+    def _fake_run_mk8s_gpu_validations(
+        _validations: list[dict[str, object]],
+        *,
+        inventory_dir: Path,
+        extra_env: dict[str, str] | None,
+        emit=None,
+    ) -> list[Path]:
+        assert extra_env == {"KUBECONFIG": "/tmp/kubeconfig"}
+        assert emit is not None
+        inventory_dir.mkdir(parents=True, exist_ok=True)
+        emit("Starting validation 1/2: GPU Operator readiness.")
+        (inventory_dir / "gpu-operator-readiness-report.json").write_text(
+            json.dumps(
+                {
+                    "passed": False,
+                    "gpu_operator": {"gpu_nodes": []},
+                    "network_operator": {"required": False},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        raise RuntimeError("GPU operator readiness check failed. Report: gpu-operator-readiness-report.json")
+
+    monkeypatch.setattr(cli, "run_mk8s_gpu_validations", _fake_run_mk8s_gpu_validations)
+
+    @contextmanager
+    def _fake_status(_message: str, **_kwargs: object):
+        yield SimpleNamespace(update=lambda *_args, **_kwargs: None)
+
+    monkeypatch.setattr(cli.console, "status", _fake_status)
+    monkeypatch.setattr(
+        cli.console, "print", lambda message, *args, **kwargs: printed.append(str(message))
+    )
+
+    with pytest.raises(RuntimeError, match="GPU operator readiness check failed"):
+        cli._deploy_generated_artifacts(
+            config,
+            fake_paths,
+            manifest,
+            auto_auth_bootstrap=True,
+            skip_validations=False,
+            skip_validation_kinds=set(),
+        )
+
+    markdown = (fake_paths.inventory_dir / "deploy-report.md").read_text(encoding="utf-8")
+    assert "- Overall status: `FAIL`" in markdown
+    assert "### GPU Operator readiness" in markdown
+    assert "### GPU Visibility test" in markdown
+    assert "No deploy validation results recorded yet." in markdown
+    assert printed == [
+        "Deploy validation summary:",
+        "  Overall: FAIL (1/2 completed, 1 not run)",
+        "  FAIL GPU Operator readiness: GPU Operator ready on 0 Ready GPU node(s).",
+        "  NOT RUN GPU Visibility test: No deploy validation results recorded yet.",
+        f"  Combined report: {fake_paths.inventory_dir / 'deploy-report.md'}",
+        f"  JSON detail: {fake_paths.inventory_dir / 'gpu-operator-readiness-report.json'}",
     ]
 
 
@@ -1816,7 +2880,10 @@ def test_raise_on_live_quota_issues_fails_only_on_confirmed_insufficiency(
         ),
     )
 
-    with pytest.raises(RuntimeError, match="Increase the quota and retry"):
+    with pytest.raises(
+        RuntimeError,
+        match="Increase the quota or assign matching Capacity Block Group capacity and retry",
+    ):
         cli._raise_on_live_quota_issues("cfg", phase="deploy")
 
 
@@ -1974,6 +3041,86 @@ def test_destroy_generated_artifacts_continues_when_flux_teardown_fails(
         "Rendered app teardown failed before infra destroy" in message for message in messages
     )
     assert any("cluster unreachable" in message for message in messages)
+
+
+def test_destroy_generated_artifacts_skips_flux_teardown_when_handoff_cluster_is_destroyed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    config = {
+        "infra": {"components": [{"id": "mk8s", "enabled": True, "inputs": {}}]},
+        "apps": {"charts": [{"id": "gateway-helm", "enabled": True}]},
+    }
+    manifest = {
+        "schema": "nebius-cxcli-generated/v1",
+        "deploy": {
+            "handoffs": [
+                {
+                    "component_id": "mk8s",
+                    "instance_id": "mk8s",
+                    "cluster_id_output_name": "mk8s_cluster_id",
+                    "component_output_ref": "mk8s.cluster_id",
+                    "access": "external",
+                }
+            ]
+        },
+    }
+    captured: dict[str, object] = {}
+    messages: list[str] = []
+
+    monkeypatch.setattr(cli, "_ensure_terraform_backend_ready", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        cli,
+        "_destroy_rendered_flux_bundle",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("should not be called")),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_terraform_destroy_with_recovery",
+        lambda current_config,
+        paths,
+        *,
+        auto_auth_bootstrap,
+        yes,
+        initialize=True,
+        status_watchers=None: captured.setdefault(
+            "destroy",
+            {
+                "config": current_config,
+                "paths": paths,
+                "auto_auth_bootstrap": auto_auth_bootstrap,
+                "yes": yes,
+                "initialize": initialize,
+                "status_watchers": status_watchers,
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        cli.console, "print", lambda message, *args, **kwargs: messages.append(str(message))
+    )
+
+    cli._destroy_generated_artifacts(
+        config,
+        fake_paths,
+        manifest,
+        auto_auth_bootstrap=True,
+        yes=True,
+    )
+
+    assert captured["destroy"] == {
+        "config": config,
+        "paths": fake_paths,
+        "auto_auth_bootstrap": True,
+        "yes": True,
+        "initialize": True,
+        "status_watchers": None,
+    }
+    assert any(
+        "Skipping rendered app teardown before infra destroy because this generated bundle destroys "
+        "the handed-off cluster directly."
+        in message
+        for message in messages
+    )
 
 
 def test_apply_rendered_flux_installs_flux_controllers_when_missing(
@@ -2952,6 +4099,42 @@ def test_run_terraform_apply_with_status_wraps_apply_in_status_reporting(
     ]
 
 
+def test_run_terraform_apply_with_status_can_skip_mk8s_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    calls: list[tuple[object, ...]] = []
+    reporter = SimpleNamespace(handle_terraform_event="callback")
+
+    monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _cfg: {"TF_VAR_DEMO": "1"})
+    monkeypatch.setattr(
+        cli,
+        "validate_mk8s_network_preflight",
+        lambda config: calls.append(("mk8s_preflight", config)),
+    )
+
+    @contextmanager
+    def _fake_reporting(
+        config: object, *, emit, poll_interval_seconds=15.0, repeat_interval_seconds=60.0
+    ):
+        yield reporter
+
+    monkeypatch.setattr(cli, "deployment_status_reporting", _fake_reporting)
+    monkeypatch.setattr(
+        cli,
+        "terraform_apply",
+        lambda infra_dir, *, extra_env=None, initialize=True, event_callback=None: calls.append(
+            ("apply", infra_dir, extra_env, initialize, event_callback)
+        ),
+    )
+
+    cli._run_terraform_apply_with_status("cfg", fake_paths, run_mk8s_preflight=False)
+
+    assert calls == [
+        ("apply", fake_paths.infra_dir, {"TF_VAR_DEMO": "1"}, True, "callback"),
+    ]
+
+
 def test_run_terraform_apply_with_status_passes_explicit_status_watchers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3377,7 +4560,7 @@ def test_terraform_apply_command_invokes_runtime_auth_and_apply(
     monkeypatch.setattr(
         cli,
         "write_inventory",
-        lambda config, paths: captured.setdefault("inventory", {"config": config, "paths": paths}),
+        lambda config, paths, **kwargs: captured.setdefault("inventory", {"config": config, "paths": paths}),
     )
 
     result = runner.invoke(
@@ -3470,6 +4653,32 @@ def test_terraform_destroy_command_invokes_runtime_auth_and_destroy(
         "initialize": True,
         "status_watchers": None,
     }
+
+
+def test_terraform_destroy_command_confirmation_targets_infra_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    captured: dict[str, object] = {}
+    manifest = {"schema": "nebius-cxcli-generated/v1"}
+
+    monkeypatch.setattr(cli, "_load_generated_context", lambda _path: ("cfg", fake_paths, manifest))
+    monkeypatch.setattr(
+        cli,
+        "_confirm_generated_destroy",
+        lambda **kwargs: captured.update(kwargs) or False,
+    )
+
+    result = runner.invoke(cli.app, ["terraform", "destroy", str(tmp_path / "generated")])
+
+    assert result.exit_code == 0, result.output
+    assert "No changes applied." in _plain_output(result.output)
+    assert captured["action_label"] == "Terraform destroy"
+    assert captured["prompt_text"] == "Continue and destroy the rendered infra resources?"
+    assert captured["warning_text"] == (
+        "Terraform destroy will destroy the rendered infra resources under "
+        f"{fake_paths.infra_dir}."
+    )
 
 
 def test_run_terraform_destroy_with_recovery_clears_stale_lock_and_retries(
@@ -3683,7 +4892,7 @@ def test_flux_bootstrap_command_invokes_flux_ops(
     monkeypatch.setattr(
         cli,
         "write_inventory",
-        lambda config, paths: captured.setdefault("inventory", {"config": config, "paths": paths}),
+        lambda config, paths, **kwargs: captured.setdefault("inventory", {"config": config, "paths": paths}),
     )
     monkeypatch.setattr(cli, "ensure_flux", lambda _paths, *, extra_env=None: "reconciled")
 
@@ -4537,7 +5746,7 @@ def test_flux_bootstrap_command_uses_cluster_handoff_when_config_declares_it(
     monkeypatch.setattr(
         cli,
         "write_inventory",
-        lambda config, paths: captured.update({"inventory": (config, paths)}),
+        lambda config, paths, **kwargs: captured.update({"inventory": (config, paths)}),
     )
     monkeypatch.setattr(
         cli,
@@ -4644,7 +5853,7 @@ def test_flux_apply_command_applies_rendered_flux_with_cluster_handoff(
     monkeypatch.setattr(
         cli,
         "write_inventory",
-        lambda config, paths: captured.update({"inventory": (config, paths)}),
+        lambda config, paths, **kwargs: captured.update({"inventory": (config, paths)}),
     )
 
     result = runner.invoke(
@@ -4742,6 +5951,39 @@ def test_flux_destroy_command_deletes_rendered_flux_with_cluster_handoff(
     assert captured["destroy_flux"] == (fake_config, fake_paths, manifest)
 
 
+def test_flux_destroy_command_confirmation_targets_flux_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    captured: dict[str, object] = {}
+    config = {"apps": {"charts": [{"id": "gateway-helm", "enabled": True}]}}
+    manifest = {"schema": "nebius-cxcli-generated/v1"}
+
+    monkeypatch.setattr(
+        cli,
+        "_load_generated_context",
+        lambda _path: (config, fake_paths, manifest),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_confirm_generated_destroy",
+        lambda **kwargs: captured.update(kwargs) or False,
+    )
+
+    result = runner.invoke(cli.app, ["flux", "destroy", str(tmp_path / "generated")])
+
+    assert result.exit_code == 0, result.output
+    assert "No changes applied." in _plain_output(result.output)
+    assert captured["action_label"] == "Flux destroy"
+    assert captured["prompt_text"] == (
+        "Continue and delete the rendered app resources from the target cluster?"
+    )
+    assert captured["warning_text"] == (
+        "Flux destroy will delete the rendered app resources declared under "
+        f"{fake_paths.flux_dir}."
+    )
+
+
 def test_warn_if_flux_gitops_not_bootstrapped_prints_guidance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -4775,6 +6017,7 @@ def test_warn_if_flux_gitops_not_bootstrapped_prints_guidance(
 def test_help_text_aligns_render_and_apply_surfaces() -> None:
     top_result = runner.invoke(cli.app, ["--help"])
     quota_check_result = runner.invoke(cli.app, ["quota-check", "--help"])
+    quota_request_result = runner.invoke(cli.app, ["quota-request", "--help"])
     render_result = runner.invoke(cli.app, ["render", "--help"])
     deploy_result = runner.invoke(cli.app, ["deploy", "--help"])
     destroy_result = runner.invoke(cli.app, ["destroy", "--help"])
@@ -4786,6 +6029,7 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
 
     assert top_result.exit_code == 0, top_result.output
     assert quota_check_result.exit_code == 0, quota_check_result.output
+    assert quota_request_result.exit_code == 0, quota_request_result.output
     assert render_result.exit_code == 0, render_result.output
     assert deploy_result.exit_code == 0, deploy_result.output
     assert destroy_result.exit_code == 0, destroy_result.output
@@ -4804,8 +6048,11 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     flux_destroy_help = " ".join(_plain_output(flux_destroy_result.output).split()).lower()
     flux_bootstrap_help = " ".join(_plain_output(flux_bootstrap_result.output).split()).lower()
     quota_check_help = " ".join(_plain_output(quota_check_result.output).split()).lower()
+    quota_request_help = " ".join(_plain_output(quota_request_result.output).split()).lower()
 
-    assert "live nebius quota assessment" in quota_check_help
+    assert "live nebius quota/capacity assessment" in quota_check_help
+    assert "quota allowance api" in quota_request_help
+    assert "confirmed live quota shortages" in quota_request_help
     assert "--all-regions" in quota_check_help
     assert "selected config region still" in quota_check_help
     assert "quota-only" in quota_check_help
@@ -4815,14 +6062,14 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert "does not create or update github workflows" in deploy_help
     assert "destructive inverse of `deploy`" in destroy_help
     assert "--yes" in destroy_help
-    assert "refresh inventory" in deploy_help
-    assert "refresh inventory" in tf_apply_help
+    assert "refresh the deploy report" in deploy_help
+    assert "refresh the deploy report" in tf_apply_help
     assert "terraform destroy" in tf_destroy_help
     assert "--yes" in tf_destroy_help
-    assert "refresh inventory" in flux_apply_help
+    assert "refresh the deploy report" in flux_apply_help
     assert "delete rendered flux resources" in flux_destroy_help
     assert "--yes" in flux_destroy_help
-    assert "refresh inventory" in flux_bootstrap_help
+    assert "refresh the deploy report" in flux_bootstrap_help
 
 
 def test_help_text_maps_commands_to_target_types() -> None:
@@ -4837,17 +6084,24 @@ def test_help_text_maps_commands_to_target_types() -> None:
     assert "overwrites existing resolved tenant/project folders only with confirmation" in output
     assert "component list/add/remove are the day-2 config.yaml editing surface" in output
     assert "discover uses a deployment-scope directory" in output
-    assert "validate/quota-check/render/bootstrap-ci use config.yaml" in output
-    assert (
-        "validate-generated/deploy/destroy/terraform/flux/inventory/email use generated/" in output
-    )
+    assert "validate/quota-check/quota-request/render/bootstrap-ci/deploy use config.yaml" in output
+    assert "destroy/report/email also use config.yaml" in output
+    assert "resolve sibling generated/ automatically" in output
+    assert "validate-generated/terraform/flux use generated/" in output
     assert "validate-sources accepts optional component_sources.yaml" in output
     assert "auth has no positional path" in output
     assert "bootstrap-ci Use CONFIG_YAML" in output
     assert "component" in output
+    assert "validate Use CONFIG_YAML" in output
+    assert "provider/chart wiring" in output
+    assert "live quota/capacity" in output
+    assert "readiness." in output
     assert "quota-check Use CONFIG_YAML" in output
-    assert "deploy Use GENERATED_PATH" in output
-    assert "destroy Use GENERATED_PATH" in output
+    assert "quota/capacity" in output
+    assert "assessment for enabled infra components." in output
+    assert "quota-request Use CONFIG_YAML" in output
+    assert "deploy Use CONFIG_YAML" in output
+    assert "destroy Use CONFIG_YAML" in output
 
 
 def test_command_help_usage_labels_positional_target_types() -> None:
@@ -4857,8 +6111,10 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     component_remove_result = runner.invoke(cli.app, ["component", "remove", "--help"])
     discover_result = runner.invoke(cli.app, ["discover", "--help"])
     validate_result = runner.invoke(cli.app, ["validate", "--help"])
+    quota_request_result = runner.invoke(cli.app, ["quota-request", "--help"])
     deploy_result = runner.invoke(cli.app, ["deploy", "--help"])
     destroy_result = runner.invoke(cli.app, ["destroy", "--help"])
+    report_result = runner.invoke(cli.app, ["report", "write", "--help"])
     tf_destroy_result = runner.invoke(cli.app, ["terraform", "destroy", "--help"])
     flux_destroy_result = runner.invoke(cli.app, ["flux", "destroy", "--help"])
     email_result = runner.invoke(cli.app, ["email", "--help"])
@@ -4869,8 +6125,10 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert component_remove_result.exit_code == 0, component_remove_result.output
     assert discover_result.exit_code == 0, discover_result.output
     assert validate_result.exit_code == 0, validate_result.output
+    assert quota_request_result.exit_code == 0, quota_request_result.output
     assert deploy_result.exit_code == 0, deploy_result.output
     assert destroy_result.exit_code == 0, destroy_result.output
+    assert report_result.exit_code == 0, report_result.output
     assert tf_destroy_result.exit_code == 0, tf_destroy_result.output
     assert flux_destroy_result.exit_code == 0, flux_destroy_result.output
     assert email_result.exit_code == 0, email_result.output
@@ -4881,8 +6139,10 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     component_remove_help = _plain_output(component_remove_result.output)
     discover_help = _plain_output(discover_result.output)
     validate_help = _plain_output(validate_result.output)
+    quota_request_help = _plain_output(quota_request_result.output)
     deploy_help = _plain_output(deploy_result.output)
     destroy_help = _plain_output(destroy_result.output)
+    report_help = _plain_output(report_result.output)
     tf_destroy_help = _plain_output(tf_destroy_result.output)
     flux_destroy_help = _plain_output(flux_destroy_result.output)
     email_help = _plain_output(email_result.output)
@@ -4918,16 +6178,28 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "generated/" in discover_help
     assert "narrower directory under it" in discover_help
     assert "validate [OPTIONS] CONFIG_YAML" in validate_help
-    assert "deploy [OPTIONS] GENERATED_PATH" in deploy_help
-    assert "destroy [OPTIONS] GENERATED_PATH" in destroy_help
+    normalized_validate_help = " ".join(validate_help.split()).lower()
+    assert "enable deployment-readiness checks" in normalized_validate_help
+    assert "strict readiness, mk8s" in normalized_validate_help
+    assert "preflight, fail-fast live quota/capacity" in normalized_validate_help
+    normalized_deploy_help = " ".join(deploy_help.split()).lower()
+    assert "--skip-validations" in deploy_help
+    assert "--skip-validation" in deploy_help
+    assert "one-run override" in normalized_deploy_help
+    assert "quota-request [OPTIONS] CONFIG_YAML" in quota_request_help
+    assert "deploy [OPTIONS] CONFIG_YAML" in deploy_help
+    assert "sibling generated/" in deploy_help
+    assert "destroy [OPTIONS] CONFIG_YAML" in destroy_help
+    assert "write [OPTIONS] CONFIG_YAML" in report_help
     assert "--yes" in " ".join(destroy_help.split())
     assert "destroy [OPTIONS] GENERATED_PATH" in tf_destroy_help
     assert "--yes" in " ".join(tf_destroy_help.split())
     assert "destroy [OPTIONS] GENERATED_PATH" in flux_destroy_help
     assert "--yes" in " ".join(flux_destroy_help.split())
-    assert "email [OPTIONS] [GENERATED_PATH]" in email_help
+    assert "email [OPTIONS] [CONFIG_YAML]" in email_help
     assert "Omit the path" in normalized_email_help
-    assert "only when using --setup." in normalized_email_help
+    assert "only when" in normalized_email_help
+    assert "using --setup." in normalized_email_help
 
 
 def test_bootstrap_ci_help_reflects_reconcile_first_contract() -> None:
@@ -4982,27 +6254,50 @@ def test_flux_apply_command_fails_when_no_enabled_charts_exist(
     assert "No enabled apps charts are configured for this project." in _plain_output(result.output)
 
 
-def test_inventory_commands_invoke_inventory_ops(
+def test_report_commands_invoke_inventory_ops(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     monkeypatch.setattr(
         cli,
-        "_load_generated_context",
+        "_load_report_context",
         lambda _path: ("cfg", fake_paths, {"schema": "nebius-cxcli-generated/v1"}),
     )
     monkeypatch.setattr(
         cli,
         "write_inventory",
-        lambda _cfg, _paths: SimpleNamespace(
-            markdown=tmp_path / "generated" / "inventory" / "inventory.md"
+        lambda _cfg, _paths, **_kwargs: SimpleNamespace(
+            markdown=tmp_path / "generated" / "inventory" / "deploy-report.md"
         ),
     )
 
-    write_result = runner.invoke(cli.app, ["inventory", "write", str(tmp_path / "generated")])
+    write_result = runner.invoke(cli.app, ["report", "write", str(fake_paths.config_path)])
 
     assert write_result.exit_code == 0, write_result.output
-    assert "Inventory written:" in _plain_output(write_result.output)
+    assert "Deploy report written:" in _plain_output(write_result.output)
+
+
+def test_report_write_command_rejects_generated_target_with_guidance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "_load_report_context",
+        lambda _path: (_ for _ in ()).throw(
+            ValueError(
+                "Report write target must be project config.yaml, not generated/. "
+                "Pass <tenant>/<project>/config.yaml; report write resolves sibling generated/ automatically."
+            )
+        ),
+    )
+
+    result = runner.invoke(cli.app, ["report", "write", str(tmp_path / "generated")])
+
+    assert result.exit_code != 0
+    assert (
+        "Report write target must be project config.yaml, not generated/."
+        in _plain_output(result.output)
+    )
 
 
 def test_email_command_handles_sent_and_noop(
@@ -5012,7 +6307,7 @@ def test_email_command_handles_sent_and_noop(
     captured: dict[str, object] = {}
     monkeypatch.setattr(
         cli,
-        "_load_generated_context",
+        "_load_email_context",
         lambda _path: ("cfg", fake_paths, {"schema": "nebius-cxcli-generated/v1"}),
     )
     monkeypatch.setattr(
@@ -5028,15 +6323,17 @@ def test_email_command_handles_sent_and_noop(
 
     monkeypatch.setattr(
         cli,
-        "send_inventory_email",
+        "send_deploy_report_email",
         lambda _cfg, _paths, *, smtp_settings=None: (
             captured.update({"smtp_settings": smtp_settings})
-            or cli.InventoryEmailResult(sent=True, reason="sent", message="Inventory email sent")
+            or cli.DeployReportEmailResult(
+                sent=True, reason="sent", message="Deploy report email sent"
+            )
         ),
     )
-    sent_result = runner.invoke(cli.app, ["email", str(tmp_path / "generated")])
+    sent_result = runner.invoke(cli.app, ["email", str(fake_paths.config_path)])
     assert sent_result.exit_code == 0, sent_result.output
-    assert "Inventory email sent" in _plain_output(sent_result.output)
+    assert "Deploy report email sent" in _plain_output(sent_result.output)
     assert captured["smtp_settings"] == {
         "host": "smtp.example.com",
         "port": 2525,
@@ -5046,30 +6343,52 @@ def test_email_command_handles_sent_and_noop(
 
     monkeypatch.setattr(
         cli,
-        "send_inventory_email",
-        lambda _cfg, _paths, *, smtp_settings=None: cli.InventoryEmailResult(
+        "send_deploy_report_email",
+        lambda _cfg, _paths, *, smtp_settings=None: cli.DeployReportEmailResult(
             sent=False,
             reason="disabled",
-            message="Inventory email disabled (`client_info.notifications.email_enabled=false`); nothing sent.",
+            message="Deploy report email disabled (`client_info.notifications.email_enabled=false`); nothing sent.",
         ),
     )
-    noop_result = runner.invoke(cli.app, ["email", str(tmp_path / "generated")])
+    noop_result = runner.invoke(cli.app, ["email", str(fake_paths.config_path)])
     assert noop_result.exit_code == 0, noop_result.output
-    assert "Inventory email disabled" in _plain_output(noop_result.output)
+    assert "Deploy report email disabled" in _plain_output(noop_result.output)
 
     monkeypatch.setattr(
         cli,
-        "send_inventory_email",
-        lambda _cfg, _paths, *, smtp_settings=None: cli.InventoryEmailResult(
+        "send_deploy_report_email",
+        lambda _cfg, _paths, *, smtp_settings=None: cli.DeployReportEmailResult(
             sent=False,
             reason="smtp_unconfigured",
-            message="Inventory email enabled but SMTP is not configured. nothing sent.",
+            message="Deploy report email enabled but SMTP is not configured. nothing sent.",
         ),
     )
-    warning_result = runner.invoke(cli.app, ["email", str(tmp_path / "generated")])
+    warning_result = runner.invoke(cli.app, ["email", str(fake_paths.config_path)])
     assert warning_result.exit_code == 0, warning_result.output
     assert "WARNING:" in _plain_output(warning_result.output)
     assert "SMTP is not configured" in _plain_output(warning_result.output)
+
+
+def test_email_command_rejects_generated_target_with_guidance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "_load_email_context",
+        lambda _path: (_ for _ in ()).throw(
+            ValueError(
+                "Email target must be project config.yaml, not generated/. "
+                "Pass <tenant>/<project>/config.yaml; email resolves sibling generated/ automatically."
+            )
+        ),
+    )
+
+    result = runner.invoke(cli.app, ["email", str(tmp_path / "generated")])
+
+    assert result.exit_code != 0
+    assert "Email target must be project config.yaml, not generated/." in _plain_output(
+        result.output
+    )
 
 
 def test_email_command_setup_without_generated_path_succeeds(
@@ -5091,11 +6410,11 @@ def test_email_command_setup_without_generated_path_succeeds(
     assert "Configured local email settings:" in _plain_output(result.output)
 
 
-def test_email_command_requires_generated_path_without_setup() -> None:
+def test_email_command_requires_config_path_without_setup() -> None:
     result = runner.invoke(cli.app, ["email"])
 
     assert result.exit_code == 1, result.output
-    assert "generated_path is required unless --setup is used." in _plain_output(result.output)
+    assert "config_path is required unless --setup is used." in _plain_output(result.output)
 
 
 def test_email_help_describes_local_setup_flags() -> None:

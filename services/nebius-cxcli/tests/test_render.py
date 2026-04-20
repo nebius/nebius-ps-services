@@ -18,6 +18,7 @@ from nebius_cxcli.components import component_entries, reset_component_entry_cac
 from nebius_cxcli.config_loader import load_config
 from nebius_cxcli.config_model import to_dynamic_payload
 from nebius_cxcli.config_template import starter_config_yaml
+from nebius_cxcli.mk8s_gpu import materialize_mk8s_gpu_app_values
 from nebius_cxcli.paths import resolve_project_paths, validate_path_alignment
 from nebius_cxcli.render import render_project
 from nebius_cxcli.runtime_introspection import ModuleVariable, reset_runtime_introspection_cache
@@ -413,6 +414,7 @@ def test_render_dynamic_chart_shape_writes_flux_manifests(tmp_path: Path) -> Non
     config = load_config(config_path)
     paths = resolve_project_paths(config_path)
     validate_path_alignment(config, paths)
+    materialize_mk8s_gpu_app_values(config)
 
     render_project(config, paths, source_profile=SourceProfile.LOCAL)
 
@@ -481,7 +483,7 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
         (paths.flux_dir / "kustomization.yaml").read_text(encoding="utf-8")
     )
     assert "./flux-system" not in kustomization_doc["resources"]
-    assert (paths.inventory_dir / "inventory.md").exists()
+    assert (paths.inventory_dir / "deploy-report.md").exists()
 
 
 def test_render_instance_preserves_existing_generated_bundle_when_rerender_fails(
@@ -549,6 +551,7 @@ def test_render_dynamic_oci_chart_writes_flux_oci_repository(tmp_path: Path) -> 
     config = load_config(config_path)
     paths = resolve_project_paths(config_path)
     validate_path_alignment(config, paths)
+    materialize_mk8s_gpu_app_values(config)
 
     render_project(config, paths, source_profile=SourceProfile.LOCAL)
 
@@ -582,12 +585,64 @@ def test_render_dynamic_oci_chart_writes_flux_oci_repository(tmp_path: Path) -> 
         "kind": "Namespace",
         "metadata": {"name": "envoy-gateway-system"},
     }
-
     kustomization_doc = yaml.safe_load(kustomization.read_text(encoding="utf-8"))
     assert "./namespace-envoy-gateway-system.yaml" in kustomization_doc["resources"]
     assert kustomization_doc["resources"].index(
         "./namespace-envoy-gateway-system.yaml"
     ) < kustomization_doc["resources"].index("./helmrelease-platform-envoy-gateway.yaml")
+
+
+def test_render_dynamic_oci_chart_uses_catalog_chart_name_when_id_differs(tmp_path: Path) -> None:
+    reset_component_entry_cache()
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    runtime_payload = _starter_payload(selected_infra=set(), selected_apps=set())
+    dynamic_payload = to_dynamic_payload(runtime_payload)
+    dynamic_payload["apps"]["charts"] = [
+        {
+            "id": "nvidia-network-operator",
+            "group": "platform",
+            "enabled": True,
+            "repo": "oci://cr.eu-north1.nebius.cloud/marketplace/nebius/nvidia-network-operator/chart/network-operator",
+            "version": "25.7.0",
+            "namespace": "nvidia-network-operator",
+            "release-name": "network-operator",
+            "values": {},
+        }
+    ]
+
+    config_path.write_text(yaml.safe_dump(dynamic_payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+    materialize_mk8s_gpu_app_values(config)
+
+    render_project(config, paths, source_profile=SourceProfile.LOCAL)
+
+    repo_sources = paths.flux_dir / "helm-repositories.yaml"
+    release = paths.flux_dir / "helmrelease-platform-network-operator.yaml"
+    assert repo_sources.exists()
+    assert release.exists()
+
+    repo_docs = [
+        doc
+        for doc in yaml.safe_load_all(repo_sources.read_text(encoding="utf-8"))
+        if isinstance(doc, dict)
+    ]
+    helm_repo_doc = next(doc for doc in repo_docs if doc.get("kind") == "HelmRepository")
+    assert helm_repo_doc["spec"]["type"] == "oci"
+    assert (
+        helm_repo_doc["spec"]["url"]
+        == "oci://cr.eu-north1.nebius.cloud/marketplace/nebius/nvidia-network-operator/chart"
+    )
+
+    release_doc = yaml.safe_load(release.read_text(encoding="utf-8"))
+    chart_spec = release_doc["spec"]["chart"]["spec"]
+    assert chart_spec["sourceRef"]["kind"] == "HelmRepository"
+    assert chart_spec["chart"] == "network-operator"
+    assert chart_spec["version"] == "25.7.0"
 
 
 def test_render_uses_component_source_release_timeout_for_helm_release(
@@ -687,6 +742,336 @@ def test_render_uses_global_flux_release_timeout_when_chart_omits_override(
     assert release_doc["spec"]["timeout"] == "15m"
 
 
+def test_render_materializes_nebius_gpu_operator_driver_crd_override_for_nebius_images(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_catalog_override(_local_catalog_path(), source_profile=SourceProfile.LOCAL)
+    reset_component_entry_cache()
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps={"nvidia-gpu-operator"})
+    mk8s = _infra_component_row(payload, "mk8s")
+    mk8s_inputs = mk8s.setdefault("inputs", {})
+    assert isinstance(mk8s_inputs, dict)
+    mk8s_inputs.update(
+        {
+            "subnet_id": "subnet-abc123",
+            "cluster_name": "cluster1",
+            "cpu_nodes_platform": "cpu-d3",
+            "cpu_nodes_preset": "4vcpu-16gb",
+            "gpu_enabled": True,
+            "gpu_nodes_platform": "gpu-b300-sxm",
+            "gpu_nodes_preset": "8gpu-192vcpu-2768gb",
+            "gpu_stack_source": "nebius_image",
+        }
+    )
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    monkeypatch.setattr(
+        "nebius_cxcli.infra_render.module_variables",
+        lambda _source: (
+            ModuleVariable(name="parent_id", required=False, type_hint="string"),
+            ModuleVariable(name="cluster_name", required=False, type_hint="string"),
+            ModuleVariable(name="cpu_nodes_count", required=False, type_hint="number"),
+            ModuleVariable(name="cpu_nodes_platform", required=False, type_hint="string"),
+            ModuleVariable(name="cpu_nodes_preset", required=False, type_hint="string"),
+            ModuleVariable(name="subnet_id", required=False, type_hint="string"),
+            ModuleVariable(name="gpu_enabled", required=False, type_hint="bool"),
+            ModuleVariable(name="gpu_nodes_platform", required=False, type_hint="string"),
+            ModuleVariable(name="gpu_nodes_preset", required=False, type_hint="string"),
+            ModuleVariable(name="gpu_stack_source", required=False, type_hint="string"),
+            ModuleVariable(
+                name="mk8s_cluster_public_endpoint",
+                required=False,
+                type_hint="bool",
+            ),
+            ModuleVariable(
+                name="kube_network_service_cidrs",
+                required=False,
+                type_hint="list(string)",
+            ),
+        ),
+    )
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+    materialize_mk8s_gpu_app_values(config)
+
+    render_project(config, paths, source_profile=SourceProfile.LOCAL)
+
+    release_doc = yaml.safe_load(
+        (paths.flux_dir / "helmrelease-platform-gpu-operator.yaml").read_text(encoding="utf-8")
+    )
+    assert release_doc["spec"]["values"]["driver"]["enabled"] is False
+    assert release_doc["spec"]["values"]["toolkit"]["enabled"] is False
+    assert release_doc["spec"]["values"]["driver"]["nvidiaDriverCRD"]["enabled"] is False
+
+
+def test_render_materializes_driverful_rdma_policy_for_nebius_gpu_clusters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_catalog_override(_local_catalog_path(), source_profile=SourceProfile.LOCAL)
+    reset_component_entry_cache()
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(
+        selected_infra={"mk8s"},
+        selected_apps={"nvidia-network-operator", "nvidia-gpu-operator"},
+    )
+    mk8s = _infra_component_row(payload, "mk8s")
+    mk8s_inputs = mk8s.setdefault("inputs", {})
+    assert isinstance(mk8s_inputs, dict)
+    mk8s_inputs.update(
+        {
+            "subnet_id": "subnet-abc123",
+            "cluster_name": "cluster1",
+            "cpu_nodes_platform": "cpu-d3",
+            "cpu_nodes_preset": "4vcpu-16gb",
+            "gpu_enabled": True,
+            "gpu_nodes_platform": "gpu-b300-sxm",
+            "gpu_nodes_preset": "8gpu-192vcpu-2768gb",
+            "gpu_stack_source": "nebius_image",
+            "infiniband_fabric": "fabric-1",
+        }
+    )
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    monkeypatch.setattr(
+        "nebius_cxcli.infra_render.module_variables",
+        lambda _source: (
+            ModuleVariable(name="parent_id", required=False, type_hint="string"),
+            ModuleVariable(name="cluster_name", required=False, type_hint="string"),
+            ModuleVariable(name="cpu_nodes_count", required=False, type_hint="number"),
+            ModuleVariable(name="cpu_nodes_platform", required=False, type_hint="string"),
+            ModuleVariable(name="cpu_nodes_preset", required=False, type_hint="string"),
+            ModuleVariable(name="subnet_id", required=False, type_hint="string"),
+            ModuleVariable(name="gpu_enabled", required=False, type_hint="bool"),
+            ModuleVariable(name="gpu_nodes_platform", required=False, type_hint="string"),
+            ModuleVariable(name="gpu_nodes_preset", required=False, type_hint="string"),
+            ModuleVariable(name="gpu_stack_source", required=False, type_hint="string"),
+            ModuleVariable(name="infiniband_fabric", required=False, type_hint="string"),
+            ModuleVariable(
+                name="mk8s_cluster_public_endpoint",
+                required=False,
+                type_hint="bool",
+            ),
+            ModuleVariable(
+                name="kube_network_service_cidrs",
+                required=False,
+                type_hint="list(string)",
+            ),
+        ),
+    )
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+    materialize_mk8s_gpu_app_values(config)
+
+    render_project(config, paths, source_profile=SourceProfile.LOCAL)
+
+    network_release_doc = yaml.safe_load(
+        (paths.flux_dir / "helmrelease-platform-network-operator.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    gpu_release_doc = yaml.safe_load(
+        (paths.flux_dir / "helmrelease-platform-gpu-operator.yaml").read_text(encoding="utf-8")
+    )
+
+    network_values = network_release_doc["spec"]["values"]
+    assert network_values["operator"]["ofedDriver"]["deploy"] is False
+    assert network_values["nfd"]["enabled"] is True
+    assert network_values["nfd"]["deployNodeFeatureRules"] is True
+    assert (
+        network_values["node-feature-discovery"]["worker"]["affinity"]["nodeAffinity"][
+            "requiredDuringSchedulingIgnoredDuringExecution"
+        ]["nodeSelectorTerms"][0]["matchExpressions"][0]["operator"]
+        == "In"
+    )
+    assert (
+        network_values["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"][
+            "nodeSelectorTerms"
+        ][0]["matchExpressions"][0]["key"]
+        == "feature.node.kubernetes.io/pci-15b3.present"
+    )
+    assert (
+        network_values["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"][
+            "nodeSelectorTerms"
+        ][0]["matchExpressions"][0]["operator"]
+        == "In"
+    )
+    network_patches = network_release_doc["spec"]["postRenderers"][0]["kustomize"]["patches"]
+    assert network_patches[0]["target"]["kind"] == "NicClusterPolicy"
+    assert '"resourceName": "shared_device"' in network_patches[0]["patch"]
+    assert '"linkTypes": ["infiniband"]' in network_patches[0]["patch"]
+
+    gpu_values = gpu_release_doc["spec"]["values"]
+    assert gpu_values["driver"]["enabled"] is False
+    assert gpu_values["toolkit"]["enabled"] is False
+    assert gpu_values["nfd"]["enabled"] is False
+    assert gpu_release_doc["spec"]["dependsOn"] == [
+        {"name": "network-operator", "namespace": "nvidia-network-operator"}
+    ]
+
+
+def test_render_disables_gpu_operator_nfd_for_manual_b200_network_operator_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_catalog_override(_local_catalog_path(), source_profile=SourceProfile.LOCAL)
+    reset_component_entry_cache()
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(
+        selected_infra={"mk8s"},
+        selected_apps={"nvidia-network-operator", "nvidia-gpu-operator"},
+    )
+    mk8s = _infra_component_row(payload, "mk8s")
+    mk8s_inputs = mk8s.setdefault("inputs", {})
+    assert isinstance(mk8s_inputs, dict)
+    mk8s_inputs.update(
+        {
+            "subnet_id": "subnet-abc123",
+            "cluster_name": "cluster1",
+            "cpu_nodes_platform": "cpu-d3",
+            "cpu_nodes_preset": "4vcpu-16gb",
+            "gpu_enabled": True,
+            "gpu_nodes_platform": "gpu-b200-sxm",
+            "gpu_nodes_preset": "8gpu-192vcpu-2768gb",
+            "gpu_stack_source": "manual",
+        }
+    )
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    monkeypatch.setattr(
+        "nebius_cxcli.infra_render.module_variables",
+        lambda _source: (
+            ModuleVariable(name="parent_id", required=False, type_hint="string"),
+            ModuleVariable(name="cluster_name", required=False, type_hint="string"),
+            ModuleVariable(name="cpu_nodes_count", required=False, type_hint="number"),
+            ModuleVariable(name="cpu_nodes_platform", required=False, type_hint="string"),
+            ModuleVariable(name="cpu_nodes_preset", required=False, type_hint="string"),
+            ModuleVariable(name="subnet_id", required=False, type_hint="string"),
+            ModuleVariable(name="gpu_enabled", required=False, type_hint="bool"),
+            ModuleVariable(name="gpu_nodes_platform", required=False, type_hint="string"),
+            ModuleVariable(name="gpu_nodes_preset", required=False, type_hint="string"),
+            ModuleVariable(name="gpu_stack_source", required=False, type_hint="string"),
+            ModuleVariable(
+                name="mk8s_cluster_public_endpoint",
+                required=False,
+                type_hint="bool",
+            ),
+            ModuleVariable(
+                name="kube_network_service_cidrs",
+                required=False,
+                type_hint="list(string)",
+            ),
+        ),
+    )
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+    materialize_mk8s_gpu_app_values(config)
+
+    render_project(config, paths, source_profile=SourceProfile.LOCAL)
+
+    gpu_release_doc = yaml.safe_load(
+        (paths.flux_dir / "helmrelease-platform-gpu-operator.yaml").read_text(encoding="utf-8")
+    )
+    assert gpu_release_doc["spec"]["values"]["nfd"]["enabled"] is False
+
+
+def test_render_materializes_manual_rdma_policy_for_gpu_cluster_shapes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_catalog_override(_local_catalog_path(), source_profile=SourceProfile.LOCAL)
+    reset_component_entry_cache()
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(
+        selected_infra={"mk8s"},
+        selected_apps={"nvidia-network-operator", "nvidia-gpu-operator"},
+    )
+    mk8s = _infra_component_row(payload, "mk8s")
+    mk8s_inputs = mk8s.setdefault("inputs", {})
+    assert isinstance(mk8s_inputs, dict)
+    mk8s_inputs.update(
+        {
+            "subnet_id": "subnet-abc123",
+            "cluster_name": "cluster1",
+            "cpu_nodes_platform": "cpu-d3",
+            "cpu_nodes_preset": "4vcpu-16gb",
+            "gpu_enabled": True,
+            "gpu_nodes_platform": "gpu-b300-sxm",
+            "gpu_nodes_preset": "8gpu-192vcpu-2768gb",
+            "gpu_stack_source": "manual",
+            "infiniband_fabric": "fabric-1",
+        }
+    )
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    monkeypatch.setattr(
+        "nebius_cxcli.infra_render.module_variables",
+        lambda _source: (
+            ModuleVariable(name="parent_id", required=False, type_hint="string"),
+            ModuleVariable(name="cluster_name", required=False, type_hint="string"),
+            ModuleVariable(name="cpu_nodes_count", required=False, type_hint="number"),
+            ModuleVariable(name="cpu_nodes_platform", required=False, type_hint="string"),
+            ModuleVariable(name="cpu_nodes_preset", required=False, type_hint="string"),
+            ModuleVariable(name="subnet_id", required=False, type_hint="string"),
+            ModuleVariable(name="gpu_enabled", required=False, type_hint="bool"),
+            ModuleVariable(name="gpu_nodes_platform", required=False, type_hint="string"),
+            ModuleVariable(name="gpu_nodes_preset", required=False, type_hint="string"),
+            ModuleVariable(name="gpu_stack_source", required=False, type_hint="string"),
+            ModuleVariable(name="infiniband_fabric", required=False, type_hint="string"),
+            ModuleVariable(
+                name="mk8s_cluster_public_endpoint",
+                required=False,
+                type_hint="bool",
+            ),
+            ModuleVariable(
+                name="kube_network_service_cidrs",
+                required=False,
+                type_hint="list(string)",
+            ),
+        ),
+    )
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+    materialize_mk8s_gpu_app_values(config)
+
+    render_project(config, paths, source_profile=SourceProfile.LOCAL)
+
+    network_release_doc = yaml.safe_load(
+        (paths.flux_dir / "helmrelease-platform-network-operator.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    gpu_release_doc = yaml.safe_load(
+        (paths.flux_dir / "helmrelease-platform-gpu-operator.yaml").read_text(encoding="utf-8")
+    )
+
+    network_values = network_release_doc["spec"]["values"]
+    assert network_values["operator"]["ofedDriver"]["deploy"] is True
+    network_patches = network_release_doc["spec"]["postRenderers"][0]["kustomize"]["patches"]
+    assert network_patches[0]["target"]["kind"] == "NicClusterPolicy"
+    assert '"resourceName": "shared_device"' in network_patches[0]["patch"]
+    assert '"linkTypes": ["infiniband"]' in network_patches[0]["patch"]
+
+    gpu_values = gpu_release_doc["spec"]["values"]
+    assert gpu_values["driver"]["enabled"] is True
+    assert gpu_values["toolkit"]["enabled"] is True
+    assert gpu_values["nfd"]["enabled"] is False
+
+
 def test_render_removes_stale_legacy_nested_flux_layout(tmp_path: Path) -> None:
     reset_component_entry_cache()
     config_path = _project_config_path(tmp_path)
@@ -713,7 +1098,10 @@ def test_render_rejects_unknown_custom_module_input(tmp_path: Path) -> None:
     config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
-    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
+    payload = _starter_payload(
+        selected_infra={"mk8s"},
+        selected_apps={"nvidia-gpu-operator"},
+    )
     mk8s = _infra_component_row(payload, "mk8s")
     mk8s["inputs"] = {
         "parent_id": "project-456",
@@ -729,6 +1117,74 @@ def test_render_rejects_unknown_custom_module_input(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="input 'ssh_public_key' is not declared by module"):
         render_project(config, paths, source_profile=SourceProfile.LOCAL)
+
+
+def test_render_ignores_declared_mk8s_gpu_validation_helper_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reset_component_entry_cache()
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(
+        selected_infra={"mk8s"},
+        selected_apps={"nvidia-gpu-operator"},
+    )
+    mk8s = _infra_component_row(payload, "mk8s")
+    mk8s["inputs"] = {
+        "parent_id": "project-456",
+        "cluster_name": "demo-cluster",
+        "subnet_id": "subnet-123",
+        "cpu_nodes_platform": "cpu-d3",
+        "cpu_nodes_preset": "4vcpu-16gb",
+        "gpu_enabled": True,
+        "gpu_nodes_platform": "gpu-h100-sxm",
+        "gpu_nodes_preset": "8gpu-128vcpu-1600gb",
+    }
+    payload["deploy"] = {
+        "validations": {
+            "mk8s_gpu": {
+                "operator_readiness": {"enabled": False},
+                "gpu_visibility": {"enabled": True, "max_nodes": 2},
+            }
+        },
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    monkeypatch.setattr(
+        "nebius_cxcli.infra_render.module_variables",
+        lambda _source: (
+            ModuleVariable(name="parent_id", required=False, type_hint="string"),
+            ModuleVariable(name="cluster_name", required=False, type_hint="string"),
+            ModuleVariable(name="subnet_id", required=False, type_hint="string"),
+            ModuleVariable(name="cpu_nodes_count", required=False, type_hint="number"),
+            ModuleVariable(name="cpu_nodes_platform", required=False, type_hint="string"),
+            ModuleVariable(name="cpu_nodes_preset", required=False, type_hint="string"),
+            ModuleVariable(name="gpu_enabled", required=False, type_hint="bool"),
+            ModuleVariable(name="gpu_stack_source", required=False, type_hint="string"),
+            ModuleVariable(
+                name="mk8s_cluster_public_endpoint",
+                required=False,
+                type_hint="bool",
+            ),
+            ModuleVariable(
+                name="kube_network_service_cidrs",
+                required=False,
+                type_hint="list(string)",
+            ),
+            ModuleVariable(name="gpu_nodes_platform", required=False, type_hint="string"),
+            ModuleVariable(name="gpu_nodes_preset", required=False, type_hint="string"),
+        ),
+    )
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+
+    render_project(config, paths, source_profile=SourceProfile.LOCAL)
+
+    tfvars = (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
+    assert "gpu_validation_overrides" not in tfvars
 
 
 def test_render_uses_materialized_shared_admin_ssh_username_for_wireguard_jumphost(

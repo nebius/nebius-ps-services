@@ -19,8 +19,8 @@ multi-node `MPIJob` flow used by Kubeflow Training Operator.
 
 That keeps the runtime image smaller than a single-stage build while preserving
 the CUDA, NCCL, Ubuntu Open MPI, SSH, and RDMA userspace pieces needed by an
-`MPIJob`. This image intentionally uses the distro MPI stack from the CUDA
-Ubuntu base rather than bundling NVIDIA HPC-X.
+`MPIJob`. This image uses NVIDIA's official CUDA Ubuntu base images and
+installs the Ubuntu Open MPI packages instead of bundling NVIDIA HPC-X.
 
 ## Runtime contract
 
@@ -72,6 +72,16 @@ cd services/nccl-test
 ./build-image.sh --tag nccl-test:cuda13.2.0-v2.18.3
 ./build-image.sh --cuda-image-tag 13.2.0 --nccl-tests-ref v2.18.3
 ```
+
+By default, `./build-image.sh` runs a local `docker buildx build --load` and
+saves the result in your local Docker image cache under the selected tag. It
+only pushes when you add `--push`, and in that case `--tag` should be the full
+remote image name you want to publish, for example
+`cr.eu-north1.nebius.cloud/<short-id>/images/nccl-test:dev`.
+When the target registry is Nebius Container Registry, the script uses
+`NEBIUS_IAM_TOKEN` when it is already set or fetches a token with
+`nebius iam get-access-token`, then runs `docker login` before the push. Public
+pulls from this registry can still remain anonymous.
 
 Useful smoke checks after a local build:
 
@@ -157,6 +167,9 @@ The actual OCI repository shape is:
 ```text
 cr.<region>.nebius.cloud/<registry-short-id>/images/nccl-test
 ```
+
+Local pushes to that repository need authentication, while public pulls from
+the published repository can remain anonymous.
 
 Example placeholder:
 

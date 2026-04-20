@@ -7,7 +7,7 @@ import time
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
 
@@ -116,6 +116,50 @@ def _event_error_text(error: Any) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
+
+
+def _coerce_utc_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
+    to_datetime = getattr(value, "ToDatetime", None)
+    if callable(to_datetime):
+        with suppress(Exception):
+            return _coerce_utc_datetime(to_datetime(tzinfo=UTC))
+        with suppress(Exception):
+            return _coerce_utc_datetime(to_datetime())
+
+    text = _as_text(value)
+    if not text:
+        return None
+    normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
+    with suppress(ValueError):
+        return _coerce_utc_datetime(datetime.fromisoformat(normalized))
+    return None
+
+
+def _event_occurred_at(event: Any) -> datetime | None:
+    last_occurrence = getattr(event, "last_occurrence", None)
+    for candidate in (
+        getattr(last_occurrence, "occurred_at", None),
+        getattr(event, "first_occurred_at", None),
+    ):
+        resolved = _coerce_utc_datetime(candidate)
+        if resolved is not None:
+            return resolved
+    return None
+
+
+def _event_is_stale(event: Any, *, monitor_started_at: datetime | None) -> bool:
+    started_at = _coerce_utc_datetime(monitor_started_at)
+    if started_at is None:
+        return False
+    occurred_at = _event_occurred_at(event)
+    if occurred_at is None:
+        return False
+    return occurred_at < (started_at - timedelta(seconds=1))
 
 
 @dataclass(frozen=True)
@@ -340,6 +384,7 @@ class _Mk8sStatusPoller:
         self._target = target
         self._cluster_id: str | None = None
         self._auth_warning: str | None = None
+        self._monitor_started_at = datetime.now(UTC)
 
         self._sdk = init_nebius_sdk(
             parent_id=target.project_id,
@@ -386,6 +431,11 @@ class _Mk8sStatusPoller:
         best_message = ""
         transient_notes: list[str] = []
         for event in events:
+            if _event_is_stale(
+                event,
+                monitor_started_at=getattr(self, "_monitor_started_at", None),
+            ):
+                continue
             last_occurrence = getattr(event, "last_occurrence", None)
             level = _enum_value_name(getattr(last_occurrence, "level", None))
             if _event_level_rank(level) < _event_level_rank("WARN"):
@@ -432,6 +482,11 @@ class _Mk8sStatusPoller:
             getattr(metadata, "id", None) or getattr(item, "id", None)
         )
         for event in events:
+            if _event_is_stale(
+                event,
+                monitor_started_at=getattr(self, "_monitor_started_at", None),
+            ):
+                continue
             last_occurrence = getattr(event, "last_occurrence", None)
             level = _enum_value_name(getattr(last_occurrence, "level", None))
             if level != "ERROR":

@@ -1,0 +1,12 @@
+# Reference values for the manual/operator-managed RDMA path.
+#
+# Use this when a GPU node group does not use the Nebius GPU driver image and
+# Network Operator is expected to manage host OFED/RDMA components.
+#
+# Nebius docs require Network Operator on manual stacks when:
+# - the node group uses NVIDIA B200 GPUs, or
+# - the node group joins a GPU cluster for InfiniBand interconnection.
+
+operator:
+  ofedDriver:
+    deploy: true

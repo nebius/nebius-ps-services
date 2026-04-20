@@ -124,6 +124,68 @@ def resolve_generated_paths(
     return resolve_project_paths(config_path, deployments_dir_hint=deployments_dir_hint)
 
 
+def resolve_generated_bundle_config_paths(
+    target_path: Path,
+    *,
+    command_label: str,
+    deployments_dir_hint: str | None = None,
+) -> ProjectPaths:
+    resolved = target_path.resolve()
+    if resolved.name == "config.yaml":
+        return resolve_project_paths(resolved, deployments_dir_hint=deployments_dir_hint)
+
+    if resolved.name == "generated" or any(candidate.name == "generated" for candidate in resolved.parents):
+        raise ValueError(
+            f"{command_label} target must be project config.yaml, not generated/. "
+            f"Pass <tenant>/<project>/config.yaml; {command_label.lower()} resolves sibling generated/ automatically."
+        )
+
+    raise ValueError(
+        f"{command_label} target must be project config.yaml "
+        "(<deployments-root>/<tenant-id>/<project-id>/config.yaml)."
+    )
+
+
+def resolve_deploy_config_paths(
+    target_path: Path, deployments_dir_hint: str | None = None
+) -> ProjectPaths:
+    return resolve_generated_bundle_config_paths(
+        target_path,
+        command_label="Deploy",
+        deployments_dir_hint=deployments_dir_hint,
+    )
+
+
+def resolve_destroy_config_paths(
+    target_path: Path, deployments_dir_hint: str | None = None
+) -> ProjectPaths:
+    return resolve_generated_bundle_config_paths(
+        target_path,
+        command_label="Destroy",
+        deployments_dir_hint=deployments_dir_hint,
+    )
+
+
+def resolve_report_config_paths(
+    target_path: Path, deployments_dir_hint: str | None = None
+) -> ProjectPaths:
+    return resolve_generated_bundle_config_paths(
+        target_path,
+        command_label="Report write",
+        deployments_dir_hint=deployments_dir_hint,
+    )
+
+
+def resolve_email_config_paths(
+    target_path: Path, deployments_dir_hint: str | None = None
+) -> ProjectPaths:
+    return resolve_generated_bundle_config_paths(
+        target_path,
+        command_label="Email",
+        deployments_dir_hint=deployments_dir_hint,
+    )
+
+
 def validate_path_alignment(config: Any, paths: ProjectPaths) -> None:
     """Ensure canonical config values and path hierarchy are synchronized."""
     errors: list[str] = []
