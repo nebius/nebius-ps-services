@@ -18,7 +18,10 @@ Ubuntu test container, bootstrapping project build dependencies into a
 container-specific virtual environment, preserving Git metadata for
 subprojects, and attaching VS Code to it on macOS with Docker Desktop, plus
 the `align` Codex skill for end-to-end project review and fix passes that
-reconcile code, tests, CI workflows, CLI/help output, and documentation.
+reconcile code, tests, CI workflows, CLI/help output, and documentation. The
+same `skills/` set also includes `create-pr` and `review-pr` for branch-safe
+GitHub pull request creation and merge-readiness review/fix flows with safer
+default-branch handling and conservative branch-update guidance.
 
 ---
 
@@ -39,6 +42,8 @@ The repository uses Dependabot for dependency update pull requests.
 - GitHub Actions minor and patch updates are grouped for simpler review.
 - The companion auto-merge workflow is responsible for deciding which eligible Dependabot pull requests may be auto-approved and auto-merged.
 - GitHub Actions updates, including majors, may be auto-merged only when the pull request is Dependabot-authored, scoped to workflow automation files, and processed with the dedicated `dependabot-automerge` environment credential.
+- Python dependency updates from the `uv` and `pip` ecosystems may also be auto-approved and auto-merged when the pull request is Dependabot-authored and every changed file stays within Python dependency manifests or lockfiles such as `pyproject.toml`, `uv.lock`, `requirements*.txt`, `constraints*.txt`, `poetry.lock`, `pdm.lock`, `Pipfile`, and `Pipfile.lock`.
+- Dependabot pull requests that touch source code or other non-dependency files remain ineligible for repo-level auto-merge.
 
 ---
 

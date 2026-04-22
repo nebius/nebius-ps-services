@@ -13,7 +13,12 @@ from nebius_cxcli.terraform_ops import (
     _translate_terraform_failure,
     terraform_apply,
     terraform_init,
+    terraform_output_json,
+    terraform_output_raw,
     terraform_plan,
+    terraform_show_json,
+    terraform_state_list,
+    terraform_state_show,
     terraform_validate,
 )
 
@@ -218,6 +223,132 @@ def test_terraform_validate_can_skip_init(monkeypatch) -> None:
     terraform_validate(Path("/tmp/demo"), initialize=False)
 
     assert calls == [("run", ("terraform", "validate", "-no-color"))]
+
+
+def test_terraform_output_raw_initializes_backend_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, object]] = []
+    infra_dir = tmp_path / "infra"
+    infra_dir.mkdir(parents=True, exist_ok=True)
+    extra_env = {"TF_VAR_demo": "value"}
+
+    monkeypatch.setattr("nebius_cxcli.terraform_ops._require_terraform", lambda: "terraform")
+    monkeypatch.setattr(
+        "nebius_cxcli.terraform_ops.terraform_init",
+        lambda cwd, *, extra_env=None, backend=True: calls.append(
+            ("init", (cwd, extra_env, backend))
+        ),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.terraform_ops._run_capture",
+        lambda cmd, *, cwd, timeout, extra_env=None: (
+            calls.append(("run_capture", (tuple(cmd), cwd, timeout, extra_env))) or ("cluster-123", "")
+        ),
+    )
+
+    assert terraform_output_raw(infra_dir, "mk8s_cluster_id", extra_env=extra_env) == "cluster-123"
+    assert calls == [
+        ("init", (infra_dir, extra_env, True)),
+        (
+            "run_capture",
+            (("terraform", "output", "-raw", "mk8s_cluster_id"), infra_dir, 120, extra_env),
+        ),
+    ]
+
+
+def test_terraform_output_json_can_skip_init(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, object]] = []
+    infra_dir = tmp_path / "infra"
+    infra_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr("nebius_cxcli.terraform_ops._require_terraform", lambda: "terraform")
+    monkeypatch.setattr(
+        "nebius_cxcli.terraform_ops.terraform_init",
+        lambda cwd, *, extra_env=None, backend=True: calls.append(
+            ("init", (cwd, extra_env, backend))
+        ),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.terraform_ops._run_capture",
+        lambda cmd, *, cwd, timeout, extra_env=None: (
+            calls.append(("run_capture", (tuple(cmd), cwd, timeout, extra_env)))
+            or ('{"mk8s_cluster_id":{"value":"cluster-123"}}', "")
+        ),
+    )
+
+    assert terraform_output_json(infra_dir, initialize=False) == {
+        "mk8s_cluster_id": {"value": "cluster-123"}
+    }
+    assert calls == [
+        ("run_capture", (("terraform", "output", "-json"), infra_dir, 120, None)),
+    ]
+
+
+def test_terraform_show_json_can_skip_init(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, object]] = []
+    infra_dir = tmp_path / "infra"
+    infra_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr("nebius_cxcli.terraform_ops._require_terraform", lambda: "terraform")
+    monkeypatch.setattr(
+        "nebius_cxcli.terraform_ops.terraform_init",
+        lambda cwd, *, extra_env=None, backend=True: calls.append(
+            ("init", (cwd, extra_env, backend))
+        ),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.terraform_ops._run_capture",
+        lambda cmd, *, cwd, timeout, extra_env=None: (
+            calls.append(("run_capture", (tuple(cmd), cwd, timeout, extra_env)))
+            or ('{"values":{"root_module":{"resources":[]}}}', "")
+        ),
+    )
+
+    assert terraform_show_json(infra_dir, initialize=False) == {
+        "values": {"root_module": {"resources": []}}
+    }
+    assert calls == [
+        ("run_capture", (("terraform", "show", "-json"), infra_dir, 120, None)),
+    ]
+
+
+def test_terraform_state_list_returns_empty_tuple_when_state_is_absent(monkeypatch) -> None:
+    monkeypatch.setattr("nebius_cxcli.terraform_ops._require_terraform", lambda: "terraform")
+
+    def _fake_run(*args, **kwargs):
+        raise subprocess.CalledProcessError(
+            1,
+            ["terraform", "state", "list"],
+            output="",
+            stderr="No state file was found!\n",
+        )
+
+    import subprocess
+
+    monkeypatch.setattr("nebius_cxcli.terraform_ops.subprocess.run", _fake_run)
+
+    assert terraform_state_list(Path("/tmp/demo"), initialize=False) == ()
+
+
+def test_terraform_state_show_renders_named_address(monkeypatch) -> None:
+    monkeypatch.setattr("nebius_cxcli.terraform_ops._require_terraform", lambda: "terraform")
+    monkeypatch.setattr(
+        "nebius_cxcli.terraform_ops._run_capture",
+        lambda cmd, *, cwd, timeout, extra_env=None: ('name = "cluster-a"\n', ""),
+    )
+
+    rendered = terraform_state_show(
+        Path("/tmp/demo"),
+        "module.mk8s.nebius_mk8s_v1_cluster.this",
+        initialize=False,
+    )
+
+    assert 'name = "cluster-a"' in rendered
 
 
 def test_terraform_plan_and_apply_can_skip_init(monkeypatch) -> None:

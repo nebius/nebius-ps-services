@@ -1,0 +1,149 @@
+#cloud-config
+users:
+  - name: ${ssh_user_name}
+    gecos: Nebius VM User
+    groups: [sudo]
+    shell: /bin/bash
+    lock_passwd: true
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    ssh_authorized_keys:
+      - ${ssh_public_key}
+
+package_update: true
+package_upgrade: true
+packages:
+  - openssh-server
+  - ca-certificates
+  - curl
+  - gnupg
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/50-nebius-vm.conf
+    owner: root:root
+    permissions: "0644"
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      ChallengeResponseAuthentication no
+      PermitRootLogin no
+      PubkeyAuthentication yes
+      AuthenticationMethods publickey
+
+%{ if container_enabled ~}
+  - path: /usr/local/bin/bootstrap-vm.sh
+    owner: root:root
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      export DEBIAN_FRONTEND=noninteractive
+      export PATH="/usr/sbin:/usr/bin:/sbin:/bin"
+
+      install -m 0755 -d /etc/apt/keyrings
+      if [ ! -f /etc/apt/keyrings/docker.gpg ]; then
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor --yes -o /etc/apt/keyrings/docker.gpg
+      fi
+
+      . /etc/os-release
+      printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu %s stable\n' \
+        "$(dpkg --print-architecture)" "$${VERSION_CODENAME}" > /etc/apt/sources.list.d/docker.list
+
+      apt-get update
+      apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+%{ if container_use_gpu ~}
+      if [ ! -f /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg ]; then
+        curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor --yes -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+      fi
+      distribution="$${ID}$${VERSION_ID}"
+      curl -fsSL "https://nvidia.github.io/libnvidia-container/$${distribution}/libnvidia-container.list" | \
+        sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' > /etc/apt/sources.list.d/nvidia-container-toolkit.list
+      apt-get update
+      apt-get install -y nvidia-container-toolkit
+      nvidia-ctk runtime configure --runtime=docker
+%{ endif ~}
+
+      usermod -aG docker ${ssh_user_name}
+      systemctl daemon-reload
+      systemctl enable --now docker
+%{ if container_use_gpu ~}
+      systemctl restart docker
+%{ endif ~}
+      systemctl enable --now bootstrap-container.service
+
+  - path: /usr/local/bin/run-bootstrap-container.sh
+    owner: root:root
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      args=(
+        run
+        --detach
+        --restart
+        "${container_restart_policy}"
+        --name
+        "${container_name}"
+      )
+%{ if container_use_gpu ~}
+      args+=(--gpus all)
+%{ endif ~}
+%{ for port in container_ports ~}
+      args+=(-p "${port.host_port}:${port.container_port}/${lower(port.protocol)}")
+%{ endfor ~}
+%{ for key, value in container_env ~}
+      args+=(-e "${key}=${value}")
+%{ endfor ~}
+%{ for mount in container_mounts ~}
+      args+=(-v "${mount.host_path}:${mount.container_path}${mount.read_only ? ":ro" : ""}")
+%{ endfor ~}
+%{ if container_entrypoint != null ~}
+      args+=(--entrypoint "${container_entrypoint}")
+%{ endif ~}
+      args+=("${container_image}")
+%{ for arg in container_args ~}
+      args+=("${arg}")
+%{ endfor ~}
+
+      /usr/bin/docker pull "${container_image}"
+      /usr/bin/docker rm -f "${container_name}" >/dev/null 2>&1 || true
+      exec /usr/bin/docker "$${args[@]}"
+
+  - path: /usr/local/bin/stop-bootstrap-container.sh
+    owner: root:root
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      /usr/bin/docker stop "${container_name}" >/dev/null 2>&1 || true
+      /usr/bin/docker rm -f "${container_name}" >/dev/null 2>&1 || true
+
+  - path: /etc/systemd/system/bootstrap-container.service
+    owner: root:root
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Managed bootstrap container for ${container_name}
+      Requires=docker.service
+      After=network-online.target docker.service
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/local/bin/run-bootstrap-container.sh
+      ExecStop=/usr/local/bin/stop-bootstrap-container.sh
+      TimeoutStartSec=0
+
+      [Install]
+      WantedBy=multi-user.target
+%{ endif ~}
+
+runcmd:
+  - [ bash, -lc, "sshd -t && (systemctl enable --now ssh || systemctl enable --now sshd)" ]
+%{ if container_enabled ~}
+  - [ bash, -lc, "/usr/local/bin/bootstrap-vm.sh > /var/log/bootstrap-vm.log 2>&1" ]
+%{ endif ~}

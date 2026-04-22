@@ -9,11 +9,12 @@ from dataclasses import dataclass
 from email.message import EmailMessage
 from typing import Any
 
+from .deploy_validation_report import DEPLOY_REPORT_FILENAME
 from .paths import ProjectPaths
 
 
 @dataclass(frozen=True)
-class InventoryEmailResult:
+class DeployReportEmailResult:
     sent: bool
     reason: str
     message: str
@@ -77,38 +78,38 @@ def _mask_identifier(value: str) -> str:
     return ("*" * (len(token) - 4)) + token[-4:]
 
 
-def send_inventory_email(
+def send_deploy_report_email(
     config: Any,
     paths: ProjectPaths,
     *,
     smtp_settings: Mapping[str, Any] | None = None,
-) -> InventoryEmailResult:
-    """Send inventory email when notifications.email_enabled is enabled and email is set."""
+) -> DeployReportEmailResult:
+    """Send the rendered deploy report email when notifications are enabled."""
     if not bool(config.client_info.notifications.email_enabled):
-        return InventoryEmailResult(
+        return DeployReportEmailResult(
             sent=False,
             reason="disabled",
-            message="Inventory email disabled (`client_info.notifications.email_enabled=false`); nothing sent.",
+            message="Deploy report email disabled (`client_info.notifications.email_enabled=false`); nothing sent.",
         )
 
     recipient = str(config.client_info.notifications.email or "").strip()
     if not recipient:
-        return InventoryEmailResult(
+        return DeployReportEmailResult(
             sent=False,
             reason="recipient_missing",
             message=(
-                "Inventory email enabled but `client_info.notifications.email` is empty; "
+                "Deploy report email enabled but `client_info.notifications.email` is empty; "
                 "nothing sent."
             ),
         )
 
     host = _env_or_config_text("SMTP_HOST", smtp_settings, "host")
     if not host:
-        return InventoryEmailResult(
+        return DeployReportEmailResult(
             sent=False,
             reason="smtp_unconfigured",
             message=(
-                "Inventory email enabled but SMTP is not configured. "
+                "Deploy report email enabled but SMTP is not configured. "
                 "Run `nebius-cxcli email --setup` and `nebius-cxcli bootstrap-ci <config.yaml>` "
                 "to sync the GitHub environment, or set SMTP_HOST."
             ),
@@ -121,19 +122,20 @@ def send_inventory_email(
         _env_or_config_text("SMTP_FROM", smtp_settings, "from") or username or "noreply@localhost"
     )
 
-    project_id = (
-        str(config.client_info.nebius.project_id or "").strip()
-        or paths.path_project_id
-        or f"{paths.path_tenant_id}/{paths.path_project_id}"
-    )
-    tenant_id = str(config.client_info.nebius.tenant_id or "").strip() or paths.path_tenant_id
+    project_id = str(config.client_info.nebius.project_id or "").strip()
+    tenant_id = str(config.client_info.nebius.tenant_id or "").strip()
+    if not project_id:
+        raise RuntimeError(
+            "Deploy report email requires `client_info.nebius.project_id` from config.yaml; "
+            "folder names are not used as an identity fallback."
+        )
     masked_project_id = _mask_identifier(project_id)
 
-    markdown_path = paths.inventory_dir / "inventory.md"
+    markdown_path = paths.inventory_dir / DEPLOY_REPORT_FILENAME
     if not markdown_path.exists():
         raise RuntimeError(
-            f"Inventory markdown is missing: {markdown_path}. "
-            "Run `nebius-cxcli inventory write <generated-dir>` or rerender first."
+            f"Deploy report markdown is missing: {markdown_path}. "
+            "Run `nebius-cxcli report <config.yaml>` or rerender first."
         )
     body = markdown_path.read_text(encoding="utf-8")
     if tenant_id:
@@ -142,7 +144,7 @@ def send_inventory_email(
         body = body.replace(project_id, masked_project_id)
 
     message = EmailMessage()
-    message["Subject"] = f"Nebius inventory: {masked_project_id}"
+    message["Subject"] = f"Nebius deploy report: {masked_project_id}"
     message["From"] = from_addr
     message["To"] = recipient
     message.set_content(body)
@@ -160,11 +162,11 @@ def send_inventory_email(
             smtp.login(username, password)
         smtp.send_message(message)
 
-    return InventoryEmailResult(
+    return DeployReportEmailResult(
         sent=True,
         reason="sent",
-        message="Inventory email sent",
+        message="Deploy report email sent",
     )
 
 
-__all__ = ["InventoryEmailResult", "send_inventory_email"]
+__all__ = ["DeployReportEmailResult", "send_deploy_report_email"]

@@ -1,0 +1,344 @@
+name: nccl-test-image-publish
+
+on:
+  push:
+    tags:
+      - "nccl-test-v*"
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Git ref (branch, tag, or SHA) to build"
+        required: false
+        default: "main"
+        type: string
+      release_version:
+        description: "Optional release SemVer (X.Y.Z) for manual publishes"
+        required: false
+        type: string
+      publish_latest:
+        description: "Also publish :latest on manual runs from main"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nccl-test-image-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  APP_DIR: services/nccl-test
+  TAG_PREFIX: nccl-test
+  MAIN_BRANCH: main
+  IMAGE_NAME: nccl-test
+  IMAGE_REPOSITORY_PREFIX: images
+  DEFAULT_CUDA_IMAGE_TAG: 13.2.0
+  DEFAULT_NCCL_TESTS_REF: v2.18.3
+
+jobs:
+  publish:
+    name: nccl-test-image-publish
+    runs-on: ubuntu-latest
+    environment:
+      name: nccl-test-image-publish
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.source_ref || github.ref }}
+
+      - name: Resolve release metadata
+        id: release
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUBLISH_LATEST: ${{ inputs.publish_latest }}
+          REF_NAME: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          set -euo pipefail
+
+          publish_version=""
+          publish_latest="false"
+          release_tag=""
+          commit="$(git rev-parse HEAD)"
+
+          if [[ "${EVENT_NAME}" == "push" ]]; then
+            if [[ ! "${REF_NAME}" =~ ^${TAG_PREFIX}-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+              echo "::error::Tag '${REF_NAME}' must match ${TAG_PREFIX}-vMAJOR.MINOR.PATCH"
+              exit 1
+            fi
+            publish_version="${BASH_REMATCH[1]}"
+            release_tag="${REF_NAME}"
+            commit="$(git rev-list -n 1 "${REF_NAME}")"
+          else
+            if [[ -n "${RELEASE_VERSION}" && ! "${RELEASE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::release_version must match X.Y.Z"
+              exit 1
+            fi
+            if [[ "${PUBLISH_LATEST}" == "true" && "${SOURCE_REF}" != "${MAIN_BRANCH}" ]]; then
+              echo "::error::publish_latest=true is only allowed with source_ref=${MAIN_BRANCH}"
+              exit 1
+            fi
+            publish_version="${RELEASE_VERSION}"
+            publish_latest="${PUBLISH_LATEST}"
+          fi
+
+          {
+            echo "commit=${commit}"
+            echo "publish_latest=${publish_latest}"
+            echo "publish_version=${publish_version}"
+            echo "release_tag=${release_tag}"
+            echo "short_sha=${commit::7}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Ensure publish commit belongs to main history
+        run: |
+          set -euo pipefail
+          git fetch origin "${MAIN_BRANCH}" --depth=1
+          if ! git merge-base --is-ancestor "${{ steps.release.outputs.commit }}" "origin/${MAIN_BRANCH}"; then
+            echo "::error::Publish commit ${{ steps.release.outputs.commit }} is not in origin/${MAIN_BRANCH} history"
+            exit 1
+          fi
+
+      - name: Resolve fixed target registry
+        id: registry
+        env:
+          NB_REGION_ID: ${{ vars.NB_REGION_ID }}
+          NB_REGISTRY_ID: ${{ vars.NB_REGISTRY_ID }}
+          NB_REGISTRY_NAME: ${{ vars.NB_REGISTRY_NAME }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${NB_REGION_ID:-}" || -z "${NB_REGISTRY_ID:-}" ]]; then
+            echo "::error::Missing required registry settings NB_REGION_ID or NB_REGISTRY_ID"
+            exit 1
+          fi
+
+          if [[ "${NB_REGISTRY_ID}" != registry-* ]]; then
+            echo "::error::NB_REGISTRY_ID must be a full registry id like registry-<id>"
+            exit 1
+          fi
+
+          registry_id="${NB_REGISTRY_ID}"
+          registry_name="${NB_REGISTRY_NAME:-${registry_id}}"
+          registry_path="${registry_id#registry-}"
+          registry_host="cr.${NB_REGION_ID}.nebius.cloud"
+          image_name="${registry_host}/${registry_path}/${IMAGE_REPOSITORY_PREFIX}/${IMAGE_NAME}"
+
+          {
+            echo "registry_id=${registry_id}"
+            echo "registry_name=${registry_name}"
+            echo "registry_path=${registry_path}"
+            echo "registry_host=${registry_host}"
+            echo "image_name=${image_name}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Install Nebius CLI
+        run: |
+          set -euo pipefail
+          curl -sSL https://storage.eu-north1.nebius.cloud/cli/install.sh | bash
+          echo "${HOME}/.nebius/bin" >> "${GITHUB_PATH}"
+
+      - name: Configure Nebius CLI profile
+        env:
+          NB_PROJECT_ID: ${{ vars.NB_PROJECT_ID }}
+          NB_SERVICE_ACCOUNT_ID: ${{ vars.NB_SERVICE_ACCOUNT_ID }}
+          NB_SERVICE_ACCOUNT_PUBLIC_KEY_ID: ${{ vars.NB_SERVICE_ACCOUNT_PUBLIC_KEY_ID }}
+          NB_TENANT_ID: ${{ vars.NB_TENANT_ID }}
+          NB_SERVICE_ACCOUNT_PRIVATE_KEY: ${{ secrets.NB_SERVICE_ACCOUNT_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          for required_var in NB_PROJECT_ID NB_SERVICE_ACCOUNT_ID NB_SERVICE_ACCOUNT_PUBLIC_KEY_ID NB_SERVICE_ACCOUNT_PRIVATE_KEY; do
+            if [[ -z "${!required_var:-}" ]]; then
+              echo "::error::Missing required Nebius environment setting ${required_var}"
+              exit 1
+            fi
+          done
+
+          install -d -m 700 "${HOME}/.nebius"
+          private_key_path="${HOME}/.nebius/nccl-test-image-publish.pem"
+          printf '%s\n' "${NB_SERVICE_ACCOUNT_PRIVATE_KEY}" > "${private_key_path}"
+          chmod 600 "${private_key_path}"
+
+          profile_args=(
+            ci
+            --config "${HOME}/.nebius/config.yaml"
+            --endpoint api.nebius.cloud
+            --service-account-id "${NB_SERVICE_ACCOUNT_ID}"
+            --public-key-id "${NB_SERVICE_ACCOUNT_PUBLIC_KEY_ID}"
+            --private-key-file-path "${private_key_path}"
+            --parent-id "${NB_PROJECT_ID}"
+            --skip-auth
+          )
+          if [[ -n "${NB_TENANT_ID:-}" ]]; then
+            profile_args+=( --tenant-id "${NB_TENANT_ID}" )
+          fi
+
+          nebius profile create "${profile_args[@]}" >/dev/null
+
+      - name: Login to Nebius Container Registry
+        run: |
+          set -euo pipefail
+          nebius --config "${HOME}/.nebius/config.yaml" --profile ci iam get-access-token | \
+            docker login "${{ steps.registry.outputs.registry_host }}" \
+              --username iam \
+              --password-stdin
+
+      - name: Fail if immutable SemVer tag already exists
+        if: steps.release.outputs.publish_version != ''
+        run: |
+          set -euo pipefail
+          version_ref="${{ steps.registry.outputs.image_name }}:${{ steps.release.outputs.publish_version }}"
+          if docker manifest inspect "${version_ref}" >/dev/null 2>&1; then
+            echo "::error::Registry already contains ${version_ref}; refusing to overwrite an immutable release tag"
+            exit 1
+          fi
+
+      - name: Resolve image metadata
+        id: image
+        env:
+          FULL_IMAGE_NAME: ${{ steps.registry.outputs.image_name }}
+          PUBLISH_LATEST: ${{ steps.release.outputs.publish_latest }}
+          PUBLISH_VERSION: ${{ steps.release.outputs.publish_version }}
+          SHORT_SHA: ${{ steps.release.outputs.short_sha }}
+        run: |
+          set -euo pipefail
+
+          tags="${FULL_IMAGE_NAME}:sha-${SHORT_SHA}"
+          if [[ -n "${PUBLISH_VERSION}" ]]; then
+            tags="${tags}"$'\n'"${FULL_IMAGE_NAME}:${PUBLISH_VERSION}"
+            tags="${tags}"$'\n'"${FULL_IMAGE_NAME}:${PUBLISH_VERSION}-g${SHORT_SHA}"
+          fi
+          if [[ "${PUBLISH_LATEST}" == "true" ]]; then
+            tags="${tags}"$'\n'"${FULL_IMAGE_NAME}:latest"
+          fi
+
+          labels="$(printf '%s\n' \
+            "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            "org.opencontainers.image.revision=${{ steps.release.outputs.commit }}" \
+            "org.opencontainers.image.description=Ubuntu 24.04 based NCCL tests image for Nebius GPU validation" \
+            "org.opencontainers.image.licenses=BSD-3-Clause" \
+            "io.nebius.cuda_image_tag=${DEFAULT_CUDA_IMAGE_TAG}" \
+            "io.nebius.nccl_tests_ref=${DEFAULT_NCCL_TESTS_REF}")"
+          if [[ -n "${PUBLISH_VERSION}" ]]; then
+            labels="${labels}"$'\n'"org.opencontainers.image.version=${PUBLISH_VERSION}"
+          fi
+
+          {
+            echo "labels<<EOF"
+            echo "${labels}"
+            echo "EOF"
+            echo "tags<<EOF"
+            echo "${tags}"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ env.APP_DIR }}
+          file: ${{ env.APP_DIR }}/Dockerfile
+          platforms: linux/amd64
+          pull: true
+          push: true
+          provenance: false
+          sbom: false
+          tags: ${{ steps.image.outputs.tags }}
+          labels: ${{ steps.image.outputs.labels }}
+          build-args: |
+            CUDA_IMAGE_TAG=${{ env.DEFAULT_CUDA_IMAGE_TAG }}
+            NCCL_TESTS_REF=${{ env.DEFAULT_NCCL_TESTS_REF }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify pushed tags
+        env:
+          TAGS: ${{ steps.image.outputs.tags }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r tag; do
+            [[ -z "${tag}" ]] && continue
+            docker buildx imagetools inspect "${tag}" >/dev/null
+          done <<< "${TAGS}"
+
+      - name: Write publish manifest
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.image.outputs.tags }}
+        run: |
+          set -euo pipefail
+          tags_json="$(printf '%s\n' "${TAGS}" | jq -R -s -c 'split("\n") | map(select(length > 0))')"
+          jq -n \
+            --arg actor "${GITHUB_ACTOR}" \
+            --arg cuda_image_tag "${DEFAULT_CUDA_IMAGE_TAG}" \
+            --arg digest "${IMAGE_DIGEST}" \
+            --arg event "${GITHUB_EVENT_NAME}" \
+            --arg nccl_tests_ref "${DEFAULT_NCCL_TESTS_REF}" \
+            --arg publish_version "${{ steps.release.outputs.publish_version }}" \
+            --arg ref "${GITHUB_REF}" \
+            --arg ref_name "${GITHUB_REF_NAME}" \
+            --arg release_tag "${{ steps.release.outputs.release_tag }}" \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg run_attempt "${GITHUB_RUN_ATTEMPT}" \
+            --arg run_id "${GITHUB_RUN_ID}" \
+            --arg sha "${{ steps.release.outputs.commit }}" \
+            --argjson tags "${tags_json}" \
+            '{
+              actor: $actor,
+              repository: $repository,
+              event: $event,
+              ref: $ref,
+              ref_name: $ref_name,
+              release_tag: $release_tag,
+              publish_version: $publish_version,
+              sha: $sha,
+              cuda_image_tag: $cuda_image_tag,
+              nccl_tests_ref: $nccl_tests_ref,
+              tags: $tags,
+              digest: $digest,
+              run_id: $run_id,
+              run_attempt: $run_attempt,
+              timestamp_utc: now | todate
+            }' > publish-manifest.json
+
+      - name: Upload publish manifest artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: nccl-test-image-publish-manifest-${{ github.run_id }}
+          path: publish-manifest.json
+
+      - name: Publish run summary
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          PUBLISH_VERSION: ${{ steps.release.outputs.publish_version }}
+          TAGS: ${{ steps.image.outputs.tags }}
+        run: |
+          set -euo pipefail
+          version="${PUBLISH_VERSION:-manual-sha-only}"
+          {
+            echo "### nccl-test image publish"
+            echo ""
+            echo "- Ref: \`${GITHUB_REF}\`"
+            echo "- Commit: \`${{ steps.release.outputs.commit }}\`"
+            echo "- Version: \`${version}\`"
+            echo "- CUDA base tag: \`${DEFAULT_CUDA_IMAGE_TAG}\`"
+            echo "- Upstream nccl-tests ref: \`${DEFAULT_NCCL_TESTS_REF}\`"
+            echo "- Digest: \`${IMAGE_DIGEST}\`"
+            echo ""
+            echo "#### Tags"
+            while IFS= read -r tag; do
+              [[ -n "${tag}" ]] && echo "- \`${tag}\`"
+            done <<< "${TAGS}"
+          } >> "${GITHUB_STEP_SUMMARY}"

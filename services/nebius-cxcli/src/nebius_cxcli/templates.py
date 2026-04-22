@@ -168,7 +168,7 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                     echo "AWS_SECRET_ACCESS_KEY=${{NEBIUS_S3_SECRET_ACCESS_KEY}}"
                   }} >> "$GITHUB_ENV"
 
-              - name: Validate generated artifacts
+              - name: Validate generated artifacts and readiness
                 run: |
                   set -euo pipefail
                   nebius-cxcli validate-generated --portable "${{{{ matrix.generated }}}}"
@@ -253,7 +253,7 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                     echo "AWS_SECRET_ACCESS_KEY=${{NEBIUS_S3_SECRET_ACCESS_KEY}}"
                   }} >> "$GITHUB_ENV"
 
-              - name: Validate generated artifacts
+              - name: Validate generated artifacts and readiness
                 run: |
                   set -euo pipefail
                   nebius-cxcli validate-generated --portable "${{{{ matrix.generated }}}}"
@@ -278,7 +278,7 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                   set -euo pipefail
                   nebius-cxcli flux bootstrap "${{{{ matrix.generated }}}}"
 
-              - name: Send inventory email
+              - name: Send deploy report email
                 env:
                   SMTP_HOST: ${{{{ vars.SMTP_HOST }}}}
                   SMTP_PORT: ${{{{ vars.SMTP_PORT }}}}
@@ -288,7 +288,7 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                   SMTP_PASSWORD: ${{{{ secrets.SMTP_PASSWORD }}}}
                 run: |
                   set -euo pipefail
-                  nebius-cxcli email "${{{{ matrix.generated }}}}"
+                  nebius-cxcli email "${{{{ matrix.config }}}}"
         """
         ).strip()
         + "\n"

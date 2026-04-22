@@ -26,9 +26,7 @@ dynamically instead of hardcoding public access.
 - Creates one CPU node group when fixed count (`cpu_nodes_count > 0`) or autoscaling override is configured.
 - Creates `gpu_node_groups` GPU node groups when `gpu_enabled = true`.
 - Supports provider-aligned override objects for cluster/CPU/GPU node groups.
-- Applies MIG hints as node labels when provided:
-  - `nvidia.com/mig.strategy`
-  - `nvidia.com/mig.config`
+- Supports explicit Nebius-image vs manual GPU stack selection through `gpu_stack_source`.
 
 ## Usage
 
@@ -45,6 +43,7 @@ module "mk8s" {
   cpu_nodes_count    = 2
   cpu_nodes_platform = "cpu-d3"
   cpu_nodes_preset   = "4vcpu-16gb"
+  cpu_nodes_os       = "ubuntu24.04"
 
   gpu_enabled = false
 }
@@ -62,6 +61,7 @@ module "mk8s" {
   cpu_nodes_count    = 2
   cpu_nodes_platform = "cpu-d3"
   cpu_nodes_preset   = "4vcpu-16gb"
+  cpu_nodes_os       = "ubuntu24.04"
 }
 ```
 
@@ -78,6 +78,7 @@ module "mk8s" {
   cpu_nodes_count    = 2
   cpu_nodes_platform = "cpu-d3"
   cpu_nodes_preset   = "4vcpu-16gb"
+  cpu_nodes_os       = "ubuntu24.04"
 }
 ```
 
@@ -96,6 +97,9 @@ module "mk8s" {
   - `cpu_nodes_count`
   - `cpu_nodes_platform` (required when CPU node group is enabled)
   - `cpu_nodes_preset` (required when CPU node group is enabled)
+  - `cpu_nodes_os`
+  - `cpu_nodes_boot_disk_size_gib`
+  - `cpu_nodes_boot_disk_type`
   - `cpu_nodes_preemptible`
   - `cpu_nodes_public_ips`
 - GPU controls:
@@ -104,14 +108,14 @@ module "mk8s" {
   - `gpu_nodes_count_per_group`
   - `gpu_nodes_platform`
   - `gpu_nodes_preset`
+  - `gpu_nodes_os`
+  - `gpu_nodes_boot_disk_size_gib`
+  - `gpu_nodes_boot_disk_type`
   - `gpu_nodes_preemptible`
   - `gpu_nodes_public_ips`
-  - `gpu_drivers_preset`
-  - `gpu_default_drivers_preset`
-  - `gpu_driver_preset_map`
+  - `gpu_stack_source`
+  - `gpu_stack_preset`
   - `infiniband_fabric`
-  - `mig_strategy`
-  - `mig_parted_config`
 - Advanced provider-aligned passthrough objects:
   - `mk8s_cluster_overrides`
   - `mk8s_cpu_node_group_overrides`
@@ -151,6 +155,7 @@ used directly from the example directory.
   - `gpu_nodes_count_per_group > 0` when autoscaling override is not set
   - non-empty effective `template.resources.platform` and
     `template.resources.preset` (from defaults or overrides)
+  - non-empty `gpu_stack_preset` when `gpu_stack_source = "nebius_image"`
 - CPU node group creation requires non-empty effective
   `template.resources.platform` and `template.resources.preset` (from defaults
   or overrides).
@@ -162,20 +167,28 @@ used directly from the example directory.
   `infra.components[].inputs`.
 - `cpu_nodes_platform` and `cpu_nodes_preset` are treated as required by the
   CLI when the baseline CPU node group is enabled.
+- `cpu_nodes_os`, `gpu_stack_source`, `gpu_stack_preset`, and `gpu_nodes_os`
+  are intended to be materialized by `nebius-cxcli` from the live MK8s
+  compatibility matrix instead of guessed in Terraform.
+- `cpu_nodes_boot_disk_size_gib`, `cpu_nodes_boot_disk_type`,
+  `gpu_nodes_boot_disk_size_gib`, and `gpu_nodes_boot_disk_type` are optional
+  first-class inputs for callers that want deterministic node-storage settings
+  and exact pre-deploy quota estimation. When they are unset, the provider or a
+  full `template.boot_disk` override remains authoritative.
 - If `mk8s_cluster_public_endpoint = false`, local `deploy` / `flux apply` /
   `flux bootstrap` / `destroy` app flows still work, but only from a machine
   that already has private network reachability to the MK8s control-plane
   endpoint. `nebius-cxcli` does not hardcode a specific jump-host or VPN
   product for that path.
 - Complex inputs such as `kube_network_service_cidrs`,
-  `gpu_driver_preset_map`, and the `mk8s_*_overrides` objects are meant to be
+  and the `mk8s_*_overrides` objects are meant to be
   provided as YAML/JSON values in the wizard or edited directly in
   `config.yaml`.
 
 ## Examples
 
 - `examples/minimal`: CPU-only baseline.
-- `examples/gpu`: GPU node group with MIG labels and explicit drivers preset.
+- `examples/gpu`: GPU node group with explicit Nebius-managed stack preset selection.
 
 Example output usage after apply:
 

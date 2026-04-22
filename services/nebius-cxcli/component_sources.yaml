@@ -1,9 +1,9 @@
 cli:
+  terraform:
+    version: 1.14.1
   flux:
     version: v2.8.0
     release_timeout: 5m
-  terraform:
-    version: 1.14.1
 shared:
   admin_ssh:
     user_name: ubuntu
@@ -22,9 +22,105 @@ components:
         name_input: cluster_name
       defaults:
         inputs.cpu_nodes_count: 2
+        # Default to Nebius-managed GPU images and stack presets. Advanced
+        # manual/operator-managed stacks can switch this to `manual`.
+        inputs.gpu_stack_source: nebius_image
         inputs.mk8s_cluster_public_endpoint: true
         inputs.kube_network_service_cidrs:
           - /20
+      cli:
+        gpu:
+          # Preference order only. cxcli still resolves the live Nebius
+          # compatibility matrix first. Nebius calls the provider field
+          # `drivers_preset`, but these values select the bundled GPU software
+          # stack/image family, not only a kernel driver.
+          image_preferences:
+            preferred_gpu_stack_presets:
+              - cuda13.0
+              - cuda12.8
+              - cuda12.4
+              - cuda12
+            preferred_os:
+              - ubuntu24.04
+              - ubuntu22.04
+          validations:
+            operator_readiness:
+              # Fast control-plane gate only: operator policy objects plus
+              # allocatable GPUs on Ready nodes. This should fail before any
+              # workload pod/job validation starts.
+              enabled_by_default: true
+              timeout: 10m
+            gpu_visibility:
+              # Single-node CUDA workload smoke test. This intentionally checks
+              # a real GPU pod instead of only scheduler-visible allocatable
+              # resources, but stays bounded to a small sample so it remains
+              # cheap enough for routine deploys.
+              # Keep the dedicated namespace for isolation and easy reruns, but
+              # delete the transient validation pods after each run.
+              enabled_by_default: true
+              namespace: gpu-validation
+              image: nvcr.io/nvidia/k8s/cuda-sample:vectoradd-cuda11.7.1-ubuntu20.04
+              timeout: 5m
+              max_nodes: 3
+              cleanup: true
+            nccl:
+              # Multi-node communication validation. This is intentionally
+              # separate from GPU visibility because it validates distributed
+              # communication correctness and bandwidth, not just single-node
+              # CUDA execution. cxcli schedules it for GPU-enabled MK8s
+              # clusters, auto-selects Socket/TCPIP on Ethernet-only shapes,
+              # and switches to RDMA transport on GPU-cluster / InfiniBand
+              # shapes. The RDMA bandwidth threshold is enforced only on the
+              # RDMA path so Ethernet-only runs stay informative instead of
+              # failing against an InfiniBand expectation.
+              # Keep the dedicated namespace, but delete the transient MPIJob
+              # and transient Training Operator install after each run.
+              enabled_by_default: true
+              chart_component_id: nccl-test
+              timeout: 20m
+              max_nodes: 8
+              # MPIJob v1 still lives on the Training Operator v1.x line.
+              # Keep the transient prerequisite pinned instead of following a
+              # floating latest manifest.
+              training_operator_manifest: github.com/kubeflow/training-operator/manifests/overlays/standalone?ref=v1.9.3
+              training_operator_namespace: kubeflow
+              average_bus_bandwidth_threshold_gbps: 300
+        boot_disk_defaults:
+          # Materialize cxcli-owned explicit MK8s boot disks into config and
+          # rendered Terraform so quota checks and deploys do not depend on
+          # hidden service defaults.
+          # cxcli resolves live preset resources (vCPU, RAM, GPU count), then
+          # prefers these explicit ordered size rules before falling back to a
+          # heuristic for shapes we do not model yet.
+          cpu:
+            default_type: NETWORK_SSD
+            rules:
+              - max_vcpu: 8
+                max_memory_gib: 32
+                size_gib: 64
+              - max_vcpu: 32
+                max_memory_gib: 128
+                size_gib: 93
+              - max_vcpu: 64
+                max_memory_gib: 256
+                size_gib: 128
+              - min_vcpu: 65
+                size_gib: 186
+          gpu:
+            default_type: NETWORK_SSD
+            rules:
+              - max_gpu: 1
+                max_vcpu: 32
+                max_memory_gib: 384
+                size_gib: 256
+              - min_gpu: 2
+                max_gpu: 4
+                max_vcpu: 96
+                max_memory_gib: 768
+                size_gib: 512
+              - min_gpu: 8
+                max_gpu: 8
+                size_gib: 1023
       wizard_profile: mk8s
     managed-postgresql:
       source:
@@ -69,6 +165,34 @@ components:
       status:
         kind: nebius.mysterybox.secret
         name_input: secrets
+    vm:
+      source:
+        portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/vm?ref=main
+        local: ../../platform-infra/modules/vm
+      ui:
+        title: Compute virtual machine
+        group: Compute
+        enabled: false
+      status:
+        kind: nebius.compute.instance
+      wizard_profile: vm
+      defaults:
+        # Materialize the shared admin SSH username into customer config.yaml.
+        inputs.ssh_user_name: shared.admin_ssh.user_name
+      cli:
+        image_preferences:
+          # Preference order only. cxcli resolves the live Nebius public image
+          # inventory through the SDK and keeps only families compatible with
+          # the selected VM platform and region.
+          preferred_cpu_image_families:
+            - ubuntu24.04-driverless
+            - ubuntu22.04-driverless
+          # GPU VMs prefer Nebius GPU images first. Driverless families remain
+          # compatible for manual stacks, but they sort after the recommended
+          # GPU image families returned by the live Nebius inventory.
+          preferred_gpu_image_families:
+            - ubuntu24.04-cuda13.0
+            - ubuntu24.04-cuda12
     wireguard-jumphost:
       source:
         portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/wireguard-jumphost?ref=main
@@ -96,11 +220,234 @@ components:
       defaults:
         inputs.ssh_user_name: shared.admin_ssh.user_name
   apps:
+    nvidia-network-operator:
+      source:
+        portable:
+          repo: oci://cr.eu-north1.nebius.cloud/marketplace/nebius/nvidia-network-operator/chart/network-operator
+          chart: network-operator
+          version: 25.7.0
+      ui:
+        title: NVIDIA Network Operator
+        group: Platform
+        enabled: false
+      release:
+        namespace: nvidia-network-operator
+        name: network-operator
+      defaults:
+        # Keep only Nebius-specific deltas here. The live chart already defaults
+        # the operator CPU limit to 500m and disables the OFED liveness probe.
+        values.operator.resources.limits.memory: 350Mi
+      cli:
+        mk8s_gpu_policy:
+          role: network_operator
+          default_sets:
+            driverful_infiniband_nfd:
+              values.nfd.enabled: true
+              values.nfd.deployNodeFeatureRules: true
+              # Use the Nebius driverful label only as the seed selector for
+              # the NFD worker. The standard Mellanox PCI feature label is not
+              # available until NFD has already run once.
+              values.node-feature-discovery.worker.affinity:
+                nodeAffinity:
+                  requiredDuringSchedulingIgnoredDuringExecution:
+                    nodeSelectorTerms:
+                      - matchExpressions:
+                          - key: nebius.com/driverful
+                            operator: In
+                            values:
+                              - "true"
+              values.nodeAffinity:
+                requiredDuringSchedulingIgnoredDuringExecution:
+                  nodeSelectorTerms:
+                    - matchExpressions:
+                        - key: feature.node.kubernetes.io/pci-15b3.present
+                          operator: In
+                          values:
+                            - "true"
+          post_render_patch_sets:
+            rdma_shared_device_plugin:
+              - target:
+                  group: mellanox.com
+                  version: v1alpha1
+                  kind: NicClusterPolicy
+                  name: nic-cluster-policy
+                patch:
+                  apiVersion: mellanox.com/v1alpha1
+                  kind: NicClusterPolicy
+                  metadata:
+                    name: nic-cluster-policy
+                  spec:
+                    rdmaSharedDevicePlugin:
+                      image: k8s-rdma-shared-dev-plugin
+                      repository: nvcr.io/nvidia/mellanox
+                      # NVIDIA publishes the RDMA shared-device plugin on the
+                      # same Network Operator release line, but with the
+                      # `network-operator-v*` image tag format.
+                      version: network-operator-v25.7.0
+                      # Expose a scheduler-visible `rdma/shared_device`
+                      # resource on InfiniBand-capable Mellanox HCAs.
+                      config: |
+                        {
+                          "configList": [
+                            {
+                              "resourceName": "shared_device",
+                              "rdmaHcaMax": 63,
+                              "selectors": {
+                                "vendors": ["15b3"],
+                                "linkTypes": ["infiniband"]
+                              }
+                            }
+                          ]
+                        }
+          # Top-level app defaults above are unconditional. These rules are
+          # conditional: each one can auto-enable the app and/or add chart
+          # defaults only when the selected MK8s GPU context matches.
+          rules:
+            - gpu_cluster_enabled: true
+              auto_enable: true
+            - gpu_stack_source: manual
+              auto_enable: true
+              # Separate Nebius platform ids and regions; both are NVIDIA B200.
+              match_platforms:
+                - gpu-b200-sxm
+                - gpu-b200-sxm-a
+            - gpu_stack_source: nebius_image
+              # Nebius-managed GPU images already contain the matching OFED
+              # stack, so keep host OFED installs disabled.
+              defaults:
+                values.operator.ofedDriver.deploy: false
+            - gpu_stack_source: nebius_image
+              gpu_cluster_enabled: true
+              # Driverful InfiniBand nodes still need NFD + NodeFeatureRules
+              # plus an RDMA shared-device policy so pods can request
+              # `rdma/shared_device` without a containerized OFED install.
+              defaults_from:
+                - driverful_infiniband_nfd
+              post_render_patches_from:
+                - rdma_shared_device_plugin
+            - gpu_stack_source: manual
+              gpu_cluster_enabled: true
+              # The driverless InfiniBand path still needs an explicit RDMA
+              # shared-device policy; the Network Operator chart default CR
+              # installs OFED but does not expose `rdma/shared_device` by
+              # itself.
+              post_render_patches_from:
+                - rdma_shared_device_plugin
+            - gpu_stack_source: manual
+              # Manual GPU stacks still need the Network Operator to lay down
+              # host OFED/RDMA bits for GPUDirect and NCCL validation.
+              defaults:
+                values.operator.ofedDriver.deploy: true
+    nvidia-gpu-operator:
+      source:
+        portable:
+          repo: oci://cr.eu-north1.nebius.cloud/marketplace/nebius/nvidia-gpu-operator/chart/gpu-operator
+          chart: gpu-operator
+          version: v25.10.0
+      ui:
+        title: NVIDIA GPU Operator
+        group: Platform
+        enabled: false
+      release:
+        namespace: nvidia-gpu-operator
+        name: gpu-operator
+      defaults:
+        # The live chart already defaults devicePlugin/DCGM Exporter to enabled.
+        # Keep only the Nebius-specific override that disables MIG management in
+        # the shared deploy-time baseline.
+        values.migManager.enabled: false
+      cli:
+        mk8s_gpu_policy:
+          role: gpu_operator
+          # GPU Operator is the default GPU software controller for GPU-enabled
+          # MK8s clusters. Rules can both auto-enable the app and add
+          # conditional chart defaults.
+          rules:
+            - auto_enable: true
+            - gpu_stack_source: nebius_image
+              # Nebius-managed GPU images already ship the host GPU driver and
+              # NVIDIA Container Toolkit runtime, so GPU Operator should leave
+              # both host-side paths untouched.
+              defaults:
+                values.driver.enabled: false
+                values.toolkit.enabled: false
+                values.driver.nvidiaDriverCRD.enabled: false
+            - gpu_cluster_enabled: true
+              # Whenever Network Operator is part of the GPU-cluster /
+              # InfiniBand path, let it own the single NFD instance.
+              defaults:
+                values.nfd.enabled: false
+            - gpu_stack_source: manual
+              # Manual B200/B200A stacks also auto-enable Network Operator for
+              # RDMA plumbing, so keep NFD single-owned there too.
+              match_platforms:
+                - gpu-b200-sxm
+                - gpu-b200-sxm-a
+              defaults:
+                values.nfd.enabled: false
+            - gpu_stack_source: manual
+              # Manual GPU stacks expect GPU Operator to install and manage the
+              # host GPU driver plus the NVIDIA Container Toolkit runtime.
+              defaults:
+                values.driver.enabled: true
+                values.toolkit.enabled: true
+            - gpu_stack_source: manual
+              match_platforms:
+                - gpu-b300-sxm
+              defaults:
+                # Ref: https://docs.nebius.com/kubernetes/gpu/set-up
+                # Nebius docs pin the B300 manual-install path to
+                # --set driver.version=580.95.05. Keep it catalog-owned rather
+                # than hardcoded in Python.
+                values.driver.version: 580.95.05
+          # App-only Flux release ordering: when both operators are present,
+          # wait for Network Operator first.
+          install_after:
+            - nvidia-network-operator
+    nccl-test:
+      source:
+        portable:
+          repo: oci://cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/charts/nccl-test
+          chart: nccl-test
+          version: 0.2.7
+        local:
+          path: ../../helm-charts/nccl-test
+      ui:
+        title: NCCL benchmark validation chart
+        group: Validations
+        enabled: false
+        selectable: false
+      release:
+        namespace: nccl-test
+        name: nccl-test
+      defaults: {}
+      cli:
+        mk8s_gpu_policy:
+          # Shared NCCL image and benchmark defaults come from the chart's own
+          # values.yaml. Keep only platform-specific MPI overlays here. Nebius
+          # docs add `-mca coll ^hcoll` only for the B200 MPIJob example while
+          # the H100/H200 example omits it, so this stays catalog-owned rather
+          # than becoming a shared chart default.
+          # Ref: https://docs.nebius.com/kubernetes/gpu/nccl-test
+          rules:
+            - match_platforms:
+                - gpu-b200-sxm
+                - gpu-b200-sxm-a
+              defaults:
+                # B200 keeps the `-mca coll ^hcoll` overlay on top of the
+                # shared first-party NCCL image release because the official
+                # Nebius B200 NCCL example includes it while the H100/H200
+                # example does not.
+                values.benchmark.mpiExtraArgs:
+                  - -mca
+                  - coll
+                  - ^hcoll
     gateway-helm:
       source:
-        repo: oci://docker.io/envoyproxy
-        chart: gateway-helm
-        version: 1.7.0
+        portable:
+          repo: oci://docker.io/envoyproxy
+          chart: gateway-helm
+          version: 1.7.0
       ui:
         title: Envoy Gateway control plane
         group: Platform
@@ -115,9 +462,10 @@ components:
       defaults: {}
     cert-manager:
       source:
-        repo: oci://quay.io/jetstack/charts
-        chart: cert-manager
-        version: v1.19.2
+        portable:
+          repo: oci://quay.io/jetstack/charts
+          chart: cert-manager
+          version: v1.19.2
       ui:
         title: cert-manager for certificate automation
         group: Platform
@@ -129,9 +477,10 @@ components:
         values.crds.enabled: true
     external-dns:
       source:
-        repo: https://kubernetes-sigs.github.io/external-dns
-        chart: external-dns
-        version: 1.20.0
+        portable:
+          repo: https://kubernetes-sigs.github.io/external-dns
+          chart: external-dns
+          version: 1.20.0
       ui:
         title: ExternalDNS controller
         group: Platform
@@ -141,9 +490,10 @@ components:
         name: external-dns
     external-secrets:
       source:
-        repo: https://charts.external-secrets.io
-        chart: external-secrets
-        version: 2.0.1
+        portable:
+          repo: https://charts.external-secrets.io
+          chart: external-secrets
+          version: 2.0.1
       ui:
         title: External Secrets Operator
         group: Platform
@@ -153,9 +503,10 @@ components:
         name: external-secrets
     n8n:
       source:
-        repo: oci://8gears.container-registry.com/library/n8n
-        chart: n8n
-        version: 2.0.1
+        portable:
+          repo: oci://8gears.container-registry.com/library/n8n
+          chart: n8n
+          version: 2.0.1
       ui:
         title: n8n workflow automation
         group: Workloads

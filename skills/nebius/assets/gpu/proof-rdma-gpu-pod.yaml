@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: rdma-gpu-proof
+spec:
+  restartPolicy: Never
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
+  containers:
+    - name: proof
+      # Replace with a CUDA-enabled image that is allowed in the target
+      # environment.
+      image: <cuda-enabled-image>
+      command:
+        - /bin/bash
+        - -lc
+      args:
+        - |
+          set -euo pipefail
+          nvidia-smi
+          ls -l /dev/infiniband || true
+          sleep 3600
+      resources:
+        limits:
+          nvidia.com/gpu: "1"
+          rdma/shared_device: "1"

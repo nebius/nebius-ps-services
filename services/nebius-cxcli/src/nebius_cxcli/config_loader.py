@@ -8,6 +8,7 @@ from typing import Any
 import yaml
 
 from .config_model import is_dynamic_payload, to_runtime_payload
+from .mk8s_gpu import normalize_mk8s_gpu_project_validation_settings
 from .runtime_config import AttrDict, to_plain_data, wrap_runtime_config
 from .runtime_validation import validate_dynamic_payload_structure, validate_runtime_payload
 from .ssh_public_keys import normalize_runtime_ssh_public_key_inputs
@@ -18,7 +19,10 @@ def normalize_runtime_config_payload(
     *,
     base_dir: Path | None = None,
 ) -> bool:
-    return normalize_runtime_ssh_public_key_inputs(payload, base_dir=base_dir)
+    changed = normalize_runtime_ssh_public_key_inputs(payload, base_dir=base_dir)
+    if normalize_mk8s_gpu_project_validation_settings(payload):
+        changed = True
+    return changed
 
 
 def validate_config(payload: dict[str, Any], *, base_dir: Path | None = None) -> AttrDict:
@@ -41,7 +45,7 @@ def load_config(path: Path, *, persist_normalized: bool = False) -> AttrDict:
     if path.is_dir():
         raise ValueError(
             "Expected a project config.yaml file path, but got a directory: "
-            f"{path}. Pass <tenant>/<project>/config.yaml."
+            f"{path}. Pass <tenant-folder>/<project-folder>/config.yaml."
         )
     with path.open("r", encoding="utf-8") as handle:
         payload = yaml.safe_load(handle) or {}

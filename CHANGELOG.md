@@ -25,11 +25,21 @@ All notable changes to this repository will be documented in this file.
   them in a container-specific virtual environment, preserves Git metadata for
   monorepo subprojects, and best-effort opens a new Dev Containers window for
   the running container.
+- Added the `create-pr` Codex skill under `skills/` for branch-safe GitHub PR
+  creation: it detects the default branch, creates a feature branch only when
+  work is still on that branch, reuses an existing feature branch otherwise,
+  avoids duplicate PRs for the same head branch, and returns the PR number plus
+  URL.
 - Added the `onboard-nbs-cxcli` Codex skill under `skills/` as the central
   onboarding guide for Nebius Terraform modules that need to be wired into
   `services/nebius-cxcli`, including the catalog-first workflow and the
   optional code-owned layers for wizard/provider, runtime validation, status
   polling, and cluster handoff behavior.
+- Added the `review-pr` Codex skill under `skills/` for GitHub-backed PR
+  review and merge-readiness work: it inspects the PR against its base branch,
+  fixes safe issues directly on the PR branch, attempts straightforward
+  conflict resolution, reruns focused validation, and reports whether the PR is
+  ready to merge.
 - Added `nebius-cxcli component list`, `component add`, and `component remove`
   as the day-2 config-editing workflow for existing project `config.yaml`
   files, with interactive infra/apps selection and non-interactive CLI usage.
@@ -39,6 +49,36 @@ All notable changes to this repository will be documented in this file.
 
 ### Changed
 
+- Updated the `skills/create-pr` guidance and metadata so Codex now treats any
+  explicit user-supplied PR title as authoritative instead of inferring a
+  generic preparation-style title from the branch name, and expanded
+  `skills/README.md` with a copy-pastable custom-title example.
+- Refined the new `create-pr` and `review-pr` skills under `skills/` to follow
+  stronger Git and GitHub PR best practices: `create-pr` now explicitly
+  refreshes the base-branch context, avoids opening PRs from a dirty tree
+  alone, and prefers draft PRs for incomplete work, while `review-pr` now
+  distinguishes safe local rebases from shared-branch cases that should use
+  non-destructive updates, preserves unresolved reviewer concerns as explicit
+  blockers, and routes selectively to sibling skills such as `align`,
+  `github-workflows`, `helmchart`, `python-project`, `shell-scripting`,
+  `linter`, `nebius`, `onboard-nbs-cxcli`, `terraform`, and the publish skills
+  based on the PR surface.
+- Expanded `skills/README.md` with explicit Codex chat prompt examples,
+  including copy-pastable `create-pr` and `review-pr` usage plus the GitHub
+  prerequisites those skills expect before they can act.
+- Added a canonical Helm chart publication flow for `helm-charts/nccl-test`
+  with chart-local `CHANGELOG.md`, `publish-helm.sh` prep/publish helper, a
+  simplified tag-driven Nebius OCI publish workflow, anonymous public-pull
+  verification, and a matching `publish-helm` skill under `skills/`.
+- Hardened `helm-charts/nccl-test` by aligning the chart `appVersion` with the
+  default NCCL image, merging local and global image pull secrets for both pod
+  types, tightening Helm values schema validation, and expanding the chart
+  README plus chart-local ignore rules.
+- Expanded the repo-level Dependabot auto-merge policy so Dependabot-authored
+  semver `uv` and `pip` dependency bumps can be auto-approved and auto-merged
+  when every changed file is limited to Python dependency manifests or
+  lockfiles, while source-code edits and other non-dependency file changes
+  remain ineligible.
 - Expanded `nebius-cxcli validate-sources` so it now validates fast
   Terraform-module and Helm-chart source contracts in addition to catalog
   shape and source-address resolution, including module `versions.tf`

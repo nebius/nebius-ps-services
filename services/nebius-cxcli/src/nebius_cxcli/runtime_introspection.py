@@ -929,6 +929,53 @@ def module_required_variables(module_source: str) -> tuple[str, ...]:
     return tuple(variable.name for variable in module_variables(module_source) if variable.required)
 
 
+def _local_chart_values_payload(
+    *,
+    chart_name_or_ref: str,
+    chart_repo: str,
+    chart_version: str,
+) -> dict[str, Any]:
+    if chart_repo.strip() or chart_version.strip():
+        return {}
+
+    chart_ref = chart_name_or_ref.strip()
+    if not chart_ref:
+        return {}
+
+    candidates: list[Path] = []
+    raw_candidate = Path(chart_ref)
+    candidates.append(raw_candidate)
+    if not raw_candidate.is_absolute():
+        try:
+            sources_file = resolve_component_sources_file()
+        except Exception:
+            sources_file = None
+        if sources_file is not None:
+            candidates.append((sources_file.parent / raw_candidate).resolve())
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            resolved = candidate
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        values_file = resolved / "values.yaml"
+        if not values_file.is_file():
+            continue
+        try:
+            payload = yaml.safe_load(values_file.read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError):
+            return {}
+        if isinstance(payload, dict):
+            return _deep_copy(payload)
+        return {}
+
+    return {}
+
+
 @lru_cache(maxsize=64)
 def helm_chart_default_values(
     *,
@@ -946,7 +993,11 @@ def helm_chart_default_values(
             )
         )
     except Exception:
-        return {}
+        payload = _local_chart_values_payload(
+            chart_name_or_ref=chart_name_or_ref,
+            chart_repo=chart_repo,
+            chart_version=chart_version,
+        )
     if not isinstance(payload, dict):
         return {}
     return _deep_copy(payload)

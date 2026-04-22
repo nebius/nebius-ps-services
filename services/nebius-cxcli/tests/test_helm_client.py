@@ -13,6 +13,7 @@ from nebius_cxcli.helm_client import (
     _resolve_show_ref,
     _run_helm_show,
     chart_cli_contract_findings,
+    render_chart_template_documents,
 )
 
 
@@ -82,6 +83,31 @@ def test_resolve_show_ref_github_tree_repo_supported(
             chart_version="1.0.0",
         )
     )
+    assert show_ref == str(chart_dir.resolve())
+    assert repo == ""
+    assert version == ""
+    assert cleanup_dir == checkout_dir.parent
+
+
+def test_resolve_show_ref_github_tree_chart_name_supported(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    checkout_dir = tmp_path / "checkout" / "repo"
+    chart_dir = checkout_dir / "charts" / "nccl-test"
+    chart_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        "nebius_cxcli.helm_client._run_git_clone",
+        lambda _git_url, _git_ref: checkout_dir,
+    )
+
+    show_ref, repo, version, cleanup_dir = _resolve_show_ref(
+        HelmChartReference(
+            chart_name="https://github.com/example/charts/tree/main/charts/nccl-test",
+            chart_repo="",
+            chart_version="",
+        )
+    )
+
     assert show_ref == str(chart_dir.resolve())
     assert repo == ""
     assert version == ""
@@ -190,3 +216,35 @@ def test_chart_cli_contract_findings_reports_missing_layout(
     assert any("missing Chart.yaml" in issue for issue in issues)
     assert any("missing templates/" in issue for issue in issues)
     assert any("missing README.md" in warning for warning in warnings)
+
+
+def test_render_chart_template_documents_parses_rendered_yaml(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    chart_dir = tmp_path / "demo-chart"
+    chart_dir.mkdir(parents=True)
+
+    @contextmanager
+    def _materialized(_reference: HelmChartReference):
+        yield chart_dir
+
+    def _fake_run(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        return SimpleNamespace(
+            returncode=0,
+            stdout="apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: demo\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr("nebius_cxcli.helm_client._materialize_chart_dir", _materialized)
+    monkeypatch.setattr("nebius_cxcli.helm_client.subprocess.run", _fake_run)
+
+    documents = render_chart_template_documents(
+        chart_name=str(chart_dir),
+        chart_repo="",
+        chart_version="",
+        release_name="demo",
+        namespace="default",
+        values={"foo": "bar"},
+    )
+
+    assert documents == [{"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "demo"}}]

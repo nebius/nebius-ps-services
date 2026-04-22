@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import yaml
@@ -12,7 +13,7 @@ from nebius_cxcli.paths import resolve_project_paths, validate_path_alignment
 
 
 def _project_config_path(base: Path) -> Path:
-    return base / "deployments" / "tenant-123" / "project-456" / "config.yaml"
+    return base / "deployments" / "tenant-name-example" / "project-name-example" / "config.yaml"
 
 
 def _starter_payload(*, selected_infra: set[str], selected_apps: set[str]) -> dict:
@@ -85,13 +86,16 @@ def test_write_inventory_handles_dynamic_component_model(tmp_path: Path) -> None
 
     artifacts = write_inventory(config, paths)
     assert artifacts.markdown.exists()
+    assert artifacts.markdown.name == "deploy-report.md"
     assert not (paths.inventory_dir / "apps.json").exists()
     assert not (paths.inventory_dir / "mk8s.json").exists()
     assert not (paths.inventory_dir / "postgresql.json").exists()
     assert not (paths.inventory_dir / "sfs.json").exists()
     markdown = artifacts.markdown.read_text(encoding="utf-8")
-    assert "## Components\n\n- MK8s:" in markdown
+    assert "## Infra\n\n- Client:" in markdown
+    assert "- MK8s: `True`" in markdown
     assert "## Apps\n\n- Envoy Gateway:" in markdown
+    assert "## Validations\n\n- No deploy-time validations configured." in markdown
     assert "- n8n: `True` (n8n.example.com)" in markdown
 
 
@@ -126,3 +130,51 @@ def test_write_inventory_removes_stale_disabled_component_files(tmp_path: Path) 
     assert not stale_apps.exists()
     assert not stale_infra.exists()
     assert not stale_mk8s.exists()
+
+
+def test_write_inventory_merges_validation_status_into_deploy_report(tmp_path: Path) -> None:
+    reset_component_entry_cache()
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+    paths.inventory_dir.mkdir(parents=True, exist_ok=True)
+    (paths.inventory_dir / "gpu-visibility-report.json").write_text(
+        json.dumps(
+            {
+                "passed": True,
+                "selected_node_count": 1,
+                "total_gpu_node_count": 1,
+                "passed_node_count": 1,
+                "skipped_node_count": 0,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    artifacts = write_inventory(
+        config,
+        paths,
+        validations=[
+            {
+                "kind": "mk8s_gpu_visibility",
+                "name": "GPU Visibility test",
+                "report_file": "gpu-visibility-report.json",
+            }
+        ],
+    )
+
+    markdown = artifacts.markdown.read_text(encoding="utf-8")
+    assert "## Infra" in markdown
+    assert "## Apps" in markdown
+    assert "## Validations" in markdown
+    assert "- Overall status: `PASS`" in markdown
+    assert "### GPU Visibility test" in markdown
+    assert "- Detail report: `gpu-visibility-report.json`" in markdown
+    assert not markdown.endswith("\n\n")

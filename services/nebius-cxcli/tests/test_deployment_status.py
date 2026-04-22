@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from enum import Enum
 from types import SimpleNamespace
 
@@ -385,6 +386,55 @@ def test_mk8s_status_poller_ignores_terminal_error_while_node_group_is_deleting(
     poller._node_group_state_name = lambda raw_state: str(raw_state)
 
     assert poller.terminal_failure() is None
+
+
+def test_mk8s_status_poller_ignores_stale_terminal_error_from_before_current_run() -> None:
+    class _Level(Enum):
+        ERROR = 1
+
+    cluster = SimpleNamespace(
+        metadata=SimpleNamespace(name="clust1", id="mk8scluster-123"),
+        status=SimpleNamespace(
+            state="RUNNING",
+            control_plane=SimpleNamespace(
+                endpoints=SimpleNamespace(public_endpoint="1.2.3.4", private_endpoint="")
+            ),
+        ),
+    )
+    node_group = SimpleNamespace(
+        metadata=SimpleNamespace(name="workers"),
+        status=SimpleNamespace(
+            state="PROVISIONING",
+            ready_node_count=0,
+            target_node_count=2,
+            events=[
+                SimpleNamespace(
+                    first_occurred_at=datetime(2026, 4, 20, 18, 46, 3, tzinfo=UTC),
+                    last_occurrence=SimpleNamespace(
+                        level=_Level.ERROR,
+                        code="ComputeInstanceCreationFailed",
+                        message="Old create failure from a previous run",
+                        occurred_at=datetime(2026, 4, 20, 18, 46, 4, tzinfo=UTC),
+                        error="RESOURCE_EXHAUSTED",
+                    ),
+                )
+            ],
+        ),
+    )
+    poller = deployment_status_module._Mk8sStatusPoller.__new__(
+        deployment_status_module._Mk8sStatusPoller
+    )
+    poller._target = Mk8sDeploymentTarget(project_id="project-u123", cluster_name="clust1")
+    poller._monitor_started_at = datetime(2026, 4, 20, 19, 10, 0, tzinfo=UTC)
+    poller._find_cluster = lambda: cluster
+    poller._list_node_groups = lambda cluster_id: [node_group]
+    poller._latest_operation_summary = lambda cluster_id: None
+    poller._cluster_state_name = lambda raw_state: str(raw_state)
+    poller._node_group_state_name = lambda raw_state: str(raw_state)
+
+    assert poller.terminal_failure() is None
+    summary = poller.summary()
+    assert "alerts ERROR workers:" not in summary
 
 
 def test_deployment_status_reporter_exposes_terminal_api_failure(monkeypatch) -> None:

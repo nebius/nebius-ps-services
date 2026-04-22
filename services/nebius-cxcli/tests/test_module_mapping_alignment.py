@@ -62,7 +62,7 @@ def _set_catalog_profile(profile: SourceProfile) -> None:
 
 
 def _project_config_path(base: Path) -> Path:
-    return base / "deployments" / "tenant-123" / "project-456" / "config.yaml"
+    return base / "deployments" / "tenant-name-example" / "project-name-example" / "config.yaml"
 
 
 def _payload_with_mk8s() -> dict:
@@ -194,6 +194,14 @@ def test_render_prefers_active_catalog_source_over_stale_config_source(
             ModuleVariable(name="cpu_nodes_preset", required=False, type_hint="string"),
             ModuleVariable(name="subnet_id", required=False, type_hint="string"),
             ModuleVariable(name="gpu_enabled", required=False, type_hint="bool"),
+            ModuleVariable(
+                name="gpu_stack_source",
+                required=False,
+                type_hint="string",
+                has_default=True,
+                default="nebius_image",
+            ),
+            ModuleVariable(name="gpu_stack_preset", required=False, type_hint="string"),
             ModuleVariable(
                 name="mk8s_cluster_public_endpoint",
                 required=False,

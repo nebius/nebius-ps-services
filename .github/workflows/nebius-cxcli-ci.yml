@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - "services/nebius-cxcli/**"
+      - "services/nccl-test/**"
+      - "helm-charts/nccl-test/**"
       - "platform-infra/modules/**"
       - ".github/workflows/nebius-cxcli-ci.yml"
       - ".github/workflows/nebius-cxcli-release.yml"
@@ -11,6 +13,8 @@ on:
     branches: [main]
     paths:
       - "services/nebius-cxcli/**"
+      - "services/nccl-test/**"
+      - "helm-charts/nccl-test/**"
       - "platform-infra/modules/**"
       - ".github/workflows/nebius-cxcli-ci.yml"
       - ".github/workflows/nebius-cxcli-release.yml"
@@ -38,6 +42,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+      - uses: azure/setup-helm@v5
       - name: Verify service with local make contract
         env:
           RELEASE_REF: ${{ github.sha }}
@@ -46,17 +51,27 @@ jobs:
           set -euo pipefail
           make all
 
+      - name: Validate NCCL chart transport rendering
+        run: |
+          set -euo pipefail
+          helm lint ../../helm-charts/nccl-test
+          helm template smoke ../../helm-charts/nccl-test \
+            --namespace nccl-test \
+            --set worker.replicas=2 \
+            --set benchmark.transport.mode=socket >/dev/null
+          helm template smoke ../../helm-charts/nccl-test \
+            --namespace nccl-test \
+            --set worker.replicas=2 \
+            --set benchmark.transport.mode=rdma >/dev/null
+
       - name: Validate active component sources catalog
         env:
-          NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE: portable
+          NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE: local
         run: |
           set -euo pipefail
           .venv/bin/python -m nebius_cxcli validate-sources component_sources.yaml
 
-      - name: Verify bundled component sources in wheel
-        env:
-          RELEASE_REF: ${{ github.sha }}
-          NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE: portable
+      - name: Verify bundled component sources are packaged in wheel
         run: |
           set -euo pipefail
           wheel="$(find dist -maxdepth 1 -name '*.whl' | sort | head -n 1)"
@@ -64,7 +79,6 @@ jobs:
             echo "::error::No wheel found in dist/"
             exit 1
           fi
-          .venv/bin/python -m nebius_cxcli.release_catalog verify-wheel \
-            --wheel "${wheel}" \
-            --release-ref "${RELEASE_REF}"
-          echo "Verified bundled portable component_sources.yaml in ${wheel}"
+          .venv/bin/python -m nebius_cxcli.release_catalog verify-wheel-bundle \
+            --wheel "${wheel}"
+          echo "Verified bundled component_sources.yaml is packaged in ${wheel}"

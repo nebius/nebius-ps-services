@@ -549,9 +549,10 @@ def wait_for_rendered_flux_resources(
         if only_sources_pending:
             if emit:
                 emit(
-                    "[cyan]NOTE:[/cyan] All rendered workload resources are Ready, but one or more rendered Flux source "
-                    "objects still have no Ready status. Treating the local apply as successful and skipping the remaining "
-                    "source wait. Inspect the source objects separately if you need source-controller health details."
+                    "[cyan]NOTE:[/cyan] Rendered HelmRelease workloads are Ready. Skipping the remaining wait for Flux "
+                    "source objects that still have no Ready status.\n"
+                    "Check HelmRelease status with:\n"
+                    "kubectl get helmreleases.helm.toolkit.fluxcd.io -A"
                 )
             return
         last_actionable_status = actionable_status
@@ -614,6 +615,7 @@ def delete_rendered_flux(
     paths: ProjectPaths,
     *,
     extra_env: dict[str, str] | None = None,
+    emit: Callable[[str], None] | None = None,
 ) -> None:
     """Delete rendered Flux manifests in local destroy mode."""
     if not flux_dir_has_rendered_resources(paths.flux_dir):
@@ -641,6 +643,13 @@ def delete_rendered_flux(
         if guidance:
             message = f"{message}\n{guidance}"
         raise RuntimeError(message)
+    if not flux_crds_installed(extra_env=extra_env):
+        if emit is not None:
+            emit(
+                "Flux resource APIs are not installed in the target cluster; "
+                "skipping rendered Flux resource deletion."
+            )
+        return
 
     with tempfile.TemporaryDirectory(prefix="nebius-cxcli-kubectl-delete-") as cache_dir:
         cache_path = Path(cache_dir)
@@ -741,13 +750,16 @@ def _get_namespace_payload(
     env = os.environ.copy()
     if extra_env:
         env.update(extra_env)
-    result = subprocess.run(
-        ["kubectl", "get", "namespace", namespace, "-o", "json"],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=20,
-    )
+    try:
+        result = subprocess.run(
+            ["kubectl", "get", "namespace", namespace, "-o", "json"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    except subprocess.TimeoutExpired:
+        return None
     if result.returncode != 0:
         return None
     try:
@@ -765,13 +777,16 @@ def _get_crd_payload(
     env = os.environ.copy()
     if extra_env:
         env.update(extra_env)
-    result = subprocess.run(
-        ["kubectl", "get", "crd", name, "-o", "json"],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=20,
-    )
+    try:
+        result = subprocess.run(
+            ["kubectl", "get", "crd", name, "-o", "json"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    except subprocess.TimeoutExpired:
+        return None
     if result.returncode != 0:
         return None
     try:
@@ -972,11 +987,8 @@ def wait_for_flux_resource_apis(
         env.update(extra_env)
     wait_for_flux_crds_ready(extra_env=extra_env)
 
-    required_types = {
-        (target.resource_type, target.namespace or FLUX_NAMESPACE)
-        for target in _flux_wait_targets(paths.flux_dir)
-    }
-    required_types.update(_FLUX_REQUIRED_API_TYPES)
+    required_types = {target.resource_type for target in _flux_wait_targets(paths.flux_dir)}
+    required_types.update(resource_type for resource_type, _namespace in _FLUX_REQUIRED_API_TYPES)
     if not required_types:
         return
 
@@ -984,26 +996,29 @@ def wait_for_flux_resource_apis(
     last_missing: list[str] = []
     while True:
         missing: list[str] = []
-        for resource_type, namespace in sorted(required_types):
+        for resource_type in sorted(required_types):
             cmd = ["kubectl"]
             if cache_dir is not None:
                 cmd.extend(["--cache-dir", str(cache_dir)])
             cmd.extend(
                 [
-                    "-n",
-                    namespace,
                     "get",
                     resource_type,
+                    "-A",
                     "--ignore-not-found",
                 ]
             )
-            result = subprocess.run(
-                cmd,
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=20,
-            )
+            try:
+                result = subprocess.run(
+                    cmd,
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                )
+            except subprocess.TimeoutExpired:
+                missing.append(resource_type)
+                continue
             if result.returncode != 0:
                 missing.append(resource_type)
         if not missing:

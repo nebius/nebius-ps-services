@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review PR"
+  short_description: "Review, fix, and ready a pull request for merge"
+  default_prompt: "Use $review-pr to review a GitHub pull request against its base branch, route to the smallest relevant sibling skills for the changed surface, fix safe issues on the branch, use non-destructive branch updates when ownership is unclear, and report whether it is ready to merge."

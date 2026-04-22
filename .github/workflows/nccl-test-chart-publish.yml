@@ -1,0 +1,417 @@
+name: nccl-test-chart-publish
+
+on:
+  push:
+    tags:
+      - "nccl-test-chart-v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nccl-test-chart-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CHART_DIR: helm-charts/nccl-test
+  CHART_NAME: nccl-test
+  TAG_PREFIX: nccl-test-chart
+  MAIN_BRANCH: main
+  OCI_REPOSITORY_PREFIX: charts
+
+jobs:
+  publish:
+    name: nccl-test-chart-publish
+    runs-on: ubuntu-latest
+    environment:
+      name: nccl-test-chart-publish
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v5
+        with:
+          version: v3.15.4
+
+      - name: Resolve release metadata
+        id: release
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "${REF_NAME}" =~ ^${TAG_PREFIX}-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "::error::Tag '${REF_NAME}' must match ${TAG_PREFIX}-vMAJOR.MINOR.PATCH"
+            exit 1
+          fi
+
+          publish_version="${BASH_REMATCH[1]}"
+          commit="$(git rev-list -n 1 "${REF_NAME}")"
+          chart_version="$(helm show chart "${CHART_DIR}" | awk -F': ' '$1 == "version" {print $2; exit}')"
+
+          if [[ -z "${chart_version}" ]]; then
+            echo "::error::Unable to resolve chart version from ${CHART_DIR}/Chart.yaml"
+            exit 1
+          fi
+
+          if [[ "${chart_version}" != "${publish_version}" ]]; then
+            echo "::error::Chart version ${chart_version} does not match release version ${publish_version}"
+            exit 1
+          fi
+
+          {
+            echo "chart_version=${chart_version}"
+            echo "publish_version=${publish_version}"
+            echo "publish_ref=${REF_NAME}"
+            echo "commit=${commit}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Ensure tag commit belongs to main history
+        run: |
+          set -euo pipefail
+          git fetch origin "${MAIN_BRANCH}" --depth=1
+          if ! git merge-base --is-ancestor "${{ steps.release.outputs.commit }}" "origin/${MAIN_BRANCH}"; then
+            echo "::error::Tag commit ${{ steps.release.outputs.commit }} is not in origin/${MAIN_BRANCH} history"
+            exit 1
+          fi
+
+      - name: Resolve fixed target registry
+        id: registry
+        env:
+          NB_REGION_ID: ${{ vars.NB_REGION_ID }}
+          NB_REGISTRY_ID: ${{ vars.NB_REGISTRY_ID }}
+          NB_REGISTRY_NAME: ${{ vars.NB_REGISTRY_NAME }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${NB_REGION_ID:-}" || -z "${NB_REGISTRY_ID:-}" ]]; then
+            echo "::error::Missing required registry settings NB_REGION_ID or NB_REGISTRY_ID"
+            exit 1
+          fi
+
+          if [[ "${NB_REGISTRY_ID}" != registry-* ]]; then
+            echo "::error::NB_REGISTRY_ID must be a full registry id like registry-<id>"
+            exit 1
+          fi
+
+          registry_id="${NB_REGISTRY_ID}"
+          registry_name="${NB_REGISTRY_NAME:-${registry_id}}"
+          registry_path="${registry_id#registry-}"
+          registry_host="cr.${NB_REGION_ID}.nebius.cloud"
+          push_ref="oci://${registry_host}/${registry_path}/${OCI_REPOSITORY_PREFIX}"
+          chart_ref="${push_ref}/${CHART_NAME}"
+          duplicate_chart_ref="${chart_ref}/${CHART_NAME}"
+
+          {
+            echo "registry_id=${registry_id}"
+            echo "registry_name=${registry_name}"
+            echo "registry_path=${registry_path}"
+            echo "registry_host=${registry_host}"
+            echo "push_ref=${push_ref}"
+            echo "chart_ref=${chart_ref}"
+            echo "duplicate_chart_ref=${duplicate_chart_ref}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Package chart
+        id: package
+        run: |
+          set -euo pipefail
+
+          if grep -q '^dependencies:' "${CHART_DIR}/Chart.yaml"; then
+            if [[ -f "${CHART_DIR}/Chart.lock" ]]; then
+              helm dependency build "${CHART_DIR}"
+            else
+              helm dependency update "${CHART_DIR}"
+            fi
+          fi
+
+          helm lint "${CHART_DIR}"
+          helm template smoke "${CHART_DIR}" --namespace "${CHART_NAME}" >/dev/null
+          helm template smoke "${CHART_DIR}" \
+            --namespace "${CHART_NAME}" \
+            --set worker.replicas=2 \
+            --set benchmark.transport.mode=socket >/dev/null
+          helm template smoke "${CHART_DIR}" \
+            --namespace "${CHART_NAME}" \
+            --set worker.replicas=2 \
+            --set benchmark.transport.mode=rdma >/dev/null
+
+          rm -rf dist
+          mkdir -p dist
+          helm package "${CHART_DIR}" -d dist
+
+          package_path="dist/${CHART_NAME}-${{ steps.release.outputs.publish_version }}.tgz"
+          if [[ ! -f "${package_path}" ]]; then
+            echo "::error::Expected package ${package_path} was not produced"
+            exit 1
+          fi
+
+          package_sha256="$(sha256sum "${package_path}" | awk '{print $1}')"
+
+          {
+            echo "package_path=${package_path}"
+            echo "package_sha256=${package_sha256}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Check existing public chart version
+        id: existing
+        run: |
+          set -euo pipefail
+
+          helm_tmp="$(mktemp -d)"
+          export HELM_CONFIG_HOME="${helm_tmp}/config"
+          export HELM_CACHE_HOME="${helm_tmp}/cache"
+          export HELM_DATA_HOME="${helm_tmp}/data"
+          export HELM_REGISTRY_CONFIG="${helm_tmp}/registry.json"
+          mkdir -p "${HELM_CONFIG_HOME}" "${HELM_CACHE_HOME}" "${HELM_DATA_HOME}"
+
+          pull_dir="$(mktemp -d)"
+          if pull_output="$(helm pull "${{ steps.registry.outputs.chart_ref }}" --version "${{ steps.release.outputs.publish_version }}" -d "${pull_dir}" 2>&1)"; then
+            printf '%s\n' "${pull_output}"
+            remote_package="${pull_dir}/${CHART_NAME}-${{ steps.release.outputs.publish_version }}.tgz"
+            remote_sha256="$(sha256sum "${remote_package}" | awk '{print $1}')"
+            if [[ "${remote_sha256}" != "${{ steps.package.outputs.package_sha256 }}" ]]; then
+              echo "::error::Registry already contains ${{ steps.registry.outputs.chart_ref }}:${{ steps.release.outputs.publish_version }} with different content"
+              echo "::error::Local package sha256=${{ steps.package.outputs.package_sha256 }}, remote package sha256=${remote_sha256}"
+              exit 1
+            fi
+            echo "publish_needed=false" >> "${GITHUB_OUTPUT}"
+          else
+            printf '%s\n' "${pull_output}" >&2
+            if grep -Eiq 'not found|manifest unknown|404' <<< "${pull_output}"; then
+              echo "publish_needed=true" >> "${GITHUB_OUTPUT}"
+            else
+              echo "::error::Failed to check existing public chart version"
+              exit 1
+            fi
+          fi
+
+      - name: Install Nebius CLI
+        if: steps.existing.outputs.publish_needed == 'true'
+        run: |
+          set -euo pipefail
+          curl -sSL https://storage.eu-north1.nebius.cloud/cli/install.sh | bash
+          echo "${HOME}/.nebius/bin" >> "${GITHUB_PATH}"
+
+      - name: Guard against duplicate nested chart repository
+        if: steps.existing.outputs.publish_needed == 'true'
+        run: |
+          set -euo pipefail
+
+          helm_tmp="$(mktemp -d)"
+          export HELM_CONFIG_HOME="${helm_tmp}/config"
+          export HELM_CACHE_HOME="${helm_tmp}/cache"
+          export HELM_DATA_HOME="${helm_tmp}/data"
+          export HELM_REGISTRY_CONFIG="${helm_tmp}/registry.json"
+          mkdir -p "${HELM_CONFIG_HOME}" "${HELM_CACHE_HOME}" "${HELM_DATA_HOME}"
+
+          duplicate_ref="${{ steps.registry.outputs.duplicate_chart_ref }}"
+          if duplicate_output="$(helm show chart "${duplicate_ref}" 2>&1)"; then
+            printf '%s\n' "${duplicate_output}"
+            echo "::error::Duplicate nested chart repository detected at ${duplicate_ref}."
+            echo "::error::Delete the nested repository/artifacts first, then rerun the publish workflow."
+            echo "::error::The canonical public chart reference must stay ${{
+              steps.registry.outputs.chart_ref
+            }}."
+            exit 1
+          fi
+
+          if grep -Eiq 'not found|manifest unknown|404|unable to locate any tags' <<< "${duplicate_output}"; then
+            printf '%s\n' "${duplicate_output}"
+            echo "::notice::No tagged duplicate nested chart repository detected at ${duplicate_ref}."
+            exit 0
+          fi
+
+          if ! grep -Eiq 'not found|manifest unknown|404|unable to locate any tags' <<< "${duplicate_output}"; then
+            printf '%s\n' "${duplicate_output}" >&2
+            echo "::error::Unable to verify whether duplicate nested chart repository ${duplicate_ref} exists."
+            exit 1
+          fi
+
+      - name: Configure Nebius CLI profile
+        if: steps.existing.outputs.publish_needed == 'true'
+        env:
+          NB_PROJECT_ID: ${{ vars.NB_PROJECT_ID }}
+          NB_SERVICE_ACCOUNT_ID: ${{ vars.NB_SERVICE_ACCOUNT_ID }}
+          NB_SERVICE_ACCOUNT_PUBLIC_KEY_ID: ${{ vars.NB_SERVICE_ACCOUNT_PUBLIC_KEY_ID }}
+          NB_TENANT_ID: ${{ vars.NB_TENANT_ID }}
+          NB_SERVICE_ACCOUNT_PRIVATE_KEY: ${{ secrets.NB_SERVICE_ACCOUNT_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          for required_var in NB_PROJECT_ID NB_SERVICE_ACCOUNT_ID NB_SERVICE_ACCOUNT_PUBLIC_KEY_ID NB_SERVICE_ACCOUNT_PRIVATE_KEY; do
+            if [[ -z "${!required_var:-}" ]]; then
+              echo "::error::Missing required Nebius environment setting ${required_var}"
+              exit 1
+            fi
+          done
+
+          install -d -m 700 "${HOME}/.nebius"
+          private_key_path="${HOME}/.nebius/nccl-test-chart-publish.pem"
+          printf '%s\n' "${NB_SERVICE_ACCOUNT_PRIVATE_KEY}" > "${private_key_path}"
+          chmod 600 "${private_key_path}"
+
+          profile_args=(
+            ci
+            --config "${HOME}/.nebius/config.yaml"
+            --endpoint api.nebius.cloud
+            --service-account-id "${NB_SERVICE_ACCOUNT_ID}"
+            --public-key-id "${NB_SERVICE_ACCOUNT_PUBLIC_KEY_ID}"
+            --private-key-file-path "${private_key_path}"
+            --parent-id "${NB_PROJECT_ID}"
+            --skip-auth
+          )
+          if [[ -n "${NB_TENANT_ID:-}" ]]; then
+            profile_args+=( --tenant-id "${NB_TENANT_ID}" )
+          fi
+
+          nebius profile create "${profile_args[@]}" >/dev/null
+
+      - name: Login to Nebius Container Registry
+        if: steps.existing.outputs.publish_needed == 'true'
+        run: |
+          set -euo pipefail
+          nebius --config "${HOME}/.nebius/config.yaml" --profile ci iam get-access-token | \
+            helm registry login "${{ steps.registry.outputs.registry_host }}" \
+              --username iam \
+              --password-stdin
+
+      - name: Push chart package
+        if: steps.existing.outputs.publish_needed == 'true'
+        id: push
+        run: |
+          set -euo pipefail
+          if push_output="$(helm push "${{ steps.package.outputs.package_path }}" "${{ steps.registry.outputs.push_ref }}" 2>&1)"; then
+            printf '%s\n' "${push_output}"
+          else
+            printf '%s\n' "${push_output}" >&2
+            exit 1
+          fi
+          digest="$(printf '%s\n' "${push_output}" | awk '/^Digest:/ {print $2; exit}')"
+          if [[ -z "${digest}" ]]; then
+            echo "::error::Unable to resolve OCI digest from helm push output"
+            exit 1
+          fi
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Verify anonymous public chart pull
+        id: verify_public
+        run: |
+          set -euo pipefail
+
+          helm_tmp="$(mktemp -d)"
+          export HELM_CONFIG_HOME="${helm_tmp}/config"
+          export HELM_CACHE_HOME="${helm_tmp}/cache"
+          export HELM_DATA_HOME="${helm_tmp}/data"
+          export HELM_REGISTRY_CONFIG="${helm_tmp}/registry.json"
+          mkdir -p "${HELM_CONFIG_HOME}" "${HELM_CACHE_HOME}" "${HELM_DATA_HOME}"
+
+          pull_dir="$(mktemp -d)"
+          if pull_output="$(helm pull "${{ steps.registry.outputs.chart_ref }}" --version "${{ steps.release.outputs.publish_version }}" -d "${pull_dir}" 2>&1)"; then
+            printf '%s\n' "${pull_output}"
+          else
+            printf '%s\n' "${pull_output}" >&2
+            exit 1
+          fi
+          public_package="${pull_dir}/${CHART_NAME}-${{ steps.release.outputs.publish_version }}.tgz"
+          public_sha256="$(sha256sum "${public_package}" | awk '{print $1}')"
+
+          if [[ "${public_sha256}" != "${{ steps.package.outputs.package_sha256 }}" ]]; then
+            echo "::error::Anonymous pull sha256 ${public_sha256} does not match packaged sha256 ${{ steps.package.outputs.package_sha256 }}"
+            exit 1
+          fi
+
+          digest="$(printf '%s\n' "${pull_output}" | awk '/^Digest:/ {print $2; exit}')"
+          if [[ -z "${digest}" ]]; then
+            digest="${{ steps.push.outputs.digest }}"
+          fi
+
+          {
+            echo "public_sha256=${public_sha256}"
+            echo "digest=${digest}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Write publish manifest
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg actor "${GITHUB_ACTOR}" \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg event "${GITHUB_EVENT_NAME}" \
+            --arg ref "${GITHUB_REF}" \
+            --arg ref_name "${GITHUB_REF_NAME}" \
+            --arg publish_ref "${{ steps.release.outputs.publish_ref }}" \
+            --arg version "${{ steps.release.outputs.publish_version }}" \
+            --arg commit "${{ steps.release.outputs.commit }}" \
+            --arg project_id "${{ vars.NB_PROJECT_ID }}" \
+            --arg tenant_id "${{ vars.NB_TENANT_ID }}" \
+            --arg registry_name "${{ steps.registry.outputs.registry_name }}" \
+            --arg registry_id "${{ steps.registry.outputs.registry_id }}" \
+            --arg registry_path "${{ steps.registry.outputs.registry_path }}" \
+            --arg oci_ref "${{ steps.registry.outputs.chart_ref }}" \
+            --arg package_path "${{ steps.package.outputs.package_path }}" \
+            --arg package_sha256 "${{ steps.package.outputs.package_sha256 }}" \
+            --arg published_digest "${{ steps.verify_public.outputs.digest }}" \
+            --arg public_pull_sha256 "${{ steps.verify_public.outputs.public_sha256 }}" \
+            --arg publish_needed "${{ steps.existing.outputs.publish_needed }}" \
+            --arg run_id "${GITHUB_RUN_ID}" \
+            --arg run_attempt "${GITHUB_RUN_ATTEMPT}" \
+            '{
+              actor: $actor,
+              repository: $repository,
+              event: $event,
+              ref: $ref,
+              ref_name: $ref_name,
+              publish_ref: $publish_ref,
+              version: $version,
+              commit: $commit,
+              tenant_id: $tenant_id,
+              project_id: $project_id,
+              registry_name: $registry_name,
+              registry_id: $registry_id,
+              registry_path: $registry_path,
+              oci_ref: $oci_ref,
+              package_path: $package_path,
+              package_sha256: $package_sha256,
+              published_digest: $published_digest,
+              public_pull_sha256: $public_pull_sha256,
+              publish_needed: ($publish_needed == "true"),
+              run_id: $run_id,
+              run_attempt: $run_attempt,
+              timestamp_utc: now | todate
+            }' > publish-manifest.json
+
+      - name: Upload publish manifest artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: nccl-test-chart-publish-manifest-${{ github.run_id }}
+          path: publish-manifest.json
+
+      - name: Publish run summary
+        run: |
+          set -euo pipefail
+          {
+            echo "### nccl-test chart publish"
+            echo ""
+            echo "- Version: \`${{ steps.release.outputs.publish_version }}\`"
+            echo "- Commit: \`${{ steps.release.outputs.commit }}\`"
+            echo "- Registry name: \`${{ steps.registry.outputs.registry_name }}\`"
+            echo "- Registry: \`${{ steps.registry.outputs.registry_id }}\`"
+            echo "- OCI reference: \`${{ steps.registry.outputs.chart_ref }}:${{ steps.release.outputs.publish_version }}\`"
+            echo "- Package sha256: \`${{ steps.package.outputs.package_sha256 }}\`"
+            echo "- OCI digest: \`${{ steps.verify_public.outputs.digest }}\`"
+            echo "- Anonymous pull sha256: \`${{ steps.verify_public.outputs.public_sha256 }}\`"
+            echo "- Pushed in this run: \`${{ steps.existing.outputs.publish_needed }}\`"
+            echo ""
+            echo "Public pull example:"
+            echo ""
+            echo '```bash'
+            echo "helm pull ${{ steps.registry.outputs.chart_ref }} --version ${{ steps.release.outputs.publish_version }}"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"

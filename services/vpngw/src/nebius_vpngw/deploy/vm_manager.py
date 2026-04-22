@@ -1376,6 +1376,165 @@ class VMManager:
         except Exception:
             return None
 
+    @staticmethod
+    def _allocation_name(alloc_obj: t.Any, fallback: str | None = None) -> str:
+        name = getattr(getattr(alloc_obj, "metadata", None), "name", None)
+        if name:
+            return str(name)
+        alloc_id = getattr(alloc_obj, "id", None) or getattr(
+            getattr(alloc_obj, "metadata", None),
+            "id",
+            None,
+        )
+        if alloc_id:
+            return str(alloc_id)
+        return fallback or "allocation"
+
+    @staticmethod
+    def _allocation_is_transitional(state: str | None) -> bool:
+        return bool(state and any(token in state.lower() for token in ("delet", "releas", "pending")))
+
+    def _hydrate_allocation(self, alloc_client: t.Any, alloc_obj: t.Any | None) -> t.Any | None:
+        if alloc_client is None or alloc_obj is None:
+            return alloc_obj
+        alloc_id = self._resource_id(alloc_obj)
+        if not alloc_id:
+            return alloc_obj
+        return self._get_allocation_by_id(alloc_client, alloc_id) or alloc_obj
+
+    def _resolve_known_allocation_ip(self, alloc_client: t.Any, alloc_obj: t.Any | None) -> str | None:
+        if alloc_obj is None:
+            return None
+        alloc_obj = self._hydrate_allocation(alloc_client, alloc_obj)
+        alloc_ip = self._allocation_ip_from_obj(alloc_obj)
+        if alloc_ip:
+            return alloc_ip
+        alloc_id = self._resource_id(alloc_obj)
+        if alloc_id:
+            return self._normalize_ip_value(self.get_allocation_ip(alloc_id))
+        return None
+
+    def _validate_requested_public_allocation(
+        self,
+        alloc_client: t.Any,
+        alloc_obj: t.Any,
+        *,
+        desired_ip: str,
+        alloc_name: str,
+        require_resolved_ip: bool,
+    ) -> t.Any:
+        alloc_obj = self._hydrate_allocation(alloc_client, alloc_obj)
+        resolved_ip = self._resolve_known_allocation_ip(alloc_client, alloc_obj)
+        actual_name = self._allocation_name(alloc_obj, alloc_name)
+
+        if require_resolved_ip and not resolved_ip:
+            raise RuntimeError(
+                f"Public IP allocation {actual_name} exists, but its IP could not be resolved to "
+                f"confirm the requested external_ips value {desired_ip}."
+            )
+        if resolved_ip and resolved_ip != desired_ip:
+            raise RuntimeError(
+                f"Public IP allocation {actual_name} has IP {resolved_ip}, but "
+                f"external_ips requested {desired_ip}."
+            )
+        if self._allocation_is_attached(alloc_obj):
+            raise RuntimeError(
+                f"Requested public IP allocation {desired_ip} ({actual_name}) is already attached "
+                "to another resource. Detach it before using it in gateway_group.external_ips."
+            )
+        return alloc_obj
+
+    def _require_public_allocation_in_gateway_subnet(
+        self,
+        alloc_client: t.Any,
+        alloc_obj: t.Any,
+        target_subnet_id: str | None,
+        desired_ip: str | None,
+    ) -> t.Any:
+        if not alloc_obj or not target_subnet_id:
+            return alloc_obj
+
+        alloc_obj = self._hydrate_allocation(alloc_client, alloc_obj)
+        alloc_spec = getattr(alloc_obj, "spec", None)
+        ipv4_public = getattr(alloc_spec, "ipv4_public", None) if alloc_spec else None
+        if not ipv4_public:
+            return alloc_obj
+
+        current_subnet_id = getattr(ipv4_public, "subnet_id", None)
+        if not current_subnet_id or current_subnet_id == target_subnet_id:
+            if current_subnet_id == target_subnet_id:
+                print(f"[VMManager] Allocation {desired_ip} already in the gateway subnet")
+            return alloc_obj
+
+        alloc_meta = getattr(alloc_obj, "metadata", None)
+        alloc_id = getattr(alloc_obj, "id", None) or getattr(alloc_meta, "id", None)
+        alloc_name = getattr(alloc_meta, "name", None) if alloc_meta else None
+        raise RuntimeError(
+            f"Public IP allocation {alloc_name or alloc_id} is bound to subnet {current_subnet_id} "
+            f"and cannot be moved to gateway subnet {target_subnet_id}. "
+            "Nebius marks public allocation subnet binding as immutable. "
+            "Options: (1) deploy the gateway in the original subnet/network so the IP matches, "
+            "or (2) remove the IP from external_ips to allow a new allocation, "
+            "or (3) release the old allocation and re-request the same IP in the gateway subnet "
+            "(best effort only)."
+        )
+
+    def _find_requested_public_allocation(
+        self,
+        alloc_client: t.Any,
+        alloc_api: t.Any,
+        alloc_name: str,
+        desired_ip: str,
+        allocations_by_ip: dict[str, t.Any] | None = None,
+    ) -> tuple[t.Any | None, dict[str, t.Any]]:
+        normalized_ip = self._normalize_ip_value(desired_ip)
+        if not normalized_ip:
+            return None, allocations_by_ip or {}
+
+        mapping = allocations_by_ip or {}
+        alloc_obj = mapping.get(normalized_ip)
+        if alloc_obj is None and alloc_client is not None:
+            mapping = self._list_allocations_by_ip(alloc_client)
+            alloc_obj = mapping.get(normalized_ip)
+
+        if alloc_obj is None and alloc_api is not None:
+            get_by_addr = getattr(alloc_api, "get_by_address", None)
+            if get_by_addr:
+                try:
+                    alloc_obj = get_by_addr(address=normalized_ip, project_id=self.project_id)
+                except Exception:
+                    alloc_obj = None
+
+        if alloc_obj is not None:
+            alloc_obj = self._hydrate_allocation(alloc_client, alloc_obj)
+            state = self._allocation_state(alloc_obj)
+            if alloc_client is not None and self._allocation_is_transitional(state):
+                mapping = self._wait_for_allocation_release(alloc_client, normalized_ip)
+                alloc_obj = mapping.get(normalized_ip)
+                alloc_obj = self._hydrate_allocation(alloc_client, alloc_obj)
+            if alloc_obj is not None:
+                alloc_obj = self._validate_requested_public_allocation(
+                    alloc_client,
+                    alloc_obj,
+                    desired_ip=normalized_ip,
+                    alloc_name=alloc_name,
+                    require_resolved_ip=False,
+                )
+                return alloc_obj, mapping
+
+        by_name = self._get_allocation_by_name(alloc_client, alloc_name)
+        if by_name is None:
+            return None, mapping
+
+        by_name = self._validate_requested_public_allocation(
+            alloc_client,
+            by_name,
+            desired_ip=normalized_ip,
+            alloc_name=alloc_name,
+            require_resolved_ip=True,
+        )
+        return by_name, mapping
+
     def _create_public_allocation_via_client(
         self,
         alloc_client: t.Any,
@@ -1448,20 +1607,20 @@ class VMManager:
         alloc_obj = None
 
         if desired_ip:
-            try:
-                get_by_addr = getattr(alloc_api, "get_by_address", None)
-                if get_by_addr:
-                    alloc_obj = get_by_addr(address=desired_ip, project_id=self.project_id)
-                    if alloc_obj:
-                        print(f"[VMManager] Found existing allocation with IP {desired_ip}")
-                        alloc_obj = self._migrate_allocation_to_vpngw_subnet(
-                            alloc_client,
-                            alloc_obj,
-                            subnet_id,
-                            desired_ip,
-                        )
-            except Exception:
-                alloc_obj = None
+            alloc_obj, _ = self._find_requested_public_allocation(
+                alloc_client,
+                alloc_api,
+                alloc_name,
+                desired_ip,
+            )
+            if alloc_obj is not None:
+                print(f"[VMManager] Found existing allocation with IP {desired_ip}")
+                alloc_obj = self._require_public_allocation_in_gateway_subnet(
+                    alloc_client,
+                    alloc_obj,
+                    subnet_id,
+                    desired_ip,
+                )
 
         if alloc_obj is None and not desired_ip and preserved_alloc_id:
             try:
@@ -1471,7 +1630,7 @@ class VMManager:
                     print(
                         f"[VMManager] Reusing preserved allocation {preserved_alloc_id} ({preserved_ip}) for {inst_name} {nic_name}"
                     )
-                    alloc_obj = self._migrate_allocation_to_vpngw_subnet(
+                    alloc_obj = self._require_public_allocation_in_gateway_subnet(
                         alloc_client,
                         alloc_obj,
                         subnet_id,
@@ -1487,9 +1646,8 @@ class VMManager:
             alloc_obj = self._get_allocation_by_name(alloc_client, alloc_name)
             if alloc_obj:
                 print(f"[VMManager] Found existing allocation by name: {alloc_name}")
-                alloc_id = self._resource_id(alloc_obj)
-                by_name_ip = self.get_allocation_ip(alloc_id) if alloc_id else None
-                alloc_obj = self._migrate_allocation_to_vpngw_subnet(
+                by_name_ip = self._resolve_known_allocation_ip(alloc_client, alloc_obj)
+                alloc_obj = self._require_public_allocation_in_gateway_subnet(
                     alloc_client,
                     alloc_obj,
                     subnet_id,
@@ -1516,18 +1674,36 @@ class VMManager:
 
         try:
             if alloc_client is not None:
-                return alloc_name, self._create_public_allocation_via_client(
+                created_alloc = self._create_public_allocation_via_client(
                     alloc_client,
                     alloc_name,
                     subnet_id,
                     desired_ip,
                 )
+                if desired_ip and created_alloc is not None:
+                    created_alloc = self._validate_requested_public_allocation(
+                        alloc_client,
+                        created_alloc,
+                        desired_ip=desired_ip,
+                        alloc_name=alloc_name,
+                        require_resolved_ip=False,
+                    )
+                return alloc_name, created_alloc
             if alloc_api is not None:
-                return alloc_name, self._create_public_allocation_via_api(
+                created_alloc = self._create_public_allocation_via_api(
                     alloc_api,
                     alloc_name,
                     subnet_id,
                 )
+                if desired_ip and created_alloc is not None:
+                    created_alloc = self._validate_requested_public_allocation(
+                        alloc_client,
+                        created_alloc,
+                        desired_ip=desired_ip,
+                        alloc_name=alloc_name,
+                        require_resolved_ip=False,
+                    )
+                return alloc_name, created_alloc
         except Exception as e:
             print(f"[VMManager] allocation create failed: {e}")
 
@@ -2084,12 +2260,21 @@ class VMManager:
                 if ipv4_public:
                     address = getattr(ipv4_public, "address", None)
                     if address:
-                        return self._normalize_ip_value(str(address))
+                        normalized_address = self._normalize_ip_value(str(address))
+                        if normalized_address:
+                            return normalized_address
+                    cidr = getattr(ipv4_public, "cidr", None)
+                    if cidr:
+                        normalized_cidr = self._normalize_ip_value(str(cidr))
+                        if normalized_cidr:
+                            return normalized_cidr
             status = getattr(alloc_obj, "status", None)
             details = getattr(status, "details", None) if status else None
             cidr = getattr(details, "allocated_cidr", None) if details else None
             if cidr:
-                return self._normalize_ip_value(str(cidr))
+                normalized_cidr = self._normalize_ip_value(str(cidr))
+                if normalized_cidr:
+                    return normalized_cidr
         except Exception:
             return None
         return None
@@ -2099,6 +2284,8 @@ class VMManager:
             from nebius.api.nebius.vpc.v1 import ListAllocationsRequest  # type: ignore
 
             response = alloc_client.list(ListAllocationsRequest(parent_id=self.project_id or ""))
+            if hasattr(response, "wait"):
+                response = response.wait()
             items = []
             if hasattr(response, "items"):
                 items = response.items
@@ -2107,9 +2294,13 @@ class VMManager:
 
             mapping: dict[str, t.Any] = {}
             for allocation in items:
-                ip_value = self._allocation_ip_from_obj(allocation)
+                full_allocation = allocation
+                ip_value = self._allocation_ip_from_obj(full_allocation)
+                if not ip_value:
+                    full_allocation = self._hydrate_allocation(alloc_client, allocation)
+                    ip_value = self._allocation_ip_from_obj(full_allocation)
                 if ip_value:
-                    mapping[ip_value] = allocation
+                    mapping[ip_value] = full_allocation
             return mapping
         except Exception:
             return {}
@@ -2144,6 +2335,8 @@ class VMManager:
         for path in (
             ("status", "details", "attachments"),
             ("status", "attachments"),
+            ("status", "assignment", "network_interface", "instance_id"),
+            ("status", "assignment", "load_balancer", "id"),
             ("status", "details", "attached_to"),
             ("status", "details", "instance_id"),
             ("status", "details", "resource_id"),
@@ -2207,40 +2400,31 @@ class VMManager:
     ) -> tuple[t.Any | None, dict[str, t.Any]]:
         alloc_obj = None
 
-        if desired_ip and desired_ip in allocations_by_ip:
-            alloc_obj = allocations_by_ip.get(desired_ip)
-            state = self._allocation_state(alloc_obj)
-            if state and any(token in state.lower() for token in ("delet", "releas", "pending")):
-                allocations_by_ip = self._wait_for_allocation_release(alloc_client, desired_ip)
-                alloc_obj = allocations_by_ip.get(desired_ip)
-
-            before_ip = self._allocation_ip_from_obj(alloc_obj)
-            alloc_obj = self._migrate_allocation_to_vpngw_subnet(
+        if desired_ip:
+            alloc_obj, allocations_by_ip = self._find_requested_public_allocation(
                 alloc_client,
-                alloc_obj,
-                subnet_id,
+                None,
+                alloc_name,
                 desired_ip,
+                allocations_by_ip,
             )
-            after_ip = self._allocation_ip_from_obj(alloc_obj) if alloc_obj else None
-            if before_ip and after_ip and before_ip != after_ip:
-                print(
-                    f"[VMManager] Note: Requested IP {before_ip} could not be migrated; continuing with allocation in its existing subnet (IP {after_ip})."
+            if alloc_obj is not None:
+                alloc_obj = self._require_public_allocation_in_gateway_subnet(
+                    alloc_client,
+                    alloc_obj,
+                    subnet_id,
+                    desired_ip,
                 )
-            if alloc_obj and self._allocation_is_attached(alloc_obj):
-                print(
-                    f"[VMManager] Warning: Requested IP {desired_ip} is already attached to a resource."
-                )
-
-        by_name = self._get_allocation_by_name(alloc_client, alloc_name)
-        if by_name is not None:
-            alloc_obj = by_name
+        else:
+            by_name = self._get_allocation_by_name(alloc_client, alloc_name)
+            if by_name is not None:
+                alloc_obj = by_name
 
         if alloc_obj is None:
             return None, allocations_by_ip
 
-        alloc_id = self._resource_id(alloc_obj)
-        alloc_ip = self.get_allocation_ip(alloc_id) if alloc_id else None
-        alloc_obj = self._migrate_allocation_to_vpngw_subnet(
+        alloc_ip = self._resolve_known_allocation_ip(alloc_client, alloc_obj)
+        alloc_obj = self._require_public_allocation_in_gateway_subnet(
             alloc_client,
             alloc_obj,
             subnet_id,
@@ -2297,9 +2481,23 @@ class VMManager:
 
         alloc_obj = self._get_allocation_by_name(alloc_client, alloc_name)
         if alloc_obj is not None:
+            if desired_ip:
+                alloc_obj = self._validate_requested_public_allocation(
+                    alloc_client,
+                    alloc_obj,
+                    desired_ip=desired_ip,
+                    alloc_name=alloc_name,
+                    require_resolved_ip=False,
+                )
             return alloc_obj
         if desired_ip and desired_ip in allocations_by_ip:
-            return allocations_by_ip[desired_ip]
+            return self._validate_requested_public_allocation(
+                alloc_client,
+                allocations_by_ip[desired_ip],
+                desired_ip=desired_ip,
+                alloc_name=alloc_name,
+                require_resolved_ip=False,
+            )
         raise RuntimeError(f"Failed to fetch allocation {alloc_name} after creation.")
 
     def _resolve_prepared_public_ip(
@@ -2819,154 +3017,6 @@ class VMManager:
 
         except Exception as e:
             print(f"[VMManager] Error ensuring route table for gateway subnet: {e}")
-
-    def _migrate_allocation_to_vpngw_subnet(
-        self,
-        alloc_client: t.Any,
-        alloc_obj: t.Any,
-        target_subnet_id: str | None,
-        desired_ip: str | None,
-    ) -> t.Any:
-        """Migrate a public IP allocation to the gateway subnet if it's in a different subnet.
-
-        This enables users to:
-        1. Rename the old gateway subnet
-        2. Run 'apply' to create a fresh gateway subnet
-        3. Automatically move public IP allocations to new subnet
-
-        Args:
-            alloc_client: AllocationServiceClient
-            alloc_obj: Existing allocation object
-            target_subnet_id: Target gateway subnet ID
-            desired_ip: IP address for logging
-
-        Returns:
-            Updated allocation object (or original if no migration needed)
-        """
-        if not alloc_client or not alloc_obj or not target_subnet_id:
-            return alloc_obj
-
-        try:
-            # Get allocation's current subnet
-            alloc_spec = getattr(alloc_obj, "spec", None)
-            if not alloc_spec:
-                return alloc_obj
-
-            # Check if it's a public allocation
-            ipv4_public = getattr(alloc_spec, "ipv4_public", None)
-            if not ipv4_public:
-                return alloc_obj
-
-            current_subnet_id = getattr(ipv4_public, "subnet_id", None)
-
-            # If already in target subnet, no migration needed
-            if current_subnet_id == target_subnet_id:
-                print(f"[VMManager] Allocation {desired_ip} already in the gateway subnet")
-                return alloc_obj
-
-            from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
-            from nebius.api.nebius.vpc.v1 import (
-                AllocationSpec,
-                IPv4PublicAllocationSpec,
-                UpdateAllocationRequest,
-            )  # type: ignore
-
-            # Resolve the IP/CIDR we should preserve during migration
-            alloc_id = getattr(alloc_obj, "id", None) or getattr(
-                getattr(alloc_obj, "metadata", None), "id", None
-            )
-            ip_cidr = desired_ip
-            if not ip_cidr and ipv4_public:
-                ip_cidr = getattr(ipv4_public, "cidr", None) or getattr(
-                    ipv4_public, "address", None
-                )
-            if not ip_cidr and alloc_id:
-                # Try to fetch via helper to avoid relying on object shape
-                ip_cidr = self.get_allocation_ip(str(alloc_id))
-            if ip_cidr:
-                ip_cidr = str(ip_cidr)
-            else:
-                # Fallback: let API keep the same IP by using /32 request semantics
-                ip_cidr = "/32"
-
-            print(
-                f"[VMManager] Attempting to migrate allocation {ip_cidr} to the gateway subnet..."
-            )
-
-            # Get allocation ID and metadata
-            if not alloc_id:
-                alloc_id = getattr(getattr(alloc_obj, "metadata", None), "id", None)
-
-            alloc_meta = getattr(alloc_obj, "metadata", None)
-            alloc_name = getattr(alloc_meta, "name", None) if alloc_meta else None
-            parent_id = self.project_id or getattr(alloc_meta, "parent_id", None)
-            if not parent_id:
-                # Some SDKs expose project_id on metadata instead of parent_id
-                parent_id = getattr(alloc_meta, "project_id", None)
-
-            if not alloc_id:
-                print("[VMManager] Cannot migrate allocation: ID not found")
-                return alloc_obj
-            if not parent_id:
-                print(
-                    f"[VMManager] Cannot migrate allocation {alloc_name or alloc_id}: parent_id is missing"
-                )
-                return alloc_obj
-            if not alloc_name:
-                # Some APIs require name on update; fall back to id as name if missing
-                alloc_name = str(alloc_id)
-
-            # Update allocation to new subnet
-            update_req = UpdateAllocationRequest(
-                metadata=ResourceMetadata(id=alloc_id, parent_id=parent_id, name=alloc_name),
-                spec=AllocationSpec(
-                    ipv4_public=IPv4PublicAllocationSpec(
-                        subnet_id=target_subnet_id,
-                        cidr=ip_cidr,  # Preserve the IP address
-                    )
-                ),
-            )
-
-            try:
-                update_op = alloc_client.update(update_req).wait()
-                try:
-                    update_op.sync_wait()
-                except Exception:
-                    pass
-
-                # Refetch the updated allocation
-                try:
-                    from nebius.api.nebius.vpc.v1 import GetAllocationRequest  # type: ignore
-
-                    updated_alloc = alloc_client.get(GetAllocationRequest(id=alloc_id)).wait()
-                    print(f"[VMManager] ✓ Migrated allocation {ip_cidr} to the gateway subnet")
-                    return updated_alloc
-                except Exception as e:
-                    print(f"[VMManager] Migration completed but could not refetch: {e}")
-                    return alloc_obj
-            except Exception as e:
-                err_text = str(e)
-                if (
-                    "Immutable field: subnetId" in err_text
-                    or "subnetId must not be changed" in err_text
-                ):
-                    # Nebius API forbids changing allocation.subnet_id; fail fast with guidance.
-                    raise RuntimeError(
-                        f"Public IP allocation {alloc_name or alloc_id} is bound to subnet {current_subnet_id} "
-                        f"and cannot be migrated to gateway subnet {target_subnet_id}. "
-                        "Options: (1) deploy the gateway in the original subnet/network so the IP matches, "
-                        "or (2) remove the IP from external_ips to allow a new allocation, "
-                        "or (3) release the old allocation and re-request the same IP in the gateway subnet "
-                        "(best effort only)."
-                    ) from e
-                print(f"[VMManager] Could not migrate allocation {ip_cidr}: {e}")
-                print("[VMManager] Continuing with existing allocation in current subnet")
-                return alloc_obj
-
-        except Exception as e:
-            print(f"[VMManager] Could not migrate allocation {desired_ip}: {e}")
-            print("[VMManager] Continuing with existing allocation in current subnet")
-            return alloc_obj
 
     def _create_vpngw_route_table(self, client: t.Any, subnet_obj: t.Any, network_id: str) -> None:
         """Create a dedicated route table for the gateway subnet with default egress route.

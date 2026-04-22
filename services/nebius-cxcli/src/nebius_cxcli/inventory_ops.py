@@ -1,14 +1,19 @@
-"""Inventory generation helpers."""
+"""Deploy report generation helpers."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from .component_instances import component_instance_id, component_type_id
 from .component_wiring import resolved_component_row
+from .deploy_validation_report import (
+    DEPLOY_REPORT_FILENAME,
+    build_deploy_validation_report,
+    validation_section_lines,
+)
 from .paths import ProjectPaths
 from .runtime_config import to_plain_data
 
@@ -129,8 +134,8 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
 
     client_info = _mapping(_lookup(payload_data, "client_info"))
     nebius = _mapping(_lookup(client_info, "nebius"))
-    project_id = str(_coalesce(_lookup(nebius, "project_id"), paths.path_project_id))
-    tenant_id = str(_coalesce(_lookup(nebius, "tenant_id"), paths.path_tenant_id))
+    project_id = str(_coalesce(_lookup(nebius, "project_id"), ""))
+    tenant_id = str(_coalesce(_lookup(nebius, "tenant_id"), ""))
     region_id = str(_coalesce(_lookup(nebius, "region_id"), ""))
 
     infra_rows = _infra_component_rows(payload_data)
@@ -264,8 +269,13 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
     }
 
 
-def write_inventory(config: Any, paths: ProjectPaths) -> InventoryArtifacts:
-    """Write non-sensitive inventory artifacts to disk."""
+def write_inventory(
+    config: Any,
+    paths: ProjectPaths,
+    *,
+    validations: Sequence[Mapping[str, Any]] = (),
+) -> InventoryArtifacts:
+    """Write the human-readable deploy report artifact to disk."""
     payload = _build_payload(config, paths)
     paths.inventory_dir.mkdir(parents=True, exist_ok=True)
     for stale_path in (
@@ -276,6 +286,11 @@ def write_inventory(config: Any, paths: ProjectPaths) -> InventoryArtifacts:
         paths.inventory_dir / "apps.json",
     ):
         stale_path.unlink(missing_ok=True)
+    for stale_markdown in (
+        paths.inventory_dir / "inventory.md",
+        paths.inventory_dir / "deploy-validation-report.md",
+    ):
+        stale_markdown.unlink(missing_ok=True)
 
     payload_data = to_plain_data(config)
     client_info = _mapping(payload_data if isinstance(payload_data, dict) else {})
@@ -285,17 +300,21 @@ def write_inventory(config: Any, paths: ProjectPaths) -> InventoryArtifacts:
     app_summary = _mapping(_lookup(payload, "apps"))
     n8n_summary = _mapping(_lookup(app_summary, "n8n"))
 
-    markdown_path = paths.inventory_dir / "inventory.md"
+    markdown_path = paths.inventory_dir / DEPLOY_REPORT_FILENAME
+    validation_report = build_deploy_validation_report(
+        validations,
+        inventory_dir=paths.inventory_dir,
+        markdown_path=markdown_path,
+    )
     lines = [
-        f"# Inventory: {payload['infra']['project_id']}",
+        f"# Deploy Report: {payload['infra']['project_id']}",
+        "",
+        "## Infra",
         "",
         f"- Client: `{_coalesce(_lookup(client_info, 'client_name'), '')}`",
-        f"- Tenant: `{_coalesce(_lookup(nebius, 'tenant_id'), paths.path_tenant_id)}`",
+        f"- Tenant: `{_coalesce(_lookup(nebius, 'tenant_id'), '')}`",
         f"- Project: `{_coalesce(_lookup(nebius, 'project_id'), '')}`",
         f"- Region: `{payload['infra']['region']}`",
-        "",
-        "## Components",
-        "",
         f"- MK8s: `{payload['infra']['mk8s_enabled']}`",
         f"- Managed PostgreSQL: `{payload['postgresql']['enabled']}`",
         f"- SFS: `{payload['sfs']['enabled']}`",
@@ -309,7 +328,20 @@ def write_inventory(config: Any, paths: ProjectPaths) -> InventoryArtifacts:
         f"- Observability: `{payload['apps']['observability']}`",
         f"- n8n: `{_coalesce(_lookup(n8n_summary, 'enabled'), False)}` "
         f"({_coalesce(_lookup(n8n_summary, 'hostname'), 'n/a')})",
+        "",
     ]
+    if validations:
+        lines.extend(validation_section_lines(validation_report))
+    else:
+        lines.extend(
+            [
+                "## Validations",
+                "",
+                "- No deploy-time validations configured.",
+            ]
+        )
+    while lines and not str(lines[-1]).strip():
+        lines.pop()
     markdown_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     return InventoryArtifacts(markdown=markdown_path)

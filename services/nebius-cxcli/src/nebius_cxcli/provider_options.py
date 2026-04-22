@@ -11,19 +11,29 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, cast
 
+from .capacity_dashboard import (
+    CapacityResourceAdvice,
+    capacity_regular_sort_key,
+    capacity_summary_text,
+    filter_capacity_resource_advice,
+    list_capacity_resource_advice,
+)
 from .sdk_auth import init_nebius_sdk
 
 SUPPORTED_PROVIDER_OPTION_SOURCES = frozenset(
     {
         "mk8s_compatible_platforms",
-        "mk8s_gpu_driver_presets",
+        "mk8s_gpu_stack_presets",
+        "mk8s_node_group_os_values",
         "mk8s_infiniband_fabrics",
         "compute_platforms",
         "compute_platform_presets",
+        "compute_public_image_families",
         "project_subnets",
         "project_networks",
         "tenant_projects",
         "mk8s_control_plane_versions",
+        "mk8s_boot_disk_types",
     }
 )
 
@@ -35,6 +45,7 @@ _OPTION_PLUGIN_ENV = "NEBIUS_CXCLI_PROVIDER_OPTION_PLUGINS"
 class OptionChoice:
     value: str
     label: str
+    recommended: bool = False
 
 
 @dataclass(frozen=True)
@@ -45,15 +56,10 @@ class TenantProjectValidationResult:
 
 
 @dataclass(frozen=True)
-class _Mk8sInfiniBandFabric:
-    value: str
-    platform: str
-    region: str
-
-
-@dataclass(frozen=True)
 class _Mk8sCompatibilityItem:
     compatible_platforms: tuple[str, ...]
+    # Nebius compatibility matrix field name. Although the API calls this
+    # `drivers_preset`, it selects the bundled GPU image/software-stack family.
     drivers_preset: str | None
     os: str | None
 
@@ -67,21 +73,11 @@ class _ComputePlatformPreset:
     allow_gpu_clustering: bool
 
 
-# Keep this in the documented Nebius fabric order for stable prompt rendering.
-_MK8S_INFINIBAND_FABRICS: tuple[_Mk8sInfiniBandFabric, ...] = (
-    _Mk8sInfiniBandFabric(value="fabric-2", platform="gpu-h100-sxm", region="eu-north1"),
-    _Mk8sInfiniBandFabric(value="fabric-3", platform="gpu-h100-sxm", region="eu-north1"),
-    _Mk8sInfiniBandFabric(value="fabric-4", platform="gpu-h100-sxm", region="eu-north1"),
-    _Mk8sInfiniBandFabric(value="fabric-5", platform="gpu-h200-sxm", region="eu-west1"),
-    _Mk8sInfiniBandFabric(value="fabric-6", platform="gpu-h100-sxm", region="eu-north1"),
-    _Mk8sInfiniBandFabric(value="fabric-7", platform="gpu-h200-sxm", region="eu-north1"),
-    _Mk8sInfiniBandFabric(value="eu-north2-a", platform="gpu-h200-sxm", region="eu-north2"),
-    _Mk8sInfiniBandFabric(value="me-west1-a", platform="gpu-b200-sxm-a", region="me-west1"),
-    _Mk8sInfiniBandFabric(value="uk-south1-a", platform="gpu-b300-sxm", region="uk-south1"),
-    _Mk8sInfiniBandFabric(value="us-central1-a", platform="gpu-h200-sxm", region="us-central1"),
-    _Mk8sInfiniBandFabric(value="us-central1-b", platform="gpu-b200-sxm", region="us-central1"),
-)
-
+@dataclass(frozen=True)
+class _ComputePublicImageFamily:
+    family: str
+    human_name: str
+    compatibility: str
 
 def _normalize_plugin_choices(items: Iterable[object] | None) -> list[OptionChoice]:
     if not items:
@@ -94,19 +90,27 @@ def _normalize_plugin_choices(items: Iterable[object] | None) -> list[OptionChoi
         if isinstance(item, OptionChoice):
             value = item.value
             label = item.label
+            recommended = item.recommended
         elif isinstance(item, dict):
             raw_value = item.get("value")
             raw_label = item.get("label")
             value = str(raw_value).strip() if raw_value is not None else ""
             label = str(raw_label).strip() if raw_label is not None else value
+            recommended = bool(item.get("recommended", False))
         else:
             value = str(item).strip()
             label = value
+            recommended = False
         if not value or value in seen:
             continue
-        out.append(OptionChoice(value=value, label=label or value))
+        out.append(OptionChoice(value=value, label=label or value, recommended=recommended))
         seen.add(value)
     return out
+
+
+def _is_live_fabric_name(value: object) -> bool:
+    normalized = _as_str(value)
+    return bool(normalized) and normalized.upper() not in {"N/A", "NA", "NONE"}
 
 
 @lru_cache(maxsize=8)
@@ -215,6 +219,17 @@ def _provider_error_message(provider: str, exc: Exception) -> str:
     return f"{provider}: {message}"
 
 
+def _unsupported_platform_names(value: object) -> tuple[str, ...]:
+    if isinstance(value, dict):
+        return tuple(str(key).strip() for key in value if str(key).strip())
+    names: list[str] = []
+    for item in list(value or []):
+        key = _as_str(getattr(item, "key", None))
+        if key:
+            names.append(key)
+    return tuple(names)
+
+
 def _apply_choice_filter(
     choices: Iterable[OptionChoice],
     *,
@@ -231,6 +246,67 @@ def _apply_choice_filter(
     return [choice for choice in resolved if compiled.search(choice.value)]
 
 
+def _mk8s_gpu_preference_lists() -> tuple[tuple[str, ...], tuple[str, ...]]:
+    try:
+        from .component_sources import load_component_sources, tf_module_source_by_id
+    except Exception:
+        return (), ()
+    settings = tf_module_source_by_id("mk8s", sources=load_component_sources())
+    if settings is None:
+        return (), ()
+    preferences = settings.mk8s_gpu.image_preferences
+    return preferences.preferred_gpu_stack_presets, preferences.preferred_os
+
+
+def _vm_image_preference_lists() -> tuple[tuple[str, ...], tuple[str, ...]]:
+    try:
+        from .component_sources import load_component_sources, tf_module_source_by_id
+    except Exception:
+        return (), ()
+    settings = tf_module_source_by_id("vm", sources=load_component_sources())
+    if settings is None:
+        return (), ()
+    preferences = settings.vm_images
+    return preferences.preferred_cpu_image_families, preferences.preferred_gpu_image_families
+
+
+def _sort_choices_by_preference(
+    choices: Iterable[OptionChoice],
+    *,
+    preferred_values: tuple[str, ...],
+) -> tuple[OptionChoice, ...]:
+    preferred_index = {value: index for index, value in enumerate(preferred_values)}
+    return tuple(
+        sorted(
+            choices,
+            key=lambda choice: (
+                preferred_index.get(choice.value, len(preferred_index)),
+                0 if choice.recommended else 1,
+                choice.value,
+            ),
+        )
+    )
+
+
+def _capacity_advice_sort_key(item: CapacityResourceAdvice) -> tuple[int, int, int, int, str]:
+    return capacity_regular_sort_key(item)
+
+
+def _capacity_summary_text(item: CapacityResourceAdvice) -> str:
+    return capacity_summary_text(item)
+
+
+def _gpu_preset_interconnect_suffix(preset: _ComputePlatformPreset) -> tuple[str, ...]:
+    gpu_count = preset.gpu_count
+    if gpu_count in (None, 0):
+        return ()
+    if preset.allow_gpu_clustering:
+        return ("GPU cluster", "InfiniBand")
+    if gpu_count == 1:
+        return ("Ethernet only", "testing/dev")
+    return ("Ethernet only",)
+
+
 class ProviderOptionLookup:
     """Resolve dynamic field choices from Nebius APIs with in-process caching."""
 
@@ -242,6 +318,10 @@ class ProviderOptionLookup:
         self._compute_platform_preset_cache: dict[
             tuple[str, str], tuple[_ComputePlatformPreset, ...]
         ] = {}
+        self._compute_public_image_family_cache: dict[
+            tuple[str, str], tuple[_ComputePublicImageFamily, ...]
+        ] = {}
+        self._capacity_resource_advice_cache: dict[str, tuple[CapacityResourceAdvice, ...]] = {}
         self._last_error: str | None = None
 
     def resolve(
@@ -256,10 +336,13 @@ class ProviderOptionLookup:
         try:
             resolver = {
                 "mk8s_compatible_platforms": self._resolve_mk8s_compatible_platforms,
-                "mk8s_gpu_driver_presets": self._resolve_mk8s_gpu_driver_presets,
+                "mk8s_gpu_stack_presets": self._resolve_mk8s_gpu_stack_presets,
+                "mk8s_node_group_os_values": self._resolve_mk8s_node_group_os_values,
                 "mk8s_infiniband_fabrics": self._resolve_mk8s_infiniband_fabrics,
+                "mk8s_boot_disk_types": self._resolve_mk8s_boot_disk_types,
                 "compute_platforms": self._resolve_compute_platforms,
                 "compute_platform_presets": self._resolve_compute_platform_presets,
+                "compute_public_image_families": self._resolve_compute_public_image_families,
                 "project_subnets": self._resolve_project_subnets,
                 "project_networks": self._resolve_project_networks,
                 "tenant_projects": self._resolve_tenant_projects,
@@ -331,6 +414,75 @@ class ProviderOptionLookup:
             if preset.name == normalized_preset_name:
                 return preset.allow_gpu_clustering
         return None
+
+    def compute_platform_preset_resources(
+        self,
+        *,
+        project_id: str,
+        platform_name: str,
+        preset_name: str,
+    ) -> tuple[int | None, int | None, int | None] | None:
+        normalized_project_id = _as_str(project_id)
+        normalized_platform_name = _as_str(platform_name)
+        normalized_preset_name = _as_str(preset_name)
+        if (
+            not normalized_project_id
+            or not normalized_platform_name
+            or not normalized_preset_name
+        ):
+            return None
+
+        presets = self._resolve_compute_platform_preset_inventory(
+            project_id=normalized_project_id,
+            platform_name=normalized_platform_name,
+        )
+        for preset in presets:
+            if preset.name == normalized_preset_name:
+                return (preset.vcpu_count, preset.memory_gibibytes, preset.gpu_count)
+        return None
+
+    def compute_platform_preset_fabrics(
+        self,
+        *,
+        tenant_id: str,
+        project_id: str,
+        region_id: str,
+        platform_name: str,
+        preset_name: str,
+    ) -> tuple[CapacityResourceAdvice, ...]:
+        normalized_tenant_id = _as_str(tenant_id)
+        normalized_project_id = _as_str(project_id)
+        normalized_region_id = _as_str(region_id)
+        normalized_platform_name = _as_str(platform_name)
+        normalized_preset_name = _as_str(preset_name)
+        if (
+            not normalized_tenant_id
+            or not normalized_project_id
+            or not normalized_region_id
+            or not normalized_platform_name
+            or not normalized_preset_name
+        ):
+            return ()
+
+        allow_gpu_clustering = self.compute_platform_preset_allows_gpu_clustering(
+            project_id=normalized_project_id,
+            platform_name=normalized_platform_name,
+            preset_name=normalized_preset_name,
+        )
+        if allow_gpu_clustering is False:
+            return ()
+
+        resolved = tuple(
+            item
+            for item in self._capacity_resource_advice_for_shape(
+                tenant_id=normalized_tenant_id,
+                region_id=normalized_region_id,
+                platform_name=normalized_platform_name,
+                preset_name=normalized_preset_name,
+            )
+            if _is_live_fabric_name(item.fabric)
+        )
+        return resolved
 
     def validate_tenant_project_scope(
         self,
@@ -425,6 +577,47 @@ class ProviderOptionLookup:
 
         return TenantProjectValidationResult(valid=True)
 
+    def resolve_tenant_project_names(
+        self,
+        *,
+        tenant_id: str,
+        project_id: str,
+    ) -> tuple[str, str]:
+        normalized_tenant_id = _as_str(tenant_id)
+        normalized_project_id = _as_str(project_id)
+        if not normalized_tenant_id or not normalized_project_id:
+            return "", ""
+
+        sdk = self._sdk_or_none()
+        if sdk is None:
+            return "", ""
+
+        try:
+            from nebius.api.nebius.iam.v1 import (
+                GetProjectRequest,
+                GetTenantRequest,
+                ProjectServiceClient,
+                TenantServiceClient,
+            )
+        except Exception:
+            return "", ""
+
+        tenant_name = ""
+        project_name = ""
+        try:
+            tenant = TenantServiceClient(sdk).get(GetTenantRequest(id=normalized_tenant_id)).wait()
+            tenant_name = _as_str(getattr(getattr(tenant, "metadata", None), "name", None))
+        except Exception:
+            tenant_name = ""
+        try:
+            project = (
+                ProjectServiceClient(sdk).get(GetProjectRequest(id=normalized_project_id)).wait()
+            )
+            project_name = _as_str(getattr(getattr(project, "metadata", None), "name", None))
+        except Exception:
+            project_name = ""
+        return tenant_name, project_name
+
     def _resolve_project_id(self, payload: dict[str, Any], args: dict[str, Any]) -> str | None:
         explicit_project = _as_str(args.get("project_id"))
         if explicit_project:
@@ -440,6 +633,23 @@ class ProviderOptionLookup:
             fallback_project = _as_str(_payload_value(payload, fallback_project_path))
             if fallback_project:
                 return fallback_project
+        return None
+
+    def _resolve_region_id(self, payload: dict[str, Any], args: dict[str, Any]) -> str | None:
+        explicit_region = _as_str(args.get("region_id"))
+        if explicit_region:
+            return explicit_region
+
+        region_path = _as_str(args.get("region_id_path")) or "client_info.nebius.region_id"
+        resolved_region = _as_str(_payload_value(payload, region_path))
+        if resolved_region:
+            return resolved_region
+
+        fallback_region_path = _as_str(args.get("fallback_region_id_path"))
+        if fallback_region_path:
+            fallback_region = _as_str(_payload_value(payload, fallback_region_path))
+            if fallback_region:
+                return fallback_region
         return None
 
     def _resolve_tenant_id(self, payload: dict[str, Any], args: dict[str, Any]) -> str | None:
@@ -530,6 +740,38 @@ class ProviderOptionLookup:
         self._cache[cache_key] = resolved
         return resolved
 
+    def _resolve_mk8s_boot_disk_types(
+        self,
+        *,
+        args: dict[str, Any],
+        payload: dict[str, Any],
+        field_path: str,
+    ) -> tuple[OptionChoice, ...]:
+        del args, payload, field_path
+        return (
+            OptionChoice(
+                value="NETWORK_SSD",
+                label=(
+                    "NETWORK_SSD  (1-8192 GiB, 450 MiB/s, 20k/40k IOPS, "
+                    "reliable, encryption always on)"
+                ),
+            ),
+            OptionChoice(
+                value="NETWORK_SSD_NON_REPLICATED",
+                label=(
+                    "NETWORK_SSD_NON_REPLICATED  (93 GiB units, 1 GiB/s, "
+                    "75k/75k IOPS, lowest-cost high-performance, no redundancy)"
+                ),
+            ),
+            OptionChoice(
+                value="NETWORK_SSD_IO_M3",
+                label=(
+                    "NETWORK_SSD_IO_M3  (93 GiB units, 1 GiB/s, 75k/75k IOPS, "
+                    "replicated, most expensive)"
+                ),
+            ),
+        )
+
     def _resolve_mk8s_compatible_platforms(
         self,
         *,
@@ -565,7 +807,7 @@ class ProviderOptionLookup:
         self._cache[cache_key] = resolved
         return resolved
 
-    def _resolve_mk8s_gpu_driver_presets(
+    def _resolve_mk8s_gpu_stack_presets(
         self,
         *,
         args: dict[str, Any],
@@ -577,7 +819,7 @@ class ProviderOptionLookup:
             return ()
 
         platform_path = _as_str(args.get("platform_path"))
-        if not platform_path and field_path.endswith(".gpu_drivers_preset"):
+        if not platform_path and field_path.endswith(".gpu_stack_preset"):
             platform_path = f"{field_path.rsplit('.', maxsplit=1)[0]}.gpu_nodes_platform"
 
         platform_name = _as_str(args.get("platform"))
@@ -586,7 +828,7 @@ class ProviderOptionLookup:
         if not platform_name:
             return ()
 
-        cache_key = ("mk8s_gpu_driver_presets", version, platform_name)
+        cache_key = ("mk8s_gpu_stack_presets", version, platform_name)
         if cache_key in self._cache:
             return self._cache[cache_key]
 
@@ -602,7 +844,63 @@ class ProviderOptionLookup:
             options.append(OptionChoice(value=preset, label=label))
             seen.add(preset)
 
-        resolved = tuple(options)
+        preferred_gpu_stack_presets, _preferred_os = _mk8s_gpu_preference_lists()
+        resolved = _sort_choices_by_preference(
+            options,
+            preferred_values=preferred_gpu_stack_presets,
+        )
+        self._cache[cache_key] = resolved
+        return resolved
+
+    def _resolve_mk8s_node_group_os_values(
+        self,
+        *,
+        args: dict[str, Any],
+        payload: dict[str, Any],
+        field_path: str,
+    ) -> tuple[OptionChoice, ...]:
+        version = self._resolve_k8s_version(payload, args, field_path)
+        if not version:
+            return ()
+
+        platform_path = _as_str(args.get("platform_path"))
+        if not platform_path:
+            if field_path.endswith(".gpu_nodes_os"):
+                platform_path = f"{field_path.rsplit('.', maxsplit=1)[0]}.gpu_nodes_platform"
+            elif field_path.endswith(".cpu_nodes_os"):
+                platform_path = f"{field_path.rsplit('.', maxsplit=1)[0]}.cpu_nodes_platform"
+        platform_name = _as_str(args.get("platform"))
+        if not platform_name and platform_path:
+            platform_name = _as_str(_payload_value(payload, platform_path))
+        if not platform_name:
+            return ()
+
+        stack_preset_path = _as_str(args.get("stack_preset_path"))
+        if not stack_preset_path and field_path.endswith(".gpu_nodes_os"):
+            stack_preset_path = f"{field_path.rsplit('.', maxsplit=1)[0]}.gpu_stack_preset"
+        stack_preset = _as_str(args.get("stack_preset"))
+        if not stack_preset and stack_preset_path:
+            stack_preset = _as_str(_payload_value(payload, stack_preset_path))
+
+        cache_key = ("mk8s_node_group_os_values", version, platform_name, stack_preset)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        options: list[OptionChoice] = []
+        seen: set[str] = set()
+        for item in self._resolve_mk8s_compatibility_items(version):
+            if platform_name not in item.compatible_platforms:
+                continue
+            if item.drivers_preset != stack_preset:
+                continue
+            os_value = item.os
+            if not os_value or os_value in seen:
+                continue
+            options.append(OptionChoice(value=os_value, label=os_value))
+            seen.add(os_value)
+
+        _preferred_gpu_stack_presets, preferred_os = _mk8s_gpu_preference_lists()
+        resolved = _sort_choices_by_preference(options, preferred_values=preferred_os)
         self._cache[cache_key] = resolved
         return resolved
 
@@ -638,17 +936,49 @@ class ProviderOptionLookup:
         region_id = _as_str(args.get("region_id")) or _as_str(
             _payload_value(payload, "client_info.nebius.region_id")
         )
-        cache_key = ("mk8s_infiniband_fabrics", platform_name, region_id)
+        tenant_id = self._resolve_tenant_id(payload, args)
+        cache_key = (
+            "mk8s_infiniband_fabrics",
+            platform_name,
+            region_id,
+            preset_name,
+            tenant_id,
+        )
         if cache_key in self._cache:
             return self._cache[cache_key]
 
+        advice_by_fabric: dict[str, CapacityResourceAdvice] = {}
+        recommended_fabric = ""
+        if tenant_id and region_id and preset_name and project_id:
+            matching_advice = self.compute_platform_preset_fabrics(
+                tenant_id=tenant_id,
+                project_id=project_id,
+                region_id=region_id,
+                platform_name=platform_name,
+                preset_name=preset_name,
+            )
+            if matching_advice:
+                if matching_advice[0].best_regular_available > 0:
+                    recommended_fabric = matching_advice[0].fabric
+                advice_by_fabric = {item.fabric: item for item in matching_advice}
+            else:
+                self._last_error = (
+                    "Live Capacity Dashboard returned no fabric rows for the selected "
+                    f"cluster-capable GPU shape {platform_name}/{preset_name} in {region_id}."
+                )
+                return ()
+
         resolved = tuple(
             OptionChoice(
-                value=item.value,
-                label=f"{item.value}  ({item.platform}, {item.region})",
+                value=item.fabric,
+                label=(
+                    f"{item.fabric}  ({platform_name}, {region_id}), "
+                    f"{_capacity_summary_text(item)}"
+                    + (", recommended" if item.fabric == recommended_fabric else "")
+                ),
+                recommended=item.fabric == recommended_fabric,
             )
-            for item in _MK8S_INFINIBAND_FABRICS
-            if item.platform == platform_name and (not region_id or item.region == region_id)
+            for item in advice_by_fabric.values()
         )
         self._cache[cache_key] = resolved
         return resolved
@@ -703,17 +1033,22 @@ class ProviderOptionLookup:
         gpu_cluster_required_path = _as_str(args.get("gpu_cluster_required_path"))
         if gpu_cluster_required_path:
             require_gpu_clustering = bool(_as_str(_payload_value(payload, gpu_cluster_required_path)))
+        tenant_id = self._resolve_tenant_id(payload, args)
+        region_id = self._resolve_region_id(payload, args)
 
         cache_key = (
             "compute_platform_presets",
             project_id,
             platform_name,
             require_gpu_clustering,
+            tenant_id,
+            region_id,
         )
         if cache_key in self._cache:
             return self._cache[cache_key]
 
         options: list[OptionChoice] = []
+        preset_by_name: dict[str, _ComputePlatformPreset] = {}
         for preset in self._resolve_compute_platform_preset_inventory(
             project_id=project_id,
             platform_name=platform_name,
@@ -722,6 +1057,7 @@ class ProviderOptionLookup:
             allow_gpu_clustering = preset.allow_gpu_clustering
             if require_gpu_clustering and not allow_gpu_clustering:
                 continue
+            preset_by_name[preset_name] = preset
             suffix_parts: list[str] = []
             if preset.vcpu_count is not None:
                 suffix_parts.append(f"vCPU={preset.vcpu_count}")
@@ -729,14 +1065,98 @@ class ProviderOptionLookup:
                 suffix_parts.append(f"RAM={preset.memory_gibibytes}GiB")
             if preset.gpu_count not in (None, 0):
                 suffix_parts.append(f"GPU={preset.gpu_count}")
-            if allow_gpu_clustering:
-                suffix_parts.append("GPU cluster")
+            suffix_parts.extend(_gpu_preset_interconnect_suffix(preset))
             label = f"{preset_name}  ({', '.join(suffix_parts)})" if suffix_parts else preset_name
             options.append(OptionChoice(value=preset_name, label=label))
+
+        if tenant_id and region_id and platform_name.startswith("gpu-"):
+            advice_by_preset: dict[str, CapacityResourceAdvice] = {}
+            for item in self._capacity_resource_advice_for_shape(
+                tenant_id=tenant_id,
+                region_id=region_id,
+                platform_name=platform_name,
+            ):
+                if not item.preset:
+                    continue
+                current = advice_by_preset.get(item.preset)
+                if current is None or _capacity_advice_sort_key(item) < _capacity_advice_sort_key(current):
+                    advice_by_preset[item.preset] = item
+
+            recommended_preset = ""
+            ranked_advice = sorted(advice_by_preset.values(), key=_capacity_advice_sort_key)
+            if ranked_advice and ranked_advice[0].best_regular_available > 0:
+                recommended_preset = ranked_advice[0].preset
+
+            original_order = {choice.value: index for index, choice in enumerate(options)}
+            options = [
+                OptionChoice(
+                    value=choice.value,
+                    label=(
+                        f"{choice.label}, {_capacity_summary_text(advice_by_preset[choice.value])}"
+                        + (
+                            f", best fabric {advice_by_preset[choice.value].fabric}"
+                            if (
+                                advice_by_preset[choice.value].fabric
+                                and preset_by_name.get(choice.value) is not None
+                                and preset_by_name[choice.value].allow_gpu_clustering
+                            )
+                            else ""
+                        )
+                        + (", recommended" if choice.value == recommended_preset else "")
+                    )
+                    if choice.value in advice_by_preset
+                    else choice.label,
+                    recommended=choice.value == recommended_preset,
+                )
+                for choice in sorted(
+                    options,
+                    key=lambda choice: (
+                        0 if choice.value in advice_by_preset else 1,
+                        _capacity_advice_sort_key(advice_by_preset[choice.value])
+                        if choice.value in advice_by_preset
+                        else (0, 0, 0, 0, ""),
+                        original_order[choice.value],
+                    ),
+                )
+            ]
 
         resolved = tuple(options)
         self._cache[cache_key] = resolved
         return resolved
+
+    def _capacity_resource_advice_for_shape(
+        self,
+        *,
+        tenant_id: str,
+        region_id: str,
+        platform_name: str,
+        preset_name: str = "",
+    ) -> tuple[CapacityResourceAdvice, ...]:
+        resolved = filter_capacity_resource_advice(
+            self._resolve_capacity_resource_advice_inventory(tenant_id=tenant_id),
+            region_id=region_id,
+            platform_name=platform_name,
+            preset_name=preset_name,
+        )
+        return tuple(sorted(resolved, key=_capacity_advice_sort_key))
+
+    def _resolve_capacity_resource_advice_inventory(
+        self,
+        *,
+        tenant_id: str,
+    ) -> tuple[CapacityResourceAdvice, ...]:
+        if tenant_id in self._capacity_resource_advice_cache:
+            return self._capacity_resource_advice_cache[tenant_id]
+
+        sdk = self._sdk_or_none()
+        if sdk is None:
+            return ()
+        try:
+            cached = list_capacity_resource_advice(sdk, parent_id=tenant_id)
+        except Exception:
+            return ()
+        self._capacity_resource_advice_cache[tenant_id] = cached
+        return cached
 
     def _resolve_compute_platform_preset_inventory(
         self,
@@ -775,6 +1195,119 @@ class ProviderOptionLookup:
             for resources in (getattr(preset, "resources", None),)
         )
         self._compute_platform_preset_cache[cache_key] = resolved
+        return resolved
+
+    def _resolve_compute_public_image_families(
+        self,
+        *,
+        args: dict[str, Any],
+        payload: dict[str, Any],
+        field_path: str,
+    ) -> tuple[OptionChoice, ...]:
+        region_id = self._resolve_region_id(payload, args)
+        if not region_id:
+            return ()
+
+        platform_path = _as_str(args.get("platform_path"))
+        if not platform_path:
+            platform_path = _component_input_sibling_path(field_path, "platform")
+        platform_name = _as_str(_payload_value(payload, platform_path)) if platform_path else None
+        if not platform_name:
+            return ()
+
+        is_gpu_platform = platform_name.startswith("gpu-")
+        preferred_cpu_image_families, preferred_gpu_image_families = _vm_image_preference_lists()
+        preferred_families = (
+            preferred_gpu_image_families if is_gpu_platform else preferred_cpu_image_families
+        )
+        preferred_index = {value: index for index, value in enumerate(preferred_families)}
+        ranked = tuple(
+            sorted(
+                self._resolve_compute_public_image_family_inventory(
+                    region_id=region_id,
+                    platform_name=platform_name,
+                ),
+                key=lambda item: (
+                    0 if item.compatibility == "recommended" else 1,
+                    preferred_index.get(item.family, len(preferred_index)),
+                    item.family,
+                ),
+            )
+        )
+        return tuple(
+            OptionChoice(
+                value=item.family,
+                label=(
+                    f"{item.family}  ({item.human_name}, {item.compatibility})"
+                    if item.human_name
+                    else f"{item.family}  ({item.compatibility})"
+                ),
+            )
+            for item in ranked
+        )
+
+    def _resolve_compute_public_image_family_inventory(
+        self,
+        *,
+        region_id: str,
+        platform_name: str,
+    ) -> tuple[_ComputePublicImageFamily, ...]:
+        cache_key = (region_id, platform_name)
+        if cache_key in self._compute_public_image_family_cache:
+            return self._compute_public_image_family_cache[cache_key]
+
+        sdk = self._sdk_or_none()
+        if sdk is None:
+            return ()
+        from nebius.api.nebius.compute.v1 import ImageServiceClient, ListPublicRequest
+
+        client = ImageServiceClient(sdk)
+        items = self._paged_list(
+            request_factory=lambda page_token: ListPublicRequest(
+                region=region_id,
+                page_size=1000,
+                page_token=page_token,
+            ),
+            request_call=client.list_public,
+        )
+
+        families: dict[str, _ComputePublicImageFamily] = {}
+        for item in items:
+            spec = getattr(item, "spec", None)
+            family = _as_str(getattr(spec, "image_family", None))
+            if not family:
+                continue
+            recommended_platforms: set[str] = set()
+            for raw_platform_name in list(getattr(spec, "recommended_platforms", [])):
+                normalized_platform_name = _as_str(raw_platform_name)
+                if normalized_platform_name:
+                    recommended_platforms.add(normalized_platform_name)
+            unsupported_platforms = set(
+                _unsupported_platform_names(getattr(spec, "unsupported_platforms", {}))
+            )
+            if platform_name in unsupported_platforms:
+                continue
+            compatibility = "recommended" if platform_name in recommended_platforms else "compatible"
+            human_name = _as_str(getattr(spec, "image_family_human_readable", None)) or ""
+            current = families.get(family)
+            if current is not None and current.compatibility == "recommended":
+                continue
+            families[family] = _ComputePublicImageFamily(
+                family=family,
+                human_name=human_name,
+                compatibility=compatibility,
+            )
+
+        resolved = tuple(
+            sorted(
+                families.values(),
+                key=lambda item: (
+                    0 if item.compatibility == "recommended" else 1,
+                    item.family,
+                ),
+            )
+        )
+        self._compute_public_image_family_cache[cache_key] = resolved
         return resolved
 
     def _resolve_mk8s_compatibility_items(

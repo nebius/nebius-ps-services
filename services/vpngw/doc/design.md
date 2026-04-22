@@ -180,15 +180,17 @@ Configuration shape: `external_ips[instance_index][nic_index]` → IP string (fl
 - Insufficient: Create missing allocations
 - Auto naming: `{instance}-eth{N}-ip`
 
-**Pre-allocation workflow:** `nebius-vpngw prep-network` can create the configured gateway subnet and reserve public IPs before peer setup. It is safe to rerun. If `gateway_group.external_ips` is empty, it allocates new IPs and writes them into the YAML. If `external_ips` is set, it verifies and allocates those specific IPs when needed. If an IP was just released, it waits briefly (~10s) and retries before failing.
+**Pre-allocation workflow:** `nebius-vpngw prep-network` can create the configured gateway subnet and reserve public IPs before peer setup. It is safe to rerun. If `gateway_group.external_ips` is empty, it allocates new IPs and writes them into the YAML. If `external_ips` is set, it resolves matching allocations by IP in the current project, reuses unattached matches only when they already belong to the target gateway subnet, and allocates the requested IP only when no match exists. If a matched allocation is still attached to another resource, the command fails instead of reusing it. If an IP was just released, it waits briefly (~10s) and retries before failing.
 
 **Preservation:** Allocations are kept and reattached during VM recreation. No downtime for IP addresses, only for tunnel establishment.
 
-**Subnet constraint:** Nebius does not allow changing `subnet_id` on an existing public allocation. If you supply `external_ips` and the found allocation belongs to a different subnet than the target gateway subnet, we fail fast with guidance:
+**Subnet constraint:** Nebius does not allow changing an existing public allocation onto a different gateway subnet. In the generated SDK/proto contract, `IPv4PublicAllocationSpec.subnet_id`, `cidr`, and `pool_id` are marked immutable, and live same-project update probes reject rebinding across subnets. If you supply `external_ips` and the found allocation belongs to a different subnet than the target gateway subnet, `vpngw` fails fast without attempting a migration:
 
 - Deploy in the original subnet/network so the allocation matches, **or**
 - Remove the IP from `external_ips` to get a new allocation in the gateway subnet, **or**
 - (Best effort) Manually release the old allocation and let the deployer request the same IP in the new subnet. If the pool allows it and the address is still free, it is reclaimed; otherwise the request fails or yields a different IP.
+
+**Explicit-IP safety:** when `external_ips` contains a literal IP, stale CLI-owned allocation names do not override that request. The deployer only reuses a named allocation when it resolves to the same IP; otherwise it fails and asks the operator to fix the mismatch.
 
 **Examples:**
 

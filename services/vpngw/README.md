@@ -577,7 +577,9 @@ Safe to rerun.
 - If an explicit CIDR is outside the current network pool, the CLI extends the network pool automatically when the target network has exactly one private pool
 
 - If `gateway_group.external_ips` is empty, it reserves public IPs, prints them, and writes them into the YAML.
-- If `gateway_group.external_ips` is set, it verifies those IPs and creates allocations for them if needed.
+- If `gateway_group.external_ips` is set, it resolves matching allocations by IP in the current project and reuses them only when they are unattached and already belong to the target gateway subnet; if no match exists, it creates the requested IP allocations.
+- If the matching allocation is still attached to another resource, the command fails and tells you to detach it before reuse.
+- If the matching allocation is in a different subnet, the command fails immediately. Nebius marks public allocation subnet binding fields such as `subnet_id` and `cidr` as immutable, so `vpngw` does not attempt a cross-subnet move.
 - If an IP was just released, it will wait briefly (up to ~10s) and retry before giving up.
 
 **Generate from peer config (no deployment):**
@@ -621,6 +623,12 @@ nebius-vpngw apply --local-config-file <file> --project-id <id> --zone <zone>
 ```
 
 Safe to rerun. Matching subnet, route table, VM, and allocation state is reused.
+
+When `gateway_group.external_ips` contains explicit IPs, `apply` resolves those
+allocations by IP in the current project before creating anything new. Existing
+matches are reused only when they are unattached and already in the target
+gateway subnet; attached allocations or different-subnet allocations fail fast
+so a different resource cannot be silently stolen or silently rebound.
 
 ### Monitoring
 
@@ -1819,7 +1827,7 @@ Bump **PATCH** for fixes only.
 1. On your feature branch (or dedicated release-prep branch), run: `./publish-release.sh --prep X.Y.Z`
 2. Open a PR from that branch and merge it to `main`.
 3. After the PR is merged, switch to `main`, pull the merged commit, and run: `./publish-release.sh --publish X.Y.Z`
-4. GitHub Actions workflow [`vpngw-release.yml`](/Users/rezab/repos/nebius-ps-services/.github/workflows/vpngw-release.yml) runs from that tag and publishes the GitHub Release.
+4. GitHub Actions workflow [`vpngw-release.yml`](../../.github/workflows/vpngw-release.yml) runs from that tag and publishes the GitHub Release.
 
 Notes:
 

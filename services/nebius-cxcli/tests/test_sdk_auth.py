@@ -137,3 +137,63 @@ def test_init_nebius_sdk_falls_back_to_sdk_config(
     assert sdk.kwargs["parent_id"] == "project-1"
     config = sdk.kwargs["config_reader"]
     assert config.kwargs == {"profile": "dev", "endpoint": "api.example.invalid"}
+
+
+def test_init_nebius_sdk_prefer_operator_auth_uses_cli_token_before_service_account(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_nebius_modules(monkeypatch)
+    private_key_file = tmp_path / "auth-private.pem"
+    private_key_file.write_text("PRIVATE-KEY", encoding="utf-8")
+    monkeypatch.delenv("NEBIUS_AUTH_CREDENTIALS_FILE", raising=False)
+    monkeypatch.setenv("NEBIUS_SA_ID", "sa-1")
+    monkeypatch.setenv("NEBIUS_AUTH_PUBLIC_KEY_ID", "pub-1")
+    monkeypatch.setenv("NEBIUS_AUTH_PRIVATE_KEY_FILE", str(private_key_file))
+    monkeypatch.delenv("NEBIUS_IAM_TOKEN", raising=False)
+    monkeypatch.setattr(
+        sdk_auth.subprocess,
+        "run",
+        lambda *args, **kwargs: type("CP", (), {"stdout": "cli-token-789\n"})(),
+    )
+
+    sdk = sdk_auth.init_nebius_sdk(
+        parent_id="project-1",
+        context="quota assessment",
+        prefer_operator_auth=True,
+    )
+
+    assert sdk.kwargs["credentials"] == "cli-token-789"
+    assert sdk.kwargs["parent_id"] == "project-1"
+
+
+def test_init_nebius_sdk_prefer_operator_auth_falls_back_to_service_account(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_nebius_modules(monkeypatch)
+    monkeypatch.delitem(sys.modules, "nebius.aio.cli_config", raising=False)
+    aio_module = sys.modules["nebius.aio"]
+    if hasattr(aio_module, "cli_config"):
+        delattr(aio_module, "cli_config")
+    private_key_file = tmp_path / "auth-private.pem"
+    private_key_file.write_text("PRIVATE-KEY", encoding="utf-8")
+    monkeypatch.delenv("NEBIUS_AUTH_CREDENTIALS_FILE", raising=False)
+    monkeypatch.setenv("NEBIUS_SA_ID", "sa-1")
+    monkeypatch.setenv("NEBIUS_AUTH_PUBLIC_KEY_ID", "pub-1")
+    monkeypatch.setenv("NEBIUS_AUTH_PRIVATE_KEY_FILE", str(private_key_file))
+    monkeypatch.delenv("NEBIUS_IAM_TOKEN", raising=False)
+    monkeypatch.setattr(
+        sdk_auth.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError("nebius not found")),
+    )
+
+    sdk = sdk_auth.init_nebius_sdk(
+        parent_id="project-1",
+        context="quota assessment",
+        prefer_operator_auth=True,
+    )
+
+    assert sdk.kwargs["service_account_id"] == "sa-1"
+    assert sdk.kwargs["service_account_public_key_id"] == "pub-1"
+    assert sdk.kwargs["service_account_private_key_file_name"] == private_key_file.resolve()
+    assert sdk.kwargs["parent_id"] == "project-1"
