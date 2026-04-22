@@ -216,12 +216,13 @@ helm template smoke ./helm-charts/nccl-test \
 - `worker.replicas`: number of MPI workers. `nebius-cxcli` derives this from
   the ready GPU node count at deploy time.
 - `worker.gpus`, `worker.resources.*`: per-worker GPU/CPU/memory baseline. The
-  shared chart keeps the 8-GPU defaults for direct chart use, while
-  `nebius-cxcli` derives `worker.gpus` from the resolved MK8s shape and sizes
-  worker CPU/memory at validation runtime from live scheduler headroom on the
-  selected GPU nodes. When Ready non-GPU nodes exist, cxcli also pins the
-  launcher there so Ethernet-only 1-GPU clusters do not inherit the 8-GPU
-  worker profile or spend GPU-node headroom on the launcher.
+  shared chart now keeps conservative 1-GPU smoke-test defaults for direct
+  chart use, so a minimal install does not assume an 8-GPU node shape.
+  `nebius-cxcli` still derives `worker.gpus` from the resolved MK8s shape and
+  sizes worker CPU/memory at validation runtime from live scheduler headroom on
+  the selected GPU nodes. When Ready non-GPU nodes exist, cxcli also pins the
+  launcher there so Ethernet-only 1-GPU clusters stay schedulable without
+  spending GPU-node headroom on the launcher.
 - `report.jsonBeginMarker` and `report.jsonEndMarker`: log markers used by
   `nebius-cxcli` to extract the benchmark JSON payload.
 

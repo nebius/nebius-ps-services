@@ -52,6 +52,10 @@ installs the Ubuntu Open MPI packages instead of bundling NVIDIA HPC-X.
   (`benchmark.transport.*`) so `nebius-cxcli` can switch cleanly between
   Ethernet-only Socket/TCPIP runs and RDMA-oriented runs without baking HCA or
   interface names into the image itself.
+- The shared chart now also keeps conservative 1-GPU smoke-test worker
+  defaults for direct Helm use, while `nebius-cxcli` still overrides worker
+  GPU count from the resolved MK8s shape and sizes worker CPU/memory from live
+  scheduler headroom at validation runtime.
 - The only NCCL chart behavior that remains catalog-owned is the
   platform-specific B200 `-mca coll ^hcoll` overlay.
 - That B200 overlay reflects the Nebius benchmark recipe, not an HCOLL toggle
