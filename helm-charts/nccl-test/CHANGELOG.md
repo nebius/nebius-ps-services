@@ -20,6 +20,8 @@ All notable changes to this chart are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [nccl-test-chart-v0.2.8] - 2026-04-22
+
 ### Changed
 
 - Fixed the `benchmark.transport.mode` render path so Socket/TCPIP and RDMA
