@@ -62,7 +62,7 @@ def _set_catalog_profile(profile: SourceProfile) -> None:
 
 
 def _project_config_path(base: Path) -> Path:
-    return base / "deployments" / "tenant-123" / "project-456" / "config.yaml"
+    return base / "deployments" / "tenant-name-example" / "project-name-example" / "config.yaml"
 
 
 def _payload_with_mk8s() -> dict:

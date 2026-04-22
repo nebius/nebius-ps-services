@@ -168,7 +168,7 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                     echo "AWS_SECRET_ACCESS_KEY=${{NEBIUS_S3_SECRET_ACCESS_KEY}}"
                   }} >> "$GITHUB_ENV"
 
-              - name: Validate generated artifacts
+              - name: Validate generated artifacts and readiness
                 run: |
                   set -euo pipefail
                   nebius-cxcli validate-generated --portable "${{{{ matrix.generated }}}}"
@@ -253,7 +253,7 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                     echo "AWS_SECRET_ACCESS_KEY=${{NEBIUS_S3_SECRET_ACCESS_KEY}}"
                   }} >> "$GITHUB_ENV"
 
-              - name: Validate generated artifacts
+              - name: Validate generated artifacts and readiness
                 run: |
                   set -euo pipefail
                   nebius-cxcli validate-generated --portable "${{{{ matrix.generated }}}}"

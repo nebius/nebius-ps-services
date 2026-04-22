@@ -122,19 +122,20 @@ def send_deploy_report_email(
         _env_or_config_text("SMTP_FROM", smtp_settings, "from") or username or "noreply@localhost"
     )
 
-    project_id = (
-        str(config.client_info.nebius.project_id or "").strip()
-        or paths.path_project_id
-        or f"{paths.path_tenant_id}/{paths.path_project_id}"
-    )
-    tenant_id = str(config.client_info.nebius.tenant_id or "").strip() or paths.path_tenant_id
+    project_id = str(config.client_info.nebius.project_id or "").strip()
+    tenant_id = str(config.client_info.nebius.tenant_id or "").strip()
+    if not project_id:
+        raise RuntimeError(
+            "Deploy report email requires `client_info.nebius.project_id` from config.yaml; "
+            "folder names are not used as an identity fallback."
+        )
     masked_project_id = _mask_identifier(project_id)
 
     markdown_path = paths.inventory_dir / DEPLOY_REPORT_FILENAME
     if not markdown_path.exists():
         raise RuntimeError(
             f"Deploy report markdown is missing: {markdown_path}. "
-            "Run `nebius-cxcli report write <config.yaml>` or rerender first."
+            "Run `nebius-cxcli report <config.yaml>` or rerender first."
         )
     body = markdown_path.read_text(encoding="utf-8")
     if tenant_id:

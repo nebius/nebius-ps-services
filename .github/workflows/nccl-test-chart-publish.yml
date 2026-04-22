@@ -133,6 +133,14 @@ jobs:
 
           helm lint "${CHART_DIR}"
           helm template smoke "${CHART_DIR}" --namespace "${CHART_NAME}" >/dev/null
+          helm template smoke "${CHART_DIR}" \
+            --namespace "${CHART_NAME}" \
+            --set worker.replicas=2 \
+            --set benchmark.transport.mode=socket >/dev/null
+          helm template smoke "${CHART_DIR}" \
+            --namespace "${CHART_NAME}" \
+            --set worker.replicas=2 \
+            --set benchmark.transport.mode=rdma >/dev/null
 
           rm -rf dist
           mkdir -p dist

@@ -134,8 +134,8 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
 
     client_info = _mapping(_lookup(payload_data, "client_info"))
     nebius = _mapping(_lookup(client_info, "nebius"))
-    project_id = str(_coalesce(_lookup(nebius, "project_id"), paths.path_project_id))
-    tenant_id = str(_coalesce(_lookup(nebius, "tenant_id"), paths.path_tenant_id))
+    project_id = str(_coalesce(_lookup(nebius, "project_id"), ""))
+    tenant_id = str(_coalesce(_lookup(nebius, "tenant_id"), ""))
     region_id = str(_coalesce(_lookup(nebius, "region_id"), ""))
 
     infra_rows = _infra_component_rows(payload_data)
@@ -312,7 +312,7 @@ def write_inventory(
         "## Infra",
         "",
         f"- Client: `{_coalesce(_lookup(client_info, 'client_name'), '')}`",
-        f"- Tenant: `{_coalesce(_lookup(nebius, 'tenant_id'), paths.path_tenant_id)}`",
+        f"- Tenant: `{_coalesce(_lookup(nebius, 'tenant_id'), '')}`",
         f"- Project: `{_coalesce(_lookup(nebius, 'project_id'), '')}`",
         f"- Region: `{payload['infra']['region']}`",
         f"- MK8s: `{payload['infra']['mk8s_enabled']}`",

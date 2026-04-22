@@ -13,7 +13,7 @@ from nebius_cxcli.paths import resolve_project_paths, validate_path_alignment
 
 
 def _project_config_path(base: Path) -> Path:
-    return base / "deployments" / "tenant-123" / "project-456" / "config.yaml"
+    return base / "deployments" / "tenant-name-example" / "project-name-example" / "config.yaml"
 
 
 def _starter_payload(*, selected_infra: set[str], selected_apps: set[str]) -> dict:

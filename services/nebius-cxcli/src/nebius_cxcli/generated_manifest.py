@@ -51,9 +51,8 @@ def build_generated_manifest(
         },
         "project": {
             "client_name": str(client_info_map.get("client_name", "") or "").strip(),
-            "tenant_id": str(nebius_map.get("tenant_id", "") or "").strip() or paths.path_tenant_id,
-            "project_id": str(nebius_map.get("project_id", "") or "").strip()
-            or paths.path_project_id,
+            "tenant_id": str(nebius_map.get("tenant_id", "") or "").strip(),
+            "project_id": str(nebius_map.get("project_id", "") or "").strip(),
         },
         "paths": {
             "generated_dir": _repo_relative_path(paths.generated_dir, root=paths.repo_root),

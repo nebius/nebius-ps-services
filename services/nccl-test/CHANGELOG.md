@@ -18,6 +18,9 @@ All notable changes to this project are tracked here. This changelog follows
 
 - Added an Ubuntu 24.04 based NCCL test container image build with MPI support,
   a Nebius registry publish workflow, and a local image build helper script.
+- Clarified the image/chart transport contract: the runtime image remains
+  transport-agnostic for both Socket/TCPIP and RDMA-capable NCCL runs, while the shared `helm-charts/nccl-test` chart now owns a structured
+  `benchmark.transport.*` contract so callers can select `auto`, `socket`, or `rdma` without baking HCA/interface names into the image.
 - Aligned local `build-image.sh --push` output with CI by disabling default
   Buildx provenance and SBOM attestations, avoiding extra untagged registry
   artifacts under the public `images/nccl-test` repository.

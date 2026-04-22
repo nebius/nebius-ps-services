@@ -16,8 +16,8 @@ def test_build_deploy_validation_report_aggregates_results(tmp_path: Path) -> No
     validations = [
         {
             "kind": "mk8s_gpu_operator_readiness",
-            "name": "GPU Operator readiness",
-            "report_file": "gpu-operator-readiness-report.json",
+            "name": "GPU stack readiness",
+            "report_file": "gpu-stack-readiness-report.json",
         },
         {
             "kind": "mk8s_gpu_visibility",
@@ -30,7 +30,7 @@ def test_build_deploy_validation_report_aggregates_results(tmp_path: Path) -> No
             "report_file": "nccl-test-report.json",
         },
     ]
-    (tmp_path / "gpu-operator-readiness-report.json").write_text(
+    (tmp_path / "gpu-stack-readiness-report.json").write_text(
         json.dumps(
             {
                 "passed": True,
@@ -74,11 +74,11 @@ def test_build_deploy_validation_report_aggregates_results(tmp_path: Path) -> No
     assert format_deploy_validation_summary_lines(report) == [
         "Deploy validation summary:",
         "  Overall: INCOMPLETE (2/3 completed, 1 not run)",
-        "  PASS GPU Operator readiness: GPU Operator ready on 2 Ready GPU node(s); RDMA resources rdma/shared_device on 2 Ready GPU node(s); GPUDirect mode dma-buf.",
+        "  PASS GPU stack readiness: GPU Operator and Network Operator ready on 2 Ready GPU node(s); RDMA resources rdma/shared_device on 2 Ready GPU node(s); GPUDirect mode dma-buf.",
         "  PASS GPU Visibility test: 2/2 selected node(s) passed; total Ready GPU nodes 4; skipped 2.",
         "  NOT RUN NCCL test: No deploy validation results recorded yet.",
         f"  Combined report: {tmp_path / DEPLOY_REPORT_FILENAME}",
-        f"  JSON detail: {tmp_path / 'gpu-operator-readiness-report.json'}",
+        f"  JSON detail: {tmp_path / 'gpu-stack-readiness-report.json'}",
         f"  JSON detail: {tmp_path / 'gpu-visibility-report.json'}",
     ]
     assert validation_section_lines(report) == [
@@ -90,11 +90,11 @@ def test_build_deploy_validation_report_aggregates_results(tmp_path: Path) -> No
         "- Failed: `0`",
         "- Not run: `1`",
         "",
-        "### GPU Operator readiness",
+        "### GPU stack readiness",
         "",
         "- Status: `PASS`",
-        "- Detail report: `gpu-operator-readiness-report.json`",
-        "- Summary: GPU Operator ready on 2 Ready GPU node(s); RDMA resources rdma/shared_device on 2 Ready GPU node(s); GPUDirect mode dma-buf.",
+        "- Detail report: `gpu-stack-readiness-report.json`",
+        "- Summary: GPU Operator and Network Operator ready on 2 Ready GPU node(s); RDMA resources rdma/shared_device on 2 Ready GPU node(s); GPUDirect mode dma-buf.",
         "",
         "### GPU Visibility test",
         "",
@@ -130,3 +130,38 @@ def test_clear_deploy_validation_artifacts_removes_stale_outputs(tmp_path: Path)
     assert not (tmp_path / "deploy-validation-report.md").exists()
     assert not (tmp_path / "gpu-visibility-report.json").exists()
     assert not (tmp_path / "nccl-test-report.json").exists()
+
+
+def test_build_deploy_validation_report_formats_socket_mode_nccl_summary(tmp_path: Path) -> None:
+    validations = [
+        {
+            "kind": "mk8s_nccl",
+            "name": "NCCL test",
+            "report_file": "nccl-test-report.json",
+        }
+    ]
+    (tmp_path / "nccl-test-report.json").write_text(
+        json.dumps(
+            {
+                "passed": True,
+                "launcher_phase": "Succeeded",
+                "transport_label": "Socket/TCPIP",
+                "avg_bus_bandwidth_gbps": 41.7,
+                "threshold_gbps": 300.0,
+                "threshold_enforced": False,
+                "selected_worker_node_count": 2,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = build_deploy_validation_report(validations, inventory_dir=tmp_path)
+
+    assert format_deploy_validation_summary_lines(report) == [
+        "Deploy validation summary:",
+        "  Overall: PASS (1/1 completed, 0 not run)",
+        "  PASS NCCL test: Launcher phase Succeeded; Socket/TCPIP average bus bandwidth 41.7 Gbps across 2 worker node(s); RDMA threshold not enforced for this run.",
+        f"  Combined report: {tmp_path / DEPLOY_REPORT_FILENAME}",
+        f"  JSON detail: {tmp_path / 'nccl-test-report.json'}",
+    ]

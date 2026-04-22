@@ -36,6 +36,8 @@ installs the Ubuntu Open MPI packages instead of bundling NVIDIA HPC-X.
 - The image now bakes `CUDA_IMAGE_TAG` and `NCCL_TESTS_REF` into the runtime
   environment, and exposes OCI labels that identify the Nebius source repo plus
   the upstream NVIDIA docs used by the build.
+- The runtime stays transport-agnostic: it carries the userspace needed for
+  both Socket/TCPIP NCCL runs and RDMA-capable runs, while the chart or caller decides whether to force `socket`, force `rdma`, or leave NCCL transport selection on `auto`.
 
 ## Chart alignment
 
@@ -46,6 +48,10 @@ installs the Ubuntu Open MPI packages instead of bundling NVIDIA HPC-X.
   at chart version `0.2.7`, and the NCCL validation path reads the shared
   image/tag plus benchmark defaults directly from the chart instead of
   duplicating them in the catalog.
+- The shared chart now owns a structured NCCL transport contract
+  (`benchmark.transport.*`) so `nebius-cxcli` can switch cleanly between
+  Ethernet-only Socket/TCPIP runs and RDMA-oriented runs without baking HCA or
+  interface names into the image itself.
 - The only NCCL chart behavior that remains catalog-owned is the
   platform-specific B200 `-mca coll ^hcoll` overlay.
 - That B200 overlay reflects the Nebius benchmark recipe, not an HCOLL toggle

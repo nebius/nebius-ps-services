@@ -13,7 +13,8 @@ the target cluster before this chart is applied.
 - Kubernetes `1.28+`
 - Kubeflow Training Operator with the `MPIJob` CRD installed in the target
   cluster
-- GPU worker nodes with the expected NCCL/RDMA runtime support
+- GPU worker nodes with the expected NCCL runtime support. Socket/TCPIP runs do
+  not require RDMA; GPUDirect-RDMA runs do.
 
 ## Install
 
@@ -81,6 +82,14 @@ The prep step updates the chart-local changelog and `Chart.yaml`, then runs:
 ```bash
 helm lint ./helm-charts/nccl-test
 helm template smoke ./helm-charts/nccl-test --namespace nccl-test >/dev/null
+helm template smoke ./helm-charts/nccl-test \
+  --namespace nccl-test \
+  --set worker.replicas=2 \
+  --set benchmark.transport.mode=socket >/dev/null
+helm template smoke ./helm-charts/nccl-test \
+  --namespace nccl-test \
+  --set worker.replicas=2 \
+  --set benchmark.transport.mode=rdma >/dev/null
 ```
 
 Anonymous public pull is enabled on the shared registry. A clean unauthenticated
@@ -137,6 +146,13 @@ helm pull \
   env links enabled because Kubeflow MPI uses `kubectl exec` from the launcher
   into worker pods. Removing that wiring makes `kubectl` fall back to
   `localhost:8080` and the benchmark never starts.
+- The launcher now also waits for every worker pod's main `nccl` container to
+  report `Ready` before starting `mpirun`. That avoids a startup race where the
+  launcher reaches `kubectl exec` before one or more worker containers exist.
+- `benchmark.transport.mode` controls the NCCL network path explicitly:
+  `auto` leaves NCCL transport selection untouched, `socket` forces the Socket
+  transport and disables IB verbs, and `rdma` forces the NCCL `IB` transport
+  used for InfiniBand or RoCE-style RDMA environments.
 - Override `benchmark.mpiExtraArgs` for platform-specific MPI flags instead of
   mutating the shared base arguments in the chart.
 - The chart itself assumes the `MPIJob` CRD already exists. In the
@@ -154,6 +170,14 @@ helm template smoke ./helm-charts/nccl-test \
 helm template smoke ./helm-charts/nccl-test \
   --namespace nccl-test \
   --set worker.replicas=2 \
+  --set benchmark.transport.mode=socket >/dev/null
+helm template smoke ./helm-charts/nccl-test \
+  --namespace nccl-test \
+  --set worker.replicas=2 \
+  --set benchmark.transport.mode=rdma >/dev/null
+helm template smoke ./helm-charts/nccl-test \
+  --namespace nccl-test \
+  --set worker.replicas=2 \
   --set 'imagePullSecrets[0]=registry-creds' \
   --set 'global.imagePullSecrets[0]=shared-registry-creds' >/dev/null
 ```
@@ -168,13 +192,22 @@ helm template smoke ./helm-charts/nccl-test \
   `cr.<region>.nebius.cloud/<registry-short-id>/images/nccl-test`, and the tag
   defaults to `0.2.0`. Use a digest for immutable production pinning.
 - `benchmark.mpiBaseArgs`: shared `mpirun` arguments applied on every platform.
+- `benchmark.transport.mode`: `auto`, `socket`, or `rdma`. The shared chart
+  default is `auto`; `nebius-cxcli` sets `socket` on Ethernet-only MK8s GPU
+  shapes and `rdma` on GPU-cluster / InfiniBand shapes.
+- `benchmark.transport.socketIfName`, `benchmark.transport.ibHca`: optional
+  NCCL interface filters. Leave them empty unless you need to pin the socket
+  interface or RDMA HCA name explicitly for your environment.
 - `benchmark.mpiExtraArgs`: platform-specific extra `mpirun` arguments. Keep
   the shared chart default empty. In the official Nebius NCCL guide, the B200
   example adds `-mca coll ^hcoll` while the H100/H200 example omits it, so
   `nebius-cxcli` injects that flag only for B200 platforms instead of baking
-  it into global chart defaults. See:
-  https://docs.nebius.com/kubernetes/gpu/nccl-test.
+  it into global chart defaults. See the
+  [official Nebius NCCL guide](https://docs.nebius.com/kubernetes/gpu/nccl-test).
 - `benchmark.args`: arguments passed directly to `all_reduce_perf`.
+- `launcher.waitForWorkers.*`: gate `mpirun` on worker-container readiness.
+  Leave this enabled for the Kubeflow MPIJob path unless you have already
+  validated a different launcher/worker startup contract.
 - The source chart carries the shared first-party image/tag and the practical
   deploy-time benchmark args directly in `values.yaml`. In the bundled
   `nebius-cxcli` flow, the chart defaults are consumed directly from this chart
@@ -182,7 +215,13 @@ helm template smoke ./helm-charts/nccl-test \
   catalog-owned.
 - `worker.replicas`: number of MPI workers. `nebius-cxcli` derives this from
   the ready GPU node count at deploy time.
-- `worker.gpus`: GPUs requested per worker pod.
+- `worker.gpus`, `worker.resources.*`: per-worker GPU/CPU/memory baseline. The
+  shared chart keeps the 8-GPU defaults for direct chart use, while
+  `nebius-cxcli` derives `worker.gpus` from the resolved MK8s shape and sizes
+  worker CPU/memory at validation runtime from live scheduler headroom on the
+  selected GPU nodes. When Ready non-GPU nodes exist, cxcli also pins the
+  launcher there so Ethernet-only 1-GPU clusters do not inherit the 8-GPU
+  worker profile or spend GPU-node headroom on the launcher.
 - `report.jsonBeginMarker` and `report.jsonEndMarker`: log markers used by
   `nebius-cxcli` to extract the benchmark JSON payload.
 
@@ -229,12 +268,15 @@ kubectl logs -n nccl-test -f <launcher-pod-name>
 - The launcher pod also intentionally keeps in-cluster API access for the
   `kubectl exec` hop into MPI worker pods, while worker pods stay without
   service-account token mounts because they do not need Kubernetes API calls.
+- The launcher's wait loop is intentionally separate from NCCL itself. It only
+  waits for worker pod/container readiness, then hands off to `mpirun`; it does
+  not change the benchmark payload or the reported NCCL performance numbers.
 - `nebius-cxcli` owns deploy-time image overrides and platform-specific MPI
   flags such as the B200 `-mca coll ^hcoll` overlay. The shared runtime image
   and common benchmark shape now live in the chart defaults; only
-  platform-specific overlays stay catalog-owned. The official Nebius NCCL
-  guide shows that flag only in the B200 example, not in the H100/H200 one:
-  https://docs.nebius.com/kubernetes/gpu/nccl-test.
+  platform-specific overlays stay catalog-owned. The
+  [official Nebius NCCL guide](https://docs.nebius.com/kubernetes/gpu/nccl-test)
+  shows that flag only in the B200 example, not in the H100/H200 one.
 - The canonical release helper is
   [publish-helm.sh](publish-helm.sh).
   The tag-driven publish workflow lives at

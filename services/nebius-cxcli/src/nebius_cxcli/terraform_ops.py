@@ -434,6 +434,68 @@ def terraform_validate(
     )
 
 
+def terraform_state_list(
+    infra_dir: Path,
+    *,
+    extra_env: dict[str, str] | None = None,
+    initialize: bool = True,
+) -> tuple[str, ...]:
+    """List Terraform state addresses, returning an empty tuple when no state exists yet."""
+    terraform_bin = _require_terraform()
+    if initialize:
+        terraform_init(infra_dir, extra_env=extra_env)
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
+    try:
+        completed = subprocess.run(
+            [terraform_bin, "state", "list"],
+            cwd=infra_dir,
+            check=True,
+            timeout=120,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or exc.stdout or "").strip()
+        lowered = stderr.lower()
+        if "no state file was found" in lowered or "no stored state was found" in lowered:
+            return ()
+        raise RuntimeError(
+            _translate_terraform_failure(
+                cmd=[terraform_bin, "state", "list"],
+                cwd=infra_dir,
+                stderr=stderr,
+            )
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"Terraform command `{terraform_bin} state list` timed out after 120 seconds in {infra_dir}"
+        ) from exc
+    return tuple(line.strip() for line in (completed.stdout or "").splitlines() if line.strip())
+
+
+def terraform_state_show(
+    infra_dir: Path,
+    address: str,
+    *,
+    extra_env: dict[str, str] | None = None,
+    initialize: bool = True,
+) -> str:
+    """Render one Terraform state address in text form."""
+    terraform_bin = _require_terraform()
+    if initialize:
+        terraform_init(infra_dir, extra_env=extra_env)
+    stdout, _stderr = _run_capture(
+        [terraform_bin, "state", "show", "-no-color", address],
+        cwd=infra_dir,
+        timeout=120,
+        extra_env=extra_env,
+    )
+    return stdout
+
+
 def terraform_apply(
     infra_dir: Path,
     *,
@@ -519,11 +581,14 @@ def terraform_output_raw(
     output_name: str,
     *,
     extra_env: dict[str, str] | None = None,
+    initialize: bool = True,
 ) -> str:
     """Read one Terraform output as raw text from the rendered infra directory."""
     terraform_bin = _require_terraform()
     if not infra_dir.exists():
         raise RuntimeError(f"Rendered infra directory does not exist: {infra_dir}")
+    if initialize:
+        terraform_init(infra_dir, extra_env=extra_env)
     stdout, stderr = _run_capture(
         [terraform_bin, "output", "-raw", output_name],
         cwd=infra_dir,
@@ -541,11 +606,14 @@ def terraform_output_json(
     infra_dir: Path,
     *,
     extra_env: dict[str, str] | None = None,
+    initialize: bool = True,
 ) -> dict[str, object]:
     """Read all Terraform outputs as JSON from the rendered infra directory."""
     terraform_bin = _require_terraform()
     if not infra_dir.exists():
         raise RuntimeError(f"Rendered infra directory does not exist: {infra_dir}")
+    if initialize:
+        terraform_init(infra_dir, extra_env=extra_env)
     stdout, stderr = _run_capture(
         [terraform_bin, "output", "-json"],
         cwd=infra_dir,
@@ -564,4 +632,37 @@ def terraform_output_json(
         ) from exc
     if not isinstance(payload, dict):
         raise RuntimeError(f"Terraform output -json returned a non-mapping payload in {infra_dir}")
+    return payload
+
+
+def terraform_show_json(
+    infra_dir: Path,
+    *,
+    extra_env: dict[str, str] | None = None,
+    initialize: bool = True,
+) -> dict[str, object]:
+    """Render the current Terraform state as JSON from the rendered infra directory."""
+    terraform_bin = _require_terraform()
+    if not infra_dir.exists():
+        raise RuntimeError(f"Rendered infra directory does not exist: {infra_dir}")
+    if initialize:
+        terraform_init(infra_dir, extra_env=extra_env)
+    stdout, stderr = _run_capture(
+        [terraform_bin, "show", "-json"],
+        cwd=infra_dir,
+        timeout=120,
+        extra_env=extra_env,
+    )
+    if stderr:
+        sys.stderr.write(stderr)
+        if not stderr.endswith("\n"):
+            sys.stderr.write("\n")
+    try:
+        payload = json.loads(stdout or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Terraform show -json returned invalid JSON in {infra_dir}: {exc}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"Terraform show -json returned a non-mapping payload in {infra_dir}")
     return payload

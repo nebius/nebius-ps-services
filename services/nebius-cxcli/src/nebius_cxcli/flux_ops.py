@@ -549,9 +549,10 @@ def wait_for_rendered_flux_resources(
         if only_sources_pending:
             if emit:
                 emit(
-                    "[cyan]NOTE:[/cyan] All rendered workload resources are Ready, but one or more rendered Flux source "
-                    "objects still have no Ready status. Treating the local apply as successful and skipping the remaining "
-                    "source wait. Inspect the source objects separately if you need source-controller health details."
+                    "[cyan]NOTE:[/cyan] Rendered HelmRelease workloads are Ready. Skipping the remaining wait for Flux "
+                    "source objects that still have no Ready status.\n"
+                    "Check HelmRelease status with:\n"
+                    "kubectl get helmreleases.helm.toolkit.fluxcd.io -A"
                 )
             return
         last_actionable_status = actionable_status
@@ -986,11 +987,8 @@ def wait_for_flux_resource_apis(
         env.update(extra_env)
     wait_for_flux_crds_ready(extra_env=extra_env)
 
-    required_types = {
-        (target.resource_type, target.namespace or FLUX_NAMESPACE)
-        for target in _flux_wait_targets(paths.flux_dir)
-    }
-    required_types.update(_FLUX_REQUIRED_API_TYPES)
+    required_types = {target.resource_type for target in _flux_wait_targets(paths.flux_dir)}
+    required_types.update(resource_type for resource_type, _namespace in _FLUX_REQUIRED_API_TYPES)
     if not required_types:
         return
 
@@ -998,16 +996,15 @@ def wait_for_flux_resource_apis(
     last_missing: list[str] = []
     while True:
         missing: list[str] = []
-        for resource_type, namespace in sorted(required_types):
+        for resource_type in sorted(required_types):
             cmd = ["kubectl"]
             if cache_dir is not None:
                 cmd.extend(["--cache-dir", str(cache_dir)])
             cmd.extend(
                 [
-                    "-n",
-                    namespace,
                     "get",
                     resource_type,
+                    "-A",
                     "--ignore-not-found",
                 ]
             )

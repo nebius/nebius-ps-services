@@ -81,7 +81,8 @@ spec:
                 - -c
               args:
                 - |
-                  set -uo pipefail
+                  set -euo pipefail
+                  {{ include "nccl-test.waitForWorkersScript" . | nindent 18 }}
                   status=0
                   {{ include "nccl-test.mpiCommand" . }} || status=$?
                   if [ -f {{ .Values.benchmark.resultJsonPath | squote }} ]; then

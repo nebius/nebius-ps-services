@@ -87,7 +87,7 @@ def _stub_catalog_output_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _project_config_path(base: Path) -> Path:
-    return base / "deployments" / "tenant-123" / "project-456" / "config.yaml"
+    return base / "deployments" / "tenant-name-example" / "project-name-example" / "config.yaml"
 
 
 def _starter_payload(*, selected_infra: set[str], selected_apps: set[str]) -> dict:
@@ -893,6 +893,18 @@ def test_render_materializes_driverful_rdma_policy_for_nebius_gpu_clusters(
         == "In"
     )
     assert (
+        network_values["node-feature-discovery"]["worker"]["affinity"]["nodeAffinity"][
+            "requiredDuringSchedulingIgnoredDuringExecution"
+        ]["nodeSelectorTerms"][0]["matchExpressions"][0]["key"]
+        == "nebius.com/driverful"
+    )
+    assert (
+        network_values["node-feature-discovery"]["worker"]["affinity"]["nodeAffinity"][
+            "requiredDuringSchedulingIgnoredDuringExecution"
+        ]["nodeSelectorTerms"][0]["matchExpressions"][0]["values"]
+        == ["true"]
+    )
+    assert (
         network_values["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"][
             "nodeSelectorTerms"
         ][0]["matchExpressions"][0]["key"]
@@ -903,6 +915,12 @@ def test_render_materializes_driverful_rdma_policy_for_nebius_gpu_clusters(
             "nodeSelectorTerms"
         ][0]["matchExpressions"][0]["operator"]
         == "In"
+    )
+    assert (
+        network_values["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"][
+            "nodeSelectorTerms"
+        ][0]["matchExpressions"][0]["values"]
+        == ["true"]
     )
     network_patches = network_release_doc["spec"]["postRenderers"][0]["kustomize"]["patches"]
     assert network_patches[0]["target"]["kind"] == "NicClusterPolicy"
