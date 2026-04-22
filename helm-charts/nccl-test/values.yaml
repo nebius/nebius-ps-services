@@ -1,9 +1,10 @@
 # Default MPIJob contract for the NCCL validation workflow. The shared
-# first-party image tag and practical benchmark shape now live here in the
-# source chart; cxcli only needs to override worker replica count and
-# platform-specific MPI extras. Nebius docs add `-mca coll ^hcoll` only in the
-# B200 example while the H100/H200 example omits it, so the shared chart keeps
-# `benchmark.mpiExtraArgs: []` and leaves that overlay to the caller.
+# first-party image tag and conservative 1-GPU smoke-test baseline now live
+# here in the source chart; cxcli still overrides worker replica count, GPU
+# count, runtime CPU/memory sizing, and platform-specific MPI extras. Nebius
+# docs add `-mca coll ^hcoll` only in the B200 example while the H100/H200
+# example omits it, so the shared chart keeps `benchmark.mpiExtraArgs: []` and
+# leaves that overlay to the caller.
 # Ref: https://docs.nebius.com/kubernetes/gpu/nccl-test
 
 nameOverride: ""
@@ -79,7 +80,7 @@ launcher:
 
 worker:
   replicas: 1
-  gpus: 8
+  gpus: 1
   podLabels: {}
   podAnnotations: {}
   priorityClassName: ""
@@ -88,11 +89,11 @@ worker:
   affinity: {}
   resources:
     requests:
-      cpu: "96"
-      memory: 1600G
+      cpu: "4"
+      memory: 16Gi
     limits:
-      cpu: "96"
-      memory: 1600G
+      cpu: "4"
+      memory: 16Gi
 
 dshm:
   enabled: true

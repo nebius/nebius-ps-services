@@ -8,16 +8,17 @@ All notable changes to this project are tracked here. This changelog follows
 
 - Fixed the new NCCL transport-selection path end to end: the shared
   `nccl-test` chart now renders its Socket/TCPIP and RDMA `mpirun` env wiring
-  correctly, cxcli now derives NCCL worker GPU count from the resolved MK8s
-  shape while sizing worker CPU/memory from live scheduler headroom and
-  pinning the launcher onto non-GPU nodes when available, so Ethernet-only
-  1-GPU clusters stay schedulable instead of leaking the 8-GPU worker profile
-  or spending GPU-node headroom on the launcher. The transport contract stays
-  covered by a Helm-backed render regression when Helm is available, and
-  GitHub Actions now triggers on `helm-charts/nccl-test` / `services/nccl-test`
-  changes and runs explicit socket/RDMA chart smoke renders so
-  transport-specific template bugs fail in CI instead of surfacing only during
-  live `deploy`.
+  correctly, the source chart now ships conservative 1-GPU smoke-test worker
+  defaults for direct Helm use, and cxcli derives NCCL worker GPU count from
+  the resolved MK8s shape while sizing worker CPU/memory from live scheduler
+  headroom and pinning the launcher onto non-GPU nodes when available, so
+  Ethernet-only 1-GPU clusters stay schedulable instead of inheriting an
+  8-GPU worker profile or spending GPU-node headroom on the launcher. The
+  transport contract stays covered by a Helm-backed render regression when
+  Helm is available, and GitHub Actions now triggers on
+  `helm-charts/nccl-test` / `services/nccl-test` changes and runs explicit
+  socket/RDMA chart smoke renders so transport-specific template bugs fail in
+  CI instead of surfacing only during live `deploy`.
 - NCCL deploy validation now runs for GPU-enabled MK8s clusters on both
   Ethernet-only and GPU-cluster / InfiniBand shapes. `deploy` auto-selects the
   NCCL transport from the resolved MK8s context, using Socket/TCPIP on

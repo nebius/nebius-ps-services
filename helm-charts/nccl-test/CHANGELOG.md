@@ -20,15 +20,18 @@ All notable changes to this chart are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [nccl-test-chart-v0.2.8] - 2026-04-22
+
 ### Changed
 
 - Fixed the `benchmark.transport.mode` render path so Socket/TCPIP and RDMA
   overrides append the right `mpirun` env tokens, and expanded the helper,
   release, and CI smoke validation to render both transport modes explicitly
-  instead of only the chart defaults. `nebius-cxcli` also now overrides the
-  chart's 8-GPU worker baseline by deriving worker GPU count from the resolved
-  MK8s shape while sizing worker CPU/memory from live scheduler headroom and
-  pinning the launcher onto non-GPU nodes when available, so Ethernet-only
+  instead of only the chart defaults. The shared chart now ships conservative
+  1-GPU smoke-test worker defaults for direct use instead of assuming an 8-GPU
+  node shape, while `nebius-cxcli` still overrides worker GPU count from the
+  resolved MK8s shape, sizes worker CPU/memory from live scheduler headroom,
+  and pins the launcher onto non-GPU nodes when available so Ethernet-only
   1-GPU NCCL runs stay schedulable instead of pending forever.
 - Replaced the hardcoded NCCL socket/HCA defaults with a structured
   `benchmark.transport.*` contract. The chart now supports `auto`, `socket`,

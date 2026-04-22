@@ -2,7 +2,7 @@ apiVersion: v2
 name: nccl-test
 description: Render an ephemeral Kubeflow MPIJob that runs NVIDIA NCCL all_reduce_perf
 type: application
-version: 0.2.7
+version: 0.2.8
 appVersion: 0.2.0
 kubeVersion: ">=1.28.0-0"
 home: https://github.com/NVIDIA/nccl-tests
