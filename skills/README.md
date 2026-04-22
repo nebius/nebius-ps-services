@@ -118,8 +118,9 @@ config-level suppressions.
 
 `nebius` is the cloud automation skill for Nebius SDK-based workflows,
 including IAM bootstrap, object storage, VPC inspection, route analysis, quota
-checks, and MK8s GPU compatibility and operator decisions. Use it when the task
-depends on live Nebius service behavior rather than generic cloud assumptions.
+checks, and live MK8s platform/preset/fabric compatibility plus GPU/operator
+decisions. Use it when the task depends on live Nebius service behavior rather
+than generic cloud assumptions.
 
 ### `onboard-nbs-cxcli`
 

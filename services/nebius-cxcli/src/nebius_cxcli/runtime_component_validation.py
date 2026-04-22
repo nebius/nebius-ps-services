@@ -144,11 +144,14 @@ def _validate_mk8s_gpu(
     effective_gpu_platform = gpu_override_platform or gpu_platform
     effective_gpu_preset = gpu_override_preset or gpu_preset
     if infiniband_fabric and effective_gpu_platform and effective_gpu_preset:
+        tenant_id = as_text(get_path(payload, "client_info.nebius.tenant_id"))
         project_id = as_text(get_path(payload, "client_info.nebius.project_id"))
+        region_id = as_text(get_path(payload, "client_info.nebius.region_id"))
         if project_id:
             from .provider_options import ProviderOptionLookup
 
-            allow_gpu_clustering = ProviderOptionLookup().compute_platform_preset_allows_gpu_clustering(
+            lookup = ProviderOptionLookup()
+            allow_gpu_clustering = lookup.compute_platform_preset_allows_gpu_clustering(
                 project_id=project_id,
                 platform_name=effective_gpu_platform,
                 preset_name=effective_gpu_preset,
@@ -158,6 +161,22 @@ def _validate_mk8s_gpu(
                     "infiniband_fabric requires a GPU preset whose live Nebius metadata allows "
                     f"GPU clustering; selected {effective_gpu_platform}/{effective_gpu_preset} "
                     "does not support GPU clustering"
+                )
+            live_fabrics = {
+                item.fabric
+                for item in lookup.compute_platform_preset_fabrics(
+                    tenant_id=tenant_id,
+                    project_id=project_id,
+                    region_id=region_id,
+                    platform_name=effective_gpu_platform,
+                    preset_name=effective_gpu_preset,
+                )
+            }
+            if live_fabrics and infiniband_fabric not in live_fabrics:
+                allowed = ", ".join(sorted(live_fabrics))
+                raise ValueError(
+                    "infiniband_fabric must match one of the live Capacity Dashboard fabrics for "
+                    f"{effective_gpu_platform}/{effective_gpu_preset} in {region_id}: {allowed}"
                 )
     if (mig_strategy or mig_parted_config) and not gpu_enabled:
         raise ValueError("mig_strategy/mig_parted_config require gpu_enabled=true")
@@ -321,28 +340,27 @@ def _validate_vm(
     if gpu_cluster_enabled:
         if not platform.lower().startswith("gpu-"):
             raise ValueError(f"{base}.gpu_cluster_enabled requires a GPU platform")
-        if not preset.lower().startswith("8gpu-"):
-            raise ValueError(f"{base}.gpu_cluster_enabled requires an 8-GPU preset")
+        project_id = as_text(get_path(payload, "client_info.nebius.project_id"))
+        allow_gpu_clustering = None
+        if project_id and platform and preset:
+            from .provider_options import ProviderOptionLookup
+
+            allow_gpu_clustering = ProviderOptionLookup().compute_platform_preset_allows_gpu_clustering(
+                project_id=project_id,
+                platform_name=platform,
+                preset_name=preset,
+            )
+        if allow_gpu_clustering is False:
+            raise ValueError(
+                f"{base}.gpu_cluster_enabled requires a GPU preset whose live Nebius metadata "
+                f"allows GPU clustering; selected {platform}/{preset} does not support GPU clustering"
+            )
+        if allow_gpu_clustering is None and not preset.lower().startswith("8gpu-"):
+            raise ValueError(f"{base}.gpu_cluster_enabled requires a GPU-cluster-compatible preset")
         if bool(gpu_cluster_id) == bool(gpu_cluster_fabric):
             raise ValueError(
                 f"{base} requires exactly one of gpu_cluster_id or gpu_cluster_infiniband_fabric when gpu_cluster_enabled=true"
             )
-        if gpu_cluster_fabric:
-            project_id = as_text(get_path(payload, "client_info.nebius.project_id"))
-            if project_id:
-                from .provider_options import ProviderOptionLookup
-
-                allow_gpu_clustering = ProviderOptionLookup().compute_platform_preset_allows_gpu_clustering(
-                    project_id=project_id,
-                    platform_name=platform,
-                    preset_name=preset,
-                )
-                if allow_gpu_clustering is False:
-                    raise ValueError(
-                        "gpu_cluster_infiniband_fabric requires a GPU preset whose live Nebius "
-                        f"metadata allows GPU clustering; selected {platform}/{preset} does not "
-                        "support GPU clustering"
-                    )
     elif gpu_cluster_id or gpu_cluster_fabric or gpu_cluster_name:
         raise ValueError(f"{base}.gpu_cluster_* fields require gpu_cluster_enabled=true")
 

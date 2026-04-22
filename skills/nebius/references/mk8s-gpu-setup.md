@@ -1,4 +1,4 @@
-## MK8s GPU setup and operator guidance
+# MK8s GPU setup and operator guidance
 
 Use this reference when a task involves actually setting up, reviewing, or
 debugging GPU-enabled Nebius Managed Service for Kubernetes clusters, especially
@@ -8,17 +8,22 @@ setup affects GPU Operator, Network Operator, or GPUDirect RDMA behavior.
 Primary vendor references:
 
 - Nebius GPU setup:
-  - https://docs.nebius.com/kubernetes/gpu/set-up
+  - <https://docs.nebius.com/kubernetes/gpu/set-up>
 - Nebius InfiniBand / GPU cluster setup:
-  - https://docs.nebius.com/kubernetes/gpu/clusters
+  - <https://docs.nebius.com/kubernetes/gpu/clusters>
 
-### Decision workflow
+## Decision workflow
 
 1. Resolve the live Nebius compatibility inputs first.
    - Use the MK8s compatibility matrix for valid Kubernetes version, platform,
      OS, and `drivers_preset` combinations.
    - Use the live compute platform preset metadata to decide whether the exact
      selected preset allows GPU clustering / InfiniBand.
+   - Use Capacity Dashboard only after that to rank which supported preset or
+     fabric currently has capacity.
+   - Treat single-GPU presets as Ethernet-only testing/dev shapes. The
+     InfiniBand / GPUDirect-RDMA path is for cluster-compatible multi-GPU
+     presets.
 
 2. Choose the host-stack ownership model.
    - Nebius driverful image:
@@ -46,13 +51,15 @@ Primary vendor references:
      - in the cxcli bundled driverful InfiniBand path, Network Operator is also
        used to expose `rdma/shared_device` to pods even though host OFED stays
        image-owned
+     - single-GPU presets stay on Ethernet and should not be described as an
+       InfiniBand or GPUDirect-RDMA path
 
 4. If both NVIDIA operators are needed, keep the order and ownership clean.
    - Install or reconcile Network Operator before GPU Operator.
    - Keep exactly one NFD owner.
    - If Network Operator is the intended NFD owner, disable GPU Operator NFD.
 
-### Validated Nebius driverful-image pattern
+## Validated Nebius driverful-image pattern
 
 This is the most important Nebius-specific distinction.
 
@@ -90,7 +97,7 @@ In the validated Nebius driverful GPU-node image, the live host had:
 Treat those host-side observations as image-specific facts that should be
 verified on the actual cluster, not as a timeless universal guarantee.
 
-### Manual/operator-managed host-stack pattern
+## Manual/operator-managed host-stack pattern
 
 Use this path when you intentionally omit `drivers_preset`.
 
@@ -115,7 +122,7 @@ Use this path when you intentionally omit `drivers_preset`.
 This path is fundamentally different from the Nebius driverful path. Do not mix
 them casually inside one node-group design.
 
-### Current nebius-cxcli catalog behavior
+## Current nebius-cxcli catalog behavior
 
 When the task is explicitly about this repository rather than generic Nebius
 operations, the active policy contract is:
@@ -132,6 +139,12 @@ operations, the active policy contract is:
   - auto-enabled for manual B200/B200A shapes even without InfiniBand
   - keeps `operator.ofedDriver.deploy=false` on the Nebius driverful-image path
   - keeps `operator.ofedDriver.deploy=true` on the manual/operator-managed path
+- Single-GPU preset handling:
+  - treated as Ethernet-only testing/dev capacity, not as GPU-cluster capacity
+  - does not surface `infiniband_fabric` as a valid setting
+  - if operators manually leave NCCL validation enabled on such shapes, cxcli
+    warns that the test would use Ethernet/TCPIP and is not representative of
+    production distributed training
 - NFD ownership:
   - on GPU-cluster / InfiniBand shapes, Network Operator is the single NFD owner
   - on manual B200/B200A shapes where Network Operator is auto-enabled for
@@ -140,7 +153,7 @@ operations, the active policy contract is:
 Treat `component_sources.yaml` in `services/nebius-cxcli` as the repository's
 authoritative implementation of those rules.
 
-### GPUDirect RDMA notes
+## GPUDirect RDMA notes
 
 - Current NVIDIA docs default to the DMA-BUF path for GPUDirect RDMA. Do not
   assume the legacy `nvidia-peermem` module is required on every cluster.
@@ -152,7 +165,7 @@ authoritative implementation of those rules.
   was already loaded. Treat that as a current-image observation, not a generic
   universal requirement.
 
-### Readiness and proof workflow
+## Readiness and proof workflow
 
 For live cluster review, do not stop at a green control plane.
 
@@ -182,7 +195,7 @@ For live cluster review, do not stop at a green control plane.
    - confirm RDMA devices are visible from the host when InfiniBand is part of
      the design
 
-### Common pitfalls
+## Common pitfalls
 
 - `toolkit.enabled` in GPU Operator refers to the NVIDIA Container Toolkit
   runtime, not the CUDA Toolkit.
@@ -190,6 +203,10 @@ For live cluster review, do not stop at a green control plane.
   switch. The documented suppression label is `nvidia.com/gpu.deploy.operands=false`.
 - Do not decide GPU clustering from platform name alone; use the selected
   preset's live `allow_gpu_clustering` metadata.
+- Do not treat a fabric-scoped Capacity Dashboard row for a single-GPU preset
+  as proof that the preset supports InfiniBand.
+- Single-GPU presets are useful for testing and basic validation, but they are
+  not representative NCCL / distributed-training performance environments.
 - A ready `NicClusterPolicy` is not proof that pods can consume RDMA. Check the
   actual allocatable resource on the node.
 - Do not blanket-set `driver.rdma.enabled=true` just because GPUDirect RDMA is
@@ -198,7 +215,7 @@ For live cluster review, do not stop at a green control plane.
 - Do not assume you can change GPU platform, preset, or GPU cluster in place on
   an existing node group. Nebius docs say to create a new node group instead.
 
-### Skill assets for this workflow
+## Skill assets for this workflow
 
 - `assets/gpu/gpu-operator-driverful-values.yaml`
 - `assets/gpu/network-operator-driverful-values.yaml`

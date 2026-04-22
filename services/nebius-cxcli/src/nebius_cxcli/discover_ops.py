@@ -98,7 +98,7 @@ def _to_repo_relative(path: Path, *, repo_root: Path) -> str:
 
 def _project_config_relative(config_path: Path, *, repo_root: Path) -> str | None:
     relative = _to_repo_relative(config_path, repo_root=repo_root)
-    if _infer_tenant_project_from_path(relative) is None:
+    if _infer_project_folders_from_path(relative) is None:
         return None
     return relative
 
@@ -129,15 +129,15 @@ def _generated_relative_for_config(config_relative: str) -> str:
     return config_path.parent.joinpath("generated").as_posix()
 
 
-def _infer_tenant_project_from_path(config_relative: str) -> tuple[str, str] | None:
+def _infer_project_folders_from_path(config_relative: str) -> tuple[str, str] | None:
     parts = [token for token in _normalize(config_relative).split("/") if token]
     if len(parts) < 3 or parts[-1] != "config.yaml":
         return None
-    tenant_id = parts[-3]
-    project_id = parts[-2]
-    if not tenant_id or not project_id:
+    tenant_folder = parts[-3]
+    project_folder = parts[-2]
+    if not tenant_folder or not project_folder:
         return None
-    return tenant_id, project_id
+    return tenant_folder, project_folder
 
 
 def _environment_name_for_config(*, root: Path, config_relative: str) -> str:
@@ -163,7 +163,7 @@ def _config_relative_from_changed(path: str) -> str | None:
     parts = [token for token in normalized.split("/") if token]
     if len(parts) < 3:
         return None
-    if normalized.endswith("config.yaml") and _infer_tenant_project_from_path(normalized) is not None:
+    if normalized.endswith("config.yaml") and _infer_project_folders_from_path(normalized) is not None:
         return normalized
     if "generated" not in parts:
         return None
@@ -172,7 +172,7 @@ def _config_relative_from_changed(path: str) -> str | None:
         return None
     prefix = parts[:generated_index]
     candidate = "/".join([*prefix, "config.yaml"])
-    if _infer_tenant_project_from_path(candidate) is None:
+    if _infer_project_folders_from_path(candidate) is None:
         return None
     return candidate
 

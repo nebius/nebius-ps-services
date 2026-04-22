@@ -173,13 +173,19 @@ from .mk8s_gpu import (
     materialize_mk8s_gpu_app_values,
     mk8s_gpu_dependency_issues,
     mk8s_gpu_validation_specs,
+    mk8s_gpu_validation_warnings,
     resolve_mk8s_gpu_app_selection,
     run_mk8s_gpu_validations,
 )
-from .mk8s_preflight import validate_mk8s_network_preflight
+from .mk8s_preflight import (
+    has_mk8s_resource_name_preflight_targets,
+    validate_mk8s_network_preflight,
+    validate_mk8s_resource_name_preflight,
+)
 from .notify_ops import DeployReportEmailResult, send_deploy_report_email
 from .paths import (
     ProjectPaths,
+    normalize_project_folder_name,
     resolve_deploy_config_paths,
     resolve_destroy_config_paths,
     resolve_email_config_paths,
@@ -194,12 +200,15 @@ from .provider_options import (
     TenantProjectValidationResult,
 )
 from .quota_checks import (
+    QuotaCheck,
+    QuotaContributor,
     QuotaReport,
     assess_live_quotas,
+    estimate_mk8s_quota_requirements,
     format_quota_report_lines,
     format_quota_request_lines,
-    plan_quota_request_changes,
-    request_quota_allowance_changes,
+    format_quota_request_manual_followup_lines,
+    request_quota_changes,
 )
 from .render import promote_staged_generated_paths, reset_generated_bundle, staged_generated_paths
 from .runtime_config import read_path_with_catalog, to_plain_data
@@ -229,6 +238,9 @@ from .terraform_ops import (
     terraform_output_json,
     terraform_output_raw,
     terraform_plan,
+    terraform_show_json,
+    terraform_state_list,
+    terraform_state_show,
     terraform_validate,
 )
 from .terraform_provider import build_provider_module_name
@@ -244,7 +256,8 @@ def _quota_failure_message(report: QuotaReport, *, phase: str) -> str:
     lines = [
         (
             f"Nebius quota/capacity is insufficient for {phase}. "
-            "Increase the quota or assign matching Capacity Block Group capacity and retry."
+            "Increase the quota, or for GPU shortages choose a platform/preset/fabric "
+            "with available Capacity Dashboard capacity, and retry."
         ),
     ]
     for item in report.insufficient_checks:
@@ -287,7 +300,7 @@ def _quota_request_command(config_path: Path) -> str:
 
 
 def _print_quota_request_hint(config_path: Path) -> None:
-    console.print("Next step: review and attempt direct quota allowance requests with:")
+    console.print("Next step: review and submit quota requests with:")
     console.print(f"  {_quota_request_command(config_path)}")
 
 
@@ -304,26 +317,415 @@ def _warn_on_live_quota_issues(
     phase: str,
     all_regions: bool = False,
 ) -> QuotaReport:
+    report = _assess_live_quota_report(config, phase=phase, all_regions=all_regions)
+    _print_live_quota_report(report, phase=phase)
+    return report
+
+
+def _assess_live_quota_report(
+    config: Any,
+    *,
+    phase: str,
+    all_regions: bool = False,
+) -> QuotaReport:
     try:
-        report = assess_live_quotas(
+        return assess_live_quotas(
             config,
             context=f"{phase} quota assessment",
             all_regions=all_regions,
         )
     except Exception as exc:
-        report = QuotaReport(
+        return QuotaReport(
             tenant_id="",
             project_id="",
             region_id="",
             checked_at=datetime.now(UTC).isoformat(),
             errors=(f"{phase} quota assessment failed: {exc}",),
         )
-    _print_live_quota_report(report, phase=phase)
-    return report
 
 
 def _raise_on_live_quota_issues(config: Any, *, phase: str) -> QuotaReport:
     report = _warn_on_live_quota_issues(config, phase=phase)
+    if report.has_confirmed_insufficiency:
+        raise RuntimeError(_quota_failure_message(report, phase=phase))
+    return report
+
+
+_TERRAFORM_STATE_MODULE_RE = re.compile(r"^module\.([A-Za-z0-9_]+)(?:\.|$)")
+
+
+def _terraform_state_module_name(address: str) -> str:
+    match = _TERRAFORM_STATE_MODULE_RE.match(str(address).strip())
+    return match.group(1).strip() if match is not None else ""
+
+
+def _state_mapping(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _state_list(value: Any) -> list[Any]:
+    return list(value) if isinstance(value, list) else []
+
+
+def _state_text(value: Any) -> str:
+    return str(value).strip() if value is not None else ""
+
+
+def _state_positive_int(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, float):
+        if value.is_integer() and value >= 0:
+            return int(value)
+        return None
+    text = _state_text(value)
+    if not text:
+        return None
+    try:
+        parsed = int(text)
+    except ValueError:
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def _terraform_show_resources(module: Mapping[str, Any]) -> list[dict[str, Any]]:
+    resources: list[dict[str, Any]] = []
+    for item in _state_list(module.get("resources")):
+        if isinstance(item, Mapping):
+            resources.append(dict(item))
+    for child in _state_list(module.get("child_modules")):
+        if isinstance(child, Mapping):
+            resources.extend(_terraform_show_resources(child))
+    return resources
+
+
+def _terraform_state_resources(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
+    values = payload.get("values")
+    if not isinstance(values, Mapping):
+        return []
+    root_module = values.get("root_module")
+    if not isinstance(root_module, Mapping):
+        return []
+    return _terraform_show_resources(root_module)
+
+
+def _state_public_ips_enabled(template: Mapping[str, Any]) -> bool:
+    for item in _state_list(template.get("network_interfaces")):
+        if isinstance(item, Mapping) and item.get("public_ip_address") is not None:
+            return True
+    return False
+
+
+def _state_boot_disk_size_gib(template: Mapping[str, Any]) -> int | None:
+    boot_disk = _state_mapping(template.get("boot_disk"))
+    for key in ("size_gibibytes", "size_gib", "size_gibs"):
+        resolved = _state_positive_int(boot_disk.get(key))
+        if resolved is not None and resolved > 0:
+            return resolved
+    size_bytes = _state_positive_int(boot_disk.get("size_bytes"))
+    gib = 1024 * 1024 * 1024
+    if size_bytes is not None and size_bytes > 0:
+        return size_bytes // gib if size_bytes % gib == 0 else None
+    return None
+
+
+def _state_node_group_count(values: Mapping[str, Any]) -> tuple[int | None, dict[str, Any] | None]:
+    fixed_count = _state_positive_int(values.get("fixed_node_count"))
+    if fixed_count is not None:
+        return fixed_count, None
+    autoscaling = _state_mapping(values.get("autoscaling"))
+    if not autoscaling:
+        return None, None
+    return None, autoscaling
+
+
+def _state_node_group_inputs(values: Mapping[str, Any], *, gpu: bool) -> dict[str, Any]:
+    template = _state_mapping(values.get("template"))
+    resources = _state_mapping(template.get("resources"))
+    count, autoscaling = _state_node_group_count(values)
+    prefix = "gpu" if gpu else "cpu"
+    inputs: dict[str, Any] = {}
+    if count is not None:
+        inputs[f"{prefix}_nodes_count_per_group" if gpu else f"{prefix}_nodes_count"] = count
+    if autoscaling is not None:
+        inputs[f"mk8s_{prefix}_node_group_overrides"] = {"autoscaling": autoscaling}
+    platform = _state_text(resources.get("platform"))
+    preset = _state_text(resources.get("preset"))
+    if platform:
+        inputs[f"{prefix}_nodes_platform"] = platform
+    if preset:
+        inputs[f"{prefix}_nodes_preset"] = preset
+    if template.get("preemptible") is not None:
+        inputs[f"{prefix}_nodes_preemptible"] = True
+    if _state_public_ips_enabled(template):
+        inputs[f"{prefix}_nodes_public_ips"] = True
+    boot_disk = _state_mapping(template.get("boot_disk"))
+    disk_type = _state_text(boot_disk.get("type"))
+    if disk_type:
+        inputs[f"{prefix}_nodes_boot_disk_type"] = disk_type
+    disk_size_gib = _state_boot_disk_size_gib(template)
+    if disk_size_gib is not None:
+        inputs[f"{prefix}_nodes_boot_disk_size_gib"] = disk_size_gib
+    return inputs
+
+
+def _component_region_for_instance(
+    config: Any,
+    *,
+    component_id: str,
+    instance_id: str,
+) -> str:
+    payload = to_plain_data(config)
+    if not isinstance(payload, Mapping):
+        return ""
+    client_info = _state_mapping(payload.get("client_info"))
+    nebius = _state_mapping(client_info.get("nebius"))
+    default_region = _state_text(nebius.get("region_id"))
+    infra = _state_mapping(payload.get("infra"))
+    for item in _state_list(infra.get("components")):
+        if not isinstance(item, Mapping) or not bool(item.get("enabled", False)):
+            continue
+        if component_type_id(item) != component_id:
+            continue
+        if component_instance_id(item) != instance_id:
+            continue
+        inputs = _state_mapping(item.get("inputs"))
+        return _state_text(inputs.get("region")) or default_region
+    return default_region
+
+
+def _generated_bundle_mk8s_module_index(
+    manifest: Mapping[str, Any],
+) -> dict[str, tuple[str, str]]:
+    return {
+        item["module_name"]: (item["component_id"], item["instance_id"])
+        for item in _generated_bundle_module_sources(manifest)
+        if item.get("component_id") == "mk8s" and item.get("module_name") and item.get("instance_id")
+    }
+
+
+def _managed_mk8s_quota_requirements_from_terraform_state(
+    config: Any,
+    paths: ProjectPaths,
+    manifest: Mapping[str, Any],
+    *,
+    runtime_env: Mapping[str, str] | None,
+) -> tuple[Any, ...]:
+    try:
+        module_index = _generated_bundle_mk8s_module_index(manifest)
+    except Exception:
+        return ()
+    if not module_index:
+        return ()
+    try:
+        state_addresses = terraform_state_list(
+            paths.infra_dir,
+            extra_env=dict(runtime_env or {}),
+            initialize=False,
+        )
+    except Exception:
+        return ()
+    if not state_addresses:
+        return ()
+    try:
+        state_payload = terraform_show_json(
+            paths.infra_dir,
+            extra_env=dict(runtime_env or {}),
+            initialize=False,
+        )
+    except Exception:
+        return ()
+
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    for resource in _terraform_state_resources(state_payload):
+        address = _state_text(resource.get("address"))
+        resource_type = _state_text(resource.get("type"))
+        module_name = _terraform_state_module_name(address)
+        component_identity = module_index.get(module_name)
+        if component_identity is None:
+            continue
+        component_id, instance_id = component_identity
+        state_bucket = grouped.setdefault(
+            (component_id, instance_id),
+            {
+                "cluster_present": False,
+                "project_id": "",
+                "region": _component_region_for_instance(
+                    config,
+                    component_id=component_id,
+                    instance_id=instance_id,
+                ),
+                "cpu_groups": [],
+                "gpu_groups": [],
+                "gpu_fabric": "",
+            },
+        )
+        values = _state_mapping(resource.get("values"))
+        if resource_type == "nebius_mk8s_v1_cluster":
+            state_bucket["cluster_present"] = True
+            state_bucket["project_id"] = _state_text(values.get("parent_id")) or str(
+                state_bucket["project_id"]
+            )
+        elif resource_type == "nebius_compute_v1_gpu_cluster":
+            state_bucket["gpu_fabric"] = _state_text(values.get("infiniband_fabric"))
+        elif resource_type == "nebius_mk8s_v1_node_group":
+            if ".nebius_mk8s_v1_node_group.cpu" in address:
+                state_bucket["cpu_groups"].append(values)
+            elif ".nebius_mk8s_v1_node_group.gpu" in address:
+                state_bucket["gpu_groups"].append(values)
+
+    collected: list[Any] = []
+    default_project_id = ""
+    payload = to_plain_data(config)
+    if isinstance(payload, Mapping):
+        default_project_id = _state_text(
+            _state_mapping(_state_mapping(payload.get("client_info")).get("nebius")).get("project_id")
+        )
+    for (_component_id, instance_id), state_bucket in grouped.items():
+        if not state_bucket["cluster_present"]:
+            continue
+        project_id = _state_text(state_bucket["project_id"]) or default_project_id
+        region = _state_text(state_bucket["region"])
+        if not project_id or not region:
+            continue
+        inputs: dict[str, Any] = {}
+        cpu_groups = list(state_bucket["cpu_groups"])
+        if cpu_groups:
+            inputs.update(_state_node_group_inputs(_state_mapping(cpu_groups[0]), gpu=False))
+        gpu_groups = list(state_bucket["gpu_groups"])
+        if gpu_groups:
+            inputs["gpu_enabled"] = True
+            inputs["gpu_node_groups"] = len(gpu_groups)
+            inputs.update(_state_node_group_inputs(_state_mapping(gpu_groups[0]), gpu=True))
+            gpu_fabric = _state_text(state_bucket["gpu_fabric"])
+            if gpu_fabric:
+                inputs["infiniband_fabric"] = gpu_fabric
+        try:
+            requirements, _gaps = estimate_mk8s_quota_requirements(
+                project_id=project_id,
+                region=region,
+                instance_id=instance_id,
+                inputs=inputs,
+                context="generated-bundle quota baseline",
+            )
+        except Exception:
+            continue
+        collected.extend(requirements)
+    return tuple(collected)
+
+
+def _baseline_requirement_key(
+    *,
+    component_id: str,
+    instance_id: str,
+    quota_name: str,
+    region: str,
+) -> tuple[str, str, str, str]:
+    return component_id, instance_id, quota_name, region
+
+
+def _adjust_quota_report_for_managed_mk8s_state(
+    report: QuotaReport,
+    *,
+    managed_requirements: Sequence[Any],
+) -> QuotaReport:
+    baseline: dict[tuple[str, str, str, str], int] = {}
+    for item in managed_requirements:
+        component_id = _state_text(getattr(item, "component_id", None))
+        instance_id = _state_text(getattr(item, "instance_id", None))
+        quota_name = _state_text(getattr(item, "quota_name", None))
+        region = _state_text(getattr(item, "region", None))
+        required = _state_positive_int(getattr(item, "required", None))
+        if not component_id or not instance_id or not quota_name or not region or required is None:
+            continue
+        key = _baseline_requirement_key(
+            component_id=component_id,
+            instance_id=instance_id,
+            quota_name=quota_name,
+            region=region,
+        )
+        baseline[key] = baseline.get(key, 0) + required
+    if not baseline:
+        return report
+
+    adjusted_checks: list[QuotaCheck] = []
+    for check in report.checks:
+        adjusted_contributors: list[QuotaContributor] = []
+        for contributor in check.contributors:
+            key = _baseline_requirement_key(
+                component_id=contributor.component_id,
+                instance_id=contributor.instance_id,
+                quota_name=check.quota_name,
+                region=check.region,
+            )
+            remaining_baseline = baseline.get(key, 0)
+            if remaining_baseline <= 0:
+                adjusted_contributors.append(contributor)
+                continue
+            if remaining_baseline >= contributor.required:
+                baseline[key] = remaining_baseline - contributor.required
+                continue
+            baseline[key] = 0
+            adjusted_contributors.append(
+                replace(
+                    contributor,
+                    required=contributor.required - remaining_baseline,
+                )
+            )
+        if not adjusted_contributors:
+            continue
+        component_ids = list(dict.fromkeys(item.component_id for item in adjusted_contributors))
+        instance_ids = list(dict.fromkeys(item.instance_id for item in adjusted_contributors))
+        component_labels = list(dict.fromkeys(item.component_label for item in adjusted_contributors))
+        component_id = component_ids[0] if len(component_ids) == 1 else "multiple"
+        instance_id = instance_ids[0] if len(instance_ids) == 1 else "multiple"
+        component_label = (
+            component_labels[0]
+            if len(component_labels) <= 1
+            else f"{component_labels[0]} + {len(component_labels) - 1} more"
+        )
+        required = sum(item.required for item in adjusted_contributors)
+        sufficient = None if check.available is None else required <= check.available
+        adjusted_checks.append(
+            replace(
+                check,
+                component_id=component_id,
+                instance_id=instance_id,
+                component_label=component_label,
+                required=required,
+                reason="; ".join(
+                    f"{item.component_label}: {item.reason}" for item in adjusted_contributors
+                ),
+                sufficient=sufficient,
+                contributors=tuple(adjusted_contributors),
+            )
+        )
+    return replace(report, checks=tuple(adjusted_checks))
+
+
+def _raise_on_generated_bundle_live_quota_issues(
+    config: Any,
+    paths: ProjectPaths,
+    *,
+    manifest: Mapping[str, Any] | None,
+    runtime_env: Mapping[str, str] | None,
+    phase: str,
+) -> QuotaReport:
+    terraform_init(paths.infra_dir, extra_env=dict(runtime_env or {}))
+    report = _assess_live_quota_report(config, phase=phase)
+    if manifest is not None:
+        report = _adjust_quota_report_for_managed_mk8s_state(
+            report,
+            managed_requirements=_managed_mk8s_quota_requirements_from_terraform_state(
+                config,
+                paths,
+                manifest,
+                runtime_env=runtime_env,
+            ),
+        )
+    _print_live_quota_report(report, phase=phase)
     if report.has_confirmed_insufficiency:
         raise RuntimeError(_quota_failure_message(report, phase=phase))
     return report
@@ -362,11 +764,11 @@ _WIZARD_BACKTRACK = object()
 _WIZARD_DEFAULT_MISSING = object()
 _DEPLOYMENTS_ROOT_ARGUMENT_HELP = (
     "Deployments root directory. Pass the folder that contains or will contain "
-    "<tenant>/<project>/config.yaml; any existing directory works."
+    "<tenant-folder>/<project-folder>/config.yaml; any existing directory works."
 )
 _CONFIG_YAML_ARGUMENT_HELP = (
     "Path to project config.yaml under the deployments root "
-    "(<tenant>/<project>/config.yaml)."
+    "(<tenant-folder>/<project-folder>/config.yaml)."
 )
 _GENERATED_BUNDLE_CONFIG_ARGUMENT_HELP = (
     "Path to project config.yaml under the deployments root. "
@@ -379,7 +781,7 @@ _GENERATED_PATH_ARGUMENT_HELP = (
 _GENERATED_INFRA_ARGUMENT_HELP = "Path to generated/ or generated/infra."
 _GENERATED_FLUX_ARGUMENT_HELP = "Path to generated/ or generated/flux."
 _GENERATED_INVENTORY_ARGUMENT_HELP = "Path to generated/ or generated/inventory."
-_GENERATED_REPORT_SCAFFOLD_TEXT = "# Deploy Report\n\nGenerated by `nebius-cxcli report write`.\n"
+_GENERATED_REPORT_SCAFFOLD_TEXT = "# Deploy Report\n\nGenerated by `nebius-cxcli report`.\n"
 _LEGACY_GENERATED_REPORT_SCAFFOLD_TEXT = (
     "# Deploy Report\n\nGenerated by `nebius-cxcli inventory write`.\n"
 )
@@ -392,8 +794,8 @@ app = typer.Typer(
     add_completion=False,
     help=(
         "Nebius artifact generator and deployer. Target guide: create bootstraps one "
-        "tenant/project folder from a deployments root directory and overwrites existing "
-        "resolved tenant/project folders only with confirmation; component list/add/remove are "
+        "name-based tenant/project folder from a deployments root directory and overwrites existing "
+        "resolved project folders only with confirmation; component list/add/remove are "
         "the day-2 config.yaml editing surface; "
         "discover uses a deployment-scope directory; validate/quota-check/quota-request/render/bootstrap-ci/deploy use config.yaml; "
         "destroy/report/email also use config.yaml and resolve sibling generated/ automatically; "
@@ -414,14 +816,10 @@ terraform_app = typer.Typer(
 flux_app = typer.Typer(
     help="Apply, bootstrap, or destroy Flux resources using generated/ or generated/flux."
 )
-report_app = typer.Typer(
-    help="Refresh the local deploy report from project config.yaml via sibling generated/."
-)
 
 app.add_typer(component_app, name="component")
 app.add_typer(terraform_app, name="terraform")
 app.add_typer(flux_app, name="flux")
-app.add_typer(report_app, name="report")
 
 
 def _version_callback(value: bool) -> bool:
@@ -803,7 +1201,7 @@ def _run_runtime_validation(
             progress.run("mk8s-preflight", lambda: validate_mk8s_network_preflight(config))
             quota_report = progress.run(
                 "quota-readiness",
-                lambda: _raise_on_live_quota_issues(config, phase="validate --strict"),
+                lambda: _raise_on_live_quota_issues(config, phase="validate"),
             )
         validated_scope_summary_lines = _validation_scope_summary_lines(
             config,
@@ -813,8 +1211,9 @@ def _run_runtime_validation(
     if validated_scope_summary_lines:
         for line in validated_scope_summary_lines:
             console.print(line)
+    _print_mk8s_gpu_validation_warnings(config)
     if strict:
-        console.print(f"[green]Valid (strict):[/green] {config_path}")
+        console.print(f"[green]Valid:[/green] {config_path}")
         return
     if quota_report is not None and (
         quota_report.has_confirmed_insufficiency
@@ -827,6 +1226,11 @@ def _run_runtime_validation(
             _print_quota_request_hint(config_path)
         return
     console.print(f"[green]Valid:[/green] {config_path}")
+
+
+def _print_mk8s_gpu_validation_warnings(payload_or_config: Any) -> None:
+    for warning in mk8s_gpu_validation_warnings(payload_or_config):
+        console.print(f"{warning_markup('Deploy validation warning:')} {warning}")
 
 
 def _configure_quiet_native_logs() -> None:
@@ -1040,26 +1444,26 @@ def _warn_existing_project_overwrite(*, config_path: Path) -> None:
     project_path = config_path.parent
     console.print(
         f"{warning_markup('Existing project detected.')} "
-        f"Re-running `create` will replace the resolved tenant/project folder [bold]{project_path}[/bold] from scratch."
+        f"Re-running `create` will replace the resolved project folder [bold]{project_path}[/bold] from scratch."
     )
     console.print(
         "[dim]Existing infra/apps selections, generated artifacts, and any other files under "
-        "that resolved tenant/project folder will not be preserved. Any follow-up prompts restart "
+        "that resolved project folder will not be preserved. Any follow-up prompts restart "
         "from the normal create defaults instead of reusing the old config values.[/dim]"
     )
     console.print(
-        "[dim]Use `component list/add/remove` for day-2 component edits without replacing the tenant/project folder.[/dim]"
+        "[dim]Use `component list/add/remove` for day-2 component edits without replacing the project folder.[/dim]"
     )
 
 
 def _confirm_existing_project_overwrite(*, config_path: Path) -> bool:
     _warn_existing_project_overwrite(config_path=config_path)
     console.print(
-        "[dim]This only affects that one resolved tenant/project folder. "
+        "[dim]This only affects that one resolved project folder. "
         "It does not delete the deployments root or unrelated projects.[/dim]"
     )
     return _wizard_continue_phase(
-        "Continue and overwrite the existing tenant/project folder from scratch?",
+        "Continue and overwrite the existing project folder from scratch?",
         default=False,
     )
 
@@ -3073,31 +3477,46 @@ def _prompt_path_sort_key(
     return required_rank, toggle_rank, leaf_rank, full_label
 
 
-def _maybe_clear_mk8s_infiniband_fabric_after_gpu_shape_change(
+def _maybe_clear_gpu_cluster_fabric_after_shape_change(
     *,
     payload: dict[str, Any],
     entry: ComponentEntry,
     full_path_label: str,
     provider_lookup: ProviderOptionLookup | None,
 ) -> None:
-    if provider_lookup is None or entry.scope != "infra" or entry.id != "mk8s":
+    if provider_lookup is None or entry.scope != "infra":
         return
-    if not full_path_label.endswith(
-        (".gpu_enabled", ".gpu_nodes_platform", ".gpu_nodes_preset")
-    ):
+    fabric_label = ""
+    disabled_reason = ""
+    if entry.id == "mk8s":
+        if not full_path_label.endswith((".gpu_enabled", ".gpu_nodes_platform", ".gpu_nodes_preset")):
+            return
+        component_prefix = _dynamic_component_prefix(entry=entry, full_path_label=full_path_label)
+        if not component_prefix:
+            return
+        fabric_label = f"{component_prefix}.inputs.infiniband_fabric"
+        gpu_shape_enabled = bool(_read_payload_field(payload, f"{component_prefix}.inputs.gpu_enabled"))
+        disabled_reason = "GPU is no longer enabled"
+    elif entry.id == "vm":
+        if not full_path_label.endswith((".gpu_cluster_enabled", ".platform", ".preset")):
+            return
+        component_prefix = _dynamic_component_prefix(entry=entry, full_path_label=full_path_label)
+        if not component_prefix:
+            return
+        fabric_label = f"{component_prefix}.inputs.gpu_cluster_infiniband_fabric"
+        gpu_shape_enabled = bool(
+            _read_payload_field(payload, f"{component_prefix}.inputs.gpu_cluster_enabled")
+        )
+        disabled_reason = "GPU clustering is no longer enabled"
+    else:
         return
 
-    component_prefix = _dynamic_component_prefix(entry=entry, full_path_label=full_path_label)
-    if not component_prefix:
-        return
-    fabric_label = f"{component_prefix}.inputs.infiniband_fabric"
     fabric_value = _non_empty_text(_read_payload_field(payload, fabric_label))
     if not fabric_value:
         return
 
-    gpu_enabled = bool(_read_payload_field(payload, f"{component_prefix}.inputs.gpu_enabled"))
-    if not gpu_enabled:
-        reason = "GPU is no longer enabled"
+    if not gpu_shape_enabled:
+        reason = disabled_reason
     elif not _provider_prompt_dependencies_ready(
         payload=payload,
         entry=entry,
@@ -3136,6 +3555,121 @@ def _is_mk8s_boot_disk_type_field(full_path_label: str) -> bool:
 
 def _is_mk8s_gpu_validation_field(full_path_label: str) -> bool:
     return full_path_label.startswith("deploy.validations.mk8s_gpu.")
+
+
+def _gpu_preset_field_context(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+) -> tuple[str, str, str, str] | None:
+    if entry.scope != "infra":
+        return None
+    component_prefix = _dynamic_component_prefix(entry=entry, full_path_label=full_path_label)
+    if not component_prefix:
+        return None
+
+    if full_path_label.endswith(".gpu_nodes_preset"):
+        platform_label = f"{component_prefix}.inputs.gpu_nodes_platform"
+        preset_label = f"{component_prefix}.inputs.gpu_nodes_preset"
+    elif full_path_label.endswith(".preset"):
+        platform_label = f"{component_prefix}.inputs.platform"
+        preset_label = full_path_label
+    else:
+        return None
+
+    platform_name = _non_empty_text(_read_payload_field(payload, platform_label))
+    if not platform_name.startswith("gpu-"):
+        return None
+    preset_name = _non_empty_text(_read_payload_field(payload, preset_label))
+    return component_prefix, platform_label, preset_label, preset_name
+
+
+def _maybe_print_gpu_preset_prompt_guidance(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+    emitted_guidance: set[str],
+) -> None:
+    if _gpu_preset_field_context(payload=payload, entry=entry, full_path_label=full_path_label) is None:
+        return
+    if "gpu_preset_interconnect" in emitted_guidance:
+        return
+    console.print(
+        "[dim]GPU interconnect guidance: 1-GPU presets are Ethernet-only and best for "
+        "testing/dev. Clusterable multi-GPU presets unlock InfiniBand / GPUDirect-RDMA "
+        "for production distributed training.[/dim]"
+    )
+    emitted_guidance.add("gpu_preset_interconnect")
+
+
+def _maybe_print_selected_gpu_preset_guidance(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+    provider_lookup: ProviderOptionLookup | None,
+    emitted_guidance: set[str],
+) -> None:
+    if provider_lookup is None:
+        return
+    context = _gpu_preset_field_context(
+        payload=payload,
+        entry=entry,
+        full_path_label=full_path_label,
+    )
+    if context is None:
+        return
+
+    _component_prefix, platform_label, preset_label, preset_name = context
+    if not preset_name:
+        return
+    project_id = _non_empty_text(_read_payload_field(payload, "client_info.nebius.project_id"))
+    platform_name = _non_empty_text(_read_payload_field(payload, platform_label))
+    if not project_id or not platform_name:
+        return
+
+    compute_platform_preset_resources = getattr(
+        provider_lookup, "compute_platform_preset_resources", None
+    )
+    compute_platform_preset_allows_gpu_clustering = getattr(
+        provider_lookup, "compute_platform_preset_allows_gpu_clustering", None
+    )
+    if not callable(compute_platform_preset_resources) or not callable(
+        compute_platform_preset_allows_gpu_clustering
+    ):
+        return
+
+    resources = compute_platform_preset_resources(
+        project_id=project_id,
+        platform_name=platform_name,
+        preset_name=preset_name,
+    )
+    allow_gpu_clustering = compute_platform_preset_allows_gpu_clustering(
+        project_id=project_id,
+        platform_name=platform_name,
+        preset_name=preset_name,
+    )
+    gpu_count = resources[2] if resources is not None else None
+    guidance_key = f"gpu_preset_selected:{preset_label}:{preset_name}"
+    if guidance_key in emitted_guidance:
+        return
+
+    if gpu_count == 1 and allow_gpu_clustering is False:
+        console.print(
+            "[dim]Selected GPU shape uses Ethernet only with no GPUDirect-RDMA. "
+            "Good for testing/dev, not production distributed training.[/dim]"
+        )
+        emitted_guidance.add(guidance_key)
+        return
+
+    if allow_gpu_clustering is True:
+        console.print(
+            "[dim]Selected GPU shape supports InfiniBand / GPUDirect-RDMA. "
+            "Choose a fabric next when live capacity is available.[/dim]"
+        )
+        emitted_guidance.add(guidance_key)
 
 
 def _payload_has_enabled_mk8s_gpu(payload: dict[str, Any]) -> bool:
@@ -3202,9 +3736,10 @@ def _maybe_print_mk8s_gpu_validation_prompt_guidance(
     console.print(
         "[dim]MK8s GPU validation guidance: operator readiness checks the operator "
         "control-plane state plus allocatable GPUs on Ready nodes. GPU visibility "
-        "runs a CUDA sample pod on selected GPU nodes. NCCL runs only for "
-        "InfiniBand-enabled GPU clusters. Health checker only auto-enables a "
-        "compatible app when the catalog exposes one.[/dim]"
+        "runs a CUDA sample pod on selected GPU nodes. NCCL auto-selects "
+        "Socket/TCPIP or RDMA transport from the configured GPU shape; the "
+        "bandwidth threshold is only enforced on RDMA runs. Health checker "
+        "only auto-enables a compatible app when the catalog exposes one.[/dim]"
     )
     emitted_guidance.add("mk8s_gpu_validation")
 
@@ -3224,8 +3759,9 @@ def _skip_mk8s_gpu_validation_prompt(
         and not has_mk8s_gpu_health_checker_app()
     ):
         return True
-    return full_path_label.startswith("deploy.validations.mk8s_gpu.nccl.") and not _payload_has_enabled_mk8s_gpu_cluster(
-        payload
+    return (
+        full_path_label == "deploy.validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps"
+        and not _payload_has_enabled_mk8s_gpu_cluster(payload)
     )
 
 
@@ -3507,10 +4043,15 @@ def _prompt_choice_override(
     prompt_suffix = _wizard_field_prompt_suffix(rendered_label)
     default_value = str(current).strip() if current is not None else ""
     option_values = [choice.value for choice in choices]
+    has_explicit_current = default_value in option_values
+    recommended_default = next(
+        (choice.value for choice in choices if choice.recommended and choice.value in option_values),
+        "",
+    )
     prompt_default = (
         default_value
-        if default_value in option_values
-        else (option_values[0] if required and option_values else "")
+        if has_explicit_current
+        else (recommended_default or (option_values[0] if required and option_values else ""))
     )
     if _is_tty_session():
         try:
@@ -3519,7 +4060,7 @@ def _prompt_choice_override(
             rendered_choices = [
                 questionary.Choice(title=choice.label, value=choice.value) for choice in choices
             ]
-            if not required and not prompt_default:
+            if not required and not has_explicit_current:
                 rendered_choices.insert(
                     0,
                     questionary.Choice(title="<skip / keep unset>", value="__skip__"),
@@ -3529,9 +4070,7 @@ def _prompt_choice_override(
                 rendered_label,
                 choices=rendered_choices,
                 instruction="Select one option (or choose manual input).",
-                default="__skip__"
-                if not required and not prompt_default
-                else (prompt_default or None),
+                default=prompt_default or ("__skip__" if not required and not has_explicit_current else None),
                 qmark="",
             ).ask()
             if selected is None:
@@ -3553,7 +4092,9 @@ def _prompt_choice_override(
     prompt_detail = "index or value"
     if not required:
         prompt_detail = (
-            "index or value; blank keeps current" if prompt_default else "index or value; blank keeps unset"
+            "index or value; blank keeps current"
+            if has_explicit_current
+            else "index or value; blank keeps unset"
         )
 
     while True:
@@ -3566,7 +4107,7 @@ def _prompt_choice_override(
         if raw == WIZARD_EXIT_TOKEN:
             return _WIZARD_BACKTRACK, False
         if not raw:
-            if prompt_default:
+            if has_explicit_current or required:
                 return prompt_default, False
             return current, False
         if raw.isdigit():
@@ -4397,6 +4938,12 @@ def _run_component_field_wizard(
                     full_path_label=full_path_label,
                     emitted_guidance=emitted_prompt_guidance,
                 )
+                _maybe_print_gpu_preset_prompt_guidance(
+                    payload=payload,
+                    entry=entry,
+                    full_path_label=full_path_label,
+                    emitted_guidance=emitted_prompt_guidance,
+                )
                 _maybe_print_mk8s_gpu_validation_prompt_guidance(
                     full_path_label=full_path_label,
                     emitted_guidance=emitted_prompt_guidance,
@@ -4510,11 +5057,18 @@ def _run_component_field_wizard(
                     previous_component_inputs=previous_component_inputs,
                     provider_lookup=provider_lookup,
                 )
-                _maybe_clear_mk8s_infiniband_fabric_after_gpu_shape_change(
+                _maybe_clear_gpu_cluster_fabric_after_shape_change(
                     payload=payload,
                     entry=entry,
                     full_path_label=full_path_label,
                     provider_lookup=provider_lookup,
+                )
+                _maybe_print_selected_gpu_preset_guidance(
+                    payload=payload,
+                    entry=entry,
+                    full_path_label=full_path_label,
+                    provider_lookup=provider_lookup,
+                    emitted_guidance=emitted_prompt_guidance,
                 )
                 if module_dependency_expander is not None:
                     before_expand = len(prompt_paths)
@@ -8477,12 +9031,20 @@ def _deploy_generated_artifacts(
     skip_validation_kinds: set[str],
 ) -> None:
     """Deploy an existing generated artifact bundle without rerendering it."""
-    _run_deploy_preflight(config, paths, auto_auth_bootstrap=auto_auth_bootstrap)
+    _run_deploy_preflight(
+        config,
+        paths,
+        auto_auth_bootstrap=auto_auth_bootstrap,
+        manifest=manifest,
+    )
     if _manifest_missing_deploy_validations(manifest):
         raise RuntimeError(
             "Generated manifest is missing deploy.validations metadata. "
             f"Rerender with `nebius-cxcli render {paths.config_path}` before deploy."
         )
+    runtime_payload = manifest.get("runtime_config")
+    if isinstance(runtime_payload, Mapping):
+        _print_mk8s_gpu_validation_warnings(runtime_config_from_manifest(manifest))
     status_watchers = _manifest_status_watchers(manifest) or _enabled_status_watcher_specs(config)
     declared_validations = _manifest_deploy_validations(manifest)
     deploy_validations = _filter_deploy_validations(
@@ -8583,18 +9145,44 @@ def _run_deploy_preflight(
     paths: ProjectPaths,
     *,
     auto_auth_bootstrap: bool,
+    manifest: Mapping[str, Any] | None = None,
+) -> None:
+    _run_generated_bundle_validation(
+        config,
+        paths,
+        auto_auth_bootstrap=auto_auth_bootstrap,
+        title="Deploy preflight",
+        quota_phase="deploy",
+        flux_command_name="deploy",
+        manifest=manifest,
+    )
+
+
+def _run_generated_bundle_validation(
+    config: Any,
+    paths: ProjectPaths,
+    *,
+    auto_auth_bootstrap: bool,
+    title: str,
+    quota_phase: str,
+    flux_command_name: str,
+    portable: bool = False,
+    manifest: Mapping[str, Any] | None = None,
 ) -> None:
     phase_defs = [
         _ValidationPhase("strict-readiness", "Validate strict deployment readiness"),
         _ValidationPhase("mk8s-preflight", "Validate MK8s network preflight"),
-        _ValidationPhase("quota-readiness", "Validate live Nebius quota/capacity"),
         _ValidationPhase("backend", "Prepare Terraform backend auth"),
+        _ValidationPhase("quota-readiness", "Validate live Nebius quota/capacity"),
         _ValidationPhase("terraform", "Validate generated Terraform bundle"),
     ]
-    if _active_chart_count(config) > 0:
+    active_chart_count = _active_chart_count(config)
+    if active_chart_count > 0:
         phase_defs.append(_ValidationPhase("flux", "Validate rendered Flux manifests"))
+    if portable:
+        phase_defs.append(_ValidationPhase("portable", "Validate generated bundle portability"))
 
-    with _ValidationProgress(title="Deploy preflight", phases=phase_defs) as progress:
+    with _ValidationProgress(title=title, phases=phase_defs) as progress:
         if not paths.infra_dir.exists():
             raise RuntimeError(f"Rendered infra directory does not exist: {paths.infra_dir}")
         progress.run(
@@ -8603,10 +9191,6 @@ def _run_deploy_preflight(
         )
         progress.run("mk8s-preflight", lambda: validate_mk8s_network_preflight(config))
         progress.run(
-            "quota-readiness",
-            lambda: _raise_on_live_quota_issues(config, phase="deploy"),
-        )
-        progress.run(
             "backend",
             lambda: _ensure_terraform_backend_ready(
                 config,
@@ -8614,9 +9198,23 @@ def _run_deploy_preflight(
             ),
         )
         runtime_env = _terraform_runtime_env(config)
+        progress.run(
+            "quota-readiness",
+            lambda: _raise_on_generated_bundle_live_quota_issues(
+                config,
+                paths,
+                manifest=manifest,
+                runtime_env=runtime_env,
+                phase=quota_phase,
+            ),
+        )
 
         def _validate_generated_terraform_bundle() -> None:
-            terraform_init(paths.infra_dir, extra_env=runtime_env)
+            _validate_generated_mk8s_resource_name_preflight(
+                config,
+                paths,
+                runtime_env=runtime_env,
+            )
             terraform_validate(
                 paths.infra_dir,
                 extra_env=runtime_env,
@@ -8627,11 +9225,83 @@ def _run_deploy_preflight(
             "terraform",
             _validate_generated_terraform_bundle,
         )
-        if _active_chart_count(config) > 0:
+        if active_chart_count > 0:
             progress.run(
                 "flux",
-                lambda: _validate_rendered_flux_manifests(paths, command_name="deploy"),
+                lambda: _validate_rendered_flux_manifests(paths, command_name=flux_command_name),
             )
+        if portable:
+            progress.run(
+                "portable",
+                lambda: _validate_generated_bundle_portability(paths, manifest or {}),
+            )
+
+    _print_mk8s_gpu_validation_warnings(config)
+
+
+_TERRAFORM_STATE_NAME_RE = re.compile(r'^\s*name\s*=\s*"([^"]+)"\s*$', re.MULTILINE)
+
+
+def _terraform_state_resource_name(state_show_text: str) -> str:
+    match = _TERRAFORM_STATE_NAME_RE.search(state_show_text)
+    return match.group(1).strip() if match is not None else ""
+
+
+def _managed_mk8s_resource_names_from_terraform_state(
+    *,
+    paths: ProjectPaths,
+    runtime_env: Mapping[str, str] | None,
+) -> tuple[set[str], set[str]]:
+    managed_mk8s_cluster_names: set[str] = set()
+    managed_gpu_cluster_names: set[str] = set()
+    for address in terraform_state_list(
+        paths.infra_dir,
+        extra_env=dict(runtime_env or {}),
+        initialize=False,
+    ):
+        normalized_address = str(address).strip()
+        if not normalized_address:
+            continue
+        if (
+            ".nebius_mk8s_v1_cluster.this" not in normalized_address
+            and ".nebius_compute_v1_gpu_cluster.this" not in normalized_address
+        ):
+            continue
+        state_show_text = terraform_state_show(
+            paths.infra_dir,
+            normalized_address,
+            extra_env=dict(runtime_env or {}),
+            initialize=False,
+        )
+        resource_name = _terraform_state_resource_name(state_show_text)
+        if not resource_name:
+            continue
+        if ".nebius_mk8s_v1_cluster.this" in normalized_address:
+            managed_mk8s_cluster_names.add(resource_name)
+        elif ".nebius_compute_v1_gpu_cluster.this" in normalized_address:
+            managed_gpu_cluster_names.add(resource_name)
+    return managed_mk8s_cluster_names, managed_gpu_cluster_names
+
+
+def _validate_generated_mk8s_resource_name_preflight(
+    config: Any,
+    paths: ProjectPaths,
+    *,
+    runtime_env: Mapping[str, str] | None,
+) -> None:
+    if not has_mk8s_resource_name_preflight_targets(config):
+        return
+    managed_mk8s_cluster_names, managed_gpu_cluster_names = (
+        _managed_mk8s_resource_names_from_terraform_state(
+            paths=paths,
+            runtime_env=runtime_env,
+        )
+    )
+    validate_mk8s_resource_name_preflight(
+        config,
+        managed_mk8s_cluster_names=managed_mk8s_cluster_names,
+        managed_gpu_cluster_names=managed_gpu_cluster_names,
+    )
 
 
 def _destroy_rendered_flux_bundle(
@@ -9446,10 +10116,26 @@ def _ensure_customer_scaffold(
 def _project_config_path(
     *,
     deployments_root: Path,
+    tenant_folder: str,
+    project_folder: str,
+) -> Path:
+    return deployments_root / tenant_folder / project_folder / "config.yaml"
+
+
+def _resolve_create_target_folders(
+    *,
+    provider_lookup: ProviderOptionLookup,
     tenant_id: str,
     project_id: str,
-) -> Path:
-    return deployments_root / tenant_id / project_id / "config.yaml"
+) -> tuple[str, str]:
+    tenant_name, project_name = provider_lookup.resolve_tenant_project_names(
+        tenant_id=tenant_id,
+        project_id=project_id,
+    )
+    return (
+        normalize_project_folder_name(tenant_name, fallback=tenant_id),
+        normalize_project_folder_name(project_name, fallback=project_id),
+    )
 
 
 def _deep_merge_payload(base: Any, override: Any) -> Any:
@@ -9796,6 +10482,8 @@ def _scaffold_instance(
     *,
     base_path: Path,
     client_name: str,
+    tenant_folder: str,
+    project_folder: str,
     tenant_id: str,
     project_id: str,
     region_id: str,
@@ -9810,7 +10498,7 @@ def _scaffold_instance(
     deployments_root = _ensure_customer_scaffold(
         base_path=base_path,
     )
-    instance_dir = deployments_root / tenant_id / project_id
+    instance_dir = deployments_root / tenant_folder / project_folder
     config_path = instance_dir / "config.yaml"
 
     if force and instance_dir.exists():
@@ -9872,7 +10560,7 @@ def _scaffold_instance(
 
 @app.command(
     "create",
-    short_help="Use DEPLOYMENTS_ROOT to bootstrap one tenant/project folder with config.yaml plus generated/ skeleton.",
+    short_help="Use DEPLOYMENTS_ROOT to bootstrap one name-based tenant/project folder with config.yaml plus generated/ skeleton.",
 )
 def create_command(
     target_path: Annotated[
@@ -9979,15 +10667,15 @@ def create_command(
         typer.Option(
             "--force",
             help=(
-                "Overwrite the resolved existing tenant/project folder from scratch using the "
+                "Overwrite the resolved existing project folder from scratch using the "
                 "current create inputs and component selections. Existing component values, "
-                "generated artifacts, and other files under that tenant/project folder are not "
+                "generated artifacts, and other files under that project folder are not "
                 "preserved. Does not delete the deployments root or other projects."
             ),
         ),
     ] = False,
 ) -> None:
-    """Use DEPLOYMENTS_ROOT to bootstrap one tenant/project folder with config.yaml plus generated/ skeleton, or overwrite an existing resolved tenant/project folder from scratch after confirmation."""
+    """Use DEPLOYMENTS_ROOT to bootstrap one name-based tenant/project folder with config.yaml plus generated/ skeleton, or overwrite an existing resolved project folder from scratch after confirmation."""
     try:
         base_path = target_path.resolve()
         _validate_deployments_root_target(base_path)
@@ -10014,11 +10702,16 @@ def create_command(
             interactive=interactive_mode,
             provider_lookup=provider_lookup,
         )
+        resolved_tenant_folder, resolved_project_folder = _resolve_create_target_folders(
+            provider_lookup=provider_lookup,
+            tenant_id=resolved_tenant_id,
+            project_id=resolved_project_id,
+        )
 
         existing_config_path = _project_config_path(
             deployments_root=deployments_root,
-            tenant_id=resolved_tenant_id,
-            project_id=resolved_project_id,
+            tenant_folder=resolved_tenant_folder,
+            project_folder=resolved_project_folder,
         )
         had_existing_config = existing_config_path.exists()
         if had_existing_config:
@@ -10026,6 +10719,24 @@ def create_command(
                 loaded_payload = yaml.safe_load(handle) or {}
             if not isinstance(loaded_payload, dict):
                 raise RuntimeError("Existing config.yaml payload must be a mapping")
+            (
+                _existing_client_name,
+                existing_tenant_id,
+                existing_project_id,
+                _existing_region_id,
+                _existing_email,
+            ) = _identity_values_from_payload(loaded_payload)
+            if (
+                existing_tenant_id != resolved_tenant_id
+                or existing_project_id != resolved_project_id
+            ):
+                raise RuntimeError(
+                    "Resolved name-based project path collision: "
+                    f"{existing_config_path.parent} already belongs to tenant_id/project_id "
+                    f"'{existing_tenant_id}'/'{existing_project_id}', not "
+                    f"'{resolved_tenant_id}'/'{resolved_project_id}'. "
+                    "Move the existing folder or rename one of the Nebius resources before rerunning `create`."
+                )
             if interactive_mode:
                 if not _confirm_existing_project_overwrite(config_path=existing_config_path):
                     console.print("No changes applied.")
@@ -10035,13 +10746,13 @@ def create_command(
                     "Existing project found: "
                     f"{existing_config_path.parent}. `create` no longer reconciles existing configs. "
                     "Use `component list/add/remove` for day-2 component edits, or rerun with "
-                    "`--force` to overwrite this one tenant/project folder from scratch."
+                    "`--force` to overwrite this one project folder from scratch."
                 )
             else:
                 _warn_existing_project_overwrite(config_path=existing_config_path)
                 console.print(
                     "[dim]`--force` confirms the overwrite in non-interactive mode. "
-                    "This only affects that one resolved tenant/project folder.[/dim]"
+                    "This only affects that one resolved project folder.[/dim]"
                 )
         if validate_sources:
             _validate_component_sources_or_raise()
@@ -10258,6 +10969,8 @@ def create_command(
         result = _scaffold_instance(
             base_path=base_path,
             client_name=resolved_client_name,
+            tenant_folder=resolved_tenant_folder,
+            project_folder=resolved_project_folder,
             tenant_id=resolved_tenant_id,
             project_id=resolved_project_id,
             region_id=resolved_region_id,
@@ -10299,9 +11012,12 @@ def create_command(
         if quota_report.has_confirmed_insufficiency:
             console.print(
                 f"{warning_markup('Create completed with quota warnings.')} "
-                "Render can continue, but deploy will fail until the required quota or "
-                "matching Capacity Block Group capacity is available."
+                "Render can continue, but deploy will fail until the required quota is available "
+                "and any selected GPU shape has matching Capacity Dashboard capacity."
             )
+            _print_quota_request_hint(result.config_path)
+        if not validate_config:
+            _print_mk8s_gpu_validation_warnings(final_payload)
         console.print(
             "Enabled infra components: "
             + (", ".join(sorted(selected_infra)) if selected_infra else "(none)")
@@ -10318,7 +11034,7 @@ def create_command(
         if interactive_mode and (not optional_wizard_mode or not wizard_completed):
             _print_wizard_required_field_warning(create_required_field_issues)
         console.print(
-            "Next steps: optionally run `nebius-cxcli validate --strict <config.yaml>`, "
+            "Next steps: run `nebius-cxcli validate <config.yaml>`, "
             "`nebius-cxcli render <config.yaml>`, "
             "`nebius-cxcli bootstrap-ci <config.yaml>` (optional), then deploy from "
             "the rendered bundle with `nebius-cxcli deploy <config.yaml>`."
@@ -10749,8 +11465,7 @@ def component_add_command(
         if interactive_mode and not wizard_completed:
             _print_wizard_required_field_warning(add_required_field_issues)
         console.print(
-            "Next steps: run `nebius-cxcli validate <config.yaml>`, optionally "
-            "`nebius-cxcli validate --strict <config.yaml>`, then "
+            "Next steps: run `nebius-cxcli validate <config.yaml>`, then "
             "`nebius-cxcli render <config.yaml>`."
         )
     except (KeyboardInterrupt, EOFError, typer.Abort):
@@ -10907,8 +11622,7 @@ def component_remove_command(
             + (", ".join(removed_app_labels) if removed_app_labels else "(none)")
         )
         console.print(
-            "Next steps: run `nebius-cxcli validate <config.yaml>`, optionally "
-            "`nebius-cxcli validate --strict <config.yaml>`, then "
+            "Next steps: run `nebius-cxcli validate <config.yaml>`, then "
             "`nebius-cxcli render <config.yaml>`."
         )
     except (KeyboardInterrupt, EOFError, typer.Abort):
@@ -10929,7 +11643,7 @@ def bootstrap_ci_command(
             metavar="CONFIG_YAML",
             help=(
                 "Path to project config.yaml inside the target customer git repository "
-                "(<tenant>/<project>/config.yaml). The file must already exist inside that repo checkout."
+                "(<tenant-folder>/<project-folder>/config.yaml). The file must already exist inside that repo checkout."
             ),
         ),
     ],
@@ -11071,7 +11785,7 @@ def bootstrap_ci_command(
 
 @app.command(
     "validate",
-    short_help="Use CONFIG_YAML to validate runtime config, sources, provider/chart wiring, and live quota/capacity readiness.",
+    short_help="Use CONFIG_YAML to validate runtime config, readiness, provider/chart wiring, and live quota/capacity.",
 )
 def validate_command(
     config_path: Annotated[
@@ -11081,22 +11795,12 @@ def validate_command(
             help=_CONFIG_YAML_ARGUMENT_HELP,
         ),
     ],
-    strict: Annotated[
-        bool,
-        typer.Option(
-            "--strict",
-            help=(
-                "Enable deployment-readiness checks "
-                "(strict readiness, MK8s preflight, fail-fast live quota/capacity)"
-            ),
-        ),
-    ] = False,
 ) -> None:
-    """Validate one project config.yaml with runtime source, provider/chart, and live quota/capacity checks."""
+    """Validate one project config.yaml with runtime source, readiness, provider/chart, and live quota/capacity checks."""
     try:
         _run_runtime_validation(
             config_path=config_path,
-            strict=strict,
+            strict=True,
             title="Runtime validation",
         )
     except Exception as exc:  # pragma: no cover - CLI surface
@@ -11162,7 +11866,7 @@ def quota_check_command(
 
 @app.command(
     "quota-request",
-    short_help="Use CONFIG_YAML to plan and attempt direct requests for confirmed insufficient Nebius quotas.",
+    short_help="Use CONFIG_YAML to plan and submit quota requests for confirmed insufficient Nebius quotas.",
 )
 def quota_request_command(
     config_path: Annotated[
@@ -11173,26 +11877,29 @@ def quota_request_command(
         ),
     ],
 ) -> None:
-    """Plan and attempt direct quota allowance requests via the quota allowance API for confirmed live quota shortages in one project config.
+    """Plan and submit quota requests for confirmed live quota shortages in one project config.
 
-    The command only requests quota dimensions that the live assessment confirmed as insufficient.
+    The command keeps QuotaAllowance reads and QuotaRequest submission separate:
+    it uses live quota allowances to confirm the shortage, then submits quota requests
+    through the separate request surface when that internal path is available.
     Unresolved live limits and coverage gaps are reported but not requested automatically.
-    If the direct API write is denied for the current identity, the command falls back to a
-    manual web-console follow-up message instead of failing silently.
+    When internal quota-request submission is unavailable, the command still prints the
+    exact manual quota targets that should be requested in the Nebius web console.
     """
     try:
         config, paths = _load_context(config_path)
         report = _warn_on_live_quota_issues(config, phase="quota request")
-        planned_changes = plan_quota_request_changes(report)
+        request_result = request_quota_changes(report, context="quota request")
+        planned_changes = request_result.planned_changes
         if not planned_changes:
             if report.has_confirmed_insufficiency:
                 raise RuntimeError(
-                    "Confirmed live quota shortages were found, but no direct quota allowance "
-                    "request could be derived automatically from the current API response."
+                    "Confirmed live quota shortages were found, but no quota request "
+                    "could be derived automatically from the current quota response."
                 )
             if report.errors or report.coverage_gaps or report.unknown_checks:
                 console.print(
-                    f"{warning_markup('No direct quota request was submitted.')} "
+                    f"{warning_markup('No quota request was submitted.')} "
                     "No confirmed quota insufficiency was found."
                 )
                 return
@@ -11201,38 +11908,52 @@ def quota_request_command(
 
         for line in format_quota_request_lines(planned_changes):
             console.print(line)
-        request_result = request_quota_allowance_changes(report, context="quota request")
         permission_denied_failures = request_result.permission_denied_failures
-        if permission_denied_failures:
+        if request_result.unavailable_reason:
+            console.print(
+                f"{warning_markup('Automatic quota-request submission is unavailable.')} "
+                "This environment could plan the quota request, but it could not create "
+                "QuotaRequest resources automatically."
+            )
+            console.print(f"Reason: {request_result.unavailable_reason}")
+            console.print("Submit or track the request in the Nebius web console under Administration -> Limits -> Quotas.")
+            console.print("Manual follow-up is still required for:")
+            for line in format_quota_request_manual_followup_lines(request_result.planned_changes):
+                console.print(line)
+            console.print("Current quota allowances remain unchanged until the request is approved.")
+        elif permission_denied_failures:
             if request_result.submitted_changes:
                 console.print(
-                    f"{warning_markup('Quota request partially submitted.')} "
+                    f"{warning_markup('Quota request submission was only partially completed.')} "
                     "Some confirmed shortage requests still require manual follow-up because the "
-                    "current identity was not permitted to mutate quota allowances through the direct API."
+                    "current identity was not permitted to create all quota-request records "
+                    "through the internal request API."
                 )
             else:
                 console.print(
-                    f"{warning_markup('Direct quota request submission was not permitted.')} "
+                    f"{warning_markup('Automatic quota-request submission was not permitted.')} "
                     "The current identity can see the confirmed shortage, but Nebius denied "
-                    "quota allowance writes through the direct API."
+                    "quota-request creation through the internal request API."
                 )
             console.print("Submit or track the request in the Nebius web console under Administration -> Limits -> Quotas.")
             console.print("Manual follow-up is still required for:")
-            for failure in permission_denied_failures:
-                change = failure.change
-                console.print(
-                    "  - "
-                    f"{change.container_scope} {change.container_id}: {change.region} {change.quota_name}"
-                )
+            for line in format_quota_request_manual_followup_lines(
+                tuple(item.change for item in permission_denied_failures)
+            ):
+                console.print(line)
+            console.print("Current quota allowances remain unchanged until the request is approved.")
         else:
             console.print(f"[green]Quota request submitted:[/green] {paths.config_path}")
             console.print(
-                "Track request status in the Nebius web console under Administration -> Limits -> Quotas."
+                "Current quota allowances remain unchanged until these requests are approved."
+            )
+            console.print(
+                "Review request status in the Nebius web console under Administration -> Limits -> Quotas."
             )
         if report.errors or report.coverage_gaps or report.unknown_checks:
             console.print(
                 f"{warning_markup('Additional unresolved quota findings remain.')} "
-                "Only confirmed insufficient quota allowances were requested automatically."
+                "Only confirmed insufficient quota dimensions were planned or requested automatically."
             )
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
@@ -11240,7 +11961,7 @@ def quota_request_command(
 
 @app.command(
     "validate-generated",
-    short_help="Use GENERATED_PATH to validate an existing rendered bundle without rerendering.",
+    short_help="Use GENERATED_PATH to validate rendered-bundle readiness, manifests, and portability without rerendering.",
 )
 def validate_generated_command(
     generated_path: Annotated[
@@ -11268,49 +11989,25 @@ def validate_generated_command(
         ),
     ] = False,
 ) -> None:
-    """Validate an existing generated/ bundle or subpath without rerendering it."""
+    """Validate generated-bundle readiness, manifests, and optional portability without rerendering.
+
+    For bundled MK8s reruns, the live quota/capacity gate is state-aware:
+    after backend init it discounts MK8s quota already managed in the current
+    Terraform state, so unchanged existing-cluster reruns do not fail like
+    fresh creates while real added capacity still fails fast.
+    """
     try:
         config, paths, _manifest = _load_generated_context(generated_path)
-        phase_defs = [
-            _ValidationPhase("backend", "Prepare Terraform backend auth"),
-            _ValidationPhase("terraform", "Validate generated Terraform bundle"),
-        ]
-        if _active_chart_count(config) > 0:
-            phase_defs.append(_ValidationPhase("flux", "Validate rendered Flux manifests"))
-        if portable:
-            phase_defs.append(_ValidationPhase("portable", "Validate generated bundle portability"))
-
-        with _ValidationProgress(
-            title="Generated artifact validation", phases=phase_defs
-        ) as progress:
-            if not paths.infra_dir.exists():
-                raise RuntimeError(f"Rendered infra directory does not exist: {paths.infra_dir}")
-            progress.run(
-                "backend",
-                lambda: _ensure_terraform_backend_ready(
-                    config,
-                    auto_auth_bootstrap=auto_auth_bootstrap,
-                ),
-            )
-            progress.run(
-                "terraform",
-                lambda: terraform_validate(
-                    paths.infra_dir,
-                    extra_env=_terraform_runtime_env(config),
-                ),
-            )
-            if _active_chart_count(config) > 0:
-                progress.run(
-                    "flux",
-                    lambda: _validate_rendered_flux_manifests(
-                        paths, command_name="validate-generated"
-                    ),
-                )
-            if portable:
-                progress.run(
-                    "portable",
-                    lambda: _validate_generated_bundle_portability(paths, _manifest),
-                )
+        _run_generated_bundle_validation(
+            config,
+            paths,
+            auto_auth_bootstrap=auto_auth_bootstrap,
+            title="Generated artifact validation",
+            quota_phase="validate-generated",
+            flux_command_name="validate-generated",
+            portable=portable,
+            manifest=_manifest,
+        )
         console.print(f"[green]Valid generated artifacts:[/green] {paths.generated_dir}")
     except subprocess.CalledProcessError as exc:  # pragma: no cover - CLI surface
         detail = _first_non_empty_line(exc.stderr or exc.stdout or "")
@@ -11440,7 +12137,7 @@ def auth_command(
         typer.Option(
             "--project-config",
             help=(
-                "Optional project config.yaml path (<tenant>/<project>/config.yaml) used to resolve "
+                "Optional project config.yaml path (<tenant-folder>/<project-folder>/config.yaml) used to resolve "
                 "project_id and client_name"
             ),
         ),
@@ -11720,6 +12417,7 @@ def render_command(
                 )
             )
             write_inventory(config, staged_paths, validations=mk8s_gpu_validation_specs(config))
+            _print_mk8s_gpu_validation_warnings(config)
             quota_report = _warn_on_live_quota_issues(config, phase="render")
             _write_generated_runtime_manifest(
                 config,
@@ -11747,7 +12445,8 @@ def render_command(
             console.print(
                 f"{warning_markup('Render completed with quota warnings.')} "
                 "The generated manifest includes the report, and deploy will fail until the "
-                "required quota or matching Capacity Block Group capacity is available."
+                "required quota is available and any selected GPU shape has matching Capacity "
+                "Dashboard capacity."
             )
         if gitignore_result.path is not None:
             if gitignore_result.wrote:
@@ -11859,13 +12558,17 @@ def deploy_command(
     the deployed bundle. Before Terraform apply it runs a generated-bundle
     deploy preflight covering strict readiness checks, MK8s network preflight,
     live Nebius quota/capacity validation, Terraform validation, and rendered
-    Flux manifest validation when apps are enabled. Terraform apply runs next,
-    refresh the deploy report runs after that, and when app charts are enabled Flux
-    then converges the existing generated bundle onto live infrastructure and
-    workloads. When a built-in cluster handoff such as MK8s is enabled, deploy
-    also refreshes local kubeconfig access for that cluster even if no app
-    charts are configured. Existing managed resources may be updated when the
-    bundle differs from live state. Use `nebius-cxcli terraform plan
+    Flux manifest validation when apps are enabled. For bundled MK8s reruns,
+    that quota/capacity phase initializes the backend and discounts MK8s quota
+    already managed in the current Terraform state, so unchanged existing
+    clusters do not fail like fresh creates while real added capacity still
+    fails fast. Terraform apply runs next, refresh the deploy report runs after
+    that, and when app charts are enabled Flux then converges the existing
+    generated bundle onto live infrastructure and workloads. When a built-in
+    cluster handoff such as MK8s is enabled, deploy also refreshes local
+    kubeconfig access for that cluster even if no app charts are configured.
+    Existing managed resources may be updated when the bundle differs from live
+    state. Use `nebius-cxcli terraform plan
     <generated>` first when you need a non-mutating preview. It does not run
     `flux bootstrap` or configure GitOps sync, and it does not create or
     update GitHub workflows, environments, or CI secrets; use `nebius-cxcli
@@ -11982,6 +12685,11 @@ def terraform_plan_command(
         _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
         runtime_env = _terraform_runtime_env(config)
         terraform_init(paths.infra_dir, extra_env=runtime_env)
+        _validate_generated_mk8s_resource_name_preflight(
+            config,
+            paths,
+            runtime_env=runtime_env,
+        )
         terraform_validate(paths.infra_dir, extra_env=runtime_env, initialize=False)
         terraform_plan(paths.infra_dir, extra_env=runtime_env, initialize=False)
     except Exception as exc:  # pragma: no cover - CLI surface
@@ -12016,6 +12724,11 @@ def terraform_apply_command(
         write_inventory(config, paths, validations=_manifest_deploy_validations(manifest))
         runtime_env = _terraform_runtime_env(config)
         terraform_init(paths.infra_dir, extra_env=runtime_env)
+        _validate_generated_mk8s_resource_name_preflight(
+            config,
+            paths,
+            runtime_env=runtime_env,
+        )
         terraform_validate(paths.infra_dir, extra_env=runtime_env, initialize=False)
         status_watchers = _manifest_status_watchers(manifest) or _enabled_status_watcher_specs(
             config
@@ -12311,7 +13024,7 @@ def discover_command(
             help=(
                 "Path to the deployments root or any narrower directory under it, including a single "
                 "project directory or generated/. When inside a git repository, discover uses git "
-                "change detection for changed <tenant>/<project>/config.yaml and generated/** paths under that scope; "
+                "change detection for changed <tenant-folder>/<project-folder>/config.yaml and generated/** paths under that scope; "
                 "otherwise it scans all config.yaml files under the scope."
             ),
         ),
@@ -12342,11 +13055,11 @@ def discover_command(
         _exit_with_error(exc)
 
 
-@report_app.command(
-    "write",
-    short_help="Use CONFIG_YAML to refresh the sibling generated/inventory deploy report.",
+@app.command(
+    "report",
+    short_help="Use CONFIG_YAML to rewrite generated/inventory/deploy-report.md.",
 )
-def report_write_command(
+def report_command(
     config_path: Annotated[
         Path,
         typer.Argument(
@@ -12355,7 +13068,7 @@ def report_write_command(
         ),
     ],
 ) -> None:
-    """Refresh the local human-readable deploy report from config.yaml.
+    """Rewrite generated/inventory/deploy-report.md from config.yaml.
 
     The command resolves the sibling `generated/` bundle and uses the rendered
     manifest/runtime snapshot rather than rereading source-config edits after

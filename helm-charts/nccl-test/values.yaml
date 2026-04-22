@@ -39,10 +39,10 @@ benchmark:
     - LD_LIBRARY_PATH
     - -x
     - NCCL_DEBUG=WARN
-    - -x
-    - NCCL_SOCKET_IFNAME=eth0
-    - -x
-    - NCCL_IB_HCA=mlx5
+  transport:
+    mode: auto
+    socketIfName: ""
+    ibHca: ""
   mpiExtraArgs: []
   args:
     - -b
@@ -67,6 +67,10 @@ launcher:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  waitForWorkers:
+    enabled: true
+    timeoutSeconds: 300
+    pollSeconds: 2
   resources:
     requests:
       cpu: "2"

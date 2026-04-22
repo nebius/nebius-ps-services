@@ -21,7 +21,9 @@ from nebius_cxcli.paths import ProjectPaths
 
 def _project_paths(tmp_path: Path) -> ProjectPaths:
     repo_root = tmp_path / "repo"
-    generated_dir = repo_root / "deployments" / "tenant-123" / "project-456" / "generated"
+    generated_dir = (
+        repo_root / "deployments" / "tenant-name-example" / "project-name-example" / "generated"
+    )
     project_dir = generated_dir.parent
     return ProjectPaths(
         config_path=project_dir / "config.yaml",
@@ -32,8 +34,8 @@ def _project_paths(tmp_path: Path) -> ProjectPaths:
         infra_dir=generated_dir / "infra",
         flux_dir=generated_dir / "flux",
         inventory_dir=generated_dir / "inventory",
-        path_tenant_id="tenant-123",
-        path_project_id="project-456",
+        path_tenant_folder="tenant-name-example",
+        path_project_folder="project-name-example",
     )
 
 
@@ -91,12 +93,19 @@ def test_build_generated_manifest_uses_repo_relative_paths(tmp_path: Path) -> No
     )
 
     assert manifest["schema"] == GENERATED_MANIFEST_SCHEMA
-    assert manifest["source_contract"]["config_path"] == "deployments/tenant-123/project-456/config.yaml"
+    assert manifest["source_contract"]["config_path"] == (
+        "deployments/tenant-name-example/project-name-example/config.yaml"
+    )
+    assert manifest["project"] == {
+        "client_name": "client-a",
+        "tenant_id": "tenant-123",
+        "project_id": "project-456",
+    }
     assert manifest["paths"] == {
-        "generated_dir": "deployments/tenant-123/project-456/generated",
-        "infra_dir": "deployments/tenant-123/project-456/generated/infra",
-        "flux_dir": "deployments/tenant-123/project-456/generated/flux",
-        "inventory_dir": "deployments/tenant-123/project-456/generated/inventory",
+        "generated_dir": "deployments/tenant-name-example/project-name-example/generated",
+        "infra_dir": "deployments/tenant-name-example/project-name-example/generated/infra",
+        "flux_dir": "deployments/tenant-name-example/project-name-example/generated/flux",
+        "inventory_dir": "deployments/tenant-name-example/project-name-example/generated/inventory",
     }
     assert manifest["tools"] == {
         "flux_version": "v2.8.0",
@@ -168,7 +177,7 @@ def test_write_generated_manifest_to_path_uses_explicit_output_path(tmp_path: Pa
 
     assert written_path == explicit_path
     assert json.loads(explicit_path.read_text(encoding="utf-8"))["paths"]["generated_dir"] == (
-        "deployments/tenant-123/project-456/generated"
+        "deployments/tenant-name-example/project-name-example/generated"
     )
 
 

@@ -178,6 +178,76 @@ def _install_fake_compute_module(
     _install_module(monkeypatch, "nebius.api.nebius.compute.v1", compute_module)
 
 
+def _install_fake_capacity_module(
+    monkeypatch,
+    *,
+    resource_advice_items: list[dict[str, object]],
+) -> None:
+    capacity_module = ModuleType("nebius.api.nebius.capacity.v1")
+
+    class ListResourceAdviceRequest:
+        def __init__(self, *, parent_id: str, page_size: int, page_token: str) -> None:
+            self.parent_id = parent_id
+            self.page_size = page_size
+            self.page_token = page_token
+
+    class ResourceAdviceServiceClient:
+        def __init__(self, sdk: object) -> None:
+            self.sdk = sdk
+
+        def list(self, request: object) -> SimpleNamespace:
+            _ = request
+            response = SimpleNamespace(
+                items=[
+                    SimpleNamespace(
+                        spec=SimpleNamespace(
+                            region=item.get("region"),
+                            fabric=item.get("fabric", ""),
+                            compute_instance=SimpleNamespace(
+                                platform=item.get("platform"),
+                                preset=SimpleNamespace(name=item.get("preset")),
+                            ),
+                        ),
+                        status=SimpleNamespace(
+                            on_demand=SimpleNamespace(
+                                available=item.get("on_demand_available", 0),
+                                limit=item.get("on_demand_limit", 0),
+                                availability_level=SimpleNamespace(
+                                    name=item.get(
+                                        "on_demand_level",
+                                        "AVAILABILITY_LEVEL_UNKNOWN",
+                                    )
+                                ),
+                                data_state=SimpleNamespace(
+                                    name=item.get("on_demand_state", "DATA_STATE_FRESH")
+                                ),
+                            ),
+                            reserved=SimpleNamespace(
+                                available=item.get("reserved_available", 0),
+                                limit=item.get("reserved_limit", 0),
+                                availability_level=SimpleNamespace(
+                                    name=item.get(
+                                        "reserved_level",
+                                        "AVAILABILITY_LEVEL_UNKNOWN",
+                                    )
+                                ),
+                                data_state=SimpleNamespace(
+                                    name=item.get("reserved_state", "DATA_STATE_FRESH")
+                                ),
+                            ),
+                        ),
+                    )
+                    for item in resource_advice_items
+                ],
+                next_page_token="",
+            )
+            return SimpleNamespace(wait=lambda: response)
+
+    capacity_module.ListResourceAdviceRequest = ListResourceAdviceRequest
+    capacity_module.ResourceAdviceServiceClient = ResourceAdviceServiceClient
+    _install_module(monkeypatch, "nebius.api.nebius.capacity.v1", capacity_module)
+
+
 def test_provider_option_lookup_uses_plugin_for_unknown_provider(
     monkeypatch,
 ) -> None:
@@ -601,7 +671,101 @@ def test_compute_platform_presets_filter_gpu_clusterable_shapes(monkeypatch) -> 
     assert [(choice.value, choice.label) for choice in resolved] == [
         (
             "8gpu-160vcpu-1792gb",
-            "8gpu-160vcpu-1792gb  (vCPU=160, RAM=1792GiB, GPU=8, GPU cluster)",
+            "8gpu-160vcpu-1792gb  (vCPU=160, RAM=1792GiB, GPU=8, GPU cluster, InfiniBand)",
+        ),
+    ]
+
+
+def test_compute_platform_presets_rank_gpu_shapes_by_live_capacity_advice(monkeypatch) -> None:
+    _install_fake_compute_module(
+        monkeypatch,
+        platforms=[("gpu-h100-sxm", "GPU H100 SXM")],
+        presets_by_platform={
+            "gpu-h100-sxm": [
+                {
+                    "name": "1gpu-16vcpu-200gb",
+                    "vcpu_count": 16,
+                    "memory_gibibytes": 200,
+                    "gpu_count": 1,
+                    "allow_gpu_clustering": False,
+                },
+                {
+                    "name": "8gpu-128vcpu-1600gb",
+                    "vcpu_count": 128,
+                    "memory_gibibytes": 1600,
+                    "gpu_count": 8,
+                    "allow_gpu_clustering": True,
+                },
+            ]
+        },
+    )
+    _install_fake_capacity_module(
+        monkeypatch,
+        resource_advice_items=[
+            {
+                "region": "eu-north1",
+                "platform": "gpu-h100-sxm",
+                "preset": "1gpu-16vcpu-200gb",
+                "fabric": "fabric-2",
+                "on_demand_available": 0,
+                "on_demand_limit": 82,
+                "on_demand_level": "AVAILABILITY_LEVEL_LOW",
+                "reserved_available": 0,
+                "reserved_limit": 0,
+                "reserved_level": "AVAILABILITY_LEVEL_LIMIT_REACHED",
+            },
+            {
+                "region": "eu-north1",
+                "platform": "gpu-h100-sxm",
+                "preset": "8gpu-128vcpu-1600gb",
+                "fabric": "fabric-2",
+                "on_demand_available": 2,
+                "on_demand_limit": 10,
+                "on_demand_level": "AVAILABILITY_LEVEL_MEDIUM",
+                "reserved_available": 0,
+                "reserved_limit": 0,
+                "reserved_level": "AVAILABILITY_LEVEL_LIMIT_REACHED",
+            },
+        ],
+    )
+
+    lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
+
+    resolved = lookup.resolve(
+        provider="compute_platform_presets",
+        args={"platform_path": "infra.components[0].inputs.gpu_nodes_platform"},
+        payload={
+            "client_info": {
+                "nebius": {
+                    "tenant_id": "tenant-123",
+                    "project_id": "project-123",
+                    "region_id": "eu-north1",
+                }
+            },
+            "infra": {
+                "components": [
+                    {
+                        "inputs": {
+                            "gpu_nodes_platform": "gpu-h100-sxm",
+                        }
+                    }
+                ]
+            },
+        },
+        field_path="infra.components[0].inputs.gpu_nodes_preset",
+    )
+
+    assert [(choice.value, choice.label, choice.recommended) for choice in resolved] == [
+        (
+            "8gpu-128vcpu-1600gb",
+            "8gpu-128vcpu-1600gb  (vCPU=128, RAM=1600GiB, GPU=8, GPU cluster, InfiniBand), live on-demand=2, reserved=0, best fabric fabric-2, recommended",
+            True,
+        ),
+        (
+            "1gpu-16vcpu-200gb",
+            "1gpu-16vcpu-200gb  (vCPU=16, RAM=200GiB, GPU=1, Ethernet only, testing/dev), live on-demand=0, reserved=0",
+            False,
         ),
     ]
 
@@ -689,15 +853,64 @@ def test_mk8s_infiniband_fabrics_skip_non_clusterable_gpu_presets(monkeypatch) -
     assert resolved == []
 
 
-def test_mk8s_infiniband_fabrics_filter_by_selected_region_and_gpu_platform() -> None:
+def test_mk8s_infiniband_fabrics_use_live_capacity_rows_for_clusterable_shape(
+    monkeypatch,
+) -> None:
+    _install_fake_compute_module(
+        monkeypatch,
+        platforms=[("gpu-h200-sxm", "GPU H200 SXM")],
+        presets_by_platform={
+            "gpu-h200-sxm": [
+                {
+                    "name": "8gpu-128vcpu-1600gb",
+                    "vcpu_count": 128,
+                    "memory_gibibytes": 1600,
+                    "gpu_count": 8,
+                    "allow_gpu_clustering": True,
+                }
+            ]
+        },
+    )
+    _install_fake_capacity_module(
+        monkeypatch,
+        resource_advice_items=[
+            {
+                "region": "us-central1",
+                "platform": "gpu-h200-sxm",
+                "preset": "8gpu-128vcpu-1600gb",
+                "fabric": "us-central1-new-fabric",
+                "on_demand_available": 1,
+                "on_demand_limit": 8,
+                "reserved_available": 0,
+                "reserved_limit": 0,
+            },
+            {
+                "region": "us-central1",
+                "platform": "gpu-h200-sxm",
+                "preset": "8gpu-128vcpu-1600gb",
+                "fabric": "N/A",
+                "on_demand_available": 9,
+                "on_demand_limit": 9,
+                "reserved_available": 0,
+                "reserved_limit": 0,
+            },
+        ],
+    )
+
     lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
 
     resolved = lookup.resolve(
         provider="mk8s_infiniband_fabrics",
-        args={"platform_path": "infra.components[0].inputs.gpu_nodes_platform"},
+        args={
+            "platform_path": "infra.components[0].inputs.gpu_nodes_platform",
+            "preset_path": "infra.components[0].inputs.gpu_nodes_preset",
+        },
         payload={
             "client_info": {
                 "nebius": {
+                    "tenant_id": "tenant-123",
+                    "project_id": "project-123",
                     "region_id": "us-central1",
                 }
             },
@@ -706,6 +919,7 @@ def test_mk8s_infiniband_fabrics_filter_by_selected_region_and_gpu_platform() ->
                     {
                         "inputs": {
                             "gpu_nodes_platform": "gpu-h200-sxm",
+                            "gpu_nodes_preset": "8gpu-128vcpu-1600gb",
                         }
                     }
                 ]
@@ -714,8 +928,137 @@ def test_mk8s_infiniband_fabrics_filter_by_selected_region_and_gpu_platform() ->
         field_path="infra.components[0].inputs.infiniband_fabric",
     )
 
-    assert [(choice.value, choice.label) for choice in resolved] == [
-        ("us-central1-a", "us-central1-a  (gpu-h200-sxm, us-central1)"),
+    assert [(choice.value, choice.label, choice.recommended) for choice in resolved] == [
+        (
+            "us-central1-new-fabric",
+            "us-central1-new-fabric  (gpu-h200-sxm, us-central1), live on-demand=1, reserved=0, recommended",
+            True,
+        ),
+    ]
+
+
+def test_mk8s_infiniband_fabrics_rank_live_capacity_and_mark_recommended(monkeypatch) -> None:
+    _install_fake_compute_module(
+        monkeypatch,
+        platforms=[("gpu-h100-sxm", "GPU H100 SXM")],
+        presets_by_platform={
+            "gpu-h100-sxm": [
+                {
+                    "name": "8gpu-128vcpu-1600gb",
+                    "vcpu_count": 128,
+                    "memory_gibibytes": 1600,
+                    "gpu_count": 8,
+                    "allow_gpu_clustering": True,
+                }
+            ]
+        },
+    )
+    _install_fake_capacity_module(
+        monkeypatch,
+        resource_advice_items=[
+            {
+                "region": "eu-north1",
+                "platform": "gpu-h100-sxm",
+                "preset": "8gpu-128vcpu-1600gb",
+                "fabric": "fabric-4",
+                "on_demand_available": 0,
+                "on_demand_limit": 10,
+                "on_demand_level": "AVAILABILITY_LEVEL_LOW",
+                "reserved_available": 0,
+                "reserved_limit": 0,
+                "reserved_level": "AVAILABILITY_LEVEL_LIMIT_REACHED",
+            },
+            {
+                "region": "eu-north1",
+                "platform": "gpu-h100-sxm",
+                "preset": "8gpu-128vcpu-1600gb",
+                "fabric": "fabric-2",
+                "on_demand_available": 2,
+                "on_demand_limit": 10,
+                "on_demand_level": "AVAILABILITY_LEVEL_MEDIUM",
+                "reserved_available": 0,
+                "reserved_limit": 0,
+                "reserved_level": "AVAILABILITY_LEVEL_LIMIT_REACHED",
+            },
+            {
+                "region": "eu-north1",
+                "platform": "gpu-h100-sxm",
+                "preset": "8gpu-128vcpu-1600gb",
+                "fabric": "fabric-3",
+                "on_demand_available": 0,
+                "on_demand_limit": 10,
+                "on_demand_level": "AVAILABILITY_LEVEL_LOW",
+                "reserved_available": 0,
+                "reserved_limit": 0,
+                "reserved_level": "AVAILABILITY_LEVEL_LIMIT_REACHED",
+            },
+            {
+                "region": "eu-north1",
+                "platform": "gpu-h100-sxm",
+                "preset": "8gpu-128vcpu-1600gb",
+                "fabric": "fabric-9",
+                "on_demand_available": 0,
+                "on_demand_limit": 10,
+                "on_demand_level": "AVAILABILITY_LEVEL_LOW",
+                "reserved_available": 0,
+                "reserved_limit": 0,
+                "reserved_level": "AVAILABILITY_LEVEL_LIMIT_REACHED",
+            },
+        ],
+    )
+
+    lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
+
+    resolved = lookup.resolve(
+        provider="mk8s_infiniband_fabrics",
+        args={
+            "platform_path": "infra.components[0].inputs.gpu_nodes_platform",
+            "preset_path": "infra.components[0].inputs.gpu_nodes_preset",
+        },
+        payload={
+            "client_info": {
+                "nebius": {
+                    "tenant_id": "tenant-123",
+                    "project_id": "project-123",
+                    "region_id": "eu-north1",
+                }
+            },
+            "infra": {
+                "components": [
+                    {
+                        "inputs": {
+                            "gpu_nodes_platform": "gpu-h100-sxm",
+                            "gpu_nodes_preset": "8gpu-128vcpu-1600gb",
+                        }
+                    }
+                ]
+            },
+        },
+        field_path="infra.components[0].inputs.infiniband_fabric",
+    )
+
+    assert [(choice.value, choice.label, choice.recommended) for choice in resolved] == [
+        (
+            "fabric-2",
+            "fabric-2  (gpu-h100-sxm, eu-north1), live on-demand=2, reserved=0, recommended",
+            True,
+        ),
+        (
+            "fabric-3",
+            "fabric-3  (gpu-h100-sxm, eu-north1), live on-demand=0, reserved=0",
+            False,
+        ),
+        (
+            "fabric-4",
+            "fabric-4  (gpu-h100-sxm, eu-north1), live on-demand=0, reserved=0",
+            False,
+        ),
+        (
+            "fabric-9",
+            "fabric-9  (gpu-h100-sxm, eu-north1), live on-demand=0, reserved=0",
+            False,
+        ),
     ]
 
 
@@ -744,18 +1087,49 @@ def test_resolve_k8s_version_prefers_dynamic_component_input_path() -> None:
     assert resolved == "1.31"
 
 
-def test_mk8s_infiniband_fabrics_return_all_platform_matches_without_region_filter() -> None:
+def test_mk8s_infiniband_fabrics_report_manual_fallback_when_live_rows_are_missing(
+    monkeypatch,
+) -> None:
+    _install_fake_compute_module(
+        monkeypatch,
+        platforms=[("gpu-h200-sxm", "GPU H200 SXM")],
+        presets_by_platform={
+            "gpu-h200-sxm": [
+                {
+                    "name": "8gpu-128vcpu-1600gb",
+                    "vcpu_count": 128,
+                    "memory_gibibytes": 1600,
+                    "gpu_count": 8,
+                    "allow_gpu_clustering": True,
+                }
+            ]
+        },
+    )
+    _install_fake_capacity_module(monkeypatch, resource_advice_items=[])
+
     lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
 
     resolved = lookup.resolve(
         provider="mk8s_infiniband_fabrics",
-        args={"platform_path": "infra.components[0].inputs.gpu_nodes_platform"},
+        args={
+            "platform_path": "infra.components[0].inputs.gpu_nodes_platform",
+            "preset_path": "infra.components[0].inputs.gpu_nodes_preset",
+        },
         payload={
+            "client_info": {
+                "nebius": {
+                    "tenant_id": "tenant-123",
+                    "project_id": "project-123",
+                    "region_id": "us-central1",
+                }
+            },
             "infra": {
                 "components": [
                     {
                         "inputs": {
                             "gpu_nodes_platform": "gpu-h200-sxm",
+                            "gpu_nodes_preset": "8gpu-128vcpu-1600gb",
                         }
                     }
                 ]
@@ -764,9 +1138,8 @@ def test_mk8s_infiniband_fabrics_return_all_platform_matches_without_region_filt
         field_path="infra.components[0].inputs.infiniband_fabric",
     )
 
-    assert [(choice.value, choice.label) for choice in resolved] == [
-        ("fabric-5", "fabric-5  (gpu-h200-sxm, eu-west1)"),
-        ("fabric-7", "fabric-7  (gpu-h200-sxm, eu-north1)"),
-        ("eu-north2-a", "eu-north2-a  (gpu-h200-sxm, eu-north2)"),
-        ("us-central1-a", "us-central1-a  (gpu-h200-sxm, us-central1)"),
-    ]
+    assert resolved == []
+    assert lookup.last_error() == (
+        "Live Capacity Dashboard returned no fabric rows for the selected "
+        "cluster-capable GPU shape gpu-h200-sxm/8gpu-128vcpu-1600gb in us-central1."
+    )

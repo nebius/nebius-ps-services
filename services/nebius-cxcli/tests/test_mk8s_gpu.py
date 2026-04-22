@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 import nebius_cxcli.component_sources as component_sources
 import nebius_cxcli.mk8s_gpu as mk8s_gpu
+import nebius_cxcli.runtime_introspection as runtime_introspection
 from nebius_cxcli.component_sources import (
     ComponentOutput,
     SourceProfile,
@@ -71,6 +75,32 @@ def _stub_catalog_output_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _local_catalog_path() -> Path:
     return Path(__file__).resolve().parents[1] / "component_sources.yaml"
+
+
+def _nccl_chart_dir() -> Path:
+    return Path(__file__).resolve().parents[3] / "helm-charts" / "nccl-test"
+
+
+def _render_nccl_chart(tmp_path: Path, chart_values: dict[str, Any]) -> str:
+    values_file = tmp_path / "nccl-values.yaml"
+    values_file.write_text(yaml.safe_dump(chart_values, sort_keys=False), encoding="utf-8")
+    rendered = subprocess.run(
+        [
+            "helm",
+            "template",
+            "smoke",
+            str(_nccl_chart_dir()),
+            "--namespace",
+            "nccl-test",
+            "-f",
+            str(values_file),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert rendered.returncode == 0, rendered.stderr
+    return rendered.stdout
 
 
 def _mk8s_payload(*, infiniband_fabric: str = "") -> dict:
@@ -142,6 +172,8 @@ def test_mk8s_gpu_cluster_adds_network_operator_and_nccl_validation() -> None:
     assert nccl_spec["chart_repo"] == ""
     assert gpu_visibility_spec["max_nodes"] == 3
     assert nccl_spec["max_nodes"] == 8
+    assert nccl_spec["transport_mode"] == "rdma"
+    assert nccl_spec["threshold_enforced"] is True
     assert (
         nccl_spec["chart_values"]["image"]["repository"]
         == "cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/images/nccl-test"
@@ -154,11 +186,9 @@ def test_mk8s_gpu_cluster_adds_network_operator_and_nccl_validation() -> None:
         "LD_LIBRARY_PATH",
         "-x",
         "NCCL_DEBUG=WARN",
-        "-x",
-        "NCCL_SOCKET_IFNAME=eth0",
-        "-x",
-        "NCCL_IB_HCA=mlx5",
     ]
+    assert nccl_spec["chart_values"]["benchmark"]["transport"] == {"mode": "rdma"}
+    assert nccl_spec["chart_values"]["worker"]["gpus"] == 8
     assert nccl_spec["chart_values"]["benchmark"]["args"] == [
         "-b",
         "512M",
@@ -179,6 +209,177 @@ def test_mk8s_gpu_cluster_adds_network_operator_and_nccl_validation() -> None:
     assert dependencies == {
         "nvidia-gpu-operator": ("nvidia-network-operator",),
     }
+
+
+def test_materialize_mk8s_gpu_app_values_heals_stale_network_operator_affinity_defaults() -> None:
+    payload = _mk8s_payload(infiniband_fabric="fabric-1")
+    payload["apps"]["charts"] = [
+        {
+            "id": "nvidia-network-operator",
+            "instance_id": "nvidia-network-operator",
+            "enabled": True,
+            "values": {
+                "operator": {
+                    "resources": {
+                        "limits": {
+                            "memory": "350Mi",
+                        }
+                    },
+                    "ofedDriver": {"deploy": True},
+                },
+                "nfd": {
+                    "enabled": False,
+                    "deployNodeFeatureRules": False,
+                },
+                "node-feature-discovery": {
+                    "worker": {
+                        "affinity": {
+                            "nodeAffinity": {
+                                "requiredDuringSchedulingIgnoredDuringExecution": {
+                                    "nodeSelectorTerms": [
+                                        {
+                                            "matchExpressions": [
+                                                {
+                                                    "operator": "In",
+                                                }
+                                            ]
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                },
+                "nodeAffinity": {
+                    "requiredDuringSchedulingIgnoredDuringExecution": {
+                        "nodeSelectorTerms": [
+                            {
+                                "matchExpressions": [
+                                    {
+                                        "key": "feature.node.kubernetes.io/pci-15b3.present",
+                                        "operator": "In",
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                },
+            },
+        },
+        {
+            "id": "nvidia-gpu-operator",
+            "instance_id": "nvidia-gpu-operator",
+            "enabled": True,
+            "values": {},
+        },
+    ]
+
+    mk8s_gpu.materialize_mk8s_gpu_app_values(payload)
+
+    network_values = payload["apps"]["charts"][0]["values"]
+    assert network_values["operator"]["ofedDriver"]["deploy"] is False
+    assert network_values["nfd"]["enabled"] is True
+    assert network_values["nfd"]["deployNodeFeatureRules"] is True
+    nfd_selector = network_values["node-feature-discovery"]["worker"]["affinity"]["nodeAffinity"][
+        "requiredDuringSchedulingIgnoredDuringExecution"
+    ]["nodeSelectorTerms"][0]["matchExpressions"][0]
+    assert nfd_selector == {
+        "key": "nebius.com/driverful",
+        "operator": "In",
+        "values": ["true"],
+    }
+    nic_selector = network_values["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"][
+        "nodeSelectorTerms"
+    ][0]["matchExpressions"][0]
+    assert nic_selector == {
+        "key": "feature.node.kubernetes.io/pci-15b3.present",
+        "operator": "In",
+        "values": ["true"],
+    }
+
+
+def test_materialize_mk8s_gpu_app_values_clears_stale_network_operator_cluster_only_paths() -> None:
+    payload = _mk8s_payload()
+    payload["apps"]["charts"] = [
+        {
+            "id": "nvidia-network-operator",
+            "instance_id": "nvidia-network-operator",
+            "enabled": True,
+            "values": {
+                "operator": {
+                    "ofedDriver": {"deploy": True},
+                },
+                "nfd": {
+                    "enabled": True,
+                    "deployNodeFeatureRules": True,
+                },
+                "node-feature-discovery": {
+                    "worker": {
+                        "affinity": {
+                            "nodeAffinity": {
+                                "requiredDuringSchedulingIgnoredDuringExecution": {
+                                    "nodeSelectorTerms": [
+                                        {
+                                            "matchExpressions": [
+                                                {
+                                                    "key": "nebius.com/driverful",
+                                                    "operator": "In",
+                                                    "values": ["true"],
+                                                }
+                                            ]
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                },
+                "nodeAffinity": {
+                    "requiredDuringSchedulingIgnoredDuringExecution": {
+                        "nodeSelectorTerms": [
+                            {
+                                "matchExpressions": [
+                                    {
+                                        "key": "feature.node.kubernetes.io/pci-15b3.present",
+                                        "operator": "In",
+                                        "values": ["true"],
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                },
+            },
+        }
+    ]
+
+    mk8s_gpu.materialize_mk8s_gpu_app_values(payload)
+
+    network_values = payload["apps"]["charts"][0]["values"]
+    assert network_values["operator"]["ofedDriver"]["deploy"] is False
+    assert "nfd" not in network_values
+    assert "node-feature-discovery" not in network_values
+    assert "nodeAffinity" not in network_values
+
+
+def test_materialize_mk8s_gpu_app_values_keeps_optional_driverful_network_operator_safe() -> None:
+    payload = _mk8s_payload()
+    payload["apps"]["charts"] = [
+        {
+            "id": "nvidia-network-operator",
+            "instance_id": "nvidia-network-operator",
+            "enabled": True,
+            "values": {},
+        }
+    ]
+
+    mk8s_gpu.materialize_mk8s_gpu_app_values(payload)
+
+    network_values = payload["apps"]["charts"][0]["values"]
+    assert network_values["operator"]["ofedDriver"]["deploy"] is False
+    assert "nfd" not in network_values
+    assert "node-feature-discovery" not in network_values
+    assert "nodeAffinity" not in network_values
 
 
 def test_mk8s_gpu_validation_overrides_can_disable_defaults_and_tune_nccl() -> None:
@@ -203,6 +404,206 @@ def test_mk8s_gpu_validation_overrides_can_disable_defaults_and_tune_nccl() -> N
     nccl_spec = validations[0]
     assert nccl_spec["max_nodes"] == 4
     assert nccl_spec["average_bus_bandwidth_threshold_gbps"] == 350
+
+
+def test_mk8s_gpu_validation_warnings_flag_single_gpu_nccl_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "nebius_cxcli.provider_options.ProviderOptionLookup.compute_platform_preset_resources",
+        lambda self, *, project_id, platform_name, preset_name: (16, 200, 1),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.provider_options.ProviderOptionLookup.compute_platform_preset_allows_gpu_clustering",
+        lambda self, *, project_id, platform_name, preset_name: False,
+    )
+    payload = {
+        "client_info": {
+            "nebius": {
+                "project_id": "project-1",
+            }
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "inputs": {
+                        "gpu_enabled": True,
+                        "gpu_nodes_platform": "gpu-h100-sxm",
+                        "gpu_nodes_preset": "1gpu-16vcpu-200gb",
+                    },
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    warnings = mk8s_gpu.mk8s_gpu_validation_warnings(payload)
+    validations = mk8s_gpu_validation_specs(payload)
+
+    assert len(warnings) == 1
+    assert "Ethernet/TCPIP" in warnings[0]
+    assert "not a representative production training test" in warnings[0]
+    assert {item["kind"] for item in validations} == {
+        "mk8s_gpu_operator_readiness",
+        "mk8s_gpu_visibility",
+        "mk8s_nccl",
+    }
+    nccl_spec = next(item for item in validations if item["kind"] == "mk8s_nccl")
+    assert nccl_spec["transport_mode"] == "socket"
+    assert nccl_spec["threshold_enforced"] is False
+    assert nccl_spec["chart_values"]["benchmark"]["transport"] == {"mode": "socket"}
+    assert nccl_spec["chart_values"]["worker"]["gpus"] == 1
+
+
+def test_nccl_live_runtime_overrides_prefer_non_gpu_launcher_nodes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker_nodes = [
+        {"name": "gpu-node-a", "gpu_count": 1, "allocatable_resources": {"nvidia.com/gpu": "1"}},
+        {"name": "gpu-node-b", "gpu_count": 1, "allocatable_resources": {"nvidia.com/gpu": "1"}},
+    ]
+
+    spec = {
+        "chart_values": {
+            "launcher": {
+                "resources": {
+                    "requests": {
+                        "cpu": "2",
+                        "memory": "1Gi",
+                    }
+                }
+            }
+        }
+    }
+
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_ready_node_inventory",
+        lambda **_kwargs: [
+            {
+                "name": "cpu-node",
+                "gpu_count": 0,
+                "allocatable_cpu_millicores": 8000,
+                "allocatable_memory_bytes": 64 * (1 << 30),
+                "allocatable_resources": {},
+            },
+            {
+                "name": "gpu-node-a",
+                "gpu_count": 1,
+                "allocatable_cpu_millicores": 16000,
+                "allocatable_memory_bytes": 128 * (1 << 30),
+                "allocatable_resources": {"nvidia.com/gpu": "1"},
+            },
+            {
+                "name": "gpu-node-b",
+                "gpu_count": 1,
+                "allocatable_cpu_millicores": 16000,
+                "allocatable_memory_bytes": 128 * (1 << 30),
+                "allocatable_resources": {"nvidia.com/gpu": "1"},
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_pod_request_totals_by_node",
+        lambda **_kwargs: {
+            "gpu-node-a": {"cpu_millicores": 0, "memory_bytes": 0},
+            "gpu-node-b": {"cpu_millicores": 0, "memory_bytes": 0},
+        },
+    )
+
+    overrides, metadata = mk8s_gpu._nccl_live_runtime_overrides(
+        spec=spec,
+        worker_nodes=worker_nodes,
+        extra_env=None,
+    )
+
+    assert overrides["worker"]["resources"]["requests"] == {"cpu": "16000m", "memory": "128Gi"}
+    assert overrides["worker"]["resources"]["limits"] == {"cpu": "16000m", "memory": "128Gi"}
+    assert (
+        overrides["launcher"]["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"][
+            "nodeSelectorTerms"
+        ][0]["matchExpressions"][0]
+        == {
+            "key": "kubernetes.io/hostname",
+            "operator": "In",
+            "values": ["cpu-node"],
+        }
+    )
+    assert metadata == {
+        "worker_request_cpu": "16000m",
+        "worker_request_memory": "128Gi",
+        "launcher_non_gpu_node_names": ["cpu-node"],
+    }
+
+
+def test_nccl_live_runtime_overrides_subtract_launcher_headroom_without_cpu_nodes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker_nodes = [
+        {"name": "gpu-node-a", "gpu_count": 1, "allocatable_resources": {"nvidia.com/gpu": "1"}},
+        {"name": "gpu-node-b", "gpu_count": 1, "allocatable_resources": {"nvidia.com/gpu": "1"}},
+    ]
+
+    spec = {
+        "chart_values": {
+            "launcher": {
+                "resources": {
+                    "requests": {
+                        "cpu": "2",
+                        "memory": "1Gi",
+                    }
+                }
+            }
+        }
+    }
+
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_ready_node_inventory",
+        lambda **_kwargs: [
+            {
+                "name": "gpu-node-a",
+                "gpu_count": 1,
+                "allocatable_cpu_millicores": 16000,
+                "allocatable_memory_bytes": 128 * (1 << 30),
+                "allocatable_resources": {"nvidia.com/gpu": "1"},
+            },
+            {
+                "name": "gpu-node-b",
+                "gpu_count": 1,
+                "allocatable_cpu_millicores": 16000,
+                "allocatable_memory_bytes": 128 * (1 << 30),
+                "allocatable_resources": {"nvidia.com/gpu": "1"},
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_pod_request_totals_by_node",
+        lambda **_kwargs: {
+            "gpu-node-a": {"cpu_millicores": 0, "memory_bytes": 0},
+            "gpu-node-b": {"cpu_millicores": 0, "memory_bytes": 0},
+        },
+    )
+
+    overrides, metadata = mk8s_gpu._nccl_live_runtime_overrides(
+        spec=spec,
+        worker_nodes=worker_nodes,
+        extra_env=None,
+    )
+
+    assert overrides["worker"]["resources"]["requests"] == {"cpu": "14000m", "memory": "127Gi"}
+    assert overrides["worker"]["resources"]["limits"] == {"cpu": "14000m", "memory": "127Gi"}
+    assert "launcher" not in overrides
+    assert metadata == {
+        "worker_request_cpu": "14000m",
+        "worker_request_memory": "127Gi",
+        "launcher_non_gpu_node_names": [],
+    }
 
 
 def test_mk8s_gpu_health_checker_override_reports_missing_catalog_role() -> None:
@@ -268,11 +669,77 @@ def test_manual_b200_nccl_validation_keeps_b200_mpi_overlay() -> None:
         == "cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/images/nccl-test"
     )
     assert nccl_spec["chart_values"]["image"]["tag"] == "0.2.0"
+    assert nccl_spec["chart_values"]["benchmark"]["transport"] == {"mode": "rdma"}
     assert nccl_spec["chart_values"]["benchmark"]["mpiExtraArgs"] == [
         "-mca",
         "coll",
         "^hcoll",
     ]
+
+
+@pytest.mark.skipif(shutil.which("helm") is None, reason="helm not installed")
+@pytest.mark.parametrize(
+    ("payload", "transport_mode", "expected_tokens"),
+    [
+        (
+            {
+                "infra": {
+                    "components": [
+                        {
+                            "id": "mk8s",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "inputs": {
+                                "gpu_enabled": True,
+                                "gpu_nodes_platform": "gpu-h100-sxm",
+                                "gpu_nodes_preset": "1gpu-16vcpu-200gb",
+                            },
+                        }
+                    ]
+                },
+                "apps": {"charts": []},
+            },
+            "socket",
+            ("NCCL_NET=Socket", "NCCL_IB_DISABLE=1"),
+        ),
+        (_mk8s_payload(infiniband_fabric="fabric-1"), "rdma", ("NCCL_NET=IB",)),
+    ],
+)
+def test_nccl_validation_chart_values_render_with_transport_mode(
+    tmp_path: Path,
+    payload: dict[str, Any],
+    transport_mode: str,
+    expected_tokens: tuple[str, ...],
+) -> None:
+    validations = mk8s_gpu_validation_specs(payload)
+    nccl_spec = next(item for item in validations if item["kind"] == "mk8s_nccl")
+
+    assert nccl_spec["transport_mode"] == transport_mode
+    rendered = _render_nccl_chart(tmp_path, nccl_spec["chart_values"])
+
+    for token in expected_tokens:
+        assert token in rendered
+
+
+def test_nccl_validation_keeps_local_chart_defaults_without_helm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FailingHelmClient:
+        def __init__(self) -> None:
+            raise RuntimeError("helm not found in PATH")
+
+    monkeypatch.setattr(runtime_introspection, "HelmClient", _FailingHelmClient)
+    reset_runtime_introspection_cache()
+
+    payload = _mk8s_payload(infiniband_fabric="fabric-1")
+    validations = mk8s_gpu_validation_specs(payload)
+    nccl_spec = next(item for item in validations if item["kind"] == "mk8s_nccl")
+
+    assert (
+        nccl_spec["chart_values"]["image"]["repository"]
+        == "cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/images/nccl-test"
+    )
+    assert nccl_spec["chart_values"]["image"]["tag"] == "0.2.0"
 
 
 def test_nccl_json_report_summary_keeps_customer_report_compact() -> None:
@@ -492,7 +959,7 @@ def test_operator_readiness_uses_allocatable_gpu_nodes_for_nebius_images(
             "timeout": "30s",
             "gpu_operator_namespace": "nvidia-gpu-operator",
             "network_operator_required": False,
-            "report_file": "gpu-operator-readiness-report.json",
+            "report_file": "gpu-stack-readiness-report.json",
         },
         inventory_dir=tmp_path,
         extra_env=None,
@@ -555,7 +1022,7 @@ def test_operator_readiness_collects_daemonset_summaries_only_after_readiness_lo
             "network_operator_namespace": "nvidia-network-operator",
             "network_operator_required": True,
             "gpu_cluster_enabled": True,
-            "report_file": "gpu-operator-readiness-report.json",
+            "report_file": "gpu-stack-readiness-report.json",
         },
         inventory_dir=tmp_path,
         extra_env=None,
@@ -625,7 +1092,7 @@ def test_operator_readiness_requires_rdma_resources_for_gpu_cluster_shapes(
         lambda **_kwargs: [],
     )
 
-    with pytest.raises(RuntimeError, match="GPU operator readiness check failed"):
+    with pytest.raises(RuntimeError, match="GPU stack readiness check failed"):
         _run_operator_readiness_validation(
             spec={
                 "timeout": "30s",
@@ -633,14 +1100,14 @@ def test_operator_readiness_requires_rdma_resources_for_gpu_cluster_shapes(
                 "network_operator_namespace": "nvidia-network-operator",
                 "network_operator_required": True,
                 "gpu_cluster_enabled": True,
-                "report_file": "gpu-operator-readiness-report.json",
+                "report_file": "gpu-stack-readiness-report.json",
             },
             inventory_dir=tmp_path,
             extra_env=None,
             emit=None,
         )
 
-    report = json.loads((tmp_path / "gpu-operator-readiness-report.json").read_text(encoding="utf-8"))
+    report = json.loads((tmp_path / "gpu-stack-readiness-report.json").read_text(encoding="utf-8"))
     assert report["passed"] is False
     assert report["network_operator"]["ready"] is False
     assert report["network_operator"]["rdma_required"] is True

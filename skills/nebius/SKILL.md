@@ -1,6 +1,6 @@
 ---
 name: nebius
-description: Implement Nebius cloud automation in Python using the Nebius SDK, including IAM/Object Storage workflows, VPC networking inspection/design, live quota management, and MK8s compatibility/readiness checks. Use when building or reviewing Nebius auth bootstrap, service accounts, access keys, Terraform state buckets, VPC pools, subnet inheritance, route tables, quota-aware Nebius provisioning checks, or MK8s GPU/image/operator compatibility.
+description: Implement Nebius cloud automation in Python using the Nebius SDK, including IAM/Object Storage workflows, VPC networking inspection/design, live quota management, and MK8s compatibility/readiness checks. Use when building or reviewing Nebius auth bootstrap, service accounts, access keys, Terraform state buckets, VPC pools, subnet inheritance, route tables, quota-aware Nebius provisioning checks, or live MK8s GPU platform/preset/fabric and operator compatibility.
 ---
 
 # Nebius
@@ -30,11 +30,14 @@ Implement Nebius IAM/Object Storage, VPC networking, quota-management, and MK8s 
   - component-level confirmed-versus-partial quota reporting for explicit operator checks
 - Nebius MK8s compatibility and readiness:
   - control-plane version and node-group compatibility-matrix checks
+  - live project-supported GPU platform, region, preset, and fabric selection
   - GPU platform, OS, and `drivers_preset` selection
   - GPU preset eligibility checks for InfiniBand / GPU clustering
+  - single-GPU Ethernet-only versus multi-GPU InfiniBand-capable shape review
   - driverful Nebius-image versus manual/operator-managed GPU stack decisions
   - GPU Operator and Network Operator ordering, ownership, and NFD scoping
   - scheduler-visible RDMA exposure checks such as `rdma/shared_device`
+  - NCCL suitability review for MK8s GPU node groups
   - image-family selection for CPU/GPU platforms
   - rolling-update quota and public-IP headroom review
   - node infra-version drift checks when provisioning or autoscaling behaves unexpectedly
@@ -59,12 +62,16 @@ Implement Nebius IAM/Object Storage, VPC networking, quota-management, and MK8s 
      - start with `references/mk8s-compatibility.md`
      - load `references/mk8s-gpu-setup.md` when the task is about GPU-enabled cluster setup, operator selection, or GPUDirect RDMA readiness
      - query the live MK8s compatibility matrix before choosing GPU platform, OS, or `drivers_preset`
-     - query the live compute platform preset inventory before deciding whether `infiniband_fabric` is valid for the chosen GPU shape
+     - query the live compute platform preset inventory for the current project before deciding whether `infiniband_fabric` is valid for the chosen GPU shape
+     - if Capacity Dashboard `capacity.v1.ResourceAdvice` is available, use it only to rank supported region / preset / fabric options and recommend a default fabric for clusterable shapes
      - prefer the Nebius SDK API for automation; use the CLI only for ad hoc manual inspection
      - prefer exact `drivers_preset` strings returned by the matrix, not shorthand guesses
      - treat GPU clustering as a property of the selected preset's live metadata, not a platform-only assumption
+     - treat single-GPU presets as Ethernet-only testing/dev shapes; do not present them as InfiniBand or GPUDirect-RDMA-capable production training shapes
      - use image-family guidance as a secondary recommendation layer after the matrix confirms compatibility
      - when the task is specific to `services/nebius-cxcli`, treat `component_sources.yaml` as the authoritative contract for operator auto-enable rules and rendered Helm values
+     - when the task is specific to `services/nebius-cxcli`, keep `create` quota and capacity checks warning-only before config creation and point operators to `quota-request` for the follow-up request path
+     - when the task is specific to `services/nebius-cxcli`, warn if NCCL is forced onto a 1-GPU or other non-cluster MK8s shape because it would run over Ethernet/TCPIP rather than InfiniBand / GPUDirect-RDMA
      - when the host uses a Nebius driverful GPU image, treat host GPU driver, NVIDIA Container Toolkit, and Nebius-provided OFED as separate concerns from Kubernetes-side device plugins and RDMA exposure
      - when both NVIDIA operators are needed, install or reconcile Network Operator before GPU Operator and keep exactly one NFD owner
 2. For live Nebius VPC inspection, run:
@@ -112,7 +119,10 @@ Implement Nebius IAM/Object Storage, VPC networking, quota-management, and MK8s 
 - Treat the live MK8s compatibility matrix as the source of truth for control-plane version, platform, OS, and GPU `drivers_preset` combinations.
 - For automation, prefer `nebius.api.nebius.mk8s.v1.NodeGroupServiceClient.get_compatibility_matrix(...)` over shelling out to the `nebius` CLI.
 - For InfiniBand / GPU-cluster decisions, prefer `nebius.api.nebius.compute.v1.PlatformServiceClient.get_by_name(...)` and inspect the selected preset's live `allow_gpu_clustering` metadata.
+- The public Nebius Compute docs currently restrict GPU-cluster compatibility to specific 8-GPU presets. Use live project inventory and `allow_gpu_clustering` metadata as the gate instead of hardcoding a stale preset list.
 - Do not assume a GPU platform implies GPU clustering support. Different presets on the same platform may differ.
+- Single-GPU presets are Ethernet-only. Treat them as testing/dev shapes and not as representative InfiniBand / GPUDirect-RDMA training environments.
+- If Capacity Dashboard returns fabric-scoped rows for a 1-GPU or other non-clusterable preset, use that only as availability ranking metadata. It does not make `infiniband_fabric` valid for that shape.
 - If the selected preset does not allow GPU clustering, leave `infiniband_fabric` unset or clear any stale value before render/apply.
 - Prefer exact preset/image tags such as `cuda13.0`; do not use shorthand aliases such as `cuda13` or floating tags such as `latest`.
 - If a compatibility lookup returns exactly one valid `drivers_preset` for the selected Kubernetes version and GPU platform, use that as the default while still allowing an explicit override.
@@ -123,6 +133,7 @@ Implement Nebius IAM/Object Storage, VPC networking, quota-management, and MK8s 
 - If both NVIDIA operators are installed, keep exactly one NFD instance. Disable GPU Operator's NFD when Network Operator is the intended NFD owner.
 - Do not treat `nvidia.com/gpu.deploy.operands=true` as a setup requirement. Prefer standard NFD labels, operator policy objects, and allocatable resources as the readiness signals.
 - For GPU-cluster / InfiniBand readiness, a ready `NicClusterPolicy` alone is insufficient. Verify scheduler-visible RDMA resources such as `rdma/shared_device` on Ready GPU nodes.
+- NCCL is appropriate for InfiniBand-capable GPU-cluster shapes. If it is configured on a single-GPU or other Ethernet-only shape, warn that the result is degraded and not representative of production distributed training.
 - Do not blanket-enable `driver.rdma.enabled=true` in GPU Operator. Use it only when the task explicitly requires the legacy `nvidia-peermem` path instead of the default DMA-BUF path.
 - Use `driver.rdma.useHostMofed=true` only when Mellanox OFED is installed directly on the host outside Network Operator's managed lifecycle.
 - When a workload needs pinned public IPs for MK8s node groups, plan the dedicated subnet/public-pool capacity for the steady-state node count plus rolling-update headroom.

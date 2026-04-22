@@ -22,6 +22,23 @@ All notable changes to this chart are tracked here. This changelog follows
 
 ### Changed
 
+- Fixed the `benchmark.transport.mode` render path so Socket/TCPIP and RDMA
+  overrides append the right `mpirun` env tokens, and expanded the helper,
+  release, and CI smoke validation to render both transport modes explicitly
+  instead of only the chart defaults. `nebius-cxcli` also now overrides the
+  chart's 8-GPU worker baseline by deriving worker GPU count from the resolved
+  MK8s shape while sizing worker CPU/memory from live scheduler headroom and
+  pinning the launcher onto non-GPU nodes when available, so Ethernet-only
+  1-GPU NCCL runs stay schedulable instead of pending forever.
+- Replaced the hardcoded NCCL socket/HCA defaults with a structured
+  `benchmark.transport.*` contract. The chart now supports `auto`, `socket`,
+  and `rdma` transport modes without baking `eth0` or `mlx5` into the shared
+  defaults, so callers such as `nebius-cxcli` can switch cleanly between
+  Ethernet-only and RDMA-capable environments.
+- Hardened the launcher startup path so it now waits for every worker pod's
+  main `nccl` container to become Ready before starting `mpirun`, avoiding the
+  Kubeflow MPIJob race where `kubectl exec` could hit workers before their main
+  container existed.
 - Clarified in `values.yaml` and `README.md` why the shared chart leaves
   `benchmark.mpiExtraArgs` empty by default: the official Nebius NCCL guide
   adds `-mca coll ^hcoll` only for B200 and omits it for H100/H200, so that

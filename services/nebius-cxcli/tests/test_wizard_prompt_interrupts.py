@@ -233,7 +233,11 @@ def test_prompt_choice_override_optional_empty_prompt_mentions_blank_keeps_unset
         path_label="infra.components[0].inputs.infiniband_fabric",
         current="",
         choices=[
-            OptionChoice(value="us-central1-a", label="us-central1-a  (gpu-h200-sxm, us-central1)"),
+            OptionChoice(
+                value="us-central1-a",
+                label="us-central1-a  (gpu-h200-sxm, us-central1, recommended)",
+                recommended=True,
+            ),
         ],
         type_hint="string",
         required=False,
@@ -241,8 +245,201 @@ def test_prompt_choice_override_optional_empty_prompt_mentions_blank_keeps_unset
 
     assert should_stop is False
     assert value == ""
-    assert captured["default"] == ""
+    assert captured["default"] == "us-central1-a"
     assert "blank keeps unset" in str(captured["text"])
+
+
+def test_prompt_choice_override_tty_keeps_skip_for_optional_recommended_default(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
+    captured: dict[str, object] = {}
+
+    class _FakePrompt:
+        def ask(self):
+            return "__skip__"
+
+    def _fake_select(*args, **kwargs):
+        captured["default"] = kwargs.get("default")
+        captured["choices"] = kwargs.get("choices")
+        return _FakePrompt()
+
+    fake_questionary = SimpleNamespace(
+        Choice=lambda **kwargs: kwargs,
+        select=_fake_select,
+    )
+    monkeypatch.setitem(sys.modules, "questionary", fake_questionary)
+
+    value, should_stop = cli._prompt_choice_override(
+        path_label="infra.components[0].inputs.infiniband_fabric",
+        current="",
+        choices=[
+            OptionChoice(
+                value="fabric-2",
+                label="fabric-2  (gpu-h100-sxm, eu-north1, recommended)",
+                recommended=True,
+            ),
+            OptionChoice(
+                value="fabric-3",
+                label="fabric-3  (gpu-h100-sxm, eu-north1)",
+            ),
+        ],
+        type_hint="string",
+        required=False,
+    )
+
+    assert should_stop is False
+    assert value == ""
+    assert captured["default"] == "fabric-2"
+    assert captured["choices"][0]["title"] == "<skip / keep unset>"
+
+
+def test_maybe_print_gpu_preset_prompt_guidance_for_gpu_shape(monkeypatch) -> None:
+    captured: list[str] = []
+    monkeypatch.setattr(cli.console, "print", lambda message: captured.append(str(message)))
+
+    cli._maybe_print_gpu_preset_prompt_guidance(
+        payload={
+            "infra": {
+                "components": [
+                    {
+                        "inputs": {
+                            "gpu_nodes_platform": "gpu-h100-sxm",
+                        }
+                    }
+                ]
+            }
+        },
+        entry=ComponentEntry(
+            id="mk8s",
+            scope="infra",
+            config_path="infra.mk8s",
+            description="mk8s",
+        ),
+        full_path_label="infra.components[0].inputs.gpu_nodes_preset",
+        emitted_guidance=set(),
+    )
+
+    assert any("Ethernet-only" in message for message in captured)
+
+
+def test_maybe_print_selected_gpu_preset_guidance_for_single_gpu_shape(monkeypatch) -> None:
+    captured: list[str] = []
+    monkeypatch.setattr(cli.console, "print", lambda message: captured.append(str(message)))
+
+    provider_lookup = SimpleNamespace(
+        compute_platform_preset_resources=lambda **_kwargs: (16, 200, 1),
+        compute_platform_preset_allows_gpu_clustering=lambda **_kwargs: False,
+    )
+
+    cli._maybe_print_selected_gpu_preset_guidance(
+        payload={
+            "client_info": {
+                "nebius": {
+                    "project_id": "project-123",
+                }
+            },
+            "infra": {
+                "components": [
+                    {
+                        "inputs": {
+                            "gpu_nodes_platform": "gpu-h100-sxm",
+                            "gpu_nodes_preset": "1gpu-16vcpu-200gb",
+                        }
+                    }
+                ]
+            },
+        },
+        entry=ComponentEntry(
+            id="mk8s",
+            scope="infra",
+            config_path="infra.mk8s",
+            description="mk8s",
+        ),
+        full_path_label="infra.components[0].inputs.gpu_nodes_preset",
+        provider_lookup=provider_lookup,
+        emitted_guidance=set(),
+    )
+
+    assert any("not production distributed training" in message for message in captured)
+
+
+def test_maybe_print_selected_gpu_preset_guidance_for_vm_single_gpu_shape(monkeypatch) -> None:
+    captured: list[str] = []
+    monkeypatch.setattr(cli.console, "print", lambda message: captured.append(str(message)))
+
+    provider_lookup = SimpleNamespace(
+        compute_platform_preset_resources=lambda **_kwargs: (16, 200, 1),
+        compute_platform_preset_allows_gpu_clustering=lambda **_kwargs: False,
+    )
+
+    cli._maybe_print_selected_gpu_preset_guidance(
+        payload={
+            "client_info": {
+                "nebius": {
+                    "project_id": "project-123",
+                }
+            },
+            "infra": {
+                "components": [
+                    {
+                        "inputs": {
+                            "platform": "gpu-h100-sxm",
+                            "preset": "1gpu-16vcpu-200gb",
+                        }
+                    }
+                ]
+            },
+        },
+        entry=ComponentEntry(
+            id="vm",
+            scope="infra",
+            config_path="infra.vm",
+            description="vm",
+        ),
+        full_path_label="infra.components[0].inputs.preset",
+        provider_lookup=provider_lookup,
+        emitted_guidance=set(),
+    )
+
+    assert any("not production distributed training" in message for message in captured)
+
+
+def test_maybe_clear_gpu_cluster_fabric_after_shape_change_for_vm(monkeypatch) -> None:
+    captured: list[str] = []
+    monkeypatch.setattr(cli.console, "print", lambda message: captured.append(str(message)))
+    monkeypatch.setattr(cli, "_resolve_dynamic_field_choices", lambda **_kwargs: [])
+
+    provider_lookup = SimpleNamespace(last_error=lambda: None)
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "inputs": {
+                        "gpu_cluster_enabled": True,
+                        "platform": "gpu-h100-sxm",
+                        "preset": "1gpu-16vcpu-200gb",
+                        "gpu_cluster_infiniband_fabric": "fabric-2",
+                    }
+                }
+            ]
+        }
+    }
+
+    cli._maybe_clear_gpu_cluster_fabric_after_shape_change(
+        payload=payload,
+        entry=ComponentEntry(
+            id="vm",
+            scope="infra",
+            config_path="infra.vm",
+            description="vm",
+        ),
+        full_path_label="infra.components[0].inputs.preset",
+        provider_lookup=provider_lookup,
+    )
+
+    assert "gpu_cluster_infiniband_fabric" not in payload["infra"]["components"][0]["inputs"]
+    assert any("gpu_cluster_infiniband_fabric" in message for message in captured)
 
 
 def test_prompt_scalar_override_reprompts_blank_for_required_field(monkeypatch) -> None:

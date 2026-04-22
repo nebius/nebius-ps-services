@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,8 +19,18 @@ class ProjectPaths:
     infra_dir: Path
     flux_dir: Path
     inventory_dir: Path
-    path_tenant_id: str
-    path_project_id: str
+    path_tenant_folder: str
+    path_project_folder: str
+
+
+def normalize_project_folder_name(value: str, *, fallback: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
+    if normalized:
+        return normalized
+    fallback_normalized = re.sub(r"[^a-z0-9]+", "-", fallback.strip().lower()).strip("-")
+    if fallback_normalized:
+        return fallback_normalized
+    return fallback.strip()
 
 
 def find_git_root(start: Path) -> Path:
@@ -49,14 +60,14 @@ def _locate_deployments_dir(config_path: Path, repo_root: Path, hint: str | None
         raise ValueError(f"Deployments dir does not exist: {hinted}")
 
     # Infer deployments root from canonical config path shape:
-    # <deployments-root>/<tenant>/<project>/config.yaml
+    # <deployments-root>/<tenant-folder>/<project-folder>/config.yaml
     parents = config_path.parents
     if len(parents) >= 3:
         return parents[2].resolve()
 
     raise ValueError(
         "Unable to infer deployments root from config path. "
-        "Expected <deployments-root>/<tenant>/<project>/config.yaml"
+        "Expected <deployments-root>/<tenant-folder>/<project-folder>/config.yaml"
     )
 
 
@@ -77,12 +88,12 @@ def resolve_project_paths(
 
     parts = relative.parts
     if len(parts) != 3 or parts[-1] != "config.yaml":
-        raise ValueError("Config path must match <tenant>/<project>/config.yaml")
+        raise ValueError("Config path must match <tenant-folder>/<project-folder>/config.yaml")
 
-    tenant_id = parts[0]
-    project_id = parts[1]
-    if not tenant_id or not project_id:
-        raise ValueError("Config path must include non-empty tenant_id and project_id segments")
+    tenant_folder = parts[0]
+    project_folder = parts[1]
+    if not tenant_folder or not project_folder:
+        raise ValueError("Config path must include non-empty tenant/project folder segments")
     project_dir = resolved.parent
     generated_dir = project_dir / "generated"
 
@@ -95,8 +106,8 @@ def resolve_project_paths(
         infra_dir=generated_dir / "infra",
         flux_dir=generated_dir / "flux",
         inventory_dir=generated_dir / "inventory",
-        path_tenant_id=tenant_id,
-        path_project_id=project_id,
+        path_tenant_folder=tenant_folder,
+        path_project_folder=project_folder,
     )
 
 
@@ -137,12 +148,12 @@ def resolve_generated_bundle_config_paths(
     if resolved.name == "generated" or any(candidate.name == "generated" for candidate in resolved.parents):
         raise ValueError(
             f"{command_label} target must be project config.yaml, not generated/. "
-            f"Pass <tenant>/<project>/config.yaml; {command_label.lower()} resolves sibling generated/ automatically."
+            f"Pass <tenant-folder>/<project-folder>/config.yaml; {command_label.lower()} resolves sibling generated/ automatically."
         )
 
     raise ValueError(
         f"{command_label} target must be project config.yaml "
-        "(<deployments-root>/<tenant-id>/<project-id>/config.yaml)."
+        "(<deployments-root>/<tenant-folder>/<project-folder>/config.yaml)."
     )
 
 
@@ -171,7 +182,7 @@ def resolve_report_config_paths(
 ) -> ProjectPaths:
     return resolve_generated_bundle_config_paths(
         target_path,
-        command_label="Report write",
+        command_label="Report",
         deployments_dir_hint=deployments_dir_hint,
     )
 
@@ -187,17 +198,17 @@ def resolve_email_config_paths(
 
 
 def validate_path_alignment(config: Any, paths: ProjectPaths) -> None:
-    """Ensure canonical config values and path hierarchy are synchronized."""
+    """Ensure project identity is present and the config path keeps the canonical shape."""
     errors: list[str] = []
-    if config.client_info.nebius.tenant_id != paths.path_tenant_id:
-        errors.append(
-            "tenant_id mismatch: "
-            f"config='{config.client_info.nebius.tenant_id}', path='{paths.path_tenant_id}'"
-        )
+    config_tenant_id = str(getattr(config.client_info.nebius, "tenant_id", None) or "").strip()
     config_project_id = str(getattr(config.client_info.nebius, "project_id", None) or "").strip()
-    if config_project_id != paths.path_project_id:
-        errors.append(
-            f"project_id mismatch: config='{config_project_id}', path='{paths.path_project_id}'"
-        )
+    if not config_tenant_id:
+        errors.append("config is missing client_info.nebius.tenant_id")
+    if not config_project_id:
+        errors.append("config is missing client_info.nebius.project_id")
+    if not paths.path_tenant_folder:
+        errors.append("config path is missing the tenant folder segment")
+    if not paths.path_project_folder:
+        errors.append("config path is missing the project folder segment")
     if errors:
-        raise ValueError("Path alignment failed:\n  - " + "\n  - ".join(errors))
+        raise ValueError("Project path validation failed:\n  - " + "\n  - ".join(errors))

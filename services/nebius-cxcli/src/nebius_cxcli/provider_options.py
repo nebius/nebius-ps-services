@@ -11,6 +11,13 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, cast
 
+from .capacity_dashboard import (
+    CapacityResourceAdvice,
+    capacity_regular_sort_key,
+    capacity_summary_text,
+    filter_capacity_resource_advice,
+    list_capacity_resource_advice,
+)
 from .sdk_auth import init_nebius_sdk
 
 SUPPORTED_PROVIDER_OPTION_SOURCES = frozenset(
@@ -38,6 +45,7 @@ _OPTION_PLUGIN_ENV = "NEBIUS_CXCLI_PROVIDER_OPTION_PLUGINS"
 class OptionChoice:
     value: str
     label: str
+    recommended: bool = False
 
 
 @dataclass(frozen=True)
@@ -45,13 +53,6 @@ class TenantProjectValidationResult:
     valid: bool
     message: str = ""
     retryable: bool = True
-
-
-@dataclass(frozen=True)
-class _Mk8sInfiniBandFabric:
-    value: str
-    platform: str
-    region: str
 
 
 @dataclass(frozen=True)
@@ -78,23 +79,6 @@ class _ComputePublicImageFamily:
     human_name: str
     compatibility: str
 
-
-# Keep this in the documented Nebius fabric order for stable prompt rendering.
-_MK8S_INFINIBAND_FABRICS: tuple[_Mk8sInfiniBandFabric, ...] = (
-    _Mk8sInfiniBandFabric(value="fabric-2", platform="gpu-h100-sxm", region="eu-north1"),
-    _Mk8sInfiniBandFabric(value="fabric-3", platform="gpu-h100-sxm", region="eu-north1"),
-    _Mk8sInfiniBandFabric(value="fabric-4", platform="gpu-h100-sxm", region="eu-north1"),
-    _Mk8sInfiniBandFabric(value="fabric-5", platform="gpu-h200-sxm", region="eu-west1"),
-    _Mk8sInfiniBandFabric(value="fabric-6", platform="gpu-h100-sxm", region="eu-north1"),
-    _Mk8sInfiniBandFabric(value="fabric-7", platform="gpu-h200-sxm", region="eu-north1"),
-    _Mk8sInfiniBandFabric(value="eu-north2-a", platform="gpu-h200-sxm", region="eu-north2"),
-    _Mk8sInfiniBandFabric(value="me-west1-a", platform="gpu-b200-sxm-a", region="me-west1"),
-    _Mk8sInfiniBandFabric(value="uk-south1-a", platform="gpu-b300-sxm", region="uk-south1"),
-    _Mk8sInfiniBandFabric(value="us-central1-a", platform="gpu-h200-sxm", region="us-central1"),
-    _Mk8sInfiniBandFabric(value="us-central1-b", platform="gpu-b200-sxm", region="us-central1"),
-)
-
-
 def _normalize_plugin_choices(items: Iterable[object] | None) -> list[OptionChoice]:
     if not items:
         return []
@@ -106,19 +90,27 @@ def _normalize_plugin_choices(items: Iterable[object] | None) -> list[OptionChoi
         if isinstance(item, OptionChoice):
             value = item.value
             label = item.label
+            recommended = item.recommended
         elif isinstance(item, dict):
             raw_value = item.get("value")
             raw_label = item.get("label")
             value = str(raw_value).strip() if raw_value is not None else ""
             label = str(raw_label).strip() if raw_label is not None else value
+            recommended = bool(item.get("recommended", False))
         else:
             value = str(item).strip()
             label = value
+            recommended = False
         if not value or value in seen:
             continue
-        out.append(OptionChoice(value=value, label=label or value))
+        out.append(OptionChoice(value=value, label=label or value, recommended=recommended))
         seen.add(value)
     return out
+
+
+def _is_live_fabric_name(value: object) -> bool:
+    normalized = _as_str(value)
+    return bool(normalized) and normalized.upper() not in {"N/A", "NA", "NONE"}
 
 
 @lru_cache(maxsize=8)
@@ -289,10 +281,30 @@ def _sort_choices_by_preference(
             choices,
             key=lambda choice: (
                 preferred_index.get(choice.value, len(preferred_index)),
+                0 if choice.recommended else 1,
                 choice.value,
             ),
         )
     )
+
+
+def _capacity_advice_sort_key(item: CapacityResourceAdvice) -> tuple[int, int, int, int, str]:
+    return capacity_regular_sort_key(item)
+
+
+def _capacity_summary_text(item: CapacityResourceAdvice) -> str:
+    return capacity_summary_text(item)
+
+
+def _gpu_preset_interconnect_suffix(preset: _ComputePlatformPreset) -> tuple[str, ...]:
+    gpu_count = preset.gpu_count
+    if gpu_count in (None, 0):
+        return ()
+    if preset.allow_gpu_clustering:
+        return ("GPU cluster", "InfiniBand")
+    if gpu_count == 1:
+        return ("Ethernet only", "testing/dev")
+    return ("Ethernet only",)
 
 
 class ProviderOptionLookup:
@@ -309,6 +321,7 @@ class ProviderOptionLookup:
         self._compute_public_image_family_cache: dict[
             tuple[str, str], tuple[_ComputePublicImageFamily, ...]
         ] = {}
+        self._capacity_resource_advice_cache: dict[str, tuple[CapacityResourceAdvice, ...]] = {}
         self._last_error: str | None = None
 
     def resolve(
@@ -428,6 +441,49 @@ class ProviderOptionLookup:
                 return (preset.vcpu_count, preset.memory_gibibytes, preset.gpu_count)
         return None
 
+    def compute_platform_preset_fabrics(
+        self,
+        *,
+        tenant_id: str,
+        project_id: str,
+        region_id: str,
+        platform_name: str,
+        preset_name: str,
+    ) -> tuple[CapacityResourceAdvice, ...]:
+        normalized_tenant_id = _as_str(tenant_id)
+        normalized_project_id = _as_str(project_id)
+        normalized_region_id = _as_str(region_id)
+        normalized_platform_name = _as_str(platform_name)
+        normalized_preset_name = _as_str(preset_name)
+        if (
+            not normalized_tenant_id
+            or not normalized_project_id
+            or not normalized_region_id
+            or not normalized_platform_name
+            or not normalized_preset_name
+        ):
+            return ()
+
+        allow_gpu_clustering = self.compute_platform_preset_allows_gpu_clustering(
+            project_id=normalized_project_id,
+            platform_name=normalized_platform_name,
+            preset_name=normalized_preset_name,
+        )
+        if allow_gpu_clustering is False:
+            return ()
+
+        resolved = tuple(
+            item
+            for item in self._capacity_resource_advice_for_shape(
+                tenant_id=normalized_tenant_id,
+                region_id=normalized_region_id,
+                platform_name=normalized_platform_name,
+                preset_name=normalized_preset_name,
+            )
+            if _is_live_fabric_name(item.fabric)
+        )
+        return resolved
+
     def validate_tenant_project_scope(
         self,
         *,
@@ -520,6 +576,47 @@ class ProviderOptionLookup:
             )
 
         return TenantProjectValidationResult(valid=True)
+
+    def resolve_tenant_project_names(
+        self,
+        *,
+        tenant_id: str,
+        project_id: str,
+    ) -> tuple[str, str]:
+        normalized_tenant_id = _as_str(tenant_id)
+        normalized_project_id = _as_str(project_id)
+        if not normalized_tenant_id or not normalized_project_id:
+            return "", ""
+
+        sdk = self._sdk_or_none()
+        if sdk is None:
+            return "", ""
+
+        try:
+            from nebius.api.nebius.iam.v1 import (
+                GetProjectRequest,
+                GetTenantRequest,
+                ProjectServiceClient,
+                TenantServiceClient,
+            )
+        except Exception:
+            return "", ""
+
+        tenant_name = ""
+        project_name = ""
+        try:
+            tenant = TenantServiceClient(sdk).get(GetTenantRequest(id=normalized_tenant_id)).wait()
+            tenant_name = _as_str(getattr(getattr(tenant, "metadata", None), "name", None))
+        except Exception:
+            tenant_name = ""
+        try:
+            project = (
+                ProjectServiceClient(sdk).get(GetProjectRequest(id=normalized_project_id)).wait()
+            )
+            project_name = _as_str(getattr(getattr(project, "metadata", None), "name", None))
+        except Exception:
+            project_name = ""
+        return tenant_name, project_name
 
     def _resolve_project_id(self, payload: dict[str, Any], args: dict[str, Any]) -> str | None:
         explicit_project = _as_str(args.get("project_id"))
@@ -839,17 +936,49 @@ class ProviderOptionLookup:
         region_id = _as_str(args.get("region_id")) or _as_str(
             _payload_value(payload, "client_info.nebius.region_id")
         )
-        cache_key = ("mk8s_infiniband_fabrics", platform_name, region_id)
+        tenant_id = self._resolve_tenant_id(payload, args)
+        cache_key = (
+            "mk8s_infiniband_fabrics",
+            platform_name,
+            region_id,
+            preset_name,
+            tenant_id,
+        )
         if cache_key in self._cache:
             return self._cache[cache_key]
 
+        advice_by_fabric: dict[str, CapacityResourceAdvice] = {}
+        recommended_fabric = ""
+        if tenant_id and region_id and preset_name and project_id:
+            matching_advice = self.compute_platform_preset_fabrics(
+                tenant_id=tenant_id,
+                project_id=project_id,
+                region_id=region_id,
+                platform_name=platform_name,
+                preset_name=preset_name,
+            )
+            if matching_advice:
+                if matching_advice[0].best_regular_available > 0:
+                    recommended_fabric = matching_advice[0].fabric
+                advice_by_fabric = {item.fabric: item for item in matching_advice}
+            else:
+                self._last_error = (
+                    "Live Capacity Dashboard returned no fabric rows for the selected "
+                    f"cluster-capable GPU shape {platform_name}/{preset_name} in {region_id}."
+                )
+                return ()
+
         resolved = tuple(
             OptionChoice(
-                value=item.value,
-                label=f"{item.value}  ({item.platform}, {item.region})",
+                value=item.fabric,
+                label=(
+                    f"{item.fabric}  ({platform_name}, {region_id}), "
+                    f"{_capacity_summary_text(item)}"
+                    + (", recommended" if item.fabric == recommended_fabric else "")
+                ),
+                recommended=item.fabric == recommended_fabric,
             )
-            for item in _MK8S_INFINIBAND_FABRICS
-            if item.platform == platform_name and (not region_id or item.region == region_id)
+            for item in advice_by_fabric.values()
         )
         self._cache[cache_key] = resolved
         return resolved
@@ -904,17 +1033,22 @@ class ProviderOptionLookup:
         gpu_cluster_required_path = _as_str(args.get("gpu_cluster_required_path"))
         if gpu_cluster_required_path:
             require_gpu_clustering = bool(_as_str(_payload_value(payload, gpu_cluster_required_path)))
+        tenant_id = self._resolve_tenant_id(payload, args)
+        region_id = self._resolve_region_id(payload, args)
 
         cache_key = (
             "compute_platform_presets",
             project_id,
             platform_name,
             require_gpu_clustering,
+            tenant_id,
+            region_id,
         )
         if cache_key in self._cache:
             return self._cache[cache_key]
 
         options: list[OptionChoice] = []
+        preset_by_name: dict[str, _ComputePlatformPreset] = {}
         for preset in self._resolve_compute_platform_preset_inventory(
             project_id=project_id,
             platform_name=platform_name,
@@ -923,6 +1057,7 @@ class ProviderOptionLookup:
             allow_gpu_clustering = preset.allow_gpu_clustering
             if require_gpu_clustering and not allow_gpu_clustering:
                 continue
+            preset_by_name[preset_name] = preset
             suffix_parts: list[str] = []
             if preset.vcpu_count is not None:
                 suffix_parts.append(f"vCPU={preset.vcpu_count}")
@@ -930,14 +1065,98 @@ class ProviderOptionLookup:
                 suffix_parts.append(f"RAM={preset.memory_gibibytes}GiB")
             if preset.gpu_count not in (None, 0):
                 suffix_parts.append(f"GPU={preset.gpu_count}")
-            if allow_gpu_clustering:
-                suffix_parts.append("GPU cluster")
+            suffix_parts.extend(_gpu_preset_interconnect_suffix(preset))
             label = f"{preset_name}  ({', '.join(suffix_parts)})" if suffix_parts else preset_name
             options.append(OptionChoice(value=preset_name, label=label))
+
+        if tenant_id and region_id and platform_name.startswith("gpu-"):
+            advice_by_preset: dict[str, CapacityResourceAdvice] = {}
+            for item in self._capacity_resource_advice_for_shape(
+                tenant_id=tenant_id,
+                region_id=region_id,
+                platform_name=platform_name,
+            ):
+                if not item.preset:
+                    continue
+                current = advice_by_preset.get(item.preset)
+                if current is None or _capacity_advice_sort_key(item) < _capacity_advice_sort_key(current):
+                    advice_by_preset[item.preset] = item
+
+            recommended_preset = ""
+            ranked_advice = sorted(advice_by_preset.values(), key=_capacity_advice_sort_key)
+            if ranked_advice and ranked_advice[0].best_regular_available > 0:
+                recommended_preset = ranked_advice[0].preset
+
+            original_order = {choice.value: index for index, choice in enumerate(options)}
+            options = [
+                OptionChoice(
+                    value=choice.value,
+                    label=(
+                        f"{choice.label}, {_capacity_summary_text(advice_by_preset[choice.value])}"
+                        + (
+                            f", best fabric {advice_by_preset[choice.value].fabric}"
+                            if (
+                                advice_by_preset[choice.value].fabric
+                                and preset_by_name.get(choice.value) is not None
+                                and preset_by_name[choice.value].allow_gpu_clustering
+                            )
+                            else ""
+                        )
+                        + (", recommended" if choice.value == recommended_preset else "")
+                    )
+                    if choice.value in advice_by_preset
+                    else choice.label,
+                    recommended=choice.value == recommended_preset,
+                )
+                for choice in sorted(
+                    options,
+                    key=lambda choice: (
+                        0 if choice.value in advice_by_preset else 1,
+                        _capacity_advice_sort_key(advice_by_preset[choice.value])
+                        if choice.value in advice_by_preset
+                        else (0, 0, 0, 0, ""),
+                        original_order[choice.value],
+                    ),
+                )
+            ]
 
         resolved = tuple(options)
         self._cache[cache_key] = resolved
         return resolved
+
+    def _capacity_resource_advice_for_shape(
+        self,
+        *,
+        tenant_id: str,
+        region_id: str,
+        platform_name: str,
+        preset_name: str = "",
+    ) -> tuple[CapacityResourceAdvice, ...]:
+        resolved = filter_capacity_resource_advice(
+            self._resolve_capacity_resource_advice_inventory(tenant_id=tenant_id),
+            region_id=region_id,
+            platform_name=platform_name,
+            preset_name=preset_name,
+        )
+        return tuple(sorted(resolved, key=_capacity_advice_sort_key))
+
+    def _resolve_capacity_resource_advice_inventory(
+        self,
+        *,
+        tenant_id: str,
+    ) -> tuple[CapacityResourceAdvice, ...]:
+        if tenant_id in self._capacity_resource_advice_cache:
+            return self._capacity_resource_advice_cache[tenant_id]
+
+        sdk = self._sdk_or_none()
+        if sdk is None:
+            return ()
+        try:
+            cached = list_capacity_resource_advice(sdk, parent_id=tenant_id)
+        except Exception:
+            return ()
+        self._capacity_resource_advice_cache[tenant_id] = cached
+        return cached
 
     def _resolve_compute_platform_preset_inventory(
         self,

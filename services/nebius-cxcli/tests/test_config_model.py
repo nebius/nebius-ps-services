@@ -21,12 +21,33 @@ from nebius_cxcli.config_template import starter_config_yaml
 runner = CliRunner()
 
 
+def _tenant_folder_name(tenant_id: str = "tenant-123") -> str:
+    folder_by_tenant_id = {
+        "tenant-123": "tenant-acme-labs",
+    }
+    return folder_by_tenant_id[tenant_id]
+
+
+def _project_folder_name(project_id: str = "project-456") -> str:
+    folder_by_project_id = {
+        "project-456": "gpu-training-prod",
+    }
+    return folder_by_project_id[project_id]
+
+
 @pytest.fixture(autouse=True)
 def _reset_component_state(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("NEBIUS_CXCLI_COMPONENT_SOURCES_FILE", raising=False)
     monkeypatch.setattr(
         "nebius_cxcli.cli._validate_tenant_project_ids_or_prompt",
         lambda **kwargs: (kwargs["tenant_id"], kwargs["project_id"]),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._resolve_create_target_folders",
+        lambda **kwargs: (
+            _tenant_folder_name(kwargs["tenant_id"]),
+            _project_folder_name(kwargs["project_id"]),
+        ),
     )
     monkeypatch.setattr(
         component_sources,
@@ -186,7 +207,12 @@ def test_create_writes_runtime_shape_with_selected_components(tmp_path: Path) ->
     )
     assert result.exit_code == 0, result.output
 
-    config_path = deployments_root / "tenant-123" / "project-456" / "config.yaml"
+    config_path = (
+        deployments_root
+        / _tenant_folder_name("tenant-123")
+        / _project_folder_name("project-456")
+        / "config.yaml"
+    )
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
     assert isinstance(payload, dict)

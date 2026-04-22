@@ -1578,6 +1578,7 @@ def test_wizard_skips_irrelevant_mk8s_gpu_validation_prompts_until_gpu_cluster_i
             "deploy.validations.mk8s_gpu.gpu_visibility.max_nodes": {"default": 3},
             "deploy.validations.mk8s_gpu.nccl.enabled": {"default": True},
             "deploy.validations.mk8s_gpu.nccl.max_nodes": {"default": 8},
+            "deploy.validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps": {"default": 300},
             "deploy.validations.mk8s_gpu.health_checker.enabled": {"default": False},
         },
     )
@@ -1629,8 +1630,9 @@ def test_wizard_skips_irrelevant_mk8s_gpu_validation_prompts_until_gpu_cluster_i
     assert "deploy.validations.mk8s_gpu.operator_readiness.enabled" in prompted_paths
     assert "deploy.validations.mk8s_gpu.gpu_visibility.enabled" in prompted_paths
     assert "deploy.validations.mk8s_gpu.gpu_visibility.max_nodes" in prompted_paths
-    assert "deploy.validations.mk8s_gpu.nccl.enabled" not in prompted_paths
-    assert "deploy.validations.mk8s_gpu.nccl.max_nodes" not in prompted_paths
+    assert "deploy.validations.mk8s_gpu.nccl.enabled" in prompted_paths
+    assert "deploy.validations.mk8s_gpu.nccl.max_nodes" in prompted_paths
+    assert "deploy.validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps" not in prompted_paths
     assert "deploy.validations.mk8s_gpu.health_checker.enabled" not in prompted_paths
 
 

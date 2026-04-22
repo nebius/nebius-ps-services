@@ -154,12 +154,11 @@ def _build_validation_result(
     inventory_dir: Path,
 ) -> DeployValidationResult:
     kind = str(spec.get("kind", "") or "").strip()
-    name = str(spec.get("name", "") or "").strip() or kind or "Validation"
     report_path = _validation_report_path(spec, inventory_dir=inventory_dir)
     if not report_path.exists():
         return DeployValidationResult(
             kind=kind,
-            name=name,
+            name=_validation_display_name(kind, spec=spec),
             status="not_run",
             report_path=report_path,
             report_exists=False,
@@ -170,7 +169,7 @@ def _build_validation_result(
     except Exception as exc:
         return DeployValidationResult(
             kind=kind,
-            name=name,
+            name=_validation_display_name(kind, spec=spec),
             status="failed",
             report_path=report_path,
             report_exists=True,
@@ -179,7 +178,7 @@ def _build_validation_result(
     passed = bool(payload.get("passed"))
     return DeployValidationResult(
         kind=kind,
-        name=name,
+        name=_validation_display_name(kind, spec=spec, payload=payload),
         status="passed" if passed else "failed",
         report_path=report_path,
         report_exists=True,
@@ -206,11 +205,31 @@ def _validation_summary(kind: str, payload: Mapping[str, Any]) -> str:
     return f"{validation_name} completed with passed={bool(payload.get('passed'))}."
 
 
+def _validation_display_name(
+    kind: str,
+    *,
+    spec: Mapping[str, Any],
+    payload: Mapping[str, Any] | None = None,
+) -> str:
+    if kind == "mk8s_gpu_operator_readiness":
+        return "GPU stack readiness"
+    validation_name = (
+        str(payload.get("validation", "") or "").strip()
+        if isinstance(payload, Mapping)
+        else ""
+    )
+    spec_name = str(spec.get("name", "") or "").strip()
+    return validation_name or spec_name or kind or "Validation"
+
+
 def _operator_readiness_summary(payload: Mapping[str, Any]) -> str:
     gpu_operator = _mapping(payload.get("gpu_operator"))
     network_operator = _mapping(payload.get("network_operator"))
     gpu_nodes = _list(gpu_operator.get("gpu_nodes"))
-    parts = [f"GPU Operator ready on {len(gpu_nodes)} Ready GPU node(s)"]
+    if bool(network_operator.get("required")):
+        parts = [f"GPU Operator and Network Operator ready on {len(gpu_nodes)} Ready GPU node(s)"]
+    else:
+        parts = [f"GPU Operator ready on {len(gpu_nodes)} Ready GPU node(s)"]
     if bool(network_operator.get("required")):
         snapshot = _mapping(network_operator.get("device_plugin_snapshot"))
         rdma_keys = [
@@ -250,8 +269,14 @@ def _nccl_summary(payload: Mapping[str, Any]) -> str:
     avg = float(payload.get("avg_bus_bandwidth_gbps", 0.0) or 0.0)
     threshold = float(payload.get("threshold_gbps", 0.0) or 0.0)
     worker_count = int(payload.get("selected_worker_node_count", 0) or 0)
+    transport = str(payload.get("transport_label", "") or "").strip() or "auto"
+    if not bool(payload.get("threshold_enforced", True)):
+        return (
+            f"Launcher phase {phase}; {transport} average bus bandwidth {avg:.1f} Gbps "
+            f"across {worker_count} worker node(s); RDMA threshold not enforced for this run."
+        )
     return (
-        f"Launcher phase {phase}; average bus bandwidth {avg:.1f} Gbps "
+        f"Launcher phase {phase}; {transport} average bus bandwidth {avg:.1f} Gbps "
         f"vs threshold {threshold:.1f} Gbps across {worker_count} worker node(s)."
     )
 

@@ -58,6 +58,21 @@ imagePullSecrets:
 {{- range .Values.benchmark.mpiBaseArgs }}
 {{- $tokens = append $tokens . -}}
 {{- end -}}
+{{- $transport := .Values.benchmark.transport | default dict -}}
+{{- $transportMode := lower (default "auto" $transport.mode) -}}
+{{- if eq $transportMode "socket" -}}
+{{- $tokens = concat $tokens (list "-x" "NCCL_NET=Socket" "-x" "NCCL_IB_DISABLE=1") -}}
+{{- else if eq $transportMode "rdma" -}}
+{{- $tokens = concat $tokens (list "-x" "NCCL_NET=IB") -}}
+{{- else if ne $transportMode "auto" -}}
+{{- fail "benchmark.transport.mode must be one of auto, socket, rdma" -}}
+{{- end -}}
+{{- with $transport.socketIfName }}
+{{- $tokens = append $tokens "-x" (printf "NCCL_SOCKET_IFNAME=%s" .) -}}
+{{- end -}}
+{{- with $transport.ibHca }}
+{{- $tokens = append $tokens "-x" (printf "NCCL_IB_HCA=%s" .) -}}
+{{- end -}}
 {{- range .Values.benchmark.mpiExtraArgs }}
 {{- $tokens = append $tokens . -}}
 {{- end -}}
@@ -71,4 +86,30 @@ imagePullSecrets:
 {{- if gt $index 0 }} {{ end -}}
 {{- squote $token -}}
 {{- end -}}
+{{- end -}}
+
+{{- define "nccl-test.waitForWorkersScript" -}}
+{{- $timeout := int .Values.launcher.waitForWorkers.timeoutSeconds -}}
+{{- $poll := int .Values.launcher.waitForWorkers.pollSeconds -}}
+{{- $namespace := .Release.Namespace -}}
+{{- $fullname := include "nccl-test.fullname" . -}}
+{{- $replicas := int .Values.worker.replicas -}}
+{{- if .Values.launcher.waitForWorkers.enabled }}
+deadline=$(( $(date +%s) + {{ $timeout }} ))
+for ordinal in $(seq 0 $(( {{ $replicas }} - 1 ))); do
+  pod="{{ $fullname }}-worker-${ordinal}"
+  while true; do
+    phase=$(/opt/kube/kubectl get pod "$pod" -n {{ $namespace | squote }} -o jsonpath='{.status.phase}' 2>/dev/null || true)
+    ready=$(/opt/kube/kubectl get pod "$pod" -n {{ $namespace | squote }} -o jsonpath='{.status.containerStatuses[?(@.name=="nccl")].ready}' 2>/dev/null || true)
+    if [ "$phase" = "Running" ] && [ "$ready" = "true" ]; then
+      break
+    fi
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      echo "Timed out waiting for NCCL worker pod ${pod} main container readiness." >&2
+      exit 1
+    fi
+    sleep {{ $poll }}
+  done
+done
+{{- end }}
 {{- end -}}

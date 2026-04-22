@@ -371,6 +371,16 @@ validate_chart() {
   helm lint "${CHART_DIR}"
   log_note "Rendering smoke template for ${CHART_DIR}..."
   helm template smoke "${CHART_DIR}" --namespace nccl-test >/dev/null
+  log_note "Rendering socket transport smoke template for ${CHART_DIR}..."
+  helm template smoke "${CHART_DIR}" \
+    --namespace nccl-test \
+    --set worker.replicas=2 \
+    --set benchmark.transport.mode=socket >/dev/null
+  log_note "Rendering RDMA transport smoke template for ${CHART_DIR}..."
+  helm template smoke "${CHART_DIR}" \
+    --namespace nccl-test \
+    --set worker.replicas=2 \
+    --set benchmark.transport.mode=rdma >/dev/null
 }
 
 prep_release() {

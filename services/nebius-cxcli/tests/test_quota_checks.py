@@ -3,10 +3,10 @@ from __future__ import annotations
 import pytest
 
 import nebius_cxcli.quota_checks as quota_checks
+from nebius_cxcli.capacity_dashboard import CapacityAdviceAvailability, CapacityResourceAdvice
 from nebius_cxcli.quota_checks import (
     AggregatedQuotaRequirement,
-    CapacityBlockGroupAffinity,
-    CapacityBlockGroupRecord,
+    GpuCapacityShape,
     QuotaCheck,
     QuotaContributor,
     QuotaCoverageGap,
@@ -19,13 +19,80 @@ from nebius_cxcli.quota_checks import (
     _estimate_mk8s_requirements,
     _estimate_vm_requirements,
     _evaluate_requirement,
+    _NpcQuotaRequestUnavailableError,
     format_quota_report_lines,
+    format_quota_request_manual_followup_lines,
     plan_quota_request_changes,
-    request_quota_allowance_changes,
+    request_quota_changes,
 )
 from nebius_cxcli.terminal_styles import WARNING_COLOR
 
 _GIB = 1024 * 1024 * 1024
+
+
+def _capacity_advice(
+    *,
+    region: str,
+    platform: str,
+    preset: str,
+    fabric: str,
+    on_demand_available: int = 0,
+    on_demand_limit: int = 0,
+    on_demand_level: str = "AVAILABILITY_LEVEL_UNKNOWN",
+    reserved_available: int = 0,
+    reserved_limit: int = 0,
+    reserved_level: str = "AVAILABILITY_LEVEL_UNKNOWN",
+    preemptible_available: int = 0,
+    preemptible_limit: int = 0,
+    preemptible_level: str = "AVAILABILITY_LEVEL_UNKNOWN",
+) -> CapacityResourceAdvice:
+    return CapacityResourceAdvice(
+        region=region,
+        platform=platform,
+        preset=preset,
+        fabric=fabric,
+        on_demand=CapacityAdviceAvailability(
+            available=on_demand_available,
+            limit=on_demand_limit,
+            availability_level=on_demand_level,
+            data_state="DATA_STATE_FRESH",
+        ),
+        reserved=CapacityAdviceAvailability(
+            available=reserved_available,
+            limit=reserved_limit,
+            availability_level=reserved_level,
+            data_state="DATA_STATE_FRESH",
+        ),
+        preemptible=CapacityAdviceAvailability(
+            available=preemptible_available,
+            limit=preemptible_limit,
+            availability_level=preemptible_level,
+            data_state="DATA_STATE_FRESH",
+        ),
+    )
+
+
+def _resources(
+    *,
+    platform: str,
+    preset: str,
+    vcpu_count: int,
+    memory_gibibytes: int,
+    gpu_count: int,
+    allow_gpu_clustering: bool = False,
+):
+    return type(
+        "_Resources",
+        (),
+        {
+            "platform": platform,
+            "preset": preset,
+            "vcpu_count": vcpu_count,
+            "memory_gibibytes": memory_gibibytes,
+            "gpu_count": gpu_count,
+            "allow_gpu_clustering": allow_gpu_clustering,
+        },
+    )()
 
 
 def test_aggregate_requirements_sums_shared_quota_usage() -> None:
@@ -85,7 +152,7 @@ def test_aggregate_requirements_sums_shared_quota_usage() -> None:
     assert check.reason == "ssh-jumphost: one VM; managed-postgresql: two database hosts"
 
 
-def test_aggregate_requirements_keep_capacity_block_group_affinity_separate() -> None:
+def test_aggregate_requirements_keep_gpu_capacity_shapes_separate() -> None:
     aggregated = _aggregate_requirements(
         [
             QuotaRequirement(
@@ -96,10 +163,12 @@ def test_aggregate_requirements_keep_capacity_block_group_affinity_separate() ->
                 region="uk-south1",
                 required=8,
                 reason="one GPU node in fabric a",
-                capacity_block_group_affinity=CapacityBlockGroupAffinity(
-                    service="compute",
+                gpu_capacity_shape=GpuCapacityShape(
                     platform="gpu-b300-sxm",
+                    preset="8gpu-192vcpu-2768gb",
                     fabric="uk-south1-a",
+                    mode="regular",
+                    gpu_count_per_instance=8,
                 ),
             ),
             QuotaRequirement(
@@ -110,47 +179,50 @@ def test_aggregate_requirements_keep_capacity_block_group_affinity_separate() ->
                 region="uk-south1",
                 required=8,
                 reason="one GPU node in fabric b",
-                capacity_block_group_affinity=CapacityBlockGroupAffinity(
-                    service="compute",
+                gpu_capacity_shape=GpuCapacityShape(
                     platform="gpu-b300-sxm",
+                    preset="8gpu-192vcpu-2768gb",
                     fabric="uk-south1-b",
+                    mode="regular",
+                    gpu_count_per_instance=8,
                 ),
             ),
         ]
     )
 
     assert len(aggregated) == 2
-    assert {item.capacity_block_group_affinity for item in aggregated} == {
-        CapacityBlockGroupAffinity(
-            service="compute",
+    assert {item.gpu_capacity_shape for item in aggregated} == {
+        GpuCapacityShape(
             platform="gpu-b300-sxm",
+            preset="8gpu-192vcpu-2768gb",
             fabric="uk-south1-a",
+            mode="regular",
+            gpu_count_per_instance=8,
         ),
-        CapacityBlockGroupAffinity(
-            service="compute",
+        GpuCapacityShape(
             platform="gpu-b300-sxm",
+            preset="8gpu-192vcpu-2768gb",
             fabric="uk-south1-b",
+            mode="regular",
+            gpu_count_per_instance=8,
         ),
     }
 
 
-def test_estimate_mk8s_requirements_tag_infiniband_gpu_checks_with_capacity_block_group_affinity() -> None:
+def test_estimate_mk8s_requirements_add_gpu_capacity_shape_for_infiniband_nodes() -> None:
     class _Session:
         def preset_resources(self, *, project_id: str, platform: str, preset: str):
             assert project_id == "project-1"
             assert platform == "gpu-b300-sxm"
             assert preset == "8gpu-192vcpu-2768gb"
-            return type(
-                "_Resources",
-                (),
-                {
-                    "platform": platform,
-                    "preset": preset,
-                    "vcpu_count": 192,
-                    "memory_gibibytes": 2768,
-                    "gpu_count": 8,
-                },
-            )()
+            return _resources(
+                platform=platform,
+                preset=preset,
+                vcpu_count=192,
+                memory_gibibytes=2768,
+                gpu_count=8,
+                allow_gpu_clustering=True,
+            )
 
     requirements: list[QuotaRequirement] = []
     gaps: list[QuotaCoverageGap] = []
@@ -173,49 +245,39 @@ def test_estimate_mk8s_requirements_tag_infiniband_gpu_checks_with_capacity_bloc
         gaps=gaps,
     )
 
-    affinity = CapacityBlockGroupAffinity(
-        service="compute",
-        platform="gpu-b300-sxm",
-        fabric="uk-south1-a",
-    )
-    gpu_cluster_requirement = next(
-        item for item in requirements if item.quota_name == "compute.gpucluster.count"
-    )
     gpu_quota_requirement = next(
         item for item in requirements if item.quota_name == "compute.instance.gpu.b300"
     )
 
-    assert gpu_cluster_requirement.capacity_block_group_affinity == affinity
-    assert gpu_quota_requirement.capacity_block_group_affinity == affinity
+    assert gpu_quota_requirement.gpu_capacity_shape == GpuCapacityShape(
+        platform="gpu-b300-sxm",
+        preset="8gpu-192vcpu-2768gb",
+        fabric="uk-south1-a",
+        mode="regular",
+        gpu_count_per_instance=8,
+    )
 
 
 def test_estimate_mk8s_requirements_cover_boot_disk_quota_from_explicit_inputs() -> None:
     class _Session:
         def preset_resources(self, *, project_id: str, platform: str, preset: str):
             if (project_id, platform, preset) == ("project-1", "cpu-d3", "32vcpu-128gb"):
-                return type(
-                    "_Resources",
-                    (),
-                    {
-                        "platform": platform,
-                        "preset": preset,
-                        "vcpu_count": 32,
-                        "memory_gibibytes": 128,
-                        "gpu_count": 0,
-                    },
-                )()
+                return _resources(
+                    platform=platform,
+                    preset=preset,
+                    vcpu_count=32,
+                    memory_gibibytes=128,
+                    gpu_count=0,
+                )
             if (project_id, platform, preset) == ("project-1", "gpu-b300-sxm", "8gpu-192vcpu-2768gb"):
-                return type(
-                    "_Resources",
-                    (),
-                    {
-                        "platform": platform,
-                        "preset": preset,
-                        "vcpu_count": 192,
-                        "memory_gibibytes": 2768,
-                        "gpu_count": 8,
-                    },
-                )()
+                return _resources(
+                    platform=platform,
+                    preset=preset,
+                    vcpu_count=192,
+                    memory_gibibytes=2768,
+                    gpu_count=8,
+                    allow_gpu_clustering=True,
+                )
             raise AssertionError((project_id, platform, preset))
 
     requirements: list[QuotaRequirement] = []
@@ -257,17 +319,13 @@ def test_estimate_mk8s_requirements_cover_boot_disk_quota_from_explicit_inputs()
 def test_estimate_mk8s_requirements_cover_boot_disk_quota_from_override_template() -> None:
     class _Session:
         def preset_resources(self, *, project_id: str, platform: str, preset: str):
-            return type(
-                "_Resources",
-                (),
-                {
-                    "platform": platform,
-                    "preset": preset,
-                    "vcpu_count": 32,
-                    "memory_gibibytes": 128,
-                    "gpu_count": 0,
-                },
-            )()
+            return _resources(
+                platform=platform,
+                preset=preset,
+                vcpu_count=32,
+                memory_gibibytes=128,
+                gpu_count=0,
+            )
 
     requirements: list[QuotaRequirement] = []
     gaps: list[QuotaCoverageGap] = []
@@ -302,7 +360,7 @@ def test_estimate_mk8s_requirements_cover_boot_disk_quota_from_override_template
     assert gaps == []
 
 
-def test_evaluate_requirement_uses_matching_capacity_block_group_for_gpu_quota() -> None:
+def test_evaluate_requirement_uses_matching_capacity_dashboard_row_for_gpu_quota() -> None:
     requirement = AggregatedQuotaRequirement(
         component_id="mk8s",
         instance_id="mk8s",
@@ -311,10 +369,12 @@ def test_evaluate_requirement_uses_matching_capacity_block_group_for_gpu_quota()
         region="uk-south1",
         required=8,
         reason="1 GPU node(s) at gpu-b300-sxm/8gpu-192vcpu-2768gb",
-        capacity_block_group_affinity=CapacityBlockGroupAffinity(
-            service="compute",
+        gpu_capacity_shape=GpuCapacityShape(
             platform="gpu-b300-sxm",
+            preset="8gpu-192vcpu-2768gb",
             fabric="uk-south1-a",
+            mode="regular",
+            gpu_count_per_instance=8,
         ),
     )
 
@@ -335,86 +395,116 @@ def test_evaluate_requirement_uses_matching_capacity_block_group_for_gpu_quota()
             )
         },
         project_quotas={},
-        capacity_block_groups=(
-            CapacityBlockGroupRecord(
-                id="capacityblockgroup-1",
-                parent_id="tenant-1",
+        capacity_resource_advice=(
+            _capacity_advice(
                 region="uk-south1",
-                service="compute",
                 platform="gpu-b300-sxm",
+                preset="8gpu-192vcpu-2768gb",
                 fabric="uk-south1-a",
-                current_limit=8,
-                usage=0,
-                state="STATE_ACTIVE",
-                usage_state="USAGE_STATE_NOT_USED",
-                usage_percentage="0.00",
+                on_demand_available=1,
+                on_demand_limit=2,
+                on_demand_level="AVAILABILITY_LEVEL_MEDIUM",
             ),
         ),
     )
 
     assert check.available == 8
     assert check.sufficient is True
-    assert check.capacity_block_group_available == 8
-    assert check.capacity_block_group_ids == ("capacityblockgroup-1",)
-    assert "capacity-block-group" in check.source_scope
+    assert check.source_scope == "capacity-dashboard/on-demand"
+    assert check.description == "NVIDIA B300 for regular VMs without reservations"
 
 
-def test_evaluate_requirement_uses_matching_capacity_block_group_for_gpu_cluster_count() -> None:
+def test_evaluate_requirement_picks_best_capacity_dashboard_row_when_fabric_is_not_fixed() -> None:
     requirement = AggregatedQuotaRequirement(
         component_id="mk8s",
         instance_id="mk8s",
         component_label="mk8s",
-        quota_name="compute.gpucluster.count",
-        region="uk-south1",
-        required=1,
-        reason="one GPU cluster for InfiniBand fabric",
-        capacity_block_group_affinity=CapacityBlockGroupAffinity(
-            service="compute",
-            platform="gpu-b300-sxm",
-            fabric="uk-south1-a",
+        quota_name="compute.instance.gpu.h100",
+        region="eu-north1",
+        required=16,
+        reason="2 GPU node(s) at gpu-h100-sxm/8gpu-128vcpu-1600gb",
+        gpu_capacity_shape=GpuCapacityShape(
+            platform="gpu-h100-sxm",
+            preset="8gpu-128vcpu-1600gb",
+            fabric="",
+            mode="regular",
+            gpu_count_per_instance=8,
         ),
     )
 
     check = _evaluate_requirement(
         requirement,
-        tenant_quotas={
-            ("compute.gpucluster.count", "uk-south1"): QuotaRecord(
-                name="compute.gpucluster.count",
-                region="uk-south1",
-                limit=0,
-                usage=0,
-                service="compute",
-                description="Number of GPU clusters",
-                unit="count",
-                state="STATE_ACTIVE",
-                usage_state="USAGE_STATE_NOT_USED",
-                usage_percentage="0.00",
-            )
-        },
+        tenant_quotas={},
         project_quotas={},
-        capacity_block_groups=(
-            CapacityBlockGroupRecord(
-                id="capacityblockgroup-1",
-                parent_id="tenant-1",
-                region="uk-south1",
-                service="compute",
-                platform="gpu-b300-sxm",
-                fabric="uk-south1-a",
-                current_limit=8,
-                usage=0,
-                state="STATE_ACTIVE",
-                usage_state="USAGE_STATE_NOT_USED",
-                usage_percentage="0.00",
+        capacity_resource_advice=(
+            _capacity_advice(
+                region="eu-north1",
+                platform="gpu-h100-sxm",
+                preset="8gpu-128vcpu-1600gb",
+                fabric="fabric-4",
+                on_demand_available=0,
+                on_demand_limit=2,
+                on_demand_level="AVAILABILITY_LEVEL_LOW",
+            ),
+            _capacity_advice(
+                region="eu-north1",
+                platform="gpu-h100-sxm",
+                preset="8gpu-128vcpu-1600gb",
+                fabric="fabric-2",
+                on_demand_available=2,
+                on_demand_limit=2,
+                on_demand_level="AVAILABILITY_LEVEL_MEDIUM",
             ),
         ),
     )
 
-    assert check.available == 1
+    assert check.available == 16
     assert check.sufficient is True
-    assert check.capacity_block_group_available == 1
+    assert check.source_scope == "capacity-dashboard/on-demand"
+    assert check.description == "Capacity Dashboard GPU availability (on-demand, fabric fabric-2)"
 
 
-def test_evaluate_requirement_marks_capacity_backed_gpu_quota_unknown_when_capacity_lookup_fails() -> None:
+def test_evaluate_requirement_uses_preemptible_capacity_dashboard_lane_for_gpu_quota() -> None:
+    requirement = AggregatedQuotaRequirement(
+        component_id="vm",
+        instance_id="vm",
+        component_label="vm",
+        quota_name="compute.instance.gpu.h100",
+        region="eu-north1",
+        required=1,
+        reason="1 preemptible GPU(s) from gpu-h100-sxm/1gpu-16vcpu-200gb",
+        gpu_capacity_shape=GpuCapacityShape(
+            platform="gpu-h100-sxm",
+            preset="1gpu-16vcpu-200gb",
+            fabric="",
+            mode="preemptible",
+            gpu_count_per_instance=1,
+        ),
+    )
+
+    check = _evaluate_requirement(
+        requirement,
+        tenant_quotas={},
+        project_quotas={},
+        capacity_resource_advice=(
+            _capacity_advice(
+                region="eu-north1",
+                platform="gpu-h100-sxm",
+                preset="1gpu-16vcpu-200gb",
+                fabric="fabric-2",
+                preemptible_available=3,
+                preemptible_limit=128,
+                preemptible_level="AVAILABILITY_LEVEL_HIGH",
+            ),
+        ),
+    )
+
+    assert check.available == 3
+    assert check.sufficient is True
+    assert check.source_scope == "capacity-dashboard/preemptible"
+
+
+def test_evaluate_requirement_marks_gpu_quota_unknown_when_capacity_dashboard_lookup_fails() -> None:
     requirement = AggregatedQuotaRequirement(
         component_id="mk8s",
         instance_id="mk8s",
@@ -423,31 +513,20 @@ def test_evaluate_requirement_marks_capacity_backed_gpu_quota_unknown_when_capac
         region="uk-south1",
         required=8,
         reason="1 GPU node(s) at gpu-b300-sxm/8gpu-192vcpu-2768gb",
-        capacity_block_group_affinity=CapacityBlockGroupAffinity(
-            service="compute",
+        gpu_capacity_shape=GpuCapacityShape(
             platform="gpu-b300-sxm",
+            preset="8gpu-192vcpu-2768gb",
             fabric="uk-south1-a",
+            mode="regular",
+            gpu_count_per_instance=8,
         ),
     )
 
     check = _evaluate_requirement(
         requirement,
-        tenant_quotas={
-            ("compute.instance.gpu.b300", "uk-south1"): QuotaRecord(
-                name="compute.instance.gpu.b300",
-                region="uk-south1",
-                limit=0,
-                usage=0,
-                service="compute",
-                description="NVIDIA B300 for regular VMs without reservations",
-                unit="count",
-                state="STATE_ACTIVE",
-                usage_state="USAGE_STATE_NOT_USED",
-                usage_percentage="0.00",
-            )
-        },
+        tenant_quotas={},
         project_quotas={},
-        capacity_block_groups=None,
+        capacity_resource_advice=None,
     )
 
     assert check.available is None
@@ -498,7 +577,6 @@ def test_plan_quota_request_changes_targets_the_constraining_scopes() -> None:
             required=200,
             requested_limit=300,
             unit="byte",
-            quota_id="project-quota-1",
         ),
         QuotaRequestChange(
             container_id="tenant-123",
@@ -510,7 +588,6 @@ def test_plan_quota_request_changes_targets_the_constraining_scopes() -> None:
             required=200,
             requested_limit=300,
             unit="byte",
-            quota_id="tenant-quota-1",
         ),
     )
 
@@ -574,7 +651,31 @@ def test_plan_quota_request_changes_coalesces_split_checks_for_one_quota_scope()
     assert change.requested_limit == 24
 
 
-def test_request_quota_allowance_changes_collects_permission_denied_failures(
+def test_format_quota_request_manual_followup_lines_includes_minimum_target() -> None:
+    lines = format_quota_request_manual_followup_lines(
+        (
+            QuotaRequestChange(
+                container_id="tenant-123",
+                container_scope="tenant",
+                quota_name="compute.disk.size.network-ssd",
+                region="eu-north1",
+                current_limit=0,
+                current_usage=0,
+                required=2396591751168,
+                requested_limit=2396591751168,
+                unit="byte",
+            ),
+        )
+    )
+
+    assert lines == [
+        "  - tenant tenant-123: eu-north1 compute.disk.size.network-ssd "
+        "-> request total limit at least 2.2 TiB (2396591751168 byte) "
+        "(increase by at least 2.2 TiB (2396591751168 byte) over current limit 0 B)"
+    ]
+
+
+def test_request_quota_changes_collects_permission_denied_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     report = QuotaReport(
@@ -610,10 +711,14 @@ def test_request_quota_allowance_changes_collects_permission_denied_failures(
             assert context == "quota request"
             assert project_id == "project-456"
 
-        def request_quota_allowance_limit(self, **_kwargs: object) -> str:
+        def recommend_quota_request_changes(
+            self, changes: tuple[QuotaRequestChange, ...]
+        ) -> tuple[QuotaRequestChange, ...]:
+            return changes
+
+        def submit_quota_requests(self, _changes: tuple[QuotaRequestChange, ...]) -> None:
             raise RuntimeError(
-                "Failed to request quota 'compute.disk.size.network-ssd' in uk-south1 "
-                "for tenant-123: Request error PERMISSION_DENIED: Permission denied; "
+                "Failed to create quota requests: Request error PERMISSION_DENIED: Permission denied; "
                 "Caused by error: UnauthorizedMany"
             )
 
@@ -622,7 +727,7 @@ def test_request_quota_allowance_changes_collects_permission_denied_failures(
 
     monkeypatch.setattr(quota_checks, "_QuotaSession", _Session)
 
-    result = request_quota_allowance_changes(report, context="quota request")
+    result = request_quota_changes(report, context="quota request")
 
     assert len(result.planned_changes) == 1
     assert result.submitted_changes == ()
@@ -630,7 +735,7 @@ def test_request_quota_allowance_changes_collects_permission_denied_failures(
     assert result.permission_denied_failures[0].change.container_id == "tenant-123"
 
 
-def test_request_quota_allowance_changes_raises_non_permission_errors(
+def test_request_quota_changes_falls_back_to_manual_when_internal_api_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     report = QuotaReport(
@@ -666,8 +771,66 @@ def test_request_quota_allowance_changes_raises_non_permission_errors(
             assert context == "quota request"
             assert project_id == "project-456"
 
-        def request_quota_allowance_limit(self, **_kwargs: object) -> str:
-            raise RuntimeError("Failed to request quota 'compute.disk.size.network-ssd': deadline exceeded")
+        def recommend_quota_request_changes(
+            self, _changes: tuple[QuotaRequestChange, ...]
+        ) -> tuple[QuotaRequestChange, ...]:
+            raise _NpcQuotaRequestUnavailableError("internal quota-request API unavailable")
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(quota_checks, "_QuotaSession", _Session)
+
+    result = request_quota_changes(report, context="quota request")
+
+    assert len(result.planned_changes) == 1
+    assert result.submitted_changes == ()
+    assert result.unavailable_reason == "internal quota-request API unavailable"
+
+
+def test_request_quota_changes_raises_non_permission_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report = QuotaReport(
+        tenant_id="tenant-123",
+        project_id="project-456",
+        region_id="uk-south1",
+        checked_at="2026-04-18T00:00:00+00:00",
+        checks=(
+            QuotaCheck(
+                component_id="mk8s",
+                instance_id="mk8s",
+                component_label="mk8s",
+                quota_name="compute.disk.size.network-ssd",
+                region="uk-south1",
+                required=1024,
+                reason="mk8s boot disks",
+                unit="byte",
+                available=0,
+                sufficient=False,
+                tenant_limit=0,
+                tenant_usage=0,
+                project_limit=None,
+                project_usage=None,
+                source_scope="tenant",
+                description="SSD quota",
+                tenant_quota_id="tenant-quota-1",
+            ),
+        ),
+    )
+
+    class _Session:
+        def __init__(self, *, context: str, project_id: str) -> None:
+            assert context == "quota request"
+            assert project_id == "project-456"
+
+        def recommend_quota_request_changes(
+            self, changes: tuple[QuotaRequestChange, ...]
+        ) -> tuple[QuotaRequestChange, ...]:
+            return changes
+
+        def submit_quota_requests(self, _changes: tuple[QuotaRequestChange, ...]) -> None:
+            raise RuntimeError("Failed to create quota requests: deadline exceeded")
 
         def close(self) -> None:
             return None
@@ -675,7 +838,7 @@ def test_request_quota_allowance_changes_raises_non_permission_errors(
     monkeypatch.setattr(quota_checks, "_QuotaSession", _Session)
 
     with pytest.raises(RuntimeError, match="deadline exceeded"):
-        request_quota_allowance_changes(report, context="quota request")
+        request_quota_changes(report, context="quota request")
 
 
 def test_format_quota_report_lines_include_errors_gaps_and_shortages() -> None:
@@ -789,6 +952,27 @@ def test_format_quota_report_lines_can_hide_coverage_gaps() -> None:
     )
 
     assert lines == []
+
+
+def test_quota_session_prefers_operator_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeSdk:
+        def sync_close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        quota_checks,
+        "init_nebius_sdk",
+        lambda **kwargs: captured.update(kwargs) or _FakeSdk(),
+    )
+
+    session = quota_checks._QuotaSession(context="deploy quota assessment", project_id="project-456")
+    session.close()
+
+    assert captured["parent_id"] == "project-456"
+    assert captured["context"] == "deploy quota assessment"
+    assert captured["prefer_operator_auth"] is True
 
 
 def test_format_quota_report_lines_include_unresolved_limits() -> None:
@@ -1003,11 +1187,13 @@ def test_estimate_vm_requirements_cover_regular_gpu_and_boot_disk() -> None:
             assert project_id == "project-1"
             assert platform == "gpu-h100-sxm"
             assert preset == "1gpu-16vcpu-200gb"
-            return type(
-                "_Resources",
-                (),
-                {"platform": platform, "preset": preset, "vcpu_count": 16, "memory_gibibytes": 200, "gpu_count": 1},
-            )()
+            return _resources(
+                platform=platform,
+                preset=preset,
+                vcpu_count=16,
+                memory_gibibytes=200,
+                gpu_count=1,
+            )
 
     requirements: list[QuotaRequirement] = []
     gaps: list[QuotaCoverageGap] = []
@@ -1038,14 +1224,16 @@ def test_estimate_vm_requirements_cover_regular_gpu_and_boot_disk() -> None:
     assert gaps == []
 
 
-def test_estimate_vm_requirements_report_preemptible_gpu_quota_gap() -> None:
+def test_estimate_vm_requirements_cover_preemptible_gpu_capacity() -> None:
     class _Session:
         def preset_resources(self, *, project_id: str, platform: str, preset: str):
-            return type(
-                "_Resources",
-                (),
-                {"platform": platform, "preset": preset, "vcpu_count": 16, "memory_gibibytes": 200, "gpu_count": 1},
-            )()
+            return _resources(
+                platform=platform,
+                preset=preset,
+                vcpu_count=16,
+                memory_gibibytes=200,
+                gpu_count=1,
+            )
 
     requirements: list[QuotaRequirement] = []
     gaps: list[QuotaCoverageGap] = []
@@ -1067,8 +1255,16 @@ def test_estimate_vm_requirements_report_preemptible_gpu_quota_gap() -> None:
         gaps=gaps,
     )
 
-    assert [item.quota_name for item in requirements] == ["compute.instance.preemptible.count"]
-    assert any(
-        "GPU-type quota mapping for preemptible standalone VMs is not exposed" in gap.message
-        for gap in gaps
+    assert [item.quota_name for item in requirements] == [
+        "compute.instance.preemptible.count",
+        "compute.instance.gpu.h100",
+    ]
+    gpu_requirement = next(item for item in requirements if item.quota_name == "compute.instance.gpu.h100")
+    assert gpu_requirement.gpu_capacity_shape == GpuCapacityShape(
+        platform="gpu-h100-sxm",
+        preset="1gpu-16vcpu-200gb",
+        fabric="",
+        mode="preemptible",
+        gpu_count_per_instance=1,
     )
+    assert gaps == []

@@ -45,7 +45,7 @@ def load_config(path: Path, *, persist_normalized: bool = False) -> AttrDict:
     if path.is_dir():
         raise ValueError(
             "Expected a project config.yaml file path, but got a directory: "
-            f"{path}. Pass <tenant>/<project>/config.yaml."
+            f"{path}. Pass <tenant-folder>/<project-folder>/config.yaml."
         )
     with path.open("r", encoding="utf-8") as handle:
         payload = yaml.safe_load(handle) or {}

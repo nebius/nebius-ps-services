@@ -36,7 +36,9 @@ class FakeSMTP:
 
 def _project_paths(tmp_path: Path) -> ProjectPaths:
     repo_root = tmp_path / "repo"
-    generated_dir = repo_root / "deployments" / "tenant-123" / "project-456" / "generated"
+    generated_dir = (
+        repo_root / "deployments" / "tenant-name-example" / "project-name-example" / "generated"
+    )
     project_dir = generated_dir.parent
     return ProjectPaths(
         config_path=project_dir / "config.yaml",
@@ -47,8 +49,8 @@ def _project_paths(tmp_path: Path) -> ProjectPaths:
         infra_dir=generated_dir / "infra",
         flux_dir=generated_dir / "flux",
         inventory_dir=generated_dir / "inventory",
-        path_tenant_id="tenant-123",
-        path_project_id="project-456",
+        path_tenant_folder="tenant-name-example",
+        path_project_folder="project-name-example",
     )
 
 
@@ -203,6 +205,23 @@ def test_send_deploy_report_email_requires_inventory_markdown_body(
     paths.inventory_dir.mkdir(parents=True, exist_ok=True)
 
     with pytest.raises(RuntimeError, match="Deploy report markdown is missing"):
+        send_deploy_report_email(_config(), paths)
+
+
+def test_send_deploy_report_email_requires_project_id_from_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _project_paths(tmp_path)
+    paths.inventory_dir.mkdir(parents=True, exist_ok=True)
+    (paths.inventory_dir / "deploy-report.md").write_text("# Deploy Report\n", encoding="utf-8")
+
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
+
+    with pytest.raises(
+        RuntimeError,
+        match="folder names are not used as an identity fallback",
+    ):
         send_deploy_report_email(_config(project_id=""), paths)
 
 
