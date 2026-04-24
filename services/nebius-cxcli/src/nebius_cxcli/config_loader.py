@@ -9,6 +9,11 @@ import yaml
 
 from .config_model import is_dynamic_payload, to_runtime_payload
 from .mk8s_gpu import normalize_mk8s_gpu_project_validation_settings
+from .observability import (
+    ensure_observability_app_rows,
+    materialize_observability_infra_values,
+    normalize_observability_project_settings,
+)
 from .runtime_config import AttrDict, to_plain_data, wrap_runtime_config
 from .runtime_validation import validate_dynamic_payload_structure, validate_runtime_payload
 from .ssh_public_keys import normalize_runtime_ssh_public_key_inputs
@@ -21,6 +26,12 @@ def normalize_runtime_config_payload(
 ) -> bool:
     changed = normalize_runtime_ssh_public_key_inputs(payload, base_dir=base_dir)
     if normalize_mk8s_gpu_project_validation_settings(payload):
+        changed = True
+    if normalize_observability_project_settings(payload):
+        changed = True
+    if ensure_observability_app_rows(payload):
+        changed = True
+    if materialize_observability_infra_values(payload):
         changed = True
     return changed
 

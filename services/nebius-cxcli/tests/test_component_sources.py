@@ -954,6 +954,128 @@ def test_bundled_vm_like_modules_declare_compute_instance_status_watchers() -> N
     assert ssh.status.name_input == "name"
 
 
+def test_bundled_mk8s_observability_declares_public_endpoint_templates() -> None:
+    loaded = load_component_sources(
+        explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml"
+    )
+    mk8s = next(item for item in loaded.tf_modules if item.module == "mk8s")
+
+    assert mk8s.observability.endpoints.metrics_otlp_write == (
+        "https://write.monitoring.{region}.nebius.cloud/projects/"
+        "{project_id}/opentelemetry/v1/metrics"
+    )
+    assert mk8s.observability.endpoints.metrics_prometheus_remote_write == (
+        "https://write.monitoring.{region}.nebius.cloud/projects/"
+        "{project_id}/prometheus/api/v1/write"
+    )
+    assert mk8s.observability.endpoints.logs_otlp_write == (
+        "https://write.logging.{region}.nebius.cloud"
+    )
+    assert mk8s.observability.endpoints.logs_agent_grpc_write == (
+        "dns:///write.logging.{region}.nebius.cloud:443"
+    )
+    assert mk8s.observability.endpoints.traces_tempo_read == (
+        "https://read.tracing.api.nebius.cloud/projects/{project_id}/tempo"
+    )
+
+
+def test_bundled_vm_observability_declares_platform_managed_write_notes() -> None:
+    loaded = load_component_sources(
+        explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml"
+    )
+    vm = next(item for item in loaded.tf_modules if item.module == "vm")
+
+    assert "platform-managed regional endpoints" in (
+        vm.observability.endpoints.metrics_platform_managed_write
+    )
+    assert "platform-managed Logging ingest path" in (
+        vm.observability.endpoints.logs_platform_managed_write
+    )
+    assert vm.observability.endpoints.metrics_service_provider_read == (
+        "https://read.monitoring.api.nebius.cloud/projects/{project_id}/service-provider/prometheus"
+    )
+    assert vm.observability.endpoints.logs_loki_read == (
+        "https://read.logging.api.nebius.cloud/projects/{project_id}"
+    )
+
+
+def test_bundled_gpu_operator_observability_declares_dcgm_node_policy() -> None:
+    loaded = load_component_sources(
+        explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml"
+    )
+    gpu_operator = next(item for item in loaded.helm_charts if item.name == "nvidia-gpu-operator")
+
+    target = gpu_operator.observability.metric_targets[0]
+
+    assert target.job_name == "cxcli-nvidia-dcgm-exporter"
+    assert target.discovery == "prometheus_annotations"
+    assert dict(target.required_gpu_node_labels) == {
+        "nvidia.com/gpu.deploy.operands": "true",
+        "nvidia.com/gpu.deploy.dcgm-exporter": "true",
+        "nvidia.com/gpu.deploy.operator-validator": "true",
+        "nvidia.com/gpu.deploy.device-plugin": "false",
+        "nvidia.com/gpu.deploy.gpu-feature-discovery": "false",
+    }
+    assert dict(target.required_gpu_node_selector) == {"nebius.com/gpu": "true"}
+    assert target.required_gpu_node_label_stack_sources == ("nebius_image",)
+
+
+def test_component_sources_rejects_invalid_observability_gpu_node_label_stack_source(
+    tmp_path: Path,
+) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                apps={
+                    "gpu-operator": {
+                        "source": _portable_chart_source(
+                            repo="https://example.invalid/charts",
+                            chart="gpu-operator",
+                            version="1.0.0",
+                        ),
+                        "release": {
+                            "namespace": "gpu-system",
+                            "name": "gpu-operator",
+                        },
+                        "ui": {"enabled": False},
+                        "cli": {
+                            "observability": {
+                                "metric_targets": [
+                                    {
+                                        "job_name": "cxcli-nvidia-dcgm-exporter",
+                                        "discovery": {
+                                            "kind": "prometheus_annotations",
+                                            "service_name": "nvidia-dcgm-exporter",
+                                        },
+                                        "managed_gpu_node_policy": {
+                                            "stack_sources": [
+                                                "driverful",
+                                            ]
+                                        },
+                                    }
+                                ]
+                            }
+                        },
+                    }
+                }
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "components\\.apps\\.gpu-operator\\.cli\\.observability\\.metric_targets"
+            "\\[0\\]\\.managed_gpu_node_policy\\.stack_sources\\[0\\] must be "
+            "'nebius_image' or 'operator_managed'"
+        ),
+    ):
+        load_component_sources(explicit=sources_file)
+
+
 def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
     loaded = load_component_sources(
         explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml"
@@ -1069,6 +1191,37 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         "deploy.validations.mk8s_gpu.health_checker.enabled": {
             "default": False,
         },
+        "observability.enabled": {
+            "default": False,
+        },
+        "observability.kubernetes.logs.enabled": {
+            "default": True,
+        },
+        "observability.kubernetes.logs.collect_agent_logs": {
+            "default": False,
+            "prompt": False,
+        },
+        "observability.kubernetes.logs.excluded_namespaces": {
+            "default": ["kube-system"],
+            "prompt": False,
+        },
+        "observability.kubernetes.metrics.enabled": {
+            "default": True,
+        },
+        "observability.kubernetes.metrics.collect_agent_metrics": {
+            "default": False,
+            "prompt": False,
+        },
+        "observability.kubernetes.metrics.collect_k8s_cluster_metrics": {
+            "default": True,
+        },
+        "observability.kubernetes.metrics.excluded_namespaces": {
+            "default": [],
+            "prompt": False,
+        },
+        "observability.kubernetes.traces.enabled": {
+            "default": True,
+        },
         "inputs.mk8s_cluster_overrides": {
             "prompt": False,
         },
@@ -1175,6 +1328,27 @@ def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> Non
                 "skip_prompt_if_no_choices": True,
             }
         },
+        "observability.enabled": {
+            "default": False,
+        },
+        "observability.vm.collector.enabled": {
+            "default": False,
+        },
+        "observability.vm.collector.metrics.enabled": {
+            "default": True,
+        },
+        "observability.vm.collector.logs.enabled": {
+            "default": True,
+        },
+        "observability.vm.collector.logs.systemd_units": {
+            "default": [],
+        },
+        "observability.vm.logs.enabled": {
+            "default": False,
+        },
+        "observability.vm.logs.systemd_units": {
+            "default": [],
+        },
         "inputs.boot_disk_existing_id": {
             "prompt": False,
         },
@@ -1196,9 +1370,6 @@ def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> Non
         "inputs.hostname": {
             "prompt": False,
         },
-        "inputs.service_account_id": {
-            "prompt": False,
-        },
         "inputs.stopped": {
             "prompt": False,
         },
@@ -1212,6 +1383,33 @@ def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> Non
             "prompt": False,
         },
         "inputs.filesystems": {
+            "prompt": False,
+        },
+        "inputs.observability_collector_enabled": {
+            "prompt": False,
+        },
+        "inputs.observability_collector_region_id": {
+            "prompt": False,
+        },
+        "inputs.observability_collector_package_version": {
+            "prompt": False,
+        },
+        "inputs.observability_collector_iam_token_file": {
+            "prompt": False,
+        },
+        "inputs.observability_collector_logs_enabled": {
+            "prompt": False,
+        },
+        "inputs.observability_collector_logs_systemd_units": {
+            "prompt": False,
+        },
+        "inputs.observability_collector_metrics_enabled": {
+            "prompt": False,
+        },
+        "inputs.observability_collector_metrics_export_port": {
+            "prompt": False,
+        },
+        "inputs.observability_collector_prometheus_agent_port": {
             "prompt": False,
         },
         "inputs.preemptible_priority": {
@@ -1514,7 +1712,26 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                                         "max_nodes": 6,
                                     },
                                 },
-                            }
+                            },
+                            "observability": {
+                                "primary_agent": {
+                                    "kind": "kubernetes_agent",
+                                    "chart_component_id": "nebius-observability-agent",
+                                    "logs": {
+                                        "default_enabled": True,
+                                        "collect_agent_logs": False,
+                                        "excluded_namespaces": ["kube-system"],
+                                    },
+                                    "metrics": {
+                                        "default_enabled": True,
+                                        "collect_agent_metrics": False,
+                                        "collect_k8s_cluster_metrics": True,
+                                    },
+                                    "traces": {
+                                        "default_enabled": True,
+                                    },
+                                },
+                            },
                         },
                     }
                 },
@@ -1552,7 +1769,7 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                                         },
                                     },
                                     {
-                                        "gpu_stack_source": "manual",
+                                        "gpu_stack_source": "operator_managed",
                                         "match_platforms": [
                                             "gpu-b200-sxm",
                                             "gpu-b200-sxm-a",
@@ -1561,9 +1778,41 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                                             "values.nfd.enabled": False,
                                         },
                                     },
+                                    {
+                                        "gpu_stack_source": "operator_managed",
+                                        "defaults": {
+                                            "values.driver.enabled": True,
+                                            "values.toolkit.enabled": True,
+                                            "values.driver.nvidiaDriverCRD.enabled": False,
+                                        },
+                                    },
                                 ],
                                 "install_after": ["network-op"],
-                            }
+                            },
+                            "observability": {
+                                "metric_targets": [
+                                    {
+                                        "job_name": "cxcli-nvidia-dcgm-exporter",
+                                        "discovery": {
+                                            "kind": "prometheus_annotations",
+                                            "service_name": "nvidia-dcgm-exporter",
+                                            "port": 9400,
+                                        },
+                                        "managed_gpu_node_policy": {
+                                            "labels": {
+                                                "nvidia.com/gpu.deploy.operands": "true",
+                                                "nvidia.com/gpu.deploy.dcgm-exporter": "true",
+                                            },
+                                            "selector": {
+                                                "nebius.com/gpu": "true",
+                                            },
+                                            "stack_sources": [
+                                                "nebius_image",
+                                            ],
+                                        },
+                                    }
+                                ]
+                            },
                         },
                     },
                     "network-op": {
@@ -1613,7 +1862,7 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                                 },
                                 "rules": [
                                     {
-                                        "gpu_stack_source": "manual",
+                                        "gpu_stack_source": "operator_managed",
                                         "match_platforms": ["gpu-b200-sxm"],
                                         "auto_enable": True,
                                     },
@@ -1682,7 +1931,7 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
     assert [item.name for item in network_operator.mk8s_gpu.post_render_patch_sets] == [
         "rdma_shared_device_plugin",
     ]
-    assert network_operator.mk8s_gpu.rules[0].gpu_stack_source == "manual"
+    assert network_operator.mk8s_gpu.rules[0].gpu_stack_source == "operator_managed"
     assert network_operator.mk8s_gpu.rules[0].match_platforms == ("gpu-b200-sxm",)
     assert network_operator.mk8s_gpu.rules[0].auto_enable is True
     assert network_operator.mk8s_gpu.rules[1].gpu_stack_source == "nebius_image"
@@ -1717,10 +1966,28 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
     assert [item.target_path for item in gpu_cluster_nfd_rule.defaults] == [
         "values.nfd.enabled",
     ]
+    manual_driver_rule = next(
+        rule
+        for rule in gpu_operator.mk8s_gpu.rules
+        if rule.gpu_stack_source == "operator_managed"
+        and not rule.match_platforms
+        and rule.defaults
+        and {item.target_path for item in rule.defaults}
+        >= {
+            "values.driver.enabled",
+            "values.toolkit.enabled",
+            "values.driver.nvidiaDriverCRD.enabled",
+        }
+    )
+    assert {item.target_path: item.value for item in manual_driver_rule.defaults} == {
+        "values.driver.enabled": True,
+        "values.toolkit.enabled": True,
+        "values.driver.nvidiaDriverCRD.enabled": False,
+    }
     manual_b200_nfd_rule = next(
         rule
         for rule in gpu_operator.mk8s_gpu.rules
-        if rule.gpu_stack_source == "manual" and rule.match_platforms == ("gpu-b200-sxm", "gpu-b200-sxm-a")
+        if rule.gpu_stack_source == "operator_managed" and rule.match_platforms == ("gpu-b200-sxm", "gpu-b200-sxm-a")
     )
     assert [item.target_path for item in manual_b200_nfd_rule.defaults] == [
         "values.nfd.enabled",
@@ -1730,6 +1997,21 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
     assert mk8s.mk8s_gpu.validations.gpu_visibility.max_nodes == 4
     assert mk8s.mk8s_gpu.validations.nccl.chart_component_id == "nccl-test"
     assert mk8s.mk8s_gpu.validations.nccl.max_nodes == 6
+    assert mk8s.observability.mode == "kubernetes_agent"
+    assert mk8s.observability.chart_component_id == "nebius-observability-agent"
+    assert mk8s.observability.logs.excluded_namespaces == ("kube-system",)
+    assert gpu_operator.observability.metric_targets[0].job_name == "cxcli-nvidia-dcgm-exporter"
+    assert gpu_operator.observability.metric_targets[0].discovery == "prometheus_annotations"
+    assert dict(gpu_operator.observability.metric_targets[0].required_gpu_node_labels) == {
+        "nvidia.com/gpu.deploy.operands": "true",
+        "nvidia.com/gpu.deploy.dcgm-exporter": "true",
+    }
+    assert dict(gpu_operator.observability.metric_targets[0].required_gpu_node_selector) == {
+        "nebius.com/gpu": "true",
+    }
+    assert gpu_operator.observability.metric_targets[0].required_gpu_node_label_stack_sources == (
+        "nebius_image",
+    )
 
 
 def test_load_component_sources_parses_vm_cli_settings(tmp_path: Path) -> None:
@@ -1754,7 +2036,19 @@ def test_load_component_sources_parses_vm_cli_settings(tmp_path: Path) -> None:
                                     "ubuntu24.04-cuda13.0",
                                     "ubuntu24.04-cuda12",
                                 ],
-                            }
+                            },
+                            "observability": {
+                                "primary_agent": {
+                                    "kind": "monitoring_agent",
+                                    "metrics": {
+                                        "default_enabled": True,
+                                    },
+                                    "logs": {
+                                        "default_enabled": False,
+                                        "systemd_units": ["sshd.service"],
+                                    },
+                                },
+                            },
                         },
                     }
                 },
@@ -1775,6 +2069,44 @@ def test_load_component_sources_parses_vm_cli_settings(tmp_path: Path) -> None:
         "ubuntu24.04-cuda13.0",
         "ubuntu24.04-cuda12",
     )
+    assert vm.observability.mode == "monitoring_agent"
+    assert vm.observability.metrics.enabled_by_default is True
+    assert vm.observability.logs.enabled_by_default is False
+    assert vm.observability.logs.systemd_units == ("sshd.service",)
+
+
+def test_load_component_sources_rejects_top_level_infra_observability_signals(tmp_path: Path) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                infra={
+                    "vm": {
+                        "source": {
+                            "portable": "git::https://example.invalid/modules/vm?ref=main",
+                            "local": "../../platform-infra/modules/vm",
+                        },
+                        "ui": {"enabled": False},
+                        "cli": {
+                            "observability": {
+                                "primary_agent": {
+                                    "kind": "monitoring_agent",
+                                },
+                                "logs": {
+                                    "default_enabled": False,
+                                },
+                            },
+                        },
+                    }
+                },
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=r"components\.infra\.vm\.cli\.observability has unsupported field\(s\): logs"):
+        load_component_sources(explicit=sources_file)
 
 
 def test_load_component_sources_resolves_local_nccl_chart_source(tmp_path: Path) -> None:
@@ -1939,7 +2271,7 @@ def test_load_component_sources_rejects_empty_mk8s_gpu_rule(tmp_path: Path) -> N
                                 "role": "gpu_operator",
                                 "rules": [
                                     {
-                                        "gpu_stack_source": "manual",
+                                        "gpu_stack_source": "operator_managed",
                                     }
                                 ],
                             }
@@ -2288,7 +2620,7 @@ def test_validate_sources_reports_chart_contract_findings(
         "nebius_cxcli.cli.chart_cli_contract_findings",
         lambda **_kwargs: (
             ("materialized chart is missing Chart.yaml in /tmp/fake-chart",),
-            ("materialized chart is missing README.md in /tmp/fake-chart",),
+            (),
         ),
     )
     monkeypatch.chdir(tmp_path)
@@ -2298,7 +2630,7 @@ def test_validate_sources_reports_chart_contract_findings(
     _resolved_path, issues, warnings = _validate_component_sources_registry()
 
     assert any("missing Chart.yaml" in issue for issue in issues)
-    assert any("missing README.md" in warning for warning in warnings)
+    assert not any("missing README.md" in warning for warning in warnings)
 
 
 def test_validate_sources_rejects_https_git_repo_module_source_without_git_prefix(

@@ -360,8 +360,8 @@ def chart_cli_contract_findings(
                         f"materialized chart templates/ has no renderable template files in {chart_dir}"
                     )
 
-            if not readme_file.exists():
-                warnings.append(f"materialized chart is missing README.md in {chart_dir}")
+            if not chart_repo and not readme_file.exists():
+                warnings.append(f"local chart is missing README.md in {chart_dir}")
 
             if chart_yaml.exists():
                 payload = yaml.safe_load(chart_yaml.read_text(encoding="utf-8")) or {}

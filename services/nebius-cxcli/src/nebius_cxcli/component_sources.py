@@ -249,6 +249,92 @@ class VmImagePreferenceSettings:
 
 
 @dataclass(frozen=True)
+class ObservabilityLogsSettings:
+    enabled_by_default: bool = True
+    collect_agent_logs: bool = False
+    excluded_namespaces: tuple[str, ...] = ()
+    systemd_units: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ObservabilityMetricsSettings:
+    enabled_by_default: bool = True
+    collect_agent_metrics: bool = False
+    collect_k8s_cluster_metrics: bool = True
+    excluded_namespaces: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ObservabilityTracesSettings:
+    enabled_by_default: bool = True
+
+
+@dataclass(frozen=True)
+class ObservabilityEndpointTemplates:
+    metrics_otlp_write: str = ""
+    metrics_prometheus_remote_write: str = ""
+    metrics_platform_managed_write: str = ""
+    logs_otlp_write: str = ""
+    logs_agent_grpc_write: str = ""
+    logs_platform_managed_write: str = ""
+    traces_otlp_grpc_write: str = ""
+    metrics_service_provider_read: str = ""
+    metrics_user_read: str = ""
+    metrics_federate_read: str = ""
+    logs_loki_read: str = ""
+    traces_tempo_read: str = ""
+
+
+@dataclass(frozen=True)
+class VmStandaloneCollectorLogsSettings:
+    enabled_by_default: bool = True
+    systemd_units: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class VmStandaloneCollectorMetricsSettings:
+    enabled_by_default: bool = True
+
+
+@dataclass(frozen=True)
+class VmStandaloneCollectorSettings:
+    enabled_by_default: bool = False
+    package_version: str = ""
+    iam_token_file: str = "/mnt/cloud-metadata/token"
+    metrics_export_port: int = 19090
+    prometheus_agent_port: int = 19091
+    logs: VmStandaloneCollectorLogsSettings = VmStandaloneCollectorLogsSettings()
+    metrics: VmStandaloneCollectorMetricsSettings = VmStandaloneCollectorMetricsSettings()
+
+
+@dataclass(frozen=True)
+class InfraObservabilitySettings:
+    mode: str = ""
+    chart_component_id: str = ""
+    logs: ObservabilityLogsSettings = ObservabilityLogsSettings()
+    metrics: ObservabilityMetricsSettings = ObservabilityMetricsSettings()
+    traces: ObservabilityTracesSettings = ObservabilityTracesSettings()
+    endpoints: ObservabilityEndpointTemplates = ObservabilityEndpointTemplates()
+    standalone_collector: VmStandaloneCollectorSettings = VmStandaloneCollectorSettings()
+
+
+@dataclass(frozen=True)
+class ObservabilityMetricTarget:
+    job_name: str = ""
+    discovery: str = ""
+    service_name: str = ""
+    port: int | None = None
+    required_gpu_node_labels: tuple[tuple[str, str], ...] = ()
+    required_gpu_node_selector: tuple[tuple[str, str], ...] = ()
+    required_gpu_node_label_stack_sources: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class AppObservabilitySettings:
+    metric_targets: tuple[ObservabilityMetricTarget, ...] = ()
+
+
+@dataclass(frozen=True)
 class CliSettings:
     flux: FluxSettings = FluxSettings()
     terraform: TerraformSettings = TerraformSettings()
@@ -295,6 +381,7 @@ class TFModuleSource:
     mk8s_gpu: Mk8sGpuSettings = Mk8sGpuSettings()
     mk8s_boot_disks: Mk8sBootDiskSettings = Mk8sBootDiskSettings()
     vm_images: VmImagePreferenceSettings = VmImagePreferenceSettings()
+    observability: InfraObservabilitySettings = InfraObservabilitySettings()
 
 
 @dataclass(frozen=True)
@@ -323,6 +410,7 @@ class HelmChartSource:
     outputs: tuple[ComponentOutput, ...] = ()
     input_bindings: tuple[ComponentInputBinding, ...] = ()
     mk8s_gpu: Mk8sGpuAppPolicy = Mk8sGpuAppPolicy()
+    observability: AppObservabilitySettings = AppObservabilitySettings()
 
     @property
     def chart_name(self) -> str | None:
@@ -837,8 +925,8 @@ def _parse_mk8s_gpu_stack_source(
         if required:
             raise ValueError(f"{field_label} is required")
         return ""
-    if value not in {"nebius_image", "manual"}:
-        raise ValueError(f"{field_label} must be 'nebius_image' or 'manual'")
+    if value not in {"nebius_image", "operator_managed"}:
+        raise ValueError(f"{field_label} must be 'nebius_image' or 'operator_managed'")
     return value
 
 
@@ -1387,6 +1475,468 @@ def _parse_vm_image_preference_settings(
     )
 
 
+def _parse_observability_logs_settings(
+    raw: Any,
+    *,
+    field_label: str,
+) -> ObservabilityLogsSettings:
+    if raw is None:
+        return ObservabilityLogsSettings()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {"default_enabled", "collect_agent_logs", "excluded_namespaces", "systemd_units"}
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    return ObservabilityLogsSettings(
+        enabled_by_default=bool(raw.get("default_enabled", True)),
+        collect_agent_logs=bool(raw.get("collect_agent_logs", False)),
+        excluded_namespaces=_parse_string_list(
+            raw.get("excluded_namespaces"),
+            field_label=f"{field_label}.excluded_namespaces",
+        ),
+        systemd_units=_parse_string_list(
+            raw.get("systemd_units"),
+            field_label=f"{field_label}.systemd_units",
+        ),
+    )
+
+
+def _parse_observability_metrics_settings(
+    raw: Any,
+    *,
+    field_label: str,
+) -> ObservabilityMetricsSettings:
+    if raw is None:
+        return ObservabilityMetricsSettings()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {"default_enabled", "collect_agent_metrics", "collect_k8s_cluster_metrics", "excluded_namespaces"}
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    return ObservabilityMetricsSettings(
+        enabled_by_default=bool(raw.get("default_enabled", True)),
+        collect_agent_metrics=bool(raw.get("collect_agent_metrics", False)),
+        collect_k8s_cluster_metrics=bool(raw.get("collect_k8s_cluster_metrics", True)),
+        excluded_namespaces=_parse_string_list(
+            raw.get("excluded_namespaces"),
+            field_label=f"{field_label}.excluded_namespaces",
+        ),
+    )
+
+
+def _parse_observability_traces_settings(
+    raw: Any,
+    *,
+    field_label: str,
+) -> ObservabilityTracesSettings:
+    if raw is None:
+        return ObservabilityTracesSettings()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {"default_enabled"}
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    return ObservabilityTracesSettings(
+        enabled_by_default=bool(raw.get("default_enabled", True))
+    )
+
+
+def _parse_observability_endpoint_templates(
+    raw: Any,
+    *,
+    field_label: str,
+) -> ObservabilityEndpointTemplates:
+    if raw is None:
+        return ObservabilityEndpointTemplates()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {"read", "write"}
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    read_raw = raw.get("read") or {}
+    write_raw = raw.get("write") or {}
+    if not isinstance(read_raw, dict):
+        raise ValueError(f"{field_label}.read must be a mapping")
+    if not isinstance(write_raw, dict):
+        raise ValueError(f"{field_label}.write must be a mapping")
+    read_supported_keys = {
+        "metrics_service_provider",
+        "metrics_user",
+        "metrics_federate",
+        "logs_loki",
+        "traces_tempo",
+    }
+    write_supported_keys = {
+        "metrics_otlp",
+        "metrics_prometheus_remote_write",
+        "metrics_platform_managed",
+        "logs_otlp",
+        "logs_agent_grpc",
+        "logs_platform_managed",
+        "traces_otlp_grpc",
+    }
+    read_unknown = sorted(str(key) for key in read_raw if str(key) not in read_supported_keys)
+    if read_unknown:
+        raise ValueError(f"{field_label}.read has unsupported field(s): " + ", ".join(read_unknown))
+    write_unknown = sorted(str(key) for key in write_raw if str(key) not in write_supported_keys)
+    if write_unknown:
+        raise ValueError(f"{field_label}.write has unsupported field(s): " + ", ".join(write_unknown))
+    return ObservabilityEndpointTemplates(
+        metrics_otlp_write=_as_text(write_raw.get("metrics_otlp")),
+        metrics_prometheus_remote_write=_as_text(write_raw.get("metrics_prometheus_remote_write")),
+        metrics_platform_managed_write=_as_text(write_raw.get("metrics_platform_managed")),
+        logs_otlp_write=_as_text(write_raw.get("logs_otlp")),
+        logs_agent_grpc_write=_as_text(write_raw.get("logs_agent_grpc")),
+        logs_platform_managed_write=_as_text(write_raw.get("logs_platform_managed")),
+        traces_otlp_grpc_write=_as_text(write_raw.get("traces_otlp_grpc")),
+        metrics_service_provider_read=_as_text(read_raw.get("metrics_service_provider")),
+        metrics_user_read=_as_text(read_raw.get("metrics_user")),
+        metrics_federate_read=_as_text(read_raw.get("metrics_federate")),
+        logs_loki_read=_as_text(read_raw.get("logs_loki")),
+        traces_tempo_read=_as_text(read_raw.get("traces_tempo")),
+    )
+
+
+def _parse_vm_standalone_collector_logs_settings(
+    raw: Any,
+    *,
+    field_label: str,
+) -> VmStandaloneCollectorLogsSettings:
+    if raw is None:
+        return VmStandaloneCollectorLogsSettings()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {"default_enabled", "systemd_units"}
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    systemd_units = raw.get("systemd_units", ())
+    if systemd_units is None:
+        systemd_units = ()
+    if not isinstance(systemd_units, (list, tuple)):
+        raise ValueError(f"{field_label}.systemd_units must be a list of strings")
+    normalized_units = tuple(_as_text(item) for item in systemd_units if _as_text(item))
+    return VmStandaloneCollectorLogsSettings(
+        enabled_by_default=bool(raw.get("default_enabled", True)),
+        systemd_units=normalized_units,
+    )
+
+
+def _parse_vm_standalone_collector_metrics_settings(
+    raw: Any,
+    *,
+    field_label: str,
+) -> VmStandaloneCollectorMetricsSettings:
+    if raw is None:
+        return VmStandaloneCollectorMetricsSettings()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {"default_enabled"}
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    return VmStandaloneCollectorMetricsSettings(
+        enabled_by_default=bool(raw.get("default_enabled", True))
+    )
+
+
+def _parse_vm_standalone_collector_settings(
+    raw: Any,
+    *,
+    field_label: str,
+) -> VmStandaloneCollectorSettings:
+    if raw is None:
+        return VmStandaloneCollectorSettings()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {
+        "default_enabled",
+        "package_version",
+        "metadata_token_file",
+        "metrics_export_port",
+        "prometheus_agent_port",
+        "logs",
+        "metrics",
+    }
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    metrics_export_port = raw.get("metrics_export_port", 19090)
+    prometheus_agent_port = raw.get("prometheus_agent_port", 19091)
+    if not isinstance(metrics_export_port, int) or metrics_export_port <= 0:
+        raise ValueError(f"{field_label}.metrics_export_port must be a positive integer")
+    if not isinstance(prometheus_agent_port, int) or prometheus_agent_port <= 0:
+        raise ValueError(f"{field_label}.prometheus_agent_port must be a positive integer")
+    return VmStandaloneCollectorSettings(
+        enabled_by_default=bool(raw.get("default_enabled", False)),
+        package_version=_as_text(raw.get("package_version")),
+        iam_token_file=_as_text(raw.get("metadata_token_file")) or "/mnt/cloud-metadata/token",
+        metrics_export_port=metrics_export_port,
+        prometheus_agent_port=prometheus_agent_port,
+        logs=_parse_vm_standalone_collector_logs_settings(
+            raw.get("logs"),
+            field_label=f"{field_label}.logs",
+        ),
+        metrics=_parse_vm_standalone_collector_metrics_settings(
+            raw.get("metrics"),
+            field_label=f"{field_label}.metrics",
+        ),
+    )
+
+
+def _parse_infra_observability_settings(
+    raw: Any,
+    *,
+    module_name: str,
+    field_label: str,
+) -> InfraObservabilitySettings:
+    if raw is None:
+        return InfraObservabilitySettings()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {
+        "primary_agent",
+        "endpoints",
+        "public_ingest",
+    }
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    primary_agent_raw = raw.get("primary_agent")
+    if primary_agent_raw is None:
+        mode = ""
+        chart_component_id = ""
+    else:
+        if not isinstance(primary_agent_raw, dict):
+            raise ValueError(f"{field_label}.primary_agent must be a mapping")
+        primary_supported_keys = {"kind", "chart_component_id", "logs", "metrics", "traces"}
+        primary_unknown = sorted(
+            str(key) for key in primary_agent_raw if str(key) not in primary_supported_keys
+        )
+        if primary_unknown:
+            raise ValueError(
+                f"{field_label}.primary_agent has unsupported field(s): " + ", ".join(primary_unknown)
+            )
+        mode = _as_text(primary_agent_raw.get("kind"))
+        chart_component_id = _as_text(primary_agent_raw.get("chart_component_id"))
+        if not mode:
+            raise ValueError(f"{field_label}.primary_agent.kind is required")
+    allowed_modes = {
+        "mk8s": {"kubernetes_agent"},
+        "vm": {"monitoring_agent"},
+    }.get(module_name, set())
+    if mode and mode not in allowed_modes:
+        allowed = ", ".join(sorted(allowed_modes)) or "<none>"
+        raise ValueError(f"{field_label}.primary_agent.kind must be one of: {allowed}")
+    if mode == "kubernetes_agent" and not chart_component_id:
+        raise ValueError(
+            f"{field_label}.primary_agent.chart_component_id is required when primary_agent.kind=kubernetes_agent"
+        )
+    if mode != "kubernetes_agent" and chart_component_id:
+        raise ValueError(
+            f"{field_label}.primary_agent.chart_component_id is only supported when primary_agent.kind=kubernetes_agent"
+        )
+    allowed_signal_keys = {
+        "kubernetes_agent": {"logs", "metrics", "traces"},
+        "monitoring_agent": {"logs", "metrics"},
+    }.get(mode, set())
+    if primary_agent_raw is None:
+        primary_logs_raw = None
+        primary_metrics_raw = None
+        primary_traces_raw = None
+    else:
+        signal_unknown = sorted(
+            str(key)
+            for key in ("logs", "metrics", "traces")
+            if primary_agent_raw.get(key) is not None and key not in allowed_signal_keys
+        )
+        if signal_unknown:
+            raise ValueError(
+                f"{field_label}.primary_agent has unsupported field(s) for {mode}: "
+                + ", ".join(signal_unknown)
+            )
+        primary_logs_raw = primary_agent_raw.get("logs")
+        primary_metrics_raw = primary_agent_raw.get("metrics")
+        primary_traces_raw = primary_agent_raw.get("traces")
+    standalone_collector = _parse_vm_standalone_collector_settings(
+        raw.get("public_ingest"),
+        field_label=f"{field_label}.public_ingest",
+    )
+    if module_name != "vm" and standalone_collector != VmStandaloneCollectorSettings():
+        raise ValueError(
+            f"{field_label}.public_ingest is only supported for the vm component"
+        )
+    return InfraObservabilitySettings(
+        mode=mode,
+        chart_component_id=chart_component_id,
+        logs=_parse_observability_logs_settings(
+            primary_logs_raw,
+            field_label=f"{field_label}.primary_agent.logs",
+        ),
+        metrics=_parse_observability_metrics_settings(
+            primary_metrics_raw,
+            field_label=f"{field_label}.primary_agent.metrics",
+        ),
+        traces=_parse_observability_traces_settings(
+            primary_traces_raw,
+            field_label=f"{field_label}.primary_agent.traces",
+        ),
+        endpoints=_parse_observability_endpoint_templates(
+            raw.get("endpoints"),
+            field_label=f"{field_label}.endpoints",
+        ),
+        standalone_collector=standalone_collector,
+    )
+
+
+def _parse_observability_gpu_node_labels(
+    raw: Any,
+    *,
+    field_label: str,
+) -> tuple[tuple[str, str], ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    labels: list[tuple[str, str]] = []
+    for key, value in raw.items():
+        label_key = str(key).strip()
+        if not label_key:
+            raise ValueError(f"{field_label} keys must be non-empty strings")
+        label_value = ("true" if value else "false") if isinstance(value, bool) else _as_text(value)
+        if not label_value:
+            raise ValueError(f"{field_label}.{label_key} must be a non-empty string")
+        labels.append((label_key, label_value))
+    return tuple(labels)
+
+
+def _parse_observability_gpu_node_label_stack_sources(
+    raw: Any,
+    *,
+    field_label: str,
+) -> tuple[str, ...]:
+    values = _parse_string_list(raw, field_label=field_label)
+    return tuple(
+        _parse_mk8s_gpu_stack_source(
+            value,
+            field_label=f"{field_label}[{index}]",
+            required=True,
+        )
+        for index, value in enumerate(values)
+    )
+
+
+def _parse_observability_metric_target(
+    raw: Any,
+    *,
+    field_label: str,
+) -> ObservabilityMetricTarget:
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {"job_name", "discovery", "managed_gpu_node_policy"}
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    job_name = _as_text(raw.get("job_name"))
+    if not job_name:
+        raise ValueError(f"{field_label}.job_name is required")
+    discovery_raw = raw.get("discovery")
+    if not isinstance(discovery_raw, dict):
+        raise ValueError(f"{field_label}.discovery must be a mapping")
+    discovery_supported_keys = {"kind", "service_name", "port"}
+    discovery_unknown = sorted(
+        str(key) for key in discovery_raw if str(key) not in discovery_supported_keys
+    )
+    if discovery_unknown:
+        raise ValueError(
+            f"{field_label}.discovery has unsupported field(s): " + ", ".join(discovery_unknown)
+        )
+    discovery = _as_text(discovery_raw.get("kind"))
+    if discovery not in {"prometheus_annotations", "additional_target"}:
+        raise ValueError(
+            f"{field_label}.discovery.kind must be one of: additional_target, prometheus_annotations"
+        )
+    service_name = _as_text(discovery_raw.get("service_name"))
+    if not service_name:
+        raise ValueError(f"{field_label}.discovery.service_name is required")
+    raw_port = discovery_raw.get("port")
+    port: int | None = None
+    if raw_port is not None:
+        if isinstance(raw_port, bool):
+            raise ValueError(f"{field_label}.discovery.port must be an integer")
+        try:
+            port = int(raw_port)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{field_label}.discovery.port must be an integer") from exc
+        if port <= 0 or port > 65535:
+            raise ValueError(f"{field_label}.discovery.port must be between 1 and 65535")
+    gpu_policy_raw = raw.get("managed_gpu_node_policy")
+    if gpu_policy_raw is None:
+        gpu_policy_raw = {}
+    if not isinstance(gpu_policy_raw, dict):
+        raise ValueError(f"{field_label}.managed_gpu_node_policy must be a mapping")
+    gpu_policy_supported_keys = {"labels", "selector", "stack_sources"}
+    gpu_policy_unknown = sorted(
+        str(key) for key in gpu_policy_raw if str(key) not in gpu_policy_supported_keys
+    )
+    if gpu_policy_unknown:
+        raise ValueError(
+            f"{field_label}.managed_gpu_node_policy has unsupported field(s): "
+            + ", ".join(gpu_policy_unknown)
+        )
+    return ObservabilityMetricTarget(
+        job_name=job_name,
+        discovery=discovery,
+        service_name=service_name,
+        port=port,
+        required_gpu_node_labels=_parse_observability_gpu_node_labels(
+            gpu_policy_raw.get("labels"),
+            field_label=f"{field_label}.managed_gpu_node_policy.labels",
+        ),
+        required_gpu_node_selector=_parse_observability_gpu_node_labels(
+            gpu_policy_raw.get("selector"),
+            field_label=f"{field_label}.managed_gpu_node_policy.selector",
+        ),
+        required_gpu_node_label_stack_sources=_parse_observability_gpu_node_label_stack_sources(
+            gpu_policy_raw.get("stack_sources"),
+            field_label=f"{field_label}.managed_gpu_node_policy.stack_sources",
+        ),
+    )
+
+
+def _parse_app_observability_settings(
+    raw: Any,
+    *,
+    field_label: str,
+) -> AppObservabilitySettings:
+    if raw is None:
+        return AppObservabilitySettings()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {"metric_targets"}
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    metric_targets_raw = raw.get("metric_targets")
+    if metric_targets_raw is None:
+        metric_targets: tuple[ObservabilityMetricTarget, ...] = ()
+    elif not isinstance(metric_targets_raw, list):
+        raise ValueError(f"{field_label}.metric_targets must be a list")
+    else:
+        metric_targets = tuple(
+            _parse_observability_metric_target(
+                item,
+                field_label=f"{field_label}.metric_targets[{index}]",
+            )
+            for index, item in enumerate(metric_targets_raw)
+        )
+    return AppObservabilitySettings(metric_targets=metric_targets)
+
+
 def _parse_infra_component_cli(
     raw: Any,
     *,
@@ -1394,14 +1944,24 @@ def _parse_infra_component_cli(
     field_label: str,
     source_profile: SourceProfile,
     source_root: Path | None = None,
-) -> tuple[Mk8sGpuSettings, Mk8sBootDiskSettings, VmImagePreferenceSettings]:
+) -> tuple[
+    Mk8sGpuSettings,
+    Mk8sBootDiskSettings,
+    VmImagePreferenceSettings,
+    InfraObservabilitySettings,
+]:
     if raw is None:
-        return Mk8sGpuSettings(), Mk8sBootDiskSettings(), VmImagePreferenceSettings()
+        return (
+            Mk8sGpuSettings(),
+            Mk8sBootDiskSettings(),
+            VmImagePreferenceSettings(),
+            InfraObservabilitySettings(),
+        )
     if not isinstance(raw, dict):
         raise ValueError(f"{field_label} must be a mapping")
 
     if module_name == "mk8s":
-        supported_keys = {"gpu", "boot_disk_defaults"}
+        supported_keys = {"gpu", "boot_disk_defaults", "observability"}
         unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
         if unknown:
             raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
@@ -1417,10 +1977,15 @@ def _parse_infra_component_cli(
                 field_label=f"{field_label}.boot_disk_defaults",
             ),
             VmImagePreferenceSettings(),
+            _parse_infra_observability_settings(
+                raw.get("observability"),
+                module_name=module_name,
+                field_label=f"{field_label}.observability",
+            ),
         )
 
     if module_name == "vm":
-        supported_keys = {"image_preferences"}
+        supported_keys = {"image_preferences", "observability"}
         unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
         if unknown:
             raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
@@ -1431,30 +1996,46 @@ def _parse_infra_component_cli(
                 raw.get("image_preferences"),
                 field_label=f"{field_label}.image_preferences",
             ),
+            _parse_infra_observability_settings(
+                raw.get("observability"),
+                module_name=module_name,
+                field_label=f"{field_label}.observability",
+            ),
         )
 
     unknown = sorted(str(key) for key in raw)
     if unknown:
         raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
-    return Mk8sGpuSettings(), Mk8sBootDiskSettings(), VmImagePreferenceSettings()
+    return (
+        Mk8sGpuSettings(),
+        Mk8sBootDiskSettings(),
+        VmImagePreferenceSettings(),
+        InfraObservabilitySettings(),
+    )
 
 
 def _parse_app_component_cli(
     raw: Any,
     *,
     field_label: str,
-) -> Mk8sGpuAppPolicy:
+) -> tuple[Mk8sGpuAppPolicy, AppObservabilitySettings]:
     if raw is None:
-        return Mk8sGpuAppPolicy()
+        return Mk8sGpuAppPolicy(), AppObservabilitySettings()
     if not isinstance(raw, dict):
         raise ValueError(f"{field_label} must be a mapping")
-    supported_keys = {"mk8s_gpu_policy"}
+    supported_keys = {"mk8s_gpu_policy", "observability"}
     unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
     if unknown:
         raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
-    return _parse_mk8s_gpu_app_policy(
-        raw.get("mk8s_gpu_policy"),
-        field_label=f"{field_label}.mk8s_gpu_policy",
+    return (
+        _parse_mk8s_gpu_app_policy(
+            raw.get("mk8s_gpu_policy"),
+            field_label=f"{field_label}.mk8s_gpu_policy",
+        ),
+        _parse_app_observability_settings(
+            raw.get("observability"),
+            field_label=f"{field_label}.observability",
+        ),
     )
 
 
@@ -1793,20 +2374,90 @@ def _derived_mk8s_gpu_validation_wizard_fields(
     }
 
 
+def _derived_observability_wizard_fields(
+    observability: InfraObservabilitySettings,
+) -> dict[str, dict[str, Any]]:
+    if observability.mode == "kubernetes_agent":
+        return {
+            "observability.enabled": {
+                "default": False,
+            },
+            "observability.kubernetes.logs.enabled": {
+                "default": observability.logs.enabled_by_default,
+            },
+            "observability.kubernetes.logs.collect_agent_logs": {
+                "default": observability.logs.collect_agent_logs,
+                "prompt": False,
+            },
+            "observability.kubernetes.logs.excluded_namespaces": {
+                "default": list(observability.logs.excluded_namespaces),
+                "prompt": False,
+            },
+            "observability.kubernetes.metrics.enabled": {
+                "default": observability.metrics.enabled_by_default,
+            },
+            "observability.kubernetes.metrics.collect_agent_metrics": {
+                "default": observability.metrics.collect_agent_metrics,
+                "prompt": False,
+            },
+            "observability.kubernetes.metrics.collect_k8s_cluster_metrics": {
+                "default": observability.metrics.collect_k8s_cluster_metrics,
+            },
+            "observability.kubernetes.metrics.excluded_namespaces": {
+                "default": list(observability.metrics.excluded_namespaces),
+                "prompt": False,
+            },
+            "observability.kubernetes.traces.enabled": {
+                "default": observability.traces.enabled_by_default,
+            },
+        }
+    if observability.mode == "monitoring_agent":
+        return {
+            "observability.enabled": {
+                "default": False,
+            },
+            "observability.vm.collector.enabled": {
+                "default": observability.standalone_collector.enabled_by_default,
+            },
+            "observability.vm.collector.metrics.enabled": {
+                "default": observability.standalone_collector.metrics.enabled_by_default,
+            },
+            "observability.vm.collector.logs.enabled": {
+                "default": observability.standalone_collector.logs.enabled_by_default,
+            },
+            "observability.vm.collector.logs.systemd_units": {
+                "default": list(observability.standalone_collector.logs.systemd_units),
+            },
+            "observability.vm.logs.enabled": {
+                "default": observability.logs.enabled_by_default,
+            },
+            "observability.vm.logs.systemd_units": {
+                "default": list(observability.logs.systemd_units),
+            },
+        }
+    return {}
+
+
 def _derived_infra_component_wizard_fields(
     *,
     module_name: str,
     raw_cli: Any,
     mk8s_gpu: Mk8sGpuSettings,
+    observability: InfraObservabilitySettings,
 ) -> dict[str, dict[str, Any]]:
+    derived: dict[str, dict[str, Any]] = {}
     if (
         module_name == "mk8s"
         and isinstance(raw_cli, dict)
         and isinstance(raw_cli.get("gpu"), dict)
         and isinstance(raw_cli.get("gpu", {}).get("validations"), dict)
     ):
-        return _derived_mk8s_gpu_validation_wizard_fields(mk8s_gpu)
-    return {}
+        derived.update(_derived_mk8s_gpu_validation_wizard_fields(mk8s_gpu))
+    if module_name in {"mk8s", "vm"} and isinstance(raw_cli, dict) and isinstance(
+        raw_cli.get("observability"), dict
+    ):
+        derived.update(_derived_observability_wizard_fields(observability))
+    return derived
 
 
 def _parse_status_watcher(raw: Any) -> StatusWatcher | None:
@@ -2094,7 +2745,7 @@ def _parse_sources_payload(
             field_label=f"components.infra.{module_name}",
         )
         validation_profile = resolve_builtin_validation_profile(module_name)
-        mk8s_gpu, mk8s_boot_disks, vm_images = _parse_infra_component_cli(
+        mk8s_gpu, mk8s_boot_disks, vm_images, observability = _parse_infra_component_cli(
             raw.get("cli"),
             module_name=module_name,
             field_label=f"components.infra.{module_name}.cli",
@@ -2109,6 +2760,7 @@ def _parse_sources_payload(
                 module_name=module_name,
                 raw_cli=raw.get("cli"),
                 mk8s_gpu=mk8s_gpu,
+                observability=observability,
             ),
             field_label=f"components.infra.{module_name}",
         )
@@ -2144,6 +2796,7 @@ def _parse_sources_payload(
                 mk8s_gpu=mk8s_gpu,
                 mk8s_boot_disks=mk8s_boot_disks,
                 vm_images=vm_images,
+                observability=observability,
             )
         )
 
@@ -2215,7 +2868,7 @@ def _parse_sources_payload(
             raw.get("defaults"),
             field_label=f"components.apps.{component_id}",
         )
-        mk8s_gpu = _parse_app_component_cli(
+        mk8s_gpu, observability = _parse_app_component_cli(
             raw.get("cli"),
             field_label=f"components.apps.{component_id}.cli",
         )
@@ -2238,6 +2891,7 @@ def _parse_sources_payload(
                 outputs=(),
                 input_bindings=input_bindings,
                 mk8s_gpu=mk8s_gpu,
+                observability=observability,
             )
         )
 

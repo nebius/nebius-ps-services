@@ -63,12 +63,14 @@ def _init_sdk(
     profile: str | None,
     endpoint: str | None,
     config_file: Path | None,
+    prefer_operator_auth: bool = False,
 ):
     return init_nebius_sdk(
         profile=profile,
         endpoint=endpoint,
         config_file=config_file,
         context="auth bootstrap",
+        prefer_operator_auth=prefer_operator_auth,
     )
 
 
@@ -461,7 +463,12 @@ def bootstrap_ci_service_account(
         config_file=config_file,
     )
 
-    sdk = _init_sdk(profile=profile, endpoint=endpoint, config_file=config_file)
+    sdk = _init_sdk(
+        profile=profile,
+        endpoint=endpoint,
+        config_file=config_file,
+        prefer_operator_auth=True,
+    )
 
     from nebius.api.nebius.iam.v1 import AuthPublicKeyServiceClient
     from nebius.api.nebius.iam.v2 import AccessKeyServiceClient
@@ -511,7 +518,12 @@ def ensure_ci_service_account_identity(
     if not role_ids:
         raise ValueError("role_ids must not be empty")
 
-    sdk = _init_sdk(profile=profile, endpoint=endpoint, config_file=config_file)
+    sdk = _init_sdk(
+        profile=profile,
+        endpoint=endpoint,
+        config_file=config_file,
+        prefer_operator_auth=True,
+    )
 
     from nebius.api.nebius.iam.v1 import (
         AccessPermitServiceClient,
@@ -570,7 +582,12 @@ def auth_public_key_exists(
     config_file: Path | None,
 ) -> bool:
     """Return true when IAM auth public key exists and is readable."""
-    sdk = _init_sdk(profile=profile, endpoint=endpoint, config_file=config_file)
+    sdk = _init_sdk(
+        profile=profile,
+        endpoint=endpoint,
+        config_file=config_file,
+        prefer_operator_auth=True,
+    )
 
     from nebius.api.nebius.iam.v1 import AuthPublicKeyServiceClient, GetAuthPublicKeyRequest
 

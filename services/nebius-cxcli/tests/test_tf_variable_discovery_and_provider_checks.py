@@ -445,7 +445,261 @@ def test_wizard_declared_nested_app_value_path_is_prompted_and_created(
     assert payload["apps"]["charts"][0]["values"] == {"image": {"tag": "1.2.3"}}
 
 
-def test_wizard_q_backtracks_current_nested_app_values_level(monkeypatch) -> None:
+def test_wizard_declared_observability_path_is_prompted_at_project_root(
+    monkeypatch,
+) -> None:
+    config_yaml = yaml.safe_dump(
+        {
+            "version": "v1",
+            "client_info": {
+                "client_name": "demo",
+                "nebius": {
+                    "tenant_id": "tenant-1",
+                    "project_id": "project-1",
+                    "region_id": "us-central1",
+                },
+                "notifications": {"email_enabled": True, "email": None},
+            },
+            "infra": {
+                "components": [
+                    {
+                        "id": "mk8s",
+                        "instance_id": "mk8s",
+                        "enabled": True,
+                        "inputs": {},
+                    }
+                ]
+            },
+            "apps": {"charts": []},
+        },
+        sort_keys=False,
+    )
+
+    entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.components.mk8s",
+        description="MK8s",
+        wizard_fields={
+            "observability.enabled": {},
+        },
+    )
+
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
+
+    rendered_messages: list[str] = []
+    prompted_paths: list[str] = []
+
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.console.print",
+        lambda *args, **_kwargs: rendered_messages.append(" ".join(str(arg) for arg in args)),
+    )
+
+    def _fake_prompt(
+        path_label: str,
+        current: object,
+        *,
+        choices=None,
+        type_hint=None,
+        required=False,
+    ) -> tuple[object, bool]:
+        _ = current, choices, type_hint, required
+        prompted_paths.append(path_label)
+        return True, False
+
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
+
+    updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=config_yaml,
+        selected_infra={"mk8s"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=None,
+    )
+
+    assert completed is True
+    assert prompted_paths.count("observability.enabled") == 1
+    assert not any("Skipping wizard field" in message for message in rendered_messages)
+    payload = yaml.safe_load(updated_yaml)
+    assert payload["observability"]["enabled"] is True
+
+
+def test_wizard_prompts_vm_observability_without_duplicate_root_prompt(monkeypatch) -> None:
+    config_yaml = yaml.safe_dump(
+        {
+            "version": "v1",
+            "client_info": {
+                "client_name": "demo",
+                "nebius": {
+                    "tenant_id": "tenant-1",
+                    "project_id": "project-1",
+                    "region_id": "us-central1",
+                },
+                "notifications": {"email_enabled": True, "email": None},
+            },
+            "infra": {
+                "components": [
+                    {
+                        "id": "mk8s",
+                        "instance_id": "mk8s",
+                        "enabled": True,
+                        "inputs": {},
+                    },
+                    {
+                        "id": "vm",
+                        "instance_id": "vm",
+                        "enabled": True,
+                        "inputs": {},
+                    },
+                ]
+            },
+            "apps": {"charts": []},
+        },
+        sort_keys=False,
+    )
+
+    mk8s_entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.components.mk8s",
+        description="MK8s",
+        wizard_fields={
+            "observability.enabled": {},
+        },
+    )
+    vm_entry = ComponentEntry(
+        id="vm",
+        scope="infra",
+        config_path="infra.components.vm",
+        description="VM",
+        wizard_fields={
+            "observability.enabled": {},
+            "observability.vm.logs.enabled": {},
+        },
+    )
+
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
+
+    prompted_paths: list[str] = []
+
+    def _fake_prompt(
+        path_label: str,
+        current: object,
+        *,
+        choices=None,
+        type_hint=None,
+        required=False,
+    ) -> tuple[object, bool]:
+        _ = current, choices, type_hint, required
+        prompted_paths.append(path_label)
+        return True, False
+
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
+
+    updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=config_yaml,
+        selected_infra={"mk8s", "vm"},
+        selected_apps=set(),
+        infra_entries=(mk8s_entry, vm_entry),
+        app_entries=(),
+        provider_lookup=None,
+    )
+
+    assert completed is True
+    assert prompted_paths.count("observability.enabled") == 1
+    assert prompted_paths.count("observability.vm.logs.enabled") == 1
+    payload = yaml.safe_load(updated_yaml)
+    assert payload["observability"]["enabled"] is True
+    assert payload["observability"]["vm"]["logs"]["enabled"] is True
+
+
+def test_vm_service_account_prompt_only_appears_when_standalone_collector_enabled(
+    monkeypatch,
+) -> None:
+    config_yaml = yaml.safe_dump(
+        {
+            "version": "v1",
+            "client_info": {
+                "client_name": "demo",
+                "nebius": {
+                    "tenant_id": "tenant-1",
+                    "project_id": "project-1",
+                    "region_id": "us-central1",
+                },
+                "notifications": {"email_enabled": True, "email": None},
+            },
+            "observability": {
+                "enabled": True,
+                "vm": {
+                    "collector": {
+                        "enabled": True,
+                    }
+                },
+            },
+            "infra": {
+                "components": [
+                    {
+                        "id": "vm",
+                        "instance_id": "vm",
+                        "enabled": True,
+                        "inputs": {},
+                    }
+                ]
+            },
+            "apps": {"charts": []},
+        },
+        sort_keys=False,
+    )
+
+    vm_entry = ComponentEntry(
+        id="vm",
+        scope="infra",
+        config_path="infra.components.vm",
+        description="VM",
+        wizard_fields={
+            "observability.enabled": {},
+            "observability.vm.collector.enabled": {},
+            "inputs.service_account_id": {},
+        },
+    )
+
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
+
+    prompted_paths: list[str] = []
+
+    def _fake_prompt(
+        path_label: str,
+        current: object,
+        *,
+        choices=None,
+        type_hint=None,
+        required=False,
+    ) -> tuple[object, bool]:
+        _ = current, choices, type_hint, required
+        prompted_paths.append(path_label)
+        if path_label.endswith(".inputs.service_account_id"):
+            return "serviceaccount-1", False
+        return True, False
+
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
+
+    updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=config_yaml,
+        selected_infra={"vm"},
+        selected_apps=set(),
+        infra_entries=(vm_entry,),
+        app_entries=(),
+        provider_lookup=None,
+    )
+
+    assert completed is True
+    assert any(path.endswith(".inputs.service_account_id") for path in prompted_paths)
+    payload = yaml.safe_load(updated_yaml)
+    assert payload["infra"]["components"][0]["inputs"]["service_account_id"] == "serviceaccount-1"
+
+
+def test_wizard_q_revisits_previous_nested_app_value_prompt(monkeypatch) -> None:
     config_yaml = yaml.safe_dump(
         {
             "version": "v1",
@@ -507,6 +761,7 @@ def test_wizard_q_backtracks_current_nested_app_values_level(monkeypatch) -> Non
     monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
 
     prompted_paths: list[str] = []
+    prompt_counts: dict[str, int] = {}
 
     def _fake_prompt(
         path_label: str,
@@ -518,10 +773,15 @@ def test_wizard_q_backtracks_current_nested_app_values_level(monkeypatch) -> Non
     ) -> tuple[object, bool]:
         _ = current, choices, type_hint, required
         prompted_paths.append(path_label)
-        if path_label.endswith(".certManager.enable"):
+        prompt_counts[path_label] = prompt_counts.get(path_label, 0) + 1
+        if path_label.endswith(".certManager.enable") and prompt_counts[path_label] == 1:
             return cli._WIZARD_BACKTRACK, False
         if path_label.endswith(".selfSigned.enable"):
             return False, False
+        if path_label.endswith(".certManager.enable"):
+            return False, False
+        if path_label.endswith(".certManager.issuerRef"):
+            return "issuer-b", False
         return "demo", False
 
     monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
@@ -536,10 +796,13 @@ def test_wizard_q_backtracks_current_nested_app_values_level(monkeypatch) -> Non
     )
 
     assert completed is True
-    assert (
+    issuer_ref_path = (
         "apps.charts[0].values.maintenance-operator-chart.operator.admissionController."
         "certificates.certManager.issuerRef"
-    ) not in prompted_paths
+    )
+    release_name_path = "apps.charts[0].release-name"
+    assert issuer_ref_path in prompted_paths
+    assert prompted_paths.count(release_name_path) == 2
     assert (
         "apps.charts[0].values.maintenance-operator-chart.operator.admissionController."
         "certificates.selfSigned.enable"
@@ -550,7 +813,7 @@ def test_wizard_q_backtracks_current_nested_app_values_level(monkeypatch) -> Non
     ]["certificates"]
     assert certs["certManager"] == {
         "enable": False,
-        "issuerRef": "issuer-a",
+        "issuerRef": "issuer-b",
     }
     assert certs["selfSigned"]["enable"] is False
 

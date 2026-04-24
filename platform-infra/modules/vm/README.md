@@ -94,6 +94,7 @@ module "vm" {
   - `hostname`
   - `service_account_id`
   - `stopped`
+  - `observability_collector_*` when using the standalone VM observability collector
 - Boot/data storage:
   - set exactly one boot source: `source_image_family`, `source_image_id`, or `boot_disk_existing_id`
   - `boot_disk_existing_id`
@@ -172,6 +173,48 @@ Operational notes:
 - Containerized VMs stay regular. The module does not combine
   `container_enabled=true` with `preemptible_enabled=true`.
 
+## Standalone VM Observability Collector
+
+This module now has an optional standalone VM observability collector path for
+customers who want VM host metrics and journald logs pushed through the Nebius
+public write endpoints instead of relying only on the built-in Monitoring
+agent path.
+
+What it does:
+
+- installs a pinned public `nebius-o11y-agent` deb package on first boot
+- pulls that package from the canonical public Artifactory APT repo at `https://artifactory.nebius.dev/artifactory/nebius-o11y-agent`
+- configures journald log forwarding through the public Logging gRPC endpoint
+- configures host metrics export plus a Prometheus agent companion for
+  Monitoring Prometheus remote_write
+- authenticates with the VM metadata token at `/mnt/cloud-metadata/token`
+
+Important constraints:
+
+- `observability_collector_enabled=true` requires `service_account_id`
+- at least one of:
+  - `observability_collector_metrics_enabled=true`
+  - `observability_collector_logs_enabled=true`
+- currently supported only on module-managed Ubuntu-family boot disks
+- `observability_collector_metrics_export_port` and
+  `observability_collector_prometheus_agent_port` must differ
+
+Key inputs:
+
+- `observability_collector_enabled`
+- `observability_collector_region_id`
+- `observability_collector_package_version`
+- `observability_collector_iam_token_file`
+- `observability_collector_logs_enabled`
+- `observability_collector_logs_systemd_units`
+- `observability_collector_metrics_enabled`
+- `observability_collector_metrics_export_port`
+- `observability_collector_prometheus_agent_port`
+
+The bundled `nebius-cxcli` `vm` component materializes these automatically from
+`observability.vm.collector.*`. Direct Terraform callers can set them
+explicitly when they need the same behavior outside cxcli.
+
 ## `nebius-cxcli` Usage
 
 - The bundled `vm` component is intended to map directly into
@@ -188,6 +231,11 @@ Operational notes:
 - Advanced disk/filesystem/container attachment shapes remain Terraform-native
   object/list inputs so they can still be edited as YAML/JSON in `config.yaml`
   when needed.
+- When `observability.enabled=true` and
+  `observability.vm.collector.enabled=true`, cxcli materializes the standalone
+  collector inputs automatically and requires `inputs.service_account_id` on
+  the VM component so the metadata token can authenticate public observability
+  writes.
 
 ## Outputs Summary
 

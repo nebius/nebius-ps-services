@@ -92,6 +92,12 @@ from .components import (
 )
 from .config_loader import load_config, normalize_runtime_config_payload, validate_config
 from .config_template import starter_config_yaml
+from .deploy_targets import (
+    TARGET_REF_FIELD,
+    app_chart_target_ref,
+    enabled_cluster_target_refs,
+    flux_target_dir,
+)
 from .deploy_validation_report import (
     DEPLOY_REPORT_FILENAME,
     build_deploy_validation_report,
@@ -183,6 +189,13 @@ from .mk8s_preflight import (
     validate_mk8s_resource_name_preflight,
 )
 from .notify_ops import DeployReportEmailResult, send_deploy_report_email
+from .observability import (
+    materialize_observability_app_values,
+    materialize_observability_infra_values,
+    observability_dependency_issues,
+    observability_gpu_node_label_reconciliation,
+    resolve_observability_app_selection,
+)
 from .paths import (
     ProjectPaths,
     normalize_project_folder_name,
@@ -1359,6 +1372,30 @@ def _value_or_prompt(
     raise RuntimeError(f"Missing required option: {option_name}")
 
 
+def _validate_client_name_or_raise(value: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise RuntimeError("Missing required option: --client-name")
+    if not INSTANCE_ID_PATTERN.fullmatch(normalized):
+        raise RuntimeError(
+            "client_info.client_name must use lowercase letters, digits, and hyphens"
+        )
+    return normalized
+
+
+def _client_name_or_prompt(value: str | None, *, interactive: bool) -> str:
+    if value:
+        return _validate_client_name_or_raise(value)
+    if not interactive:
+        raise RuntimeError("Missing required option: --client-name")
+    while True:
+        prompted = typer.prompt("Client name (lowercase letters, digits, and hyphens)").strip()
+        try:
+            return _validate_client_name_or_raise(prompted)
+        except RuntimeError as exc:
+            console.print(f"{error_markup('Invalid value')}. {exc}")
+
+
 def _optional_email_or_prompt(value: str | None, *, interactive: bool) -> str | None:
     if value is not None:
         return value
@@ -1516,6 +1553,45 @@ def _validate_component_sources_or_raise() -> None:
         )
 
 
+def _format_component_id_sample(component_ids: Sequence[str], *, limit: int = 8) -> str:
+    sample = list(component_ids[:limit])
+    suffix = ""
+    remaining = len(component_ids) - len(sample)
+    if remaining > 0:
+        suffix = f", and {remaining} more"
+    return ", ".join(sample) + suffix
+
+
+def _component_source_tool_preflight_issues(*, explicit: Path | None = None) -> tuple[str, ...]:
+    """Return missing-tool issues that can be checked before interactive prompts."""
+    source_path = resolve_component_sources_file(explicit=explicit)
+    sources = load_component_sources(explicit=explicit)
+    issues: list[str] = []
+
+    helm_chart_ids = sorted(
+        _non_empty_text(chart.name)
+        for chart in sources.helm_charts
+        if _non_empty_text(chart.name)
+    )
+    if helm_chart_ids and not shutil.which("helm"):
+        issues.append(
+            "helm is required for component source validation because "
+            f"{source_path} declares Helm app charts: "
+            f"{_format_component_id_sample(helm_chart_ids)}. "
+            "Install helm or rerun with --no-validate-sources."
+        )
+    return tuple(issues)
+
+
+def _preflight_component_source_tools_or_raise() -> None:
+    issues = _component_source_tool_preflight_issues()
+    if issues:
+        raise RuntimeError(
+            "Component source validation requires missing external tool(s):\n  - "
+            + "\n  - ".join(issues)
+        )
+
+
 def _identity_values_from_payload(
     payload: Mapping[str, Any],
 ) -> tuple[str, str, str, str, str | None]:
@@ -1638,6 +1714,7 @@ def _starter_component_payload(
         payload=starter_payload,
         infra_entries=infra_entries,
     )
+    normalize_runtime_config_payload(starter_payload)
     return starter_payload
 
 
@@ -2206,6 +2283,8 @@ def _append_component_instance_row(
         rows=rows,
         requested_instance_id=requested_instance_id,
     )
+    target_refs = enabled_cluster_target_refs(payload)
+    default_target_ref = target_refs[0] if len(target_refs) == 1 else ""
     if entry.scope == "infra":
         row: dict[str, Any] = {
             "id": entry.id,
@@ -2239,6 +2318,8 @@ def _append_component_instance_row(
             "release-name": release_name,
             "values": {},
         }
+        if target_refs:
+            row[TARGET_REF_FIELD] = default_target_ref
     if entry.defaults:
         row = resolve_component_defaults(
             component_node=row,
@@ -2466,7 +2547,7 @@ def _declared_wizard_prompt_path(
         return resolved
 
     root_token = full_path_label.split(".", 1)[0]
-    if root_token in {"version", "client_info", "deploy", "infra", "apps"}:
+    if root_token in _ABSOLUTE_WIZARD_ROOTS:
         return _parse_payload_path_label(full_path_label)
 
     if component_path is None:
@@ -2481,7 +2562,7 @@ def _declared_wizard_prompt_path(
         if not relative.startswith("inputs."):
             return None
     elif entry.scope == "apps":
-        if relative not in {"namespace", "release-name"} and not relative.startswith("values."):
+        if relative not in {TARGET_REF_FIELD, "namespace", "release-name"} and not relative.startswith("values."):
             return None
     else:
         return None
@@ -2805,6 +2886,10 @@ _PROVIDER_ARG_PATH_KEYS = frozenset(
     }
 )
 
+_ABSOLUTE_WIZARD_ROOTS = frozenset(
+    {"version", "client_info", "deploy", "infra", "apps", "observability"}
+)
+
 
 def _dynamic_component_prefix(
     *,
@@ -2827,7 +2912,7 @@ def _normalize_provider_arg_path(
     token = str(raw_path).strip()
     if not token:
         return ""
-    if token.split(".", 1)[0] in {"version", "client_info", "deploy", "infra", "apps"}:
+    if token.split(".", 1)[0] in _ABSOLUTE_WIZARD_ROOTS:
         return token
 
     component_prefix = _dynamic_component_prefix(entry=entry, full_path_label=full_path_label)
@@ -2846,6 +2931,7 @@ def _normalize_provider_arg_path(
         "enabled",
         "repo",
         "version",
+        TARGET_REF_FIELD,
         "namespace",
         "release-name",
         "values",
@@ -2931,6 +3017,11 @@ def _resolve_dynamic_field_choices(
     provider_lookup: ProviderOptionLookup | None,
 ) -> list[OptionChoice]:
     leaf = full_path_label.rsplit(".", maxsplit=1)[-1].strip().lower().replace("-", "_")
+    if leaf == TARGET_REF_FIELD and full_path_label.startswith("apps.charts["):
+        return [
+            OptionChoice(value=target_ref, label=target_ref)
+            for target_ref in enabled_cluster_target_refs(payload)
+        ]
     if leaf in {"parent_id", "project_id"} and full_path_label.startswith("infra.components["):
         preferred_project_id = _non_empty_text(
             _read_payload_field(payload, "client_info.nebius.project_id")
@@ -3218,7 +3309,6 @@ def _declared_wizard_field_labels(
 ) -> list[str]:
     labels: list[str] = []
     seen: set[str] = set()
-    absolute_roots = {"version", "client_info", "deploy", "infra", "apps"}
     component_path_label = (
         _format_payload_path(component_path) if component_path is not None else ""
     )
@@ -3230,7 +3320,7 @@ def _declared_wizard_field_labels(
         if (
             key.startswith(prefix)
             or key == entry.config_path
-            or key.split(".", 1)[0] in absolute_roots
+            or key.split(".", 1)[0] in _ABSOLUTE_WIZARD_ROOTS
         ):
             full_label = key
         elif component_path_label:
@@ -3453,13 +3543,18 @@ def _prompt_path_sort_key(
     }
     full_label = _format_payload_path(path)
     nested_order_hints = {
-        "deploy.validations.mk8s_gpu.operator_readiness.enabled": 19,
-        "deploy.validations.mk8s_gpu.gpu_visibility.enabled": 20,
-        "deploy.validations.mk8s_gpu.gpu_visibility.max_nodes": 21,
-        "deploy.validations.mk8s_gpu.nccl.enabled": 22,
-        "deploy.validations.mk8s_gpu.nccl.max_nodes": 23,
-        "deploy.validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps": 24,
-        "deploy.validations.mk8s_gpu.health_checker.enabled": 25,
+        "observability.enabled": 19,
+        "observability.kubernetes.logs.enabled": 20,
+        "observability.kubernetes.metrics.enabled": 21,
+        "observability.kubernetes.metrics.collect_k8s_cluster_metrics": 22,
+        "observability.kubernetes.traces.enabled": 23,
+        "deploy.validations.mk8s_gpu.operator_readiness.enabled": 30,
+        "deploy.validations.mk8s_gpu.gpu_visibility.enabled": 31,
+        "deploy.validations.mk8s_gpu.gpu_visibility.max_nodes": 32,
+        "deploy.validations.mk8s_gpu.nccl.enabled": 33,
+        "deploy.validations.mk8s_gpu.nccl.max_nodes": 34,
+        "deploy.validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps": 35,
+        "deploy.validations.mk8s_gpu.health_checker.enabled": 36,
     }
     leaf = path[-1] if path else ""
     leaf_name = _normalize_leaf_name(str(leaf)) if isinstance(leaf, str) else ""
@@ -3555,6 +3650,10 @@ def _is_mk8s_boot_disk_type_field(full_path_label: str) -> bool:
 
 def _is_mk8s_gpu_validation_field(full_path_label: str) -> bool:
     return full_path_label.startswith("deploy.validations.mk8s_gpu.")
+
+
+def _is_observability_field(full_path_label: str) -> bool:
+    return full_path_label.startswith("observability.")
 
 
 def _gpu_preset_field_context(
@@ -3706,6 +3805,44 @@ def _payload_has_enabled_mk8s_gpu_cluster(payload: dict[str, Any]) -> bool:
     return False
 
 
+def _payload_has_enabled_mk8s(payload: dict[str, Any]) -> bool:
+    infra = payload.get("infra")
+    components = infra.get("components") if isinstance(infra, dict) else None
+    if not isinstance(components, list):
+        return False
+    return any(
+        isinstance(item, dict)
+        and bool(item.get("enabled", False))
+        and component_type_id(item) == "mk8s"
+        for item in components
+    )
+
+
+def _payload_has_enabled_vm(payload: dict[str, Any]) -> bool:
+    infra = payload.get("infra")
+    components = infra.get("components") if isinstance(infra, dict) else None
+    if not isinstance(components, list):
+        return False
+    return any(
+        isinstance(item, dict)
+        and bool(item.get("enabled", False))
+        and component_type_id(item) == "vm"
+        for item in components
+    )
+
+
+def _payload_vm_standalone_collector_enabled(payload: dict[str, Any]) -> bool:
+    return bool(_read_payload_field(payload, "observability.enabled")) and bool(
+        _read_payload_field(payload, "observability.vm.collector.enabled")
+    )
+
+
+def _payload_vm_standalone_collector_logs_enabled(payload: dict[str, Any]) -> bool:
+    return _payload_vm_standalone_collector_enabled(payload) and bool(
+        _read_payload_field(payload, "observability.vm.collector.logs.enabled")
+    )
+
+
 def _maybe_print_mk8s_boot_disk_prompt_guidance(
     *,
     full_path_label: str,
@@ -3742,6 +3879,108 @@ def _maybe_print_mk8s_gpu_validation_prompt_guidance(
         "only auto-enables a compatible app when the catalog exposes one.[/dim]"
     )
     emitted_guidance.add("mk8s_gpu_validation")
+
+
+def _maybe_print_observability_prompt_guidance(
+    *,
+    full_path_label: str,
+    emitted_guidance: set[str],
+) -> None:
+    if not _is_observability_field(full_path_label):
+        return
+    if "observability" in emitted_guidance:
+        return
+    console.print(
+        "[dim]Observability guidance: MK8s uses the Nebius observability agent "
+        "chart for logs, Prometheus-style metrics, and OTLP traces. Compute VMs "
+        "already run the built-in Monitoring agent for service metrics. cxcli "
+        "can also enable a separate default-off standalone VM collector that "
+        "pushes host metrics and journald logs to the public write endpoints.[/dim]"
+    )
+    emitted_guidance.add("observability")
+
+
+def _skip_observability_prompt(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+) -> bool:
+    if entry.scope != "infra" or not _is_observability_field(full_path_label):
+        return False
+    mk8s_enabled = _payload_has_enabled_mk8s(payload)
+    vm_enabled = _payload_has_enabled_vm(payload)
+    if not (mk8s_enabled or vm_enabled):
+        return True
+    if full_path_label == "observability.enabled":
+        return bool(entry.id != "mk8s" and mk8s_enabled)
+    if full_path_label.startswith("observability.kubernetes."):
+        if entry.id != "mk8s":
+            return True
+        if not mk8s_enabled:
+            return True
+    if full_path_label.startswith("observability.vm."):
+        if entry.id != "vm":
+            return True
+        if not vm_enabled:
+            return True
+    observability_enabled = bool(_read_payload_field(payload, "observability.enabled"))
+    if not observability_enabled:
+        return True
+    if full_path_label.startswith("observability.kubernetes.logs."):
+        return bool(
+            full_path_label != "observability.kubernetes.logs.enabled"
+            and not _read_payload_field(payload, "observability.kubernetes.logs.enabled")
+        )
+    if full_path_label.startswith("observability.kubernetes.metrics."):
+        return bool(
+            full_path_label != "observability.kubernetes.metrics.enabled"
+            and not _read_payload_field(payload, "observability.kubernetes.metrics.enabled")
+        )
+    if full_path_label.startswith("observability.kubernetes.traces."):
+        return False
+    if full_path_label == "observability.vm.logs.enabled":
+        return bool(
+            _payload_vm_standalone_collector_logs_enabled(payload)
+            and not _read_payload_field(payload, "observability.vm.logs.enabled")
+        )
+    if full_path_label.startswith("observability.vm.logs."):
+        return bool(
+            full_path_label != "observability.vm.logs.enabled"
+            and not _read_payload_field(payload, "observability.vm.logs.enabled")
+        )
+    if full_path_label == "observability.vm.collector.logs.enabled":
+        return bool(
+            _read_payload_field(payload, "observability.vm.logs.enabled")
+            and not _read_payload_field(payload, "observability.vm.collector.logs.enabled")
+        )
+    if full_path_label.startswith("observability.vm.collector."):
+        if (
+            full_path_label != "observability.vm.collector.enabled"
+            and not _read_payload_field(payload, "observability.vm.collector.enabled")
+        ):
+            return True
+        if full_path_label.startswith("observability.vm.collector.logs."):
+            return bool(
+                full_path_label != "observability.vm.collector.logs.enabled"
+                and not _read_payload_field(payload, "observability.vm.collector.logs.enabled")
+            )
+    return False
+
+
+def _skip_vm_observability_dependent_prompt(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+) -> bool:
+    if entry.scope != "infra" or entry.id != "vm":
+        return False
+    if full_path_label != "inputs.service_account_id":
+        return False
+    if not _payload_has_enabled_vm(payload):
+        return True
+    return not _payload_vm_standalone_collector_enabled(payload)
 
 
 def _skip_mk8s_gpu_validation_prompt(
@@ -3931,6 +4170,12 @@ def _seed_component_prompt_fields(
 
     if entry.scope == "apps":
         # Ensure chart-backed entries discovered at runtime have editable scaffolding.
+        target_refs = enabled_cluster_target_refs(payload)
+        if target_refs:
+            component_node.setdefault(
+                TARGET_REF_FIELD,
+                target_refs[0] if len(target_refs) == 1 else "",
+            )
         component_node.setdefault(
             "namespace", str(entry.default_namespace or "").strip() or entry.id
         )
@@ -3963,7 +4208,7 @@ def _seed_component_prompt_fields(
 
 def _wizard_field_prompt_suffix(rendered_label: str) -> str:
     return (
-        f"{rendered_label} (enter {WIZARD_EXIT_TOKEN} to go back; "
+        f"{rendered_label} (enter {WIZARD_EXIT_TOKEN} to revisit the previous answered field; "
         f"{WIZARD_ABORT_TOKEN} stops wizard)"
     )
 
@@ -3995,6 +4240,29 @@ def _wizard_previous_prompt_index(
         with suppress(ValueError):
             return prompt_paths.index(previous_path)
     return None
+
+
+def _wizard_backtrack_target_index(
+    *,
+    prompt_paths: list[PayloadPath],
+    prompt_history: list[PayloadPath],
+    current_path: PayloadPath,
+) -> int:
+    previous_prompt_index = _wizard_previous_prompt_index(
+        prompt_paths=prompt_paths,
+        prompt_history=prompt_history,
+    )
+    if previous_prompt_index is not None:
+        return previous_prompt_index
+    console.print(
+        warning_markup(
+            "Already at the first wizard field; staying on the current prompt. "
+            f"Use {WIZARD_ABORT_TOKEN} to stop the wizard."
+        )
+    )
+    with suppress(ValueError):
+        return prompt_paths.index(current_path)
+    return 0
 
 
 def _payload_path_has_prefix(path: PayloadPath, prefix: PayloadPath) -> bool:
@@ -4364,6 +4632,49 @@ def _run_component_field_wizard(
             + " because the selected MK8s GPU configuration requires them."
         )
 
+    def _materialize_wizard_auto_enabled_observability_apps() -> None:
+        nonlocal payload, active_selected_apps
+        if not selected_infra or not app_entries:
+            return
+        observability_selection = resolve_observability_app_selection(
+            payload,
+            selected_app_ids=active_selected_apps,
+            app_entries=app_entries,
+        )
+        if not observability_selection.auto_enabled_app_ids:
+            return
+        active_selected_apps = set(observability_selection.selected_app_ids)
+        identity_client_name, identity_tenant_id, identity_project_id, identity_region_id, identity_email = (
+            _identity_values_from_payload(payload)
+        )
+        auto_enabled_seed = _starter_component_payload(
+            client_name=identity_client_name,
+            tenant_id=identity_tenant_id,
+            project_id=identity_project_id,
+            region_id=identity_region_id,
+            email=identity_email,
+            selected_infra=selected_infra,
+            selected_apps=active_selected_apps,
+            infra_entries=infra_entries,
+            app_entries=app_entries,
+        )
+        _ensure_payload_contains_component_rows(
+            payload=payload,
+            seed_payload=auto_enabled_seed,
+        )
+        payload = _filter_runtime_payload_for_selected_components(
+            payload=payload,
+            selected_infra=selected_infra,
+            selected_apps=active_selected_apps,
+            infra_entries=infra_entries,
+            app_entries=app_entries,
+        )
+        console.print(
+            f"{warning_markup('Adjusted component selection:')} enabling "
+            + ", ".join(f"'apps:{item}'" for item in observability_selection.auto_enabled_app_ids)
+            + " because the selected observability configuration requires them."
+        )
+
     def _run_component(entry: ComponentEntry, instance_id: str) -> bool:
         component_label = component_instance_label(entry.id, instance_id)
         decision = _wizard_continue_phase(
@@ -4721,14 +5032,21 @@ def _run_component_field_wizard(
                     )
             elif entry.scope == "apps":
                 # App wizard prompts are Helm values-driven.
-                for key in ("namespace", "release-name"):
+                cluster_target_refs = enabled_cluster_target_refs(payload)
+                for key in (TARGET_REF_FIELD, "namespace", "release-name"):
+                    if key == TARGET_REF_FIELD and not cluster_target_refs:
+                        continue
                     full_path = component_path + (key,)
                     if full_path in bound_prompt_paths:
                         continue
                     label = _format_payload_path(full_path)
                     if label in seen_prompt_labels:
                         continue
-                    current_value = _get_payload_value(payload, full_path)
+                    current_value = (
+                        _get_payload_value(payload, full_path)
+                        if _payload_path_exists(payload, full_path)
+                        else None
+                    )
                     if isinstance(current_value, (dict, list)):
                         continue
                     seen_prompt_labels.add(label)
@@ -4846,6 +5164,18 @@ def _run_component_field_wizard(
                     full_path_label=full_path_label,
                 ):
                     continue
+                if _skip_observability_prompt(
+                    payload=payload,
+                    entry=entry,
+                    full_path_label=full_path_label,
+                ):
+                    continue
+                if _skip_vm_observability_dependent_prompt(
+                    payload=payload,
+                    entry=entry,
+                    full_path_label=full_path_label,
+                ):
+                    continue
                 if not _provider_prompt_dependencies_ready(
                     payload=payload,
                     entry=entry,
@@ -4948,6 +5278,10 @@ def _run_component_field_wizard(
                     full_path_label=full_path_label,
                     emitted_guidance=emitted_prompt_guidance,
                 )
+                _maybe_print_observability_prompt_guidance(
+                    full_path_label=full_path_label,
+                    emitted_guidance=emitted_prompt_guidance,
+                )
                 updated, should_stop = _prompt_scalar_override(
                     full_path_label,
                     current,
@@ -4958,28 +5292,11 @@ def _run_component_field_wizard(
                 if should_stop:
                     return False
                 if _wizard_backtrack_requested(updated):
-                    previous_prompt_index = None
-                    if _is_flat_module_prompt_path(
-                        full_path=full_path,
-                        module_prompt_path_prefix=module_prompt_path_prefix,
-                    ):
-                        previous_prompt_index = _wizard_previous_prompt_index(
-                            prompt_paths=prompt_paths,
-                            prompt_history=prompt_history,
-                        )
-                    if previous_prompt_index is not None:
-                        prompt_index = previous_prompt_index
-                        continue
-                    backtrack_prefix = _wizard_backtrack_prefix(
-                        component_path=component_path,
-                        full_path=full_path,
+                    prompt_index = _wizard_backtrack_target_index(
+                        prompt_paths=prompt_paths,
+                        prompt_history=prompt_history,
+                        current_path=full_path,
                     )
-                    if backtrack_prefix is not None:
-                        _skip_remaining_prompt_paths_for_prefix(
-                            prompt_paths=prompt_paths,
-                            prompt_index=prompt_index,
-                            prefix=backtrack_prefix,
-                        )
                     continue
                 backtracked = False
                 while allowed_provider_values:
@@ -5008,29 +5325,11 @@ def _run_component_field_wizard(
                     if should_stop:
                         return False
                     if _wizard_backtrack_requested(updated):
-                        previous_prompt_index = None
-                        if _is_flat_module_prompt_path(
-                            full_path=full_path,
-                            module_prompt_path_prefix=module_prompt_path_prefix,
-                        ):
-                            previous_prompt_index = _wizard_previous_prompt_index(
-                                prompt_paths=prompt_paths,
-                                prompt_history=prompt_history,
-                            )
-                        if previous_prompt_index is not None:
-                            prompt_index = previous_prompt_index
-                            backtracked = True
-                            break
-                        backtrack_prefix = _wizard_backtrack_prefix(
-                            component_path=component_path,
-                            full_path=full_path,
+                        prompt_index = _wizard_backtrack_target_index(
+                            prompt_paths=prompt_paths,
+                            prompt_history=prompt_history,
+                            current_path=full_path,
                         )
-                        if backtrack_prefix is not None:
-                            _skip_remaining_prompt_paths_for_prefix(
-                                prompt_paths=prompt_paths,
-                                prompt_index=prompt_index,
-                                prefix=backtrack_prefix,
-                            )
                         backtracked = True
                         break
                 if backtracked:
@@ -5103,6 +5402,7 @@ def _run_component_field_wizard(
             return yaml.safe_dump(payload, sort_keys=False), False
 
     _materialize_wizard_auto_enabled_gpu_apps()
+    _materialize_wizard_auto_enabled_observability_apps()
 
     for entry, instance_id in _selected_components_for_scope("apps"):
         if not _run_component(entry, instance_id):
@@ -5641,6 +5941,7 @@ def _component_dependency_issues_from_payload(
                 f"(chart dependency: {adjustment.dependency_chart_name})"
             )
     issues.extend(mk8s_gpu_dependency_issues(payload))
+    issues.extend(observability_dependency_issues(payload))
     return issues
 
 
@@ -6655,9 +6956,9 @@ def _materialize_mk8s_image_defaults(
         stack_source = (
             _non_empty_text(_read_payload_field(payload, stack_source_field)) or "nebius_image"
         ).lower()
-        if stack_source not in {"nebius_image", "manual"}:
+        if stack_source not in {"nebius_image", "operator_managed"}:
             raise RuntimeError(
-                f"{stack_source_field} must be 'nebius_image' or 'manual' for GPU-enabled MK8s clusters"
+                f"{stack_source_field} must be 'nebius_image' or 'operator_managed' for GPU-enabled MK8s clusters"
             )
         if not _non_empty_text(_read_payload_field(payload, stack_source_field)):
             target_path = _parse_payload_path_label(stack_source_field)
@@ -6679,7 +6980,7 @@ def _materialize_mk8s_image_defaults(
         _set_first_provider_choice(
             entry=entry,
             full_path_label=gpu_os_field,
-            replace_if_invalid=(stack_source == "manual"),
+            replace_if_invalid=(stack_source == "operator_managed"),
         )
 
 
@@ -6901,6 +7202,7 @@ def _dynamic_enabled_app_chart_rows(payload: dict[str, Any]) -> list[dict[str, A
                 "group": str(item.get("group", "")).strip().lower() or "workloads",
                 "repo": str(item.get("repo", "")).strip(),
                 "version": str(item.get("version", "")).strip(),
+                TARGET_REF_FIELD: app_chart_target_ref(item),
                 "namespace": str(item.get("namespace", "")).strip(),
                 "release-name": str(item.get("release-name", instance_id)).strip() or instance_id,
                 "values": dict(item.get("values", {}))
@@ -7388,6 +7690,42 @@ class RuntimeAuthCacheMaterial:
     s3_secret_access_key: str | None
 
 
+def _runtime_auth_profile_recreate_reason(
+    status: RuntimeAuthProfileStatus,
+) -> str | None:
+    def _cloud_error_looks_like_deleted_key() -> bool:
+        error = str(status.cloud_check_error or "").strip().lower()
+        if not error:
+            return False
+        return (
+            "public key not exists" in error
+            or "jwtkeynotexists" in error
+            or "expired or deactivated" in error
+        )
+
+    if not status.metadata_exists:
+        return f"runtime-auth metadata file is missing: {status.metadata_file}"
+    if not status.service_account_id:
+        return "runtime-auth metadata is missing service_account_id"
+    if not status.auth_public_key_id:
+        return "runtime-auth metadata is missing auth_public_key_id"
+    if status.private_key_file is None:
+        return "runtime-auth metadata is missing private_key_file"
+    if not status.private_key_exists:
+        return f"runtime-auth private key file is missing: {status.private_key_file}"
+    if status.cloud_public_key_exists is False:
+        return (
+            "cached Nebius auth public key "
+            f"'{status.auth_public_key_id}' no longer exists or is not accessible"
+        )
+    if _cloud_error_looks_like_deleted_key():
+        return (
+            "cached Nebius auth public key "
+            f"'{status.auth_public_key_id}' no longer exists or is not accessible"
+        )
+    return None
+
+
 def _runtime_auth_cache_material(
     *, project_id: str, client_name: str
 ) -> RuntimeAuthCacheMaterial | None:
@@ -7680,12 +8018,50 @@ def _ensure_runtime_auth_material(
     )
     project_id = str(config.client_info.nebius.project_id).strip()
     client_name = str(config.client_info.client_name).strip()
+    loaded_from_cache = False
     if missing:
-        _runtime_auth_cache_load(project_id=project_id, client_name=client_name)
+        loaded_from_cache = _runtime_auth_cache_load(project_id=project_id, client_name=client_name)
         missing = _runtime_auth_missing_envs(
             need_terraform=need_terraform,
             need_eso_mysterybox=need_eso_mysterybox,
         )
+    if not missing and loaded_from_cache:
+        status = _runtime_auth_profile_status(
+            project_id=project_id,
+            client_name=client_name,
+            profile=None,
+            endpoint=None,
+            sdk_config_file=None,
+        )
+        recreate_reason = _runtime_auth_profile_recreate_reason(status)
+        if recreate_reason:
+            if not auto_bootstrap:
+                raise RuntimeError(
+                    "Cached runtime auth profile is stale: "
+                    + recreate_reason
+                    + "\nRun `nebius-cxcli auth --project-id "
+                    + project_id
+                    + " --client-name "
+                    + client_name
+                    + " --recreate`, or rerun with --auto-auth-bootstrap."
+                )
+            console.print(
+                f"{warning_markup('WARNING:', bold=True)} Cached runtime auth profile is stale; "
+                f"recreating because {recreate_reason}."
+            )
+            material, _ = _create_or_recreate_runtime_auth_profile(
+                project_id=project_id,
+                client_name=client_name,
+                recreate=True,
+                profile=None,
+                endpoint=None,
+                sdk_config_file=None,
+            )
+            _export_material_to_env(material)
+            missing = _runtime_auth_missing_envs(
+                need_terraform=need_terraform,
+                need_eso_mysterybox=need_eso_mysterybox,
+            )
     if missing:
         if not auto_bootstrap:
             raise RuntimeError(
@@ -7946,7 +8322,7 @@ def _write_generated_runtime_manifest(
     write_kwargs = dict(
         config=config,
         paths=manifest_paths or paths,
-        handoffs=_enabled_cluster_handoffs(config),
+        targets=_enabled_deploy_targets(config, manifest_paths or paths),
         required_component_outputs=_required_runtime_component_output_specs(config),
         status_watchers=_enabled_status_watcher_specs(config),
         validations=mk8s_gpu_validation_specs(config),
@@ -7974,6 +8350,26 @@ def _active_chart_count(config: Any) -> int:
         return 0
     return sum(
         1 for item in charts if isinstance(item, Mapping) and bool(item.get("enabled", False))
+    )
+
+
+def _active_chart_count_for_target(config: Any, *, target_ref: str) -> int:
+    payload = to_plain_data(config)
+    if not isinstance(payload, dict):
+        return 0
+    apps = payload.get("apps")
+    if not isinstance(apps, dict):
+        return 0
+    charts = apps.get("charts")
+    if not isinstance(charts, list):
+        return 0
+    normalized_target_ref = normalize_component_token(target_ref)
+    return sum(
+        1
+        for item in charts
+        if isinstance(item, Mapping)
+        and bool(item.get("enabled", False))
+        and app_chart_target_ref(item) == normalized_target_ref
     )
 
 
@@ -8082,30 +8478,55 @@ def _requires_flux_terraform_state(config: Any) -> bool:
     )
 
 
-def _manifest_cluster_handoffs(manifest: Mapping[str, Any]) -> list[dict[str, str]]:
+def _enabled_deploy_targets(config: Any, paths: ProjectPaths) -> list[dict[str, str]]:
+    targets: list[dict[str, str]] = []
+    for handoff in _enabled_cluster_handoffs(config):
+        target_ref = str(handoff.get("instance_id", "")).strip().lower()
+        targets.append(
+            {
+                **handoff,
+                "target_ref": target_ref,
+                "flux_dir": str(flux_target_dir(paths, target_ref)),
+            }
+        )
+    return targets
+
+
+def _manifest_deploy_targets(manifest: Mapping[str, Any]) -> list[dict[str, str]]:
     deploy_node = manifest.get("deploy")
     if not isinstance(deploy_node, Mapping):
         return []
-    raw_handoffs = deploy_node.get("handoffs")
-    if not isinstance(raw_handoffs, list):
+    raw_targets = deploy_node.get("targets")
+    if not isinstance(raw_targets, list):
         return []
-    handoffs: list[dict[str, str]] = []
-    for item in raw_handoffs:
+    targets: list[dict[str, str]] = []
+    for item in raw_targets:
         if not isinstance(item, Mapping):
             continue
-        handoffs.append(
+        target_ref = (
+            str(item.get("target_ref", "")).strip().lower()
+            or str(item.get("instance_id", "")).strip().lower()
+            or str(item.get("component_id", "")).strip().lower()
+        )
+        targets.append(
             {
                 "component_id": str(item.get("component_id", "")).strip().lower(),
                 "instance_id": (
                     str(item.get("instance_id", "")).strip().lower()
                     or str(item.get("component_id", "")).strip().lower()
                 ),
+                "target_ref": target_ref,
                 "cluster_id_output_name": str(item.get("cluster_id_output_name", "")).strip(),
                 "component_output_ref": str(item.get("component_output_ref", "")).strip(),
                 "access": str(item.get("access", "")).strip().lower(),
+                "flux_dir": str(item.get("flux_dir", "")).strip(),
             }
         )
-    return [item for item in handoffs if item["cluster_id_output_name"]]
+    return [
+        item
+        for item in targets
+        if item["target_ref"] and item["cluster_id_output_name"]
+    ]
 
 
 def _manifest_required_component_output_specs(manifest: Mapping[str, Any]) -> list[dict[str, str]]:
@@ -8184,6 +8605,71 @@ def _manifest_deploy_validations(manifest: Mapping[str, Any]) -> list[dict[str, 
     return [dict(item) for item in raw_validations if isinstance(item, Mapping)]
 
 
+def _manifest_target_flux_dir(
+    *,
+    paths: ProjectPaths,
+    target: Mapping[str, str],
+) -> Path:
+    manifest_flux_dir = str(target.get("flux_dir", "")).strip()
+    if manifest_flux_dir:
+        flux_dir_path = Path(manifest_flux_dir)
+        if not flux_dir_path.is_absolute():
+            return (paths.repo_root / flux_dir_path).resolve()
+        return flux_dir_path.resolve()
+    return flux_target_dir(paths, str(target.get("target_ref", "")).strip())
+
+
+def _paths_for_target_flux_dir(paths: ProjectPaths, target: Mapping[str, str]) -> ProjectPaths:
+    return replace(paths, flux_dir=_manifest_target_flux_dir(paths=paths, target=target))
+
+
+def _resolve_selected_deploy_targets(
+    manifest: Mapping[str, Any],
+    *,
+    requested_target_ref: str | None,
+    all_targets: bool,
+) -> list[dict[str, str]]:
+    targets = _manifest_deploy_targets(manifest)
+    if requested_target_ref and all_targets:
+        raise ValueError("Use either --target or --all-targets, not both.")
+    if not targets:
+        if requested_target_ref or all_targets:
+            raise RuntimeError("No built-in cluster targets are declared in this generated bundle.")
+        return []
+    if all_targets:
+        return targets
+    if requested_target_ref:
+        normalized_target_ref = normalize_component_token(requested_target_ref)
+        for target in targets:
+            if str(target.get("target_ref", "")).strip() == normalized_target_ref:
+                return [target]
+        available = ", ".join(sorted(str(item["target_ref"]) for item in targets))
+        raise RuntimeError(
+            f"Unknown cluster target '{requested_target_ref}'. Available targets: {available}"
+        )
+    if len(targets) == 1:
+        return targets
+    available = ", ".join(sorted(str(item["target_ref"]) for item in targets))
+    raise RuntimeError(
+        "Multiple cluster targets are declared in this generated bundle: "
+        f"{available}. Select one with --target or use --all-targets."
+    )
+
+
+def _filter_validations_for_target(
+    validations: list[dict[str, Any]],
+    *,
+    target_ref: str,
+) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    for item in validations:
+        item_target_ref = normalize_component_token(item.get(TARGET_REF_FIELD))
+        if item_target_ref and item_target_ref != normalize_component_token(target_ref):
+            continue
+        selected.append(item)
+    return selected
+
+
 _DEPLOY_VALIDATION_SKIP_KIND_MAP = {
     "operator-readiness": "mk8s_gpu_operator_readiness",
     "operator_readiness": "mk8s_gpu_operator_readiness",
@@ -8250,7 +8736,7 @@ def _manifest_missing_deploy_validations(manifest: Mapping[str, Any]) -> bool:
 
 def _manifest_requires_flux_terraform_state(manifest: Mapping[str, Any]) -> bool:
     return bool(
-        _manifest_cluster_handoffs(manifest) or _manifest_required_component_output_specs(manifest)
+        _manifest_deploy_targets(manifest) or _manifest_required_component_output_specs(manifest)
     )
 
 
@@ -8427,6 +8913,28 @@ def _private_cluster_handoff_note() -> str:
         "Using a private MK8s control-plane endpoint for cluster handoff. "
         "Local app deploy/bootstrap/destroy requires this machine to already have a private network path "
         "to the Nebius control-plane endpoint."
+    )
+
+
+def _multi_cluster_handoff_labels(handoffs: list[dict[str, str]]) -> str:
+    return ", ".join(
+        sorted(
+            component_instance_label(
+                handoff["component_id"],
+                handoff.get("instance_id", handoff["component_id"]),
+            )
+            for handoff in handoffs
+        )
+    )
+
+
+def _multi_cluster_handoff_skip_note(handoffs: list[dict[str, str]]) -> str:
+    return (
+        "Multiple cluster handoff sources are enabled: "
+        f"{_multi_cluster_handoff_labels(handoffs)}. "
+        "Terraform infra apply can continue, but cxcli will not run target-specific "
+        "Kubernetes work until you select a target. Use --target <instance_id> or "
+        "--all-targets when Kubernetes access is required."
     )
 
 
@@ -8696,6 +9204,7 @@ def _mk8s_cluster_handoff_spec(
 def _persist_cluster_handoff_kubeconfig(
     *,
     spec: _Mk8sKubeconfigSpec,
+    set_current_context: bool = True,
 ) -> Path | None:
     if not _should_persist_local_kubeconfig():
         return None
@@ -8737,7 +9246,13 @@ def _persist_cluster_handoff_kubeconfig(
             entry_name=spec.context_name,
             replacement=rendered["contexts"][0],
         )
-        payload["current-context"] = spec.context_name
+        existing_current_context = payload.get("current-context")
+        if (
+            set_current_context
+            or not isinstance(existing_current_context, str)
+            or not existing_current_context.strip()
+        ):
+            payload["current-context"] = spec.context_name
         local_kubeconfig.write_text(
             yaml.safe_dump(payload, sort_keys=False),
             encoding="utf-8",
@@ -8755,36 +9270,31 @@ def _prepare_cluster_handoff_kube_env(
     paths: ProjectPaths,
     *,
     stack: ExitStack,
-    handoffs: list[dict[str, str]] | None = None,
+    target: Mapping[str, str] | None = None,
     persist_local_kubeconfig: bool = True,
+    set_current_context: bool = True,
 ) -> dict[str, str] | None:
-    handoffs = handoffs if handoffs is not None else _enabled_cluster_handoffs(config)
-    if not handoffs:
-        return None
-    if len(handoffs) > 1:
-        component_ids = ", ".join(
-            sorted(
-                component_instance_label(
-                    handoff["component_id"],
-                    handoff.get("instance_id", handoff["component_id"]),
-                )
-                for handoff in handoffs
+    resolved_target = target
+    if resolved_target is None:
+        handoffs = _enabled_cluster_handoffs(config)
+        if len(handoffs) > 1:
+            raise RuntimeError(
+                "Multiple handoff-capable infra components are enabled for this run: "
+                f"{_multi_cluster_handoff_labels(handoffs)}. Enable only one cluster handoff source "
+                "before running this command."
             )
-        )
-        raise RuntimeError(
-            "Multiple handoff-capable infra components are enabled for this run: "
-            f"{component_ids}. Enable only one cluster handoff source before running this command."
-        )
-    handoff = handoffs[0]
+        resolved_target = handoffs[0] if handoffs else None
+    if not resolved_target:
+        return None
 
     cluster_id = terraform_output_raw(
         paths.infra_dir,
-        handoff["cluster_id_output_name"],
+        str(resolved_target["cluster_id_output_name"]),
         extra_env=_terraform_runtime_env(config),
     )
     if not cluster_id:
         raise RuntimeError(
-            f"Terraform output `{handoff['cluster_id_output_name']}` is empty. The rendered Terraform root must expose "
+            f"Terraform output `{resolved_target['cluster_id_output_name']}` is empty. The rendered Terraform root must expose "
             "the cluster ID required for local cluster handoff kubeconfig generation."
         )
 
@@ -8795,18 +9305,21 @@ def _prepare_cluster_handoff_kube_env(
     spec = _mk8s_cluster_handoff_spec(
         config,
         cluster_id=cluster_id,
-        access=handoff["access"],
+        access=str(resolved_target["access"]),
     )
-    if handoff["access"] == "internal":
+    if str(resolved_target["access"]) == "internal":
         console.print(f"[yellow]NOTE:[/yellow] {_private_cluster_handoff_note()}")
     kube_root = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="nebius-cxcli-kube-")))
     kubeconfig_path = kube_root / "config"
     _write_kubeconfig_file(kubeconfig_path, spec)
     if persist_local_kubeconfig:
-        _persist_cluster_handoff_kubeconfig(spec=spec)
+        _persist_cluster_handoff_kubeconfig(
+            spec=spec,
+            set_current_context=set_current_context,
+        )
     return {
         "KUBECONFIG": str(kubeconfig_path),
-        CLUSTER_HANDOFF_ACCESS_ENV: str(handoff["access"]),
+        CLUSTER_HANDOFF_ACCESS_ENV: str(resolved_target["access"]),
     }
 
 
@@ -9021,6 +9534,41 @@ def _report_cluster_nodes_status(
     )
 
 
+def _reconcile_observability_gpu_node_labels(
+    config: Any,
+    *,
+    extra_env: dict[str, str] | None,
+) -> None:
+    if not extra_env or not extra_env.get("KUBECONFIG"):
+        return
+    policy = observability_gpu_node_label_reconciliation(config)
+    if not policy.enabled:
+        return
+    selector = ",".join(f"{key}={value}" for key, value in policy.selector)
+    label_args = [f"{key}={value}" for key, value in policy.labels]
+    if not selector or not label_args:
+        return
+    env = os.environ.copy()
+    env.update(extra_env)
+    result = subprocess.run(
+        ["kubectl", "label", "nodes", "-l", selector, *label_args, "--overwrite"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        detail = (
+            _first_non_empty_line(result.stderr or result.stdout or "")
+            or "kubectl node label reconciliation failed"
+        )
+        raise RuntimeError(f"Observability GPU node-label reconciliation failed: {detail}")
+    console.print(
+        "Reconciled observability GPU node labels for selector "
+        f"`{escape(selector)}`."
+    )
+
+
 def _deploy_generated_artifacts(
     config: Any,
     paths: ProjectPaths,
@@ -9029,6 +9577,8 @@ def _deploy_generated_artifacts(
     auto_auth_bootstrap: bool,
     skip_validations: bool,
     skip_validation_kinds: set[str],
+    requested_target_ref: str | None = None,
+    all_targets: bool = False,
 ) -> None:
     """Deploy an existing generated artifact bundle without rerendering it."""
     _run_deploy_preflight(
@@ -9063,7 +9613,6 @@ def _deploy_generated_artifacts(
     _run_terraform_apply_with_status(config, paths, **apply_kwargs)
     write_inventory(config, paths, validations=declared_validations)
     has_enabled_app_charts = _active_chart_count(config) > 0
-    needs_cluster_ready = has_enabled_app_charts or bool(deploy_validations)
     if skip_validations and declared_validations:
         console.print("Skipping deploy-time validations for this run (--skip-validations).")
     elif skip_validation_kinds:
@@ -9073,21 +9622,94 @@ def _deploy_generated_artifacts(
                 "Skipping deploy-time validations for this run: "
                 + ", ".join(skipped_labels)
             )
-    with ExitStack() as stack:
-        kube_env = _prepare_cluster_handoff_kube_env(
-            config,
-            paths,
-            stack=stack,
-            handoffs=_manifest_cluster_handoffs(manifest),
+    manifest_targets = _manifest_deploy_targets(manifest)
+    if not manifest_targets:
+        selected_targets: list[dict[str, str]] = []
+    elif not has_enabled_app_charts and not deploy_validations and not requested_target_ref and not all_targets:
+        # Infra-only multi-target deploys do not need one execution target. Refresh every local
+        # kubeconfig handoff so operators can switch contexts after Terraform finishes.
+        selected_targets = manifest_targets
+    else:
+        selected_targets = _resolve_selected_deploy_targets(
+            manifest,
+            requested_target_ref=requested_target_ref,
+            all_targets=all_targets,
         )
-        if needs_cluster_ready:
-            _report_cluster_nodes_status(
-                extra_env=kube_env, emit=lambda message: console.print(message)
+    if manifest_targets and not selected_targets:
+        console.print(
+            f"{warning_markup('WARNING:', bold=True)} "
+            f"{_multi_cluster_handoff_skip_note(manifest_targets)}"
+        )
+    validation_error: Exception | None = None
+    if selected_targets:
+        persist_local_kubeconfig = True
+        set_current_context = len(selected_targets) == 1 and not all_targets
+        for target in selected_targets:
+            target_ref = str(target["target_ref"])
+            target_paths = _paths_for_target_flux_dir(paths, target)
+            target_has_apps = _active_chart_count_for_target(config, target_ref=target_ref) > 0
+            target_validations = _filter_validations_for_target(
+                deploy_validations,
+                target_ref=target_ref,
             )
+            needs_cluster_ready = target_has_apps or bool(target_validations)
+            if len(selected_targets) > 1:
+                console.print(f"[bold]Target {target_ref}[/bold]")
+            with ExitStack() as stack:
+                kube_env = _prepare_cluster_handoff_kube_env(
+                    config,
+                    paths,
+                    stack=stack,
+                    target=target,
+                    persist_local_kubeconfig=persist_local_kubeconfig,
+                    set_current_context=set_current_context,
+                )
+                if target_has_apps:
+                    _reconcile_observability_gpu_node_labels(config, extra_env=kube_env)
+                if needs_cluster_ready:
+                    _report_cluster_nodes_status(
+                        extra_env=kube_env, emit=lambda message: console.print(message)
+                    )
+                if target_has_apps:
+                    _apply_rendered_flux(target_paths, extra_env=kube_env)
+                    _warn_if_flux_gitops_not_bootstrapped(
+                        config,
+                        target_paths,
+                        extra_env=kube_env,
+                        target_ref=target_ref,
+                    )
+                if target_validations:
+                    with console.status(
+                        f"[cyan]Running MK8s GPU validations for {target_ref}...[/cyan]",
+                        spinner="dots",
+                    ) as status:
+                        last_validation_phase = ""
+
+                        def _emit_validation_phase(message: str) -> None:
+                            nonlocal last_validation_phase
+                            status.update(message)
+                            if not _console_is_terminal() and message != last_validation_phase:
+                                console.print(message)
+                            last_validation_phase = message
+
+                        try:
+                            run_mk8s_gpu_validations(
+                                target_validations,
+                                inventory_dir=paths.inventory_dir,
+                                extra_env=kube_env,
+                                emit=_emit_validation_phase,
+                            )
+                        except Exception as exc:
+                            validation_error = exc
+                            break
+            if validation_error is not None:
+                break
+    elif has_enabled_app_charts or deploy_validations:
+        _report_cluster_nodes_status(
+            extra_env=None, emit=lambda message: console.print(message)
+        )
         if has_enabled_app_charts:
-            _apply_rendered_flux(paths, extra_env=kube_env)
-            _warn_if_flux_gitops_not_bootstrapped(config, paths, extra_env=kube_env)
-        validation_error: Exception | None = None
+            _apply_rendered_flux(paths, extra_env=None)
         if deploy_validations:
             with console.status(
                 "[cyan]Running MK8s GPU validations...[/cyan]",
@@ -9106,38 +9728,48 @@ def _deploy_generated_artifacts(
                     run_mk8s_gpu_validations(
                         deploy_validations,
                         inventory_dir=paths.inventory_dir,
-                        extra_env=kube_env,
+                        extra_env=None,
                         emit=_emit_validation_phase,
                     )
                 except Exception as exc:
                     validation_error = exc
-        if declared_validations:
-            artifacts = write_inventory(config, paths, validations=declared_validations)
-            validation_report = build_deploy_validation_report(
-                declared_validations,
-                inventory_dir=paths.inventory_dir,
-                markdown_path=artifacts.markdown,
-            )
-            for line in format_deploy_validation_summary_lines(validation_report):
-                console.print(line)
-        if validation_error is not None:
-            raise validation_error
+    if declared_validations:
+        artifacts = write_inventory(config, paths, validations=declared_validations)
+        validation_report = build_deploy_validation_report(
+            declared_validations,
+            inventory_dir=paths.inventory_dir,
+            markdown_path=artifacts.markdown,
+        )
+        for line in format_deploy_validation_summary_lines(validation_report):
+            console.print(line)
+    if validation_error is not None:
+        raise validation_error
 
 
-def _validate_rendered_flux_manifests(paths: ProjectPaths, *, command_name: str) -> None:
+def _validate_rendered_flux_manifests(
+    paths: ProjectPaths,
+    *,
+    command_name: str,
+    manifest: Mapping[str, Any] | None = None,
+) -> None:
     if not shutil.which("kubectl"):
         raise RuntimeError(f"kubectl is required for `{command_name}` but was not found in PATH")
-    try:
-        subprocess.run(
-            ["kubectl", "kustomize", str(paths.flux_dir)],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-    except subprocess.CalledProcessError as exc:
-        detail = _first_non_empty_line(exc.stderr or exc.stdout or "")
-        raise RuntimeError(detail or str(exc)) from exc
+    target_paths = (
+        [_paths_for_target_flux_dir(paths, target) for target in _manifest_deploy_targets(manifest or {})]
+        or [paths]
+    )
+    for target_path in target_paths:
+        try:
+            subprocess.run(
+                ["kubectl", "kustomize", str(target_path.flux_dir)],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except subprocess.CalledProcessError as exc:
+            detail = _first_non_empty_line(exc.stderr or exc.stdout or "")
+            raise RuntimeError(detail or str(exc)) from exc
 
 
 def _run_deploy_preflight(
@@ -9228,7 +9860,11 @@ def _run_generated_bundle_validation(
         if active_chart_count > 0:
             progress.run(
                 "flux",
-                lambda: _validate_rendered_flux_manifests(paths, command_name=flux_command_name),
+                lambda: _validate_rendered_flux_manifests(
+                    paths,
+                    command_name=flux_command_name,
+                    manifest=manifest,
+                ),
             )
         if portable:
             progress.run(
@@ -9308,26 +9944,43 @@ def _destroy_rendered_flux_bundle(
     config: Any,
     paths: ProjectPaths,
     manifest: Mapping[str, Any],
+    *,
+    requested_target_ref: str | None = None,
+    all_targets: bool = False,
 ) -> None:
     if _active_chart_count(config) == 0:
         raise RuntimeError("No enabled apps charts are configured for this project.")
-    with ExitStack() as stack:
-        kube_env = _prepare_cluster_handoff_kube_env(
-            config,
-            paths,
-            stack=stack,
-            handoffs=_manifest_cluster_handoffs(manifest),
-            persist_local_kubeconfig=False,
+    manifest_targets = _manifest_deploy_targets(manifest)
+    if manifest_targets:
+        selected_targets = _resolve_selected_deploy_targets(
+            manifest,
+            requested_target_ref=requested_target_ref,
+            all_targets=all_targets,
         )
-        delete_rendered_flux(paths, extra_env=kube_env, emit=console.print)
+        for target in selected_targets:
+            target_ref = str(target["target_ref"])
+            target_paths = _paths_for_target_flux_dir(paths, target)
+            if len(selected_targets) > 1:
+                console.print(f"[bold]Target {target_ref}[/bold]")
+            with ExitStack() as stack:
+                kube_env = _prepare_cluster_handoff_kube_env(
+                    config,
+                    paths,
+                    stack=stack,
+                    target=target,
+                    persist_local_kubeconfig=False,
+                )
+                delete_rendered_flux(target_paths, extra_env=kube_env, emit=console.print)
+        return
+    delete_rendered_flux(paths, extra_env=None, emit=console.print)
 
 
 def _destroy_uses_cluster_teardown_for_apps(config: Any, manifest: Mapping[str, Any]) -> bool:
-    return _active_chart_count(config) > 0 and bool(_manifest_cluster_handoffs(manifest))
+    return _active_chart_count(config) > 0 and bool(_manifest_deploy_targets(manifest))
 
 
 def _destroy_should_delete_rendered_flux_first(config: Any, manifest: Mapping[str, Any]) -> bool:
-    return _active_chart_count(config) > 0 and not bool(_manifest_cluster_handoffs(manifest))
+    return _active_chart_count(config) > 0 and not bool(_manifest_deploy_targets(manifest))
 
 
 def _destroy_confirmation_text(
@@ -9536,6 +10189,7 @@ def _warn_if_flux_gitops_not_bootstrapped(
     paths: ProjectPaths,
     *,
     extra_env: dict[str, str] | None,
+    target_ref: str | None = None,
 ) -> None:
     if _active_chart_count(config) == 0:
         return
@@ -9544,6 +10198,8 @@ def _warn_if_flux_gitops_not_bootstrapped(
     if flux_bootstrap_resources_installed(extra_env=extra_env):
         return
     command = f"nebius-cxcli flux bootstrap {shlex.quote(str(paths.generated_dir))}"
+    if target_ref:
+        command += f" --target {shlex.quote(target_ref)}"
     console.print(
         f"{warning_markup('WARNING:', bold=True)} Flux GitOps bootstrap is not configured for this cluster yet. "
         "Local apply succeeded, but the cluster will not continuously sync from the Git repository "
@@ -10237,6 +10893,8 @@ def _filter_runtime_payload_for_selected_components(
                 row["enabled"] = True
         selected_infra_components.extend(matched_rows)
     infra["components"] = selected_infra_components
+    target_refs = enabled_cluster_target_refs(runtime_payload)
+    default_target_ref = target_refs[0] if len(target_refs) == 1 else ""
 
     app_charts = apps.get("charts")
     if not isinstance(app_charts, list):
@@ -10282,6 +10940,8 @@ def _filter_runtime_payload_for_selected_components(
                 "release-name": release_name,
                 "values": {},
             }
+            if target_refs:
+                row[TARGET_REF_FIELD] = default_target_ref
             matched_rows = [row]
         else:
             for row in matched_rows:
@@ -10305,6 +10965,8 @@ def _filter_runtime_payload_for_selected_components(
                 if "group" not in row or not str(row.get("group", "")).strip():
                     raw_group = str(entry.group or "").strip().lower()
                     row["group"] = re.sub(r"[^a-z0-9]+", "-", raw_group).strip("-") or "workloads"
+                if target_refs and not str(row.get(TARGET_REF_FIELD, "")).strip() and default_target_ref:
+                    row[TARGET_REF_FIELD] = default_target_ref
                 if not isinstance(row.get("values"), Mapping):
                     row["values"] = {}
                 row["enabled"] = True
@@ -10681,6 +11343,8 @@ def create_command(
         _validate_deployments_root_target(base_path)
         deployments_root = _resolve_deployments_root(base_path)
         interactive_mode = not no_interactive
+        if validate_sources:
+            _preflight_component_source_tools_or_raise()
         resolved_tenant_id = _value_or_prompt(
             tenant_id,
             option_name="--tenant-id",
@@ -10757,12 +11421,9 @@ def create_command(
         if validate_sources:
             _validate_component_sources_or_raise()
 
-        resolved_client_name = _value_or_prompt(
+        resolved_client_name = _client_name_or_prompt(
             client_name,
-            option_name="--client-name",
-            prompt_text="Client name",
             interactive=interactive_mode,
-            default_value=None,
         )
         resolved_region_id = _region_or_prompt(
             region_id or None,
@@ -10951,7 +11612,45 @@ def create_command(
                 + ", ".join(f"'apps:{item}'" for item in gpu_app_selection.auto_enabled_app_ids)
                 + " because the selected MK8s GPU configuration requires them."
             )
+        observability_selection = resolve_observability_app_selection(
+            final_payload,
+            selected_app_ids=selected_apps,
+            app_entries=app_entries,
+        )
+        if observability_selection.issues:
+            raise RuntimeError(
+                "Observability app defaults are incomplete:\n  - "
+                + "\n  - ".join(observability_selection.issues)
+            )
+        if observability_selection.auto_enabled_app_ids:
+            selected_apps = set(observability_selection.selected_app_ids)
+            auto_enabled_seed = _starter_component_payload(
+                client_name=resolved_client_name,
+                tenant_id=resolved_tenant_id,
+                project_id=resolved_project_id,
+                region_id=resolved_region_id,
+                email=resolved_email,
+                selected_infra=selected_infra,
+                selected_apps=selected_apps,
+                infra_entries=infra_entries,
+                app_entries=app_entries,
+                app_namespace_overrides=app_namespace_overrides,
+                app_releasename_overrides=app_releasename_overrides,
+            )
+            _ensure_payload_contains_component_rows(
+                payload=final_payload,
+                seed_payload=auto_enabled_seed,
+            )
+            console.print(
+                f"{warning_markup('Adjusted component selection:')} enabling "
+                + ", ".join(
+                    f"'apps:{item}'" for item in observability_selection.auto_enabled_app_ids
+                )
+                + " because the selected observability configuration requires them."
+            )
         materialize_mk8s_gpu_app_values(final_payload)
+        materialize_observability_infra_values(final_payload)
+        materialize_observability_app_values(final_payload)
 
         create_required_field_issues = (
             _wizard_followup_required_field_issues(
@@ -11139,6 +11838,7 @@ def component_add_command(
             help=(
                 "Optional infra module or app chart id(s) to add. When omitted, "
                 "component add prompts interactively using separate infra/apps selections. "
+                "Infra-only interactive adds are valid and do not require selecting an app. "
                 "Repeat a component id to add another instance, or use "
                 "'<component-id>@<instance-id>' to request an explicit instance id."
             ),
@@ -11191,11 +11891,23 @@ def component_add_command(
                 scope="infra",
                 entries=infra_entries,
             )
-            requested_apps = _prompt_component_scope_selection(
-                action="add",
-                scope="apps",
-                entries=app_entries,
-            )
+            requested_apps: set[str] = set()
+            select_apps = not requested_infra
+            if requested_infra:
+                apps_decision = _wizard_continue_phase(
+                    "Select apps components to add too?",
+                    default=False,
+                )
+                if _wizard_phase_stop_requested(apps_decision):
+                    console.print("No component changes applied.")
+                    return
+                select_apps = bool(apps_decision)
+            if select_apps:
+                requested_apps = _prompt_component_scope_selection(
+                    action="add",
+                    scope="apps",
+                    entries=app_entries,
+                )
             add_targets = [
                 *(
                     _ComponentAddTarget(scope="infra", component_id=component_id)
@@ -11423,7 +12135,53 @@ def component_add_command(
                 + ", ".join(f"'apps:{item}'" for item in gpu_app_selection.auto_enabled_app_ids)
                 + " because the selected MK8s GPU configuration requires them."
             )
+        observability_selection = resolve_observability_app_selection(
+            next_payload,
+            selected_app_ids=selected_apps,
+            app_entries=app_entries,
+        )
+        if observability_selection.issues:
+            raise RuntimeError(
+                "Observability app defaults are incomplete:\n  - "
+                + "\n  - ".join(observability_selection.issues)
+            )
+        if observability_selection.auto_enabled_app_ids:
+            selected_apps = set(observability_selection.selected_app_ids)
+            identity_client_name, identity_tenant_id, identity_project_id, identity_region_id, identity_email = _identity_values_from_payload(next_payload)
+            auto_enabled_seed = _starter_component_payload(
+                client_name=identity_client_name,
+                tenant_id=identity_tenant_id,
+                project_id=identity_project_id,
+                region_id=identity_region_id,
+                email=identity_email,
+                selected_infra=selected_infra,
+                selected_apps=selected_apps,
+                infra_entries=infra_entries,
+                app_entries=app_entries,
+            )
+            _ensure_payload_contains_component_rows(
+                payload=next_payload,
+                seed_payload=auto_enabled_seed,
+            )
+            next_payload = _filter_runtime_payload_for_selected_components(
+                payload=next_payload,
+                selected_infra=selected_infra,
+                selected_apps=selected_apps,
+                infra_entries=infra_entries,
+                app_entries=app_entries,
+            )
+            for component_id in observability_selection.auto_enabled_app_ids:
+                added_apps_labels.append(component_instance_label(component_id, component_id))
+            console.print(
+                f"{warning_markup('Adjusted component selection:')} enabling "
+                + ", ".join(
+                    f"'apps:{item}'" for item in observability_selection.auto_enabled_app_ids
+                )
+                + " because the selected observability configuration requires them."
+            )
         materialize_mk8s_gpu_app_values(next_payload)
+        materialize_observability_infra_values(next_payload)
+        materialize_observability_app_values(next_payload)
 
         add_required_field_issues = (
             _wizard_followup_required_field_issues(
@@ -12386,6 +13144,8 @@ def render_command(
     try:
         config, paths = _load_runtime_context(config_path)
         materialize_mk8s_gpu_app_values(config)
+        materialize_observability_infra_values(config)
+        materialize_observability_app_values(config)
         resolved_source_profile = resolve_component_sources_profile()
         if not _confirm_render_overwrite(paths, force=force):
             console.print(
@@ -12548,6 +13308,23 @@ def deploy_command(
             ),
         ),
     ] = None,
+    target_ref: Annotated[
+        str | None,
+        typer.Option(
+            "--target",
+            help=(
+                "Explicit MK8s target instance_id for Flux/app work and deploy-time validations "
+                "when the bundle declares more than one built-in cluster target."
+            ),
+        ),
+    ] = None,
+    all_targets: Annotated[
+        bool,
+        typer.Option(
+            "--all-targets",
+            help="Run target-scoped Flux/app work and deploy-time validations for every built-in cluster target in the bundle.",
+        ),
+    ] = False,
 ) -> None:
     """Deploy an existing generated artifact bundle locally from config.yaml.
 
@@ -12567,6 +13344,9 @@ def deploy_command(
     generated bundle onto live infrastructure and workloads. When a built-in
     cluster handoff such as MK8s is enabled, deploy also refreshes local
     kubeconfig access for that cluster even if no app charts are configured.
+    When more than one built-in cluster target is present, use `--target
+    <instance_id>` or `--all-targets` for Flux/app work and deploy-time
+    validations.
     Existing managed resources may be updated when the bundle differs from live
     state. Use `nebius-cxcli terraform plan
     <generated>` first when you need a non-mutating preview. It does not run
@@ -12590,6 +13370,8 @@ def deploy_command(
             auto_auth_bootstrap=auto_auth_bootstrap,
             skip_validations=skip_validations,
             skip_validation_kinds=skip_validation_kinds,
+            requested_target_ref=target_ref,
+            all_targets=all_targets,
         )
         console.print(f"Local deploy completed from {paths.generated_dir}")
     except Exception as exc:  # pragma: no cover - CLI surface
@@ -12884,6 +13666,20 @@ def flux_destroy_command(
             help="Skip the destructive confirmation prompt.",
         ),
     ] = False,
+    target_ref: Annotated[
+        str | None,
+        typer.Option(
+            "--target",
+            help="Explicit MK8s target instance_id when the bundle declares more than one built-in cluster target.",
+        ),
+    ] = None,
+    all_targets: Annotated[
+        bool,
+        typer.Option(
+            "--all-targets",
+            help="Delete rendered app resources from every built-in cluster target in the bundle.",
+        ),
+    ] = False,
 ) -> None:
     """Delete rendered Flux resources directly from an existing generated/flux bundle."""
     try:
@@ -12903,7 +13699,13 @@ def flux_destroy_command(
             return
         if _manifest_requires_flux_terraform_state(manifest):
             _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
-        _destroy_rendered_flux_bundle(config, paths, manifest)
+        _destroy_rendered_flux_bundle(
+            config,
+            paths,
+            manifest,
+            requested_target_ref=target_ref,
+            all_targets=all_targets,
+        )
         console.print(f"Flux resources deleted from {paths.flux_dir}")
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
@@ -12928,13 +13730,24 @@ def flux_bootstrap_command(
             help="Automatically bootstrap runtime auth when env vars are missing",
         ),
     ] = False,
+    target_ref: Annotated[
+        str | None,
+        typer.Option(
+            "--target",
+            help="Explicit MK8s target instance_id when the bundle declares more than one built-in cluster target.",
+        ),
+    ] = None,
+    all_targets: Annotated[
+        bool,
+        typer.Option(
+            "--all-targets",
+            help="Bootstrap or reconcile Flux for every built-in cluster target in the bundle.",
+        ),
+    ] = False,
 ) -> None:
     """Refresh the deploy report, then bootstrap or reconcile Flux from an existing generated/flux bundle."""
     try:
         config, paths, manifest = _load_generated_context(generated_path)
-        requires_cluster_handoff = bool(
-            _active_chart_count(config) and _manifest_cluster_handoffs(manifest)
-        )
         if _manifest_requires_flux_terraform_state(manifest):
             _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
         else:
@@ -12946,22 +13759,40 @@ def flux_bootstrap_command(
             )
         paths.inventory_dir.mkdir(parents=True, exist_ok=True)
         write_inventory(config, paths, validations=_manifest_deploy_validations(manifest))
-        with ExitStack() as stack:
-            kube_env = (
-                _prepare_cluster_handoff_kube_env(
-                    config,
-                    paths,
-                    stack=stack,
-                    handoffs=_manifest_cluster_handoffs(manifest),
-                )
-                if requires_cluster_handoff
-                else None
+        manifest_targets = _manifest_deploy_targets(manifest)
+        if manifest_targets:
+            selected_targets = _resolve_selected_deploy_targets(
+                manifest,
+                requested_target_ref=target_ref,
+                all_targets=all_targets,
             )
+            persist_local_kubeconfig = True
+            set_current_context = len(selected_targets) == 1 and not all_targets
+            for target in selected_targets:
+                target_ref_value = str(target["target_ref"])
+                target_paths = _paths_for_target_flux_dir(paths, target)
+                if len(selected_targets) > 1:
+                    console.print(f"[bold]Target {target_ref_value}[/bold]")
+                with ExitStack() as stack:
+                    kube_env = _prepare_cluster_handoff_kube_env(
+                        config,
+                        paths,
+                        stack=stack,
+                        target=target,
+                        persist_local_kubeconfig=persist_local_kubeconfig,
+                        set_current_context=set_current_context,
+                    )
+                    _report_cluster_nodes_status(
+                        extra_env=kube_env, emit=lambda message: console.print(message)
+                    )
+                    action = ensure_flux(target_paths, extra_env=kube_env)
+                console.print(f"Flux {action} for {target_paths.flux_dir}")
+        else:
             _report_cluster_nodes_status(
-                extra_env=kube_env, emit=lambda message: console.print(message)
+                extra_env=None, emit=lambda message: console.print(message)
             )
-            action = ensure_flux(paths, extra_env=kube_env)
-        console.print(f"Flux {action} for {paths.flux_dir}")
+            action = ensure_flux(paths, extra_env=None)
+            console.print(f"Flux {action} for {paths.flux_dir}")
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 
@@ -12985,6 +13816,20 @@ def flux_apply_command(
             help="Automatically bootstrap runtime auth when env vars are missing",
         ),
     ] = True,
+    target_ref: Annotated[
+        str | None,
+        typer.Option(
+            "--target",
+            help="Explicit MK8s target instance_id when the bundle declares more than one built-in cluster target.",
+        ),
+    ] = None,
+    all_targets: Annotated[
+        bool,
+        typer.Option(
+            "--all-targets",
+            help="Apply rendered Flux resources to every built-in cluster target in the bundle.",
+        ),
+    ] = False,
 ) -> None:
     """Refresh the deploy report and apply an existing generated/flux bundle directly."""
     try:
@@ -12995,19 +13840,47 @@ def flux_apply_command(
             _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
         paths.inventory_dir.mkdir(parents=True, exist_ok=True)
         write_inventory(config, paths, validations=_manifest_deploy_validations(manifest))
-        with ExitStack() as stack:
-            kube_env = _prepare_cluster_handoff_kube_env(
-                config,
-                paths,
-                stack=stack,
-                handoffs=_manifest_cluster_handoffs(manifest),
+        manifest_targets = _manifest_deploy_targets(manifest)
+        if manifest_targets:
+            selected_targets = _resolve_selected_deploy_targets(
+                manifest,
+                requested_target_ref=target_ref,
+                all_targets=all_targets,
             )
+            persist_local_kubeconfig = True
+            set_current_context = len(selected_targets) == 1 and not all_targets
+            for target in selected_targets:
+                target_ref_value = str(target["target_ref"])
+                target_paths = _paths_for_target_flux_dir(paths, target)
+                if len(selected_targets) > 1:
+                    console.print(f"[bold]Target {target_ref_value}[/bold]")
+                with ExitStack() as stack:
+                    kube_env = _prepare_cluster_handoff_kube_env(
+                        config,
+                        paths,
+                        stack=stack,
+                        target=target,
+                        persist_local_kubeconfig=persist_local_kubeconfig,
+                        set_current_context=set_current_context,
+                    )
+                    _report_cluster_nodes_status(
+                        extra_env=kube_env, emit=lambda message: console.print(message)
+                    )
+                    _apply_rendered_flux(target_paths, extra_env=kube_env)
+                    _warn_if_flux_gitops_not_bootstrapped(
+                        config,
+                        target_paths,
+                        extra_env=kube_env,
+                        target_ref=target_ref_value,
+                    )
+                console.print(f"Flux applied from {target_paths.flux_dir}")
+        else:
             _report_cluster_nodes_status(
-                extra_env=kube_env, emit=lambda message: console.print(message)
+                extra_env=None, emit=lambda message: console.print(message)
             )
-            _apply_rendered_flux(paths, extra_env=kube_env)
-            _warn_if_flux_gitops_not_bootstrapped(config, paths, extra_env=kube_env)
-        console.print(f"Flux applied from {paths.flux_dir}")
+            _apply_rendered_flux(paths, extra_env=None)
+            _warn_if_flux_gitops_not_bootstrapped(config, paths, extra_env=None)
+            console.print(f"Flux applied from {paths.flux_dir}")
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 

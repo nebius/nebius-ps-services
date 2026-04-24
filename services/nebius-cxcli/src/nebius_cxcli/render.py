@@ -13,7 +13,11 @@ from .component_sources import SourceProfile
 from .flux_render import render_flux
 from .infra_render import render_terraform_artifacts
 from .inventory_ops import write_inventory
-from .mk8s_gpu import mk8s_gpu_validation_specs
+from .mk8s_gpu import materialize_mk8s_gpu_app_values, mk8s_gpu_validation_specs
+from .observability import (
+    materialize_observability_app_values,
+    materialize_observability_infra_values,
+)
 from .paths import ProjectPaths
 
 
@@ -79,6 +83,9 @@ def _render_project_to_paths(
     source_profile: SourceProfile = SourceProfile.PORTABLE,
 ) -> RenderResult:
     """Render Terraform and Flux artifacts into the provided target paths."""
+    materialize_mk8s_gpu_app_values(config)
+    materialize_observability_infra_values(config)
+    materialize_observability_app_values(config)
     paths.infra_dir.mkdir(parents=True, exist_ok=True)
     paths.flux_dir.mkdir(parents=True, exist_ok=True)
     paths.inventory_dir.mkdir(parents=True, exist_ok=True)

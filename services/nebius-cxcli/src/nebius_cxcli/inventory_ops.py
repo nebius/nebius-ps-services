@@ -14,6 +14,7 @@ from .deploy_validation_report import (
     build_deploy_validation_report,
     validation_section_lines,
 )
+from .observability import observability_endpoint_summary, observability_status_summary
 from .paths import ProjectPaths
 from .runtime_config import to_plain_data
 
@@ -171,6 +172,12 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
     n8n_route = _mapping(_lookup(n8n_values, "route"))
     if not n8n_route:
         n8n_route = _mapping(_lookup(n8n_chart_values, "route"))
+    observability = observability_status_summary(payload_data)
+    observability_endpoints = observability_endpoint_summary(
+        payload_data,
+        project_id=project_id,
+        region_id=region_id,
+    )
     cluster_name = str(
         _coalesce(
             _lookup(mk8s_inputs, "cluster_name"),
@@ -256,7 +263,8 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
             ),
             "cert_manager": _chart_enabled(app_rows, "cert-manager", "cert_manager"),
             "external_dns": _chart_enabled(app_rows, "external-dns", "external_dns"),
-            "observability": _chart_enabled(app_rows, "nebius-observability", "observability"),
+            "observability": observability,
+            "observability_endpoints": observability_endpoints,
             "n8n": {
                 "enabled": _chart_enabled(app_rows, "n8n"),
                 "hostname": _coalesce(
@@ -299,6 +307,11 @@ def write_inventory(
     nebius = _mapping(_lookup(client_info, "nebius"))
     app_summary = _mapping(_lookup(payload, "apps"))
     n8n_summary = _mapping(_lookup(app_summary, "n8n"))
+    observability_summary = _mapping(_lookup(app_summary, "observability"))
+    observability_endpoints = _mapping(_lookup(app_summary, "observability_endpoints"))
+    observability_read_endpoints = _mapping(_lookup(observability_endpoints, "read"))
+    observability_write_endpoints = _mapping(_lookup(observability_endpoints, "write"))
+    observability_auth = _mapping(_lookup(observability_endpoints, "auth"))
 
     markdown_path = paths.inventory_dir / DEPLOY_REPORT_FILENAME
     validation_report = build_deploy_validation_report(
@@ -325,11 +338,91 @@ def write_inventory(
         f"- Envoy Gateway: `{payload['apps']['envoy_gateway']}`",
         f"- cert-manager: `{payload['apps']['cert_manager']}`",
         f"- ExternalDNS: `{payload['apps']['external_dns']}`",
-        f"- Observability: `{payload['apps']['observability']}`",
+        f"- Observability: `{_coalesce(_lookup(observability_summary, 'enabled'), False)}`",
+        f"- K8s o11y agent: `{_coalesce(_lookup(observability_summary, 'kubernetes_agent'), False)}`",
+        f"- VM monitoring agent: `{_coalesce(_lookup(observability_summary, 'vm_monitoring_agent'), False)}`",
+        f"- VM journald logs (systemd services): `{_coalesce(_lookup(observability_summary, 'vm_journald_logs'), False)}`",
+        f"- VM standalone collector: `{_coalesce(_lookup(observability_summary, 'vm_standalone_collector'), False)}`",
+        f"- VM standalone collector metrics: `{_coalesce(_lookup(observability_summary, 'vm_standalone_metrics'), False)}`",
+        f"- VM standalone collector logs: `{_coalesce(_lookup(observability_summary, 'vm_standalone_logs'), False)}`",
+        f"- GPU DCGM metrics source: `{_coalesce(_lookup(observability_summary, 'gpu_dcgm_metric_source'), 'disabled')}`",
+        f"- GPU DCGM node policy: `{_coalesce(_lookup(observability_summary, 'gpu_dcgm_node_policy'), 'not_managed')}`",
+        f"- GPU DCGM live readiness: `{_coalesce(_lookup(observability_summary, 'gpu_dcgm_live_readiness'), 'not_configured')}`",
         f"- n8n: `{_coalesce(_lookup(n8n_summary, 'enabled'), False)}` "
         f"({_coalesce(_lookup(n8n_summary, 'hostname'), 'n/a')})",
         "",
     ]
+    if bool(_lookup(observability_endpoints, "configured")) and (
+        bool(_lookup(observability_summary, "enabled"))
+        or bool(_lookup(observability_summary, "vm_monitoring_agent"))
+    ):
+        endpoint_lines: list[str] = []
+
+        def _append_endpoint(
+            label: str,
+            endpoints: dict[str, Any],
+            key: str,
+        ) -> None:
+            value = _lookup(endpoints, key)
+            if value:
+                endpoint_lines.append(f"- {label}: `{value}`")
+
+        _append_endpoint(
+            "Metrics read (Nebius service metrics)",
+            observability_read_endpoints,
+            "metrics_service_provider_read",
+        )
+        _append_endpoint(
+            "Metrics read (user-ingested metrics)",
+            observability_read_endpoints,
+            "metrics_user_read",
+        )
+        _append_endpoint(
+            "Metrics read (federate template)",
+            observability_read_endpoints,
+            "metrics_federate_read",
+        )
+        _append_endpoint("Logs read (Loki)", observability_read_endpoints, "logs_loki_read")
+        _append_endpoint("Traces read (Tempo)", observability_read_endpoints, "traces_tempo_read")
+        _append_endpoint(
+            "Metrics write (OTLP HTTP/protobuf)",
+            observability_write_endpoints,
+            "metrics_otlp_write",
+        )
+        _append_endpoint(
+            "Metrics write (Prometheus Remote Write)",
+            observability_write_endpoints,
+            "metrics_prometheus_remote_write",
+        )
+        _append_endpoint(
+            "Metrics write (VM monitoring agent)",
+            observability_write_endpoints,
+            "metrics_platform_managed_write",
+        )
+        _append_endpoint(
+            "Logs write (direct/self-managed)",
+            observability_write_endpoints,
+            "logs_otlp_write",
+        )
+        _append_endpoint(
+            "Logs write (Nebius agent gRPC)",
+            observability_write_endpoints,
+            "logs_agent_grpc_write",
+        )
+        _append_endpoint(
+            "Logs write (VM monitoring agent)",
+            observability_write_endpoints,
+            "logs_platform_managed_write",
+        )
+        _append_endpoint(
+            "Traces write (OTLP gRPC)",
+            observability_write_endpoints,
+            "traces_otlp_grpc_write",
+        )
+        if endpoint_lines:
+            endpoint_lines.append(f"- Read auth: `{_lookup(observability_auth, 'read')}`")
+            endpoint_lines.append(f"- Write auth: `{_lookup(observability_auth, 'write')}`")
+            lines.extend(["## Observability Endpoints", "", *endpoint_lines, ""])
     if validations:
         lines.extend(validation_section_lines(validation_report))
     else:

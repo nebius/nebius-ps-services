@@ -10,6 +10,7 @@ import yaml
 from .component_defaults import resolve_component_defaults
 from .component_instances import INSTANCE_ID_FIELD
 from .config_loader import normalize_runtime_config_payload
+from .deploy_targets import TARGET_REF_FIELD, enabled_cluster_target_refs
 
 if TYPE_CHECKING:
     from .components import ComponentEntry
@@ -113,6 +114,23 @@ def _apply_component_selection(
                 item["enabled"] = chart_id in resolved_selected_apps
 
 
+def _materialize_app_target_refs(payload: dict[str, object]) -> None:
+    target_refs = enabled_cluster_target_refs(payload)
+    apps_node = payload.get("apps")
+    if not isinstance(apps_node, dict):
+        return
+    charts = apps_node.get("charts")
+    if not isinstance(charts, list):
+        return
+    for item in charts:
+        if not isinstance(item, dict) or not bool(item.get("enabled", False)):
+            continue
+        if len(target_refs) == 1:
+            item[TARGET_REF_FIELD] = target_refs[0]
+            continue
+        item.pop(TARGET_REF_FIELD, None)
+
+
 def _starter_payload(
     *,
     client_name: str,
@@ -189,6 +207,7 @@ def _starter_payload(
             "enabled": bool(entry.default_enabled),
             "repo": chart_repo,
             "version": str(entry.version or ""),
+            TARGET_REF_FIELD: "",
             "namespace": namespace,
             "release-name": release_name,
             "values": {},
@@ -234,5 +253,6 @@ def starter_config_yaml(
         infra_entries=infra_entries,
         app_entries=app_entries,
     )
+    _materialize_app_target_refs(payload)
     normalize_runtime_config_payload(payload)
     return yaml.safe_dump(payload, sort_keys=False)

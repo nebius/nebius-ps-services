@@ -25,7 +25,7 @@ def build_generated_manifest(
     *,
     config: Any,
     paths: ProjectPaths,
-    handoffs: Sequence[Mapping[str, Any]],
+    targets: Sequence[Mapping[str, Any]],
     required_component_outputs: Sequence[Mapping[str, Any]],
     status_watchers: Sequence[Mapping[str, Any]] = (),
     validations: Sequence[Mapping[str, Any]] = (),
@@ -43,6 +43,14 @@ def build_generated_manifest(
     client_info_map = client_info if isinstance(client_info, Mapping) else {}
     nebius = client_info_map.get("nebius")
     nebius_map = nebius if isinstance(nebius, Mapping) else {}
+
+    rendered_targets: list[dict[str, Any]] = []
+    for item in targets:
+        target_item = dict(item)
+        flux_dir = str(target_item.get("flux_dir", "") or "").strip()
+        if flux_dir:
+            target_item["flux_dir"] = _repo_relative_path(Path(flux_dir), root=paths.repo_root)
+        rendered_targets.append(target_item)
 
     return {
         "schema": GENERATED_MANIFEST_SCHEMA,
@@ -71,7 +79,7 @@ def build_generated_manifest(
             "terraform_tfvars": dict(terraform_tfvars or {}),
         },
         "deploy": {
-            "handoffs": [dict(item) for item in handoffs],
+            "targets": rendered_targets,
             "required_component_outputs": [dict(item) for item in required_component_outputs],
             "status_watchers": [dict(item) for item in status_watchers],
             "validations": [dict(item) for item in validations],
@@ -89,7 +97,7 @@ def write_generated_manifest_to_path(
     *,
     config: Any,
     paths: ProjectPaths,
-    handoffs: Sequence[Mapping[str, Any]],
+    targets: Sequence[Mapping[str, Any]],
     required_component_outputs: Sequence[Mapping[str, Any]],
     status_watchers: Sequence[Mapping[str, Any]] = (),
     validations: Sequence[Mapping[str, Any]] = (),
@@ -103,7 +111,7 @@ def write_generated_manifest_to_path(
     manifest = build_generated_manifest(
         config=config,
         paths=paths,
-        handoffs=handoffs,
+        targets=targets,
         required_component_outputs=required_component_outputs,
         status_watchers=status_watchers,
         validations=validations,
@@ -123,7 +131,7 @@ def write_generated_manifest(
     *,
     config: Any,
     paths: ProjectPaths,
-    handoffs: Sequence[Mapping[str, Any]],
+    targets: Sequence[Mapping[str, Any]],
     required_component_outputs: Sequence[Mapping[str, Any]],
     status_watchers: Sequence[Mapping[str, Any]] = (),
     validations: Sequence[Mapping[str, Any]] = (),
@@ -138,7 +146,7 @@ def write_generated_manifest(
         manifest_path_for_generated_dir(paths.generated_dir),
         config=config,
         paths=paths,
-        handoffs=handoffs,
+        targets=targets,
         required_component_outputs=required_component_outputs,
         status_watchers=status_watchers,
         validations=validations,

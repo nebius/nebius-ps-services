@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from .component_instances import component_instance_id, ensure_component_instance_id
+from .deploy_targets import TARGET_REF_FIELD
 
 
 def _deep_copy(value: Any) -> Any:
@@ -54,6 +55,7 @@ def to_runtime_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         "version": dynamic_payload.get("version", "v1"),
         "client_info": _deep_copy(dynamic_payload.get("client_info", {})),
         "deploy": _deep_copy(dynamic_payload.get("deploy", {})),
+        "observability": _deep_copy(dynamic_payload.get("observability", {})),
         "infra": {},
         "apps": {},
     }
@@ -141,6 +143,7 @@ def to_runtime_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
                     "enabled": enabled,
                     "repo": str(copied_item.get("repo", "")).strip(),
                     "version": str(copied_item.get("version", "")).strip(),
+                    TARGET_REF_FIELD: str(copied_item.get(TARGET_REF_FIELD, "")).strip(),
                     "namespace": str(copied_item.get("namespace", "")).strip(),
                     "release_name": str(copied_item.get("release-name", instance_id)).strip()
                     or instance_id,

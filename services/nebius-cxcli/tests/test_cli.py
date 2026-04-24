@@ -378,6 +378,58 @@ def _infra_enabled_map(payload: dict) -> dict[str, bool]:
     return result
 
 
+def test_create_preflights_source_validation_tools_before_identity_prompts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    def _fail_preflight() -> None:
+        raise RuntimeError("helm missing from PATH")
+
+    monkeypatch.setattr(cli_module, "_preflight_component_source_tools_or_raise", _fail_preflight)
+
+    result = runner.invoke(app, ["create", str(deployments_root)])
+
+    assert result.exit_code == 1
+    assert "helm missing from PATH" in result.output
+    assert "Tenant ID" not in result.output
+
+
+def test_create_reprompts_invalid_interactive_client_name(tmp_path: Path) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    result = runner.invoke(
+        app,
+        [
+            "create",
+            str(deployments_root),
+            "--tenant-id",
+            "tenant-123",
+            "--project-id",
+            "project-456",
+            "--no-validate-sources",
+        ],
+        input="Test\nclient-a\n\n\nn\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "client_info.client_name must use lowercase" in result.output
+    assert "letters, digits, and hyphens" in result.output
+    payload = yaml.safe_load(_project_config_path(deployments_root).read_text(encoding="utf-8"))
+    assert payload["client_info"]["client_name"] == "client-a"
+
+
+def test_wizard_field_prompt_describes_q_as_previous_field() -> None:
+    rendered = cli_module._wizard_field_prompt_suffix("infra.components[0].inputs.name")
+
+    assert "enter q to revisit the previous answered field" in rendered
+    assert "qq stops wizard" in rendered
+    assert "go back" not in rendered
+
+
 def _apps_enabled_map(payload: dict) -> dict[str, bool]:
     rows = payload.get("apps", {}).get("charts", [])
     if not isinstance(rows, list):
@@ -431,6 +483,30 @@ def _patch_late_mk8s_gpu_enable_wizard(
             inputs["infiniband_fabric"] = infiniband_fabric
         else:
             inputs.pop("infiniband_fabric", None)
+        return yaml.safe_dump(payload, sort_keys=False), True
+
+    monkeypatch.setattr(cli_module, "_run_component_field_wizard", _fake_run_component_field_wizard)
+
+
+def _patch_late_observability_enable_wizard(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli_module, "_wizard_continue_phase", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(cli_module, "_optional_email_or_prompt", lambda *_args, **_kwargs: None)
+
+    def _fake_run_component_field_wizard(
+        *,
+        config_yaml: str,
+        selected_infra: set[str],
+        selected_apps: set[str],
+        infra_entries,
+        app_entries,
+        provider_lookup=None,
+    ) -> tuple[str, bool]:
+        _ = selected_infra, selected_apps, infra_entries, app_entries, provider_lookup
+        payload = yaml.safe_load(config_yaml) or {}
+        assert isinstance(payload, dict)
+        observability = payload.setdefault("observability", {})
+        assert isinstance(observability, dict)
+        observability["enabled"] = True
         return yaml.safe_dump(payload, sort_keys=False), True
 
     monkeypatch.setattr(cli_module, "_run_component_field_wizard", _fake_run_component_field_wizard)
@@ -1267,6 +1343,81 @@ def test_create_auto_enables_network_operator_only_for_gpu_cluster_shapes(
     apps_enabled = _apps_enabled_map(payload)
     assert apps_enabled["nvidia-gpu-operator"] is True
     assert apps_enabled["nvidia-network-operator"] is True
+
+
+def test_create_auto_enables_observability_agent_when_wizard_turns_on_observability(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    _patch_late_observability_enable_wizard(monkeypatch)
+
+    result = runner.invoke(
+        app,
+        [
+            "create",
+            str(deployments_root),
+            "--client-name",
+            "client-a",
+            "--tenant-id",
+            "tenant-123",
+            "--project-id",
+            "project-456",
+            "--region-id",
+            "eu-north1",
+            "--no-validate-sources",
+            "--no-validate-config",
+            "--infra",
+            "mk8s",
+            "--app",
+            "none",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Adjusted component selection:" in result.output
+    assert "'apps:nebius-observability-agent'" in result.output
+
+    payload = yaml.safe_load(_project_config_path(deployments_root).read_text(encoding="utf-8"))
+    apps_enabled = _apps_enabled_map(payload)
+    assert apps_enabled["nebius-observability-agent"] is True
+
+
+def test_create_vm_only_omits_kubernetes_observability_defaults(tmp_path: Path) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    result = runner.invoke(
+        app,
+        [
+            "create",
+            str(deployments_root),
+            "--client-name",
+            "client-a",
+            "--tenant-id",
+            "tenant-123",
+            "--project-id",
+            "project-456",
+            "--region-id",
+            "eu-north1",
+            "--infra",
+            "vm",
+            "--app",
+            "none",
+            "--no-interactive",
+            "--no-validate-sources",
+            "--no-validate-config",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = yaml.safe_load(_project_config_path(deployments_root).read_text(encoding="utf-8"))
+    observability = payload["observability"]
+    assert "kubernetes" not in observability
+    assert observability["vm"]["logs"]["enabled"] is False
+    deploy = payload.get("deploy", {})
+    assert "validations" not in deploy
 
 
 def test_create_prunes_redundant_live_chart_default_values_from_existing_config(
@@ -2365,6 +2516,30 @@ def test_component_add_allows_multiple_instances_of_same_component_type(tmp_path
     ]
 
 
+def test_component_add_allows_multiple_mk8s_instances(tmp_path: Path) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    created = _create_non_interactive(deployments_root, "--infra", "mk8s")
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    result = _component_add(config_path, "mk8s", "--no-interactive")
+
+    assert result.exit_code == 0, result.output
+    assert "Added infra components: mk8s@mk8s-2" in result.output
+
+    refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    components = refreshed.get("infra", {}).get("components", [])
+    assert isinstance(components, list)
+    mk8s_rows = [
+        row
+        for row in components
+        if isinstance(row, dict) and str(row.get("id", "")).strip() == "mk8s"
+    ]
+    assert [row.get("instance_id") for row in mk8s_rows] == ["mk8s", "mk8s-2"]
+
+
 def test_component_add_interactive_prompts_for_new_component_fields(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2390,6 +2565,8 @@ def test_component_add_interactive_prompts_for_new_component_fields(
         input_text="managed-postgresql\n\n\ny\ndemo-pg\n",
     )
     assert result.exit_code == 0, result.output
+    assert "Select apps components to add too?" in result.output
+    assert "Select apps components (comma-separated ids or indexes)" not in result.output
 
     refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     components = refreshed.get("infra", {}).get("components", [])
@@ -3273,3 +3450,76 @@ def test_discover_accepts_generated_subdirectory_scope(tmp_path: Path) -> None:
             }
         ]
     }
+
+
+def test_reconcile_observability_gpu_node_labels_uses_catalog_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cli_module,
+        "observability_gpu_node_label_reconciliation",
+        lambda _config: SimpleNamespace(
+            enabled=True,
+            selector=(("nebius.com/gpu", "true"),),
+            labels=(
+                ("nvidia.com/gpu.deploy.operands", "true"),
+                ("nvidia.com/gpu.deploy.dcgm-exporter", "true"),
+                ("nvidia.com/gpu.deploy.operator-validator", "true"),
+                ("nvidia.com/gpu.deploy.device-plugin", "false"),
+            ),
+        ),
+    )
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append((cmd, kwargs))
+        return subprocess.CompletedProcess(cmd, 0, stdout="node/gpu-a labeled\n", stderr="")
+
+    monkeypatch.setattr(cli_module.subprocess, "run", fake_run)
+
+    cli_module._reconcile_observability_gpu_node_labels(
+        {"observability": {"enabled": True}},
+        extra_env={"KUBECONFIG": "/tmp/kubeconfig", "NEBIUS_IAM_TOKEN": "token-123"},
+    )
+
+    assert len(calls) == 1
+    command, kwargs = calls[0]
+    assert command == [
+        "kubectl",
+        "label",
+        "nodes",
+        "-l",
+        "nebius.com/gpu=true",
+        "nvidia.com/gpu.deploy.operands=true",
+        "nvidia.com/gpu.deploy.dcgm-exporter=true",
+        "nvidia.com/gpu.deploy.operator-validator=true",
+        "nvidia.com/gpu.deploy.device-plugin=false",
+        "--overwrite",
+    ]
+    assert kwargs["capture_output"] is True
+    assert kwargs["text"] is True
+    assert kwargs["timeout"] == 120
+    env = kwargs["env"]
+    assert isinstance(env, dict)
+    assert env["KUBECONFIG"] == "/tmp/kubeconfig"
+    assert env["NEBIUS_IAM_TOKEN"] == "token-123"
+
+
+def test_reconcile_observability_gpu_node_labels_noops_without_enabled_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cli_module,
+        "observability_gpu_node_label_reconciliation",
+        lambda _config: SimpleNamespace(enabled=False, selector=(), labels=()),
+    )
+    monkeypatch.setattr(
+        cli_module.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("kubectl should not be called"),
+    )
+
+    cli_module._reconcile_observability_gpu_node_labels(
+        {"observability": {"enabled": False}},
+        extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
+    )

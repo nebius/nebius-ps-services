@@ -4,8 +4,10 @@ import json
 import os
 import re
 from contextlib import ExitStack, contextmanager
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 import yaml
@@ -23,6 +25,7 @@ from nebius_cxcli.component_sources import (
     set_component_sources_profile_override,
 )
 from nebius_cxcli.components import ComponentEntry
+from nebius_cxcli.deploy_targets import flux_target_dir
 from nebius_cxcli.email_settings import EmailSettings
 from nebius_cxcli.inventory_ops import write_inventory as write_inventory_artifacts
 from nebius_cxcli.managed_tools import FLUX_VERSION_ENV, TERRAFORM_VERSION_ENV
@@ -39,6 +42,17 @@ from nebius_cxcli.quota_checks import (
 
 runner = CliRunner()
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+_RUNTIME_AUTH_ENV_KEYS = (
+    "NEBIUS_AUTH_CREDENTIALS_FILE",
+    "NEBIUS_SA_ID",
+    "NEBIUS_AUTH_PUBLIC_KEY_ID",
+    "NEBIUS_AUTH_PRIVATE_KEY_FILE",
+    "NEBIUS_AUTH_PRIVATE_KEY_PEM",
+    "NEBIUS_S3_ACCESS_KEY_ID",
+    "NEBIUS_S3_SECRET_ACCESS_KEY",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+)
 
 
 def _empty_quota_report() -> cli.QuotaReport:
@@ -88,6 +102,11 @@ def _plain_output(text: str) -> str:
     return _ANSI_ESCAPE_RE.sub("", text)
 
 
+def _clear_runtime_auth_env() -> None:
+    for name in _RUNTIME_AUTH_ENV_KEYS:
+        os.environ.pop(name, None)
+
+
 def _fake_paths(tmp_path: Path) -> ProjectPaths:
     project_dir = tmp_path / "deployments" / "tenant-name-example" / "project-name-example"
     project_dir.mkdir(parents=True, exist_ok=True)
@@ -103,6 +122,22 @@ def _fake_paths(tmp_path: Path) -> ProjectPaths:
         path_tenant_folder="tenant-name-example",
         path_project_folder="project-name-example",
     )
+
+
+def _mk8s_target(paths: ProjectPaths, *, target_ref: str = "mk8s") -> dict[str, str]:
+    return {
+        "component_id": "mk8s",
+        "instance_id": target_ref,
+        "target_ref": target_ref,
+        "cluster_id_output_name": f"{target_ref.replace('-', '_')}_cluster_id",
+        "component_output_ref": f"{target_ref}.cluster_id",
+        "access": "external",
+        "flux_dir": str(flux_target_dir(paths, target_ref)),
+    }
+
+
+def _target_paths(paths: ProjectPaths, *, target_ref: str = "mk8s") -> ProjectPaths:
+    return replace(paths, flux_dir=flux_target_dir(paths, target_ref))
 
 
 def test_render_overwrite_warning_never_mentions_flux_system(tmp_path: Path) -> None:
@@ -1710,6 +1745,8 @@ def test_deploy_command_passes_auto_auth_flag(
         auto_auth_bootstrap: bool,
         skip_validations: bool,
         skip_validation_kinds: set[str],
+        requested_target_ref: str | None = None,
+        all_targets: bool = False,
     ) -> None:
         captured["config"] = config
         captured["paths"] = paths
@@ -1717,6 +1754,8 @@ def test_deploy_command_passes_auto_auth_flag(
         captured["auto_auth_bootstrap"] = auto_auth_bootstrap
         captured["skip_validations"] = skip_validations
         captured["skip_validation_kinds"] = skip_validation_kinds
+        captured["requested_target_ref"] = requested_target_ref
+        captured["all_targets"] = all_targets
 
     monkeypatch.setattr(cli, "_deploy_generated_artifacts", _fake_deploy_generated_artifacts)
 
@@ -1735,6 +1774,8 @@ def test_deploy_command_passes_auto_auth_flag(
         "auto_auth_bootstrap": True,
         "skip_validations": False,
         "skip_validation_kinds": set(),
+        "requested_target_ref": None,
+        "all_targets": False,
     }
 
 
@@ -1973,15 +2014,7 @@ def test_destroy_command_confirmation_skips_flux_delete_when_cluster_destroy_cov
     manifest = {
         "schema": "nebius-cxcli-generated/v1",
         "deploy": {
-            "handoffs": [
-                {
-                    "component_id": "mk8s",
-                    "instance_id": "mk8s",
-                    "cluster_id_output_name": "mk8s_cluster_id",
-                    "component_output_ref": "mk8s.cluster_id",
-                    "access": "external",
-                }
-            ]
+            "targets": [_mk8s_target(fake_paths)],
         },
     }
 
@@ -2094,7 +2127,9 @@ def test_run_deploy_preflight_runs_strict_quota_backend_terraform_and_flux_valid
     monkeypatch.setattr(
         cli,
         "_validate_rendered_flux_manifests",
-        lambda paths, *, command_name: calls.append(("flux", paths, command_name)),
+        lambda paths, *, command_name, manifest=None: calls.append(
+            ("flux", paths, command_name, manifest)
+        ),
     )
 
     cli._run_deploy_preflight(
@@ -2118,7 +2153,7 @@ def test_run_deploy_preflight_runs_strict_quota_backend_terraform_and_flux_valid
             "deploy",
         ),
         ("validate", fake_paths.infra_dir, {"TF_VAR_DEMO": "1"}, False),
-        ("flux", fake_paths, "deploy"),
+        ("flux", fake_paths, "deploy", {"render": {"module_sources": []}}),
     ]
 
 
@@ -2176,7 +2211,9 @@ def test_run_deploy_preflight_skips_flux_validation_when_no_apps_enabled(
     monkeypatch.setattr(
         cli,
         "_validate_rendered_flux_manifests",
-        lambda paths, *, command_name: calls.append(("flux", paths, command_name)),
+        lambda paths, *, command_name, manifest=None: calls.append(
+            ("flux", paths, command_name, manifest)
+        ),
     )
 
     cli._run_deploy_preflight(
@@ -2482,18 +2519,10 @@ def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    config = {"apps": {"charts": [{"id": "gateway-helm", "enabled": True}]}}
+    config = {"apps": {"charts": [{"id": "gateway-helm", "enabled": True, "target_ref": "mk8s"}]}}
     manifest = {
         "deploy": {
-            "handoffs": [
-                {
-                    "component_id": "mk8s",
-                    "instance_id": "mk8s",
-                    "cluster_id_output_name": "mk8s_cluster_id",
-                    "component_output_ref": "mk8s.cluster_id",
-                    "access": "external",
-                }
-            ],
+            "targets": [_mk8s_target(fake_paths)],
             "validations": [],
         }
     }
@@ -2516,8 +2545,18 @@ def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env
     monkeypatch.setattr(
         cli,
         "_prepare_cluster_handoff_kube_env",
-        lambda config, paths, *, stack, handoffs=None: (
-            calls.append(("kube_env", config, paths, handoffs)) or {"KUBECONFIG": "/tmp/kubeconfig"}
+        lambda config, paths, *, stack, target=None, persist_local_kubeconfig=True, set_current_context=True: (
+            calls.append(
+                (
+                    "kube_env",
+                    config,
+                    paths,
+                    target,
+                    persist_local_kubeconfig,
+                    set_current_context,
+                )
+            )
+            or {"KUBECONFIG": "/tmp/kubeconfig"}
         ),
     )
     monkeypatch.setattr(
@@ -2533,8 +2572,8 @@ def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env
     monkeypatch.setattr(
         cli,
         "_warn_if_flux_gitops_not_bootstrapped",
-        lambda config, paths, *, extra_env=None: calls.append(
-            ("warn_bootstrap", config, paths, extra_env)
+        lambda config, paths, *, extra_env=None, target_ref=None: calls.append(
+            ("warn_bootstrap", config, paths, extra_env, target_ref)
         ),
     )
     monkeypatch.setattr(
@@ -2563,19 +2602,19 @@ def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env
             "kube_env",
             config,
             fake_paths,
-            [
-                {
-                    "component_id": "mk8s",
-                    "instance_id": "mk8s",
-                    "cluster_id_output_name": "mk8s_cluster_id",
-                    "component_output_ref": "mk8s.cluster_id",
-                    "access": "external",
-                }
-            ],
+            _mk8s_target(fake_paths),
+            True,
+            True,
         ),
         ("cluster_status", {"KUBECONFIG": "/tmp/kubeconfig"}),
-        ("flux", fake_paths, {"KUBECONFIG": "/tmp/kubeconfig"}),
-        ("warn_bootstrap", config, fake_paths, {"KUBECONFIG": "/tmp/kubeconfig"}),
+        ("flux", _target_paths(fake_paths), {"KUBECONFIG": "/tmp/kubeconfig"}),
+        (
+            "warn_bootstrap",
+            config,
+            _target_paths(fake_paths),
+            {"KUBECONFIG": "/tmp/kubeconfig"},
+            "mk8s",
+        ),
     ]
 
 
@@ -2596,15 +2635,7 @@ def test_deploy_generated_artifacts_without_apps_still_prepares_kube_env(
     }
     manifest = {
         "deploy": {
-            "handoffs": [
-                {
-                    "component_id": "mk8s",
-                    "instance_id": "mk8s",
-                    "cluster_id_output_name": "mk8s_cluster_id",
-                    "component_output_ref": "mk8s.cluster_id",
-                    "access": "external",
-                }
-            ],
+            "targets": [_mk8s_target(fake_paths)],
             "validations": [],
         }
     }
@@ -2627,8 +2658,18 @@ def test_deploy_generated_artifacts_without_apps_still_prepares_kube_env(
     monkeypatch.setattr(
         cli,
         "_prepare_cluster_handoff_kube_env",
-        lambda config, paths, *, stack, handoffs=None: (
-            calls.append(("kube_env", config, paths, handoffs)) or {"KUBECONFIG": "/tmp/kubeconfig"}
+        lambda config, paths, *, stack, target=None, persist_local_kubeconfig=True, set_current_context=True: (
+            calls.append(
+                (
+                    "kube_env",
+                    config,
+                    paths,
+                    target,
+                    persist_local_kubeconfig,
+                    set_current_context,
+                )
+            )
+            or {"KUBECONFIG": "/tmp/kubeconfig"}
         ),
     )
     monkeypatch.setattr(
@@ -2674,15 +2715,117 @@ def test_deploy_generated_artifacts_without_apps_still_prepares_kube_env(
             "kube_env",
             config,
             fake_paths,
-            [
-                {
-                    "component_id": "mk8s",
-                    "instance_id": "mk8s",
-                    "cluster_id_output_name": "mk8s_cluster_id",
-                    "component_output_ref": "mk8s.cluster_id",
-                    "access": "external",
-                }
+            _mk8s_target(fake_paths),
+            True,
+            True,
+        ),
+    ]
+
+
+def test_deploy_generated_artifacts_with_multiple_handoffs_and_no_apps_refreshes_all_kubeconfigs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    config = {
+        "apps": {"charts": []},
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-456",
+                "region_id": "eu-north1",
+            },
+        },
+    }
+    manifest = {
+        "deploy": {
+            "targets": [
+                _mk8s_target(fake_paths),
+                _mk8s_target(fake_paths, target_ref="mk8s-2"),
             ],
+            "validations": [],
+        }
+    }
+    calls: list[tuple[object, ...]] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_run_deploy_preflight",
+        lambda config, paths, *, auto_auth_bootstrap, manifest=None: calls.append(
+            ("preflight", config, paths, auto_auth_bootstrap, manifest)
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_terraform_apply_with_status",
+        lambda config, paths, *, initialize=True, run_mk8s_preflight=True: calls.append(
+            ("apply_with_status", config, paths, initialize, run_mk8s_preflight)
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_prepare_cluster_handoff_kube_env",
+        lambda config, paths, *, stack, target=None, persist_local_kubeconfig=True, set_current_context=True: (
+            calls.append(
+                (
+                    "kube_env",
+                    config,
+                    paths,
+                    target,
+                    persist_local_kubeconfig,
+                    set_current_context,
+                )
+            )
+            or {"KUBECONFIG": "/tmp/kubeconfig"}
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_report_cluster_nodes_status",
+        lambda *, extra_env, emit: calls.append(("cluster_status", extra_env)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_apply_rendered_flux",
+        lambda paths, *, extra_env=None: calls.append(("flux", paths, extra_env)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "write_inventory",
+        lambda config, paths, **kwargs: (
+            calls.append(("inventory", config, paths))
+            or SimpleNamespace(markdown=paths.inventory_dir / "deploy-report.md")
+        ),
+    )
+
+    cli._deploy_generated_artifacts(
+        config,
+        fake_paths,
+        manifest,
+        auto_auth_bootstrap=True,
+        skip_validations=False,
+        skip_validation_kinds=set(),
+    )
+
+    assert calls == [
+        ("preflight", config, fake_paths, True, manifest),
+        ("apply_with_status", config, fake_paths, False, False),
+        ("inventory", config, fake_paths),
+        (
+            "kube_env",
+            config,
+            fake_paths,
+            _mk8s_target(fake_paths),
+            True,
+            False,
+        ),
+        (
+            "kube_env",
+            config,
+            fake_paths,
+            _mk8s_target(fake_paths, target_ref="mk8s-2"),
+            True,
+            False,
         ),
     ]
 
@@ -2704,20 +2847,13 @@ def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
     }
     manifest = {
         "deploy": {
-            "handoffs": [
-                {
-                    "component_id": "mk8s",
-                    "instance_id": "mk8s",
-                    "cluster_id_output_name": "mk8s_cluster_id",
-                    "component_output_ref": "mk8s.cluster_id",
-                    "access": "external",
-                }
-            ],
+            "targets": [_mk8s_target(fake_paths)],
             "validations": [
                 {
                     "kind": "mk8s_gpu_visibility",
                     "name": "GPU Visibility test",
                     "namespace": "gpu-validation",
+                    "target_ref": "mk8s",
                 }
             ],
         }
@@ -2737,8 +2873,18 @@ def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
     monkeypatch.setattr(
         cli,
         "_prepare_cluster_handoff_kube_env",
-        lambda config, paths, *, stack, handoffs=None: (
-            calls.append(("kube_env", config, paths, handoffs)) or {"KUBECONFIG": "/tmp/kubeconfig"}
+        lambda config, paths, *, stack, target=None, persist_local_kubeconfig=True, set_current_context=True: (
+            calls.append(
+                (
+                    "kube_env",
+                    config,
+                    paths,
+                    target,
+                    persist_local_kubeconfig,
+                    set_current_context,
+                )
+            )
+            or {"KUBECONFIG": "/tmp/kubeconfig"}
         ),
     )
     monkeypatch.setattr(
@@ -2781,15 +2927,9 @@ def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
             "kube_env",
             config,
             fake_paths,
-            [
-                {
-                    "component_id": "mk8s",
-                    "instance_id": "mk8s",
-                    "cluster_id_output_name": "mk8s_cluster_id",
-                    "component_output_ref": "mk8s.cluster_id",
-                    "access": "external",
-                }
-            ],
+            _mk8s_target(fake_paths),
+            True,
+            True,
         ),
         ("cluster_status", {"KUBECONFIG": "/tmp/kubeconfig"}),
         (
@@ -2799,6 +2939,7 @@ def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
                     "kind": "mk8s_gpu_visibility",
                     "name": "GPU Visibility test",
                     "namespace": "gpu-validation",
+                    "target_ref": "mk8s",
                 }
             ],
             fake_paths.inventory_dir,
@@ -2825,15 +2966,7 @@ def test_deploy_generated_artifacts_rejects_manifest_missing_deploy_validations(
     }
     manifest = {
         "deploy": {
-            "handoffs": [
-                {
-                    "component_id": "mk8s",
-                    "instance_id": "mk8s",
-                    "cluster_id_output_name": "mk8s_cluster_id",
-                    "component_output_ref": "mk8s.cluster_id",
-                    "access": "external",
-                }
-            ]
+            "targets": [_mk8s_target(fake_paths)]
         }
     }
     monkeypatch.setattr(cli, "_run_deploy_preflight", lambda *_args, **_kwargs: None)
@@ -2901,27 +3034,21 @@ def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
     }
     manifest = {
         "deploy": {
-            "handoffs": [
-                {
-                    "component_id": "mk8s",
-                    "instance_id": "mk8s",
-                    "cluster_id_output_name": "mk8s_cluster_id",
-                    "component_output_ref": "mk8s.cluster_id",
-                    "access": "external",
-                }
-            ],
+            "targets": [_mk8s_target(fake_paths)],
             "validations": [
                 {
                     "kind": "mk8s_gpu_operator_readiness",
                     "name": "GPU stack readiness",
                     "namespace": "gpu-operator",
                     "report_file": "gpu-stack-readiness-report.json",
+                    "target_ref": "mk8s",
                 },
                 {
                     "kind": "mk8s_gpu_visibility",
                     "name": "GPU Visibility test",
                     "namespace": "gpu-validation",
                     "report_file": "gpu-visibility-report.json",
+                    "target_ref": "mk8s",
                 },
             ],
         }
@@ -3012,7 +3139,7 @@ def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
         skip_validation_kinds=set(),
     )
 
-    assert status_start == [("[cyan]Running MK8s GPU validations...[/cyan]", "dots")]
+    assert status_start == [("[cyan]Running MK8s GPU validations for mk8s...[/cyan]", "dots")]
     assert status_updates == [
         "Starting validation 1/2: GPU stack readiness.",
         "[bold white]GPU Operator[/bold white] [dim][5s][/dim] clusterpolicy state=ready",
@@ -3047,21 +3174,14 @@ def test_deploy_generated_artifacts_prints_validation_phase_lines_when_console_i
     }
     manifest = {
         "deploy": {
-            "handoffs": [
-                {
-                    "component_id": "mk8s",
-                    "instance_id": "mk8s",
-                    "cluster_id_output_name": "mk8s_cluster_id",
-                    "component_output_ref": "mk8s.cluster_id",
-                    "access": "external",
-                }
-            ],
+            "targets": [_mk8s_target(fake_paths)],
             "validations": [
                 {
                     "kind": "mk8s_gpu_visibility",
                     "name": "GPU Visibility test",
                     "namespace": "gpu-validation",
                     "report_file": "gpu-visibility-report.json",
+                    "target_ref": "mk8s",
                 }
             ],
         }
@@ -3166,25 +3286,19 @@ def test_deploy_generated_artifacts_writes_summary_even_when_validation_fails(
     }
     manifest = {
         "deploy": {
-            "handoffs": [
-                {
-                    "component_id": "mk8s",
-                    "instance_id": "mk8s",
-                    "cluster_id_output_name": "mk8s_cluster_id",
-                    "component_output_ref": "mk8s.cluster_id",
-                    "access": "external",
-                }
-            ],
+            "targets": [_mk8s_target(fake_paths)],
             "validations": [
                 {
                     "kind": "mk8s_gpu_operator_readiness",
                     "name": "GPU stack readiness",
                     "report_file": "gpu-stack-readiness-report.json",
+                    "target_ref": "mk8s",
                 },
                 {
                     "kind": "mk8s_gpu_visibility",
                     "name": "GPU Visibility test",
                     "report_file": "gpu-visibility-report.json",
+                    "target_ref": "mk8s",
                 },
             ],
         }
@@ -3474,15 +3588,7 @@ def test_destroy_generated_artifacts_skips_flux_teardown_when_handoff_cluster_is
     manifest = {
         "schema": "nebius-cxcli-generated/v1",
         "deploy": {
-            "handoffs": [
-                {
-                    "component_id": "mk8s",
-                    "instance_id": "mk8s",
-                    "cluster_id_output_name": "mk8s_cluster_id",
-                    "component_output_ref": "mk8s.cluster_id",
-                    "access": "external",
-                }
-            ]
+            "targets": [_mk8s_target(fake_paths)]
         },
     }
     captured: dict[str, object] = {}
@@ -5694,7 +5800,10 @@ def test_prepare_cluster_handoff_kube_env_writes_exec_kubeconfig_and_persists_lo
     monkeypatch.setattr(
         cli,
         "_persist_cluster_handoff_kubeconfig",
-        lambda *, spec: captured.setdefault("persist", spec) or Path.home() / ".kube" / "config",
+        lambda *, spec, set_current_context=True: (
+            captured.setdefault("persist", (spec, set_current_context))
+            or Path.home() / ".kube" / "config"
+        ),
     )
 
     with ExitStack() as stack:
@@ -5710,7 +5819,7 @@ def test_prepare_cluster_handoff_kube_env_writes_exec_kubeconfig_and_persists_lo
     assert terraform_output[2]["TF_VAR_nebius_provider_parent_id"] == "project-456"
     assert terraform_output[2]["TF_VAR_nebius_provider_module_name"]
     assert captured["handoff_spec"] == (fake_config, "cluster-123", "external")
-    assert captured["persist"] == spec
+    assert captured["persist"] == (spec, True)
     assert env[flux_ops.CLUSTER_HANDOFF_ACCESS_ENV] == "external"
     assert kubeconfig["clusters"][0]["cluster"]["server"] == "https://mk8s.example.invalid"
     assert kubeconfig["users"][0]["user"]["exec"]["command"] == "/usr/local/bin/nebius-cxcli"
@@ -5782,7 +5891,10 @@ def test_prepare_cluster_handoff_kube_env_loads_runtime_auth_cache_when_env_miss
     monkeypatch.setattr(
         cli,
         "_persist_cluster_handoff_kubeconfig",
-        lambda *, spec: captured.setdefault("persist", spec) or Path.home() / ".kube" / "config",
+        lambda *, spec, set_current_context=True: (
+            captured.setdefault("persist", (spec, set_current_context))
+            or Path.home() / ".kube" / "config"
+        ),
     )
 
     with ExitStack() as stack:
@@ -5791,7 +5903,7 @@ def test_prepare_cluster_handoff_kube_env_loads_runtime_auth_cache_when_env_miss
     assert env is not None
     assert captured["cache_load"] == ("project-456", "client-a")
     assert captured["handoff_spec"] == (fake_config, "cluster-123", "external")
-    assert captured["persist"] == spec
+    assert captured["persist"] == (spec, True)
     assert env[flux_ops.CLUSTER_HANDOFF_ACCESS_ENV] == "external"
 
 
@@ -5841,7 +5953,9 @@ def test_prepare_cluster_handoff_kube_env_skips_local_persist_when_disabled(
     monkeypatch.setattr(
         cli,
         "_persist_cluster_handoff_kubeconfig",
-        lambda *, spec: (_ for _ in ()).throw(AssertionError("should not persist kubeconfig")),
+        lambda *, spec, set_current_context=True: (_ for _ in ()).throw(
+            AssertionError("should not persist kubeconfig")
+        ),
     )
 
     with ExitStack() as stack:
@@ -5974,6 +6088,57 @@ def test_persist_cluster_handoff_kubeconfig_merges_exec_entries(
     ]
     assert persisted["users"][-1]["user"]["exec"]["command"] == "/usr/local/bin/nebius-cxcli"
     assert persisted["contexts"][-1]["context"]["cluster"] == "cluster-entry"
+
+
+def test_persist_cluster_handoff_kubeconfig_preserves_existing_current_context_when_requested(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setenv("NEBIUS_CXCLI_PERSIST_LOCAL_KUBECONFIG", "true")
+    kubeconfig_path = tmp_path / ".kube" / "config"
+    kubeconfig_path.parent.mkdir(parents=True, exist_ok=True)
+    kubeconfig_path.write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "v1",
+                "kind": "Config",
+                "clusters": [
+                    {"name": "existing-cluster", "cluster": {"server": "https://existing"}}
+                ],
+                "users": [{"name": "existing-user", "user": {"token": "existing"}}],
+                "contexts": [
+                    {
+                        "name": "existing-context",
+                        "context": {"cluster": "existing-cluster", "user": "existing-user"},
+                    }
+                ],
+                "current-context": "existing-context",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    spec = cli._Mk8sKubeconfigSpec(
+        cluster_entry_name="cluster-entry",
+        user_entry_name="user-entry",
+        context_name="context-entry",
+        server="https://mk8s.example.invalid",
+        ca_pem="FAKE-CA",
+        exec_command="/usr/local/bin/nebius-cxcli",
+        exec_args=("mk8s-token", "--project-id", "project-456"),
+    )
+
+    result = cli._persist_cluster_handoff_kubeconfig(spec=spec, set_current_context=False)
+
+    persisted = yaml.safe_load(kubeconfig_path.read_text(encoding="utf-8"))
+    assert result == kubeconfig_path
+    assert persisted["current-context"] == "existing-context"
+    assert [entry["name"] for entry in persisted["contexts"]] == [
+        "existing-context",
+        "context-entry",
+    ]
 
 
 def test_persist_cluster_handoff_kubeconfig_replaces_duplicate_named_entries(
@@ -6212,17 +6377,10 @@ def test_flux_bootstrap_command_uses_cluster_handoff_when_config_declares_it(
     manifest = {
         "schema": "nebius-cxcli-generated/v1",
         "deploy": {
-            "handoffs": [
-                {
-                    "component_id": "mk8s",
-                    "instance_id": "mk8s",
-                    "cluster_id_output_name": "mk8s_cluster_id",
-                    "component_output_ref": "mk8s.cluster_id",
-                    "access": "external",
-                }
-            ]
+            "targets": [_mk8s_target(fake_paths)]
         },
     }
+    target_paths = _target_paths(fake_paths)
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(
@@ -6238,8 +6396,18 @@ def test_flux_bootstrap_command_uses_cluster_handoff_when_config_declares_it(
     monkeypatch.setattr(
         cli,
         "_prepare_cluster_handoff_kube_env",
-        lambda config, paths, *, stack, handoffs=None: (
-            captured.update({"handoff": (config, paths, handoffs)})
+        lambda config, paths, *, stack, target=None, persist_local_kubeconfig=True, set_current_context=True: (
+            captured.update(
+                {
+                    "handoff": (
+                        config,
+                        paths,
+                        target,
+                        persist_local_kubeconfig,
+                        set_current_context,
+                    ),
+                }
+            )
             or {"KUBECONFIG": "/tmp/kubeconfig"}
         ),
     )
@@ -6272,17 +6440,11 @@ def test_flux_bootstrap_command_uses_cluster_handoff_when_config_declares_it(
     assert captured["handoff"] == (
         fake_config,
         fake_paths,
-        [
-            {
-                "component_id": "mk8s",
-                "instance_id": "mk8s",
-                "cluster_id_output_name": "mk8s_cluster_id",
-                "component_output_ref": "mk8s.cluster_id",
-                "access": "external",
-            }
-        ],
+        _mk8s_target(fake_paths),
+        True,
+        True,
     )
-    assert captured["flux"] == (fake_paths, {"KUBECONFIG": "/tmp/kubeconfig"})
+    assert captured["flux"] == (target_paths, {"KUBECONFIG": "/tmp/kubeconfig"})
     assert captured["cluster_status"] == {"KUBECONFIG": "/tmp/kubeconfig"}
 
 
@@ -6307,17 +6469,10 @@ def test_flux_apply_command_applies_rendered_flux_with_cluster_handoff(
     manifest = {
         "schema": "nebius-cxcli-generated/v1",
         "deploy": {
-            "handoffs": [
-                {
-                    "component_id": "mk8s",
-                    "instance_id": "mk8s",
-                    "cluster_id_output_name": "mk8s_cluster_id",
-                    "component_output_ref": "mk8s.cluster_id",
-                    "access": "external",
-                }
-            ]
+            "targets": [_mk8s_target(fake_paths)]
         },
     }
+    target_paths = _target_paths(fake_paths)
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(
@@ -6333,8 +6488,18 @@ def test_flux_apply_command_applies_rendered_flux_with_cluster_handoff(
     monkeypatch.setattr(
         cli,
         "_prepare_cluster_handoff_kube_env",
-        lambda config, paths, *, stack, handoffs=None: (
-            captured.update({"handoff": (config, paths, handoffs)})
+        lambda config, paths, *, stack, target=None, persist_local_kubeconfig=True, set_current_context=True: (
+            captured.update(
+                {
+                    "handoff": (
+                        config,
+                        paths,
+                        target,
+                        persist_local_kubeconfig,
+                        set_current_context,
+                    ),
+                }
+            )
             or {"KUBECONFIG": "/tmp/kubeconfig"}
         ),
     )
@@ -6351,8 +6516,8 @@ def test_flux_apply_command_applies_rendered_flux_with_cluster_handoff(
     monkeypatch.setattr(
         cli,
         "_warn_if_flux_gitops_not_bootstrapped",
-        lambda config, paths, *, extra_env=None: captured.update(
-            {"warn_bootstrap": (config, paths, extra_env)}
+        lambda config, paths, *, extra_env=None, target_ref=None: captured.update(
+            {"warn_bootstrap": (config, paths, extra_env, target_ref)}
         ),
     )
     monkeypatch.setattr(
@@ -6373,23 +6538,160 @@ def test_flux_apply_command_applies_rendered_flux_with_cluster_handoff(
     assert captured["handoff"] == (
         fake_config,
         fake_paths,
-        [
-            {
-                "component_id": "mk8s",
-                "instance_id": "mk8s",
-                "cluster_id_output_name": "mk8s_cluster_id",
-                "component_output_ref": "mk8s.cluster_id",
-                "access": "external",
-            }
-        ],
+        _mk8s_target(fake_paths),
+        True,
+        True,
     )
-    assert captured["apply_flux"] == (fake_paths, {"KUBECONFIG": "/tmp/kubeconfig"})
+    assert captured["apply_flux"] == (target_paths, {"KUBECONFIG": "/tmp/kubeconfig"})
     assert captured["warn_bootstrap"] == (
         fake_config,
-        fake_paths,
+        target_paths,
         {"KUBECONFIG": "/tmp/kubeconfig"},
+        "mk8s",
     )
     assert captured["cluster_status"] == {"KUBECONFIG": "/tmp/kubeconfig"}
+
+
+def test_flux_apply_command_all_targets_persists_contexts_without_switching_current_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_config = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-456",
+                "region_id": "eu-north1",
+            },
+            "notifications": {},
+        },
+        "infra": {"components": [{"id": "mk8s", "enabled": True, "inputs": {}}]},
+        "apps": {
+            "charts": [
+                {"id": "gateway-helm", "enabled": True, "target_ref": "mk8s"},
+                {"id": "gateway-helm", "enabled": True, "target_ref": "mk8s-2"},
+            ]
+        },
+    }
+    manifest = {
+        "schema": "nebius-cxcli-generated/v1",
+        "deploy": {
+            "targets": [
+                _mk8s_target(fake_paths),
+                _mk8s_target(fake_paths, target_ref="mk8s-2"),
+            ]
+        },
+    }
+    captured: dict[str, object] = {
+        "handoffs": [],
+        "apply_flux": [],
+        "warn_bootstrap": [],
+        "cluster_status": [],
+    }
+
+    monkeypatch.setattr(
+        cli, "_load_generated_context", lambda _path: (fake_config, fake_paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli,
+        "_ensure_terraform_backend_ready",
+        lambda config, *, auto_auth_bootstrap: captured.update(
+            {"backend": (config, auto_auth_bootstrap)}
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_prepare_cluster_handoff_kube_env",
+        lambda config, paths, *, stack, target=None, persist_local_kubeconfig=True, set_current_context=True: (
+            cast(list[tuple[object, ...]], captured["handoffs"]).append(
+                (
+                    config,
+                    paths,
+                    target,
+                    persist_local_kubeconfig,
+                    set_current_context,
+                )
+            )
+            or {"KUBECONFIG": f"/tmp/{target['target_ref']}.kubeconfig"}
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_report_cluster_nodes_status",
+        lambda *, extra_env, emit: cast(list[dict[str, str]], captured["cluster_status"]).append(
+            extra_env or {}
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_apply_rendered_flux",
+        lambda paths, *, extra_env=None: cast(list[tuple[ProjectPaths, dict[str, str] | None]], captured["apply_flux"]).append(
+            (paths, extra_env)
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_warn_if_flux_gitops_not_bootstrapped",
+        lambda config, paths, *, extra_env=None, target_ref=None: cast(
+            list[tuple[object, ...]], captured["warn_bootstrap"]
+        ).append((config, paths, extra_env, target_ref)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "write_inventory",
+        lambda config, paths, **kwargs: captured.update({"inventory": (config, paths)}),
+    )
+
+    result = runner.invoke(
+        cli.app,
+        ["flux", "apply", str(tmp_path / "generated"), "--auto-auth-bootstrap", "--all-targets"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["backend"] == (fake_config, True)
+    assert captured["inventory"] == (fake_config, fake_paths)
+    assert captured["handoffs"] == [
+        (
+            fake_config,
+            fake_paths,
+            _mk8s_target(fake_paths),
+            True,
+            False,
+        ),
+        (
+            fake_config,
+            fake_paths,
+            _mk8s_target(fake_paths, target_ref="mk8s-2"),
+            True,
+            False,
+        ),
+    ]
+    assert captured["apply_flux"] == [
+        (
+            _target_paths(fake_paths),
+            {"KUBECONFIG": "/tmp/mk8s.kubeconfig"},
+        ),
+        (
+            _target_paths(fake_paths, target_ref="mk8s-2"),
+            {"KUBECONFIG": "/tmp/mk8s-2.kubeconfig"},
+        ),
+    ]
+    assert captured["warn_bootstrap"] == [
+        (
+            fake_config,
+            _target_paths(fake_paths),
+            {"KUBECONFIG": "/tmp/mk8s.kubeconfig"},
+            "mk8s",
+        ),
+        (
+            fake_config,
+            _target_paths(fake_paths, target_ref="mk8s-2"),
+            {"KUBECONFIG": "/tmp/mk8s-2.kubeconfig"},
+            "mk8s-2",
+        ),
+    ]
 
 
 def test_flux_destroy_command_deletes_rendered_flux_with_cluster_handoff(
@@ -6413,15 +6715,7 @@ def test_flux_destroy_command_deletes_rendered_flux_with_cluster_handoff(
     manifest = {
         "schema": "nebius-cxcli-generated/v1",
         "deploy": {
-            "handoffs": [
-                {
-                    "component_id": "mk8s",
-                    "instance_id": "mk8s",
-                    "cluster_id_output_name": "mk8s_cluster_id",
-                    "component_output_ref": "mk8s.cluster_id",
-                    "access": "external",
-                }
-            ]
+            "targets": [_mk8s_target(fake_paths)]
         },
     }
     captured: dict[str, object] = {}
@@ -6440,8 +6734,8 @@ def test_flux_destroy_command_deletes_rendered_flux_with_cluster_handoff(
     monkeypatch.setattr(
         cli,
         "_destroy_rendered_flux_bundle",
-        lambda config, paths, loaded_manifest: captured.update(
-            {"destroy_flux": (config, paths, loaded_manifest)}
+        lambda config, paths, loaded_manifest, **kwargs: captured.update(
+            {"destroy_flux": (config, paths, loaded_manifest, kwargs)}
         ),
     )
 
@@ -6453,7 +6747,12 @@ def test_flux_destroy_command_deletes_rendered_flux_with_cluster_handoff(
     assert result.exit_code == 0, result.output
     assert "Flux resources deleted from" in _plain_output(result.output)
     assert captured["backend"] == (fake_config, True)
-    assert captured["destroy_flux"] == (fake_config, fake_paths, manifest)
+    assert captured["destroy_flux"] == (
+        fake_config,
+        fake_paths,
+        manifest,
+        {"requested_target_ref": None, "all_targets": False},
+    )
 
 
 def test_flux_destroy_command_confirmation_targets_flux_dir(
@@ -6676,6 +6975,8 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     )
     assert "add [OPTIONS] CONFIG_YAML [COMPONENT_ID]..." in component_add_help
     assert "component add prompts" in normalized_component_add_help
+    assert "Infra-only" in normalized_component_add_help
+    assert "selecting an app" in normalized_component_add_help
     assert "Repeat a" in normalized_component_add_help
     assert "<component-id>@<instance-id>" in normalized_component_add_help
     assert "--validate-sources --no-validate-sources" in " ".join(component_add_help.split())
@@ -7186,6 +7487,300 @@ def test_auth_recreate_forces_profile_rotation(monkeypatch: pytest.MonkeyPatch) 
     assert "Recreated runtime auth profile for project 'project-123'" in _plain_output(
         result.output
     )
+
+
+def test_ensure_runtime_auth_material_recreates_stale_cached_public_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in _RUNTIME_AUTH_ENV_KEYS:
+        monkeypatch.delenv(name, raising=False)
+    try:
+        fake_config = SimpleNamespace(
+            client_info=SimpleNamespace(
+                client_name="client-a",
+                nebius=SimpleNamespace(project_id="project-123"),
+            )
+        )
+        stale_private_key = tmp_path / "auth-private-stale.pem"
+        stale_private_key.write_text("STALE-KEY", encoding="utf-8")
+        refreshed_private_key = tmp_path / "auth-private-fresh.pem"
+        refreshed_private_key.write_text("FRESH-KEY", encoding="utf-8")
+        stale_status = cli.RuntimeAuthProfileStatus(
+            project_id="project-123",
+            client_name="client-a",
+            cache_dir=Path("/tmp/nebius-cxcli/client-a-project-123"),
+            metadata_file=Path("/tmp/nebius-cxcli/client-a-project-123/runtime-auth.json"),
+            metadata_exists=True,
+            service_account_id="sa-stale",
+            auth_public_key_id="auth-key-stale",
+            private_key_file=stale_private_key,
+            private_key_exists=True,
+            cloud_public_key_exists=False,
+            cloud_check_error=None,
+            issues=(
+                "auth_public_key_id 'auth-key-stale' does not exist (or is not accessible) in Nebius",
+            ),
+        )
+        refreshed_material = cli.RuntimeAuthCacheMaterial(
+            project_id="project-123",
+            client_name="client-a",
+            service_account_id="sa-fresh",
+            auth_public_key_id="auth-key-fresh",
+            private_key_file=refreshed_private_key,
+            private_key_pem="FRESH-KEY-DATA",
+            s3_access_key_id="fresh-access",
+            s3_secret_access_key="fresh-secret",
+        )
+
+        def _fake_cache_load(**_kwargs: object) -> bool:
+            os.environ["NEBIUS_SA_ID"] = "sa-stale"
+            os.environ["NEBIUS_AUTH_PUBLIC_KEY_ID"] = "auth-key-stale"
+            os.environ["NEBIUS_AUTH_PRIVATE_KEY_FILE"] = str(stale_private_key)
+            os.environ["AWS_ACCESS_KEY_ID"] = "stale-access"
+            os.environ["AWS_SECRET_ACCESS_KEY"] = "stale-secret"
+            return True
+
+        recreate_calls: list[bool] = []
+        rendered_messages: list[str] = []
+
+        monkeypatch.setattr(cli, "_runtime_auth_cache_load", _fake_cache_load)
+        monkeypatch.setattr(cli, "_runtime_auth_profile_status", lambda **_kwargs: stale_status)
+        monkeypatch.setattr(
+            cli,
+            "_create_or_recreate_runtime_auth_profile",
+            lambda **kwargs: recreate_calls.append(bool(kwargs["recreate"]))
+            or (refreshed_material, True),
+        )
+        monkeypatch.setattr(
+            cli.console,
+            "print",
+            lambda *args, **_kwargs: rendered_messages.append(" ".join(str(arg) for arg in args)),
+        )
+
+        cli._ensure_runtime_auth_material(
+            fake_config,
+            need_terraform=True,
+            need_eso_mysterybox=False,
+            auto_bootstrap=True,
+        )
+
+        assert recreate_calls == [True]
+        assert os.environ["NEBIUS_SA_ID"] == "sa-fresh"
+        assert os.environ["NEBIUS_AUTH_PUBLIC_KEY_ID"] == "auth-key-fresh"
+        assert os.environ["NEBIUS_AUTH_PRIVATE_KEY_FILE"] == str(refreshed_material.private_key_file)
+        assert os.environ["NEBIUS_AUTH_PRIVATE_KEY_PEM"] == "FRESH-KEY-DATA"
+        assert os.environ["AWS_ACCESS_KEY_ID"] == "fresh-access"
+        assert os.environ["AWS_SECRET_ACCESS_KEY"] == "fresh-secret"
+        assert any(
+            "Cached runtime auth profile is stale; recreating because" in message
+            for message in rendered_messages
+        )
+    finally:
+        _clear_runtime_auth_env()
+
+
+def test_ensure_runtime_auth_material_fails_fast_for_stale_cached_public_key_without_auto_bootstrap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in _RUNTIME_AUTH_ENV_KEYS:
+        monkeypatch.delenv(name, raising=False)
+    try:
+        fake_config = SimpleNamespace(
+            client_info=SimpleNamespace(
+                client_name="client-a",
+                nebius=SimpleNamespace(project_id="project-123"),
+            )
+        )
+        stale_private_key = tmp_path / "auth-private-stale.pem"
+        stale_private_key.write_text("STALE-KEY", encoding="utf-8")
+        stale_status = cli.RuntimeAuthProfileStatus(
+            project_id="project-123",
+            client_name="client-a",
+            cache_dir=Path("/tmp/nebius-cxcli/client-a-project-123"),
+            metadata_file=Path("/tmp/nebius-cxcli/client-a-project-123/runtime-auth.json"),
+            metadata_exists=True,
+            service_account_id="sa-stale",
+            auth_public_key_id="auth-key-stale",
+            private_key_file=stale_private_key,
+            private_key_exists=True,
+            cloud_public_key_exists=False,
+            cloud_check_error=None,
+            issues=(
+                "auth_public_key_id 'auth-key-stale' does not exist (or is not accessible) in Nebius",
+            ),
+        )
+
+        def _fake_cache_load(**_kwargs: object) -> bool:
+            os.environ["NEBIUS_SA_ID"] = "sa-stale"
+            os.environ["NEBIUS_AUTH_PUBLIC_KEY_ID"] = "auth-key-stale"
+            os.environ["NEBIUS_AUTH_PRIVATE_KEY_FILE"] = str(stale_private_key)
+            os.environ["AWS_ACCESS_KEY_ID"] = "stale-access"
+            os.environ["AWS_SECRET_ACCESS_KEY"] = "stale-secret"
+            return True
+
+        monkeypatch.setattr(cli, "_runtime_auth_cache_load", _fake_cache_load)
+        monkeypatch.setattr(cli, "_runtime_auth_profile_status", lambda **_kwargs: stale_status)
+        monkeypatch.setattr(
+            cli,
+            "_create_or_recreate_runtime_auth_profile",
+            lambda **_kwargs: pytest.fail(
+                "stale cached profile should fail before recreate when auto bootstrap is disabled"
+            ),
+        )
+
+        with pytest.raises(RuntimeError) as exc_info:
+            cli._ensure_runtime_auth_material(
+                fake_config,
+                need_terraform=True,
+                need_eso_mysterybox=False,
+                auto_bootstrap=False,
+            )
+
+        message = str(exc_info.value)
+        assert "Cached runtime auth profile is stale" in message
+        assert "--recreate" in message
+        assert "--auto-auth-bootstrap" in message
+    finally:
+        _clear_runtime_auth_env()
+
+
+def test_ensure_runtime_auth_material_does_not_recreate_on_cloud_verification_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in _RUNTIME_AUTH_ENV_KEYS:
+        monkeypatch.delenv(name, raising=False)
+    try:
+        fake_config = SimpleNamespace(
+            client_info=SimpleNamespace(
+                client_name="client-a",
+                nebius=SimpleNamespace(project_id="project-123"),
+            )
+        )
+        stale_private_key = tmp_path / "auth-private-stale.pem"
+        stale_private_key.write_text("STALE-KEY", encoding="utf-8")
+        verification_error_status = cli.RuntimeAuthProfileStatus(
+            project_id="project-123",
+            client_name="client-a",
+            cache_dir=Path("/tmp/nebius-cxcli/client-a-project-123"),
+            metadata_file=Path("/tmp/nebius-cxcli/client-a-project-123/runtime-auth.json"),
+            metadata_exists=True,
+            service_account_id="sa-stale",
+            auth_public_key_id="auth-key-stale",
+            private_key_file=stale_private_key,
+            private_key_exists=True,
+            cloud_public_key_exists=None,
+            cloud_check_error="temporary sdk failure",
+            issues=("failed Nebius auth public key verification: temporary sdk failure",),
+        )
+
+        def _fake_cache_load(**_kwargs: object) -> bool:
+            os.environ["NEBIUS_SA_ID"] = "sa-stale"
+            os.environ["NEBIUS_AUTH_PUBLIC_KEY_ID"] = "auth-key-stale"
+            os.environ["NEBIUS_AUTH_PRIVATE_KEY_FILE"] = str(stale_private_key)
+            os.environ["AWS_ACCESS_KEY_ID"] = "stale-access"
+            os.environ["AWS_SECRET_ACCESS_KEY"] = "stale-secret"
+            return True
+
+        monkeypatch.setattr(cli, "_runtime_auth_cache_load", _fake_cache_load)
+        monkeypatch.setattr(
+            cli, "_runtime_auth_profile_status", lambda **_kwargs: verification_error_status
+        )
+        monkeypatch.setattr(
+            cli,
+            "_create_or_recreate_runtime_auth_profile",
+            lambda **_kwargs: pytest.fail(
+                "cloud verification errors should not auto-recreate runtime auth material"
+            ),
+        )
+
+        cli._ensure_runtime_auth_material(
+            fake_config,
+            need_terraform=True,
+            need_eso_mysterybox=False,
+            auto_bootstrap=True,
+        )
+    finally:
+        _clear_runtime_auth_env()
+
+
+def test_ensure_runtime_auth_material_recreates_on_deleted_key_cloud_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in _RUNTIME_AUTH_ENV_KEYS:
+        monkeypatch.delenv(name, raising=False)
+    try:
+        fake_config = SimpleNamespace(
+            client_info=SimpleNamespace(
+                client_name="client-a",
+                nebius=SimpleNamespace(project_id="project-123"),
+            )
+        )
+        stale_private_key = tmp_path / "auth-private-stale.pem"
+        stale_private_key.write_text("STALE-KEY", encoding="utf-8")
+        refreshed_private_key = tmp_path / "auth-private-fresh.pem"
+        refreshed_private_key.write_text("FRESH-KEY", encoding="utf-8")
+        deleted_key_status = cli.RuntimeAuthProfileStatus(
+            project_id="project-123",
+            client_name="client-a",
+            cache_dir=Path("/tmp/nebius-cxcli/client-a-project-123"),
+            metadata_file=Path("/tmp/nebius-cxcli/client-a-project-123/runtime-auth.json"),
+            metadata_exists=True,
+            service_account_id="sa-stale",
+            auth_public_key_id="auth-key-stale",
+            private_key_file=stale_private_key,
+            private_key_exists=True,
+            cloud_public_key_exists=None,
+            cloud_check_error=(
+                "Request error INVALID_ARGUMENT: Public Key not exists, expired or deactivated: "
+                "'auth-key-stale'; Caused by error: JwtKeyNotExists"
+            ),
+            issues=("failed Nebius auth public key verification",),
+        )
+        refreshed_material = cli.RuntimeAuthCacheMaterial(
+            project_id="project-123",
+            client_name="client-a",
+            service_account_id="sa-fresh",
+            auth_public_key_id="auth-key-fresh",
+            private_key_file=refreshed_private_key,
+            private_key_pem="FRESH-KEY-DATA",
+            s3_access_key_id="fresh-access",
+            s3_secret_access_key="fresh-secret",
+        )
+
+        def _fake_cache_load(**_kwargs: object) -> bool:
+            os.environ["NEBIUS_SA_ID"] = "sa-stale"
+            os.environ["NEBIUS_AUTH_PUBLIC_KEY_ID"] = "auth-key-stale"
+            os.environ["NEBIUS_AUTH_PRIVATE_KEY_FILE"] = str(stale_private_key)
+            os.environ["AWS_ACCESS_KEY_ID"] = "stale-access"
+            os.environ["AWS_SECRET_ACCESS_KEY"] = "stale-secret"
+            return True
+
+        recreate_calls: list[bool] = []
+
+        monkeypatch.setattr(cli, "_runtime_auth_cache_load", _fake_cache_load)
+        monkeypatch.setattr(cli, "_runtime_auth_profile_status", lambda **_kwargs: deleted_key_status)
+        monkeypatch.setattr(
+            cli,
+            "_create_or_recreate_runtime_auth_profile",
+            lambda **kwargs: recreate_calls.append(bool(kwargs["recreate"]))
+            or (refreshed_material, True),
+        )
+
+        cli._ensure_runtime_auth_material(
+            fake_config,
+            need_terraform=True,
+            need_eso_mysterybox=False,
+            auto_bootstrap=True,
+        )
+
+        assert recreate_calls == [True]
+        assert os.environ["NEBIUS_AUTH_PUBLIC_KEY_ID"] == "auth-key-fresh"
+    finally:
+        _clear_runtime_auth_env()
 
 
 def test_auth_bootstrap_ci_syncs_runtime_profile(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -215,6 +215,15 @@ def test_chart_cli_contract_findings_reports_missing_layout(
 
     assert any("missing Chart.yaml" in issue for issue in issues)
     assert any("missing templates/" in issue for issue in issues)
+    assert not any("missing README.md" in warning for warning in warnings)
+
+    chart_cli_contract_findings.cache_clear()
+    _issues, warnings = chart_cli_contract_findings(
+        chart_name=str(chart_dir),
+        chart_repo="",
+        chart_version="",
+    )
+
     assert any("missing README.md" in warning for warning in warnings)
 
 

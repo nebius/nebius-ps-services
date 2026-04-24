@@ -195,6 +195,9 @@ def _list(value: Any) -> list[Any]:
 
 
 def _validation_summary(kind: str, payload: Mapping[str, Any]) -> str:
+    error = str(payload.get("error", "") or "").strip()
+    if error:
+        return f"Failed before completion: {error}"
     if kind == "mk8s_gpu_operator_readiness":
         return _operator_readiness_summary(payload)
     if kind == "mk8s_gpu_visibility":
@@ -211,14 +214,16 @@ def _validation_display_name(
     spec: Mapping[str, Any],
     payload: Mapping[str, Any] | None = None,
 ) -> str:
-    if kind == "mk8s_gpu_operator_readiness":
-        return "GPU stack readiness"
+    spec_name = str(spec.get("name", "") or "").strip()
+    if kind == "mk8s_gpu_operator_readiness" and spec_name:
+        return spec_name
     validation_name = (
         str(payload.get("validation", "") or "").strip()
         if isinstance(payload, Mapping)
         else ""
     )
-    spec_name = str(spec.get("name", "") or "").strip()
+    if kind == "mk8s_gpu_operator_readiness":
+        return validation_name or spec_name or "GPU stack readiness"
     return validation_name or spec_name or kind or "Validation"
 
 

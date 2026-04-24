@@ -122,6 +122,7 @@ def test_to_runtime_payload_round_trip_keeps_enabled_flags() -> None:
     dynamic = to_dynamic_payload(runtime)
     back = to_runtime_payload(dynamic)
 
+    assert back["observability"]["enabled"] is False
     assert back["infra"]["mk8s"]["enabled"] is True
     assert back["infra"]["object_storage"]["enabled"] is False
     assert back["apps"]["workloads"]["n8n"]["enabled"] is False
@@ -165,6 +166,7 @@ def test_load_config_accepts_dynamic_payload_with_extra_chart(tmp_path: Path) ->
             "id": "runtime-app",
             "group": "workloads",
             "enabled": True,
+            "target_ref": "mk8s",
             "repo": "https://example.invalid/charts",
             "version": "1.0.0",
             "namespace": "runtime-app",

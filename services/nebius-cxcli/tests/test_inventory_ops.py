@@ -11,6 +11,12 @@ from nebius_cxcli.config_template import starter_config_yaml
 from nebius_cxcli.inventory_ops import write_inventory
 from nebius_cxcli.paths import resolve_project_paths, validate_path_alignment
 
+_VALID_ED25519_PUBLIC_KEY = (
+    "ssh-ed25519 "
+    "AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f "
+    "demo@example"
+)
+
 
 def _project_config_path(base: Path) -> Path:
     return base / "deployments" / "tenant-name-example" / "project-name-example" / "config.yaml"
@@ -97,6 +103,144 @@ def test_write_inventory_handles_dynamic_component_model(tmp_path: Path) -> None
     assert "## Apps\n\n- Envoy Gateway:" in markdown
     assert "## Validations\n\n- No deploy-time validations configured." in markdown
     assert "- n8n: `True` (n8n.example.com)" in markdown
+
+
+def test_write_inventory_includes_observability_endpoint_contract(tmp_path: Path) -> None:
+    reset_component_entry_cache()
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
+    payload.setdefault("observability", {})["enabled"] = True
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+
+    artifacts = write_inventory(config, paths)
+    markdown = artifacts.markdown.read_text(encoding="utf-8")
+
+    assert "## Observability Endpoints" in markdown
+    assert (
+        "https://read.monitoring.api.nebius.cloud/projects/project-456/service-provider/prometheus"
+    ) in markdown
+    assert (
+        "https://write.monitoring.eu-north1.nebius.cloud/projects/"
+        "project-456/opentelemetry/v1/metrics"
+    ) in markdown
+    assert "https://write.logging.eu-north1.nebius.cloud" in markdown
+    assert "dns:///write.tracing.eu-north1.nebius.cloud:443" in markdown
+    assert "Bearer <observability static token or IAM token>" in markdown
+
+
+def test_write_inventory_omits_disabled_observability_signal_endpoints(tmp_path: Path) -> None:
+    reset_component_entry_cache()
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
+    payload.setdefault("observability", {})["enabled"] = True
+    payload["observability"].setdefault("kubernetes", {}).setdefault("logs", {})["enabled"] = False
+    payload["observability"].setdefault("kubernetes", {}).setdefault("traces", {})["enabled"] = (
+        False
+    )
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+
+    artifacts = write_inventory(config, paths)
+    markdown = artifacts.markdown.read_text(encoding="utf-8")
+
+    assert "## Observability Endpoints" in markdown
+    assert "Metrics write (OTLP HTTP/protobuf)" in markdown
+    assert "Logs read (Loki)" not in markdown
+    assert "Logs write (bundled agent gRPC)" not in markdown
+    assert "Traces read (Tempo)" not in markdown
+    assert "Traces write (OTLP gRPC)" not in markdown
+
+
+def test_write_inventory_includes_vm_observability_read_paths_and_managed_write_notes(
+    tmp_path: Path,
+) -> None:
+    reset_component_entry_cache()
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"vm"}, selected_apps=set())
+    payload.setdefault("observability", {})["enabled"] = True
+    payload["observability"].setdefault("vm", {}).setdefault("logs", {})["enabled"] = True
+    vm = _infra_component_row(payload, "vm")
+    vm_inputs = vm.setdefault("inputs", {})
+    assert isinstance(vm_inputs, dict)
+    vm_inputs.update(
+        {
+            "parent_id": "project-456",
+            "subnet_id": "subnet-123",
+            "platform": "cpu-d3",
+            "preset": "2vcpu-8gb",
+            "source_image_family": "ubuntu24.04-driverless",
+            "ssh_user_name": "ubuntu",
+            "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
+        }
+    )
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+
+    artifacts = write_inventory(config, paths)
+    markdown = artifacts.markdown.read_text(encoding="utf-8")
+
+    assert "VM monitoring agent: `True`" in markdown
+    assert "VM journald logs (systemd services): `True`" in markdown
+    assert "Metrics read (Nebius service metrics)" in markdown
+    assert "Logs read (Loki)" in markdown
+    assert "Metrics write (VM monitoring agent)" in markdown
+    assert "Logs write (VM monitoring agent)" in markdown
+    assert "Logs write (bundled agent gRPC)" not in markdown
+
+
+def test_write_inventory_includes_vm_metrics_even_when_project_observability_is_off(
+    tmp_path: Path,
+) -> None:
+    reset_component_entry_cache()
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"vm"}, selected_apps=set())
+    payload.setdefault("observability", {})["enabled"] = False
+    vm = _infra_component_row(payload, "vm")
+    vm_inputs = vm.setdefault("inputs", {})
+    assert isinstance(vm_inputs, dict)
+    vm_inputs.update(
+        {
+            "parent_id": "project-456",
+            "subnet_id": "subnet-123",
+            "platform": "cpu-d3",
+            "preset": "2vcpu-8gb",
+            "source_image_family": "ubuntu24.04-driverless",
+            "ssh_user_name": "ubuntu",
+            "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
+        }
+    )
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+
+    artifacts = write_inventory(config, paths)
+    markdown = artifacts.markdown.read_text(encoding="utf-8")
+
+    assert "VM monitoring agent: `True`" in markdown
+    assert "## Observability Endpoints" in markdown
+    assert "Metrics read (Nebius service metrics)" in markdown
+    assert "Metrics write (VM monitoring agent)" in markdown
+    assert "VM journald logs (systemd services): `False`" in markdown
 
 
 def test_write_inventory_removes_stale_disabled_component_files(tmp_path: Path) -> None:

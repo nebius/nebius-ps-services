@@ -26,7 +26,7 @@ dynamically instead of hardcoding public access.
 - Creates one CPU node group when fixed count (`cpu_nodes_count > 0`) or autoscaling override is configured.
 - Creates `gpu_node_groups` GPU node groups when `gpu_enabled = true`.
 - Supports provider-aligned override objects for cluster/CPU/GPU node groups.
-- Supports explicit Nebius-image vs manual GPU stack selection through `gpu_stack_source`.
+- Supports explicit Nebius-image vs operator-managed GPU stack selection through `gpu_stack_source`.
 
 ## Usage
 

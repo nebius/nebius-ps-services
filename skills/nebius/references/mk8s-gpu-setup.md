@@ -2,7 +2,7 @@
 
 Use this reference when a task involves actually setting up, reviewing, or
 debugging GPU-enabled Nebius Managed Service for Kubernetes clusters, especially
-when the choice between Nebius driverful images and manual/operator-managed host
+when the choice between Nebius driverful images and operator-managed host
 setup affects GPU Operator, Network Operator, or GPUDirect RDMA behavior.
 
 Primary vendor references:
@@ -97,20 +97,20 @@ In the validated Nebius driverful GPU-node image, the live host had:
 Treat those host-side observations as image-specific facts that should be
 verified on the actual cluster, not as a timeless universal guarantee.
 
-## Manual/operator-managed host-stack pattern
+## Operator-managed host-stack pattern
 
 Use this path when you intentionally omit `drivers_preset`.
 
 - GPU Operator is required.
 - Network Operator is required for:
-  - B200/B200A manual GPU node groups
+  - B200/B200A operator-managed GPU node groups
   - any GPU-cluster / InfiniBand path
 - If both operators are installed:
   - install Network Operator first
   - disable GPU Operator NFD so only one NFD instance is active
-- Nebius docs currently pin the manual B300 GPU Operator path to:
+- Nebius docs currently pin the operator-managed B300 GPU Operator path to:
   - `driver.version=580.95.05`
-- In the current cxcli contract for manual stacks:
+- In the current cxcli contract for operator-managed stacks:
   - `driver.enabled=true`
   - `toolkit.enabled=true`
   - `nfd.enabled=false` on GPU Operator whenever Network Operator is the
@@ -132,13 +132,13 @@ operations, the active policy contract is:
   - leaves host GPU driver and NVIDIA Container Toolkit untouched on
     `gpu_stack_source: nebius_image`
   - installs the host GPU driver and NVIDIA Container Toolkit on
-    `gpu_stack_source: manual`
-  - pins `driver.version=580.95.05` only for the Nebius B300 manual path
+    `gpu_stack_source: operator_managed`
+  - pins `driver.version=580.95.05` only for the Nebius B300 operator-managed path
 - Network Operator:
   - auto-enabled for `gpu_cluster_enabled=true`
-  - auto-enabled for manual B200/B200A shapes even without InfiniBand
+  - auto-enabled for operator-managed B200/B200A shapes even without InfiniBand
   - keeps `operator.ofedDriver.deploy=false` on the Nebius driverful-image path
-  - keeps `operator.ofedDriver.deploy=true` on the manual/operator-managed path
+  - keeps `operator.ofedDriver.deploy=true` on the operator-managed path
 - Single-GPU preset handling:
   - treated as Ethernet-only testing/dev capacity, not as GPU-cluster capacity
   - does not surface `infiniband_fabric` as a valid setting
@@ -147,7 +147,7 @@ operations, the active policy contract is:
     production distributed training
 - NFD ownership:
   - on GPU-cluster / InfiniBand shapes, Network Operator is the single NFD owner
-  - on manual B200/B200A shapes where Network Operator is auto-enabled for
+  - on operator-managed B200/B200A shapes where Network Operator is auto-enabled for
     RDMA plumbing, GPU Operator NFD also stays disabled
 
 Treat `component_sources.yaml` in `services/nebius-cxcli` as the repository's

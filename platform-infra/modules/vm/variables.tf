@@ -256,6 +256,109 @@ variable "service_account_id" {
   }
 }
 
+variable "observability_collector_enabled" {
+  description = "Whether to install the cxcli-managed standalone Nebius VM collector stack."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+variable "observability_collector_region_id" {
+  description = "Region ID used to build public observability write endpoints for the standalone collector."
+  type        = string
+  default     = ""
+  nullable    = false
+  validation {
+    condition = (
+      length(trimspace(var.observability_collector_region_id)) > 0 ||
+      !var.observability_collector_enabled
+    )
+    error_message = "observability_collector_region_id must be a non-empty region ID when observability_collector_enabled=true."
+  }
+}
+
+variable "observability_collector_package_version" {
+  description = "Pinned nebius-o11y-agent deb package version for the standalone collector."
+  type        = string
+  default     = ""
+  nullable    = false
+  validation {
+    condition = (
+      length(trimspace(var.observability_collector_package_version)) > 0 ||
+      !var.observability_collector_enabled
+    )
+    error_message = "observability_collector_package_version must be a non-empty package version when observability_collector_enabled=true."
+  }
+}
+
+variable "observability_collector_iam_token_file" {
+  description = "IAM token file path used by the standalone collector."
+  type        = string
+  default     = "/mnt/cloud-metadata/token"
+  nullable    = false
+  validation {
+    condition = length(trimspace(var.observability_collector_iam_token_file)) > 0
+    error_message = "observability_collector_iam_token_file must be a non-empty path."
+  }
+}
+
+variable "observability_collector_logs_enabled" {
+  description = "Whether the standalone collector should forward journald logs."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+variable "observability_collector_logs_systemd_units" {
+  description = "Optional systemd unit allowlist for the standalone collector journald receiver."
+  type        = list(string)
+  default     = []
+  nullable    = false
+  validation {
+    condition = alltrue([
+      for unit_name in var.observability_collector_logs_systemd_units : length(trimspace(unit_name)) > 0
+    ])
+    error_message = "observability_collector_logs_systemd_units must contain non-empty systemd unit names."
+  }
+}
+
+variable "observability_collector_metrics_enabled" {
+  description = "Whether the standalone collector should export host metrics for Prometheus remote_write."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+variable "observability_collector_metrics_export_port" {
+  description = "Loopback port where nebius-o11y-agent exposes host metrics for the Prometheus agent."
+  type        = number
+  default     = 19090
+  nullable    = false
+  validation {
+    condition = (
+      floor(var.observability_collector_metrics_export_port) == var.observability_collector_metrics_export_port &&
+      var.observability_collector_metrics_export_port >= 1 &&
+      var.observability_collector_metrics_export_port <= 65535
+    )
+    error_message = "observability_collector_metrics_export_port must be an integer between 1 and 65535."
+  }
+}
+
+variable "observability_collector_prometheus_agent_port" {
+  description = "Loopback status port for the Prometheus agent sidecar process."
+  type        = number
+  default     = 19091
+  nullable    = false
+  validation {
+    condition = (
+      floor(var.observability_collector_prometheus_agent_port) == var.observability_collector_prometheus_agent_port &&
+      var.observability_collector_prometheus_agent_port >= 1 &&
+      var.observability_collector_prometheus_agent_port <= 65535
+    )
+    error_message = "observability_collector_prometheus_agent_port must be an integer between 1 and 65535."
+  }
+}
+
 variable "stopped" {
   description = "Whether the VM should be created in a stopped state."
   type        = bool

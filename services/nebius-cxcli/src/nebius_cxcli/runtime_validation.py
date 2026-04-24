@@ -22,11 +22,13 @@ from .components import (
     component_lookup,
     parse_dependency_ref,
 )
+from .deploy_targets import TARGET_REF_FIELD, app_chart_target_ref
 from .mk8s_gpu import mk8s_gpu_dependency_issues
+from .observability import observability_dependency_issues
 from .runtime_config import read_path_with_catalog
 from .runtime_plugin_validation import run_runtime_validation_plugins
 
-_ROOT_KEYS = frozenset({"version", "client_info", "deploy", "infra", "apps"})
+_ROOT_KEYS = frozenset({"version", "client_info", "deploy", "observability", "infra", "apps"})
 _ID_PATTERN = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 _SECTION_PATTERN = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 _ENV_VAR_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
@@ -126,6 +128,205 @@ def _validate_deploy(payload: Mapping[str, Any]) -> None:
     mk8s_gpu = validations.get("mk8s_gpu")
     if mk8s_gpu is not None and not isinstance(mk8s_gpu, Mapping):
         raise ValueError("deploy.validations.mk8s_gpu must be a mapping")
+
+
+def _validate_observability(payload: Mapping[str, Any]) -> None:
+    observability = payload.get("observability")
+    if observability is None:
+        return
+    if not isinstance(observability, Mapping):
+        raise ValueError("observability must be a mapping")
+    supported_keys = {"enabled", "kubernetes", "vm"}
+    unknown_keys = sorted(str(key) for key in observability if str(key) not in supported_keys)
+    if unknown_keys:
+        raise ValueError(
+            "observability has unsupported field(s): " + ", ".join(unknown_keys)
+        )
+    enabled = observability.get("enabled")
+    if enabled is not None and not isinstance(enabled, bool):
+        raise ValueError("observability.enabled must be true or false")
+
+    kubernetes = observability.get("kubernetes")
+    if kubernetes is not None:
+        if not isinstance(kubernetes, Mapping):
+            raise ValueError("observability.kubernetes must be a mapping")
+        supported_kubernetes_keys = {"logs", "metrics", "traces"}
+        unknown_kubernetes_keys = sorted(
+            str(key) for key in kubernetes if str(key) not in supported_kubernetes_keys
+        )
+        if unknown_kubernetes_keys:
+            raise ValueError(
+                "observability.kubernetes has unsupported field(s): "
+                + ", ".join(unknown_kubernetes_keys)
+            )
+
+        logs = kubernetes.get("logs")
+        if logs is not None:
+            if not isinstance(logs, Mapping):
+                raise ValueError("observability.kubernetes.logs must be a mapping")
+            supported_log_keys = {"enabled", "collect_agent_logs", "excluded_namespaces"}
+            unknown_log_keys = sorted(str(key) for key in logs if str(key) not in supported_log_keys)
+            if unknown_log_keys:
+                raise ValueError(
+                    "observability.kubernetes.logs has unsupported field(s): "
+                    + ", ".join(unknown_log_keys)
+                )
+            for field in ("enabled", "collect_agent_logs"):
+                value = logs.get(field)
+                if value is not None and not isinstance(value, bool):
+                    raise ValueError(f"observability.kubernetes.logs.{field} must be true or false")
+            excluded_namespaces = logs.get("excluded_namespaces")
+            if excluded_namespaces is not None and (
+                not isinstance(excluded_namespaces, list)
+                or any(not isinstance(item, str) for item in excluded_namespaces)
+            ):
+                raise ValueError(
+                    "observability.kubernetes.logs.excluded_namespaces must be a list of strings"
+                )
+
+        metrics = kubernetes.get("metrics")
+        if metrics is not None:
+            if not isinstance(metrics, Mapping):
+                raise ValueError("observability.kubernetes.metrics must be a mapping")
+            supported_metric_keys = {
+                "enabled",
+                "collect_agent_metrics",
+                "collect_k8s_cluster_metrics",
+                "excluded_namespaces",
+            }
+            unknown_metric_keys = sorted(
+                str(key) for key in metrics if str(key) not in supported_metric_keys
+            )
+            if unknown_metric_keys:
+                raise ValueError(
+                    "observability.kubernetes.metrics has unsupported field(s): "
+                    + ", ".join(unknown_metric_keys)
+                )
+            for field in ("enabled", "collect_agent_metrics", "collect_k8s_cluster_metrics"):
+                value = metrics.get(field)
+                if value is not None and not isinstance(value, bool):
+                    raise ValueError(
+                        f"observability.kubernetes.metrics.{field} must be true or false"
+                    )
+            excluded_namespaces = metrics.get("excluded_namespaces")
+            if excluded_namespaces is not None and (
+                not isinstance(excluded_namespaces, list)
+                or any(not isinstance(item, str) for item in excluded_namespaces)
+            ):
+                raise ValueError(
+                    "observability.kubernetes.metrics.excluded_namespaces must be a list of strings"
+                )
+
+        traces = kubernetes.get("traces")
+        if traces is not None:
+            if not isinstance(traces, Mapping):
+                raise ValueError("observability.kubernetes.traces must be a mapping")
+            supported_trace_keys = {"enabled"}
+            unknown_trace_keys = sorted(
+                str(key) for key in traces if str(key) not in supported_trace_keys
+            )
+            if unknown_trace_keys:
+                raise ValueError(
+                    "observability.kubernetes.traces has unsupported field(s): "
+                    + ", ".join(unknown_trace_keys)
+                )
+            value = traces.get("enabled")
+            if value is not None and not isinstance(value, bool):
+                raise ValueError("observability.kubernetes.traces.enabled must be true or false")
+
+    vm = observability.get("vm")
+    if vm is None:
+        return
+    if not isinstance(vm, Mapping):
+        raise ValueError("observability.vm must be a mapping")
+    supported_vm_keys = {"logs", "collector"}
+    unknown_vm_keys = sorted(str(key) for key in vm if str(key) not in supported_vm_keys)
+    if unknown_vm_keys:
+        raise ValueError("observability.vm has unsupported field(s): " + ", ".join(unknown_vm_keys))
+
+    logs = vm.get("logs")
+    if logs is None:
+        return
+    if not isinstance(logs, Mapping):
+        raise ValueError("observability.vm.logs must be a mapping")
+    supported_vm_log_keys = {"enabled", "systemd_units"}
+    unknown_vm_log_keys = sorted(
+        str(key) for key in logs if str(key) not in supported_vm_log_keys
+    )
+    if unknown_vm_log_keys:
+        raise ValueError(
+            "observability.vm.logs has unsupported field(s): " + ", ".join(unknown_vm_log_keys)
+        )
+    enabled = logs.get("enabled")
+    if enabled is not None and not isinstance(enabled, bool):
+        raise ValueError("observability.vm.logs.enabled must be true or false")
+    systemd_units = logs.get("systemd_units")
+    if systemd_units is not None and (
+        not isinstance(systemd_units, list) or any(not isinstance(item, str) for item in systemd_units)
+    ):
+        raise ValueError("observability.vm.logs.systemd_units must be a list of strings")
+
+    collector = vm.get("collector")
+    if collector is None:
+        return
+    if not isinstance(collector, Mapping):
+        raise ValueError("observability.vm.collector must be a mapping")
+    supported_collector_keys = {"enabled", "logs", "metrics"}
+    unknown_collector_keys = sorted(
+        str(key) for key in collector if str(key) not in supported_collector_keys
+    )
+    if unknown_collector_keys:
+        raise ValueError(
+            "observability.vm.collector has unsupported field(s): "
+            + ", ".join(unknown_collector_keys)
+        )
+    collector_enabled = collector.get("enabled")
+    if collector_enabled is not None and not isinstance(collector_enabled, bool):
+        raise ValueError("observability.vm.collector.enabled must be true or false")
+
+    collector_logs = collector.get("logs")
+    if collector_logs is not None:
+        if not isinstance(collector_logs, Mapping):
+            raise ValueError("observability.vm.collector.logs must be a mapping")
+        supported_collector_log_keys = {"enabled", "systemd_units"}
+        unknown_collector_log_keys = sorted(
+            str(key) for key in collector_logs if str(key) not in supported_collector_log_keys
+        )
+        if unknown_collector_log_keys:
+            raise ValueError(
+                "observability.vm.collector.logs has unsupported field(s): "
+                + ", ".join(unknown_collector_log_keys)
+            )
+        collector_logs_enabled = collector_logs.get("enabled")
+        if collector_logs_enabled is not None and not isinstance(collector_logs_enabled, bool):
+            raise ValueError("observability.vm.collector.logs.enabled must be true or false")
+        collector_units = collector_logs.get("systemd_units")
+        if collector_units is not None and (
+            not isinstance(collector_units, list)
+            or any(not isinstance(item, str) for item in collector_units)
+        ):
+            raise ValueError(
+                "observability.vm.collector.logs.systemd_units must be a list of strings"
+            )
+
+    collector_metrics = collector.get("metrics")
+    if collector_metrics is not None:
+        if not isinstance(collector_metrics, Mapping):
+            raise ValueError("observability.vm.collector.metrics must be a mapping")
+        supported_collector_metric_keys = {"enabled"}
+        unknown_collector_metric_keys = sorted(
+            str(key) for key in collector_metrics if str(key) not in supported_collector_metric_keys
+        )
+        if unknown_collector_metric_keys:
+            raise ValueError(
+                "observability.vm.collector.metrics has unsupported field(s): "
+                + ", ".join(unknown_collector_metric_keys)
+            )
+        collector_metrics_enabled = collector_metrics.get("enabled")
+        if collector_metrics_enabled is not None and not isinstance(
+            collector_metrics_enabled, bool
+        ):
+            raise ValueError("observability.vm.collector.metrics.enabled must be true or false")
 
 
 def _enabled_component_ids(payload: Mapping[str, Any], *, scope: ComponentScope) -> set[str]:
@@ -242,8 +443,10 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
         raise ValueError("apps.charts must be a list in dynamic config mode")
 
     app_lookup = component_lookup("apps")
+    infra_lookup = component_lookup("infra")
     seen_infra_instance_ids: set[str] = set()
     seen_global_instance_ids: set[str] = set()
+    cluster_target_refs: set[str] = set()
     for index, raw_component in enumerate(infra_components):
         if not isinstance(raw_component, Mapping):
             raise ValueError(f"infra.components[{index}] must be a mapping")
@@ -302,6 +505,9 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
                 "infra.components[].inputs.gpu_validation_overrides is no longer supported; "
                 "use deploy.validations.mk8s_gpu.*"
             )
+        entry = infra_lookup.get(component_id)
+        if entry is not None and entry.handoff is not None and bool(raw_component.get("enabled", False)):
+            cluster_target_refs.add(instance_id)
 
     seen_app_instance_ids: set[str] = set()
     for index, raw_chart in enumerate(apps_charts):
@@ -318,6 +524,7 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
                 "enabled",
                 "repo",
                 "version",
+                TARGET_REF_FIELD,
                 "namespace",
                 "release-name",
                 "values",
@@ -371,11 +578,34 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
             value = raw_chart.get(key)
             if value is not None and not isinstance(value, str):
                 raise ValueError(f"apps.charts[{index}].{key} must be a string when set")
+        target_ref = raw_chart.get(TARGET_REF_FIELD)
+        if target_ref is not None and not isinstance(target_ref, str):
+            raise ValueError(f"apps.charts[{index}].{TARGET_REF_FIELD} must be a string when set")
+        normalized_target_ref = app_chart_target_ref(raw_chart)
+        if target_ref and not INSTANCE_ID_PATTERN.fullmatch(normalized_target_ref):
+            raise ValueError(
+                f"apps.charts[{index}].{TARGET_REF_FIELD} must use lowercase letters, digits, and hyphens"
+            )
         release_name = raw_chart.get("release-name")
         if release_name is not None and not isinstance(release_name, str):
             raise ValueError(f"apps.charts[{index}].release-name must be a string when set")
         if not isinstance(raw_chart.get("values"), Mapping):
             raise ValueError(f"apps.charts[{index}].values must be a mapping")
+        if bool(raw_chart.get("enabled", False)):
+            if cluster_target_refs:
+                if not normalized_target_ref:
+                    raise ValueError(
+                        f"apps.charts[{index}].{TARGET_REF_FIELD} is required when cluster targets are enabled"
+                    )
+                if normalized_target_ref not in cluster_target_refs:
+                    available = ", ".join(sorted(cluster_target_refs))
+                    raise ValueError(
+                        f"apps.charts[{index}].{TARGET_REF_FIELD} must reference one of the enabled cluster targets: {available}"
+                    )
+            elif normalized_target_ref:
+                raise ValueError(
+                    f"apps.charts[{index}].{TARGET_REF_FIELD} is not allowed when no built-in cluster target is enabled"
+                )
 
 
 def validate_runtime_payload(payload: Mapping[str, Any]) -> None:
@@ -392,6 +622,7 @@ def validate_runtime_payload(payload: Mapping[str, Any]) -> None:
 
     _validate_client_info(payload)
     _validate_deploy(payload)
+    _validate_observability(payload)
 
     infra = payload.get("infra")
     if isinstance(infra, Mapping):
@@ -429,6 +660,9 @@ def validate_runtime_payload(payload: Mapping[str, Any]) -> None:
     gpu_issues = mk8s_gpu_dependency_issues(payload)
     if gpu_issues:
         raise ValueError(gpu_issues[0])
+    observability_issues = observability_dependency_issues(payload)
+    if observability_issues:
+        raise ValueError(observability_issues[0])
 
     _validate_materialized_shared_defaults(payload)
 

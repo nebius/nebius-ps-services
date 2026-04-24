@@ -32,6 +32,7 @@ from nebius_cxcli.mk8s_gpu import (
     mk8s_gpu_flux_release_dependencies,
     mk8s_gpu_project_validation_defaults,
     mk8s_gpu_validation_specs,
+    normalize_mk8s_gpu_project_validation_settings,
     resolve_mk8s_gpu_app_selection,
 )
 from nebius_cxcli.runtime_introspection import reset_runtime_introspection_cache
@@ -135,6 +136,34 @@ def test_mk8s_gpu_app_selection_defaults_to_gpu_operator_for_nebius_images() -> 
     assert selection.auto_enabled_app_ids == ("nvidia-gpu-operator",)
     assert selection.selected_app_ids == ("nvidia-gpu-operator",)
     assert selection.issues == ()
+
+
+def test_mk8s_gpu_app_selection_rejects_disabled_dcgm_exporter() -> None:
+    payload = _mk8s_payload()
+    payload["apps"]["charts"] = [
+        {
+            "id": "nvidia-gpu-operator",
+            "instance_id": "nvidia-gpu-operator",
+            "enabled": True,
+            "values": {
+                "dcgmExporter": {
+                    "enabled": False,
+                }
+            },
+        }
+    ]
+
+    selection = resolve_mk8s_gpu_app_selection(
+        payload,
+        selected_app_ids={"nvidia-gpu-operator"},
+        app_entries=component_entries("apps"),
+    )
+
+    assert selection.selected_app_ids == ("nvidia-gpu-operator",)
+    assert selection.issues == (
+        "GPU-enabled MK8s deployment requires "
+        "'nvidia-gpu-operator.values.dcgmExporter.enabled' to stay true",
+    )
 
 
 def test_mk8s_gpu_cluster_adds_network_operator_and_nccl_validation() -> None:
@@ -380,6 +409,36 @@ def test_materialize_mk8s_gpu_app_values_keeps_optional_driverful_network_operat
     assert "nfd" not in network_values
     assert "node-feature-discovery" not in network_values
     assert "nodeAffinity" not in network_values
+
+
+def test_materialize_mk8s_gpu_app_values_driverful_manual_stack_disables_nebius_driver_crd() -> None:
+    payload = _mk8s_payload()
+    payload["infra"]["components"][0]["inputs"]["gpu_stack_source"] = "operator_managed"
+    payload["apps"]["charts"] = [
+        {
+            "id": "nvidia-gpu-operator",
+            "instance_id": "nvidia-gpu-operator",
+            "enabled": True,
+            "values": {
+                "driver": {
+                    "enabled": False,
+                    "nvidiaDriverCRD": {
+                        "enabled": True,
+                    },
+                },
+                "toolkit": {
+                    "enabled": False,
+                },
+            },
+        }
+    ]
+
+    mk8s_gpu.materialize_mk8s_gpu_app_values(payload)
+
+    gpu_values = payload["apps"]["charts"][0]["values"]
+    assert gpu_values["driver"]["enabled"] is True
+    assert gpu_values["toolkit"]["enabled"] is True
+    assert gpu_values["driver"]["nvidiaDriverCRD"]["enabled"] is False
 
 
 def test_mk8s_gpu_validation_overrides_can_disable_defaults_and_tune_nccl() -> None:
@@ -640,7 +699,7 @@ def test_mk8s_gpu_project_validation_defaults_include_health_checker_for_custom_
 
 def test_manual_b200_requires_network_operator_without_infiniband() -> None:
     payload = _mk8s_payload()
-    payload["infra"]["components"][0]["inputs"]["gpu_stack_source"] = "manual"
+    payload["infra"]["components"][0]["inputs"]["gpu_stack_source"] = "operator_managed"
     payload["infra"]["components"][0]["inputs"]["gpu_nodes_platform"] = "gpu-b200-sxm"
 
     selection = resolve_mk8s_gpu_app_selection(
@@ -657,7 +716,7 @@ def test_manual_b200_requires_network_operator_without_infiniband() -> None:
 
 def test_manual_b200_nccl_validation_keeps_b200_mpi_overlay() -> None:
     payload = _mk8s_payload(infiniband_fabric="fabric-1")
-    payload["infra"]["components"][0]["inputs"]["gpu_stack_source"] = "manual"
+    payload["infra"]["components"][0]["inputs"]["gpu_stack_source"] = "operator_managed"
     payload["infra"]["components"][0]["inputs"]["gpu_nodes_platform"] = "gpu-b200-sxm"
 
     validations = mk8s_gpu_validation_specs(payload)
@@ -806,6 +865,48 @@ def test_nccl_json_report_summary_keeps_customer_report_compact() -> None:
         "peak_bus_bandwidth_size_bytes": 1073741824,
         "peak_bus_bandwidth_variant": "in_place",
     }
+
+
+def test_run_kubectl_timeout_reports_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _timeout(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        raise subprocess.TimeoutExpired(["kubectl", "get", "pod"], timeout=30)
+
+    monkeypatch.setattr(mk8s_gpu.subprocess, "run", _timeout)
+
+    with pytest.raises(RuntimeError, match="kubectl get pod timed out after 30 seconds"):
+        mk8s_gpu._run_kubectl(["get", "pod"], extra_env=None, timeout_seconds=30)
+
+
+def test_run_mk8s_gpu_validations_writes_error_report_on_nccl_exception(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def _fail_nccl(**_kwargs):  # type: ignore[no-untyped-def]
+        raise RuntimeError("kubectl get pod nccl-test-nebius-launcher timed out after 30 seconds")
+
+    monkeypatch.setattr(mk8s_gpu, "_run_nccl_validation", _fail_nccl)
+    validations = [
+        {
+            "kind": "mk8s_nccl",
+            "name": "NCCL test",
+            "report_file": "nccl-test-report.json",
+            "transport_mode": "socket",
+            "threshold_enforced": False,
+        }
+    ]
+
+    with pytest.raises(RuntimeError, match="nccl-test-nebius-launcher timed out"):
+        mk8s_gpu.run_mk8s_gpu_validations(
+            validations,
+            inventory_dir=tmp_path,
+            extra_env=None,
+        )
+
+    report = json.loads((tmp_path / "nccl-test-report.json").read_text(encoding="utf-8"))
+    assert report["validation"] == "NCCL test"
+    assert report["passed"] is False
+    assert report["launcher_phase"] == "error"
+    assert "nccl-test-nebius-launcher timed out" in report["error"]
 
 
 def test_report_log_excerpt_keeps_tail_only() -> None:
@@ -1137,3 +1238,53 @@ def test_mk8s_gpu_dependency_issues_report_missing_required_apps() -> None:
         "GPU-enabled MK8s deployment requires 'apps:nvidia-gpu-operator' to be enabled",
         "GPU-enabled MK8s deployment requires 'apps:nvidia-network-operator' to be enabled",
     ]
+
+
+def test_mk8s_gpu_dependency_issues_report_disabled_dcgm_exporter() -> None:
+    payload = _mk8s_payload()
+    payload["apps"]["charts"] = [
+        {
+            "id": "nvidia-gpu-operator",
+            "instance_id": "nvidia-gpu-operator",
+            "enabled": True,
+            "values": {
+                "dcgmExporter": {
+                    "enabled": False,
+                }
+            },
+        }
+    ]
+
+    issues = mk8s_gpu_dependency_issues(payload)
+
+    assert issues == [
+        "GPU-enabled MK8s deployment requires "
+        "'nvidia-gpu-operator.values.dcgmExporter.enabled' to stay true",
+    ]
+
+
+def test_normalize_mk8s_gpu_project_validation_settings_prunes_stale_block_without_mk8s() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "vm",
+                    "instance_id": "vm",
+                    "enabled": True,
+                    "inputs": {},
+                }
+            ]
+        },
+        "deploy": {
+            "validations": {
+                "mk8s_gpu": {
+                    "operator_readiness": {"enabled": True},
+                }
+            }
+        },
+    }
+
+    changed = normalize_mk8s_gpu_project_validation_settings(payload)
+
+    assert changed is True
+    assert "deploy" not in payload

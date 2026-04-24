@@ -7,6 +7,9 @@ cli:
 shared:
   admin_ssh:
     user_name: ubuntu
+# `components.*` defines reusable component types only. Repeated modules or
+# charts in one project are modeled in `config.yaml` with distinct
+# `infra.components[].instance_id` / `apps.charts[].instance_id` rows.
 components:
   infra:
     mk8s:
@@ -23,7 +26,7 @@ components:
       defaults:
         inputs.cpu_nodes_count: 2
         # Default to Nebius-managed GPU images and stack presets. Advanced
-        # manual/operator-managed stacks can switch this to `manual`.
+        # operator-managed stacks can switch this to `operator_managed`.
         inputs.gpu_stack_source: nebius_image
         inputs.mk8s_cluster_public_endpoint: true
         inputs.kube_network_service_cidrs:
@@ -121,6 +124,42 @@ components:
               - min_gpu: 8
                 max_gpu: 8
                 size_gib: 1023
+        observability:
+          # Source-owned MK8s observability contract. `config.yaml` decides
+          # whether cxcli deploys it; this block keeps agent choice, signal
+          # defaults, and endpoint templates.
+          primary_agent:
+            kind: kubernetes_agent
+            chart_component_id: nebius-observability-agent
+            logs:
+              default_enabled: true
+              collect_agent_logs: false
+              # Exclude list; all other namespaces remain eligible.
+              excluded_namespaces:
+                - kube-system
+            metrics:
+              default_enabled: true
+              collect_agent_metrics: false
+              # Include cluster/node/control-plane metrics when this
+              # cxcli-managed MK8s path is enabled.
+              collect_k8s_cluster_metrics: true
+              # Exclude list; all other namespaces remain eligible.
+              excluded_namespaces: []
+            traces:
+              default_enabled: true
+          endpoints:
+            write:
+              metrics_otlp: https://write.monitoring.{region}.nebius.cloud/projects/{project_id}/opentelemetry/v1/metrics
+              metrics_prometheus_remote_write: https://write.monitoring.{region}.nebius.cloud/projects/{project_id}/prometheus/api/v1/write
+              logs_otlp: https://write.logging.{region}.nebius.cloud
+              logs_agent_grpc: dns:///write.logging.{region}.nebius.cloud:443
+              traces_otlp_grpc: dns:///write.tracing.{region}.nebius.cloud:443
+            read:
+              metrics_service_provider: https://read.monitoring.api.nebius.cloud/projects/{project_id}/service-provider/prometheus
+              metrics_user: https://read.monitoring.api.nebius.cloud/projects/{project_id}/prometheus
+              metrics_federate: https://read.monitoring.api.nebius.cloud/projects/{project_id}/buckets/<service-provider>/prometheus/federate
+              logs_loki: https://read.logging.api.nebius.cloud/projects/{project_id}
+              traces_tempo: https://read.tracing.api.nebius.cloud/projects/{project_id}/tempo
       wizard_profile: mk8s
     managed-postgresql:
       source:
@@ -188,11 +227,46 @@ components:
             - ubuntu24.04-driverless
             - ubuntu22.04-driverless
           # GPU VMs prefer Nebius GPU images first. Driverless families remain
-          # compatible for manual stacks, but they sort after the recommended
+          # compatible for operator-managed stacks, but they sort after the recommended
           # GPU image families returned by the live Nebius inventory.
           preferred_gpu_image_families:
             - ubuntu24.04-cuda13.0
             - ubuntu24.04-cuda12
+        observability:
+          # VM observability has two paths: the built-in Monitoring agent and
+          # an optional cxcli-managed public-ingest collector.
+          primary_agent:
+            kind: monitoring_agent
+            metrics:
+              default_enabled: true
+            logs:
+              default_enabled: false
+              systemd_units: []
+          public_ingest:
+            # Default-off public-ingest collector. It installs the public
+            # `nebius-o11y-agent` package plus a Prometheus agent companion.
+            default_enabled: false
+            package_version: 0.2.130
+            # Metadata token for the VM-attached service account.
+            metadata_token_file: /mnt/cloud-metadata/token
+            metrics_export_port: 19090
+            prometheus_agent_port: 19091
+            logs:
+              default_enabled: true
+              systemd_units: []
+            metrics:
+              default_enabled: true
+          endpoints:
+            write:
+              metrics_platform_managed: Nebius-managed Monitoring agent metrics ingest is automatic for Compute VMs and uses platform-managed regional endpoints; cxcli does not configure a public customer write endpoint for this path.
+              metrics_prometheus_remote_write: https://write.monitoring.{region}.nebius.cloud/projects/{project_id}/prometheus/api/v1/write
+              logs_platform_managed: When journald collection is enabled, the Nebius-managed Monitoring agent forwards VM logs through the platform-managed Logging ingest path; cxcli does not configure a public customer write endpoint for this path.
+              logs_agent_grpc: dns:///write.logging.{region}.nebius.cloud:443
+            read:
+              metrics_service_provider: https://read.monitoring.api.nebius.cloud/projects/{project_id}/service-provider/prometheus
+              metrics_user: https://read.monitoring.api.nebius.cloud/projects/{project_id}/prometheus
+              metrics_federate: https://read.monitoring.api.nebius.cloud/projects/{project_id}/buckets/<service-provider>/prometheus/federate
+              logs_loki: https://read.logging.api.nebius.cloud/projects/{project_id}
     wireguard-jumphost:
       source:
         portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/wireguard-jumphost?ref=main
@@ -305,7 +379,7 @@ components:
           rules:
             - gpu_cluster_enabled: true
               auto_enable: true
-            - gpu_stack_source: manual
+            - gpu_stack_source: operator_managed
               auto_enable: true
               # Separate Nebius platform ids and regions; both are NVIDIA B200.
               match_platforms:
@@ -325,7 +399,7 @@ components:
                 - driverful_infiniband_nfd
               post_render_patches_from:
                 - rdma_shared_device_plugin
-            - gpu_stack_source: manual
+            - gpu_stack_source: operator_managed
               gpu_cluster_enabled: true
               # The driverless InfiniBand path still needs an explicit RDMA
               # shared-device policy; the Network Operator chart default CR
@@ -333,8 +407,8 @@ components:
               # itself.
               post_render_patches_from:
                 - rdma_shared_device_plugin
-            - gpu_stack_source: manual
-              # Manual GPU stacks still need the Network Operator to lay down
+            - gpu_stack_source: operator_managed
+              # Operator-managed GPU stacks still need the Network Operator to lay down
               # host OFED/RDMA bits for GPUDirect and NCCL validation.
               defaults:
                 values.operator.ofedDriver.deploy: true
@@ -377,26 +451,28 @@ components:
               # InfiniBand path, let it own the single NFD instance.
               defaults:
                 values.nfd.enabled: false
-            - gpu_stack_source: manual
-              # Manual B200/B200A stacks also auto-enable Network Operator for
+            - gpu_stack_source: operator_managed
+              # Operator-managed B200/B200A stacks also auto-enable Network Operator for
               # RDMA plumbing, so keep NFD single-owned there too.
               match_platforms:
                 - gpu-b200-sxm
                 - gpu-b200-sxm-a
               defaults:
                 values.nfd.enabled: false
-            - gpu_stack_source: manual
-              # Manual GPU stacks expect GPU Operator to install and manage the
-              # host GPU driver plus the NVIDIA Container Toolkit runtime.
+            - gpu_stack_source: operator_managed
+              # Operator-managed GPU stacks keep the host driver/toolkit path in
+              # GPU Operator, but still avoid the broken Nebius NVIDIADriver
+              # CRD template path in gpu-operator@v25.10.0.
               defaults:
                 values.driver.enabled: true
                 values.toolkit.enabled: true
-            - gpu_stack_source: manual
+                values.driver.nvidiaDriverCRD.enabled: false
+            - gpu_stack_source: operator_managed
               match_platforms:
                 - gpu-b300-sxm
               defaults:
                 # Ref: https://docs.nebius.com/kubernetes/gpu/set-up
-                # Nebius docs pin the B300 manual-install path to
+                # Nebius docs pin the B300 operator-managed install path to
                 # --set driver.version=580.95.05. Keep it catalog-owned rather
                 # than hardcoded in Python.
                 values.driver.version: 580.95.05
@@ -404,6 +480,30 @@ components:
           # wait for Network Operator first.
           install_after:
             - nvidia-network-operator
+        observability:
+          metric_targets:
+            - job_name: cxcli-nvidia-dcgm-exporter
+              # DCGM Exporter is discovered through Prometheus annotations.
+              # On `nebius_image` stacks cxcli also owns the Nebius-specific GPU
+              # node-label policy required to schedule DCGM Exporter plus the
+              # validator without turning on GPU Operator device-plugin or GFD.
+              # Keep this `nebius_image`-only: the operator-managed stack was
+              # live-tested without these extra label injections.
+              discovery:
+                kind: prometheus_annotations
+                service_name: nvidia-dcgm-exporter
+                port: 9400
+              managed_gpu_node_policy:
+                stack_sources:
+                  - nebius_image
+                selector:
+                  nebius.com/gpu: "true"
+                labels:
+                  nvidia.com/gpu.deploy.operands: "true"
+                  nvidia.com/gpu.deploy.dcgm-exporter: "true"
+                  nvidia.com/gpu.deploy.operator-validator: "true"
+                  nvidia.com/gpu.deploy.device-plugin: "false"
+                  nvidia.com/gpu.deploy.gpu-feature-discovery: "false"
     nccl-test:
       source:
         portable:
@@ -442,6 +542,28 @@ components:
                   - -mca
                   - coll
                   - ^hcoll
+    nebius-observability-agent:
+      # Keep this public chart pinned here because the current Nebius traces
+      # ingest workflow installs it, and its rendered surface matches
+      # cxcli's logs+metrics+traces MK8s contract.
+      # Ref: https://docs.nebius.com/observability/traces/ingest
+      source:
+        portable:
+          repo: oci://cr.nebius.cloud/observability/public/nebius-observability-agent-helm
+          chart: nebius-observability-agent-helm
+          version: 1.0.5
+      ui:
+        title: Nebius observability agent
+        group: Observability
+        enabled: false
+      release:
+        namespace: observability
+        name: nebius-observability-agent
+      # Keep customer-facing toggles on the MK8s project contract under
+      # components.infra.mk8s.cli.observability and materialize them into the
+      # chart at render time. Only put explicit Nebius-specific chart deltas
+      # here when cxcli must override an upstream chart default.
+      defaults: {}
     gateway-helm:
       source:
         portable:

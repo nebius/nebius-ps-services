@@ -242,6 +242,20 @@ def normalize_mk8s_gpu_project_validation_settings(payload: dict[str, Any]) -> b
             has_mk8s_component = True
 
     if not has_mk8s_component:
+        deploy = payload_map.get("deploy")
+        if not isinstance(deploy, dict):
+            return changed
+        validations = deploy.get("validations")
+        if not isinstance(validations, dict):
+            return changed
+        if "mk8s_gpu" not in validations:
+            return changed
+        del validations["mk8s_gpu"]
+        changed = True
+        if not validations:
+            del deploy["validations"]
+        if not deploy:
+            payload_map.pop("deploy", None)
         return changed
 
     deploy = payload_map.get("deploy")
@@ -303,7 +317,7 @@ def _coerce_optional_positive_float(value: Any) -> float | None:
 
 def _gpu_stack_source(inputs: dict[str, Any]) -> str:
     stack_source = _as_text(inputs.get("gpu_stack_source")).lower()
-    return stack_source if stack_source in {"nebius_image", "manual"} else "nebius_image"
+    return stack_source if stack_source in {"nebius_image", "operator_managed"} else "nebius_image"
 
 
 def _rule_matches_context(
@@ -497,6 +511,17 @@ def _enabled_mk8s_gpu_contexts(payload: dict[str, Any]) -> tuple[Mk8sGpuClusterC
     return tuple(contexts)
 
 
+def _app_chart_row(payload: dict[str, Any], app_id: str) -> dict[str, Any] | None:
+    apps_node = payload.get("apps")
+    charts = apps_node.get("charts") if isinstance(apps_node, dict) else None
+    if not isinstance(charts, list):
+        return None
+    for row in charts:
+        if isinstance(row, dict) and component_type_id(row) == app_id:
+            return row
+    return None
+
+
 def _mk8s_gpu_shape_capabilities(
     payload: dict[str, Any],
     *,
@@ -606,6 +631,21 @@ def _nccl_transport_label(mode: str) -> str:
     return "auto"
 
 
+def _target_scoped_validation_name(name: str, *, target_ref: str) -> str:
+    normalized_target_ref = _as_text(target_ref)
+    if not normalized_target_ref:
+        return name
+    return f"{name} ({normalized_target_ref})"
+
+
+def _target_scoped_report_file(report_file: str, *, target_ref: str) -> str:
+    normalized_target_ref = _as_text(target_ref)
+    if not normalized_target_ref:
+        return report_file
+    report_path = Path(report_file)
+    return f"{report_path.stem}-{normalized_target_ref}{report_path.suffix}"
+
+
 def mk8s_gpu_validation_warnings(
     payload_or_config: Any,
     *,
@@ -703,6 +743,14 @@ def resolve_mk8s_gpu_app_selection(
             "deploy.validations.mk8s_gpu.health_checker.enabled requires one apps component "
             "with cli.mk8s_gpu_policy.role: health_checker"
         )
+    gpu_operator_id = _mk8s_gpu_app_id_by_role().get("gpu_operator")
+    if gpu_operator_id:
+        gpu_operator_row = _app_chart_row(payload, gpu_operator_id)
+        if _nested_path_value(_mapping(gpu_operator_row), "values.dcgmExporter.enabled") is False:
+            issues.append(
+                "GPU-enabled MK8s deployment requires "
+                f"'{gpu_operator_id}.values.dcgmExporter.enabled' to stay true"
+            )
     for app_id in required_app_ids:
         if app_id not in available_ids:
             issues.append(
@@ -793,18 +841,9 @@ def mk8s_gpu_validation_specs(
         payload,
         gpu_settings=settings,
     )
-    required_app_ids = set(
-        _required_gpu_app_ids(
-            contexts,
-            gpu_settings=settings,
-            health_checker_enabled=validation_overrides.health_checker_enabled,
-        )
-    )
-
     validations: list[dict[str, Any]] = []
     app_entry_by_id = {entry.id: entry for entry in component_entries("apps")}
     role_map = _mk8s_gpu_app_id_by_role()
-    nccl_context = _select_nccl_validation_context(payload, contexts=contexts)
     # Keep the validation chain layered from cheapest to most expensive:
     # 1. operator/network control-plane readiness
     # 2. bounded single-node CUDA workload visibility
@@ -828,22 +867,37 @@ def mk8s_gpu_validation_specs(
             raise ValueError(
                 "component_sources.yaml must declare one apps component with cli.mk8s_gpu_policy.role: gpu_operator and a release namespace"
             )
-        if network_operator_id in required_app_ids and not network_operator_namespace:
-            raise ValueError(
-                "component_sources.yaml must declare one apps component with cli.mk8s_gpu_policy.role: network_operator and a release namespace"
+        for context in contexts:
+            required_app_ids = set(
+                _required_gpu_app_ids(
+                    (context,),
+                    gpu_settings=settings,
+                    health_checker_enabled=validation_overrides.health_checker_enabled,
+                )
             )
-        validations.append(
-            {
-                "kind": "mk8s_gpu_operator_readiness",
-                "name": _GPU_STACK_VALIDATION_NAME,
-                "timeout": operator_readiness.timeout,
-                "gpu_operator_namespace": gpu_operator_namespace,
-                "network_operator_namespace": network_operator_namespace,
-                "network_operator_required": network_operator_id in required_app_ids,
-                "gpu_cluster_enabled": any(item.gpu_cluster_enabled for item in contexts),
-                "report_file": "gpu-stack-readiness-report.json",
-            }
-        )
+            if network_operator_id in required_app_ids and not network_operator_namespace:
+                raise ValueError(
+                    "component_sources.yaml must declare one apps component with cli.mk8s_gpu_policy.role: network_operator and a release namespace"
+                )
+            validations.append(
+                {
+                    "kind": "mk8s_gpu_operator_readiness",
+                    "target_ref": context.instance_id,
+                    "name": _target_scoped_validation_name(
+                        _GPU_STACK_VALIDATION_NAME,
+                        target_ref=context.instance_id,
+                    ),
+                    "timeout": operator_readiness.timeout,
+                    "gpu_operator_namespace": gpu_operator_namespace,
+                    "network_operator_namespace": network_operator_namespace,
+                    "network_operator_required": network_operator_id in required_app_ids,
+                    "gpu_cluster_enabled": context.gpu_cluster_enabled,
+                    "report_file": _target_scoped_report_file(
+                        "gpu-stack-readiness-report.json",
+                        target_ref=context.instance_id,
+                    ),
+                }
+            )
 
     gpu_visibility = settings.validations.gpu_visibility
     if validation_overrides.gpu_visibility_enabled:
@@ -851,21 +905,29 @@ def mk8s_gpu_validation_specs(
             raise ValueError(
                 "components.infra.mk8s.cli.gpu.validations.gpu_visibility must set namespace, image, and timeout"
             )
-        validations.append(
-            {
-                "kind": "mk8s_gpu_visibility",
-                "name": "GPU Visibility test",
-                "namespace": gpu_visibility.namespace,
-                "image": gpu_visibility.image,
-                "timeout": gpu_visibility.timeout,
-                "cleanup": gpu_visibility.cleanup,
-                "max_nodes": validation_overrides.gpu_visibility_max_nodes,
-                "report_file": "gpu-visibility-report.json",
-            }
-        )
+        for context in contexts:
+            validations.append(
+                {
+                    "kind": "mk8s_gpu_visibility",
+                    "target_ref": context.instance_id,
+                    "name": _target_scoped_validation_name(
+                        "GPU Visibility test",
+                        target_ref=context.instance_id,
+                    ),
+                    "namespace": gpu_visibility.namespace,
+                    "image": gpu_visibility.image,
+                    "timeout": gpu_visibility.timeout,
+                    "cleanup": gpu_visibility.cleanup,
+                    "max_nodes": validation_overrides.gpu_visibility_max_nodes,
+                    "report_file": _target_scoped_report_file(
+                        "gpu-visibility-report.json",
+                        target_ref=context.instance_id,
+                    ),
+                }
+            )
 
     nccl = settings.validations.nccl
-    if nccl_context is not None and validation_overrides.nccl_enabled:
+    if validation_overrides.nccl_enabled:
         if (
             not nccl.chart_component_id
             or not nccl.timeout
@@ -895,52 +957,72 @@ def mk8s_gpu_validation_specs(
             chart_values,
             _defaults_to_mapping(chart_entry.defaults, strip_root="values"),
         )
-        chart_values = _deep_merge_dict(
-            chart_values,
-            _defaults_to_mapping(
-                _resolved_app_value_defaults(
-                    app_id=nccl.chart_component_id,
-                    contexts=(nccl_context.context,),
-                ),
-                strip_root="values",
-            ),
-        )
-        chart_values = _deep_merge_dict(
-            chart_values,
-            _nccl_chart_transport_defaults(nccl_context.transport_mode),
-        )
-        _worker_vcpu_count, _worker_memory_gibibytes, worker_gpu_count, _allow_gpu_clustering = (
-            _mk8s_gpu_shape_resource_profile(payload, context=nccl_context.context)
-        )
-        chart_values = _deep_merge_dict(
-            chart_values,
-            _nccl_chart_worker_shape_defaults(
-                gpu_count=worker_gpu_count,
-            ),
-        )
         namespace = _as_text(chart_entry.namespace) or nccl.chart_component_id
-        validations.append(
-            {
-                "kind": "mk8s_nccl",
-                "name": "NCCL test",
-                "chart_component_id": nccl.chart_component_id,
-                "chart_name_or_ref": chart_name_or_ref,
-                "chart_repo": chart_repo,
-                "chart_version": chart_version,
-                "namespace": namespace,
-                "timeout": nccl.timeout,
-                "max_nodes": validation_overrides.nccl_max_nodes,
-                "training_operator_manifest": nccl.training_operator_manifest,
-                "training_operator_namespace": nccl.training_operator_namespace,
-                "average_bus_bandwidth_threshold_gbps": validation_overrides.nccl_average_bus_bandwidth_threshold_gbps,
-                "threshold_enforced": nccl_context.threshold_enforced,
-                "chart_values": chart_values,
-                "gpu_platform": nccl_context.context.gpu_platform,
-                "gpu_cluster_enabled": nccl_context.context.gpu_cluster_enabled,
-                "transport_mode": nccl_context.transport_mode,
-                "report_file": "nccl-test-report.json",
-            }
-        )
+        for context in contexts:
+            gpu_count, allow_gpu_clustering = _mk8s_gpu_shape_capabilities(payload, context=context)
+            nccl_context = Mk8sNcclValidationContext(
+                context=context,
+                gpu_count=gpu_count,
+                allow_gpu_clustering=allow_gpu_clustering,
+                transport_mode="rdma" if context.gpu_cluster_enabled else "socket",
+                threshold_enforced=bool(context.gpu_cluster_enabled),
+            )
+            scoped_chart_values = copy.deepcopy(chart_values)
+            scoped_chart_values = _deep_merge_dict(
+                scoped_chart_values,
+                _defaults_to_mapping(
+                    _resolved_app_value_defaults(
+                        app_id=nccl.chart_component_id,
+                        contexts=(nccl_context.context,),
+                    ),
+                    strip_root="values",
+                ),
+            )
+            scoped_chart_values = _deep_merge_dict(
+                scoped_chart_values,
+                _nccl_chart_transport_defaults(nccl_context.transport_mode),
+            )
+            (
+                _worker_vcpu_count,
+                _worker_memory_gibibytes,
+                worker_gpu_count,
+                _allow_gpu_clustering,
+            ) = _mk8s_gpu_shape_resource_profile(payload, context=nccl_context.context)
+            scoped_chart_values = _deep_merge_dict(
+                scoped_chart_values,
+                _nccl_chart_worker_shape_defaults(
+                    gpu_count=worker_gpu_count,
+                ),
+            )
+            validations.append(
+                {
+                    "kind": "mk8s_nccl",
+                    "target_ref": context.instance_id,
+                    "name": _target_scoped_validation_name(
+                        "NCCL test",
+                        target_ref=context.instance_id,
+                    ),
+                    "chart_component_id": nccl.chart_component_id,
+                    "chart_name_or_ref": chart_name_or_ref,
+                    "chart_repo": chart_repo,
+                    "chart_version": chart_version,
+                    "namespace": namespace,
+                    "timeout": nccl.timeout,
+                    "max_nodes": validation_overrides.nccl_max_nodes,
+                    "training_operator_manifest": nccl.training_operator_manifest,
+                    "training_operator_namespace": nccl.training_operator_namespace,
+                    "average_bus_bandwidth_threshold_gbps": validation_overrides.nccl_average_bus_bandwidth_threshold_gbps,
+                    "threshold_enforced": nccl_context.threshold_enforced,
+                    "chart_values": scoped_chart_values,
+                    "gpu_platform": nccl_context.context.gpu_platform,
+                    "gpu_cluster_enabled": nccl_context.context.gpu_cluster_enabled,
+                    "transport_mode": nccl_context.transport_mode,
+                    "report_file": _target_scoped_report_file(
+                        "nccl-test-report.json",
+                        target_ref=context.instance_id,
+                    ),
+                }
+            )
 
     return validations
 
@@ -1200,7 +1282,7 @@ def _ensure_mk8s_gpu_rule_compatibility(
     stack_sources = {item.gpu_stack_source for item in contexts}
     if len(stack_sources) != 1:
         raise RuntimeError(
-            "GPU-enabled MK8s config mixes Nebius-image and manual GPU stack sources; split them into separate deployments"
+            "GPU-enabled MK8s config mixes Nebius-image and operator-managed GPU stack sources; split them into separate deployments"
         )
     if any(
         (
@@ -1346,6 +1428,10 @@ def _run_kubectl(
         )
     except FileNotFoundError as exc:
         raise RuntimeError("kubectl is required for MK8s GPU validation workflows") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"kubectl {' '.join(args)} timed out after {timeout_seconds} seconds"
+        ) from exc
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout or "").strip() or "kubectl command failed"
         raise RuntimeError(f"kubectl {' '.join(args)} failed: {detail}")
@@ -2786,6 +2872,44 @@ def _run_operator_readiness_validation(
     return report_path
 
 
+def _write_validation_error_report(
+    *,
+    spec: Mapping[str, Any],
+    inventory_dir: Path,
+    error: Exception,
+) -> None:
+    report_file = _as_text(spec.get("report_file"))
+    if not report_file:
+        return
+    report_path = inventory_dir / report_file
+    if report_path.exists():
+        return
+    kind = _as_text(spec.get("kind"))
+    validation_name = _as_text(spec.get("name")) or kind or "Validation"
+    report: dict[str, Any] = {
+        "validation": validation_name,
+        "kind": kind,
+        "passed": False,
+        "error": str(error),
+    }
+    if kind == "mk8s_nccl":
+        transport_mode = _as_text(spec.get("transport_mode")).lower() or "auto"
+        report.update(
+            {
+                "launcher_phase": "error",
+                "transport_mode": transport_mode,
+                "transport_label": _nccl_transport_label(transport_mode),
+                "avg_bus_bandwidth_gbps": 0.0,
+                "threshold_gbps": float(
+                    spec.get("average_bus_bandwidth_threshold_gbps", 0) or 0
+                ),
+                "threshold_enforced": bool(spec.get("threshold_enforced", True)),
+                "selected_worker_node_count": 0,
+            }
+        )
+    _write_report(report_path, report)
+
+
 def run_mk8s_gpu_validations(
     validations: list[dict[str, Any]],
     *,
@@ -2800,33 +2924,37 @@ def run_mk8s_gpu_validations(
         name = _as_text(spec.get("name")) or kind or f"validation-{index}"
         if emit:
             emit(f"Starting validation {index}/{total}: {name}.")
-        if kind == "mk8s_gpu_operator_readiness":
-            written_reports.append(
-                _run_operator_readiness_validation(
-                    spec=spec,
-                    inventory_dir=inventory_dir,
-                    extra_env=extra_env,
-                    emit=emit,
+        try:
+            if kind == "mk8s_gpu_operator_readiness":
+                written_reports.append(
+                    _run_operator_readiness_validation(
+                        spec=spec,
+                        inventory_dir=inventory_dir,
+                        extra_env=extra_env,
+                        emit=emit,
+                    )
                 )
-            )
-        elif kind == "mk8s_gpu_visibility":
-            written_reports.append(
-                _run_gpu_visibility_validation(
-                    spec=spec,
-                    inventory_dir=inventory_dir,
-                    extra_env=extra_env,
-                    emit=emit,
+            elif kind == "mk8s_gpu_visibility":
+                written_reports.append(
+                    _run_gpu_visibility_validation(
+                        spec=spec,
+                        inventory_dir=inventory_dir,
+                        extra_env=extra_env,
+                        emit=emit,
+                    )
                 )
-            )
-        elif kind == "mk8s_nccl":
-            written_reports.append(
-                _run_nccl_validation(
-                    spec=spec,
-                    inventory_dir=inventory_dir,
-                    extra_env=extra_env,
-                    emit=emit,
+            elif kind == "mk8s_nccl":
+                written_reports.append(
+                    _run_nccl_validation(
+                        spec=spec,
+                        inventory_dir=inventory_dir,
+                        extra_env=extra_env,
+                        emit=emit,
+                    )
                 )
-            )
+        except Exception as exc:
+            _write_validation_error_report(spec=spec, inventory_dir=inventory_dir, error=exc)
+            raise
     return written_reports
 
 

@@ -18,6 +18,7 @@ from nebius_cxcli.components import component_entries, reset_component_entry_cac
 from nebius_cxcli.config_loader import load_config
 from nebius_cxcli.config_model import to_dynamic_payload
 from nebius_cxcli.config_template import starter_config_yaml
+from nebius_cxcli.deploy_targets import flux_target_dir
 from nebius_cxcli.mk8s_gpu import materialize_mk8s_gpu_app_values
 from nebius_cxcli.paths import resolve_project_paths, validate_path_alignment
 from nebius_cxcli.render import render_project
@@ -88,6 +89,10 @@ def _stub_catalog_output_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _project_config_path(base: Path) -> Path:
     return base / "deployments" / "tenant-name-example" / "project-name-example" / "config.yaml"
+
+
+def _target_flux_dir(paths, target_ref: str = "mk8s") -> Path:
+    return flux_target_dir(paths, target_ref)
 
 
 def _starter_payload(*, selected_infra: set[str], selected_apps: set[str]) -> dict:
@@ -258,7 +263,7 @@ def test_render_creates_source_only_module_and_flux_outputs(
         in tfvars
     )
 
-    n8n_release = paths.flux_dir / "helmrelease-workloads-n8n.yaml"
+    n8n_release = _target_flux_dir(paths) / "helmrelease-workloads-n8n.yaml"
     assert n8n_release.exists()
 
 
@@ -309,9 +314,10 @@ def test_render_skips_empty_flux_repository_file_when_no_apps_are_enabled(
 
     render_project(config, paths, source_profile=SourceProfile.PORTABLE)
 
-    assert not (paths.flux_dir / "helm-repositories.yaml").exists()
+    target_flux_dir = _target_flux_dir(paths)
+    assert not (target_flux_dir / "helm-repositories.yaml").exists()
     kustomization_doc = yaml.safe_load(
-        (paths.flux_dir / "kustomization.yaml").read_text(encoding="utf-8")
+        (target_flux_dir / "kustomization.yaml").read_text(encoding="utf-8")
     )
     assert kustomization_doc["resources"] == []
 
@@ -480,7 +486,7 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     assert not bootstrap_kustomization.exists()
     assert (paths.infra_dir / "main.tf").exists()
     kustomization_doc = yaml.safe_load(
-        (paths.flux_dir / "kustomization.yaml").read_text(encoding="utf-8")
+        (_target_flux_dir(paths) / "kustomization.yaml").read_text(encoding="utf-8")
     )
     assert "./flux-system" not in kustomization_doc["resources"]
     assert (paths.inventory_dir / "deploy-report.md").exists()
@@ -802,7 +808,9 @@ def test_render_materializes_nebius_gpu_operator_driver_crd_override_for_nebius_
     render_project(config, paths, source_profile=SourceProfile.LOCAL)
 
     release_doc = yaml.safe_load(
-        (paths.flux_dir / "helmrelease-platform-gpu-operator.yaml").read_text(encoding="utf-8")
+        (_target_flux_dir(paths) / "helmrelease-platform-gpu-operator.yaml").read_text(
+            encoding="utf-8"
+        )
     )
     assert release_doc["spec"]["values"]["driver"]["enabled"] is False
     assert release_doc["spec"]["values"]["toolkit"]["enabled"] is False
@@ -873,13 +881,16 @@ def test_render_materializes_driverful_rdma_policy_for_nebius_gpu_clusters(
 
     render_project(config, paths, source_profile=SourceProfile.LOCAL)
 
+    target_flux_dir = _target_flux_dir(paths)
     network_release_doc = yaml.safe_load(
-        (paths.flux_dir / "helmrelease-platform-network-operator.yaml").read_text(
+        (target_flux_dir / "helmrelease-platform-network-operator.yaml").read_text(
             encoding="utf-8"
         )
     )
     gpu_release_doc = yaml.safe_load(
-        (paths.flux_dir / "helmrelease-platform-gpu-operator.yaml").read_text(encoding="utf-8")
+        (target_flux_dir / "helmrelease-platform-gpu-operator.yaml").read_text(
+            encoding="utf-8"
+        )
     )
 
     network_values = network_release_doc["spec"]["values"]
@@ -960,7 +971,7 @@ def test_render_disables_gpu_operator_nfd_for_manual_b200_network_operator_path(
             "gpu_enabled": True,
             "gpu_nodes_platform": "gpu-b200-sxm",
             "gpu_nodes_preset": "8gpu-192vcpu-2768gb",
-            "gpu_stack_source": "manual",
+            "gpu_stack_source": "operator_managed",
         }
     )
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
@@ -999,7 +1010,9 @@ def test_render_disables_gpu_operator_nfd_for_manual_b200_network_operator_path(
     render_project(config, paths, source_profile=SourceProfile.LOCAL)
 
     gpu_release_doc = yaml.safe_load(
-        (paths.flux_dir / "helmrelease-platform-gpu-operator.yaml").read_text(encoding="utf-8")
+        (_target_flux_dir(paths) / "helmrelease-platform-gpu-operator.yaml").read_text(
+            encoding="utf-8"
+        )
     )
     assert gpu_release_doc["spec"]["values"]["nfd"]["enabled"] is False
 
@@ -1028,7 +1041,7 @@ def test_render_materializes_manual_rdma_policy_for_gpu_cluster_shapes(
             "gpu_enabled": True,
             "gpu_nodes_platform": "gpu-b300-sxm",
             "gpu_nodes_preset": "8gpu-192vcpu-2768gb",
-            "gpu_stack_source": "manual",
+            "gpu_stack_source": "operator_managed",
             "infiniband_fabric": "fabric-1",
         }
     )
@@ -1068,13 +1081,16 @@ def test_render_materializes_manual_rdma_policy_for_gpu_cluster_shapes(
 
     render_project(config, paths, source_profile=SourceProfile.LOCAL)
 
+    target_flux_dir = _target_flux_dir(paths)
     network_release_doc = yaml.safe_load(
-        (paths.flux_dir / "helmrelease-platform-network-operator.yaml").read_text(
+        (target_flux_dir / "helmrelease-platform-network-operator.yaml").read_text(
             encoding="utf-8"
         )
     )
     gpu_release_doc = yaml.safe_load(
-        (paths.flux_dir / "helmrelease-platform-gpu-operator.yaml").read_text(encoding="utf-8")
+        (target_flux_dir / "helmrelease-platform-gpu-operator.yaml").read_text(
+            encoding="utf-8"
+        )
     )
 
     network_values = network_release_doc["spec"]["values"]
@@ -1108,7 +1124,7 @@ def test_render_removes_stale_legacy_nested_flux_layout(tmp_path: Path) -> None:
     render_project(config, paths, source_profile=SourceProfile.LOCAL)
 
     assert not (paths.flux_dir / "apps").exists()
-    assert (paths.flux_dir / "kustomization.yaml").exists()
+    assert (_target_flux_dir(paths) / "kustomization.yaml").exists()
 
 
 def test_render_rejects_unknown_custom_module_input(tmp_path: Path) -> None:
@@ -1331,14 +1347,14 @@ def test_render_uses_materialized_shared_defaults_for_app_chart_values(
         },
         "infra": {"components": []},
         "apps": {
-            "charts": [
-                {
-                    "id": "demo-app",
-                    "group": "workloads",
-                    "enabled": True,
-                    "repo": "https://example.invalid/charts",
-                    "version": "1.0.0",
-                    "namespace": "demo",
+                "charts": [
+                    {
+                        "id": "demo-app",
+                        "group": "workloads",
+                        "enabled": True,
+                        "repo": "https://example.invalid/charts",
+                        "version": "1.0.0",
+                        "namespace": "demo",
                     "release-name": "demo-app",
                     "values": {"admin": {"sshUser": "adminuser"}},
                 }
@@ -1515,6 +1531,7 @@ def test_render_supports_app_input_binding_from_component_output(
                     "id": "demo-app",
                     "group": "workloads",
                     "enabled": True,
+                    "target_ref": "mk8s-blue",
                     "repo": "https://example.invalid/charts",
                     "version": "1.0.0",
                     "namespace": "demo",
@@ -1538,7 +1555,9 @@ def test_render_supports_app_input_binding_from_component_output(
     )
 
     release_doc = yaml.safe_load(
-        (paths.flux_dir / "helmrelease-workloads-demo-app.yaml").read_text(encoding="utf-8")
+        (_target_flux_dir(paths, "mk8s-blue") / "helmrelease-workloads-demo-app.yaml").read_text(
+            encoding="utf-8"
+        )
     )
     assert release_doc["spec"]["values"]["global"]["clusterId"] == "cluster-u123"
 

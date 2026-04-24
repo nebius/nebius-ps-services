@@ -90,6 +90,8 @@ locals {
   cloud_init_user_data = templatefile("${path.module}/vm-cloud-init.tftpl", {
     ssh_user_name            = var.ssh_user_name
     ssh_public_key           = var.ssh_public_key
+    vm_name                  = var.name
+    project_id               = var.parent_id
     container_enabled        = var.container_enabled
     container_name           = local.container_name
     container_image          = var.container_image
@@ -100,5 +102,14 @@ locals {
     container_mounts         = var.container_mounts
     container_use_gpu        = var.container_use_gpu
     container_restart_policy = lower(var.container_restart_policy)
+    observability_collector_enabled                = var.observability_collector_enabled
+    observability_collector_region_id              = var.observability_collector_region_id
+    observability_collector_package_version        = var.observability_collector_package_version
+    observability_collector_iam_token_file         = var.observability_collector_iam_token_file
+    observability_collector_logs_enabled           = var.observability_collector_logs_enabled
+    observability_collector_logs_systemd_units     = var.observability_collector_logs_systemd_units
+    observability_collector_metrics_enabled        = var.observability_collector_metrics_enabled
+    observability_collector_metrics_export_port    = var.observability_collector_metrics_export_port
+    observability_collector_prometheus_agent_port  = var.observability_collector_prometheus_agent_port
   })
 }

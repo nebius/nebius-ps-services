@@ -6,6 +6,135 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Renamed the MK8s GPU stack-source enum from `manual` to
+  `operator_managed` across `nebius-cxcli` and the bundled `platform-infra`
+  MK8s module. The old value is no longer accepted; the new name matches the
+  actual contract, where GPU Operator still manages the host driver and
+  toolkit path on that stack.
+- Fixed the bundled MK8s operator-managed GPU Operator policy so it now
+  also forces `values.driver.nvidiaDriverCRD.enabled=false`. Live testing on
+  the operator-managed path showed the marketplace `gpu-operator@v25.10.0` chart's
+  Nebius `NVIDIADriver` CRD template fails during Flux install when that CRD
+  path is left enabled, so cxcli now keeps the driver/toolkit enabled on the
+  operator-managed stack while disabling only the broken CRD branch on both stack modes.
+- Refactored the source-owned observability catalog structure for clarity. The
+  external `component_sources.yaml` contract now keeps built-in observability
+  signals under `primary_agent.{logs,metrics,traces}`, nested
+  `endpoints.{write,read}.*`, `public_ingest.*` for the VM standalone
+  collector path, and nested DCGM metric-target discovery/GPU-policy metadata.
+  Parser/runtime wiring now maps that clearer external structure into the same
+  runtime behavior, while README and design docs now also make the
+  project-switch-versus-service-endpoint boundary explicit.
+- Added a separate default-off standalone VM observability collector contract.
+  `observability.vm.collector.*` now lets cxcli bootstrap a pinned public
+  `nebius-o11y-agent` package plus a Prometheus agent companion on supported
+  Ubuntu-family VMs, using the VM metadata token and attached service account
+  to push journald logs and host metrics through Nebius public write endpoints
+  without conflating that path with the built-in Monitoring agent. The VM
+  bootstrap now uses the canonical public Artifactory APT repo directly rather
+  than the older mirror redirect.
+- Corrected the VM observability contract to match the built-in Nebius
+  Monitoring agent behavior. VM service metrics are now treated as always-on
+  for enabled `vm` components even when `observability.enabled=false`, and the
+  generated observability endpoint/report summary now describes the VM
+  agent's platform-managed metrics/logging ingest path instead of implying that
+  the VM path has no write side at all. README, design docs, and the Nebius
+  skill reference asset now make the same split explicit: public customer write
+  endpoints are the MK8s/external-collector path, while the built-in VM agent
+  uses Nebius-managed internal regional ingest.
+- Added the canonical VM observability contract. The bundled `vm` catalog now
+  uses `cli.observability.primary_agent.kind: monitoring_agent`, the project
+  contract exposes `observability.vm.logs.*`, and config normalization
+  materializes the supported Compute journald labels into VM `inputs.labels`
+  instead of documenting the older `platform_monitoring_agent` marker. README
+  and design docs now describe VM observability as the built-in Nebius
+  Monitoring agent path with journald collection for systemd services,
+  service-metric read endpoints, the `default` Logging bucket for
+  user-ingested VM logs, and stop/start as the supported day-2 activation
+  boundary for changed VM labels.
+  They now also make the public-doc split explicit: Managed Kubernetes node
+  VMs already get that Monitoring agent automatically, while cxcli keeps the
+  MK8s project contract focused on the separate Helm-managed Kubernetes agent.
+- Consolidated observability documentation into one design-doc section with the
+  Nebius service/agent architecture, customer `config.yaml` contract,
+  `component_sources.yaml` ownership model, public-safe endpoint map, auth
+  boundaries, and onboarding workflow, and added a matching public-safe
+  observability reference asset under the Nebius skill.
+  The VM wizard now surfaces `observability.vm.logs.systemd_units` directly so
+  operators can choose explicit unit allowlists at create time. `create` and
+  runtime normalization also prune irrelevant project-scope branches, so
+  VM-only configs no longer carry MK8s-only deploy validation defaults.
+- Fixed two project-creation/runtime-auth contract gaps. The bundled `mk8s` wizard now treats
+  `observability.*` as project-scoped fields, so `create` and interactive `component add` can
+  actually prompt `observability.enabled` and the main signal toggles at wizard time and then
+  auto-enable the collector app in the same run. Commands that use `--auto-auth-bootstrap` now
+  also self-heal a cached runtime-auth profile when its Nebius auth public key has been deleted
+  or the cached private-key metadata is broken; when auto bootstrap is disabled, the CLI now
+  fails fast with explicit `auth --recreate` guidance instead of surfacing a later opaque auth
+  failure.
+- Tightened the local MK8s handoff and observability defaults. Local `deploy`, `flux apply`, and
+  `flux bootstrap` now merge every selected target cluster into `~/.kube/config`; single-target
+  runs still switch `current-context`, while multi-target runs preserve the operator's current
+  context and add switchable contexts for each selected cluster. Multi-target infra-only `deploy`
+  now refreshes all built-in cluster handoffs automatically after Terraform apply. The bundled
+  MK8s observability contract also now names the Helm-based Kubernetes agent explicitly and treats
+  `collect_k8s_cluster_metrics=true` as the enabled baseline once project observability is turned
+  on, while keeping those customer-facing toggles on the project contract instead of duplicating
+  them under the chart's static defaults. Multi-target MK8s observability now materializes that
+  managed collector config into every target-bound `nebius-observability-agent` row instead of
+  only the first matching app id, and the docs now clarify the live k8s-agent signal split:
+  traces/logs use OTLP or file-log collection, while Prometheus-style metrics still flow through
+  the scrape pipeline rather than an in-cluster OTLP metrics receiver.
+- Fixed coworker-reported wizard/deploy rough edges: `create --validate-sources`
+  now checks for missing source-validation tools such as `helm` before identity
+  prompts, client names are validated and re-prompted immediately in the
+  interactive wizard, field-level `q` consistently revisits the previous
+  answered field, and interactive `component add` can complete an infra-only add
+  without selecting an app component. Repeated infra component adds, including
+  `mk8s@<instance-id>`, are documented as the canonical way to provision
+  multiple modules of the same type in one project; infra-only deploys now skip
+  the optional kubeconfig refresh instead of failing when multiple
+  handoff-capable MK8s instances are enabled. Remote Helm chart packages that
+  omit `README.md` no longer produce customer-facing source-validation warnings,
+  while local chart paths still warn on missing README files. MK8s GPU validation
+  command timeouts now become structured validation failures with JSON detail, so
+  deploy summaries show `FAIL` and the underlying `kubectl` timeout instead of
+  `NOT RUN`.
+- Added canonical multi-target cluster binding for repeated infra types. When a
+  bundle declares built-in cluster targets such as multiple `mk8s` instances,
+  enabled app charts now bind to one target through `apps.charts[].target_ref`,
+  render writes one flat Flux subtree per target under
+  `generated/flux/targets/<target_ref>/`, the generated manifest records
+  `deploy.targets[]`, and `deploy`, `flux apply`, `flux destroy`, and
+  `flux bootstrap` accept `--target <instance-id>` / `--all-targets` instead of
+  relying on implicit cluster order or a single global kubeconfig context.
+- Added a source-driven observability stack contract. `observability.*` is now a
+  first-class project setting that stays disabled by default; when enabled for
+  MK8s, cxcli auto-enables the bundled `nebius-observability-agent` Helm chart,
+  materializes the customer-facing logs/metrics/traces toggles into
+  `values.config.*`, and keeps auth on the public-safe Nebius metadata/IAM
+  token-file path instead of requiring secrets in repo config. The bundled
+  catalog also now carries app-side observability metadata and records the GPU
+  Operator's DCGM Exporter endpoint as an annotation-discovered metrics source
+  with catalog-owned GPU node labels that run only DCGM Exporter plus the GPU
+  Operator validator when Kubernetes metrics are enabled on the driverful
+  `nebius_image` stack. `deploy` also reconciles those labels onto existing live
+  GPU Nodes using the catalog-owned selector, while VM observability stays on
+  the Nebius platform monitoring agent that is already present on
+  Nebius-managed VMs and MK8s worker nodes. Direct `config.yaml` edits that set
+  `observability.enabled=true` now seed the required collector app row during
+  config normalization, matching the wizard/create behavior. Generated deploy
+  reports now also include signal-aware public read endpoints for Grafana/external
+  tools and regional collector write endpoints for metrics, logs, and traces from
+  catalog-owned templates without storing static tokens or secrets in config.
+- Fixed the MK8s GPU operator baseline to fail fast when a GPU-enabled project
+  explicitly disables `nvidia-gpu-operator.values.dcgmExporter.enabled`. The
+  docs now also clarify that long-running GPU telemetry belongs to DCGM
+  Exporter / Prometheus / Grafana and that cxcli materializes the required
+  GPU Operator DCGM node-label policy when observability metrics are enabled,
+  while Prometheus scrape wiring remains the
+  chart-native `values.dcgmExporter.serviceMonitor.*` surface rather than a
+  `deploy` validation toggle.
 - Fixed the new NCCL transport-selection path end to end: the shared
   `nccl-test` chart now renders its Socket/TCPIP and RDMA `mpirun` env wiring
   correctly, the source chart now ships conservative 1-GPU smoke-test worker
@@ -400,7 +529,7 @@ All notable changes to this project are tracked here. This changelog follows
 - Simplified the bundled app-side MK8s GPU catalog contract: `components.apps.<id>.cli.mk8s_gpu_policy` now uses one conditional `rules` list where each rule can auto-enable the app and/or contribute conditional chart defaults, replacing the earlier split between `auto_enable` and `value_overrides` while keeping top-level app `defaults` as the unconditional chart-default layer.
 - Added the published portable OCI source for the bundled `nccl-test` Helm chart in `component_sources.yaml`, so the NCCL validation chart now resolves through the same dual `source.local` / `source.portable` contract as the other bundled charts.
 - Aligned the bundled NCCL validation image overrides with the first-party `services/nccl-test` release path, so `component_sources.yaml` now points at `cr.<region>.nebius.cloud/<registry-short-id>/images/nccl-test` SemVer tags instead of the legacy `nebius-benchmarks/nccl-tests` repository.
-- Pinned the bundled NCCL chart/image contract to the current first-party release set: `component_sources.yaml` now keeps the portable chart source on `oci://cr.<region>.nebius.cloud/<registry-short-id>/charts/nccl-test --version 0.2.7`, the bundled MK8s GPU validation path consumes the runtime image `cr.<region>.nebius.cloud/<registry-short-id>/images/nccl-test:0.2.0` from the chart's own defaults, and release-catalog coverage now guards OCI chart refs from being rewritten back to legacy GitHub tree paths.
+- Pinned the bundled NCCL chart/image contract to the current first-party release set: `component_sources.yaml` now keeps the portable chart source on `oci://cr.<region>.nebius.cloud/<registry-short-id>/charts/nccl-test --version 0.2.8`, the bundled MK8s GPU validation path consumes the runtime image `cr.<region>.nebius.cloud/<registry-short-id>/images/nccl-test:0.2.0` from the chart's own defaults, and release-catalog coverage now guards OCI chart refs from being rewritten back to legacy GitHub tree paths.
 - Simplified the bundled MK8s GPU app catalog around live chart defaults and customer-facing reports: the shared NCCL image/tag plus deploy-time benchmark defaults are now sourced directly from `helm-charts/nccl-test/values.yaml`, only the B200-specific MPI overlay remains in `mk8s_gpu_policy.rules`, redundant operator values that already match the live NVIDIA chart defaults were dropped from `component_sources.yaml`, and the generated GPU validation reports now preserve readable field order while keeping only compact summaries plus failure-focused log excerpts.
 - Fixed the remaining `nebius-cxcli-ci` wheel gate for local-only charts: branch CI now verifies that the built wheel bundles `component_sources.yaml` without forcing release-grade portable chart sources, while the tag/release workflow still runs the stricter portable `verify-wheel` / `verify-catalog` checks.
 - Fixed `nebius-cxcli-ci` catalog validation for branch work: the normal CI workflow now runs `validate-sources component_sources.yaml` with source profile `local` so new in-repo Terraform modules and local-only Helm charts are validated against the checked-out branch, while the release workflow keeps the portable-profile validation for published wheel/catalog verification.

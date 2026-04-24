@@ -1,4 +1,4 @@
-# Reference values for a manual/operator-managed GPU host stack.
+# Reference values for an operator-managed GPU host stack.
 #
 # Use this when the MK8s node group does not use a Nebius GPU driver image and
 # GPU Operator is expected to install the host GPU driver and the NVIDIA
