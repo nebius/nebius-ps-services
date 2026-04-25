@@ -37,7 +37,9 @@ def capacity_availability(value: object) -> CapacityAdviceAvailability:
     return CapacityAdviceAvailability(
         available=int(getattr(value, "available", 0) or 0),
         limit=int(getattr(value, "limit", 0) or 0),
-        availability_level=_as_text(getattr(getattr(value, "availability_level", None), "name", None))
+        availability_level=_as_text(
+            getattr(getattr(value, "availability_level", None), "name", None)
+        )
         or "",
         data_state=_as_text(getattr(getattr(value, "data_state", None), "name", None)) or "",
     )
@@ -49,7 +51,9 @@ def regular_capacity_lane(item: CapacityResourceAdvice) -> tuple[str, CapacityAd
     return "reserved", item.reserved
 
 
-def capacity_lane(item: CapacityResourceAdvice, *, mode: str) -> tuple[str, CapacityAdviceAvailability]:
+def capacity_lane(
+    item: CapacityResourceAdvice, *, mode: str
+) -> tuple[str, CapacityAdviceAvailability]:
     normalized_mode = _as_text(mode).lower() or "regular"
     if normalized_mode == "preemptible":
         return "preemptible", item.preemptible
@@ -100,10 +104,7 @@ def capacity_mode_sort_key(
 
 
 def capacity_summary_text(item: CapacityResourceAdvice) -> str:
-    return (
-        f"live on-demand={item.on_demand.available}, "
-        f"reserved={item.reserved.available}"
-    )
+    return f"live on-demand VMs={item.on_demand.available}, reserved VMs={item.reserved.available}"
 
 
 def filter_capacity_resource_advice(

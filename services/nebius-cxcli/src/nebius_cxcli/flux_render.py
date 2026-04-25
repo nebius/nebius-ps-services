@@ -387,7 +387,7 @@ def _configured_app_release_specs(
                 )
         if depends_on:
             release["depends_on"] = depends_on
-        patches = post_render_patch_map.get(entry_id)
+        patches = post_render_patch_map.get((target_ref, entry_id))
         if patches:
             release["post_render_patches"] = [dict(item) for item in patches]
     return specs

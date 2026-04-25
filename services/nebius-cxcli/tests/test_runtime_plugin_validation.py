@@ -157,7 +157,7 @@ def test_runtime_validation_plugins_reject_non_clusterable_mk8s_gpu_preset_with_
             as_text=_as_text,
             id_pattern=re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
             env_var_pattern=re.compile(r"^[A-Z_][A-Z0-9_]*$"),
-                )
+        )
 
 
 def test_runtime_validation_plugins_reject_mk8s_infiniband_fabric_not_in_live_capacity_rows(
@@ -239,7 +239,9 @@ def test_runtime_validation_plugins_reject_invalid_mk8s_gpu_validation_override(
         },
     }
 
-    with pytest.raises(ValueError, match="deploy\\.validations\\.mk8s_gpu\\.gpu_visibility\\.max_nodes must be > 0"):
+    with pytest.raises(
+        ValueError, match="deploy\\.validations\\.mk8s_gpu\\.gpu_visibility\\.max_nodes must be > 0"
+    ):
         run_runtime_validation_plugins(
             payload=payload,
             get_path=_get_path,
@@ -377,7 +379,9 @@ def test_runtime_validation_plugins_reject_vm_gpu_cluster_on_single_gpu_preset_w
         },
     }
 
-    with pytest.raises(ValueError, match="gpu_cluster_enabled requires a GPU-cluster-compatible preset"):
+    with pytest.raises(
+        ValueError, match="gpu_cluster_enabled requires a GPU-cluster-compatible preset"
+    ):
         run_runtime_validation_plugins(
             payload=payload,
             get_path=_get_path,

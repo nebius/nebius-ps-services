@@ -55,7 +55,6 @@ def to_runtime_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         "version": dynamic_payload.get("version", "v1"),
         "client_info": _deep_copy(dynamic_payload.get("client_info", {})),
         "deploy": _deep_copy(dynamic_payload.get("deploy", {})),
-        "observability": _deep_copy(dynamic_payload.get("observability", {})),
         "infra": {},
         "apps": {},
     }

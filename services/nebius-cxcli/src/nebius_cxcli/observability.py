@@ -198,9 +198,7 @@ def _app_chart_rows_for_id(payload: dict[str, Any], app_id: str) -> list[dict[st
     charts = payload.get("apps", {}).get("charts")
     if not isinstance(charts, list):
         return []
-    return [
-        row for row in charts if isinstance(row, dict) and component_type_id(row) == app_id
-    ]
+    return [row for row in charts if isinstance(row, dict) and component_type_id(row) == app_id]
 
 
 def _app_chart_rows(payload: dict[str, Any]) -> list[Any]:
@@ -355,7 +353,7 @@ def _coerce_optional_string_list(value: Any) -> tuple[str, ...] | None:
 
 
 def _project_observability_config(payload: dict[str, Any]) -> dict[str, Any]:
-    return _mapping(payload.get("observability"))
+    return _mapping(_mapping(payload.get("deploy")).get("observability"))
 
 
 def _payload_nebius_context(payload: dict[str, Any]) -> dict[str, Any]:
@@ -407,8 +405,12 @@ def _merge_endpoint_templates(
 
 def _combined_endpoint_templates() -> ObservabilityEndpointTemplates:
     templates = _DEFAULT_OBSERVABILITY_ENDPOINTS
-    templates = _merge_endpoint_templates(templates, _endpoint_templates(_mk8s_observability_settings()))
-    templates = _merge_endpoint_templates(templates, _endpoint_templates(_vm_observability_settings()))
+    templates = _merge_endpoint_templates(
+        templates, _endpoint_templates(_mk8s_observability_settings())
+    )
+    templates = _merge_endpoint_templates(
+        templates, _endpoint_templates(_vm_observability_settings())
+    )
     return templates
 
 
@@ -484,7 +486,7 @@ def observability_project_defaults(
             "logs": {
                 "enabled": vm_observability.logs.enabled_by_default,
                 "systemd_units": list(vm_observability.logs.systemd_units),
-            }
+            },
         }
     return defaults
 
@@ -510,7 +512,17 @@ def normalize_observability_project_settings(payload: dict[str, Any]) -> bool:
         include_kubernetes="mk8s" in component_ids,
         include_vm="vm" in component_ids,
     )
-    existing = payload_map.get("observability")
+    deploy_raw = payload_map.get("deploy")
+    if deploy_raw is None:
+        deploy = {}
+        payload_map["deploy"] = deploy
+    elif isinstance(deploy_raw, dict):
+        deploy = deploy_raw
+    else:
+        return False
+    existing = deploy.get("observability")
+    if existing is not None and not isinstance(existing, Mapping):
+        return False
     merged = copy.deepcopy(defaults)
     if isinstance(existing, Mapping):
         existing_filtered = copy.deepcopy(dict(existing))
@@ -519,8 +531,8 @@ def normalize_observability_project_settings(payload: dict[str, Any]) -> bool:
         if "vm" not in component_ids:
             existing_filtered.pop("vm", None)
         merged = _deep_merge_mapping(merged, existing_filtered)
-    if payload_map.get("observability") != merged:
-        payload_map["observability"] = merged
+    if deploy.get("observability") != merged:
+        deploy["observability"] = merged
         return True
     return False
 
@@ -731,6 +743,8 @@ def _vm_journald_logs_enabled(
     *,
     vm_settings: VmObservabilityConfig | None = None,
 ) -> bool:
+    if not _observability_enabled(payload):
+        return False
     if not _vm_monitoring_agent_enabled(payload):
         return False
     effective = vm_settings or _effective_vm_observability_config(payload)
@@ -854,8 +868,7 @@ def _merge_label_mapping(
         existing = target.get(key)
         if existing is not None and existing != value:
             raise RuntimeError(
-                f"Observability metric targets resolve conflicting {conflict_label} "
-                f"for '{key}'"
+                f"Observability metric targets resolve conflicting {conflict_label} for '{key}'"
             )
         target[key] = value
 
@@ -1002,7 +1015,7 @@ def resolve_observability_app_selection(
                 f"'{collector_app_id}.values.config.iam.enabled' to stay true"
             )
         if collector_app_id in selected and not observability_enabled:
-            issues.append(f"apps:{collector_app_id} requires observability.enabled=true")
+            issues.append(f"apps:{collector_app_id} requires deploy.observability.enabled=true")
         if collector_app_id in selected and "mk8s" not in _enabled_component_ids(
             payload, scope="infra"
         ):
@@ -1067,13 +1080,21 @@ def observability_dependency_issues(
     collector_settings = _effective_vm_standalone_collector_config(payload)
     collector_requested = bool(collector_settings.enabled)
     if collector_requested and not _observability_enabled(payload):
-        issues.append("observability.vm.collector.enabled=true requires observability.enabled=true")
-    if collector_requested and not _enabled_vm_rows(payload):
-        issues.append("observability.vm.collector.enabled=true requires one enabled infra:vm component")
-    if collector_requested and not (collector_settings.metrics_enabled or collector_settings.logs_enabled):
         issues.append(
-            "observability.vm.collector.enabled=true requires observability.vm.collector.metrics.enabled "
-            "or observability.vm.collector.logs.enabled to stay true"
+            "deploy.observability.vm.collector.enabled=true requires "
+            "deploy.observability.enabled=true"
+        )
+    if collector_requested and not _enabled_vm_rows(payload):
+        issues.append(
+            "deploy.observability.vm.collector.enabled=true requires one enabled infra:vm component"
+        )
+    if collector_requested and not (
+        collector_settings.metrics_enabled or collector_settings.logs_enabled
+    ):
+        issues.append(
+            "deploy.observability.vm.collector.enabled=true requires "
+            "deploy.observability.vm.collector.metrics.enabled or "
+            "deploy.observability.vm.collector.logs.enabled to stay true"
         )
     if collector_requested:
         missing_service_accounts = [
@@ -1092,9 +1113,10 @@ def observability_dependency_issues(
         and _vm_journald_logs_enabled(payload, vm_settings=vm_settings)
     ):
         issues.append(
-            "observability.vm.logs.enabled and observability.vm.collector.logs.enabled "
-            "cannot both be true; choose the built-in Monitoring-agent journald path or the "
-            "cxcli-managed standalone collector path"
+            "deploy.observability.vm.logs.enabled and "
+            "deploy.observability.vm.collector.logs.enabled cannot both be true; choose "
+            "the built-in Monitoring-agent journald path or the cxcli-managed standalone "
+            "collector path"
         )
     return issues
 
@@ -1118,7 +1140,7 @@ def ensure_observability_app_rows(
         app_entries=entries,
         cli_settings=cli_settings,
     )
-    if resolution.issues or not resolution.auto_enabled_app_ids:
+    if resolution.issues:
         return False
 
     entry_by_id = {entry.id: entry for entry in entries}
@@ -1126,7 +1148,12 @@ def ensure_observability_app_rows(
     changed = False
     collector_app_id = _collector_app_id()
     target_refs = enabled_cluster_target_refs(payload)
-    for app_id in resolution.auto_enabled_app_ids:
+    app_ids_to_ensure = set(resolution.auto_enabled_app_ids)
+    if collector_app_id and _kubernetes_agent_required(payload):
+        app_ids_to_ensure.add(collector_app_id)
+    if not app_ids_to_ensure:
+        return False
+    for app_id in sorted(app_ids_to_ensure):
         entry = entry_by_id.get(app_id)
         if entry is None:
             continue
@@ -1387,9 +1414,9 @@ def materialize_observability_infra_values(payload_or_config: Any) -> bool:
                 inputs["labels"] = labels
             else:
                 labels = {}
-        built_in_logs_enabled = _vm_journald_logs_enabled(payload, vm_settings=vm_settings) and bool(
-            row.get("enabled", False)
-        )
+        built_in_logs_enabled = _vm_journald_logs_enabled(
+            payload, vm_settings=vm_settings
+        ) and bool(row.get("enabled", False))
         if built_in_logs_enabled:
             if labels.get(_VM_JOURNALD_LOGS_ENABLED_LABEL) != "true":
                 labels[_VM_JOURNALD_LOGS_ENABLED_LABEL] = "true"
@@ -1441,22 +1468,24 @@ def materialize_observability_infra_values(payload_or_config: Any) -> bool:
     return changed
 
 
-def materialize_observability_app_values(payload_or_config: Any) -> None:
+def materialize_observability_app_values(payload_or_config: Any) -> bool:
     payload = (
         payload_or_config if isinstance(payload_or_config, dict) else _as_payload(payload_or_config)
     )
     collector_app_id = _collector_app_id()
     if not collector_app_id:
-        return
+        return False
     chart_rows = [
         row
         for row in _app_chart_rows_for_id(payload, collector_app_id)
         if isinstance(row, dict) and bool(row.get("enabled", False))
     ]
     if not chart_rows:
-        return
+        return False
 
+    changed = False
     for chart_row in chart_rows:
+        before = copy.deepcopy(chart_row)
         if _kubernetes_agent_required(payload):
             for target_path, target_value in _collector_managed_values(payload).items():
                 _set_path_value(chart_row, target_path, copy.deepcopy(target_value))
@@ -1470,6 +1499,8 @@ def materialize_observability_app_values(payload_or_config: Any) -> None:
                 else ()
             )
             _merge_managed_additional_targets(chart_row=chart_row, managed_targets=managed_targets)
+            if chart_row != before:
+                changed = True
             continue
 
         for stale_path in sorted(
@@ -1477,6 +1508,9 @@ def materialize_observability_app_values(payload_or_config: Any) -> None:
         ):
             _delete_path_value(chart_row, stale_path)
         _merge_managed_additional_targets(chart_row=chart_row, managed_targets=())
+        if chart_row != before:
+            changed = True
+    return changed
 
 
 def observability_endpoint_summary(

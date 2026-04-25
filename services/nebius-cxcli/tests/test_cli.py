@@ -28,9 +28,7 @@ from nebius_cxcli.runtime_config import to_plain_data
 runner = CliRunner()
 
 _VALID_ED25519_PUBLIC_KEY = (
-    "ssh-ed25519 "
-    "AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f "
-    "demo@example"
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f demo@example"
 )
 
 
@@ -209,7 +207,9 @@ def _catalog(
 def _write_mk8s_boot_disk_sources_file(path: Path, *, module_dir: Path) -> None:
     module_dir.mkdir(parents=True, exist_ok=True)
     (module_dir / "main.tf").write_text("terraform {}\n", encoding="utf-8")
-    (module_dir / "variables.tf").write_text('variable "cpu_nodes_count" { type = number }\n', encoding="utf-8")
+    (module_dir / "variables.tf").write_text(
+        'variable "cpu_nodes_count" { type = number }\n', encoding="utf-8"
+    )
     path.write_text(
         yaml.safe_dump(
             _catalog(
@@ -504,7 +504,7 @@ def _patch_late_observability_enable_wizard(monkeypatch: pytest.MonkeyPatch) -> 
         _ = selected_infra, selected_apps, infra_entries, app_entries, provider_lookup
         payload = yaml.safe_load(config_yaml) or {}
         assert isinstance(payload, dict)
-        observability = payload.setdefault("observability", {})
+        observability = payload.setdefault("deploy", {}).setdefault("observability", {})
         assert isinstance(observability, dict)
         observability["enabled"] = True
         return yaml.safe_dump(payload, sort_keys=False), True
@@ -744,11 +744,15 @@ def test_create_interactive_existing_root_new_project_skips_overwrite_warning(
     assert "Client name [client-a]" not in result.output
     assert "Created project:" in result.output
     assert config_path.read_text(encoding="utf-8") == original
-    assert _project_dir(
-        deployments_root,
-        tenant_id="tenant-123",
-        project_id="project-789",
-    ).joinpath("config.yaml").exists()
+    assert (
+        _project_dir(
+            deployments_root,
+            tenant_id="tenant-123",
+            project_id="project-789",
+        )
+        .joinpath("config.yaml")
+        .exists()
+    )
 
 
 def test_create_non_interactive_existing_tenant_new_project_creates_config(
@@ -784,11 +788,15 @@ def test_create_non_interactive_existing_tenant_new_project_creates_config(
     assert "Existing project detected." not in result.output
     assert "Created project:" in result.output
     assert original_config_path.read_text(encoding="utf-8") == original
-    assert _project_dir(
-        deployments_root,
-        tenant_id="tenant-123",
-        project_id="project-789",
-    ).joinpath("config.yaml").exists()
+    assert (
+        _project_dir(
+            deployments_root,
+            tenant_id="tenant-123",
+            project_id="project-789",
+        )
+        .joinpath("config.yaml")
+        .exists()
+    )
 
 
 def test_create_refuses_name_based_path_collision_with_different_project_ids(
@@ -931,7 +939,9 @@ def test_render_normalizes_ssh_public_key_file_path_into_config(
         "render_terraform_artifacts",
         lambda _config, _paths, *, source_profile: [tmp_path / "main.tf"],
     )
-    monkeypatch.setattr(cli_module, "_runtime_component_output_values", lambda _config, _paths, **_kwargs: {})
+    monkeypatch.setattr(
+        cli_module, "_runtime_component_output_values", lambda _config, _paths, **_kwargs: {}
+    )
     monkeypatch.setattr(
         cli_module,
         "render_flux",
@@ -1220,7 +1230,10 @@ def test_create_interactive_overwrite_restarts_client_info_prompts_from_fresh_de
 
     assert result.exit_code == 0, result.output
     assert "Client name [proserv1]" not in result.output
-    assert "Notifications email (optional; leave blank to keep email disabled) [ops@example.com]" not in result.output
+    assert (
+        "Notifications email (optional; leave blank to keep email disabled) [ops@example.com]"
+        not in result.output
+    )
 
     refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert refreshed["client_info"]["client_name"] == "client-b"
@@ -1413,9 +1426,9 @@ def test_create_vm_only_omits_kubernetes_observability_defaults(tmp_path: Path) 
 
     assert result.exit_code == 0, result.output
     payload = yaml.safe_load(_project_config_path(deployments_root).read_text(encoding="utf-8"))
-    observability = payload["observability"]
+    observability = payload["deploy"]["observability"]
     assert "kubernetes" not in observability
-    assert observability["vm"]["logs"]["enabled"] is False
+    assert observability["vm"]["logs"]["enabled"] is True
     deploy = payload.get("deploy", {})
     assert "validations" not in deploy
 
@@ -2059,8 +2072,7 @@ def test_create_materializes_shared_admin_ssh_username_into_config(tmp_path: Pat
     jump_hosts = {
         item["id"]: item
         for item in payload["infra"]["components"]
-        if isinstance(item, dict)
-        and item.get("id") in {"wireguard-jumphost", "ssh-jumphost"}
+        if isinstance(item, dict) and item.get("id") in {"wireguard-jumphost", "ssh-jumphost"}
     }
 
     assert jump_hosts["wireguard-jumphost"]["inputs"]["ssh_user_name"] == "ubuntu"
@@ -3478,7 +3490,7 @@ def test_reconcile_observability_gpu_node_labels_uses_catalog_policy(
     monkeypatch.setattr(cli_module.subprocess, "run", fake_run)
 
     cli_module._reconcile_observability_gpu_node_labels(
-        {"observability": {"enabled": True}},
+        {"deploy": {"observability": {"enabled": True}}},
         extra_env={"KUBECONFIG": "/tmp/kubeconfig", "NEBIUS_IAM_TOKEN": "token-123"},
     )
 
@@ -3520,6 +3532,6 @@ def test_reconcile_observability_gpu_node_labels_noops_without_enabled_policy(
     )
 
     cli_module._reconcile_observability_gpu_node_labels(
-        {"observability": {"enabled": False}},
+        {"deploy": {"observability": {"enabled": False}}},
         extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
     )

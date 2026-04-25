@@ -247,7 +247,9 @@ def test_send_deploy_report_email_masks_project_and_tenant_ids_in_body(
     monkeypatch.setenv("SMTP_STARTTLS", "false")
     monkeypatch.setattr("nebius_cxcli.notify_ops.smtplib.SMTP", _fake_smtp)
 
-    assert send_deploy_report_email(_config(project_id="project-456"), paths) == DeployReportEmailResult(
+    assert send_deploy_report_email(
+        _config(project_id="project-456"), paths
+    ) == DeployReportEmailResult(
         sent=True,
         reason="sent",
         message="Deploy report email sent",

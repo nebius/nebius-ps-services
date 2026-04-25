@@ -12,9 +12,7 @@ from nebius_cxcli.inventory_ops import write_inventory
 from nebius_cxcli.paths import resolve_project_paths, validate_path_alignment
 
 _VALID_ED25519_PUBLIC_KEY = (
-    "ssh-ed25519 "
-    "AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f "
-    "demo@example"
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f demo@example"
 )
 
 
@@ -105,13 +103,82 @@ def test_write_inventory_handles_dynamic_component_model(tmp_path: Path) -> None
     assert "- n8n: `True` (n8n.example.com)" in markdown
 
 
+def test_write_inventory_lists_each_mk8s_cluster(tmp_path: Path) -> None:
+    reset_component_entry_cache()
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(
+        selected_infra={"mk8s"},
+        selected_apps={"nvidia-gpu-operator", "nvidia-network-operator"},
+    )
+    mk8s = _infra_component_row(payload, "mk8s")
+    mk8s["instance_id"] = "mk8s"
+    mk8s_inputs = mk8s.setdefault("inputs", {})
+    assert isinstance(mk8s_inputs, dict)
+    mk8s_inputs.update(
+        {
+            "cluster_name": "cluster1",
+            "cpu_nodes_count": 2,
+            "cpu_nodes_platform": "cpu-d3",
+            "cpu_nodes_preset": "32vcpu-128gb",
+            "gpu_enabled": True,
+            "gpu_node_groups": 1,
+            "gpu_nodes_count_per_group": 2,
+            "gpu_nodes_platform": "gpu-h100-sxm",
+            "gpu_nodes_preset": "8gpu-128vcpu-1600gb",
+            "mk8s_cluster_public_endpoint": True,
+            "infiniband_fabric": "fabric-6",
+        }
+    )
+    cluster2 = yaml.safe_load(yaml.safe_dump(mk8s, sort_keys=False))
+    cluster2["instance_id"] = "cluster2"
+    cluster2["inputs"]["cluster_name"] = "cluster2"
+    cluster2["inputs"]["gpu_nodes_preset"] = "1gpu-16vcpu-200gb"
+    cluster2["inputs"].pop("infiniband_fabric", None)
+    payload["infra"]["components"].append(cluster2)
+    payload["apps"]["charts"].append(
+        {
+            "id": "nvidia-gpu-operator",
+            "instance_id": "nvidia-gpu-operator-cluster2",
+            "enabled": True,
+            "target_ref": "cluster2",
+            "values": {},
+        }
+    )
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+
+    artifacts = write_inventory(config, paths)
+    markdown = artifacts.markdown.read_text(encoding="utf-8")
+
+    assert (
+        "- MK8s cluster `mk8s` (`cluster1`): CPU `2` node(s) at "
+        "`cpu-d3/32vcpu-128gb`; GPU `1x2` node(s) at "
+        "`gpu-h100-sxm/8gpu-128vcpu-1600gb`; fabric `fabric-6`; "
+        "public endpoint `True`"
+    ) in markdown
+    assert (
+        "- MK8s cluster `cluster2` (`cluster2`): CPU `2` node(s) at "
+        "`cpu-d3/32vcpu-128gb`; GPU `1x2` node(s) at "
+        "`gpu-h100-sxm/1gpu-16vcpu-200gb`; fabric `none`; public endpoint `True`"
+    ) in markdown
+
+
 def test_write_inventory_includes_observability_endpoint_contract(tmp_path: Path) -> None:
     reset_component_entry_cache()
     config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
-    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
-    payload.setdefault("observability", {})["enabled"] = True
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps={"nvidia-gpu-operator"})
+    payload.setdefault("deploy", {}).setdefault("observability", {})["enabled"] = True
+    mk8s = _infra_component_row(payload, "mk8s")
+    mk8s_inputs = mk8s.setdefault("inputs", {})
+    assert isinstance(mk8s_inputs, dict)
+    mk8s_inputs["gpu_enabled"] = True
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     config = load_config(config_path)
@@ -123,15 +190,111 @@ def test_write_inventory_includes_observability_endpoint_contract(tmp_path: Path
 
     assert "## Observability Endpoints" in markdown
     assert (
+        "- Metrics datasource base (Nebius service metrics): "
+        "`https://read.monitoring.api.nebius.cloud/projects/"
+        "project-456/service-provider/prometheus`"
+    ) in markdown
+    assert (
         "https://read.monitoring.api.nebius.cloud/projects/project-456/service-provider/prometheus"
     ) in markdown
+    assert (
+        "- Metrics read (federate, `gpu` bucket): "
+        "`https://read.monitoring.api.nebius.cloud/projects/"
+        "project-456/buckets/gpu/prometheus/federate`"
+    ) in markdown
+    assert "- Metrics read (federate, `msp` bucket): " not in markdown
+    assert "/buckets/<service-provider>/" not in markdown
     assert (
         "https://write.monitoring.eu-north1.nebius.cloud/projects/"
         "project-456/opentelemetry/v1/metrics"
     ) in markdown
     assert "https://write.logging.eu-north1.nebius.cloud" in markdown
     assert "dns:///write.tracing.eu-north1.nebius.cloud:443" in markdown
+    assert "## Grafana Read Data Sources" in markdown
+    assert (
+        "- Metrics datasource (Nebius service metrics): type `Prometheus`, "
+        "URL `https://read.monitoring.api.nebius.cloud/projects/"
+        "project-456/service-provider/prometheus`, access `Server`"
+    ) in markdown
+    assert (
+        "- Metrics datasource (user-ingested metrics): type `Prometheus`, "
+        "URL `https://read.monitoring.api.nebius.cloud/projects/"
+        "project-456/prometheus`, access `Server`"
+    ) in markdown
+    assert (
+        "- Logs datasource: type `Loki`, URL "
+        "`https://read.logging.api.nebius.cloud/projects/project-456`, access `Server`"
+    ) in markdown
+    assert (
+        "- Traces datasource: type `Tempo`, URL "
+        "`https://read.tracing.api.nebius.cloud/projects/project-456/tempo`, access `Server`"
+    ) in markdown
+    assert (
+        "- HTTP header: `Authorization: Bearer <observability static token or IAM token>`"
+    ) in markdown
+    assert (
+        "- URL note: use these URLs as Grafana datasource URLs; opening a datasource base URL "
+        "directly can return `404` because Grafana calls Prometheus, Loki, and Tempo API "
+        "subpaths below it."
+    ) in markdown
+    assert (
+        "- Bucket note: `service-provider` is a literal path segment for Nebius service "
+        "metrics. Only the federation template placeholder `<service-provider>` should be "
+        "replaced. This deployment shows `compute`, `gpu`, `nbs`, `sp_storage` bucket URLs."
+    ) in markdown
+    assert "## Read Endpoint Probe URLs" in markdown
+    assert (
+        "- Metrics API probe (Nebius service metrics): "
+        "`https://read.monitoring.api.nebius.cloud/projects/"
+        "project-456/service-provider/prometheus/api/v1/query?query=up`"
+    ) in markdown
+    assert (
+        "- Metrics API probe (user-ingested metrics): "
+        "`https://read.monitoring.api.nebius.cloud/projects/"
+        "project-456/prometheus/api/v1/query?query=up`"
+    ) in markdown
+    assert (
+        "- Logs API probe (default bucket): "
+        "`https://read.logging.api.nebius.cloud/projects/"
+        "project-456/loki/api/v1/query?query=%7B__bucket__%3D%22default%22%7D`"
+    ) in markdown
+    assert (
+        "- Traces API probe: "
+        "`https://read.tracing.api.nebius.cloud/projects/"
+        "project-456/tempo/api/v2/search/tags`"
+    ) in markdown
+    assert ("Region `eu-north1` applies to the write endpoints above.") in markdown
+    assert (
+        "opening a Grafana datasource base URL directly can return `404` even when its API "
+        "subpaths are reachable."
+    ) in markdown
     assert "Bearer <observability static token or IAM token>" in markdown
+
+
+def test_write_inventory_includes_msp_federation_bucket_when_postgresql_enabled(
+    tmp_path: Path,
+) -> None:
+    reset_component_entry_cache()
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"mk8s", "managed-postgresql"}, selected_apps=set())
+    payload.setdefault("deploy", {}).setdefault("observability", {})["enabled"] = True
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+
+    artifacts = write_inventory(config, paths)
+    markdown = artifacts.markdown.read_text(encoding="utf-8")
+
+    assert "- Managed PostgreSQL: `True`" in markdown
+    assert (
+        "- Metrics read (federate, `msp` bucket): "
+        "`https://read.monitoring.api.nebius.cloud/projects/"
+        "project-456/buckets/msp/prometheus/federate`"
+    ) in markdown
 
 
 def test_write_inventory_omits_disabled_observability_signal_endpoints(tmp_path: Path) -> None:
@@ -140,11 +303,13 @@ def test_write_inventory_omits_disabled_observability_signal_endpoints(tmp_path:
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
     payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
-    payload.setdefault("observability", {})["enabled"] = True
-    payload["observability"].setdefault("kubernetes", {}).setdefault("logs", {})["enabled"] = False
-    payload["observability"].setdefault("kubernetes", {}).setdefault("traces", {})["enabled"] = (
-        False
-    )
+    payload.setdefault("deploy", {}).setdefault("observability", {})["enabled"] = True
+    payload["deploy"]["observability"].setdefault("kubernetes", {}).setdefault("logs", {})[
+        "enabled"
+    ] = False
+    payload["deploy"]["observability"].setdefault("kubernetes", {}).setdefault("traces", {})[
+        "enabled"
+    ] = False
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     config = load_config(config_path)
@@ -156,10 +321,14 @@ def test_write_inventory_omits_disabled_observability_signal_endpoints(tmp_path:
 
     assert "## Observability Endpoints" in markdown
     assert "Metrics write (OTLP HTTP/protobuf)" in markdown
-    assert "Logs read (Loki)" not in markdown
+    assert "Logs datasource base (Loki)" not in markdown
     assert "Logs write (bundled agent gRPC)" not in markdown
-    assert "Traces read (Tempo)" not in markdown
+    assert "Traces datasource base (Tempo)" not in markdown
     assert "Traces write (OTLP gRPC)" not in markdown
+    assert "Logs datasource" not in markdown
+    assert "Traces datasource" not in markdown
+    assert "Logs API probe" not in markdown
+    assert "Traces API probe" not in markdown
 
 
 def test_write_inventory_includes_vm_observability_read_paths_and_managed_write_notes(
@@ -170,8 +339,8 @@ def test_write_inventory_includes_vm_observability_read_paths_and_managed_write_
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
     payload = _starter_payload(selected_infra={"vm"}, selected_apps=set())
-    payload.setdefault("observability", {})["enabled"] = True
-    payload["observability"].setdefault("vm", {}).setdefault("logs", {})["enabled"] = True
+    payload.setdefault("deploy", {}).setdefault("observability", {})["enabled"] = True
+    payload["deploy"]["observability"].setdefault("vm", {}).setdefault("logs", {})["enabled"] = True
     vm = _infra_component_row(payload, "vm")
     vm_inputs = vm.setdefault("inputs", {})
     assert isinstance(vm_inputs, dict)
@@ -197,8 +366,8 @@ def test_write_inventory_includes_vm_observability_read_paths_and_managed_write_
 
     assert "VM monitoring agent: `True`" in markdown
     assert "VM journald logs (systemd services): `True`" in markdown
-    assert "Metrics read (Nebius service metrics)" in markdown
-    assert "Logs read (Loki)" in markdown
+    assert "Metrics datasource base (Nebius service metrics)" in markdown
+    assert "Logs datasource base (Loki)" in markdown
     assert "Metrics write (VM monitoring agent)" in markdown
     assert "Logs write (VM monitoring agent)" in markdown
     assert "Logs write (bundled agent gRPC)" not in markdown
@@ -212,7 +381,7 @@ def test_write_inventory_includes_vm_metrics_even_when_project_observability_is_
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
     payload = _starter_payload(selected_infra={"vm"}, selected_apps=set())
-    payload.setdefault("observability", {})["enabled"] = False
+    payload.setdefault("deploy", {}).setdefault("observability", {})["enabled"] = False
     vm = _infra_component_row(payload, "vm")
     vm_inputs = vm.setdefault("inputs", {})
     assert isinstance(vm_inputs, dict)
@@ -238,7 +407,7 @@ def test_write_inventory_includes_vm_metrics_even_when_project_observability_is_
 
     assert "VM monitoring agent: `True`" in markdown
     assert "## Observability Endpoints" in markdown
-    assert "Metrics read (Nebius service metrics)" in markdown
+    assert "Metrics datasource base (Nebius service metrics)" in markdown
     assert "Metrics write (VM monitoring agent)" in markdown
     assert "VM journald logs (systemd services): `False`" in markdown
 

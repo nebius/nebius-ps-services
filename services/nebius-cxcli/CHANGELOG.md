@@ -6,6 +6,52 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Fixed multi-target MK8s GPU app materialization and reporting. GPU Operator,
+  Network Operator, and their post-render patches are now resolved against the
+  chart row's `target_ref`, so one deployment can mix an InfiniBand/RDMA MK8s
+  target with an Ethernet-only 1-GPU H100 target without conflicting chart
+  defaults. Runtime validation now reports missing required GPU app rows per
+  target, and the generated deploy report lists each MK8s cluster plus
+  target-scoped validation headings.
+- Fixed config normalization for direct multi-target edits. When a config adds
+  another GPU-enabled MK8s target or enables Kubernetes observability after app
+  rows already exist, cxcli now seeds the missing target-bound GPU Operator,
+  Network Operator, and observability-agent rows before render/deploy, then
+  materializes their managed chart values against the mutable runtime payload.
+- Fixed GPU Capacity Dashboard preflight math for MK8s quota checks. cxcli now
+  treats `resource-advice` on-demand/reserved/preemptible availability as VM
+  slots for the selected preset and converts those slots to GPU units before
+  comparing them with `compute.instance.gpu.*` quota requirements. For example,
+  three reserved `8gpu-*` H100 VM slots now count as 24 available GPUs for a
+  two-node request that needs 16 GPUs. Generated-bundle quota failures from
+  `deploy` and `validate-generated` now also print the exact `quota-request`
+  and `quota-check --all-regions` follow-up commands.
+- Closed Nebius SDK instances used by runtime-auth IAM bootstrap and stale-profile
+  validation and added a token-exchange readiness wait after new runtime auth
+  keys are created. Fresh auth keys can be visible in IAM before the token
+  service accepts them; cxcli now waits for propagation and filters the expected
+  first-attempt deleted-key refresh traceback instead of letting that SDK stack
+  trace appear while Terraform continues.
+- Moved the MK8s observability-agent auto-selection notice in the interactive
+  wizard so it appears immediately after `deploy.observability.*` answers make the
+  chart required, instead of after later MK8s infra prompts. The notice now
+  also clarifies that the later app field prompt only controls chart-value
+  customization: answering `n` keeps the auto-selected
+  `nebius-observability-agent` app with defaults. The canonical customer
+  observability contract now lives under `deploy.observability:`; top-level
+  `observability:` is no longer accepted.
+- Expanded `generated/inventory/deploy-report.md` with Grafana read data-source
+  hints for enabled observability signals, including Prometheus, Loki, and Tempo
+  data-source types, real Nebius read URLs, server/proxy access mode, and the
+  required `Authorization: Bearer <observability static token or IAM token>`
+  header guidance. The report now also clarifies that `service-provider` is
+  literal in the Grafana service-metrics URL, expands federation bucket URLs
+  for deployment-applicable service buckets, and includes auth-required API
+  probe URLs for direct reachability checks because opening Grafana datasource
+  base URLs directly can return `404`. The Observability design doc now records
+  the implemented workflow from catalog metadata through `deploy.observability.*`
+  normalization, render/deploy materialization, deploy-time GPU label
+  reconciliation, and generated report/Grafana handoff.
 - Renamed the MK8s GPU stack-source enum from `manual` to
   `operator_managed` across `nebius-cxcli` and the bundled `platform-infra`
   MK8s module. The old value is no longer accepted; the new name matches the
@@ -26,7 +72,7 @@ All notable changes to this project are tracked here. This changelog follows
   runtime behavior, while README and design docs now also make the
   project-switch-versus-service-endpoint boundary explicit.
 - Added a separate default-off standalone VM observability collector contract.
-  `observability.vm.collector.*` now lets cxcli bootstrap a pinned public
+  `deploy.observability.vm.collector.*` now lets cxcli bootstrap a pinned public
   `nebius-o11y-agent` package plus a Prometheus agent companion on supported
   Ubuntu-family VMs, using the VM metadata token and attached service account
   to push journald logs and host metrics through Nebius public write endpoints
@@ -35,7 +81,7 @@ All notable changes to this project are tracked here. This changelog follows
   than the older mirror redirect.
 - Corrected the VM observability contract to match the built-in Nebius
   Monitoring agent behavior. VM service metrics are now treated as always-on
-  for enabled `vm` components even when `observability.enabled=false`, and the
+  for enabled `vm` components even when `deploy.observability.enabled=false`, and the
   generated observability endpoint/report summary now describes the VM
   agent's platform-managed metrics/logging ingest path instead of implying that
   the VM path has no write side at all. README, design docs, and the Nebius
@@ -44,7 +90,7 @@ All notable changes to this project are tracked here. This changelog follows
   uses Nebius-managed internal regional ingest.
 - Added the canonical VM observability contract. The bundled `vm` catalog now
   uses `cli.observability.primary_agent.kind: monitoring_agent`, the project
-  contract exposes `observability.vm.logs.*`, and config normalization
+  contract exposes `deploy.observability.vm.logs.*`, and config normalization
   materializes the supported Compute journald labels into VM `inputs.labels`
   instead of documenting the older `platform_monitoring_agent` marker. README
   and design docs now describe VM observability as the built-in Nebius
@@ -60,13 +106,13 @@ All notable changes to this project are tracked here. This changelog follows
   `component_sources.yaml` ownership model, public-safe endpoint map, auth
   boundaries, and onboarding workflow, and added a matching public-safe
   observability reference asset under the Nebius skill.
-  The VM wizard now surfaces `observability.vm.logs.systemd_units` directly so
+  The VM wizard now surfaces `deploy.observability.vm.logs.systemd_units` directly so
   operators can choose explicit unit allowlists at create time. `create` and
   runtime normalization also prune irrelevant project-scope branches, so
   VM-only configs no longer carry MK8s-only deploy validation defaults.
 - Fixed two project-creation/runtime-auth contract gaps. The bundled `mk8s` wizard now treats
-  `observability.*` as project-scoped fields, so `create` and interactive `component add` can
-  actually prompt `observability.enabled` and the main signal toggles at wizard time and then
+  `deploy.observability.*` as project-scoped fields, so `create` and interactive `component add` can
+  actually prompt `deploy.observability.enabled` and the main signal toggles at wizard time and then
   auto-enable the collector app in the same run. Commands that use `--auto-auth-bootstrap` now
   also self-heal a cached runtime-auth profile when its Nebius auth public key has been deleted
   or the cached private-key metadata is broken; when auto bootstrap is disabled, the CLI now
@@ -108,7 +154,7 @@ All notable changes to this project are tracked here. This changelog follows
   `deploy.targets[]`, and `deploy`, `flux apply`, `flux destroy`, and
   `flux bootstrap` accept `--target <instance-id>` / `--all-targets` instead of
   relying on implicit cluster order or a single global kubeconfig context.
-- Added a source-driven observability stack contract. `observability.*` is now a
+- Added a source-driven observability stack contract. `deploy.observability.*` is now a
   first-class project setting that stays disabled by default; when enabled for
   MK8s, cxcli auto-enables the bundled `nebius-observability-agent` Helm chart,
   materializes the customer-facing logs/metrics/traces toggles into
@@ -122,7 +168,7 @@ All notable changes to this project are tracked here. This changelog follows
   GPU Nodes using the catalog-owned selector, while VM observability stays on
   the Nebius platform monitoring agent that is already present on
   Nebius-managed VMs and MK8s worker nodes. Direct `config.yaml` edits that set
-  `observability.enabled=true` now seed the required collector app row during
+  `deploy.observability.enabled=true` now seed the required collector app row during
   config normalization, matching the wizard/create behavior. Generated deploy
   reports now also include signal-aware public read endpoints for Grafana/external
   tools and regional collector write endpoints for metrics, logs, and traces from
@@ -434,11 +480,11 @@ All notable changes to this project are tracked here. This changelog follows
   Helm values, avoiding the live `gpu-operator@v25.10.0` Flux install failure
   on `templates/nvidiadriver_nebius_patch.yaml`.
 
-- Clarified the source-config validation contract: `validate --strict` help now
+- Clarified the source-config validation contract: `validate` help now
   explicitly calls out strict readiness, MK8s preflight, and fail-fast live
   quota/capacity checks, and `component add` / `component remove` now point
-  operators at the same `validate`, optional `validate --strict`, then
-  `render` day-2 loop already used after `create`.
+  operators at the same `validate`, then `render` day-2 loop already used
+  after `create`.
 - Hardened `deploy <generated-dir>` with an explicit generated-bundle
   preflight before Terraform apply: strict readiness checks against the
   manifest runtime config, MK8s network preflight, live Nebius
@@ -446,10 +492,9 @@ All notable changes to this project are tracked here. This changelog follows
   rendered Flux manifest validation when apps are enabled now all fail fast
   inside `deploy` itself instead of relying on operators to run separate
   commands first.
-- Changed plain `validate <config.yaml>` to also run the live Nebius
-  quota/capacity assessment in warning mode, so operators now see confirmed
-  shortages before `deploy` while `validate --strict` keeps the fail-on-
-  insufficiency readiness gate.
+- Changed `validate <config.yaml>` to run the live Nebius quota/capacity
+  assessment as part of the default readiness gate, so operators see confirmed
+  shortages before `deploy` and the command fails on confirmed insufficiency.
 - Added `quota-request <config.yaml>`, which reuses the existing live quota
   assessment and plans direct tenant/project quota allowance requests for the
   confirmed insufficient quota dimensions through the published Nebius quota
@@ -475,12 +520,10 @@ All notable changes to this project are tracked here. This changelog follows
   MK8s shortages without waiting for a deploy-time failure. Public MK8s
   node-group `boot_disk` still exposes size/type only, so cxcli documents but
   does not attempt to toggle optional SSD NRD / SSD IO M3 encryption.
-- Extended the live bundled infra quota assessment to also consider active
-  tenant Capacity Block Groups for fabric-bound GPU requests, so matching CBG
-  capacity can satisfy `compute.instance.gpu.*` and
-  `compute.gpucluster.count` during `validate --strict`, `create`,
-  `quota-check`, `render`, and deploy-time guard rails instead of emitting
-  false zero-quota warnings.
+- Replaced the earlier Capacity Block Group / `compute.gpucluster.count`
+  overlay with the live Capacity Dashboard `resource-advice` path for
+  fabric-bound GPU requests, keeping `validate`, `create`, `quota-check`,
+  `render`, and deploy-time guard rails on one GPU availability model.
 - Refined generated-bundle destroy behavior so top-level `destroy` now skips
   separate Flux app deletion when the generated infra bundle destroys the
   handed-off MK8s cluster directly, while external-cluster app bundles still
@@ -500,7 +543,7 @@ All notable changes to this project are tracked here. This changelog follows
   design doc now point operators to the official Nebius disk-type and pricing
   pages for current values instead of restating specific amounts in the prompt
   text.
-- Improved `validate` / `validate --strict` terminal output with one concise
+- Improved `validate` terminal output with one concise
   validated-scope list that separates `infra` and `apps` and shows their
   catalog groups such as `Compute`, `Storage`, `Platform`, or `Workloads`,
   so successful validation is more informative without adding another heavy
@@ -535,8 +578,8 @@ All notable changes to this project are tracked here. This changelog follows
 - Fixed `nebius-cxcli-ci` catalog validation for branch work: the normal CI workflow now runs `validate-sources component_sources.yaml` with source profile `local` so new in-repo Terraform modules and local-only Helm charts are validated against the checked-out branch, while the release workflow keeps the portable-profile validation for published wheel/catalog verification.
 - Aligned the remaining strict-validation and docs surfaces with the current Helm/source contract: the MK8s GPU strict-validation coverage now enables `nvidia-gpu-operator` before asserting missing GPU shape fields, and the README/design examples now consistently show app charts under `source.portable` instead of the removed top-level `source.repo/chart/version` layout.
 - Added a bundled `vm` infra component backed by `platform-infra/modules/vm`: the catalog now exposes guided project-subnet and live compute platform/preset selection, resolves `source_image_family` from the live Nebius public image inventory using component-local image preference ordering under `components.infra.vm.cli.image_preferences`, keeps the module boot-image contract explicit instead of hiding a hardcoded family default, preserves static public-IP mode choices plus optional GPU-cluster fabric guidance, and includes runtime validation/quota estimation for standalone Nebius VMs so the new module behaves like a first-class `nebius-cxcli` component instead of a raw custom Terraform source.
-- Refactored the bundled MK8s GPU contract around the actual Nebius node-group model: `inputs.gpu_stack_source` and `inputs.gpu_stack_preset` now replace the earlier driver-centric terminology in the customer- and catalog-facing contracts, the MK8s module/docs now describe Nebius-managed `gpu_settings.drivers_preset` vs manual/operator-managed GPU stacks explicitly, and the NCCL path now renders a first-party `helm-charts/nccl-test` chart selected through the same Helm `source.portable` / `source.local` contract used by other bundled charts instead of assembling the raw `MPIJob` manifest in Python.
-- Replaced the old MK8s GPU hardcoded profile split with component-local catalog policy: `component_sources.yaml` now keeps MK8s GPU image preferences and validations under `components.infra.mk8s.cli.gpu`, keeps GPU operator/network operator auto-enable rules and Helm value overrides on the operator app entries themselves under `components.apps.<id>.cli.mk8s_gpu_policy`, removes the unused standalone `nvidia-device-plugin` catalog entry, still materializes Nebius-image vs manual MK8s defaults from the live Nebius compatibility matrix, keeps the GPU Operator B300 driver pin in the catalog instead of Python, and still persists deploy-time GPU readiness/visibility/NCCL reports under `generated/inventory/`.
+- Refactored the bundled MK8s GPU contract around the actual Nebius node-group model: `inputs.gpu_stack_source` and `inputs.gpu_stack_preset` now replace the earlier driver-centric terminology in the customer- and catalog-facing contracts, the MK8s module/docs now describe Nebius-managed `gpu_settings.drivers_preset` vs operator-managed GPU stacks explicitly, and the NCCL path now renders a first-party `helm-charts/nccl-test` chart selected through the same Helm `source.portable` / `source.local` contract used by other bundled charts instead of assembling the raw `MPIJob` manifest in Python.
+- Replaced the old MK8s GPU hardcoded profile split with component-local catalog policy: `component_sources.yaml` now keeps MK8s GPU image preferences and validations under `components.infra.mk8s.cli.gpu`, keeps GPU operator/network operator auto-enable rules and Helm value overrides on the operator app entries themselves under `components.apps.<id>.cli.mk8s_gpu_policy`, removes the unused standalone `nvidia-device-plugin` catalog entry, still materializes Nebius-image vs operator-managed MK8s defaults from the live Nebius compatibility matrix, keeps the GPU Operator B300 driver pin in the catalog instead of Python, and still persists deploy-time GPU readiness/visibility/NCCL reports under `generated/inventory/`.
 - Changed interactive `create` overwrite UX so it now resolves `tenant_id` / `project_id` before showing any overwrite warning: existing deployments roots no longer emit a root-wide pre-warning, and confirmation appears only when the chosen resolved project folder already exists.
 - Changed the canonical project layout to match the two-level project hierarchy under the deployments root: project configs now live at `<deployments-root>/<tenant-folder>/<project-folder>/config.yaml`, and `create <deployments-root>` is a bootstrap/overwrite command instead of an existing-config reconcile path. Once that resolved project folder already exists, interactive reruns now require explicit overwrite confirmation, non-interactive reruns require `--force`, overwrite recreates only that one resolved project folder from scratch, client-info prompts restart from the normal create defaults, and infra/apps selections plus component values are rebuilt from the current create inputs instead of being merged from the old config; docs/help/tests were realigned to make `component list/add/remove` the default day-2 editing surface.
 - Tightened the remaining help/docs wording around the project-folder layout so `create --help`, README, and the design doc consistently describe the canonical overwrite target and the generated customer workflow's canonical `<tenant-folder>/<project-folder>/generated/**` watch scope.
@@ -544,7 +587,7 @@ All notable changes to this project are tracked here. This changelog follows
 - Extended catalog-driven Nebius fail-fast status monitoring beyond MK8s: bundled jump-host modules now declare live `nebius.compute.instance` watchers, bundled `mysterybox` now declares `nebius.mysterybox.secret` watchers that expand one component row into one watcher per configured secret name, supported watcher kinds now include compute instances and MysteryBox secrets, and the MSP PostgreSQL/SFS/object-storage/compute-instance/MysteryBox pollers now abort long-running apply/destroy waits from terminal Nebius SDK operation failures instead of only printing progress summaries.
 - Changed explicit `quota-check` output to also print both confirmed checked quota names and coverage-gap reasons as vertical lists under each component, including partial-coverage components such as MK8s when the checked dimensions are sufficient but other dimensions still remain coverage gaps.
 - Added guarded built-in destroy recovery for generated Terraform bundles: `destroy` / `terraform destroy` now auto-clear a stale backend lock when the existing local-owner safety checks already pass, retry Terraform destroy once, and if destroy is still blocked by a live MK8s node-group create stuck in terminal-error provisioning, they can delete that stuck node group through the Nebius SDK and retry destroy again inside the same confirmed teardown flow.
-- Changed `render <config.yaml>` to always run the same non-strict runtime preflight as `validate` before writing artifacts, so active-source drift, unresolved component dependencies, and Terraform module schema/input mismatches fail before any generated bundle side effects.
+- Changed `render <config.yaml>` to always run pre-render runtime validation before writing artifacts, so active-source drift, unresolved component dependencies, and Terraform module schema/input mismatches fail before any generated bundle side effects.
 - Changed long-running `deploy` / `terraform apply` / `terraform destroy` MK8s monitoring from passive alerting to active fail-fast behavior: node-group API event levels are now read correctly from the live SDK enum fields, terminal node-group failures surface their Nebius error detail directly in status/recovery output without leaking raw SDK object reprs, and apply/destroy abort their Terraform wait loop instead of idling until a generic timeout when the live MK8s API already shows the operation has failed.
 - Added live MK8s GPU stack-preset selection to the bundled `mk8s` wizard profile: `inputs.gpu_stack_preset` now comes from the MK8s compatibility matrix, the wizard can auto-select and materialize a singleton compatible preset into `config.yaml`, and new provider option source `mk8s_gpu_stack_presets` is available for other catalog wiring.
 - Tightened bundled MK8s GPU-cluster guidance around live preset capability instead of guesswork: the wizard now selects `inputs.gpu_nodes_preset` before `inputs.infiniband_fabric`, the later fabric prompt is shown only when the chosen preset's live SDK metadata allows GPU clustering, stale `infiniband_fabric` values are cleared during interactive edits when the selected GPU shape no longer supports clustering, and runtime validation now fails early on invalid fabric+preset combinations instead of deferring them to Terraform/MK8s admission errors.

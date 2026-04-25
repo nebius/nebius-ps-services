@@ -119,10 +119,11 @@ def test_to_dynamic_payload_generates_components_and_charts() -> None:
 
 def test_to_runtime_payload_round_trip_keeps_enabled_flags() -> None:
     runtime = _starter_runtime_payload()
+    runtime["deploy"] = {"observability": {"enabled": False}}
     dynamic = to_dynamic_payload(runtime)
     back = to_runtime_payload(dynamic)
 
-    assert back["observability"]["enabled"] is False
+    assert back["deploy"]["observability"]["enabled"] is False
     assert back["infra"]["mk8s"]["enabled"] is True
     assert back["infra"]["object_storage"]["enabled"] is False
     assert back["apps"]["workloads"]["n8n"]["enabled"] is False

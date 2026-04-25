@@ -187,9 +187,7 @@ def _validate_mk8s_gpu(
         nccl = project_gpu_validations.get("nccl", {})
         health_checker = project_gpu_validations.get("health_checker", {})
         operator_enabled = (
-            operator_readiness.get("enabled")
-            if isinstance(operator_readiness, Mapping)
-            else None
+            operator_readiness.get("enabled") if isinstance(operator_readiness, Mapping) else None
         )
 
         for field_label, value in (
@@ -213,7 +211,10 @@ def _validate_mk8s_gpu(
         gpu_visibility_max_nodes = (
             gpu_visibility.get("max_nodes") if isinstance(gpu_visibility, Mapping) else None
         )
-        if gpu_visibility_max_nodes is not None and _coerce_int(gpu_visibility_max_nodes, default=0) <= 0:
+        if (
+            gpu_visibility_max_nodes is not None
+            and _coerce_int(gpu_visibility_max_nodes, default=0) <= 0
+        ):
             raise ValueError("deploy.validations.mk8s_gpu.gpu_visibility.max_nodes must be > 0")
 
         nccl_max_nodes = nccl.get("max_nodes") if isinstance(nccl, Mapping) else None
@@ -221,9 +222,7 @@ def _validate_mk8s_gpu(
             raise ValueError("deploy.validations.mk8s_gpu.nccl.max_nodes must be > 0")
 
         nccl_threshold = (
-            nccl.get("average_bus_bandwidth_threshold_gbps")
-            if isinstance(nccl, Mapping)
-            else None
+            nccl.get("average_bus_bandwidth_threshold_gbps") if isinstance(nccl, Mapping) else None
         )
         if nccl_threshold is not None:
             try:
@@ -320,7 +319,9 @@ def _validate_vm(
         raise ValueError(f"{base}.public_ip_mode must be one of: none, dynamic, static, allocation")
     public_ip_allocation_id = as_text(get_path(payload, f"{base}.public_ip_allocation_id"))
     if public_ip_mode == "allocation" and not public_ip_allocation_id:
-        raise ValueError(f"{base}.public_ip_allocation_id is required when public_ip_mode=allocation")
+        raise ValueError(
+            f"{base}.public_ip_allocation_id is required when public_ip_mode=allocation"
+        )
     if public_ip_mode != "allocation" and public_ip_allocation_id:
         raise ValueError(
             f"{base}.public_ip_allocation_id can only be used when public_ip_mode=allocation"
@@ -345,10 +346,12 @@ def _validate_vm(
         if project_id and platform and preset:
             from .provider_options import ProviderOptionLookup
 
-            allow_gpu_clustering = ProviderOptionLookup().compute_platform_preset_allows_gpu_clustering(
-                project_id=project_id,
-                platform_name=platform,
-                preset_name=preset,
+            allow_gpu_clustering = (
+                ProviderOptionLookup().compute_platform_preset_allows_gpu_clustering(
+                    project_id=project_id,
+                    platform_name=platform,
+                    preset_name=preset,
+                )
             )
         if allow_gpu_clustering is False:
             raise ValueError(

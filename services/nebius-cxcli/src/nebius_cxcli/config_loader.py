@@ -8,9 +8,14 @@ from typing import Any
 import yaml
 
 from .config_model import is_dynamic_payload, to_runtime_payload
-from .mk8s_gpu import normalize_mk8s_gpu_project_validation_settings
+from .mk8s_gpu import (
+    ensure_mk8s_gpu_app_rows,
+    materialize_mk8s_gpu_app_values,
+    normalize_mk8s_gpu_project_validation_settings,
+)
 from .observability import (
     ensure_observability_app_rows,
+    materialize_observability_app_values,
     materialize_observability_infra_values,
     normalize_observability_project_settings,
 )
@@ -27,11 +32,17 @@ def normalize_runtime_config_payload(
     changed = normalize_runtime_ssh_public_key_inputs(payload, base_dir=base_dir)
     if normalize_mk8s_gpu_project_validation_settings(payload):
         changed = True
+    if ensure_mk8s_gpu_app_rows(payload):
+        changed = True
+    if materialize_mk8s_gpu_app_values(payload):
+        changed = True
     if normalize_observability_project_settings(payload):
         changed = True
     if ensure_observability_app_rows(payload):
         changed = True
     if materialize_observability_infra_values(payload):
+        changed = True
+    if materialize_observability_app_values(payload):
         changed = True
     return changed
 
@@ -62,6 +73,10 @@ def load_config(path: Path, *, persist_normalized: bool = False) -> AttrDict:
         payload = yaml.safe_load(handle) or {}
     if not isinstance(payload, dict):
         raise ValueError("config.yaml root must be a mapping")
+    if not is_dynamic_payload(payload):
+        raise ValueError(
+            "config.yaml must use dynamic model with 'infra.components[]' and 'apps.charts[]'"
+        )
     changed = normalize_runtime_config_payload(payload, base_dir=path.parent)
     if changed and persist_normalized:
         path.write_text(dump_yaml(payload), encoding="utf-8")

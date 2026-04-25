@@ -145,7 +145,9 @@ def resolve_generated_bundle_config_paths(
     if resolved.name == "config.yaml":
         return resolve_project_paths(resolved, deployments_dir_hint=deployments_dir_hint)
 
-    if resolved.name == "generated" or any(candidate.name == "generated" for candidate in resolved.parents):
+    if resolved.name == "generated" or any(
+        candidate.name == "generated" for candidate in resolved.parents
+    ):
         raise ValueError(
             f"{command_label} target must be project config.yaml, not generated/. "
             f"Pass <tenant-folder>/<project-folder>/config.yaml; {command_label.lower()} resolves sibling generated/ automatically."

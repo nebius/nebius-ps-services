@@ -10,9 +10,7 @@ from nebius_cxcli.config_loader import load_config
 from nebius_cxcli.config_template import starter_config_yaml
 
 _VALID_ED25519_PUBLIC_KEY = (
-    "ssh-ed25519 "
-    "AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f "
-    "demo@example"
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f demo@example"
 )
 
 
@@ -163,6 +161,18 @@ def test_schema_rejects_unknown_root_key(tmp_path: Path) -> None:
     with pytest.raises(ValueError) as exc_info:
         load_config(config_path)
     assert "unknown field(s) at root" in str(exc_info.value)
+
+
+def test_schema_rejects_top_level_observability_contract(tmp_path: Path) -> None:
+    payload = _dynamic_payload()
+    payload["observability"] = {"enabled": True}
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc_info:
+        load_config(config_path)
+    assert "unknown field(s) at root: observability" in str(exc_info.value)
 
 
 def test_schema_rejects_shared_root_key(tmp_path: Path) -> None:

@@ -47,6 +47,14 @@ class _FakeAccessPermits:
         return SimpleNamespace(wait=lambda: SimpleNamespace())
 
 
+class _CloseTrackingSDK:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def sync_close(self) -> None:
+        self.closed = True
+
+
 def _install_fake_access_permit_modules(monkeypatch: pytest.MonkeyPatch) -> None:
     common_module = ModuleType("nebius.api.nebius.common.v1")
     common_module.ResourceMetadata = _FakeResourceMetadata  # type: ignore[attr-defined]
@@ -56,6 +64,94 @@ def _install_fake_access_permit_modules(monkeypatch: pytest.MonkeyPatch) -> None
     iam_module.ListAccessPermitRequest = _FakeListAccessPermitRequest  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "nebius.api.nebius.common.v1", common_module)
     monkeypatch.setitem(sys.modules, "nebius.api.nebius.iam.v1", iam_module)
+
+
+def test_auth_public_key_exists_closes_sdk(monkeypatch: pytest.MonkeyPatch) -> None:
+    @dataclass
+    class _FakeGetAuthPublicKeyRequest:
+        id: str
+
+    class _FakeAuthPublicKeyServiceClient:
+        def __init__(self, sdk: object) -> None:
+            self.sdk = sdk
+
+        def get(self, request: _FakeGetAuthPublicKeyRequest):  # type: ignore[no-untyped-def]
+            assert request.id == "publickey-123"
+            return SimpleNamespace(wait=lambda: SimpleNamespace())
+
+    iam_module = ModuleType("nebius.api.nebius.iam.v1")
+    iam_module.AuthPublicKeyServiceClient = _FakeAuthPublicKeyServiceClient  # type: ignore[attr-defined]
+    iam_module.GetAuthPublicKeyRequest = _FakeGetAuthPublicKeyRequest  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "nebius.api.nebius.iam.v1", iam_module)
+
+    sdk = _CloseTrackingSDK()
+    monkeypatch.setattr(iam_bootstrap, "_init_sdk", lambda **_kwargs: sdk)
+
+    assert iam_bootstrap.auth_public_key_exists(
+        auth_public_key_id="publickey-123",
+        profile=None,
+        endpoint=None,
+        config_file=None,
+    )
+    assert sdk.closed
+
+
+def test_bootstrap_ci_service_account_closes_key_sdk(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeAuthPublicKeyServiceClient:
+        def __init__(self, sdk: object) -> None:
+            self.sdk = sdk
+
+    class _FakeAccessKeyServiceClient:
+        def __init__(self, sdk: object) -> None:
+            self.sdk = sdk
+
+    iam_v1_module = ModuleType("nebius.api.nebius.iam.v1")
+    iam_v1_module.AuthPublicKeyServiceClient = _FakeAuthPublicKeyServiceClient  # type: ignore[attr-defined]
+    iam_v2_module = ModuleType("nebius.api.nebius.iam.v2")
+    iam_v2_module.AccessKeyServiceClient = _FakeAccessKeyServiceClient  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "nebius.api.nebius.iam.v1", iam_v1_module)
+    monkeypatch.setitem(sys.modules, "nebius.api.nebius.iam.v2", iam_v2_module)
+
+    sdk = _CloseTrackingSDK()
+    monkeypatch.setattr(iam_bootstrap, "_init_sdk", lambda **_kwargs: sdk)
+    monkeypatch.setattr(
+        iam_bootstrap,
+        "ensure_ci_service_account_identity",
+        lambda **_kwargs: iam_bootstrap.CIIdentityEnsureResult(
+            project_id="project-123",
+            service_account_name="nebius-cxcli-tf-sa",
+            service_account_id="serviceaccount-123",
+            service_account_created=False,
+            roles_created=[],
+            roles_already_present=["editor"],
+        ),
+    )
+    monkeypatch.setattr(
+        iam_bootstrap,
+        "_create_auth_public_key",
+        lambda **_kwargs: ("publickey-123", "PRIVATE-KEY"),
+    )
+    monkeypatch.setattr(
+        iam_bootstrap,
+        "_create_object_storage_access_key",
+        lambda **_kwargs: ("access-key", "secret-key"),
+    )
+
+    result = iam_bootstrap.bootstrap_ci_service_account(
+        project_id="project-123",
+        service_account_name="nebius-cxcli-tf-sa",
+        service_account_description="runtime",
+        role_ids=["editor"],
+        auth_key_description="auth",
+        access_key_description="s3",
+        profile=None,
+        endpoint=None,
+        config_file=None,
+    )
+
+    assert result.auth_public_key_id == "publickey-123"
+    assert result.s3_access_key_id == "access-key"
+    assert sdk.closed
 
 
 def test_access_permits_use_group_as_parent(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -22,9 +22,7 @@ from nebius_cxcli.component_sources import (
 from nebius_cxcli.runtime_introspection import reset_runtime_introspection_cache
 
 _VALID_ED25519_PUBLIC_KEY = (
-    "ssh-ed25519 "
-    "AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f "
-    "demo@example"
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f demo@example"
 )
 
 
@@ -859,7 +857,9 @@ def test_load_component_sources_rejects_runtime_block(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match=r"components\.infra\.mk8s has unsupported field\(s\): runtime"):
+    with pytest.raises(
+        ValueError, match=r"components\.infra\.mk8s has unsupported field\(s\): runtime"
+    ):
         load_component_sources(explicit=sources_file)
 
 
@@ -1191,35 +1191,35 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         "deploy.validations.mk8s_gpu.health_checker.enabled": {
             "default": False,
         },
-        "observability.enabled": {
+        "deploy.observability.enabled": {
             "default": False,
         },
-        "observability.kubernetes.logs.enabled": {
+        "deploy.observability.kubernetes.logs.enabled": {
             "default": True,
         },
-        "observability.kubernetes.logs.collect_agent_logs": {
+        "deploy.observability.kubernetes.logs.collect_agent_logs": {
             "default": False,
             "prompt": False,
         },
-        "observability.kubernetes.logs.excluded_namespaces": {
+        "deploy.observability.kubernetes.logs.excluded_namespaces": {
             "default": ["kube-system"],
             "prompt": False,
         },
-        "observability.kubernetes.metrics.enabled": {
+        "deploy.observability.kubernetes.metrics.enabled": {
             "default": True,
         },
-        "observability.kubernetes.metrics.collect_agent_metrics": {
+        "deploy.observability.kubernetes.metrics.collect_agent_metrics": {
             "default": False,
             "prompt": False,
         },
-        "observability.kubernetes.metrics.collect_k8s_cluster_metrics": {
+        "deploy.observability.kubernetes.metrics.collect_k8s_cluster_metrics": {
             "default": True,
         },
-        "observability.kubernetes.metrics.excluded_namespaces": {
+        "deploy.observability.kubernetes.metrics.excluded_namespaces": {
             "default": [],
             "prompt": False,
         },
-        "observability.kubernetes.traces.enabled": {
+        "deploy.observability.kubernetes.traces.enabled": {
             "default": True,
         },
         "inputs.mk8s_cluster_overrides": {
@@ -1328,25 +1328,25 @@ def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> Non
                 "skip_prompt_if_no_choices": True,
             }
         },
-        "observability.enabled": {
+        "deploy.observability.enabled": {
             "default": False,
         },
-        "observability.vm.collector.enabled": {
+        "deploy.observability.vm.collector.enabled": {
             "default": False,
         },
-        "observability.vm.collector.metrics.enabled": {
+        "deploy.observability.vm.collector.metrics.enabled": {
             "default": True,
         },
-        "observability.vm.collector.logs.enabled": {
+        "deploy.observability.vm.collector.logs.enabled": {
             "default": True,
         },
-        "observability.vm.collector.logs.systemd_units": {
+        "deploy.observability.vm.collector.logs.systemd_units": {
             "default": [],
         },
-        "observability.vm.logs.enabled": {
-            "default": False,
+        "deploy.observability.vm.logs.enabled": {
+            "default": True,
         },
-        "observability.vm.logs.systemd_units": {
+        "deploy.observability.vm.logs.systemd_units": {
             "default": [],
         },
         "inputs.boot_disk_existing_id": {
@@ -1453,7 +1453,7 @@ def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> Non
                 "from": "compute_platform_presets",
                 "args": {"platform_path": "inputs.platform"},
             }
-        }
+        },
     }
     assert ssh.wizard_fields == {
         "inputs.subnet_id": {
@@ -1471,7 +1471,7 @@ def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> Non
                 "from": "compute_platform_presets",
                 "args": {"platform_path": "inputs.platform"},
             }
-        }
+        },
     }
 
 
@@ -1853,7 +1853,7 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                                                         "image": "k8s-rdma-shared-dev-plugin",
                                                         "repository": "nvcr.io/nvidia/mellanox",
                                                         "version": "network-operator-v25.7.0",
-                                                        "config": "{\"configList\":[]}",
+                                                        "config": '{"configList":[]}',
                                                     }
                                                 },
                                             },
@@ -1871,7 +1871,7 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                                         "gpu_cluster_enabled": True,
                                         "defaults_from": ["driverful_infiniband_nfd"],
                                         "post_render_patches_from": ["rdma_shared_device_plugin"],
-                                    }
+                                    },
                                 ],
                             }
                         },
@@ -1966,7 +1966,7 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
     assert [item.target_path for item in gpu_cluster_nfd_rule.defaults] == [
         "values.nfd.enabled",
     ]
-    manual_driver_rule = next(
+    operator_managed_driver_rule = next(
         rule
         for rule in gpu_operator.mk8s_gpu.rules
         if rule.gpu_stack_source == "operator_managed"
@@ -1979,17 +1979,18 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
             "values.driver.nvidiaDriverCRD.enabled",
         }
     )
-    assert {item.target_path: item.value for item in manual_driver_rule.defaults} == {
+    assert {item.target_path: item.value for item in operator_managed_driver_rule.defaults} == {
         "values.driver.enabled": True,
         "values.toolkit.enabled": True,
         "values.driver.nvidiaDriverCRD.enabled": False,
     }
-    manual_b200_nfd_rule = next(
+    operator_managed_b200_nfd_rule = next(
         rule
         for rule in gpu_operator.mk8s_gpu.rules
-        if rule.gpu_stack_source == "operator_managed" and rule.match_platforms == ("gpu-b200-sxm", "gpu-b200-sxm-a")
+        if rule.gpu_stack_source == "operator_managed"
+        and rule.match_platforms == ("gpu-b200-sxm", "gpu-b200-sxm-a")
     )
-    assert [item.target_path for item in manual_b200_nfd_rule.defaults] == [
+    assert [item.target_path for item in operator_managed_b200_nfd_rule.defaults] == [
         "values.nfd.enabled",
     ]
     assert mk8s.mk8s_gpu.validations.operator_readiness.timeout == "20m"
@@ -2075,7 +2076,9 @@ def test_load_component_sources_parses_vm_cli_settings(tmp_path: Path) -> None:
     assert vm.observability.logs.systemd_units == ("sshd.service",)
 
 
-def test_load_component_sources_rejects_top_level_infra_observability_signals(tmp_path: Path) -> None:
+def test_load_component_sources_rejects_top_level_infra_observability_signals(
+    tmp_path: Path,
+) -> None:
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
@@ -2105,7 +2108,10 @@ def test_load_component_sources_rejects_top_level_infra_observability_signals(tm
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match=r"components\.infra\.vm\.cli\.observability has unsupported field\(s\): logs"):
+    with pytest.raises(
+        ValueError,
+        match=r"components\.infra\.vm\.cli\.observability has unsupported field\(s\): logs",
+    ):
         load_component_sources(explicit=sources_file)
 
 

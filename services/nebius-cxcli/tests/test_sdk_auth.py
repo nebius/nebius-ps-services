@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -33,6 +34,30 @@ def _install_fake_nebius_modules(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "nebius.sdk", sdk_module)
     monkeypatch.setitem(sys.modules, "nebius.aio", aio_module)
     monkeypatch.setitem(sys.modules, "nebius.aio.cli_config", cli_config_module)
+
+
+def test_deleted_key_refresh_log_filter_only_suppresses_expected_traceback() -> None:
+    expected_record = logging.LogRecord(
+        "nebius.aio.token.renewable",
+        logging.ERROR,
+        __file__,
+        1,
+        "Failed refresh token, attempt: 1, error: Public Key not exists: JwtKeyNotExists",
+        (),
+        None,
+    )
+    unrelated_record = logging.LogRecord(
+        "nebius.aio.token.renewable",
+        logging.ERROR,
+        __file__,
+        1,
+        "Failed refresh token, attempt: 1, error: network unavailable",
+        (),
+        None,
+    )
+
+    assert sdk_auth.deleted_key_refresh_log(expected_record)
+    assert not sdk_auth.deleted_key_refresh_log(unrelated_record)
 
 
 def test_init_nebius_sdk_prefers_credentials_file(

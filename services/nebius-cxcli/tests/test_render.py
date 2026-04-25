@@ -26,9 +26,7 @@ from nebius_cxcli.runtime_introspection import ModuleVariable, reset_runtime_int
 from nebius_cxcli.terraform_provider import build_provider_module_name
 
 _VALID_ED25519_PUBLIC_KEY = (
-    "ssh-ed25519 "
-    "AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f "
-    "demo@example"
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f demo@example"
 )
 
 
@@ -883,14 +881,10 @@ def test_render_materializes_driverful_rdma_policy_for_nebius_gpu_clusters(
 
     target_flux_dir = _target_flux_dir(paths)
     network_release_doc = yaml.safe_load(
-        (target_flux_dir / "helmrelease-platform-network-operator.yaml").read_text(
-            encoding="utf-8"
-        )
+        (target_flux_dir / "helmrelease-platform-network-operator.yaml").read_text(encoding="utf-8")
     )
     gpu_release_doc = yaml.safe_load(
-        (target_flux_dir / "helmrelease-platform-gpu-operator.yaml").read_text(
-            encoding="utf-8"
-        )
+        (target_flux_dir / "helmrelease-platform-gpu-operator.yaml").read_text(encoding="utf-8")
     )
 
     network_values = network_release_doc["spec"]["values"]
@@ -909,12 +903,9 @@ def test_render_materializes_driverful_rdma_policy_for_nebius_gpu_clusters(
         ]["nodeSelectorTerms"][0]["matchExpressions"][0]["key"]
         == "nebius.com/driverful"
     )
-    assert (
-        network_values["node-feature-discovery"]["worker"]["affinity"]["nodeAffinity"][
-            "requiredDuringSchedulingIgnoredDuringExecution"
-        ]["nodeSelectorTerms"][0]["matchExpressions"][0]["values"]
-        == ["true"]
-    )
+    assert network_values["node-feature-discovery"]["worker"]["affinity"]["nodeAffinity"][
+        "requiredDuringSchedulingIgnoredDuringExecution"
+    ]["nodeSelectorTerms"][0]["matchExpressions"][0]["values"] == ["true"]
     assert (
         network_values["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"][
             "nodeSelectorTerms"
@@ -927,12 +918,9 @@ def test_render_materializes_driverful_rdma_policy_for_nebius_gpu_clusters(
         ][0]["matchExpressions"][0]["operator"]
         == "In"
     )
-    assert (
-        network_values["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"][
-            "nodeSelectorTerms"
-        ][0]["matchExpressions"][0]["values"]
-        == ["true"]
-    )
+    assert network_values["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"][
+        "nodeSelectorTerms"
+    ][0]["matchExpressions"][0]["values"] == ["true"]
     network_patches = network_release_doc["spec"]["postRenderers"][0]["kustomize"]["patches"]
     assert network_patches[0]["target"]["kind"] == "NicClusterPolicy"
     assert '"resourceName": "shared_device"' in network_patches[0]["patch"]
@@ -947,7 +935,7 @@ def test_render_materializes_driverful_rdma_policy_for_nebius_gpu_clusters(
     ]
 
 
-def test_render_disables_gpu_operator_nfd_for_manual_b200_network_operator_path(
+def test_render_disables_gpu_operator_nfd_for_operator_managed_b200_network_operator_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _set_catalog_override(_local_catalog_path(), source_profile=SourceProfile.LOCAL)
@@ -1017,7 +1005,7 @@ def test_render_disables_gpu_operator_nfd_for_manual_b200_network_operator_path(
     assert gpu_release_doc["spec"]["values"]["nfd"]["enabled"] is False
 
 
-def test_render_materializes_manual_rdma_policy_for_gpu_cluster_shapes(
+def test_render_materializes_operator_managed_rdma_policy_for_gpu_cluster_shapes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _set_catalog_override(_local_catalog_path(), source_profile=SourceProfile.LOCAL)
@@ -1083,14 +1071,10 @@ def test_render_materializes_manual_rdma_policy_for_gpu_cluster_shapes(
 
     target_flux_dir = _target_flux_dir(paths)
     network_release_doc = yaml.safe_load(
-        (target_flux_dir / "helmrelease-platform-network-operator.yaml").read_text(
-            encoding="utf-8"
-        )
+        (target_flux_dir / "helmrelease-platform-network-operator.yaml").read_text(encoding="utf-8")
     )
     gpu_release_doc = yaml.safe_load(
-        (target_flux_dir / "helmrelease-platform-gpu-operator.yaml").read_text(
-            encoding="utf-8"
-        )
+        (target_flux_dir / "helmrelease-platform-gpu-operator.yaml").read_text(encoding="utf-8")
     )
 
     network_values = network_release_doc["spec"]["values"]
@@ -1347,14 +1331,14 @@ def test_render_uses_materialized_shared_defaults_for_app_chart_values(
         },
         "infra": {"components": []},
         "apps": {
-                "charts": [
-                    {
-                        "id": "demo-app",
-                        "group": "workloads",
-                        "enabled": True,
-                        "repo": "https://example.invalid/charts",
-                        "version": "1.0.0",
-                        "namespace": "demo",
+            "charts": [
+                {
+                    "id": "demo-app",
+                    "group": "workloads",
+                    "enabled": True,
+                    "repo": "https://example.invalid/charts",
+                    "version": "1.0.0",
+                    "namespace": "demo",
                     "release-name": "demo-app",
                     "values": {"admin": {"sshUser": "adminuser"}},
                 }

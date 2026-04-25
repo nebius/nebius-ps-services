@@ -218,13 +218,11 @@ def _validation_display_name(
     if kind == "mk8s_gpu_operator_readiness" and spec_name:
         return spec_name
     validation_name = (
-        str(payload.get("validation", "") or "").strip()
-        if isinstance(payload, Mapping)
-        else ""
+        str(payload.get("validation", "") or "").strip() if isinstance(payload, Mapping) else ""
     )
     if kind == "mk8s_gpu_operator_readiness":
         return validation_name or spec_name or "GPU stack readiness"
-    return validation_name or spec_name or kind or "Validation"
+    return spec_name or validation_name or kind or "Validation"
 
 
 def _operator_readiness_summary(payload: Mapping[str, Any]) -> str:
@@ -248,7 +246,8 @@ def _operator_readiness_summary(payload: Mapping[str, Any]) -> str:
             parts.append(f"RDMA resources {keys_text} on {node_count} Ready GPU node(s)")
         else:
             parts.append(
-                "Network Operator " + ("ready" if bool(network_operator.get("ready")) else "not ready")
+                "Network Operator "
+                + ("ready" if bool(network_operator.get("ready")) else "not ready")
             )
     gpudirect_mode = str(payload.get("gpudirect_mode", "") or "").strip()
     if gpudirect_mode:

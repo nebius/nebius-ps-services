@@ -481,7 +481,7 @@ def test_wizard_declared_observability_path_is_prompted_at_project_root(
         config_path="infra.components.mk8s",
         description="MK8s",
         wizard_fields={
-            "observability.enabled": {},
+            "deploy.observability.enabled": {},
         },
     )
 
@@ -519,10 +519,10 @@ def test_wizard_declared_observability_path_is_prompted_at_project_root(
     )
 
     assert completed is True
-    assert prompted_paths.count("observability.enabled") == 1
+    assert prompted_paths.count("deploy.observability.enabled") == 1
     assert not any("Skipping wizard field" in message for message in rendered_messages)
     payload = yaml.safe_load(updated_yaml)
-    assert payload["observability"]["enabled"] is True
+    assert payload["deploy"]["observability"]["enabled"] is True
 
 
 def test_wizard_prompts_vm_observability_without_duplicate_root_prompt(monkeypatch) -> None:
@@ -565,7 +565,7 @@ def test_wizard_prompts_vm_observability_without_duplicate_root_prompt(monkeypat
         config_path="infra.components.mk8s",
         description="MK8s",
         wizard_fields={
-            "observability.enabled": {},
+            "deploy.observability.enabled": {},
         },
     )
     vm_entry = ComponentEntry(
@@ -574,8 +574,8 @@ def test_wizard_prompts_vm_observability_without_duplicate_root_prompt(monkeypat
         config_path="infra.components.vm",
         description="VM",
         wizard_fields={
-            "observability.enabled": {},
-            "observability.vm.logs.enabled": {},
+            "deploy.observability.enabled": {},
+            "deploy.observability.vm.logs.enabled": {},
         },
     )
 
@@ -607,11 +607,11 @@ def test_wizard_prompts_vm_observability_without_duplicate_root_prompt(monkeypat
     )
 
     assert completed is True
-    assert prompted_paths.count("observability.enabled") == 1
-    assert prompted_paths.count("observability.vm.logs.enabled") == 1
+    assert prompted_paths.count("deploy.observability.enabled") == 1
+    assert prompted_paths.count("deploy.observability.vm.logs.enabled") == 1
     payload = yaml.safe_load(updated_yaml)
-    assert payload["observability"]["enabled"] is True
-    assert payload["observability"]["vm"]["logs"]["enabled"] is True
+    assert payload["deploy"]["observability"]["enabled"] is True
+    assert payload["deploy"]["observability"]["vm"]["logs"]["enabled"] is True
 
 
 def test_vm_service_account_prompt_only_appears_when_standalone_collector_enabled(
@@ -629,12 +629,14 @@ def test_vm_service_account_prompt_only_appears_when_standalone_collector_enable
                 },
                 "notifications": {"email_enabled": True, "email": None},
             },
-            "observability": {
-                "enabled": True,
-                "vm": {
-                    "collector": {
-                        "enabled": True,
-                    }
+            "deploy": {
+                "observability": {
+                    "enabled": True,
+                    "vm": {
+                        "collector": {
+                            "enabled": True,
+                        }
+                    },
                 },
             },
             "infra": {
@@ -658,8 +660,8 @@ def test_vm_service_account_prompt_only_appears_when_standalone_collector_enable
         config_path="infra.components.vm",
         description="VM",
         wizard_fields={
-            "observability.enabled": {},
-            "observability.vm.collector.enabled": {},
+            "deploy.observability.enabled": {},
+            "deploy.observability.vm.collector.enabled": {},
             "inputs.service_account_id": {},
         },
     )
@@ -1026,9 +1028,7 @@ def test_wizard_auto_selects_single_provider_option_for_optional_field(
     class _Lookup:
         def resolve(self, *, provider, args, payload, field_path):
             _ = args, payload
-            if provider == "mk8s_gpu_stack_presets" and field_path.endswith(
-                ".gpu_stack_preset"
-            ):
+            if provider == "mk8s_gpu_stack_presets" and field_path.endswith(".gpu_stack_preset"):
                 return [OptionChoice(value="cuda13.0", label="cuda13.0")]
             return []
 
@@ -1099,9 +1099,7 @@ def test_materialize_singleton_provider_defaults_sets_missing_single_choice_fiel
     class _Lookup:
         def resolve(self, *, provider, args, payload, field_path):
             _ = args, payload
-            if provider == "mk8s_gpu_stack_presets" and field_path.endswith(
-                ".gpu_stack_preset"
-            ):
+            if provider == "mk8s_gpu_stack_presets" and field_path.endswith(".gpu_stack_preset"):
                 return [OptionChoice(value="cuda13.0", label="cuda13.0")]
             return []
 
@@ -1760,9 +1758,7 @@ def test_wizard_uses_declared_default_for_nested_helper_field_without_persisting
     )
     monkeypatch.setattr(
         "nebius_cxcli.cli.module_variables",
-        lambda _source: (
-            ModuleVariable(name="cluster_name", required=True, type_hint="string"),
-        ),
+        lambda _source: (ModuleVariable(name="cluster_name", required=True, type_hint="string"),),
     )
     monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
 
@@ -1841,7 +1837,9 @@ def test_wizard_skips_irrelevant_mk8s_gpu_validation_prompts_until_gpu_cluster_i
             "deploy.validations.mk8s_gpu.gpu_visibility.max_nodes": {"default": 3},
             "deploy.validations.mk8s_gpu.nccl.enabled": {"default": True},
             "deploy.validations.mk8s_gpu.nccl.max_nodes": {"default": 8},
-            "deploy.validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps": {"default": 300},
+            "deploy.validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps": {
+                "default": 300
+            },
             "deploy.validations.mk8s_gpu.health_checker.enabled": {"default": False},
         },
     )
@@ -1895,9 +1893,11 @@ def test_wizard_skips_irrelevant_mk8s_gpu_validation_prompts_until_gpu_cluster_i
     assert "deploy.validations.mk8s_gpu.gpu_visibility.max_nodes" in prompted_paths
     assert "deploy.validations.mk8s_gpu.nccl.enabled" in prompted_paths
     assert "deploy.validations.mk8s_gpu.nccl.max_nodes" in prompted_paths
-    assert "deploy.validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps" not in prompted_paths
+    assert (
+        "deploy.validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps"
+        not in prompted_paths
+    )
     assert "deploy.validations.mk8s_gpu.health_checker.enabled" not in prompted_paths
-
 
 
 def test_wizard_auto_enabled_mk8s_gpu_apps_are_prompted_in_same_pass(monkeypatch) -> None:

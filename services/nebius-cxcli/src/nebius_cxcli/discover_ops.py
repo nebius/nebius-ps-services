@@ -163,7 +163,10 @@ def _config_relative_from_changed(path: str) -> str | None:
     parts = [token for token in normalized.split("/") if token]
     if len(parts) < 3:
         return None
-    if normalized.endswith("config.yaml") and _infer_project_folders_from_path(normalized) is not None:
+    if (
+        normalized.endswith("config.yaml")
+        and _infer_project_folders_from_path(normalized) is not None
+    ):
         return normalized
     if "generated" not in parts:
         return None

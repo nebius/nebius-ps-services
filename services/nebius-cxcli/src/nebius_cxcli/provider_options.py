@@ -79,6 +79,7 @@ class _ComputePublicImageFamily:
     human_name: str
     compatibility: str
 
+
 def _normalize_plugin_choices(items: Iterable[object] | None) -> list[OptionChoice]:
     if not items:
         return []
@@ -399,11 +400,7 @@ class ProviderOptionLookup:
         normalized_project_id = _as_str(project_id)
         normalized_platform_name = _as_str(platform_name)
         normalized_preset_name = _as_str(preset_name)
-        if (
-            not normalized_project_id
-            or not normalized_platform_name
-            or not normalized_preset_name
-        ):
+        if not normalized_project_id or not normalized_platform_name or not normalized_preset_name:
             return None
 
         presets = self._resolve_compute_platform_preset_inventory(
@@ -425,11 +422,7 @@ class ProviderOptionLookup:
         normalized_project_id = _as_str(project_id)
         normalized_platform_name = _as_str(platform_name)
         normalized_preset_name = _as_str(preset_name)
-        if (
-            not normalized_project_id
-            or not normalized_platform_name
-            or not normalized_preset_name
-        ):
+        if not normalized_project_id or not normalized_platform_name or not normalized_preset_name:
             return None
 
         presets = self._resolve_compute_platform_preset_inventory(
@@ -1000,9 +993,7 @@ class ProviderOptionLookup:
 
         inventory = self._resolve_project_compute_platform_inventory(project_id)
         resolved = tuple(
-            choice
-            for choice in inventory
-            if not prefix or choice.value.startswith(prefix)
+            choice for choice in inventory if not prefix or choice.value.startswith(prefix)
         )
         self._cache[cache_key] = resolved
         return resolved
@@ -1032,7 +1023,9 @@ class ProviderOptionLookup:
         require_gpu_clustering = False
         gpu_cluster_required_path = _as_str(args.get("gpu_cluster_required_path"))
         if gpu_cluster_required_path:
-            require_gpu_clustering = bool(_as_str(_payload_value(payload, gpu_cluster_required_path)))
+            require_gpu_clustering = bool(
+                _as_str(_payload_value(payload, gpu_cluster_required_path))
+            )
         tenant_id = self._resolve_tenant_id(payload, args)
         region_id = self._resolve_region_id(payload, args)
 
@@ -1079,7 +1072,9 @@ class ProviderOptionLookup:
                 if not item.preset:
                     continue
                 current = advice_by_preset.get(item.preset)
-                if current is None or _capacity_advice_sort_key(item) < _capacity_advice_sort_key(current):
+                if current is None or _capacity_advice_sort_key(item) < _capacity_advice_sort_key(
+                    current
+                ):
                     advice_by_preset[item.preset] = item
 
             recommended_preset = ""
@@ -1287,7 +1282,9 @@ class ProviderOptionLookup:
             )
             if platform_name in unsupported_platforms:
                 continue
-            compatibility = "recommended" if platform_name in recommended_platforms else "compatible"
+            compatibility = (
+                "recommended" if platform_name in recommended_platforms else "compatible"
+            )
             human_name = _as_str(getattr(spec, "image_family_human_readable", None)) or ""
             current = families.get(family)
             if current is not None and current.compatibility == "recommended":

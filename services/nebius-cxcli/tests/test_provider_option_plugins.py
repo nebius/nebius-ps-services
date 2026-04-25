@@ -151,12 +151,8 @@ def _install_fake_compute_module(
                     SimpleNamespace(
                         spec=SimpleNamespace(
                             image_family=item.get("image_family"),
-                            image_family_human_readable=item.get(
-                                "image_family_human_readable"
-                            ),
-                            recommended_platforms=list(
-                                item.get("recommended_platforms", [])
-                            ),
+                            image_family_human_readable=item.get("image_family_human_readable"),
+                            recommended_platforms=list(item.get("recommended_platforms", [])),
                             unsupported_platforms=[
                                 SimpleNamespace(key=key, value=value)
                                 for key, value in dict(
@@ -759,12 +755,12 @@ def test_compute_platform_presets_rank_gpu_shapes_by_live_capacity_advice(monkey
     assert [(choice.value, choice.label, choice.recommended) for choice in resolved] == [
         (
             "8gpu-128vcpu-1600gb",
-            "8gpu-128vcpu-1600gb  (vCPU=128, RAM=1600GiB, GPU=8, GPU cluster, InfiniBand), live on-demand=2, reserved=0, best fabric fabric-2, recommended",
+            "8gpu-128vcpu-1600gb  (vCPU=128, RAM=1600GiB, GPU=8, GPU cluster, InfiniBand), live on-demand VMs=2, reserved VMs=0, best fabric fabric-2, recommended",
             True,
         ),
         (
             "1gpu-16vcpu-200gb",
-            "1gpu-16vcpu-200gb  (vCPU=16, RAM=200GiB, GPU=1, Ethernet only, testing/dev), live on-demand=0, reserved=0",
+            "1gpu-16vcpu-200gb  (vCPU=16, RAM=200GiB, GPU=1, Ethernet only, testing/dev), live on-demand VMs=0, reserved VMs=0",
             False,
         ),
     ]
@@ -931,7 +927,7 @@ def test_mk8s_infiniband_fabrics_use_live_capacity_rows_for_clusterable_shape(
     assert [(choice.value, choice.label, choice.recommended) for choice in resolved] == [
         (
             "us-central1-new-fabric",
-            "us-central1-new-fabric  (gpu-h200-sxm, us-central1), live on-demand=1, reserved=0, recommended",
+            "us-central1-new-fabric  (gpu-h200-sxm, us-central1), live on-demand VMs=1, reserved VMs=0, recommended",
             True,
         ),
     ]
@@ -1041,22 +1037,22 @@ def test_mk8s_infiniband_fabrics_rank_live_capacity_and_mark_recommended(monkeyp
     assert [(choice.value, choice.label, choice.recommended) for choice in resolved] == [
         (
             "fabric-2",
-            "fabric-2  (gpu-h100-sxm, eu-north1), live on-demand=2, reserved=0, recommended",
+            "fabric-2  (gpu-h100-sxm, eu-north1), live on-demand VMs=2, reserved VMs=0, recommended",
             True,
         ),
         (
             "fabric-3",
-            "fabric-3  (gpu-h100-sxm, eu-north1), live on-demand=0, reserved=0",
+            "fabric-3  (gpu-h100-sxm, eu-north1), live on-demand VMs=0, reserved VMs=0",
             False,
         ),
         (
             "fabric-4",
-            "fabric-4  (gpu-h100-sxm, eu-north1), live on-demand=0, reserved=0",
+            "fabric-4  (gpu-h100-sxm, eu-north1), live on-demand VMs=0, reserved VMs=0",
             False,
         ),
         (
             "fabric-9",
-            "fabric-9  (gpu-h100-sxm, eu-north1), live on-demand=0, reserved=0",
+            "fabric-9  (gpu-h100-sxm, eu-north1), live on-demand VMs=0, reserved VMs=0",
             False,
         ),
     ]
@@ -1064,9 +1060,7 @@ def test_mk8s_infiniband_fabrics_rank_live_capacity_and_mark_recommended(monkeyp
 
 def test_resolve_k8s_version_prefers_dynamic_component_input_path() -> None:
     lookup = ProviderOptionLookup()
-    lookup._cache[("mk8s_control_plane_versions",)] = (
-        OptionChoice(value="1.32", label="1.32"),
-    )
+    lookup._cache[("mk8s_control_plane_versions",)] = (OptionChoice(value="1.32", label="1.32"),)
 
     resolved = lookup._resolve_k8s_version(
         payload={

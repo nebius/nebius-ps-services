@@ -304,16 +304,13 @@ def test_validation_scope_summary_lines_group_enabled_components_concisely(
         source_profile=SourceProfile.PORTABLE,
     )
 
-    assert (
-        lines
-        == [
-            "Validated scope:",
-            "  infra:",
-            "    - Compute: mk8s",
-            "  apps:",
-            "    - Platform: nvidia-gpu-operator, nvidia-network-operator",
-        ]
-    )
+    assert lines == [
+        "Validated scope:",
+        "  infra:",
+        "    - Compute: mk8s",
+        "  apps:",
+        "    - Platform: nvidia-gpu-operator, nvidia-network-operator",
+    ]
 
 
 def test_validate_command_fails_on_confirmed_live_quota_insufficiency(
@@ -685,7 +682,10 @@ def test_quota_check_command_coverage_gap_warns_without_all_regions_next_step(
     collapsed_output = " ".join(plain_output.split())
     assert "Quota check completed with warnings." in collapsed_output
     assert "No confirmed quota insufficiency was found." in collapsed_output
-    assert "Some quota dimensions could not be evaluated from the current config/API surface." in collapsed_output
+    assert (
+        "Some quota dimensions could not be evaluated from the current config/API surface."
+        in collapsed_output
+    )
     assert (
         "Quota confirmed: live quota was sufficient for the following checked component(s)."
         in collapsed_output
@@ -694,8 +694,7 @@ def test_quota_check_command_coverage_gap_warns_without_all_regions_next_step(
     assert "    checked:" in plain_output
     assert "      - storage.bucket.count" in plain_output
     assert (
-        "mk8s: 2 checked quota dimensions confirmed in eu-north1 "
-        "(partial coverage; see gaps below)"
+        "mk8s: 2 checked quota dimensions confirmed in eu-north1 (partial coverage; see gaps below)"
     ) in collapsed_output
     assert "      - compute.instance.count" in plain_output
     assert "      - compute.instance.non-gpu.vcpu" in plain_output
@@ -932,7 +931,9 @@ def test_quota_request_command_reports_noop_when_no_confirmed_shortage(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(cli, "_load_context", lambda _path: (object(), _fake_paths(tmp_path)))
-    monkeypatch.setattr(cli, "_warn_on_live_quota_issues", lambda *_args, **_kwargs: _empty_quota_report())
+    monkeypatch.setattr(
+        cli, "_warn_on_live_quota_issues", lambda *_args, **_kwargs: _empty_quota_report()
+    )
 
     result = runner.invoke(cli.app, ["quota-request", str(tmp_path / "config.yaml")])
 
@@ -1042,9 +1043,8 @@ def test_quota_request_command_prints_coverage_gaps_when_no_request_is_possible(
 
     assert result.exit_code == 0, result.output
     output = _plain_output(result.output)
-    assert (
-        "quota could not be fully evaluated for the following component(s)"
-        in " ".join(output.split())
+    assert "quota could not be fully evaluated for the following component(s)" in " ".join(
+        output.split()
     )
     assert "MK8s GPU node-group boot-disk quota could not be fully evaluated" in output
     assert "No quota request was submitted." in output
@@ -1352,7 +1352,9 @@ def test_render_command_accepts_local_source_profile(
         "_write_generated_runtime_manifest",
         lambda config, paths, *, source_profile, **kwargs: paths.generated_dir / "manifest.json",
     )
-    monkeypatch.setattr(cli, "_try_generate_terraform_lock_file", lambda config, paths, **kwargs: False)
+    monkeypatch.setattr(
+        cli, "_try_generate_terraform_lock_file", lambda config, paths, **kwargs: False
+    )
 
     result = runner.invoke(
         cli.app,
@@ -1878,8 +1880,8 @@ def test_deploy_command_rejects_generated_target_with_guidance(
     result = runner.invoke(cli.app, ["deploy", str(tmp_path / "generated")])
 
     assert result.exit_code != 0
-    assert (
-        "Deploy target must be project config.yaml, not generated/." in _plain_output(result.output)
+    assert "Deploy target must be project config.yaml, not generated/." in _plain_output(
+        result.output
     )
 
 
@@ -1965,9 +1967,8 @@ def test_destroy_command_rejects_generated_target_with_guidance(
     result = runner.invoke(cli.app, ["destroy", str(tmp_path / "generated")])
 
     assert result.exit_code != 0
-    assert (
-        "Destroy target must be project config.yaml, not generated/."
-        in _plain_output(result.output)
+    assert "Destroy target must be project config.yaml, not generated/." in _plain_output(
+        result.output
     )
 
 
@@ -2240,6 +2241,72 @@ def test_run_deploy_preflight_skips_flux_validation_when_no_apps_enabled(
     ]
 
 
+def test_generated_bundle_live_quota_failure_prints_remediation_hints(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
+    rendered_messages: list[str] = []
+    report = QuotaReport(
+        tenant_id="tenant-123",
+        project_id="project-456",
+        region_id="eu-north1",
+        checked_at="2026-04-25T00:00:00+00:00",
+        checks=(
+            QuotaCheck(
+                component_id="mk8s",
+                instance_id="mk8s",
+                component_label="mk8s",
+                quota_name="compute.instance.gpu.h100",
+                region="eu-north1",
+                required=16,
+                reason="2 GPU node(s) at gpu-h100-sxm/8gpu-128vcpu-1600gb",
+                unit="count",
+                available=4,
+                sufficient=False,
+                tenant_limit=4,
+                tenant_usage=0,
+                project_limit=None,
+                project_usage=0,
+                source_scope="capacity-dashboard/on-demand",
+                description=(
+                    "Capacity Dashboard GPU availability "
+                    "(on-demand VM slots, fabric fabric-4, converted to GPU units)"
+                ),
+                contributors=(),
+            ),
+        ),
+    )
+
+    monkeypatch.setattr(cli, "terraform_init", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_assess_live_quota_report", lambda *_args, **_kwargs: report)
+    monkeypatch.setattr(
+        cli,
+        "_managed_mk8s_quota_requirements_from_terraform_state",
+        lambda *_args, **_kwargs: (),
+    )
+    monkeypatch.setattr(
+        cli.console,
+        "print",
+        lambda *args, **_kwargs: rendered_messages.append(" ".join(str(arg) for arg in args)),
+    )
+
+    with pytest.raises(RuntimeError, match="insufficient for deploy"):
+        cli._raise_on_generated_bundle_live_quota_issues(
+            "cfg",
+            fake_paths,
+            manifest={"render": {"module_sources": []}},
+            runtime_env={},
+            phase="deploy",
+        )
+
+    output = "\n".join(rendered_messages)
+    assert "Next step: review and submit quota requests with:" in output
+    assert f"nebius-cxcli quota-request {fake_paths.config_path}" in output
+    assert "Next step: compare quota availability across regions with:" in output
+    assert f"nebius-cxcli quota-check --all-regions {fake_paths.config_path}" in output
+
+
 def test_adjust_quota_report_for_managed_mk8s_state_discounts_existing_cluster_capacity() -> None:
     report = QuotaReport(
         tenant_id="tenant-123",
@@ -2263,7 +2330,10 @@ def test_adjust_quota_report_for_managed_mk8s_state_discounts_existing_cluster_c
                 project_limit=24,
                 project_usage=16,
                 source_scope="capacity-dashboard/on-demand",
-                description="Capacity Dashboard GPU availability",
+                description=(
+                    "Capacity Dashboard GPU availability "
+                    "(on-demand VM slots, fabric fabric-4, converted to GPU units)"
+                ),
                 contributors=(
                     cli.QuotaContributor(
                         component_id="mk8s",
@@ -2321,7 +2391,9 @@ def test_managed_mk8s_quota_requirements_from_terraform_state_maps_generated_mod
         }
     }
     captured: dict[str, object] = {}
-    monkeypatch.setattr(cli, "terraform_state_list", lambda *_args, **_kwargs: ("module.cluster_main",))
+    monkeypatch.setattr(
+        cli, "terraform_state_list", lambda *_args, **_kwargs: ("module.cluster_main",)
+    )
     monkeypatch.setattr(
         cli,
         "terraform_show_json",
@@ -2493,12 +2565,14 @@ def test_validate_generated_mk8s_resource_name_preflight_passes_state_managed_na
     monkeypatch.setattr(
         cli,
         "validate_mk8s_resource_name_preflight",
-        lambda current_config, *, managed_mk8s_cluster_names, managed_gpu_cluster_names: captured.update(
-            {
-                "config": current_config,
-                "managed_mk8s_cluster_names": managed_mk8s_cluster_names,
-                "managed_gpu_cluster_names": managed_gpu_cluster_names,
-            }
+        lambda current_config, *, managed_mk8s_cluster_names, managed_gpu_cluster_names: (
+            captured.update(
+                {
+                    "config": current_config,
+                    "managed_mk8s_cluster_names": managed_mk8s_cluster_names,
+                    "managed_gpu_cluster_names": managed_gpu_cluster_names,
+                }
+            )
         ),
     )
 
@@ -2964,25 +3038,21 @@ def test_deploy_generated_artifacts_rejects_manifest_missing_deploy_validations(
             },
         },
     }
-    manifest = {
-        "deploy": {
-            "targets": [_mk8s_target(fake_paths)]
-        }
-    }
+    manifest = {"deploy": {"targets": [_mk8s_target(fake_paths)]}}
     monkeypatch.setattr(cli, "_run_deploy_preflight", lambda *_args, **_kwargs: None)
 
     with pytest.raises(
         RuntimeError,
         match="Generated manifest is missing deploy\\.validations metadata",
-        ):
-            cli._deploy_generated_artifacts(
-                config,
-                fake_paths,
-                manifest,
+    ):
+        cli._deploy_generated_artifacts(
+            config,
+            fake_paths,
+            manifest,
             auto_auth_bootstrap=True,
             skip_validations=False,
-                skip_validation_kinds=set(),
-            )
+            skip_validation_kinds=set(),
+        )
 
 
 def test_deploy_generated_artifacts_rejects_manifest_missing_deploy_section(
@@ -3338,7 +3408,9 @@ def test_deploy_generated_artifacts_writes_summary_even_when_validation_fails(
             + "\n",
             encoding="utf-8",
         )
-        raise RuntimeError("GPU stack readiness check failed. Report: gpu-stack-readiness-report.json")
+        raise RuntimeError(
+            "GPU stack readiness check failed. Report: gpu-stack-readiness-report.json"
+        )
 
     monkeypatch.setattr(cli, "run_mk8s_gpu_validations", _fake_run_mk8s_gpu_validations)
 
@@ -3462,21 +3534,17 @@ def test_destroy_generated_artifacts_destroys_flux_before_terraform(
     monkeypatch.setattr(
         cli,
         "_run_terraform_destroy_with_recovery",
-        lambda current_config,
-        paths,
-        *,
-        auto_auth_bootstrap,
-        yes,
-        initialize=True,
-        status_watchers=None: calls.append(
-            (
-                "destroy_tf",
-                current_config,
-                paths,
-                auto_auth_bootstrap,
-                yes,
-                initialize,
-                status_watchers,
+        lambda current_config, paths, *, auto_auth_bootstrap, yes, initialize=True, status_watchers=None: (
+            calls.append(
+                (
+                    "destroy_tf",
+                    current_config,
+                    paths,
+                    auto_auth_bootstrap,
+                    yes,
+                    initialize,
+                    status_watchers,
+                )
             )
         ),
     )
@@ -3533,22 +3601,18 @@ def test_destroy_generated_artifacts_continues_when_flux_teardown_fails(
     monkeypatch.setattr(
         cli,
         "_run_terraform_destroy_with_recovery",
-        lambda current_config,
-        paths,
-        *,
-        auto_auth_bootstrap,
-        yes,
-        initialize=True,
-        status_watchers=None: captured.setdefault(
-            "destroy",
-            {
-                "config": current_config,
-                "paths": paths,
-                "auto_auth_bootstrap": auto_auth_bootstrap,
-                "yes": yes,
-                "initialize": initialize,
-                "status_watchers": status_watchers,
-            },
+        lambda current_config, paths, *, auto_auth_bootstrap, yes, initialize=True, status_watchers=None: (
+            captured.setdefault(
+                "destroy",
+                {
+                    "config": current_config,
+                    "paths": paths,
+                    "auto_auth_bootstrap": auto_auth_bootstrap,
+                    "yes": yes,
+                    "initialize": initialize,
+                    "status_watchers": status_watchers,
+                },
+            )
         ),
     )
     monkeypatch.setattr(
@@ -3587,9 +3651,7 @@ def test_destroy_generated_artifacts_skips_flux_teardown_when_handoff_cluster_is
     }
     manifest = {
         "schema": "nebius-cxcli-generated/v1",
-        "deploy": {
-            "targets": [_mk8s_target(fake_paths)]
-        },
+        "deploy": {"targets": [_mk8s_target(fake_paths)]},
     }
     captured: dict[str, object] = {}
     messages: list[str] = []
@@ -3603,22 +3665,18 @@ def test_destroy_generated_artifacts_skips_flux_teardown_when_handoff_cluster_is
     monkeypatch.setattr(
         cli,
         "_run_terraform_destroy_with_recovery",
-        lambda current_config,
-        paths,
-        *,
-        auto_auth_bootstrap,
-        yes,
-        initialize=True,
-        status_watchers=None: captured.setdefault(
-            "destroy",
-            {
-                "config": current_config,
-                "paths": paths,
-                "auto_auth_bootstrap": auto_auth_bootstrap,
-                "yes": yes,
-                "initialize": initialize,
-                "status_watchers": status_watchers,
-            },
+        lambda current_config, paths, *, auto_auth_bootstrap, yes, initialize=True, status_watchers=None: (
+            captured.setdefault(
+                "destroy",
+                {
+                    "config": current_config,
+                    "paths": paths,
+                    "auto_auth_bootstrap": auto_auth_bootstrap,
+                    "yes": yes,
+                    "initialize": initialize,
+                    "status_watchers": status_watchers,
+                },
+            )
         ),
     )
     monkeypatch.setattr(
@@ -3643,8 +3701,7 @@ def test_destroy_generated_artifacts_skips_flux_teardown_when_handoff_cluster_is
     }
     assert any(
         "Skipping rendered app teardown before infra destroy because this generated bundle destroys "
-        "the handed-off cluster directly."
-        in message
+        "the handed-off cluster directly." in message
         for message in messages
     )
 
@@ -5088,7 +5145,9 @@ def test_terraform_apply_command_invokes_runtime_auth_and_apply(
     monkeypatch.setattr(
         cli,
         "write_inventory",
-        lambda config, paths, **kwargs: captured.setdefault("inventory", {"config": config, "paths": paths}),
+        lambda config, paths, **kwargs: captured.setdefault(
+            "inventory", {"config": config, "paths": paths}
+        ),
     )
 
     result = runner.invoke(
@@ -5143,22 +5202,18 @@ def test_terraform_destroy_command_invokes_runtime_auth_and_destroy(
     monkeypatch.setattr(
         cli,
         "_run_terraform_destroy_with_recovery",
-        lambda config,
-        paths,
-        *,
-        auto_auth_bootstrap,
-        yes,
-        initialize=True,
-        status_watchers=None: captured.setdefault(
-            "destroy",
-            {
-                "config": config,
-                "paths": paths,
-                "auto_auth_bootstrap": auto_auth_bootstrap,
-                "yes": yes,
-                "initialize": initialize,
-                "status_watchers": status_watchers,
-            },
+        lambda config, paths, *, auto_auth_bootstrap, yes, initialize=True, status_watchers=None: (
+            captured.setdefault(
+                "destroy",
+                {
+                    "config": config,
+                    "paths": paths,
+                    "auto_auth_bootstrap": auto_auth_bootstrap,
+                    "yes": yes,
+                    "initialize": initialize,
+                    "status_watchers": status_watchers,
+                },
+            )
         ),
     )
 
@@ -5204,8 +5259,7 @@ def test_terraform_destroy_command_confirmation_targets_infra_dir(
     assert captured["action_label"] == "Terraform destroy"
     assert captured["prompt_text"] == "Continue and destroy the rendered infra resources?"
     assert captured["warning_text"] == (
-        "Terraform destroy will destroy the rendered infra resources under "
-        f"{fake_paths.infra_dir}."
+        f"Terraform destroy will destroy the rendered infra resources under {fake_paths.infra_dir}."
     )
 
 
@@ -5420,7 +5474,9 @@ def test_flux_bootstrap_command_invokes_flux_ops(
     monkeypatch.setattr(
         cli,
         "write_inventory",
-        lambda config, paths, **kwargs: captured.setdefault("inventory", {"config": config, "paths": paths}),
+        lambda config, paths, **kwargs: captured.setdefault(
+            "inventory", {"config": config, "paths": paths}
+        ),
     )
     monkeypatch.setattr(cli, "ensure_flux", lambda _paths, *, extra_env=None: "reconciled")
 
@@ -6376,9 +6432,7 @@ def test_flux_bootstrap_command_uses_cluster_handoff_when_config_declares_it(
     }
     manifest = {
         "schema": "nebius-cxcli-generated/v1",
-        "deploy": {
-            "targets": [_mk8s_target(fake_paths)]
-        },
+        "deploy": {"targets": [_mk8s_target(fake_paths)]},
     }
     target_paths = _target_paths(fake_paths)
     captured: dict[str, object] = {}
@@ -6468,9 +6522,7 @@ def test_flux_apply_command_applies_rendered_flux_with_cluster_handoff(
     }
     manifest = {
         "schema": "nebius-cxcli-generated/v1",
-        "deploy": {
-            "targets": [_mk8s_target(fake_paths)]
-        },
+        "deploy": {"targets": [_mk8s_target(fake_paths)]},
     }
     target_paths = _target_paths(fake_paths)
     captured: dict[str, object] = {}
@@ -6627,9 +6679,9 @@ def test_flux_apply_command_all_targets_persists_contexts_without_switching_curr
     monkeypatch.setattr(
         cli,
         "_apply_rendered_flux",
-        lambda paths, *, extra_env=None: cast(list[tuple[ProjectPaths, dict[str, str] | None]], captured["apply_flux"]).append(
-            (paths, extra_env)
-        ),
+        lambda paths, *, extra_env=None: cast(
+            list[tuple[ProjectPaths, dict[str, str] | None]], captured["apply_flux"]
+        ).append((paths, extra_env)),
     )
     monkeypatch.setattr(
         cli,
@@ -6714,9 +6766,7 @@ def test_flux_destroy_command_deletes_rendered_flux_with_cluster_handoff(
     }
     manifest = {
         "schema": "nebius-cxcli-generated/v1",
-        "deploy": {
-            "targets": [_mk8s_target(fake_paths)]
-        },
+        "deploy": {"targets": [_mk8s_target(fake_paths)]},
     }
     captured: dict[str, object] = {}
 
@@ -6783,8 +6833,7 @@ def test_flux_destroy_command_confirmation_targets_flux_dir(
         "Continue and delete the rendered app resources from the target cluster?"
     )
     assert captured["warning_text"] == (
-        "Flux destroy will delete the rendered app resources declared under "
-        f"{fake_paths.flux_dir}."
+        f"Flux destroy will delete the rendered app resources declared under {fake_paths.flux_dir}."
     )
 
 
@@ -6885,7 +6934,10 @@ def test_help_text_maps_commands_to_target_types() -> None:
     output = " ".join(plain_output.split())
 
     assert "Target guide:" in plain_output
-    assert "create bootstraps one name-based tenant/project folder from a deployments root directory" in output
+    assert (
+        "create bootstraps one name-based tenant/project folder from a deployments root directory"
+        in output
+    )
     assert "overwrites existing resolved project folders only with confirmation" in output
     assert "component list/add/remove are the day-2 config.yaml editing surface" in output
     assert "discover uses a deployment-scope directory" in output
@@ -6969,10 +7021,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         "bootstrap one name-based tenant/project folder with config.yaml plus generated/ skeleton"
         in normalized_create_help
     )
-    assert (
-        "overwrite an existing resolved project folder from scratch"
-        in normalized_create_help
-    )
+    assert "overwrite an existing resolved project folder from scratch" in normalized_create_help
     assert "add [OPTIONS] CONFIG_YAML [COMPONENT_ID]..." in component_add_help
     assert "component add prompts" in normalized_component_add_help
     assert "Infra-only" in normalized_component_add_help
@@ -6991,7 +7040,10 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     normalized_validate_help = " ".join(validate_help.split()).lower()
     normalized_validate_generated_help = " ".join(validate_generated_help.split()).lower()
     assert "--strict" not in validate_help
-    assert "runtime source, readiness, provider/chart, and live quota/capacity checks" in normalized_validate_help
+    assert (
+        "runtime source, readiness, provider/chart, and live quota/capacity checks"
+        in normalized_validate_help
+    )
     assert "validate-generated [OPTIONS] GENERATED_PATH" in validate_generated_help
     assert "generated-bundle readiness" in normalized_validate_generated_help
     assert "portability" in normalized_validate_generated_help
@@ -7109,9 +7161,8 @@ def test_report_write_command_rejects_generated_target_with_guidance(
     result = runner.invoke(cli.app, ["report", str(tmp_path / "generated")])
 
     assert result.exit_code != 0
-    assert (
-        "Report target must be project config.yaml, not generated/."
-        in _plain_output(result.output)
+    assert "Report target must be project config.yaml, not generated/." in _plain_output(
+        result.output
     )
 
 
@@ -7546,11 +7597,13 @@ def test_ensure_runtime_auth_material_recreates_stale_cached_public_key(
 
         monkeypatch.setattr(cli, "_runtime_auth_cache_load", _fake_cache_load)
         monkeypatch.setattr(cli, "_runtime_auth_profile_status", lambda **_kwargs: stale_status)
+        monkeypatch.setattr(cli, "_wait_for_runtime_auth_token_ready", lambda _material: None)
         monkeypatch.setattr(
             cli,
             "_create_or_recreate_runtime_auth_profile",
-            lambda **kwargs: recreate_calls.append(bool(kwargs["recreate"]))
-            or (refreshed_material, True),
+            lambda **kwargs: (
+                recreate_calls.append(bool(kwargs["recreate"])) or (refreshed_material, True)
+            ),
         )
         monkeypatch.setattr(
             cli.console,
@@ -7568,7 +7621,9 @@ def test_ensure_runtime_auth_material_recreates_stale_cached_public_key(
         assert recreate_calls == [True]
         assert os.environ["NEBIUS_SA_ID"] == "sa-fresh"
         assert os.environ["NEBIUS_AUTH_PUBLIC_KEY_ID"] == "auth-key-fresh"
-        assert os.environ["NEBIUS_AUTH_PRIVATE_KEY_FILE"] == str(refreshed_material.private_key_file)
+        assert os.environ["NEBIUS_AUTH_PRIVATE_KEY_FILE"] == str(
+            refreshed_material.private_key_file
+        )
         assert os.environ["NEBIUS_AUTH_PRIVATE_KEY_PEM"] == "FRESH-KEY-DATA"
         assert os.environ["AWS_ACCESS_KEY_ID"] == "fresh-access"
         assert os.environ["AWS_SECRET_ACCESS_KEY"] == "fresh-secret"
@@ -7762,12 +7817,16 @@ def test_ensure_runtime_auth_material_recreates_on_deleted_key_cloud_error(
         recreate_calls: list[bool] = []
 
         monkeypatch.setattr(cli, "_runtime_auth_cache_load", _fake_cache_load)
-        monkeypatch.setattr(cli, "_runtime_auth_profile_status", lambda **_kwargs: deleted_key_status)
+        monkeypatch.setattr(
+            cli, "_runtime_auth_profile_status", lambda **_kwargs: deleted_key_status
+        )
+        monkeypatch.setattr(cli, "_wait_for_runtime_auth_token_ready", lambda _material: None)
         monkeypatch.setattr(
             cli,
             "_create_or_recreate_runtime_auth_profile",
-            lambda **kwargs: recreate_calls.append(bool(kwargs["recreate"]))
-            or (refreshed_material, True),
+            lambda **kwargs: (
+                recreate_calls.append(bool(kwargs["recreate"])) or (refreshed_material, True)
+            ),
         )
 
         cli._ensure_runtime_auth_material(
@@ -7781,6 +7840,54 @@ def test_ensure_runtime_auth_material_recreates_on_deleted_key_cloud_error(
         assert os.environ["NEBIUS_AUTH_PUBLIC_KEY_ID"] == "auth-key-fresh"
     finally:
         _clear_runtime_auth_env()
+
+
+def test_wait_for_runtime_auth_token_ready_retries_until_token_service_accepts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_key_file = tmp_path / "auth-private.pem"
+    private_key_file.write_text("PRIVATE-KEY", encoding="utf-8")
+    material = cli.RuntimeAuthCacheMaterial(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="sa-123",
+        auth_public_key_id="publickey-123",
+        private_key_file=private_key_file,
+        private_key_pem="PRIVATE-KEY",
+        s3_access_key_id="access-key",
+        s3_secret_access_key="secret-key",
+    )
+    token_attempts: list[float] = []
+    closed_sdks: list[object] = []
+    rendered_messages: list[str] = []
+
+    class _FakeRuntimeAuthSDK:
+        def get_token_sync(self, *, timeout: float) -> object:
+            token_attempts.append(timeout)
+            if len(token_attempts) == 1:
+                raise RuntimeError(
+                    "Request error INVALID_ARGUMENT: Public Key not exists: "
+                    "'publickey-123'; Caused by error: JwtKeyNotExists"
+                )
+            return object()
+
+        def sync_close(self) -> None:
+            closed_sdks.append(self)
+
+    monkeypatch.setattr(cli, "_runtime_auth_token_sdk", lambda _material: _FakeRuntimeAuthSDK())
+    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        cli.console,
+        "print",
+        lambda *args, **_kwargs: rendered_messages.append(" ".join(str(arg) for arg in args)),
+    )
+
+    cli._wait_for_runtime_auth_token_ready(material)
+
+    assert len(token_attempts) == 2
+    assert len(closed_sdks) == 2
+    assert any("waiting for propagation" in message for message in rendered_messages)
 
 
 def test_auth_bootstrap_ci_syncs_runtime_profile(monkeypatch: pytest.MonkeyPatch) -> None:

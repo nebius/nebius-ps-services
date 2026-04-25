@@ -32,11 +32,7 @@ def _is_not_found_error(exc: Exception) -> bool:
     if code_name == "NOT_FOUND" or code_text in {"NOT_FOUND", "STATUSCODE.NOT_FOUND"}:
         return True
     message = str(exc).lower()
-    return (
-        "not found" in message
-        or "not_found" in message
-        or "statuscode.not_found" in message
-    )
+    return "not found" in message or "not_found" in message or "statuscode.not_found" in message
 
 
 @dataclass(frozen=True)
@@ -56,7 +52,9 @@ def _resolved_mk8s_components(payload: Mapping[str, Any]) -> tuple[_Mk8sResolved
         return ()
 
     entry_by_id = component_lookup("infra")
-    default_project_id = _as_text(payload.get("client_info", {}).get("nebius", {}).get("project_id"))
+    default_project_id = _as_text(
+        payload.get("client_info", {}).get("nebius", {}).get("project_id")
+    )
     resolved_components: list[_Mk8sResolvedComponent] = []
     for item in components:
         if not isinstance(item, Mapping) or not bool(item.get("enabled", False)):

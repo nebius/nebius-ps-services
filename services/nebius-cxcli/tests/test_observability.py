@@ -95,8 +95,10 @@ def _base_payload(
             }
         )
     payload = {
-        "observability": {
-            "enabled": observability_enabled,
+        "deploy": {
+            "observability": {
+                "enabled": observability_enabled,
+            },
         },
         "infra": {
             "components": [
@@ -146,7 +148,7 @@ def test_observability_project_defaults_follow_catalog() -> None:
     assert defaults["vm"]["collector"]["metrics"]["enabled"] is True
     assert defaults["vm"]["collector"]["logs"]["enabled"] is True
     assert defaults["vm"]["collector"]["logs"]["systemd_units"] == []
-    assert defaults["vm"]["logs"]["enabled"] is False
+    assert defaults["vm"]["logs"]["enabled"] is True
     assert defaults["vm"]["logs"]["systemd_units"] == []
 
 
@@ -168,9 +170,11 @@ def test_normalize_observability_settings_adds_project_defaults() -> None:
     changed = normalize_observability_project_settings(payload)
 
     assert changed is True
-    assert payload["observability"]["enabled"] is False
-    assert payload["observability"]["kubernetes"]["logs"]["excluded_namespaces"] == ["kube-system"]
-    assert "vm" not in payload["observability"]
+    assert payload["deploy"]["observability"]["enabled"] is False
+    assert payload["deploy"]["observability"]["kubernetes"]["logs"]["excluded_namespaces"] == [
+        "kube-system"
+    ]
+    assert "vm" not in payload["deploy"]["observability"]
 
 
 def test_normalize_observability_settings_vm_only_omits_kubernetes_defaults() -> None:
@@ -191,18 +195,20 @@ def test_normalize_observability_settings_vm_only_omits_kubernetes_defaults() ->
     changed = normalize_observability_project_settings(payload)
 
     assert changed is True
-    assert payload["observability"]["enabled"] is False
-    assert "kubernetes" not in payload["observability"]
-    assert payload["observability"]["vm"]["collector"]["enabled"] is False
-    assert payload["observability"]["vm"]["logs"]["enabled"] is False
+    assert payload["deploy"]["observability"]["enabled"] is False
+    assert "kubernetes" not in payload["deploy"]["observability"]
+    assert payload["deploy"]["observability"]["vm"]["collector"]["enabled"] is False
+    assert payload["deploy"]["observability"]["vm"]["logs"]["enabled"] is True
 
 
 def test_normalize_observability_settings_prunes_stale_kubernetes_branch_for_vm_only() -> None:
     payload = {
-        "observability": {
-            "enabled": True,
-            "kubernetes": {
-                "logs": {"enabled": False},
+        "deploy": {
+            "observability": {
+                "enabled": True,
+                "kubernetes": {
+                    "logs": {"enabled": False},
+                },
             },
         },
         "infra": {
@@ -221,10 +227,10 @@ def test_normalize_observability_settings_prunes_stale_kubernetes_branch_for_vm_
     changed = normalize_observability_project_settings(payload)
 
     assert changed is True
-    assert "kubernetes" not in payload["observability"]
-    assert payload["observability"]["enabled"] is True
-    assert payload["observability"]["vm"]["collector"]["enabled"] is False
-    assert payload["observability"]["vm"]["logs"]["enabled"] is False
+    assert "kubernetes" not in payload["deploy"]["observability"]
+    assert payload["deploy"]["observability"]["enabled"] is True
+    assert payload["deploy"]["observability"]["vm"]["collector"]["enabled"] is False
+    assert payload["deploy"]["observability"]["vm"]["logs"]["enabled"] is True
 
 
 def test_observability_auto_enables_k8s_agent_when_enabled() -> None:
@@ -292,6 +298,46 @@ def test_ensure_observability_app_rows_seeds_one_collector_per_target() -> None:
     assert all(item["release-name"] == "nebius-observability-agent" for item in charts)
 
 
+def test_ensure_observability_app_rows_fills_missing_collector_target() -> None:
+    payload = _base_payload(observability_enabled=True)
+    payload["infra"]["components"] = [
+        {
+            "id": "mk8s",
+            "instance_id": "blue",
+            "enabled": True,
+            "inputs": {"gpu_enabled": False},
+        },
+        {
+            "id": "mk8s",
+            "instance_id": "green",
+            "enabled": True,
+            "inputs": {"gpu_enabled": False},
+        },
+    ]
+    payload["apps"]["charts"] = [
+        {
+            "id": "nebius-observability-agent",
+            "instance_id": "nebius-observability-agent",
+            "enabled": True,
+            "target_ref": "blue",
+            "values": {},
+        }
+    ]
+
+    changed = ensure_observability_app_rows(payload, app_entries=component_entries("apps"))
+
+    assert changed is True
+    charts = sorted(
+        _chart_rows(payload, "nebius-observability-agent"),
+        key=lambda item: str(item["target_ref"]),
+    )
+    assert [item["target_ref"] for item in charts] == ["blue", "green"]
+    assert [item["instance_id"] for item in charts] == [
+        "nebius-observability-agent",
+        "nebius-observability-agent-green",
+    ]
+
+
 def test_observability_does_not_auto_enable_agent_when_disabled() -> None:
     payload = _base_payload(observability_enabled=False)
 
@@ -314,7 +360,7 @@ def test_observability_dependency_issues_require_project_toggle_for_agent() -> N
 
     issues = observability_dependency_issues(payload, app_entries=component_entries("apps"))
 
-    assert issues == ["apps:nebius-observability-agent requires observability.enabled=true"]
+    assert issues == ["apps:nebius-observability-agent requires deploy.observability.enabled=true"]
 
 
 def test_materialize_observability_agent_values_from_project_contract() -> None:
@@ -438,7 +484,7 @@ def test_observability_gpu_node_label_reconciliation_uses_catalog_selector() -> 
     assert dict(policy.labels)["nvidia.com/gpu.deploy.dcgm-exporter"] == "true"
 
 
-def test_observability_gpu_node_label_reconciliation_skips_manual_stack() -> None:
+def test_observability_gpu_node_label_reconciliation_skips_operator_managed_stack() -> None:
     payload = _base_payload(
         observability_enabled=True,
         enabled_apps=("nebius-observability-agent", "nvidia-gpu-operator"),
@@ -500,7 +546,7 @@ def test_materialize_observability_infra_values_skips_dcgm_labels_when_metrics_d
         observability_enabled=True,
         enabled_apps=("nebius-observability-agent", "nvidia-gpu-operator"),
     )
-    payload["observability"]["kubernetes"]["metrics"]["enabled"] = False
+    payload["deploy"]["observability"]["kubernetes"]["metrics"]["enabled"] = False
 
     changed = materialize_observability_infra_values(payload)
 
@@ -515,8 +561,8 @@ def test_materialize_observability_infra_values_sets_vm_journald_labels() -> Non
         mk8s_enabled=False,
         vm_enabled=True,
     )
-    payload["observability"]["vm"]["logs"]["enabled"] = True
-    payload["observability"]["vm"]["logs"]["systemd_units"] = [
+    payload["deploy"]["observability"]["vm"]["logs"]["enabled"] = True
+    payload["deploy"]["observability"]["vm"]["logs"]["systemd_units"] = [
         "sshd.service",
         "docker.service",
     ]
@@ -562,7 +608,7 @@ def test_materialize_observability_infra_values_sets_vm_standalone_collector_inp
             "region_id": "eu-north1",
         }
     }
-    payload["observability"]["vm"]["collector"]["enabled"] = True
+    payload["deploy"]["observability"]["vm"]["collector"]["enabled"] = True
     payload["infra"]["components"][1]["inputs"]["service_account_id"] = "serviceaccount-1"
 
     changed = materialize_observability_infra_values(payload)
@@ -580,7 +626,9 @@ def test_materialize_observability_infra_values_sets_vm_standalone_collector_inp
     assert vm_inputs["observability_collector_prometheus_agent_port"] == 19091
 
 
-def test_materialize_observability_infra_values_cleans_vm_standalone_collector_inputs_when_disabled() -> None:
+def test_materialize_observability_infra_values_cleans_vm_standalone_collector_inputs_when_disabled() -> (
+    None
+):
     payload = _base_payload(
         observability_enabled=False,
         mk8s_enabled=False,
@@ -612,7 +660,7 @@ def test_observability_status_summary_reports_vm_agent_and_gpu_metrics() -> None
         vm_enabled=True,
         enabled_apps=("nebius-observability-agent", "nvidia-gpu-operator"),
     )
-    payload["observability"]["vm"]["logs"]["enabled"] = True
+    payload["deploy"]["observability"]["vm"]["logs"]["enabled"] = True
 
     summary = observability_status_summary(payload)
 
@@ -698,8 +746,8 @@ def test_observability_endpoint_summary_respects_disabled_kubernetes_signals() -
             "region_id": "eu-north1",
         }
     }
-    payload["observability"]["kubernetes"]["logs"]["enabled"] = False
-    payload["observability"]["kubernetes"]["traces"]["enabled"] = False
+    payload["deploy"]["observability"]["kubernetes"]["logs"]["enabled"] = False
+    payload["deploy"]["observability"]["kubernetes"]["traces"]["enabled"] = False
 
     summary = observability_endpoint_summary(payload)
 
@@ -737,7 +785,9 @@ def test_observability_endpoint_summary_vm_only_reports_service_metrics_read_pat
     assert "metrics_service_provider_read" in summary["read"]
     assert "metrics_federate_read" in summary["read"]
     assert "metrics_user_read" not in summary["read"]
-    assert "platform-managed regional endpoints" in summary["write"]["metrics_platform_managed_write"]
+    assert (
+        "platform-managed regional endpoints" in summary["write"]["metrics_platform_managed_write"]
+    )
 
 
 def test_observability_endpoint_summary_vm_logs_adds_logs_read_path_only() -> None:
@@ -746,7 +796,7 @@ def test_observability_endpoint_summary_vm_logs_adds_logs_read_path_only() -> No
         mk8s_enabled=False,
         vm_enabled=True,
     )
-    payload["observability"]["vm"]["logs"]["enabled"] = True
+    payload["deploy"]["observability"]["vm"]["logs"]["enabled"] = True
     payload["client_info"] = {
         "nebius": {
             "project_id": "project-example",
@@ -777,7 +827,7 @@ def test_observability_endpoint_summary_vm_standalone_collector_adds_user_write_
             "region_id": "eu-north1",
         }
     }
-    payload["observability"]["vm"]["collector"]["enabled"] = True
+    payload["deploy"]["observability"]["vm"]["collector"]["enabled"] = True
     payload["infra"]["components"][1]["inputs"]["service_account_id"] = "serviceaccount-1"
 
     summary = observability_endpoint_summary(payload)
@@ -797,13 +847,16 @@ def test_observability_endpoint_summary_vm_standalone_collector_adds_user_write_
     )
 
 
-def test_observability_dependency_issues_require_vm_service_account_for_standalone_collector() -> None:
+def test_observability_dependency_issues_require_vm_service_account_for_standalone_collector() -> (
+    None
+):
     payload = _base_payload(
         observability_enabled=True,
         mk8s_enabled=False,
         vm_enabled=True,
     )
-    payload["observability"]["vm"]["collector"]["enabled"] = True
+    payload["deploy"]["observability"]["vm"]["collector"]["enabled"] = True
+    payload["deploy"]["observability"]["vm"]["logs"]["enabled"] = False
 
     issues = observability_dependency_issues(payload)
 

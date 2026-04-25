@@ -147,9 +147,7 @@ def test_seed_infra_shared_admin_ssh_public_key_copies_into_matching_inputs(
         cli,
         "read_path_with_catalog",
         lambda _payload, dotted_path: (
-            "ssh-ed25519 AAAA-shared"
-            if dotted_path == "shared.admin_ssh.public_key"
-            else None
+            "ssh-ed25519 AAAA-shared" if dotted_path == "shared.admin_ssh.public_key" else None
         ),
     )
     payload = {
@@ -194,9 +192,7 @@ def test_seed_infra_shared_admin_ssh_public_key_preserves_existing_value(
         cli,
         "read_path_with_catalog",
         lambda _payload, dotted_path: (
-            "ssh-ed25519 AAAA-shared"
-            if dotted_path == "shared.admin_ssh.public_key"
-            else None
+            "ssh-ed25519 AAAA-shared" if dotted_path == "shared.admin_ssh.public_key" else None
         ),
     )
     payload = {

@@ -125,9 +125,9 @@ components:
                 max_gpu: 8
                 size_gib: 1023
         observability:
-          # Source-owned MK8s observability contract. `config.yaml` decides
-          # whether cxcli deploys it; this block keeps agent choice, signal
-          # defaults, and endpoint templates.
+          # Source-owned MK8s observability contract. The `config.yaml`
+          # `deploy.observability` block decides whether cxcli deploys it; this
+          # block keeps agent choice, signal defaults, and endpoint templates.
           primary_agent:
             kind: kubernetes_agent
             chart_component_id: nebius-observability-agent
@@ -240,7 +240,7 @@ components:
             metrics:
               default_enabled: true
             logs:
-              default_enabled: false
+              default_enabled: true
               systemd_units: []
           public_ingest:
             # Default-off public-ingest collector. It installs the public
@@ -487,8 +487,9 @@ components:
               # On `nebius_image` stacks cxcli also owns the Nebius-specific GPU
               # node-label policy required to schedule DCGM Exporter plus the
               # validator without turning on GPU Operator device-plugin or GFD.
-              # Keep this `nebius_image`-only: the operator-managed stack was
-              # live-tested without these extra label injections.
+              # Keep this as `nebius_image` only. The operator-managed image does not need
+              # these extra label injections since it already includes the full GPU software
+              # stack and its own DCGM Exporter install path and labels.
               discovery:
                 kind: prometheus_annotations
                 service_name: nvidia-dcgm-exporter
@@ -559,10 +560,10 @@ components:
       release:
         namespace: observability
         name: nebius-observability-agent
-      # Keep customer-facing toggles on the MK8s project contract under
-      # components.infra.mk8s.cli.observability and materialize them into the
-      # chart at render time. Only put explicit Nebius-specific chart deltas
-      # here when cxcli must override an upstream chart default.
+      # Keep customer-facing toggles under config.yaml deploy.observability and
+      # derive them from components.infra.mk8s.cli.observability at render time.
+      # Only put explicit Nebius-specific chart deltas here when cxcli must
+      # override an upstream chart default.
       defaults: {}
     gateway-helm:
       source:

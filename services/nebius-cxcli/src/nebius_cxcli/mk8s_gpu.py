@@ -17,6 +17,7 @@ from typing import Any
 
 import yaml
 
+from .component_defaults import resolve_component_defaults
 from .component_instances import component_instance_id, component_type_id
 from .component_sources import (
     ComponentDefault,
@@ -29,6 +30,7 @@ from .component_sources import (
     tf_module_source_by_id,
 )
 from .components import ComponentEntry, component_entries
+from .deploy_targets import TARGET_REF_FIELD, app_chart_target_ref
 from .helm_client import render_chart_template_documents
 from .runtime_config import to_plain_data
 from .runtime_introspection import helm_chart_default_values
@@ -475,7 +477,9 @@ def _enabled_mk8s_gpu_contexts(payload: dict[str, Any]) -> tuple[Mk8sGpuClusterC
         return ()
 
     mk8s_entry_ids = {
-        entry.id for entry in component_entries("infra") if entry.validation_profile == "mk8s_cluster"
+        entry.id
+        for entry in component_entries("infra")
+        if entry.validation_profile == "mk8s_cluster"
     }
     contexts: list[Mk8sGpuClusterContext] = []
     for row in components:
@@ -490,12 +494,12 @@ def _enabled_mk8s_gpu_contexts(payload: dict[str, Any]) -> tuple[Mk8sGpuClusterC
         gpu_overrides = _mapping(inputs.get("mk8s_gpu_node_group_overrides"))
         gpu_template = _mapping(gpu_overrides.get("template"))
         gpu_resources = _mapping(gpu_template.get("resources"))
-        gpu_platform = _as_text(
-            gpu_resources.get("platform")
-        ) or _as_text(inputs.get("gpu_nodes_platform"))
-        gpu_preset = _as_text(
-            gpu_resources.get("preset")
-        ) or _as_text(inputs.get("gpu_nodes_preset"))
+        gpu_platform = _as_text(gpu_resources.get("platform")) or _as_text(
+            inputs.get("gpu_nodes_platform")
+        )
+        gpu_preset = _as_text(gpu_resources.get("preset")) or _as_text(
+            inputs.get("gpu_nodes_preset")
+        )
         gpu_stack_source = _gpu_stack_source(inputs)
         gpu_cluster_enabled = bool(_as_text(inputs.get("infiniband_fabric")))
         contexts.append(
@@ -522,14 +526,151 @@ def _app_chart_row(payload: dict[str, Any], app_id: str) -> dict[str, Any] | Non
     return None
 
 
+def _app_chart_rows(payload: dict[str, Any]) -> list[Any]:
+    apps = payload.get("apps")
+    if not isinstance(apps, dict):
+        apps = {}
+        payload["apps"] = apps
+    charts = apps.get("charts")
+    if not isinstance(charts, list):
+        charts = []
+        apps["charts"] = charts
+    return charts
+
+
+def _app_chart_rows_for_id(payload: dict[str, Any], app_id: str) -> tuple[dict[str, Any], ...]:
+    apps_node = payload.get("apps")
+    charts = apps_node.get("charts") if isinstance(apps_node, dict) else None
+    if not isinstance(charts, list):
+        return ()
+    return tuple(row for row in charts if isinstance(row, dict) and component_type_id(row) == app_id)
+
+
+def _chart_source_parts(entry: ComponentEntry) -> tuple[str, str]:
+    source = str(entry.source or "").strip().rstrip("/")
+    if "/" not in source:
+        return "", source
+    repo, chart_name = source.rsplit("/", maxsplit=1)
+    return repo, chart_name
+
+
+def _canonical_chart_repo(*, chart_repo: str, chart_name: str) -> str:
+    repo = chart_repo.strip().rstrip("/")
+    if not repo:
+        return repo
+    if repo.startswith("oci://"):
+        repo_tail = repo.rsplit("/", maxsplit=1)[-1].strip().lower()
+        if repo_tail != chart_name.strip().lower():
+            return f"{repo}/{chart_name.strip()}"
+    return repo
+
+
+def _normalized_app_group(entry: ComponentEntry) -> str:
+    raw_group = str(entry.group or "").strip().lower()
+    return re.sub(r"[^a-z0-9]+", "-", raw_group).strip("-") or "workloads"
+
+
+def _target_scoped_app_instance_id(app_id: str, *, target_ref: str) -> str:
+    normalized_app_id = _as_text(app_id).lower()
+    normalized_target_ref = _as_text(target_ref).lower()
+    if normalized_app_id and normalized_target_ref:
+        return f"{normalized_app_id}-{normalized_target_ref}"
+    return normalized_app_id
+
+
+def _apply_mk8s_gpu_app_entry_defaults(
+    *,
+    row: dict[str, Any],
+    entry: ComponentEntry,
+) -> None:
+    chart_repo = str(entry.chart_repo or "").strip()
+    chart_name = str(entry.chart_name or "").strip()
+    if not chart_name:
+        chart_repo, chart_name = _chart_source_parts(entry)
+    if not chart_name:
+        chart_name = entry.id
+    if not str(row.get("repo", "")).strip():
+        row["repo"] = _canonical_chart_repo(chart_repo=chart_repo, chart_name=chart_name)
+    if not str(row.get("version", "")).strip() and entry.version:
+        row["version"] = str(entry.version)
+    if not str(row.get("namespace", "")).strip():
+        row["namespace"] = str(entry.default_namespace or "").strip() or entry.id
+    if not str(row.get("release-name", "")).strip():
+        row["release-name"] = str(entry.default_release_name or "").strip() or entry.id
+    if not str(row.get("group", "")).strip():
+        row["group"] = _normalized_app_group(entry)
+    if not isinstance(row.get("values"), dict):
+        row["values"] = {}
+    if entry.defaults:
+        resolved = resolve_component_defaults(
+            component_node=row,
+            entry=entry,
+            preserve_existing_literal=True,
+            include_shared=False,
+        )
+        row.clear()
+        row.update(resolved)
+
+
+def _new_mk8s_gpu_app_row(entry: ComponentEntry, *, target_ref: str) -> dict[str, Any]:
+    row: dict[str, Any] = {
+        "id": entry.id,
+        "instance_id": _target_scoped_app_instance_id(entry.id, target_ref=target_ref),
+        "group": _normalized_app_group(entry),
+        "enabled": True,
+        "repo": "",
+        "version": "",
+        "namespace": "",
+        "release-name": "",
+        "values": {},
+    }
+    if target_ref:
+        row[TARGET_REF_FIELD] = target_ref
+    _apply_mk8s_gpu_app_entry_defaults(row=row, entry=entry)
+    return row
+
+
+def _contexts_for_app_chart(
+    chart: Mapping[str, Any],
+    *,
+    contexts: tuple[Mk8sGpuClusterContext, ...],
+) -> tuple[Mk8sGpuClusterContext, ...]:
+    target_ref = app_chart_target_ref(chart)
+    if target_ref:
+        return tuple(context for context in contexts if context.instance_id == target_ref)
+    if len(contexts) == 1:
+        return contexts
+    return contexts
+
+
+def _selected_app_target_refs(
+    payload: dict[str, Any],
+    *,
+    app_id: str,
+    contexts: tuple[Mk8sGpuClusterContext, ...],
+) -> set[str]:
+    target_refs: set[str] = set()
+    for row in _app_chart_rows_for_id(payload, app_id):
+        if not bool(row.get("enabled", False)):
+            continue
+        row_target_ref = app_chart_target_ref(row)
+        if row_target_ref:
+            target_refs.add(row_target_ref)
+        elif len(contexts) == 1:
+            target_refs.add(contexts[0].instance_id)
+    return target_refs
+
+
 def _mk8s_gpu_shape_capabilities(
     payload: dict[str, Any],
     *,
     context: Mk8sGpuClusterContext,
 ) -> tuple[int | None, bool | None]:
-    _vcpu_count, _memory_gibibytes, gpu_count, allow_gpu_clustering = _mk8s_gpu_shape_resource_profile(
-        payload,
-        context=context,
+    _vcpu_count, _memory_gibibytes, gpu_count, allow_gpu_clustering = (
+        _mk8s_gpu_shape_resource_profile(
+            payload,
+            context=context,
+        )
     )
     return gpu_count, allow_gpu_clustering
 
@@ -555,7 +696,9 @@ def _mk8s_gpu_shape_resource_profile(
     gpu_count = _parse_gpu_quantity(context.gpu_preset) or None
     allow_gpu_clustering: bool | None = True if context.gpu_cluster_enabled else None
     project_id = _as_text(
-        _nested_path_value(_mapping(_mapping(payload.get("client_info")).get("nebius")), "project_id")
+        _nested_path_value(
+            _mapping(_mapping(payload.get("client_info")).get("nebius")), "project_id"
+        )
     )
     if project_id and context.gpu_platform and context.gpu_preset:
         from .provider_options import ProviderOptionLookup
@@ -667,9 +810,10 @@ def mk8s_gpu_validation_warnings(
     generic_warning_emitted = False
     for context in contexts:
         gpu_count, allow_gpu_clustering = _mk8s_gpu_shape_capabilities(payload, context=context)
-        shape_label = "/".join(
-            part for part in (context.gpu_platform, context.gpu_preset) if part
-        ) or context.instance_id
+        shape_label = (
+            "/".join(part for part in (context.gpu_platform, context.gpu_preset) if part)
+            or context.instance_id
+        )
         if gpu_count == 1 and allow_gpu_clustering is not True:
             warnings.append(
                 "deploy.validations.mk8s_gpu.nccl.enabled is set, but selected MK8s GPU shape "
@@ -705,7 +849,9 @@ def resolve_mk8s_gpu_app_selection(
 ) -> Mk8sGpuAppSelection:
     payload = _as_payload(payload_or_config)
     contexts = _enabled_mk8s_gpu_contexts(payload)
-    selected = {str(item).strip().lower() for item in (selected_app_ids or set()) if str(item).strip()}
+    selected = {
+        str(item).strip().lower() for item in (selected_app_ids or set()) if str(item).strip()
+    }
     if not contexts:
         return Mk8sGpuAppSelection(
             selected_app_ids=tuple(sorted(selected)),
@@ -745,10 +891,24 @@ def resolve_mk8s_gpu_app_selection(
         )
     gpu_operator_id = _mk8s_gpu_app_id_by_role().get("gpu_operator")
     if gpu_operator_id:
-        gpu_operator_row = _app_chart_row(payload, gpu_operator_id)
-        if _nested_path_value(_mapping(gpu_operator_row), "values.dcgmExporter.enabled") is False:
+        gpu_operator_rows = [
+            row
+            for row in _app_chart_rows_for_id(payload, gpu_operator_id)
+            if bool(row.get("enabled", False))
+        ]
+        if not gpu_operator_rows:
+            gpu_operator_row = _app_chart_row(payload, gpu_operator_id)
+            gpu_operator_rows = [gpu_operator_row] if gpu_operator_row else []
+        for gpu_operator_row in gpu_operator_rows:
+            if (
+                _nested_path_value(_mapping(gpu_operator_row), "values.dcgmExporter.enabled")
+                is not False
+            ):
+                continue
+            target_ref = app_chart_target_ref(gpu_operator_row)
+            target_phrase = f" target '{target_ref}'" if target_ref else ""
             issues.append(
-                "GPU-enabled MK8s deployment requires "
+                f"GPU-enabled MK8s{target_phrase} deployment requires "
                 f"'{gpu_operator_id}.values.dcgmExporter.enabled' to stay true"
             )
     for app_id in required_app_ids:
@@ -768,6 +928,86 @@ def resolve_mk8s_gpu_app_selection(
         cluster_contexts=contexts,
         gpu_stack_source=resolved_stack_source,
     )
+
+
+def ensure_mk8s_gpu_app_rows(
+    payload_or_config: Any,
+    *,
+    app_entries: tuple[ComponentEntry, ...] | None = None,
+    cli_settings: Any | None = None,
+) -> bool:
+    _ = cli_settings
+    payload = (
+        payload_or_config if isinstance(payload_or_config, dict) else _as_payload(payload_or_config)
+    )
+    if not payload:
+        return False
+    contexts = _enabled_mk8s_gpu_contexts(payload)
+    if not contexts:
+        return False
+    entries = app_entries if app_entries is not None else component_entries("apps")
+    entry_by_id = {entry.id: entry for entry in entries}
+    settings = _mk8s_gpu_settings()
+    validation_overrides = _effective_mk8s_gpu_validation_overrides(
+        payload,
+        gpu_settings=settings,
+    )
+    charts = _app_chart_rows(payload)
+    changed = False
+
+    for context in contexts:
+        required_app_ids = _required_gpu_app_ids(
+            (context,),
+            gpu_settings=settings,
+            health_checker_enabled=validation_overrides.health_checker_enabled,
+        )
+        for app_id in required_app_ids:
+            entry = entry_by_id.get(app_id)
+            if entry is None:
+                continue
+            rows_for_app = _app_chart_rows_for_id(payload, app_id)
+            existing = next(
+                (
+                    row
+                    for row in rows_for_app
+                    if app_chart_target_ref(row) == context.instance_id
+                ),
+                None,
+            )
+            if existing is None:
+                existing = next(
+                    (
+                        row
+                        for row in rows_for_app
+                        if not app_chart_target_ref(row) and not bool(row.get("enabled", False))
+                    ),
+                    None,
+                )
+            if existing is None:
+                existing = next(
+                    (row for row in rows_for_app if not app_chart_target_ref(row)),
+                    None,
+                )
+            if existing is None:
+                charts.append(_new_mk8s_gpu_app_row(entry, target_ref=context.instance_id))
+                changed = True
+                continue
+
+            before = copy.deepcopy(existing)
+            existing["enabled"] = True
+            if not str(existing.get("id", "")).strip():
+                existing["id"] = entry.id
+            if not str(existing.get("instance_id", "")).strip():
+                existing["instance_id"] = _target_scoped_app_instance_id(
+                    app_id,
+                    target_ref=context.instance_id,
+                )
+            if app_chart_target_ref(existing) != context.instance_id:
+                existing[TARGET_REF_FIELD] = context.instance_id
+            _apply_mk8s_gpu_app_entry_defaults(row=existing, entry=entry)
+            if existing != before:
+                changed = True
+    return changed
 
 
 def mk8s_gpu_dependency_issues(
@@ -791,17 +1031,30 @@ def mk8s_gpu_dependency_issues(
         cli_settings=cli_settings,
     )
     issues = list(resolution.issues)
-    expected = set(resolve_mk8s_gpu_app_selection(
-        payload,
-        selected_app_ids=set(),
-        app_entries=app_entries,
-        cli_settings=cli_settings,
-    ).selected_app_ids)
+    expected = set(
+        resolve_mk8s_gpu_app_selection(
+            payload,
+            selected_app_ids=set(),
+            app_entries=app_entries,
+            cli_settings=cli_settings,
+        ).selected_app_ids
+    )
     missing = sorted(expected - selected)
     for app_id in missing:
-        issues.append(
-            f"GPU-enabled MK8s deployment requires 'apps:{app_id}' to be enabled"
-        )
+        issues.append(f"GPU-enabled MK8s deployment requires 'apps:{app_id}' to be enabled")
+    if len(resolution.cluster_contexts) > 1:
+        for context in resolution.cluster_contexts:
+            for app_id in _required_gpu_app_ids((context,)):
+                target_refs = _selected_app_target_refs(
+                    payload,
+                    app_id=app_id,
+                    contexts=resolution.cluster_contexts,
+                )
+                if context.instance_id not in target_refs:
+                    issues.append(
+                        f"GPU-enabled MK8s target '{context.instance_id}' requires "
+                        f"'apps:{app_id}' to be enabled with target_ref '{context.instance_id}'"
+                    )
     return issues
 
 
@@ -1339,42 +1592,46 @@ def mk8s_gpu_flux_release_post_render_patches(
     *,
     release_entry_ids: set[str],
     cli_settings: Any | None = None,
-) -> dict[str, tuple[dict[str, Any], ...]]:
+) -> dict[tuple[str, str], tuple[dict[str, Any], ...]]:
     payload = _as_payload(payload_or_config)
     contexts = _enabled_mk8s_gpu_contexts(payload)
     if not contexts:
         return {}
     policies = _mk8s_gpu_app_policies()
-    _ensure_mk8s_gpu_rule_compatibility(contexts=contexts, policies=policies)
-    patch_map: dict[str, tuple[dict[str, Any], ...]] = {}
+    patch_map: dict[tuple[str, str], tuple[dict[str, Any], ...]] = {}
     for app_id in release_entry_ids:
         if app_id not in policies:
             continue
-        patches = _resolved_app_post_render_patches(app_id=app_id, contexts=contexts)
-        if not patches:
-            continue
-        patch_map[app_id] = tuple(
-            {
-                "target": _post_render_patch_target_dict(patch),
-                "patch": patch.patch,
-            }
-            for patch in patches
-        )
+        for context in contexts:
+            scoped_contexts = (context,)
+            _ensure_mk8s_gpu_rule_compatibility(contexts=scoped_contexts, policies=policies)
+            patches = _resolved_app_post_render_patches(app_id=app_id, contexts=scoped_contexts)
+            if not patches:
+                continue
+            patch_map[(context.instance_id, app_id)] = tuple(
+                {
+                    "target": _post_render_patch_target_dict(patch),
+                    "patch": patch.patch,
+                }
+                for patch in patches
+            )
     return patch_map
 
 
-def materialize_mk8s_gpu_app_values(payload_or_config: Any) -> None:
-    payload = payload_or_config if isinstance(payload_or_config, dict) else _as_payload(payload_or_config)
+def materialize_mk8s_gpu_app_values(payload_or_config: Any) -> bool:
+    payload = (
+        payload_or_config if isinstance(payload_or_config, dict) else _as_payload(payload_or_config)
+    )
     apps_node = payload.get("apps")
     charts = apps_node.get("charts") if isinstance(apps_node, dict) else None
     if not isinstance(charts, list):
-        return
+        return False
     contexts = _enabled_mk8s_gpu_contexts(payload)
     if not contexts:
-        return
+        return False
 
     policies = _mk8s_gpu_app_policies()
-    _ensure_mk8s_gpu_rule_compatibility(contexts=contexts, policies=policies)
+    changed = False
 
     for chart in charts:
         if not isinstance(chart, dict) or not bool(chart.get("enabled", False)):
@@ -1382,9 +1639,14 @@ def materialize_mk8s_gpu_app_values(payload_or_config: Any) -> None:
         chart_id = component_type_id(chart)
         if chart_id not in policies:
             continue
+        scoped_contexts = _contexts_for_app_chart(chart, contexts=contexts)
+        if not scoped_contexts:
+            continue
+        before = copy.deepcopy(chart)
+        _ensure_mk8s_gpu_rule_compatibility(contexts=scoped_contexts, policies=policies)
         resolved_defaults = _resolved_app_value_defaults(
             app_id=chart_id,
-            contexts=contexts,
+            contexts=scoped_contexts,
         )
         # Shared Helm releases cannot safely accept conflicting values from
         # different GPU contexts in one deployment.
@@ -1404,6 +1666,9 @@ def materialize_mk8s_gpu_app_values(payload_or_config: Any) -> None:
             _delete_path_value(chart, stale_path)
         for target_path, target_value in values_by_path.items():
             _set_path_value(chart, target_path, copy.deepcopy(target_value))
+        if chart != before:
+            changed = True
+    return changed
 
 
 def _run_kubectl(
@@ -1466,15 +1731,18 @@ def _parse_go_duration_seconds(raw: str) -> int:
         value = float(match.group(1))
         unit = match.group(2)
         position = match.end()
-        total += value * {
-            "ns": 1e-9,
-            "us": 1e-6,
-            "µs": 1e-6,
-            "ms": 1e-3,
-            "s": 1.0,
-            "m": 60.0,
-            "h": 3600.0,
-        }[unit]
+        total += (
+            value
+            * {
+                "ns": 1e-9,
+                "us": 1e-6,
+                "µs": 1e-6,
+                "ms": 1e-3,
+                "s": 1.0,
+                "m": 60.0,
+                "h": 3600.0,
+            }[unit]
+        )
     if position != len(text):
         raise RuntimeError(f"Unsupported Go-style duration: {raw}")
     return max(1, int(total))
@@ -1711,8 +1979,7 @@ def _rdma_resource_keys(allocatable_resources: Mapping[str, str]) -> tuple[str, 
         sorted(
             key
             for key in allocatable_resources
-            if not _is_nvidia_extended_resource_name(key)
-            and _has_rdma_resource_signal(key)
+            if not _is_nvidia_extended_resource_name(key) and _has_rdma_resource_signal(key)
         )
     )
 
@@ -1771,7 +2038,9 @@ def _rdma_device_plugin_summary(snapshot: Mapping[str, Any]) -> str:
     ready_gpu_node_count = int(snapshot.get("ready_gpu_node_count", 0) or 0)
     rdma_resource_node_count = int(snapshot.get("rdma_resource_node_count", 0) or 0)
     raw_keys = snapshot.get("rdma_resource_keys")
-    rdma_resource_keys = [str(item).strip() for item in raw_keys] if isinstance(raw_keys, list) else []
+    rdma_resource_keys = (
+        [str(item).strip() for item in raw_keys] if isinstance(raw_keys, list) else []
+    )
     keys_summary = ", ".join(key for key in rdma_resource_keys if key) or "none"
     return (
         "scheduler-visible RDMA resources on "
@@ -1944,12 +2213,12 @@ def _nccl_live_runtime_overrides(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     ready_nodes = _ready_node_inventory(extra_env=extra_env)
     ready_node_by_name = {
-        _as_text(node.get("name")): node
-        for node in ready_nodes
-        if _as_text(node.get("name"))
+        _as_text(node.get("name")): node for node in ready_nodes if _as_text(node.get("name"))
     }
     requested_by_node = _pod_request_totals_by_node(extra_env=extra_env)
-    worker_names = {_as_text(node.get("name")) for node in worker_nodes if _as_text(node.get("name"))}
+    worker_names = {
+        _as_text(node.get("name")) for node in worker_nodes if _as_text(node.get("name"))
+    }
     launcher_candidates = tuple(
         sorted(
             _as_text(node.get("name"))
@@ -1961,7 +2230,9 @@ def _nccl_live_runtime_overrides(
 
     chart_values = spec.get("chart_values")
     values_map = dict(chart_values) if isinstance(chart_values, dict) else {}
-    launcher_map = values_map.get("launcher") if isinstance(values_map.get("launcher"), dict) else {}
+    launcher_map = (
+        values_map.get("launcher") if isinstance(values_map.get("launcher"), dict) else {}
+    )
     launcher_resources = (
         launcher_map.get("resources") if isinstance(launcher_map.get("resources"), dict) else {}
     )
@@ -2165,7 +2436,9 @@ def _run_gpu_visibility_validation(
     report_path = inventory_dir / _as_text(spec.get("report_file"))
     all_nodes = _gpu_nodes(extra_env=extra_env)
     if not all_nodes:
-        raise RuntimeError("GPU Visibility test could not find any Ready Kubernetes node with allocatable GPUs")
+        raise RuntimeError(
+            "GPU Visibility test could not find any Ready Kubernetes node with allocatable GPUs"
+        )
     nodes, total_gpu_nodes = _select_gpu_validation_nodes(all_nodes, max_nodes=max_nodes)
     skipped_nodes = max(0, total_gpu_nodes - len(nodes))
     device_plugin_snapshot = _gpu_device_plugin_snapshot(all_nodes)
@@ -2230,7 +2503,10 @@ def _run_gpu_visibility_validation(
                 extra_env=extra_env,
             )
             now = time.monotonic()
-            if emit and (summary != last_summary or (now - last_emit_at) >= _VALIDATION_REPEAT_INTERVAL_SECONDS):
+            if emit and (
+                summary != last_summary
+                or (now - last_emit_at) >= _VALIDATION_REPEAT_INTERVAL_SECONDS
+            ):
                 elapsed = int(max(0.0, now - (deadline - timeout_seconds)))
                 emit(
                     f"GPU Visibility test [{elapsed}s] "
@@ -2388,7 +2664,10 @@ def _wait_for_launcher_completion(
             phase = "NotCreated"
             summary = f"NCCL launcher pod {launcher_pod_name}: {phase}"
             now = time.monotonic()
-            if emit and (summary != last_summary or (now - last_emit_at) >= _VALIDATION_REPEAT_INTERVAL_SECONDS):
+            if emit and (
+                summary != last_summary
+                or (now - last_emit_at) >= _VALIDATION_REPEAT_INTERVAL_SECONDS
+            ):
                 elapsed = int(max(0.0, now - started_at))
                 emit(f"NCCL test [{elapsed}s] {summary}")
                 last_summary = summary
@@ -2398,7 +2677,9 @@ def _wait_for_launcher_completion(
         phase = _as_text(payload.get("status", {}).get("phase"))
         summary = f"NCCL launcher pod {launcher_pod_name}: {phase or 'Unknown'}"
         now = time.monotonic()
-        if emit and (summary != last_summary or (now - last_emit_at) >= _VALIDATION_REPEAT_INTERVAL_SECONDS):
+        if emit and (
+            summary != last_summary or (now - last_emit_at) >= _VALIDATION_REPEAT_INTERVAL_SECONDS
+        ):
             elapsed = int(max(0.0, now - started_at))
             emit(f"NCCL test [{elapsed}s] {summary}")
             last_summary = summary
@@ -2406,9 +2687,7 @@ def _wait_for_launcher_completion(
         if phase in {"Succeeded", "Failed"}:
             return phase
         time.sleep(_VALIDATION_POLL_INTERVAL_SECONDS)
-    raise RuntimeError(
-        f"Timed out waiting for NCCL launcher pod '{launcher_pod_name}' to finish"
-    )
+    raise RuntimeError(f"Timed out waiting for NCCL launcher pod '{launcher_pod_name}' to finish")
 
 
 def _extract_nccl_json(logs: str) -> dict[str, Any] | None:
@@ -2562,8 +2841,12 @@ def _run_nccl_validation(
     threshold_enforced = bool(spec.get("threshold_enforced", True))
     all_worker_nodes = _gpu_nodes(extra_env=extra_env)
     if not all_worker_nodes:
-        raise RuntimeError("NCCL test could not find any Ready Kubernetes node with allocatable GPUs")
-    worker_nodes, total_gpu_nodes = _select_gpu_validation_nodes(all_worker_nodes, max_nodes=max_nodes)
+        raise RuntimeError(
+            "NCCL test could not find any Ready Kubernetes node with allocatable GPUs"
+        )
+    worker_nodes, total_gpu_nodes = _select_gpu_validation_nodes(
+        all_worker_nodes, max_nodes=max_nodes
+    )
     skipped_nodes = max(0, total_gpu_nodes - len(worker_nodes))
     worker_gpu_counts = {
         int(node.get("gpu_count", 0) or 0)
@@ -2573,7 +2856,9 @@ def _run_nccl_validation(
     if not worker_gpu_counts:
         raise RuntimeError("NCCL test could not resolve GPU count for the selected worker nodes")
     if len(worker_gpu_counts) != 1:
-        raise RuntimeError("NCCL test requires a uniform GPU count across the selected worker nodes")
+        raise RuntimeError(
+            "NCCL test requires a uniform GPU count across the selected worker nodes"
+        )
     worker_gpu_count = next(iter(worker_gpu_counts))
 
     training_operator_namespace = _as_text(spec.get("training_operator_namespace"))
@@ -2601,7 +2886,10 @@ def _run_nccl_validation(
                 extra_env=extra_env,
             )
             now = time.monotonic()
-            if emit and (summary != last_summary or (now - last_emit_at) >= _VALIDATION_REPEAT_INTERVAL_SECONDS):
+            if emit and (
+                summary != last_summary
+                or (now - last_emit_at) >= _VALIDATION_REPEAT_INTERVAL_SECONDS
+            ):
                 elapsed = int(max(0.0, now - started_at))
                 emit(f"NCCL prerequisite [{elapsed}s] {summary}")
                 last_summary = summary
@@ -2626,7 +2914,9 @@ def _run_nccl_validation(
                 f" using {transport_label}."
             )
             if skipped_nodes:
-                message += f" Skipping {skipped_nodes} additional GPU node(s) for deploy-time validation."
+                message += (
+                    f" Skipping {skipped_nodes} additional GPU node(s) for deploy-time validation."
+                )
             emit(message)
         runtime_values = {
             "worker": {"replicas": len(worker_nodes), "gpus": worker_gpu_count},
@@ -2758,7 +3048,9 @@ def _run_operator_readiness_validation(
     timeout_seconds = _parse_go_duration_seconds(_as_text(spec.get("timeout")))
     report_path = inventory_dir / _as_text(spec.get("report_file"))
     gpu_namespace = _as_text(spec.get("gpu_operator_namespace")) or "nvidia-gpu-operator"
-    network_namespace = _as_text(spec.get("network_operator_namespace")) or "nvidia-network-operator"
+    network_namespace = (
+        _as_text(spec.get("network_operator_namespace")) or "nvidia-network-operator"
+    )
     network_required = bool(spec.get("network_operator_required"))
     deadline = time.monotonic() + timeout_seconds
     started_at = time.monotonic()
@@ -2797,9 +3089,7 @@ def _run_operator_readiness_validation(
         )
         summary_parts = [f"GPU Operator {gpu_state_summary}; {gpu_allocatable_summary}"]
         if gpu_ready_condition:
-            condition_summary = (
-                f"condition Ready={_as_text(gpu_ready_condition.get('status'))}"
-            )
+            condition_summary = f"condition Ready={_as_text(gpu_ready_condition.get('status'))}"
             reason = _as_text(gpu_ready_condition.get("reason"))
             if reason:
                 condition_summary += f"/{reason}"
@@ -2825,7 +3115,9 @@ def _run_operator_readiness_validation(
                 summary_parts.append(_rdma_device_plugin_summary(rdma_snapshot))
         summary = " | ".join(summary_parts)
         now = time.monotonic()
-        if emit and (summary != last_summary or (now - last_emit_at) >= _VALIDATION_REPEAT_INTERVAL_SECONDS):
+        if emit and (
+            summary != last_summary or (now - last_emit_at) >= _VALIDATION_REPEAT_INTERVAL_SECONDS
+        ):
             elapsed = int(max(0.0, now - started_at))
             emit(f"{_GPU_STACK_VALIDATION_NAME} [{elapsed}s] {summary}")
             last_summary = summary
@@ -2900,9 +3192,7 @@ def _write_validation_error_report(
                 "transport_mode": transport_mode,
                 "transport_label": _nccl_transport_label(transport_mode),
                 "avg_bus_bandwidth_gbps": 0.0,
-                "threshold_gbps": float(
-                    spec.get("average_bus_bandwidth_threshold_gbps", 0) or 0
-                ),
+                "threshold_gbps": float(spec.get("average_bus_bandwidth_threshold_gbps", 0) or 0),
                 "threshold_enforced": bool(spec.get("threshold_enforced", True)),
                 "selected_worker_node_count": 0,
             }
@@ -2961,6 +3251,7 @@ def run_mk8s_gpu_validations(
 __all__ = [
     "Mk8sGpuAppSelection",
     "Mk8sGpuClusterContext",
+    "ensure_mk8s_gpu_app_rows",
     "has_mk8s_gpu_health_checker_app",
     "materialize_mk8s_gpu_app_values",
     "mk8s_gpu_dependency_issues",

@@ -243,7 +243,8 @@ def test_terraform_output_raw_initializes_backend_by_default(
     monkeypatch.setattr(
         "nebius_cxcli.terraform_ops._run_capture",
         lambda cmd, *, cwd, timeout, extra_env=None: (
-            calls.append(("run_capture", (tuple(cmd), cwd, timeout, extra_env))) or ("cluster-123", "")
+            calls.append(("run_capture", (tuple(cmd), cwd, timeout, extra_env)))
+            or ("cluster-123", "")
         ),
     )
 
@@ -287,9 +288,7 @@ def test_terraform_output_json_can_skip_init(
     ]
 
 
-def test_terraform_show_json_can_skip_init(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_terraform_show_json_can_skip_init(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[str, object]] = []
     infra_dir = tmp_path / "infra"
     infra_dir.mkdir(parents=True, exist_ok=True)

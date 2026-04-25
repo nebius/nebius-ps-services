@@ -128,6 +128,60 @@ def _chart_enabled(rows: dict[str, list[dict[str, Any]]], *chart_ids: str) -> bo
     return False
 
 
+def _service_provider_metric_buckets(payload: Mapping[str, Any]) -> tuple[str, ...]:
+    buckets = ["compute"]
+    clusters = _lookup(payload, "mk8s_clusters")
+    if isinstance(clusters, list):
+        has_gpu_nodes = any(
+            bool(_lookup(_mapping(_lookup(_mapping(item), "gpu_nodes")), "enabled"))
+            for item in clusters
+        )
+    else:
+        mk8s = _mapping(_lookup(payload, "mk8s"))
+        mk8s_gpu_nodes = _mapping(_lookup(mk8s, "gpu_nodes"))
+        has_gpu_nodes = bool(_lookup(mk8s_gpu_nodes, "enabled"))
+    if has_gpu_nodes:
+        buckets.append("gpu")
+    buckets.extend(("nbs", "sp_storage"))
+
+    postgresql = _mapping(_lookup(payload, "postgresql"))
+    if bool(_lookup(postgresql, "enabled")):
+        buckets.append("msp")
+    return tuple(buckets)
+
+
+def _format_backtick_list(values: Sequence[str]) -> str:
+    return ", ".join(f"`{value}`" for value in values)
+
+
+def _shape_label(*parts: Any) -> str:
+    values = [str(item).strip() for item in parts if str(item or "").strip()]
+    return "/".join(values) if values else "n/a"
+
+
+def _mk8s_cluster_markdown_line(cluster: Mapping[str, Any]) -> str:
+    instance_id = str(_coalesce(_lookup(cluster, "instance_id"), "mk8s"))
+    cluster_name = str(_coalesce(_lookup(cluster, "cluster_name"), instance_id))
+    cpu_nodes = _mapping(_lookup(cluster, "cpu_nodes"))
+    gpu_nodes = _mapping(_lookup(cluster, "gpu_nodes"))
+    cpu_count = _coalesce(_lookup(cpu_nodes, "count"), "n/a")
+    cpu_shape = _shape_label(_lookup(cpu_nodes, "platform"), _lookup(cpu_nodes, "preset"))
+    if bool(_lookup(gpu_nodes, "enabled")):
+        groups = _coalesce(_lookup(gpu_nodes, "groups"), 1)
+        nodes_per_group = _coalesce(_lookup(gpu_nodes, "nodes_per_group"), "n/a")
+        gpu_shape = _shape_label(_lookup(gpu_nodes, "platform"), _lookup(gpu_nodes, "preset"))
+        gpu_text = f"`{groups}x{nodes_per_group}` node(s) at `{gpu_shape}`"
+    else:
+        gpu_text = "`disabled`"
+    fabric = _coalesce(_lookup(cluster, "infiniband_fabric"), "none")
+    public_endpoint = _coalesce(_lookup(cluster, "api_public"), "unknown")
+    return (
+        f"- MK8s cluster `{instance_id}` (`{cluster_name}`): CPU `{cpu_count}` node(s) "
+        f"at `{cpu_shape}`; GPU {gpu_text}; fabric `{fabric}`; public endpoint "
+        f"`{public_endpoint}`"
+    )
+
+
 def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
     payload_data = to_plain_data(config)
     if not isinstance(payload_data, dict):
@@ -148,58 +202,34 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
 
     entry_by_id = _component_lookup("infra")
 
-    def _row_by_status_kind(kind: str) -> dict[str, Any] | None:
+    def _rows_by_status_kind(kind: str) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
         for cid, entry in entry_by_id.items():
             status = getattr(entry, "status", None)
             if status is not None and getattr(status, "kind", "") == kind:
-                return _first_row(infra_rows, cid)
-        return None
+                rows.extend(infra_rows.get(cid, []))
+        return rows
 
-    mk8s_row = _row_by_status_kind("nebius.mk8s.cluster")
-    mk8s_inputs = _component_inputs(mk8s_row)
-    cpu_nodes = _mapping(_lookup(mk8s_inputs, "cpu_nodes"))
-    gpu_nodes = _mapping(_lookup(mk8s_inputs, "gpu_nodes"))
-    api_endpoint = _mapping(_lookup(mk8s_inputs, "api_endpoint"))
+    def _row_by_status_kind(kind: str) -> dict[str, Any] | None:
+        rows = _rows_by_status_kind(kind)
+        return rows[0] if rows else None
 
-    pg_row = _row_by_status_kind("nebius.msp.postgresql.cluster")
-    pg_inputs = _component_inputs(pg_row)
+    mk8s_rows = _rows_by_status_kind("nebius.mk8s.cluster")
 
-    sfs_row = _row_by_status_kind("nebius.compute.filesystem")
-    sfs_inputs = _component_inputs(sfs_row)
-
-    n8n_values = _chart_values(_first_row(app_rows, "n8n"))
-    n8n_chart_values = _mapping(_lookup(n8n_values, "values"))
-    n8n_route = _mapping(_lookup(n8n_values, "route"))
-    if not n8n_route:
-        n8n_route = _mapping(_lookup(n8n_chart_values, "route"))
-    observability = observability_status_summary(payload_data)
-    observability_endpoints = observability_endpoint_summary(
-        payload_data,
-        project_id=project_id,
-        region_id=region_id,
-    )
-    cluster_name = str(
-        _coalesce(
-            _lookup(mk8s_inputs, "cluster_name"),
-            project_id,
-            f"{tenant_id}/{project_id}",
+    def _mk8s_summary(row: dict[str, Any] | None) -> dict[str, Any]:
+        mk8s_inputs = _component_inputs(row)
+        cpu_nodes = _mapping(_lookup(mk8s_inputs, "cpu_nodes"))
+        gpu_nodes = _mapping(_lookup(mk8s_inputs, "gpu_nodes"))
+        api_endpoint = _mapping(_lookup(mk8s_inputs, "api_endpoint"))
+        cluster_name = str(
+            _coalesce(
+                _lookup(mk8s_inputs, "cluster_name"),
+                project_id,
+                f"{tenant_id}/{project_id}",
+            )
         )
-    )
-
-    return {
-        "infra": {
-            "project_scope": f"{tenant_id}/{project_id}",
-            "project_id": project_id,
-            "region": region_id,
-            "mk8s_enabled": bool(_lookup(mk8s_row or {}, "enabled")),
-            "wireguard_enabled": any(
-                bool(_lookup(row, "enabled"))
-                for cid, rows in infra_rows.items()
-                for row in rows
-                if "wireguard" in cid
-            ),
-        },
-        "mk8s": {
+        return {
+            "instance_id": component_instance_id(row or {}) or component_type_id(row or {}),
             "cluster_name": cluster_name,
             "cpu_nodes": {
                 "count": _coalesce(
@@ -218,16 +248,19 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
                 "enabled": bool(
                     _coalesce(
                         _lookup(gpu_nodes, "enabled"),
+                        _lookup(mk8s_inputs, "gpu_enabled"),
                         _lookup(mk8s_inputs, "gpu_nodes_enabled"),
                         False,
                     )
                 ),
                 "groups": _coalesce(
                     _lookup(gpu_nodes, "node_groups"),
+                    _lookup(mk8s_inputs, "gpu_node_groups"),
                     _lookup(mk8s_inputs, "gpu_nodes_node_groups"),
                 ),
                 "nodes_per_group": _coalesce(
                     _lookup(gpu_nodes, "nodes_per_group"),
+                    _lookup(mk8s_inputs, "gpu_nodes_count_per_group"),
                     _lookup(mk8s_inputs, "gpu_nodes_nodes_per_group"),
                 ),
                 "platform": _coalesce(
@@ -241,10 +274,48 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
             },
             "api_public": _coalesce(
                 _lookup(api_endpoint, "public"),
+                _lookup(mk8s_inputs, "mk8s_cluster_public_endpoint"),
                 _lookup(mk8s_inputs, "api_endpoint_public"),
             ),
             "infiniband_fabric": _lookup(mk8s_inputs, "infiniband_fabric"),
+        }
+
+    mk8s_row = mk8s_rows[0] if mk8s_rows else None
+    mk8s_summary = _mk8s_summary(mk8s_row)
+    mk8s_cluster_summaries = [_mk8s_summary(row) for row in mk8s_rows]
+
+    pg_row = _row_by_status_kind("nebius.msp.postgresql.cluster")
+    pg_inputs = _component_inputs(pg_row)
+
+    sfs_row = _row_by_status_kind("nebius.compute.filesystem")
+    sfs_inputs = _component_inputs(sfs_row)
+
+    n8n_values = _chart_values(_first_row(app_rows, "n8n"))
+    n8n_chart_values = _mapping(_lookup(n8n_values, "values"))
+    n8n_route = _mapping(_lookup(n8n_values, "route"))
+    if not n8n_route:
+        n8n_route = _mapping(_lookup(n8n_chart_values, "route"))
+    observability = observability_status_summary(payload_data)
+    observability_endpoints = observability_endpoint_summary(
+        payload_data,
+        project_id=project_id,
+        region_id=region_id,
+    )
+    return {
+        "infra": {
+            "project_scope": f"{tenant_id}/{project_id}",
+            "project_id": project_id,
+            "region": region_id,
+            "mk8s_enabled": bool(_lookup(mk8s_row or {}, "enabled")),
+            "wireguard_enabled": any(
+                bool(_lookup(row, "enabled"))
+                for cid, rows in infra_rows.items()
+                for row in rows
+                if "wireguard" in cid
+            ),
         },
+        "mk8s": mk8s_summary,
+        "mk8s_clusters": mk8s_cluster_summaries,
         "postgresql": {
             "enabled": bool(_lookup(pg_row or {}, "enabled")),
             "name": _lookup(pg_inputs, "name"),
@@ -332,31 +403,39 @@ def write_inventory(
         f"- Managed PostgreSQL: `{payload['postgresql']['enabled']}`",
         f"- SFS: `{payload['sfs']['enabled']}`",
         f"- WireGuard Jump Host: `{payload['infra']['wireguard_enabled']}`",
-        "",
-        "## Apps",
-        "",
-        f"- Envoy Gateway: `{payload['apps']['envoy_gateway']}`",
-        f"- cert-manager: `{payload['apps']['cert_manager']}`",
-        f"- ExternalDNS: `{payload['apps']['external_dns']}`",
-        f"- Observability: `{_coalesce(_lookup(observability_summary, 'enabled'), False)}`",
-        f"- K8s o11y agent: `{_coalesce(_lookup(observability_summary, 'kubernetes_agent'), False)}`",
-        f"- VM monitoring agent: `{_coalesce(_lookup(observability_summary, 'vm_monitoring_agent'), False)}`",
-        f"- VM journald logs (systemd services): `{_coalesce(_lookup(observability_summary, 'vm_journald_logs'), False)}`",
-        f"- VM standalone collector: `{_coalesce(_lookup(observability_summary, 'vm_standalone_collector'), False)}`",
-        f"- VM standalone collector metrics: `{_coalesce(_lookup(observability_summary, 'vm_standalone_metrics'), False)}`",
-        f"- VM standalone collector logs: `{_coalesce(_lookup(observability_summary, 'vm_standalone_logs'), False)}`",
-        f"- GPU DCGM metrics source: `{_coalesce(_lookup(observability_summary, 'gpu_dcgm_metric_source'), 'disabled')}`",
-        f"- GPU DCGM node policy: `{_coalesce(_lookup(observability_summary, 'gpu_dcgm_node_policy'), 'not_managed')}`",
-        f"- GPU DCGM live readiness: `{_coalesce(_lookup(observability_summary, 'gpu_dcgm_live_readiness'), 'not_configured')}`",
-        f"- n8n: `{_coalesce(_lookup(n8n_summary, 'enabled'), False)}` "
-        f"({_coalesce(_lookup(n8n_summary, 'hostname'), 'n/a')})",
-        "",
     ]
+    for cluster in payload.get("mk8s_clusters", []):
+        if isinstance(cluster, Mapping):
+            lines.append(_mk8s_cluster_markdown_line(cluster))
+    lines.extend(
+        [
+            "",
+            "## Apps",
+            "",
+            f"- Envoy Gateway: `{payload['apps']['envoy_gateway']}`",
+            f"- cert-manager: `{payload['apps']['cert_manager']}`",
+            f"- ExternalDNS: `{payload['apps']['external_dns']}`",
+            f"- Observability: `{_coalesce(_lookup(observability_summary, 'enabled'), False)}`",
+            f"- K8s o11y agent: `{_coalesce(_lookup(observability_summary, 'kubernetes_agent'), False)}`",
+            f"- VM monitoring agent: `{_coalesce(_lookup(observability_summary, 'vm_monitoring_agent'), False)}`",
+            f"- VM journald logs (systemd services): `{_coalesce(_lookup(observability_summary, 'vm_journald_logs'), False)}`",
+            f"- VM standalone collector: `{_coalesce(_lookup(observability_summary, 'vm_standalone_collector'), False)}`",
+            f"- VM standalone collector metrics: `{_coalesce(_lookup(observability_summary, 'vm_standalone_metrics'), False)}`",
+            f"- VM standalone collector logs: `{_coalesce(_lookup(observability_summary, 'vm_standalone_logs'), False)}`",
+            f"- GPU DCGM metrics source: `{_coalesce(_lookup(observability_summary, 'gpu_dcgm_metric_source'), 'disabled')}`",
+            f"- GPU DCGM node policy: `{_coalesce(_lookup(observability_summary, 'gpu_dcgm_node_policy'), 'not_managed')}`",
+            f"- GPU DCGM live readiness: `{_coalesce(_lookup(observability_summary, 'gpu_dcgm_live_readiness'), 'not_configured')}`",
+            f"- n8n: `{_coalesce(_lookup(n8n_summary, 'enabled'), False)}` "
+            f"({_coalesce(_lookup(n8n_summary, 'hostname'), 'n/a')})",
+            "",
+        ]
+    )
     if bool(_lookup(observability_endpoints, "configured")) and (
         bool(_lookup(observability_summary, "enabled"))
         or bool(_lookup(observability_summary, "vm_monitoring_agent"))
     ):
         endpoint_lines: list[str] = []
+        service_provider_metric_buckets = _service_provider_metric_buckets(payload)
 
         def _append_endpoint(
             label: str,
@@ -367,23 +446,81 @@ def write_inventory(
             if value:
                 endpoint_lines.append(f"- {label}: `{value}`")
 
+        def _append_federate_endpoints() -> None:
+            value = str(
+                _lookup(observability_read_endpoints, "metrics_federate_read") or ""
+            ).strip()
+            if not value:
+                return
+            if "<service-provider>" not in value:
+                endpoint_lines.append(f"- Metrics read (federate): `{value}`")
+                return
+            for bucket in service_provider_metric_buckets:
+                endpoint_lines.append(
+                    f"- Metrics read (federate, `{bucket}` bucket): "
+                    f"`{value.replace('<service-provider>', bucket)}`"
+                )
+
+        grafana_lines: list[str] = []
+        probe_lines: list[str] = []
+
+        def _append_grafana_datasource(label: str, datasource_type: str, key: str) -> None:
+            value = _lookup(observability_read_endpoints, key)
+            if value:
+                grafana_lines.append(
+                    f"- {label}: type `{datasource_type}`, URL `{value}`, access `Server`"
+                )
+
+        def _append_probe_url(label: str, key: str, suffix: str) -> None:
+            value = str(_lookup(observability_read_endpoints, key) or "").strip().rstrip("/")
+            if value:
+                probe_lines.append(f"- {label}: `{value}{suffix}`")
+
         _append_endpoint(
-            "Metrics read (Nebius service metrics)",
+            "Metrics datasource base (Nebius service metrics)",
             observability_read_endpoints,
             "metrics_service_provider_read",
         )
         _append_endpoint(
-            "Metrics read (user-ingested metrics)",
+            "Metrics datasource base (user-ingested metrics)",
             observability_read_endpoints,
             "metrics_user_read",
         )
+        _append_federate_endpoints()
         _append_endpoint(
-            "Metrics read (federate template)",
-            observability_read_endpoints,
-            "metrics_federate_read",
+            "Logs datasource base (Loki)", observability_read_endpoints, "logs_loki_read"
         )
-        _append_endpoint("Logs read (Loki)", observability_read_endpoints, "logs_loki_read")
-        _append_endpoint("Traces read (Tempo)", observability_read_endpoints, "traces_tempo_read")
+        _append_endpoint(
+            "Traces datasource base (Tempo)", observability_read_endpoints, "traces_tempo_read"
+        )
+        _append_grafana_datasource(
+            "Metrics datasource (Nebius service metrics)",
+            "Prometheus",
+            "metrics_service_provider_read",
+        )
+        _append_grafana_datasource(
+            "Metrics datasource (user-ingested metrics)",
+            "Prometheus",
+            "metrics_user_read",
+        )
+        _append_grafana_datasource("Logs datasource", "Loki", "logs_loki_read")
+        _append_grafana_datasource("Traces datasource", "Tempo", "traces_tempo_read")
+        _append_probe_url(
+            "Metrics API probe (Nebius service metrics)",
+            "metrics_service_provider_read",
+            "/api/v1/query?query=up",
+        )
+        _append_probe_url(
+            "Metrics API probe (user-ingested metrics)",
+            "metrics_user_read",
+            "/api/v1/query?query=up",
+        )
+        _append_probe_url(
+            "Logs API probe (default bucket)",
+            "logs_loki_read",
+            "/loki/api/v1/query?query=%7B__bucket__%3D%22default%22%7D",
+        )
+        _append_probe_url("Traces API probe", "traces_tempo_read", "/api/v2/search/tags")
         _append_endpoint(
             "Metrics write (OTLP HTTP/protobuf)",
             observability_write_endpoints,
@@ -423,6 +560,38 @@ def write_inventory(
             endpoint_lines.append(f"- Read auth: `{_lookup(observability_auth, 'read')}`")
             endpoint_lines.append(f"- Write auth: `{_lookup(observability_auth, 'write')}`")
             lines.extend(["## Observability Endpoints", "", *endpoint_lines, ""])
+        if grafana_lines:
+            grafana_lines.append(
+                "- HTTP header: `Authorization: Bearer <observability static token or IAM token>`"
+            )
+            grafana_lines.append("- Credential requirement: project observability read access.")
+            grafana_lines.append(
+                "- URL note: use these URLs as Grafana datasource URLs; opening a datasource "
+                "base URL directly can return `404` because Grafana calls Prometheus, Loki, "
+                "and Tempo API subpaths below it."
+            )
+            grafana_lines.append(
+                "- Bucket note: `service-provider` is a literal path segment for Nebius "
+                "service metrics. Only the federation template placeholder "
+                "`<service-provider>` should be replaced. This deployment shows "
+                f"{_format_backtick_list(service_provider_metric_buckets)} bucket URLs."
+            )
+            lines.extend(["## Grafana Read Data Sources", "", *grafana_lines, ""])
+        if probe_lines:
+            lines.extend(
+                [
+                    "## Read Endpoint Probe URLs",
+                    "",
+                    "- Use these URLs for browser or `curl` reachability checks with a valid "
+                    "`Authorization` header. Without credentials, a live route can return "
+                    "`401` or `403`; opening a Grafana datasource base URL directly can "
+                    "return `404` even when its API subpaths are reachable.",
+                    "- Read endpoints use global `read.*.api.nebius.cloud` hostnames. "
+                    f"Region `{payload['infra']['region']}` applies to the write endpoints above.",
+                    *probe_lines,
+                    "",
+                ]
+            )
     if validations:
         lines.extend(validation_section_lines(validation_report))
     else:
