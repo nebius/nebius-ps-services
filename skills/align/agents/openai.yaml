@@ -1,4 +1,4 @@
 interface:
   display_name: "Align"
-  short_description: "Fix project inconsistencies end to end"
-  default_prompt: "Use $align to inspect this project broadly, fix inconsistencies across code, tests, CI, CLI, docs, and help output, and leave the repository aligned."
+  short_description: "Safely align project surfaces end to end"
+  default_prompt: "Use $align to safely inspect this project end to end, fix verified wiring or contract drift across code, tests, CI, CLI, docs, and workflows, and report validation."

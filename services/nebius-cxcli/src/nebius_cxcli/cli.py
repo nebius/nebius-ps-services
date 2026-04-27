@@ -97,6 +97,8 @@ from .deploy_targets import (
     app_chart_target_ref,
     enabled_cluster_target_refs,
     flux_target_dir,
+    is_auto_target_scoped_app_instance_id,
+    target_scoped_app_instance_id,
 )
 from .deploy_validation_report import (
     DEPLOY_REPORT_FILENAME,
@@ -148,6 +150,12 @@ from .github_secrets import (
     read_github_token,
     upsert_environment_secrets,
     upsert_environment_variables,
+)
+from .grafana_runtime import (
+    collect_grafana_runtime_status,
+    ensure_grafana_runtime_secrets,
+    grafana_enabled_for_target,
+    write_grafana_status,
 )
 from .helm_client import HelmChartReference, HelmClient, chart_cli_contract_findings
 from .iam_bootstrap import (
@@ -203,9 +211,10 @@ from .paths import (
     resolve_deploy_config_paths,
     resolve_destroy_config_paths,
     resolve_email_config_paths,
+    resolve_generated_flux_paths,
+    resolve_generated_infra_paths,
     resolve_generated_paths,
     resolve_project_paths,
-    resolve_report_config_paths,
     validate_path_alignment,
 )
 from .provider_options import (
@@ -222,6 +231,7 @@ from .quota_checks import (
     format_quota_report_lines,
     format_quota_request_lines,
     format_quota_request_manual_followup_lines,
+    plan_quota_request_changes,
     request_quota_changes,
 )
 from .render import promote_staged_generated_paths, reset_generated_bundle, staged_generated_paths
@@ -318,6 +328,29 @@ def _print_quota_request_hint(config_path: Path) -> None:
     console.print(f"  {_quota_request_command(config_path)}")
 
 
+def _quota_report_has_capacity_dashboard_shortage(report: QuotaReport) -> bool:
+    return any(
+        item.sufficient is False and item.source_scope.startswith("capacity-dashboard")
+        for item in report.insufficient_checks
+    )
+
+
+def _print_quota_remediation_hint(config_path: Path, report: QuotaReport) -> None:
+    if plan_quota_request_changes(report):
+        _print_quota_request_hint(config_path)
+        return
+    if _quota_report_has_capacity_dashboard_shortage(report):
+        console.print(
+            "Next step: choose a GPU platform/preset/fabric or region with available "
+            "Capacity Dashboard capacity, then rerun quota-check."
+        )
+        return
+    console.print(
+        "Next step: resolve the live quota lookup details and rerun quota-check; "
+        "no automatic quota request target could be derived."
+    )
+
+
 def _print_quota_check_all_regions_hint(config_path: Path, *, enabled: bool) -> None:
     if not enabled:
         return
@@ -332,6 +365,49 @@ def _warn_on_live_quota_issues(
     all_regions: bool = False,
 ) -> QuotaReport:
     report = _assess_live_quota_report(config, phase=phase, all_regions=all_regions)
+    _print_live_quota_report(report, phase=phase)
+    return report
+
+
+def _adjust_quota_report_for_existing_generated_state(
+    config: Any,
+    paths: ProjectPaths,
+    report: QuotaReport,
+) -> QuotaReport:
+    if not report.checks:
+        return report
+    if not paths.infra_dir.exists():
+        return report
+    manifest_path = manifest_path_for_generated_dir(paths.generated_dir)
+    if not manifest_path.exists():
+        return report
+    try:
+        manifest = load_generated_manifest(paths.generated_dir)
+        runtime_env = _terraform_runtime_env(config)
+        terraform_init(paths.infra_dir, extra_env=runtime_env)
+        managed_requirements = _managed_mk8s_quota_requirements_from_terraform_state(
+            config,
+            paths,
+            manifest,
+            runtime_env=runtime_env,
+        )
+    except Exception:
+        return report
+    return _adjust_quota_report_for_managed_mk8s_state(
+        report,
+        managed_requirements=managed_requirements,
+    )
+
+
+def _warn_on_config_live_quota_issues(
+    config: Any,
+    paths: ProjectPaths,
+    *,
+    phase: str,
+    all_regions: bool = False,
+) -> QuotaReport:
+    report = _assess_live_quota_report(config, phase=phase, all_regions=all_regions)
+    report = _adjust_quota_report_for_existing_generated_state(config, paths, report)
     _print_live_quota_report(report, phase=phase)
     return report
 
@@ -690,6 +766,10 @@ def _adjust_quota_report_for_managed_mk8s_state(
                 replace(
                     contributor,
                     required=contributor.required - remaining_baseline,
+                    reason=(
+                        f"{contributor.reason} "
+                        "(net-new after existing Terraform state discount)"
+                    ),
                 )
             )
         if not adjusted_contributors:
@@ -747,7 +827,7 @@ def _raise_on_generated_bundle_live_quota_issues(
         )
     _print_live_quota_report(report, phase=phase)
     if report.has_confirmed_insufficiency:
-        _print_quota_request_hint(paths.config_path)
+        _print_quota_remediation_hint(paths.config_path, report)
         _print_quota_check_all_regions_hint(paths.config_path, enabled=True)
         raise RuntimeError(_quota_failure_message(report, phase=phase))
     return report
@@ -807,16 +887,11 @@ _GENERATED_PATH_ARGUMENT_HELP = (
 _GENERATED_INFRA_ARGUMENT_HELP = "Path to generated/ or generated/infra."
 _GENERATED_FLUX_ARGUMENT_HELP = "Path to generated/ or generated/flux."
 _GENERATED_INVENTORY_ARGUMENT_HELP = "Path to generated/ or generated/inventory."
-_GENERATED_REPORT_SCAFFOLD_TEXT = "# Deploy Report\n\nGenerated by `nebius-cxcli report`.\n"
-_LEGACY_GENERATED_REPORT_SCAFFOLD_TEXT = (
-    "# Deploy Report\n\nGenerated by `nebius-cxcli inventory write`.\n"
-)
-_LEGACY_GENERATED_INVENTORY_SCAFFOLD_TEXT = (
-    "# Inventory\n\nGenerated by `nebius-cxcli inventory write`.\n"
-)
+_GENERATED_REPORT_SCAFFOLD_TEXT = "# Deploy Report\n\nGenerated by `nebius-cxcli render`.\n"
 _COMPONENT_SOURCES_ARGUMENT_HELP = (
     "Optional explicit component_sources.yaml path. "
-    "When omitted, validate-sources uses the normal component source resolution order."
+    "When omitted, validate-sources uses the normal catalog resolution order "
+    "from global flags, environment, and bundled defaults."
 )
 app = typer.Typer(
     add_completion=False,
@@ -826,8 +901,9 @@ app = typer.Typer(
         "resolved project folders only with confirmation; component list/add/remove are "
         "the day-2 config.yaml editing surface; "
         "discover uses a deployment-scope directory; validate/quota-check/quota-request/render/bootstrap-ci/deploy use config.yaml; "
-        "destroy/report/email also use config.yaml and resolve sibling generated/ automatically; "
-        "validate-generated/terraform/flux use generated/, "
+        "destroy uses config.yaml to tear down all rendered project resources from sibling generated/; "
+        "email also uses config.yaml and resolves sibling generated/ automatically; "
+        "validate-generated uses generated/, terraform uses generated/infra, flux uses generated/flux, "
         "validate-sources accepts optional component_sources.yaml, and "
         "auth has no positional path."
     ),
@@ -968,6 +1044,16 @@ def _load_generated_context(target_path: Path) -> tuple:
     return _load_manifest_backed_context(paths)
 
 
+def _load_generated_infra_context(target_path: Path) -> tuple:
+    paths = resolve_generated_infra_paths(target_path)
+    return _load_manifest_backed_context(paths)
+
+
+def _load_generated_flux_context(target_path: Path) -> tuple:
+    paths = resolve_generated_flux_paths(target_path)
+    return _load_manifest_backed_context(paths)
+
+
 def _load_deploy_context(target_path: Path) -> tuple:
     paths = resolve_deploy_config_paths(target_path)
     return _load_manifest_backed_context(paths)
@@ -975,11 +1061,6 @@ def _load_deploy_context(target_path: Path) -> tuple:
 
 def _load_destroy_context(target_path: Path) -> tuple:
     paths = resolve_destroy_config_paths(target_path)
-    return _load_manifest_backed_context(paths)
-
-
-def _load_report_context(target_path: Path) -> tuple:
-    paths = resolve_report_config_paths(target_path)
     return _load_manifest_backed_context(paths)
 
 
@@ -1025,16 +1106,9 @@ def _render_overwrite_warning(paths: ProjectPaths) -> str | None:
     existing_files = sorted(path for path in paths.generated_dir.rglob("*") if path.is_file())
     meaningful_files: list[Path] = []
     for path in existing_files:
-        if path in {
-            paths.inventory_dir / DEPLOY_REPORT_FILENAME,
-            paths.inventory_dir / "inventory.md",
-        }:
+        if path == paths.inventory_dir / DEPLOY_REPORT_FILENAME:
             try:
-                if path.read_text(encoding="utf-8") in {
-                    _GENERATED_REPORT_SCAFFOLD_TEXT,
-                    _LEGACY_GENERATED_REPORT_SCAFFOLD_TEXT,
-                    _LEGACY_GENERATED_INVENTORY_SCAFFOLD_TEXT,
-                }:
+                if path.read_text(encoding="utf-8") == _GENERATED_REPORT_SCAFFOLD_TEXT:
                     continue
             except OSError:
                 pass
@@ -1251,7 +1325,7 @@ def _run_runtime_validation(
     ):
         console.print(f"{warning_markup('Valid with quota warnings:')} {config_path}")
         if quota_report.has_confirmed_insufficiency:
-            _print_quota_request_hint(config_path)
+            _print_quota_remediation_hint(config_path, quota_report)
         return
     console.print(f"[green]Valid:[/green] {config_path}")
 
@@ -2035,7 +2109,7 @@ def _resolve_component_remove_targets(
         *_enabled_component_instance_specs(payload, scope="infra", entries=infra_entries),
         *_enabled_component_instance_specs(payload, scope="apps", entries=app_entries),
     ]
-    by_instance: dict[str, _ComponentRemoveTarget] = {}
+    by_instance: dict[str, list[_ComponentRemoveTarget]] = {}
     by_scope_and_type: dict[tuple[ComponentScope, str], list[_ComponentRemoveTarget]] = {}
     for entry, row in enabled_specs:
         instance_id = str(row["instance_id"])
@@ -2044,7 +2118,7 @@ def _resolve_component_remove_targets(
             component_id=entry.id,
             instance_id=instance_id,
         )
-        by_instance[instance_id] = target
+        by_instance.setdefault(instance_id, []).append(target)
         by_scope_and_type.setdefault((entry.scope, entry.id), []).append(target)
 
     normalized = [token.strip() for token in tokens if token.strip()]
@@ -2053,7 +2127,7 @@ def _resolve_component_remove_targets(
         if keyword == "none":
             return [], ()
         if keyword == "all":
-            return list(by_instance.values()), ()
+            return [item for items in by_instance.values() for item in items], ()
 
     skipped: list[str] = []
     selected: list[_ComponentRemoveTarget] = []
@@ -2068,16 +2142,21 @@ def _resolve_component_remove_targets(
                 raise RuntimeError(
                     f"Invalid component selector '{token}'. Use '<instance-id>' or '<component-id>@<instance-id>'."
                 )
-            candidate = by_instance.get(instance_id)
-            if (
-                candidate is None
-                or candidate.component_id != component_id
-                or (scope is not None and candidate.scope != scope)
-            ):
+            candidates = by_instance.get(instance_id, [])
+            candidate = next(
+                (
+                    item
+                    for item in candidates
+                    if item.component_id == component_id and (scope is None or item.scope == scope)
+                ),
+                None,
+            )
+            if candidate is None:
                 skipped.append(token)
                 continue
-            if candidate.instance_id not in seen_instances:
-                seen_instances.add(candidate.instance_id)
+            selected_key = f"{candidate.scope}:{candidate.component_id}@{candidate.instance_id}"
+            if selected_key not in seen_instances:
+                seen_instances.add(selected_key)
                 selected.append(candidate)
             continue
 
@@ -2099,15 +2178,30 @@ def _resolve_component_remove_targets(
             )
         if len(flattened) == 1:
             only = flattened[0]
-            if only.instance_id not in seen_instances:
-                seen_instances.add(only.instance_id)
+            selected_key = f"{only.scope}:{only.component_id}@{only.instance_id}"
+            if selected_key not in seen_instances:
+                seen_instances.add(selected_key)
                 selected.append(only)
             continue
 
-        candidate = by_instance.get(normalized_token)
-        if candidate is not None and (scope is None or candidate.scope == scope):
-            if candidate.instance_id not in seen_instances:
-                seen_instances.add(candidate.instance_id)
+        instance_matches = [
+            item
+            for item in by_instance.get(normalized_token, [])
+            if scope is None or item.scope == scope
+        ]
+        if len(instance_matches) > 1:
+            available = ", ".join(
+                sorted(f"{item.component_id}@{item.instance_id}" for item in instance_matches)
+            )
+            raise RuntimeError(
+                f"Component selector '{token}' matches multiple enabled instances. "
+                f"Use '<component-id>@<instance-id>'. Available instances: {available}"
+            )
+        if len(instance_matches) == 1:
+            candidate = instance_matches[0]
+            selected_key = f"{candidate.scope}:{candidate.component_id}@{candidate.instance_id}"
+            if selected_key not in seen_instances:
+                seen_instances.add(selected_key)
                 selected.append(candidate)
             continue
         skipped.append(token)
@@ -2284,20 +2378,179 @@ def _scope_rows(payload: dict[str, Any], *, scope: ComponentScope) -> list[dict[
     return rows
 
 
+def _component_instance_id_is_auto_allocated(component_id: str, instance_id: str) -> bool:
+    normalized_component_id = normalize_component_token(component_id)
+    normalized_instance_id = normalize_component_token(instance_id)
+    if normalized_instance_id == normalized_component_id:
+        return True
+    suffix_prefix = f"{normalized_component_id}-"
+    if not normalized_instance_id.startswith(suffix_prefix):
+        return False
+    suffix = normalized_instance_id[len(suffix_prefix) :]
+    return bool(suffix) and suffix.isdigit()
+
+
+def _align_new_handoff_instance_ids_with_resource_names(
+    payload: dict[str, Any],
+    *,
+    selected_instance_ids: set[str] | None = None,
+) -> dict[str, str]:
+    """Rename newly scaffolded handoff instances from placeholder ids to resource names."""
+    infra_rows = _scope_rows(payload, scope="infra")
+    apps_rows = _scope_rows(payload, scope="apps")
+    infra_entry_by_id = {entry.id: entry for entry in component_entries("infra")}
+    used_infra_instance_ids = {
+        component_instance_id(row)
+        for row in infra_rows
+        if isinstance(row, Mapping) and component_instance_id(row)
+    }
+    selected = (
+        {
+            normalize_component_token(item)
+            for item in selected_instance_ids
+            if normalize_component_token(item)
+        }
+        if selected_instance_ids is not None
+        else None
+    )
+    renames: dict[str, str] = {}
+
+    for row in infra_rows:
+        component_id = component_type_id(row)
+        instance_id = component_instance_id(row)
+        if not component_id or not instance_id:
+            continue
+        if selected is not None and instance_id not in selected:
+            continue
+        entry = infra_entry_by_id.get(component_id)
+        if entry is None or entry.handoff is None or entry.status is None:
+            continue
+        if not _component_instance_id_is_auto_allocated(component_id, instance_id):
+            continue
+        inputs = row.get("inputs")
+        if not isinstance(inputs, Mapping):
+            continue
+        resource_names = _status_resource_names_from_value(
+            _mapping_path_value(inputs, entry.status.name_input)
+        )
+        if len(resource_names) != 1:
+            continue
+        target_instance_id = normalize_component_token(resource_names[0])
+        if (
+            not target_instance_id
+            or target_instance_id == instance_id
+            or not INSTANCE_ID_PATTERN.fullmatch(target_instance_id)
+        ):
+            continue
+        if target_instance_id in used_infra_instance_ids:
+            raise RuntimeError(
+                f"Cannot use {entry.status.name_input} '{resource_names[0]}' as the "
+                f"instance_id for infra:{component_id}; component instance_id "
+                f"'{target_instance_id}' already exists."
+            )
+        row[INSTANCE_ID_FIELD] = target_instance_id
+        used_infra_instance_ids.remove(instance_id)
+        used_infra_instance_ids.add(target_instance_id)
+        renames[instance_id] = target_instance_id
+
+    if not renames:
+        return {}
+
+    for row in apps_rows:
+        if not isinstance(row, dict):
+            continue
+        target_ref = app_chart_target_ref(row)
+        if target_ref not in renames:
+            continue
+        new_target_ref = renames[target_ref]
+        app_id = component_type_id(row)
+        if app_id and is_auto_target_scoped_app_instance_id(
+            row.get(INSTANCE_ID_FIELD),
+            app_id=app_id,
+            target_ref=target_ref,
+        ):
+            row[INSTANCE_ID_FIELD] = target_scoped_app_instance_id(
+                app_id,
+                target_ref=new_target_ref,
+            )
+        row[TARGET_REF_FIELD] = new_target_ref
+    deploy = payload.get("deploy")
+    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    if isinstance(targets, list):
+        for row in targets:
+            if not isinstance(row, dict):
+                continue
+            target_ref = normalize_component_token(row.get(INSTANCE_ID_FIELD))
+            if target_ref in renames:
+                row[INSTANCE_ID_FIELD] = renames[target_ref]
+    return renames
+
+
 def _append_component_instance_row(
     *,
     payload: dict[str, Any],
     entry: ComponentEntry,
     requested_instance_id: str | None = None,
+    allow_unassigned_app_target: bool = False,
 ) -> dict[str, Any]:
     rows = _scope_rows(payload, scope=entry.scope)
-    instance_id = next_component_instance_id(
-        component_id=entry.id,
-        rows=rows,
-        requested_instance_id=requested_instance_id,
-    )
     target_refs = enabled_cluster_target_refs(payload)
+    requested = normalize_component_token(requested_instance_id)
     default_target_ref = target_refs[0] if len(target_refs) == 1 else ""
+    if entry.scope == "apps" and target_refs:
+        if requested:
+            if requested not in target_refs:
+                available = ", ".join(sorted(target_refs))
+                raise ValueError(
+                    f"apps component '{entry.id}' instance_id must match a cluster target. "
+                    f"Use one of: {available}"
+                )
+            default_target_ref = requested
+        elif len(target_refs) > 1 and not allow_unassigned_app_target:
+            available = ", ".join(sorted(target_refs))
+            raise ValueError(
+                f"apps component '{entry.id}' must be added for an explicit cluster target "
+                f"when multiple targets are enabled. Use '{entry.id}@<target-id>'. "
+                f"Available targets: {available}"
+            )
+    if entry.scope == "apps":
+        instance_id = requested or (
+            target_scoped_app_instance_id(entry.id, target_ref=default_target_ref)
+            if default_target_ref
+            else entry.id
+        )
+        duplicate_app_instance = any(
+            component_type_id(row) == entry.id and component_instance_id(row) == instance_id
+            for row in rows
+            if isinstance(row, Mapping)
+        )
+        if duplicate_app_instance and target_refs:
+            target_label = default_target_ref or requested or instance_id
+            raise ValueError(
+                f"apps component '{entry.id}' is already enabled for cluster target "
+                f"'{target_label}'. Remove that app row first, or add it for a different target."
+            )
+        if duplicate_app_instance:
+            if requested:
+                raise ValueError(
+                    f"apps component '{entry.id}' instance_id '{instance_id}' already exists"
+                )
+            suffix = 2
+            base_instance_id = instance_id
+            while any(
+                component_type_id(row) == entry.id
+                and component_instance_id(row) == f"{base_instance_id}-{suffix}"
+                for row in rows
+                if isinstance(row, Mapping)
+            ):
+                suffix += 1
+            instance_id = f"{base_instance_id}-{suffix}"
+    else:
+        instance_id = next_component_instance_id(
+            component_id=entry.id,
+            rows=rows,
+            requested_instance_id=requested_instance_id,
+        )
     if entry.scope == "infra":
         row: dict[str, Any] = {
             "id": entry.id,
@@ -2315,9 +2568,12 @@ def _append_component_instance_row(
         chart_repo = _canonical_app_chart_repo(chart_repo=chart_repo, chart_name=chart_name)
         namespace = str(entry.default_namespace or "").strip() or entry.id
         default_release_name = str(entry.default_release_name or "").strip()
-        release_name = (
-            instance_id if instance_id != entry.id else (default_release_name or instance_id)
-        )
+        if target_refs:
+            release_name = default_release_name or entry.id
+        else:
+            release_name = (
+                instance_id if instance_id != entry.id else (default_release_name or instance_id)
+            )
         raw_group = str(entry.group or "").strip().lower()
         group = re.sub(r"[^a-z0-9]+", "-", raw_group).strip("-") or "workloads"
         row = {
@@ -2349,14 +2605,65 @@ def _remove_component_instance_row(
     payload: dict[str, Any],
     scope: ComponentScope,
     instance_id: str,
+    component_id: str | None = None,
 ) -> dict[str, Any] | None:
     rows = _scope_rows(payload, scope=scope)
     target = normalize_component_token(instance_id)
+    target_component = normalize_component_token(component_id)
     for index, row in enumerate(rows):
         if component_instance_id(row) != target:
             continue
+        if target_component and component_type_id(row) != target_component:
+            continue
         return rows.pop(index)
     return None
+
+
+def _materialize_single_target_app_bindings(payload: dict[str, Any]) -> bool:
+    target_refs = enabled_cluster_target_refs(payload)
+    if len(target_refs) != 1:
+        return False
+    target_ref = target_refs[0]
+
+    apps_node = payload.get("apps")
+    if not isinstance(apps_node, Mapping):
+        return False
+    charts = apps_node.get("charts")
+    if not isinstance(charts, list):
+        return False
+
+    enabled_unbound_by_chart: dict[str, list[dict[str, Any]]] = {}
+    for row in charts:
+        if not isinstance(row, dict) or not bool(row.get("enabled", False)):
+            continue
+        chart_id = component_type_id(row)
+        if not chart_id or app_chart_target_ref(row):
+            continue
+        enabled_unbound_by_chart.setdefault(chart_id, []).append(row)
+
+    changed = False
+    for chart_id, rows in enabled_unbound_by_chart.items():
+        if len(rows) != 1:
+            continue
+        row = rows[0]
+        instance_id = target_scoped_app_instance_id(chart_id, target_ref=target_ref)
+        duplicate_target_row = any(
+            other is not row
+            and isinstance(other, Mapping)
+            and bool(other.get("enabled", False))
+            and component_type_id(other) == chart_id
+            and component_instance_id(other) == instance_id
+            for other in charts
+        )
+        if duplicate_target_row:
+            continue
+        if row.get(INSTANCE_ID_FIELD) != instance_id:
+            row[INSTANCE_ID_FIELD] = instance_id
+            changed = True
+        if row.get(TARGET_REF_FIELD) != target_ref:
+            row[TARGET_REF_FIELD] = target_ref
+            changed = True
+    return changed
 
 
 def _enabled_component_instance_specs(
@@ -2554,6 +2861,42 @@ def _declared_wizard_prompt_path(
     resolved = _resolve_payload_path(payload, full_path_label)
     if resolved is not None:
         return resolved
+
+    if full_path_label.startswith("deploy.targets[].") and component_path is not None:
+        component_node = (
+            _get_payload_value(payload, component_path)
+            if _payload_path_exists(payload, component_path)
+            else None
+        )
+        if isinstance(component_node, Mapping):
+            target_ref = component_instance_id(component_node)
+            deploy = payload.get("deploy")
+            if not isinstance(deploy, dict):
+                deploy = {}
+                payload["deploy"] = deploy
+            targets = deploy.get("targets")
+            if not isinstance(targets, list):
+                targets = []
+                deploy["targets"] = targets
+            if isinstance(targets, list):
+                for index, target_row in enumerate(targets):
+                    if not isinstance(target_row, Mapping):
+                        continue
+                    if normalize_component_token(target_row.get(INSTANCE_ID_FIELD)) != target_ref:
+                        continue
+                    indexed_label = full_path_label.replace(
+                        "deploy.targets[]",
+                        f"deploy.targets[{index}]",
+                        1,
+                    )
+                    return _parse_payload_path_label(indexed_label)
+                targets.append({INSTANCE_ID_FIELD: target_ref})
+                indexed_label = full_path_label.replace(
+                    "deploy.targets[]",
+                    f"deploy.targets[{len(targets) - 1}]",
+                    1,
+                )
+                return _parse_payload_path_label(indexed_label)
 
     root_token = full_path_label.split(".", 1)[0]
     if root_token in _ABSOLUTE_WIZARD_ROOTS:
@@ -2980,6 +3323,13 @@ def _resolve_wizard_field_spec(
         direct = entry.wizard_fields.get(full_path_label)
         if isinstance(direct, dict):
             return direct
+
+        target_match = re.match(r"^deploy\.targets\[[0-9]+\]\.(.+)$", full_path_label)
+        if target_match:
+            placeholder = f"deploy.targets[].{target_match.group(1)}"
+            placeholder_spec = entry.wizard_fields.get(placeholder)
+            if isinstance(placeholder_spec, dict):
+                return placeholder_spec
 
         prefix = f"{entry.config_path}."
         if full_path_label.startswith(prefix):
@@ -3557,17 +3907,18 @@ def _prompt_path_sort_key(
     full_label = _format_payload_path(path)
     nested_order_hints = {
         "deploy.observability.enabled": 19,
-        "deploy.observability.kubernetes.logs.enabled": 20,
-        "deploy.observability.kubernetes.metrics.enabled": 21,
-        "deploy.observability.kubernetes.metrics.collect_k8s_cluster_metrics": 22,
-        "deploy.observability.kubernetes.traces.enabled": 23,
-        "deploy.validations.mk8s_gpu.operator_readiness.enabled": 30,
-        "deploy.validations.mk8s_gpu.gpu_visibility.enabled": 31,
-        "deploy.validations.mk8s_gpu.gpu_visibility.max_nodes": 32,
-        "deploy.validations.mk8s_gpu.nccl.enabled": 33,
-        "deploy.validations.mk8s_gpu.nccl.max_nodes": 34,
-        "deploy.validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps": 35,
-        "deploy.validations.mk8s_gpu.health_checker.enabled": 36,
+        "deploy.targets[].observability.enabled": 19,
+        "deploy.targets[].observability.kubernetes.logs.enabled": 20,
+        "deploy.targets[].observability.kubernetes.metrics.enabled": 21,
+        "deploy.targets[].observability.kubernetes.metrics.collect_k8s_cluster_metrics": 22,
+        "deploy.targets[].observability.kubernetes.traces.enabled": 23,
+        "deploy.targets[].validations.mk8s_gpu.operator_readiness.enabled": 30,
+        "deploy.targets[].validations.mk8s_gpu.gpu_visibility.enabled": 31,
+        "deploy.targets[].validations.mk8s_gpu.gpu_visibility.max_nodes": 32,
+        "deploy.targets[].validations.mk8s_gpu.nccl.enabled": 33,
+        "deploy.targets[].validations.mk8s_gpu.nccl.max_nodes": 34,
+        "deploy.targets[].validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps": 35,
+        "deploy.targets[].validations.mk8s_gpu.health_checker.enabled": 36,
     }
     leaf = path[-1] if path else ""
     leaf_name = _normalize_leaf_name(str(leaf)) if isinstance(leaf, str) else ""
@@ -3578,8 +3929,9 @@ def _prompt_path_sort_key(
         else 1
     )
     toggle_rank = 0 if leaf_name.endswith("_enabled") else 1
+    normalized_full_label = re.sub(r"deploy\.targets\[[0-9]+\]", "deploy.targets[]", full_label)
     leaf_rank = next(
-        (rank for suffix, rank in nested_order_hints.items() if full_label == suffix),
+        (rank for suffix, rank in nested_order_hints.items() if normalized_full_label == suffix),
         leaf_order_hints.get(leaf_name, 100),
     )
     return required_rank, toggle_rank, leaf_rank, full_label
@@ -3664,11 +4016,19 @@ def _is_mk8s_boot_disk_type_field(full_path_label: str) -> bool:
 
 
 def _is_mk8s_gpu_validation_field(full_path_label: str) -> bool:
-    return full_path_label.startswith("deploy.validations.mk8s_gpu.")
+    return bool(
+        re.match(
+            r"^deploy\.targets\[[0-9]+\]\.validations\.mk8s_gpu\.",
+            full_path_label,
+        )
+        or full_path_label.startswith("deploy.targets[].validations.mk8s_gpu.")
+    )
 
 
 def _is_observability_field(full_path_label: str) -> bool:
-    return full_path_label.startswith("deploy.observability.")
+    return full_path_label.startswith("deploy.observability.") or bool(
+        re.match(r"^deploy\.targets(?:\[[0-9]+\]|\[\])\.observability\.", full_path_label)
+    )
 
 
 def _gpu_preset_field_context(
@@ -3930,13 +4290,33 @@ def _skip_observability_prompt(
     vm_enabled = _payload_has_enabled_vm(payload)
     if not (mk8s_enabled or vm_enabled):
         return True
+    target_observability_match = re.match(
+        r"^(deploy\.targets\[[0-9]+\]\.observability)(?:\.|$)",
+        full_path_label,
+    )
+    if target_observability_match:
+        if entry.id != "mk8s" or not mk8s_enabled:
+            return True
+        target_prefix = target_observability_match.group(1)
+        if full_path_label == f"{target_prefix}.enabled":
+            return False
+        target_enabled = bool(_read_payload_field(payload, f"{target_prefix}.enabled"))
+        if not target_enabled:
+            return True
+        kubernetes_prefix = f"{target_prefix}.kubernetes"
+        if full_path_label.startswith(f"{kubernetes_prefix}.logs."):
+            return bool(
+                full_path_label != f"{kubernetes_prefix}.logs.enabled"
+                and not _read_payload_field(payload, f"{kubernetes_prefix}.logs.enabled")
+            )
+        if full_path_label.startswith(f"{kubernetes_prefix}.metrics."):
+            return bool(
+                full_path_label != f"{kubernetes_prefix}.metrics.enabled"
+                and not _read_payload_field(payload, f"{kubernetes_prefix}.metrics.enabled")
+            )
+        return False
     if full_path_label == "deploy.observability.enabled":
-        return bool(entry.id != "mk8s" and mk8s_enabled)
-    if full_path_label.startswith("deploy.observability.kubernetes."):
-        if entry.id != "mk8s":
-            return True
-        if not mk8s_enabled:
-            return True
+        return bool(entry.id != "vm" or not vm_enabled)
     if full_path_label.startswith("deploy.observability.vm."):
         if entry.id != "vm":
             return True
@@ -3945,18 +4325,6 @@ def _skip_observability_prompt(
     observability_enabled = bool(_read_payload_field(payload, "deploy.observability.enabled"))
     if not observability_enabled:
         return True
-    if full_path_label.startswith("deploy.observability.kubernetes.logs."):
-        return bool(
-            full_path_label != "deploy.observability.kubernetes.logs.enabled"
-            and not _read_payload_field(payload, "deploy.observability.kubernetes.logs.enabled")
-        )
-    if full_path_label.startswith("deploy.observability.kubernetes.metrics."):
-        return bool(
-            full_path_label != "deploy.observability.kubernetes.metrics.enabled"
-            and not _read_payload_field(payload, "deploy.observability.kubernetes.metrics.enabled")
-        )
-    if full_path_label.startswith("deploy.observability.kubernetes.traces."):
-        return False
     if full_path_label == "deploy.observability.vm.logs.enabled":
         return bool(
             _payload_vm_standalone_collector_logs_enabled(payload)
@@ -4003,6 +4371,55 @@ def _skip_vm_observability_dependent_prompt(
     return not _payload_vm_standalone_collector_enabled(payload)
 
 
+def _skip_vm_preemptible_prompt(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+) -> bool:
+    if entry.scope != "infra" or entry.id != "vm":
+        return False
+    if not full_path_label.endswith((".preemptible_enabled", ".preemptible_priority")):
+        return False
+    component_prefix = _dynamic_component_prefix(entry=entry, full_path_label=full_path_label)
+    if not component_prefix:
+        return True
+    platform = _non_empty_text(_read_payload_field(payload, f"{component_prefix}.inputs.platform"))
+    return not platform.lower().startswith("gpu-")
+
+
+def _maybe_materialize_vm_preemptible_recovery_policy(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    component_path: PayloadPath | None,
+) -> None:
+    if entry.scope != "infra" or entry.id != "vm" or component_path is None:
+        return
+    inputs_path = component_path + ("inputs",)
+    preemptible_path = inputs_path + ("preemptible_enabled",)
+    if not _payload_path_exists(payload, preemptible_path) or not bool(
+        _get_payload_value(payload, preemptible_path)
+    ):
+        return
+    recovery_policy_path = inputs_path + ("recovery_policy",)
+    current = (
+        _non_empty_text(_get_payload_value(payload, recovery_policy_path)).upper()
+        if _payload_path_exists(payload, recovery_policy_path)
+        else ""
+    )
+    if current == "FAIL":
+        return
+    _set_payload_value_creating_containers(payload, recovery_policy_path, "FAIL")
+    recovery_policy_label = _format_payload_path(recovery_policy_path)
+    console.print(
+        f"{warning_markup('Adjusted VM preemptible settings:')} "
+        f"set '{escape(recovery_policy_label)}' to 'FAIL' because Nebius preemptible "
+        "VMs require recovery_policy=FAIL and render on_preemption=STOP."
+    )
+    _print_wizard_selected_field(recovery_policy_label, "FAIL")
+
+
 def _skip_mk8s_gpu_validation_prompt(
     *,
     payload: dict[str, Any],
@@ -4018,14 +4435,13 @@ def _skip_mk8s_gpu_validation_prompt(
     if not _payload_has_enabled_mk8s_gpu(payload):
         return True
     if (
-        full_path_label == "deploy.validations.mk8s_gpu.health_checker.enabled"
+        full_path_label.endswith(".validations.mk8s_gpu.health_checker.enabled")
         and not has_mk8s_gpu_health_checker_app()
     ):
         return True
-    return (
-        full_path_label == "deploy.validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps"
-        and not _payload_has_enabled_mk8s_gpu_cluster(payload)
-    )
+    return full_path_label.endswith(
+        ".validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps"
+    ) and not _payload_has_enabled_mk8s_gpu_cluster(payload)
 
 
 def _maybe_refresh_mk8s_boot_disk_defaults_after_shape_change(
@@ -4235,6 +4651,63 @@ def _wizard_field_prompt_suffix(rendered_label: str) -> str:
         f"{rendered_label} (enter {WIZARD_EXIT_TOKEN} to revisit the previous answered field; "
         f"{WIZARD_ABORT_TOKEN} stops wizard)"
     )
+
+
+_WIZARD_REDACTED_FIELD_TOKENS = (
+    "access_key",
+    "api_key",
+    "certificate",
+    "credentials",
+    "iam_token",
+    "password",
+    "private_key",
+    "secret",
+    "token",
+)
+
+
+def _wizard_field_is_sensitive(path_label: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", "_", path_label.lower())
+    return any(token in normalized for token in _WIZARD_REDACTED_FIELD_TOKENS)
+
+
+def _wizard_visible_value(value: object, *, path_label: str) -> str:
+    if _wizard_field_is_sensitive(path_label):
+        return "<redacted>"
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        rendered = value
+    else:
+        rendered = str(value)
+        with suppress(TypeError):
+            rendered = json.dumps(value, sort_keys=True)
+    rendered = rendered.strip()
+    if len(rendered) > 160:
+        rendered = f"{rendered[:157]}..."
+    return rendered
+
+
+def _print_wizard_selected_field(path_label: str, value: object) -> None:
+    rendered_value = _wizard_visible_value(value, path_label=path_label)
+    console.print(f"[dim]Selected {escape(path_label)} = {escape(rendered_value)}[/dim]")
+
+
+def _print_wizard_section_banner(
+    *,
+    title: str,
+    components: Sequence[tuple[ComponentEntry, str]],
+) -> None:
+    if not components:
+        return
+    labels = ", ".join(
+        component_instance_label(entry.id, instance_id) for entry, instance_id in components
+    )
+    console.print()
+    console.print(f"[bold cyan]--- {escape(title)} wizard section ---[/bold cyan]")
+    console.print(f"[dim]Selected components: {escape(labels)}[/dim]")
 
 
 def _wizard_backtrack_requested(value: object) -> bool:
@@ -4610,12 +5083,35 @@ def _run_component_field_wizard(
             return selected_components
         for row in _dynamic_enabled_app_chart_rows(payload):
             instance_id = str(row["instance_id"])
-            if instance_id not in active_selected_apps:
+            chart_id = str(row["id"])
+            exact_selector = component_instance_label(chart_id, instance_id)
+            exact_selector_mode = any("@" in token for token in active_selected_apps)
+            if (
+                exact_selector not in active_selected_apps
+                and chart_id not in active_selected_apps
+                and (exact_selector_mode or instance_id not in active_selected_apps)
+            ):
                 continue
-            entry = app_lookup.get(str(row["id"]))
+            entry = app_lookup.get(chart_id)
             if entry is not None:
                 selected_components.append((entry, instance_id))
         return selected_components
+
+    def _app_target_ref_for_instance(component_id: str, instance_id: str) -> str:
+        for row in _dynamic_enabled_app_chart_rows(payload):
+            if component_type_id(row) != component_id:
+                continue
+            if component_instance_id(row) != instance_id:
+                continue
+            return app_chart_target_ref(row)
+        return ""
+
+    def _wizard_component_label(entry: ComponentEntry, instance_id: str) -> str:
+        if entry.scope == "apps":
+            target_ref = _app_target_ref_for_instance(entry.id, instance_id)
+            if target_ref:
+                return f"{entry.id} on {target_ref}"
+        return component_instance_label(entry.id, instance_id)
 
     def _materialize_wizard_auto_enabled_gpu_apps() -> None:
         nonlocal payload, active_selected_apps
@@ -4736,7 +5232,7 @@ def _run_component_field_wizard(
         )
 
     def _run_component(entry: ComponentEntry, instance_id: str) -> bool:
-        component_label = component_instance_label(entry.id, instance_id)
+        component_label = _wizard_component_label(entry, instance_id)
         decision = _wizard_continue_phase(
             f"Configure '{component_label}' component fields now?",
             default=entry.scope == "infra",
@@ -5240,6 +5736,12 @@ def _run_component_field_wizard(
                     full_path_label=full_path_label,
                 ):
                     continue
+                if _skip_vm_preemptible_prompt(
+                    payload=payload,
+                    entry=entry,
+                    full_path_label=full_path_label,
+                ):
+                    continue
                 if not _provider_prompt_dependencies_ready(
                     payload=payload,
                     entry=entry,
@@ -5413,6 +5915,17 @@ def _run_component_field_wizard(
                     _set_payload_value_creating_containers(payload, full_path, updated)
                 else:
                     _set_payload_value(payload, full_path, updated)
+                _print_wizard_selected_field(full_path_label, updated)
+                if (
+                    entry.scope == "apps"
+                    and component_path is not None
+                    and full_path == component_path + (TARGET_REF_FIELD,)
+                ):
+                    component_node = _get_payload_value(payload, component_path)
+                    if isinstance(component_node, dict):
+                        target_ref = app_chart_target_ref(component_node)
+                        if target_ref:
+                            component_node[INSTANCE_ID_FIELD] = target_ref
                 _maybe_refresh_mk8s_boot_disk_defaults_after_shape_change(
                     payload=payload,
                     entry=entry,
@@ -5425,6 +5938,11 @@ def _run_component_field_wizard(
                     entry=entry,
                     full_path_label=full_path_label,
                     provider_lookup=provider_lookup,
+                )
+                _maybe_materialize_vm_preemptible_recovery_policy(
+                    payload=payload,
+                    entry=entry,
+                    component_path=component_path,
                 )
                 _maybe_print_selected_gpu_preset_guidance(
                     payload=payload,
@@ -5463,14 +5981,18 @@ def _run_component_field_wizard(
             )
         return True
 
-    for entry, instance_id in _selected_components_for_scope("infra"):
+    infra_components = _selected_components_for_scope("infra")
+    _print_wizard_section_banner(title="Infra", components=infra_components)
+    for entry, instance_id in infra_components:
         if not _run_component(entry, instance_id):
             return yaml.safe_dump(payload, sort_keys=False), False
 
     _materialize_wizard_auto_enabled_gpu_apps()
     _materialize_wizard_auto_enabled_observability_apps()
 
-    for entry, instance_id in _selected_components_for_scope("apps"):
+    app_components = _selected_components_for_scope("apps")
+    _print_wizard_section_banner(title="Apps", components=app_components)
+    for entry, instance_id in app_components:
         if not _run_component(entry, instance_id):
             return yaml.safe_dump(payload, sort_keys=False), False
 
@@ -7338,13 +7860,13 @@ def _enabled_custom_module_source_issues(
 def _active_component_input_binding_issues(payload: dict[str, Any]) -> list[str]:
     issues: list[str] = []
     all_entries = component_entry_lookup()
-    active_rows: dict[str, dict[str, Any]] = {}
+    active_rows: dict[tuple[ComponentScope, str, str], dict[str, Any]] = {}
     for row in _dynamic_enabled_infra_component_rows(payload):
-        active_rows[str(row["instance_id"])] = row
+        active_rows[("infra", str(row["id"]), str(row["instance_id"]))] = row
     for row in _dynamic_enabled_app_chart_rows(payload):
-        active_rows[str(row["instance_id"])] = row
+        active_rows[("apps", str(row["id"]), str(row["instance_id"]))] = row
 
-    for instance_id, row in active_rows.items():
+    for (_scope, _row_component_id, instance_id), row in active_rows.items():
         component_id = str(row["id"])
         entry = all_entries.get(component_id)
         if entry is None or not entry.input_bindings:
@@ -7378,7 +7900,12 @@ def _active_component_input_binding_issues(payload: dict[str, Any]) -> list[str]
                 if source_instance_id
                 else declared_source_ref
             )
-            if not source_instance_id or source_instance_id not in active_rows:
+            source_key = (
+                source_entry.scope,
+                binding.source_component_id,
+                source_instance_id or binding.source_instance_id,
+            )
+            if not source_instance_id or source_key not in active_rows:
                 issues.append(
                     f"{entry.scope} component '{component_instance_label(component_id, instance_id)}' input binding '{binding.target_path}' requires "
                     f"enabled source component matching '{declared_source_ref}'"
@@ -9685,10 +10212,15 @@ def _reconcile_observability_gpu_node_labels(
     config: Any,
     *,
     extra_env: dict[str, str] | None,
+    target_ref: str = "",
 ) -> None:
     if not extra_env or not extra_env.get("KUBECONFIG"):
         return
-    policy = observability_gpu_node_label_reconciliation(config)
+    policy = (
+        observability_gpu_node_label_reconciliation(config, target_ref=target_ref)
+        if target_ref
+        else observability_gpu_node_label_reconciliation(config)
+    )
     if not policy.enabled:
         return
     selector = ",".join(f"{key}={value}" for key, value in policy.selector)
@@ -9711,6 +10243,37 @@ def _reconcile_observability_gpu_node_labels(
         )
         raise RuntimeError(f"Observability GPU node-label reconciliation failed: {detail}")
     console.print(f"Reconciled observability GPU node labels for selector `{escape(selector)}`.")
+
+
+def _ensure_grafana_runtime_before_flux(
+    config: Any,
+    *,
+    extra_env: dict[str, str] | None,
+    target_ref: str = "",
+) -> None:
+    if not grafana_enabled_for_target(config, target_ref=target_ref):
+        return
+    ensure_grafana_runtime_secrets(
+        config,
+        extra_env=extra_env,
+        target_ref=target_ref,
+        emit=lambda message: console.print(message),
+    )
+
+
+def _collect_grafana_status_after_flux(
+    config: Any,
+    *,
+    extra_env: dict[str, str] | None,
+    target_ref: str = "",
+) -> tuple[dict[str, Any], ...]:
+    if not grafana_enabled_for_target(config, target_ref=target_ref):
+        return ()
+    try:
+        return collect_grafana_runtime_status(config, extra_env=extra_env, target_ref=target_ref)
+    except Exception as exc:
+        console.print(f"{warning_markup('WARNING:', bold=True)} Failed to resolve Grafana URL: {exc}")
+        return ()
 
 
 def _deploy_generated_artifacts(
@@ -9789,6 +10352,7 @@ def _deploy_generated_artifacts(
             f"{_multi_cluster_handoff_skip_note(manifest_targets)}"
         )
     validation_error: Exception | None = None
+    grafana_statuses: list[dict[str, Any]] = []
     if selected_targets:
         persist_local_kubeconfig = True
         set_current_context = len(selected_targets) == 1 and not all_targets
@@ -9813,13 +10377,29 @@ def _deploy_generated_artifacts(
                     set_current_context=set_current_context,
                 )
                 if target_has_apps:
-                    _reconcile_observability_gpu_node_labels(config, extra_env=kube_env)
+                    _reconcile_observability_gpu_node_labels(
+                        config,
+                        extra_env=kube_env,
+                        target_ref=target_ref,
+                    )
+                    _ensure_grafana_runtime_before_flux(
+                        config,
+                        extra_env=kube_env,
+                        target_ref=target_ref,
+                    )
                 if needs_cluster_ready:
                     _report_cluster_nodes_status(
                         extra_env=kube_env, emit=lambda message: console.print(message)
                     )
                 if target_has_apps:
                     _apply_rendered_flux(target_paths, extra_env=kube_env)
+                    grafana_statuses.extend(
+                        _collect_grafana_status_after_flux(
+                            config,
+                            extra_env=kube_env,
+                            target_ref=target_ref,
+                        )
+                    )
                     _warn_if_flux_gitops_not_bootstrapped(
                         config,
                         target_paths,
@@ -9855,7 +10435,11 @@ def _deploy_generated_artifacts(
     elif has_enabled_app_charts or deploy_validations:
         _report_cluster_nodes_status(extra_env=None, emit=lambda message: console.print(message))
         if has_enabled_app_charts:
+            _ensure_grafana_runtime_before_flux(config, extra_env=None)
             _apply_rendered_flux(paths, extra_env=None)
+            grafana_statuses.extend(
+                _collect_grafana_status_after_flux(config, extra_env=None)
+            )
         if deploy_validations:
             with console.status(
                 "[cyan]Running MK8s GPU validations...[/cyan]",
@@ -9879,6 +10463,9 @@ def _deploy_generated_artifacts(
                     )
                 except Exception as exc:
                     validation_error = exc
+    if grafana_statuses:
+        write_grafana_status(paths, grafana_statuses)
+        write_inventory(config, paths, validations=declared_validations)
     if declared_validations:
         artifacts = write_inventory(config, paths, validations=declared_validations)
         validation_report = build_deploy_validation_report(
@@ -10136,23 +10723,26 @@ def _destroy_confirmation_text(
 ) -> tuple[str, str]:
     if _active_chart_count(config) == 0:
         return (
-            "Continue and destroy the rendered infra resources?",
-            "Destroy will run Terraform destroy against the rendered infra bundle under "
+            "Continue and destroy all rendered infra resources for this project?",
+            "Destroy will remove all rendered infra resources for this project by running "
+            "Terraform destroy against the rendered infra bundle under "
             f"{paths.infra_dir}.",
         )
     if _destroy_uses_cluster_teardown_for_apps(config, manifest):
         return (
-            "Continue and destroy the rendered apps and infra?",
-            "Destroy will run Terraform destroy against the rendered infra bundle under "
+            "Continue and destroy all rendered app and infra resources for this project?",
+            "Destroy will remove all rendered project resources represented by the generated "
+            "manifest by running Terraform destroy against the rendered infra bundle under "
             f"{paths.infra_dir}. Because this bundle destroys the handed-off cluster directly, "
             "it will not delete the rendered app resources under "
             f"{paths.flux_dir} separately first.",
         )
     return (
-        "Continue and destroy the rendered apps and infra?",
-        "Destroy will delete the rendered app resources from the target cluster using "
-        f"{paths.flux_dir} first and then run Terraform destroy against the rendered infra bundle "
-        f"under {paths.infra_dir}.",
+        "Continue and destroy all rendered app and infra resources for this project?",
+        "Destroy will remove all rendered project resources represented by the generated "
+        "manifest by deleting the rendered app resources from the target cluster using "
+        f"{paths.flux_dir} first and then running Terraform destroy against the rendered "
+        f"infra bundle under {paths.infra_dir}.",
     )
 
 
@@ -10856,8 +11446,9 @@ _DEPLOYMENTS_GITIGNORE_BEGIN = "# >>> nebius-cxcli managed ignores >>>"
 _DEPLOYMENTS_GITIGNORE_END = "# <<< nebius-cxcli managed ignores <<<"
 _DEPLOYMENTS_GITIGNORE_LINES: tuple[str, ...] = (
     _DEPLOYMENTS_GITIGNORE_BEGIN,
-    "# Generated by `nebius-cxcli create`.",
-    "# Keep the canonical project config versioned in a private repo; ignore generated Terraform runtime files.",
+    "# Managed by `nebius-cxcli`.",
+    "# Keep config.yaml and generated/nebius-cxcli-manifest.json versioned in a private repo.",
+    "# Ignore Terraform runtime files and tfvars duplicates recreated from the generated manifest.",
     "*/*/generated/infra/.terraform/",
     "*/*/generated/infra/*.tfstate",
     "*/*/generated/infra/*.tfstate.*",
@@ -11075,9 +11666,14 @@ def _filter_runtime_payload_for_selected_components(
             release_name = str(entry.default_release_name or "").strip() or entry.id
             raw_group = str(entry.group or "").strip().lower()
             group = re.sub(r"[^a-z0-9]+", "-", raw_group).strip("-") or "workloads"
+            instance_id = (
+                target_scoped_app_instance_id(entry.id, target_ref=default_target_ref)
+                if default_target_ref
+                else entry.id
+            )
             row = {
                 "id": entry.id,
-                INSTANCE_ID_FIELD: entry.id,
+                INSTANCE_ID_FIELD: instance_id,
                 "group": group,
                 "enabled": True,
                 "repo": str(chart_repo or ""),
@@ -11117,19 +11713,71 @@ def _filter_runtime_payload_for_selected_components(
                     and default_target_ref
                 ):
                     row[TARGET_REF_FIELD] = default_target_ref
+                    row[INSTANCE_ID_FIELD] = target_scoped_app_instance_id(
+                        entry.id,
+                        target_ref=default_target_ref,
+                    )
                 if not isinstance(row.get("values"), Mapping):
                     row["values"] = {}
                 row["enabled"] = True
         selected_app_charts.extend(matched_rows)
     apps["charts"] = selected_app_charts
+    _materialize_single_target_app_bindings(runtime_payload)
 
     return runtime_payload
+
+
+def _target_bound_app_issues_from_payload(payload: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+    target_refs = set(enabled_cluster_target_refs(payload))
+    available_targets = ", ".join(sorted(target_refs)) or "(none)"
+    seen_keys: dict[tuple[str, str], str] = {}
+
+    for row in _dynamic_enabled_app_chart_rows(payload):
+        chart_id = str(row["id"])
+        instance_id = str(row["instance_id"])
+        label = _component_instance_path_label("apps", chart_id, instance_id)
+        instance_key = (chart_id, instance_id)
+        existing_label = seen_keys.get(instance_key)
+        if existing_label is not None:
+            issues.append(
+                f"{label} duplicates enabled app chart instance {existing_label}"
+            )
+            continue
+        seen_keys[instance_key] = label
+
+        target_ref = app_chart_target_ref(row)
+        if target_refs:
+            if not target_ref:
+                issues.append(
+                    f"{label}.{TARGET_REF_FIELD} is required when cluster targets are enabled"
+                )
+                continue
+            if instance_id != target_ref:
+                issues.append(
+                    f"{label}.{INSTANCE_ID_FIELD} must match {label}.{TARGET_REF_FIELD} "
+                    "for target-bound charts"
+                )
+                continue
+            if target_ref not in target_refs:
+                issues.append(
+                    f"{label}.{TARGET_REF_FIELD} '{target_ref}' must reference one of "
+                    f"the enabled cluster targets: {available_targets}"
+                )
+            continue
+        if target_ref:
+            issues.append(
+                f"{label}.{TARGET_REF_FIELD} '{target_ref}' no longer has an enabled "
+                "cluster target; remove that app row first or keep the target infra component"
+            )
+    return issues
 
 
 def _selection_change_issues(payload: dict[str, Any]) -> list[str]:
     issues: list[str] = []
     issues.extend(_component_dependency_issues_from_payload(payload))
     issues.extend(_active_component_input_binding_issues(payload))
+    issues.extend(_target_bound_app_issues_from_payload(payload))
     return issues
 
 
@@ -11461,8 +12109,10 @@ def create_command(
         typer.Option(
             "--validate-config/--no-validate-config",
             help=(
-                "Run `validate` against the resulting config.yaml after create finishes "
-                "(enabled by default)."
+                "Run post-write runtime validation against the resulting config.yaml "
+                "after create finishes (enabled by default). `--no-validate-config` "
+                "skips that validation only; create still runs its warning-only live "
+                "quota/capacity assessment."
             ),
         ),
     ] = True,
@@ -11489,7 +12139,12 @@ def create_command(
         ),
     ] = False,
 ) -> None:
-    """Use DEPLOYMENTS_ROOT to bootstrap one name-based tenant/project folder with config.yaml plus generated/ skeleton, or overwrite an existing resolved project folder from scratch after confirmation."""
+    """Use DEPLOYMENTS_ROOT to bootstrap one name-based tenant/project folder with config.yaml plus generated/ skeleton, or overwrite an existing resolved project folder from scratch after confirmation.
+
+    The post-create quota/capacity assessment is warning-only. It is not a
+    reservation, not a quota request, and not a wizard-selectable deployment
+    gate.
+    """
     try:
         base_path = target_path.resolve()
         _validate_deployments_root_target(base_path)
@@ -11808,6 +12463,7 @@ def create_command(
                 )
                 + " because the selected observability configuration requires them."
             )
+        _align_new_handoff_instance_ids_with_resource_names(final_payload)
         materialize_mk8s_gpu_app_values(final_payload)
         materialize_observability_infra_values(final_payload)
         materialize_observability_app_values(final_payload)
@@ -11876,7 +12532,7 @@ def create_command(
                 "Render can continue, but deploy will fail until the required quota is available "
                 "and any selected GPU shape has matching Capacity Dashboard capacity."
             )
-            _print_quota_request_hint(result.config_path)
+            _print_quota_remediation_hint(result.config_path, quota_report)
         if not validate_config:
             _print_mk8s_gpu_validation_warnings(final_payload)
         console.print(
@@ -11955,8 +12611,14 @@ def component_list_command(
                 console.print()
             else:
                 for entry, row in specs:
+                    target_suffix = ""
+                    if entry.scope == "apps":
+                        target_ref = app_chart_target_ref(row)
+                        if target_ref:
+                            target_suffix = f" on {target_ref}"
                     console.print(
                         f"  {_component_instance_selector_label(entry, instance_id=str(row['instance_id']))}"
+                        f"{target_suffix}"
                         f"  ({entry.description})"
                     )
                 console.print()
@@ -11996,13 +12658,16 @@ def component_add_command(
     component_ids: Annotated[
         list[str] | None,
         typer.Argument(
-            metavar="[COMPONENT_ID]...",
+            metavar="[COMPONENT_SELECTOR]...",
             help=(
-                "Optional infra module or app chart id(s) to add. When omitted, "
-                "component add prompts interactively using separate infra/apps selections. "
-                "Infra-only interactive adds are valid and do not require selecting an app. "
-                "Repeat a component id to add another instance, or use "
-                "'<component-id>@<instance-id>' to request an explicit instance id."
+                "Optional infra module or app chart selector(s) to add. Use "
+                "'<id>', 'infra:<id>', 'apps:<id>', 'all', 'none', or "
+                "'<id>@<instance-id>'. Omit to prompt "
+                "interactively; infra-only interactive adds are valid. "
+                "Repeat reusable ids for another instance. "
+                "For target-bound app charts, use '<app-id>@<target-id>'; one chart row "
+                "is allowed per app id and cluster target, and the suffix sets "
+                "apps.charts[].target_ref."
             ),
         ),
     ] = None,
@@ -12155,6 +12820,7 @@ def component_add_command(
 
         added_infra_instances: list[str] = []
         added_apps_instances: list[str] = []
+        added_apps_selectors: list[str] = []
         added_infra_labels: list[str] = []
         added_apps_labels: list[str] = []
         infra_lookup = {entry.id: entry for entry in infra_entries}
@@ -12173,6 +12839,7 @@ def component_add_command(
                 payload=next_payload,
                 entry=entry,
                 requested_instance_id=target.requested_instance_id,
+                allow_unassigned_app_target=interactive_mode,
             )
             instance_id = component_instance_id(row)
             if target.scope == "infra":
@@ -12180,7 +12847,9 @@ def component_add_command(
                 added_infra_labels.append(component_instance_label(entry.id, instance_id))
             else:
                 added_apps_instances.append(instance_id)
-                added_apps_labels.append(component_instance_label(entry.id, instance_id))
+                app_label = component_instance_label(entry.id, instance_id)
+                added_apps_selectors.append(app_label)
+                added_apps_labels.append(app_label)
         _seed_infra_project_scope_defaults(
             payload=next_payload,
             infra_entries=infra_entries,
@@ -12222,7 +12891,7 @@ def component_add_command(
             config_yaml_override, wizard_completed = _run_component_field_wizard(
                 config_yaml=config_yaml_override,
                 selected_infra=set(added_infra_instances),
-                selected_apps=set(added_apps_instances),
+                selected_apps=set(added_apps_selectors),
                 infra_entries=infra_entries,
                 app_entries=app_entries,
                 provider_lookup=provider_lookup,
@@ -12375,6 +13044,20 @@ def component_add_command(
                 )
                 + " because the selected observability configuration requires them."
             )
+        infra_renames = _align_new_handoff_instance_ids_with_resource_names(
+            next_payload,
+            selected_instance_ids=set(added_infra_instances),
+        )
+        if infra_renames:
+            added_infra_instances = [
+                infra_renames.get(instance_id, instance_id) for instance_id in added_infra_instances
+            ]
+            added_infra_labels = [
+                component_instance_label(component_type_id(row), component_instance_id(row))
+                for row in next_payload.get("infra", {}).get("components", [])
+                if isinstance(row, dict) and component_instance_id(row) in added_infra_instances
+            ]
+        _materialize_single_target_app_bindings(next_payload)
         materialize_mk8s_gpu_app_values(next_payload)
         materialize_observability_infra_values(next_payload)
         materialize_observability_app_values(next_payload)
@@ -12444,12 +13127,14 @@ def component_remove_command(
     component_ids: Annotated[
         list[str] | None,
         typer.Argument(
-            metavar="[COMPONENT_ID]...",
+            metavar="[COMPONENT_SELECTOR]...",
             help=(
-                "Optional infra module or app chart id(s) to remove. When omitted, "
-                "component remove prompts interactively using separate infra/apps selections. "
+                "Optional enabled infra module or app chart selector(s) to remove. Use "
+                "'<id>', 'infra:<id>', 'apps:<id>', 'all', 'none', '<instance-id>', "
+                "or '<id>@<instance-id>'. Omit to prompt interactively. "
                 "If multiple instances of the same component type are enabled, pass the "
-                "instance id or '<component-id>@<instance-id>' to remove one exact instance."
+                "instance_id or '<id>@<instance-id>' to remove one exact "
+                "config.yaml row."
             ),
         ),
     ] = None,
@@ -12547,6 +13232,7 @@ def component_remove_command(
                 payload=next_payload,
                 scope=target.scope,
                 instance_id=target.instance_id,
+                component_id=target.component_id,
             )
             if removed is None:
                 continue
@@ -12739,7 +13425,7 @@ def bootstrap_ci_command(
 
 @app.command(
     "validate",
-    short_help="Use CONFIG_YAML to validate runtime config, readiness, provider/chart wiring, and live quota/capacity.",
+    short_help="Use CONFIG_YAML to validate source config, deployment readiness, and live quota/capacity.",
 )
 def validate_command(
     config_path: Annotated[
@@ -12750,7 +13436,7 @@ def validate_command(
         ),
     ],
 ) -> None:
-    """Validate one project config.yaml with runtime source, readiness, provider/chart, and live quota/capacity checks."""
+    """Validate one project source config.yaml as the source config, deployment readiness, and live quota/capacity gate, including provider/chart wiring and MK8s preflight."""
     try:
         _run_runtime_validation(
             config_path=config_path,
@@ -12793,13 +13479,14 @@ def quota_check_command(
     """
     try:
         config, paths = _load_context(config_path)
-        report = _warn_on_live_quota_issues(
+        report = _warn_on_config_live_quota_issues(
             config,
+            paths,
             phase="quota check",
             all_regions=all_regions,
         )
         if report.has_confirmed_insufficiency:
-            _print_quota_request_hint(paths.config_path)
+            _print_quota_remediation_hint(paths.config_path, report)
             _print_quota_check_all_regions_hint(paths.config_path, enabled=not all_regions)
             raise RuntimeError(_quota_failure_message(report, phase="quota check"))
         if report.errors or report.coverage_gaps or report.unknown_checks:
@@ -12836,13 +13523,16 @@ def quota_request_command(
     The command keeps QuotaAllowance reads and QuotaRequest submission separate:
     it uses live quota allowances to confirm the shortage, then submits quota requests
     through the separate request surface when that internal path is available.
+    If the current live assessment is already sufficient, quota-request is a no-op.
+    It is mainly the remediation command for confirmed shortages reported by
+    create, quota-check, validate, render, deploy, or validate-generated.
     Unresolved live limits and coverage gaps are reported but not requested automatically.
     When internal quota-request submission is unavailable, the command still prints the
     exact manual quota targets that should be requested in the Nebius web console.
     """
     try:
         config, paths = _load_context(config_path)
-        report = _warn_on_live_quota_issues(config, phase="quota request")
+        report = _warn_on_config_live_quota_issues(config, paths, phase="quota request")
         request_result = request_quota_changes(report, context="quota request")
         planned_changes = request_result.planned_changes
         if not planned_changes:
@@ -12937,7 +13627,10 @@ def validate_generated_command(
         bool,
         typer.Option(
             "--auto-auth-bootstrap/--no-auto-auth-bootstrap",
-            help="Automatically bootstrap runtime auth when env vars are missing",
+            help=(
+                "Automatically bootstrap runtime auth for generated-bundle "
+                "backend/Terraform validation when env vars are missing."
+            ),
         ),
     ] = True,
     portable: Annotated[
@@ -12980,7 +13673,7 @@ def validate_generated_command(
 
 @app.command(
     "validate-sources",
-    short_help="Validate component_sources.yaml plus resolved Terraform module and Helm chart source contracts.",
+    short_help="Validate the active component_sources.yaml catalog and resolved Terraform/Helm source contracts.",
 )
 def validate_sources_command(
     component_sources_path: Annotated[
@@ -12991,7 +13684,7 @@ def validate_sources_command(
         ),
     ] = None,
 ) -> None:
-    """Validate component_sources.yaml plus resolved Terraform module and Helm chart source contracts."""
+    """Validate the active component_sources.yaml catalog plus resolved Terraform module and Helm chart source contracts."""
     try:
         sources = load_component_sources(explicit=component_sources_path)
         progress_items: list[tuple[str, str]] = []
@@ -13090,7 +13783,7 @@ def auth_command(
             "--project-id",
             help=(
                 "Project ID used by runtime auth operations "
-                "(or provide --project-config to resolve it)."
+                "(or provide --project-config to resolve it; do not pass both)."
             ),
         ),
     ] = None,
@@ -13100,7 +13793,7 @@ def auth_command(
             "--project-config",
             help=(
                 "Optional project config.yaml path (<tenant-folder>/<project-folder>/config.yaml) used to resolve "
-                "project_id and client_name"
+                "project_id and client_name; do not combine with --project-id or --client-name"
             ),
         ),
     ] = None,
@@ -13110,8 +13803,9 @@ def auth_command(
             "--client-name",
             help=(
                 "Client name used for runtime auth cache path and --bootstrap-ci environment naming "
-                "(`<client_name>-<project_id>`). Required for --create/--recreate unless "
-                "--project-config is provided, or when project_id maps to multiple cached profiles."
+                "(`<client_name>-<project_id>`). Valid only with --project-id; required for "
+                "--create/--recreate unless --project-id maps to one cached profile, and required "
+                "when project_id maps to multiple cached profiles."
             ),
         ),
     ] = None,
@@ -13182,6 +13876,22 @@ def auth_command(
 ) -> None:
     """Manage runtime auth profiles, optionally scoped by config.yaml/project ID or across all cached profiles for validate-only runs."""
     try:
+        if project_config is not None and project_id is not None:
+            raise RuntimeError(
+                "--project-config and --project-id are mutually exclusive. "
+                "Use --project-config to resolve identity from config.yaml, or use "
+                "--project-id with --client-name."
+            )
+        if project_config is not None and client_name is not None:
+            raise RuntimeError(
+                "--client-name is valid only with --project-id. "
+                "--project-config resolves client_name from config.yaml."
+            )
+        if project_config is None and project_id is None and client_name is not None:
+            raise RuntimeError(
+                "--client-name requires --project-id, or omit both for global "
+                "--validate-profile."
+            )
         if not bootstrap_ci and (github_repo is not None or github_token_env != "GH_TOKEN"):
             raise RuntimeError(
                 "--github-repo and --github-token-env are valid only with --bootstrap-ci."
@@ -13584,7 +14294,7 @@ def deploy_command(
 
 @app.command(
     "destroy",
-    short_help="Use CONFIG_YAML to destroy the sibling rendered bundle.",
+    short_help="Use CONFIG_YAML to destroy all rendered project resources.",
 )
 def destroy_command(
     config_path: Annotated[
@@ -13610,17 +14320,18 @@ def destroy_command(
         ),
     ] = False,
 ) -> None:
-    """Destroy an existing generated artifact bundle locally from config.yaml.
+    """Destroy all rendered project resources locally from config.yaml.
 
     This command is the destructive inverse of `deploy`: it resolves the
     sibling `generated/` directory from the project `config.yaml`, then uses
     `generated/nebius-cxcli-manifest.json` as the authoritative teardown
-    contract. When apps target an external or current cluster, it deletes the
-    rendered Flux manifests first and then runs Terraform destroy against the
-    rendered infra bundle. When the generated bundle destroys the handed-off
-    cluster directly, it skips the separate Flux delete step and relies on
-    cluster teardown instead. It does not rerender from `config.yaml`, and it
-    does not uninstall Flux controllers or bootstrap GitHub/CI state.
+    contract for the whole rendered project. When apps target an external or
+    current cluster, it deletes the rendered Flux manifests first and then runs
+    Terraform destroy against the rendered infra bundle. When the generated
+    bundle destroys the handed-off cluster directly, it skips the separate Flux
+    delete step and relies on cluster teardown instead. It does not rerender
+    from `config.yaml`, and it does not uninstall Flux controllers or bootstrap
+    GitHub/CI state.
     """
     try:
         config, paths, manifest = _load_destroy_context(config_path)
@@ -13667,7 +14378,7 @@ def terraform_plan_command(
 ) -> None:
     """Run Terraform plan against an existing generated/infra bundle."""
     try:
-        config, paths, _manifest = _load_generated_context(generated_path)
+        config, paths, _manifest = _load_generated_infra_context(generated_path)
         _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
         runtime_env = _terraform_runtime_env(config)
         terraform_init(paths.infra_dir, extra_env=runtime_env)
@@ -13704,7 +14415,7 @@ def terraform_apply_command(
 ) -> None:
     """Refresh the deploy report, then run Terraform apply against an existing generated/infra bundle."""
     try:
-        config, paths, manifest = _load_generated_context(generated_path)
+        config, paths, manifest = _load_generated_infra_context(generated_path)
         _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
         paths.inventory_dir.mkdir(parents=True, exist_ok=True)
         write_inventory(config, paths, validations=_manifest_deploy_validations(manifest))
@@ -13757,7 +14468,7 @@ def terraform_destroy_command(
 ) -> None:
     """Run Terraform destroy against an existing generated/infra bundle."""
     try:
-        config, paths, manifest = _load_generated_context(generated_path)
+        config, paths, manifest = _load_generated_infra_context(generated_path)
         if not _confirm_generated_destroy(
             yes=yes,
             action_label="Terraform destroy",
@@ -13818,7 +14529,7 @@ def terraform_unlock_command(
 ) -> None:
     """Clear a stale remote Terraform state lock for an existing generated/infra bundle."""
     try:
-        config, paths, _manifest = _load_generated_context(generated_path)
+        config, paths, _manifest = _load_generated_infra_context(generated_path)
         lock_info = _unlock_terraform_state_lock(
             config,
             paths,
@@ -13887,7 +14598,7 @@ def flux_destroy_command(
 ) -> None:
     """Delete rendered Flux resources directly from an existing generated/flux bundle."""
     try:
-        config, paths, manifest = _load_generated_context(generated_path)
+        config, paths, manifest = _load_generated_flux_context(generated_path)
         if _active_chart_count(config) == 0:
             raise RuntimeError("No enabled apps charts are configured for this project.")
         if not _confirm_generated_destroy(
@@ -13951,7 +14662,7 @@ def flux_bootstrap_command(
 ) -> None:
     """Refresh the deploy report, then bootstrap or reconcile Flux from an existing generated/flux bundle."""
     try:
-        config, paths, manifest = _load_generated_context(generated_path)
+        config, paths, manifest = _load_generated_flux_context(generated_path)
         if _manifest_requires_flux_terraform_state(manifest):
             _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
         else:
@@ -13989,12 +14700,18 @@ def flux_bootstrap_command(
                     _report_cluster_nodes_status(
                         extra_env=kube_env, emit=lambda message: console.print(message)
                     )
+                    _ensure_grafana_runtime_before_flux(
+                        config,
+                        extra_env=kube_env,
+                        target_ref=target_ref_value,
+                    )
                     action = ensure_flux(target_paths, extra_env=kube_env)
                 console.print(f"Flux {action} for {target_paths.flux_dir}")
         else:
             _report_cluster_nodes_status(
                 extra_env=None, emit=lambda message: console.print(message)
             )
+            _ensure_grafana_runtime_before_flux(config, extra_env=None)
             action = ensure_flux(paths, extra_env=None)
             console.print(f"Flux {action} for {paths.flux_dir}")
     except Exception as exc:  # pragma: no cover - CLI surface
@@ -14037,7 +14754,7 @@ def flux_apply_command(
 ) -> None:
     """Refresh the deploy report and apply an existing generated/flux bundle directly."""
     try:
-        config, paths, manifest = _load_generated_context(generated_path)
+        config, paths, manifest = _load_generated_flux_context(generated_path)
         if _active_chart_count(config) == 0:
             raise RuntimeError("No enabled apps charts are configured for this project.")
         if _manifest_requires_flux_terraform_state(manifest):
@@ -14045,6 +14762,7 @@ def flux_apply_command(
         paths.inventory_dir.mkdir(parents=True, exist_ok=True)
         write_inventory(config, paths, validations=_manifest_deploy_validations(manifest))
         manifest_targets = _manifest_deploy_targets(manifest)
+        grafana_statuses: list[dict[str, Any]] = []
         if manifest_targets:
             selected_targets = _resolve_selected_deploy_targets(
                 manifest,
@@ -14070,7 +14788,19 @@ def flux_apply_command(
                     _report_cluster_nodes_status(
                         extra_env=kube_env, emit=lambda message: console.print(message)
                     )
+                    _ensure_grafana_runtime_before_flux(
+                        config,
+                        extra_env=kube_env,
+                        target_ref=target_ref_value,
+                    )
                     _apply_rendered_flux(target_paths, extra_env=kube_env)
+                    grafana_statuses.extend(
+                        _collect_grafana_status_after_flux(
+                            config,
+                            extra_env=kube_env,
+                            target_ref=target_ref_value,
+                        )
+                    )
                     _warn_if_flux_gitops_not_bootstrapped(
                         config,
                         target_paths,
@@ -14082,9 +14812,16 @@ def flux_apply_command(
             _report_cluster_nodes_status(
                 extra_env=None, emit=lambda message: console.print(message)
             )
+            _ensure_grafana_runtime_before_flux(config, extra_env=None)
             _apply_rendered_flux(paths, extra_env=None)
+            grafana_statuses.extend(
+                _collect_grafana_status_after_flux(config, extra_env=None)
+            )
             _warn_if_flux_gitops_not_bootstrapped(config, paths, extra_env=None)
             console.print(f"Flux applied from {paths.flux_dir}")
+        if grafana_statuses:
+            write_grafana_status(paths, grafana_statuses)
+            write_inventory(config, paths, validations=_manifest_deploy_validations(manifest))
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 
@@ -14128,37 +14865,6 @@ def discover_command(
             repo_root=repo_root,
         )
         print(json.dumps(payload, sort_keys=True))
-    except Exception as exc:  # pragma: no cover - CLI surface
-        _exit_with_error(exc)
-
-
-@app.command(
-    "report",
-    short_help="Use CONFIG_YAML to rewrite generated/inventory/deploy-report.md.",
-)
-def report_command(
-    config_path: Annotated[
-        Path,
-        typer.Argument(
-            metavar="CONFIG_YAML",
-            help=_GENERATED_BUNDLE_CONFIG_ARGUMENT_HELP,
-        ),
-    ],
-) -> None:
-    """Rewrite generated/inventory/deploy-report.md from config.yaml.
-
-    The command resolves the sibling `generated/` bundle and uses the rendered
-    manifest/runtime snapshot rather than rereading source-config edits after
-    render.
-    """
-    try:
-        config, paths, manifest = _load_report_context(config_path)
-        artifacts = write_inventory(
-            config,
-            paths,
-            validations=_manifest_deploy_validations(manifest),
-        )
-        console.print(f"Deploy report written: {artifacts.markdown}")
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 

@@ -202,7 +202,7 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
             "inputs.observability_collector_metrics_enabled",
             "inputs.observability_collector_metrics_export_port",
             "inputs.observability_collector_prometheus_agent_port",
-            "inputs.preemptible_priority",
+            "inputs.recovery_policy",
             "inputs.gpu_cluster_id",
             "inputs.gpu_cluster_name",
             "inputs.container_entrypoint",

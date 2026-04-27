@@ -34,6 +34,16 @@ def _normalize_group(value: Any, *, default: str = "workloads") -> str:
     return token or default
 
 
+def _runtime_component_key(component_id: str, instance_id: str) -> str:
+    normalized_component = str(component_id or "").strip().lower().replace("-", "_")
+    normalized_instance = str(instance_id or "").strip().lower().replace("-", "_")
+    if not normalized_instance or normalized_instance == normalized_component:
+        return normalized_component
+    if not normalized_component:
+        return normalized_instance
+    return f"{normalized_component}_{normalized_instance}"
+
+
 def to_dynamic_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Return dynamic payload copy. Static payloads are rejected."""
     if not is_dynamic_payload(payload):
@@ -138,7 +148,7 @@ def to_runtime_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
                     group_node = {}
                     runtime_apps[group] = group_node
                 instance_id = component_instance_id(copied_item)
-                group_node[instance_id.replace("-", "_")] = {
+                group_node[_runtime_component_key(chart_id, instance_id)] = {
                     "enabled": enabled,
                     "repo": str(copied_item.get("repo", "")).strip(),
                     "version": str(copied_item.get("version", "")).strip(),

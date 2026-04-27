@@ -465,6 +465,50 @@ def test_evaluate_requirement_converts_capacity_dashboard_vm_slots_to_gpu_units(
     )
 
 
+def test_evaluate_requirement_requires_exact_selected_gpu_fabric() -> None:
+    requirement = AggregatedQuotaRequirement(
+        component_id="mk8s",
+        instance_id="mk8s",
+        component_label="mk8s",
+        quota_name="compute.instance.gpu.h100",
+        region="eu-north1",
+        required=16,
+        reason="2 GPU node(s) at gpu-h100-sxm/8gpu-128vcpu-1600gb",
+        gpu_capacity_shape=GpuCapacityShape(
+            platform="gpu-h100-sxm",
+            preset="8gpu-128vcpu-1600gb",
+            fabric="fabric-4",
+            mode="regular",
+            gpu_count_per_instance=8,
+        ),
+    )
+
+    check = _evaluate_requirement(
+        requirement,
+        tenant_quotas={},
+        project_quotas={},
+        capacity_resource_advice=(
+            _capacity_advice(
+                region="eu-north1",
+                platform="gpu-h100-sxm",
+                preset="8gpu-128vcpu-1600gb",
+                fabric="fabric-6",
+                reserved_available=3,
+                reserved_limit=3,
+                reserved_level="AVAILABILITY_LEVEL_HIGH",
+            ),
+        ),
+    )
+
+    assert check.available == 0
+    assert check.sufficient is False
+    assert check.source_scope == "capacity-dashboard"
+    assert check.description == (
+        "Capacity Dashboard reported no matching GPU shape row for "
+        "gpu-h100-sxm/8gpu-128vcpu-1600gb, fabric fabric-4"
+    )
+
+
 def test_evaluate_requirement_picks_best_capacity_dashboard_row_when_fabric_is_not_fixed() -> None:
     requirement = AggregatedQuotaRequirement(
         component_id="mk8s",

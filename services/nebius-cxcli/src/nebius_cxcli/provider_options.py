@@ -12,7 +12,9 @@ from pathlib import Path
 from typing import Any, cast
 
 from .capacity_dashboard import (
+    CapacityAdviceAvailability,
     CapacityResourceAdvice,
+    capacity_level_rank,
     capacity_regular_sort_key,
     capacity_summary_text,
     filter_capacity_resource_advice,
@@ -78,6 +80,24 @@ class _ComputePublicImageFamily:
     family: str
     human_name: str
     compatibility: str
+
+
+@dataclass(frozen=True)
+class _CapacityLaneSummary:
+    availability: CapacityAdviceAvailability
+    fabric: str
+
+
+@dataclass(frozen=True)
+class _PresetCapacitySummary:
+    preset: str
+    best_regular: CapacityResourceAdvice
+    on_demand: _CapacityLaneSummary
+    reserved: _CapacityLaneSummary
+
+    @property
+    def best_regular_available(self) -> int:
+        return max(self.on_demand.availability.available, self.reserved.availability.available)
 
 
 def _normalize_plugin_choices(items: Iterable[object] | None) -> list[OptionChoice]:
@@ -293,8 +313,90 @@ def _capacity_advice_sort_key(item: CapacityResourceAdvice) -> tuple[int, int, i
     return capacity_regular_sort_key(item)
 
 
+def _capacity_fabric_sort_key(
+    item: CapacityResourceAdvice,
+    *,
+    prefer_reserved: bool,
+) -> tuple[int, int, int, int, int, int, int, str]:
+    regular_key = _capacity_advice_sort_key(item)
+    return (
+        0 if not prefer_reserved or item.reserved.available > 0 else 1,
+        -item.reserved.available if prefer_reserved else 0,
+        capacity_level_rank(item.reserved.availability_level) if prefer_reserved else 0,
+        *regular_key,
+    )
+
+
 def _capacity_summary_text(item: CapacityResourceAdvice) -> str:
     return capacity_summary_text(item)
+
+
+def _capacity_lane_sort_key(
+    item: CapacityResourceAdvice,
+    *,
+    lane_name: str,
+) -> tuple[int, int, str]:
+    lane = item.on_demand if lane_name == "on_demand" else item.reserved
+    return (
+        -lane.available,
+        capacity_level_rank(lane.availability_level),
+        item.fabric,
+    )
+
+
+def _capacity_preset_summary(items: Iterable[CapacityResourceAdvice]) -> _PresetCapacitySummary:
+    rows = tuple(items)
+    if not rows:
+        raise ValueError("capacity preset summary requires at least one advice row")
+    best_regular = sorted(rows, key=_capacity_advice_sort_key)[0]
+    best_on_demand = sorted(
+        rows,
+        key=lambda item: _capacity_lane_sort_key(item, lane_name="on_demand"),
+    )[0]
+    best_reserved = sorted(
+        rows,
+        key=lambda item: _capacity_lane_sort_key(item, lane_name="reserved"),
+    )[0]
+    return _PresetCapacitySummary(
+        preset=best_regular.preset,
+        best_regular=best_regular,
+        on_demand=_CapacityLaneSummary(
+            availability=best_on_demand.on_demand,
+            fabric=best_on_demand.fabric,
+        ),
+        reserved=_CapacityLaneSummary(
+            availability=best_reserved.reserved,
+            fabric=best_reserved.fabric,
+        ),
+    )
+
+
+def _capacity_preset_summary_text(summary: _PresetCapacitySummary) -> str:
+    return (
+        f"live on-demand VMs={summary.on_demand.availability.available}, "
+        f"reserved VMs={summary.reserved.availability.available}"
+    )
+
+
+def _capacity_preset_fabric_summary_parts(
+    summary: _PresetCapacitySummary,
+    *,
+    allow_gpu_clustering: bool,
+) -> tuple[str, ...]:
+    if not allow_gpu_clustering:
+        return ()
+    parts: list[str] = []
+    best_fabric = summary.best_regular.fabric
+    if best_fabric:
+        parts.append(f"best fabric {best_fabric}")
+    reserved_fabric = summary.reserved.fabric
+    if (
+        reserved_fabric
+        and reserved_fabric != best_fabric
+        and summary.reserved.availability.available > 0
+    ):
+        parts.append(f"best reserved fabric {reserved_fabric}")
+    return tuple(parts)
 
 
 def _gpu_preset_interconnect_suffix(preset: _ComputePlatformPreset) -> tuple[str, ...]:
@@ -951,7 +1053,20 @@ class ProviderOptionLookup:
                 preset_name=preset_name,
             )
             if matching_advice:
-                if matching_advice[0].best_regular_available > 0:
+                prefer_reserved = any(item.reserved.available > 0 for item in matching_advice)
+                matching_advice = tuple(
+                    sorted(
+                        matching_advice,
+                        key=lambda item: _capacity_fabric_sort_key(
+                            item,
+                            prefer_reserved=prefer_reserved,
+                        ),
+                    )
+                )
+                if prefer_reserved:
+                    if matching_advice[0].reserved.available > 0:
+                        recommended_fabric = matching_advice[0].fabric
+                elif matching_advice[0].best_regular_available > 0:
                     recommended_fabric = matching_advice[0].fabric
                 advice_by_fabric = {item.fabric: item for item in matching_advice}
             else:
@@ -967,7 +1082,13 @@ class ProviderOptionLookup:
                 label=(
                     f"{item.fabric}  ({platform_name}, {region_id}), "
                     f"{_capacity_summary_text(item)}"
-                    + (", recommended" if item.fabric == recommended_fabric else "")
+                    + (
+                        ", recommended for reservations"
+                        if item.fabric == recommended_fabric and item.reserved.available > 0
+                        else ", recommended"
+                        if item.fabric == recommended_fabric
+                        else ""
+                    )
                 ),
                 recommended=item.fabric == recommended_fabric,
             )
@@ -1063,7 +1184,7 @@ class ProviderOptionLookup:
             options.append(OptionChoice(value=preset_name, label=label))
 
         if tenant_id and region_id and platform_name.startswith("gpu-"):
-            advice_by_preset: dict[str, CapacityResourceAdvice] = {}
+            advice_rows_by_preset: dict[str, list[CapacityResourceAdvice]] = {}
             for item in self._capacity_resource_advice_for_shape(
                 tenant_id=tenant_id,
                 region_id=region_id,
@@ -1071,14 +1192,19 @@ class ProviderOptionLookup:
             ):
                 if not item.preset:
                     continue
-                current = advice_by_preset.get(item.preset)
-                if current is None or _capacity_advice_sort_key(item) < _capacity_advice_sort_key(
-                    current
-                ):
-                    advice_by_preset[item.preset] = item
+                advice_rows_by_preset.setdefault(item.preset, []).append(item)
+
+            advice_by_preset = {
+                preset: _capacity_preset_summary(rows)
+                for preset, rows in advice_rows_by_preset.items()
+                if rows
+            }
 
             recommended_preset = ""
-            ranked_advice = sorted(advice_by_preset.values(), key=_capacity_advice_sort_key)
+            ranked_advice = sorted(
+                advice_by_preset.values(),
+                key=lambda item: _capacity_advice_sort_key(item.best_regular),
+            )
             if ranked_advice and ranked_advice[0].best_regular_available > 0:
                 recommended_preset = ranked_advice[0].preset
 
@@ -1087,15 +1213,17 @@ class ProviderOptionLookup:
                 OptionChoice(
                     value=choice.value,
                     label=(
-                        f"{choice.label}, {_capacity_summary_text(advice_by_preset[choice.value])}"
-                        + (
-                            f", best fabric {advice_by_preset[choice.value].fabric}"
-                            if (
-                                advice_by_preset[choice.value].fabric
-                                and preset_by_name.get(choice.value) is not None
-                                and preset_by_name[choice.value].allow_gpu_clustering
+                        f"{choice.label}, "
+                        f"{_capacity_preset_summary_text(advice_by_preset[choice.value])}"
+                        + "".join(
+                            f", {part}"
+                            for part in _capacity_preset_fabric_summary_parts(
+                                advice_by_preset[choice.value],
+                                allow_gpu_clustering=(
+                                    preset_by_name.get(choice.value) is not None
+                                    and preset_by_name[choice.value].allow_gpu_clustering
+                                ),
                             )
-                            else ""
                         )
                         + (", recommended" if choice.value == recommended_preset else "")
                     )
@@ -1107,7 +1235,7 @@ class ProviderOptionLookup:
                     options,
                     key=lambda choice: (
                         0 if choice.value in advice_by_preset else 1,
-                        _capacity_advice_sort_key(advice_by_preset[choice.value])
+                        _capacity_advice_sort_key(advice_by_preset[choice.value].best_regular)
                         if choice.value in advice_by_preset
                         else (0, 0, 0, 0, ""),
                         original_order[choice.value],

@@ -23,8 +23,17 @@ def default_cli_ref() -> str:
     return "main"
 
 
+def _generated_workflow_path_glob(deployments_dir: str) -> str:
+    """Return the generated-bundle glob used by customer workflow triggers."""
+    normalized = deployments_dir.strip().strip("/")
+    if normalized in {"", "."}:
+        return "*/*/generated/**"
+    return f"**/{normalized}/*/*/generated/**"
+
+
 def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_ref: str) -> str:
     """Render the customer GitHub Actions workflow scaffold."""
+    generated_path_glob = _generated_workflow_path_glob(deployments_dir)
     return (
         dedent(
             f"""
@@ -33,12 +42,12 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
         on:
           pull_request:
             paths:
-              - "**/{deployments_dir}/*/*/generated/**"
+              - "{generated_path_glob}"
               - ".github/workflows/nebius-deployments.yml"
           push:
             branches: [ "main" ]
             paths:
-              - "**/{deployments_dir}/*/*/generated/**"
+              - "{generated_path_glob}"
               - ".github/workflows/nebius-deployments.yml"
           workflow_dispatch:
 

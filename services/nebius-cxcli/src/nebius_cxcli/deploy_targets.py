@@ -12,10 +12,38 @@ from .paths import ProjectPaths
 from .runtime_config import to_plain_data
 
 TARGET_REF_FIELD = "target_ref"
+DEPLOY_TARGET_INSTANCE_ID_FIELD = "instance_id"
 
 
 def app_chart_target_ref(row: Mapping[str, Any]) -> str:
     return normalize_component_token(row.get(TARGET_REF_FIELD))
+
+
+def deploy_target_instance_id(row: Mapping[str, Any]) -> str:
+    return normalize_component_token(row.get(DEPLOY_TARGET_INSTANCE_ID_FIELD))
+
+
+def target_scoped_app_instance_id(app_id: Any, *, target_ref: Any) -> str:
+    """Return the canonical app instance id for one chart installed on one target."""
+    normalized_target_ref = normalize_component_token(target_ref)
+    if normalized_target_ref:
+        return normalized_target_ref
+    return normalize_component_token(app_id)
+
+
+def is_auto_target_scoped_app_instance_id(
+    instance_id: Any,
+    *,
+    app_id: Any,
+    target_ref: Any,
+) -> bool:
+    """Return true for the canonical target-bound chart instance id."""
+    normalized_instance_id = normalize_component_token(instance_id)
+    normalized_target_ref = normalize_component_token(target_ref)
+    _ = app_id
+    if not normalized_instance_id or not normalized_target_ref:
+        return False
+    return normalized_instance_id == normalized_target_ref
 
 
 def enabled_cluster_target_refs(payload_or_config: Any) -> tuple[str, ...]:
@@ -59,9 +87,13 @@ def flux_target_dir(paths: ProjectPaths, target_ref: str) -> Path:
 
 
 __all__ = [
+    "DEPLOY_TARGET_INSTANCE_ID_FIELD",
     "TARGET_REF_FIELD",
     "app_chart_target_ref",
+    "deploy_target_instance_id",
     "enabled_cluster_target_refs",
     "flux_target_dir",
     "flux_targets_dir",
+    "is_auto_target_scoped_app_instance_id",
+    "target_scoped_app_instance_id",
 ]

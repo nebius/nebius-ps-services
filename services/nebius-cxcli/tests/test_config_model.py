@@ -165,6 +165,7 @@ def test_load_config_accepts_dynamic_payload_with_extra_chart(tmp_path: Path) ->
     charts.append(
         {
             "id": "runtime-app",
+            "instance_id": "mk8s",
             "group": "workloads",
             "enabled": True,
             "target_ref": "mk8s",
@@ -180,8 +181,33 @@ def test_load_config_accepts_dynamic_payload_with_extra_chart(tmp_path: Path) ->
     config_path.write_text(yaml.safe_dump(dynamic, sort_keys=False), encoding="utf-8")
 
     loaded = load_config(config_path)
-    assert loaded.apps.workloads.runtime_app.enabled is True
-    assert loaded.apps.workloads.runtime_app.repo == "https://example.invalid/charts"
+    assert loaded.apps.workloads.runtime_app_mk8s.enabled is True
+    assert loaded.apps.workloads.runtime_app_mk8s.repo == "https://example.invalid/charts"
+
+
+def test_starter_payload_names_target_bound_app_instances() -> None:
+    payload = yaml.safe_load(
+        starter_config_yaml(
+            client_name="client-a",
+            tenant_id="tenant-123",
+            project_id="project-456",
+            region_id="us-central1",
+            email="ops@example.com",
+            selected_infra={"mk8s"},
+            selected_apps={"n8n"},
+            infra_entries=component_entries("infra"),
+            app_entries=component_entries("apps"),
+        )
+    )
+    assert isinstance(payload, dict)
+    charts = {
+        str(item.get("id")): item
+        for item in payload["apps"]["charts"]
+        if isinstance(item, dict) and bool(item.get("enabled"))
+    }
+
+    assert charts["n8n"]["target_ref"] == "mk8s"
+    assert charts["n8n"]["instance_id"] == "mk8s"
 
 
 def test_create_writes_runtime_shape_with_selected_components(tmp_path: Path) -> None:

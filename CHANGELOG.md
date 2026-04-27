@@ -49,6 +49,10 @@ All notable changes to this repository will be documented in this file.
 
 ### Changed
 
+- Clarified the `align` Codex skill guidance and metadata so alignment passes
+  stay audit-first, evidence-driven, wiring-aware, and safe from speculative
+  rewrites while still fixing verified gaps across code, tests, docs,
+  workflows, CLI/help output, config, and applicable project skills.
 - Updated the `skills/create-pr` guidance and metadata so Codex now treats any
   explicit user-supplied PR title as authoritative instead of inferring a
   generic preparation-style title from the branch name, and expanded

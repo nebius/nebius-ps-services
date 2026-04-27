@@ -84,6 +84,9 @@ Implement Nebius IAM/Object Storage, VPC networking, quota-management, and MK8s 
    - Observability:
      - start with `references/observability.md`
      - reuse `assets/observability/public-endpoints.yaml`
+     - verify the Kubernetes agent chart source against the current Nebius
+       Observability Agent docs; the cxcli catalog pins
+       `oci://cr.nebius.cloud/observability/public/nebius-observability-agent-helm`
      - when the task is specific to `services/nebius-cxcli`, treat `component_sources.yaml` and `src/nebius_cxcli/observability.py` as the contract owners for observability defaults, runtime materialization, and report endpoint summaries
 2. For live Nebius VPC inspection, run:
    - `scripts/inspect_vpc_topology.py`

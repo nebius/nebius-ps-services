@@ -345,6 +345,9 @@ def _configured_app_release_specs(
                         "timeout": release_timeout,
                         "values": chart_values,
                         "depends_on": [],
+                        "install_after": tuple(entry.default_release_install_after or ())
+                        if entry is not None
+                        else (),
                     }
                 )
     dependency_map = mk8s_gpu_flux_release_dependencies(
@@ -375,7 +378,11 @@ def _configured_app_release_specs(
         if not entry_id:
             continue
         target_ref = str(release.get("target_ref", "")).strip()
-        dependency_ids = dependency_map.get(entry_id, ())
+        dependency_ids = tuple(
+            dict.fromkeys(
+                tuple(release.get("install_after") or ()) + tuple(dependency_map.get(entry_id, ()))
+            )
+        )
         depends_on: list[dict[str, str]] = []
         for dependency_id in dependency_ids:
             for dependency in specs_by_target_and_entry_id.get((target_ref, dependency_id), ()):

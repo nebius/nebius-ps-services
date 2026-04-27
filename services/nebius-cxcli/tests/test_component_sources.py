@@ -9,7 +9,6 @@ import yaml
 import nebius_cxcli.component_sources as component_sources
 from nebius_cxcli.cli import _validate_component_sources_registry
 from nebius_cxcli.component_sources import (
-    ComponentDefault,
     ComponentOutput,
     SourceProfile,
     load_component_sources,
@@ -24,6 +23,24 @@ from nebius_cxcli.runtime_introspection import reset_runtime_introspection_cache
 _VALID_ED25519_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f demo@example"
 )
+
+_NEBIUS_CPU_ONLY_AFFINITY = {
+    "nodeAffinity": {
+        "requiredDuringSchedulingIgnoredDuringExecution": {
+            "nodeSelectorTerms": [
+                {
+                    "matchExpressions": [
+                        {
+                            "key": "nebius.com/gpu",
+                            "operator": "NotIn",
+                            "values": ["true"],
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+}
 
 
 def _reset_sources_state() -> None:
@@ -1008,7 +1025,7 @@ def test_bundled_gpu_operator_observability_declares_dcgm_node_policy() -> None:
     target = gpu_operator.observability.metric_targets[0]
 
     assert target.job_name == "cxcli-nvidia-dcgm-exporter"
-    assert target.discovery == "prometheus_annotations"
+    assert target.discovery == "additional_target"
     assert dict(target.required_gpu_node_labels) == {
         "nvidia.com/gpu.deploy.operands": "true",
         "nvidia.com/gpu.deploy.dcgm-exporter": "true",
@@ -1170,56 +1187,56 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
                 "auto_select_first": True,
             },
         },
-        "deploy.validations.mk8s_gpu.operator_readiness.enabled": {
+        "deploy.targets[].validations.mk8s_gpu.operator_readiness.enabled": {
             "default": True,
         },
-        "deploy.validations.mk8s_gpu.gpu_visibility.enabled": {
+        "deploy.targets[].validations.mk8s_gpu.gpu_visibility.enabled": {
             "default": True,
         },
-        "deploy.validations.mk8s_gpu.gpu_visibility.max_nodes": {
+        "deploy.targets[].validations.mk8s_gpu.gpu_visibility.max_nodes": {
             "default": 3,
         },
-        "deploy.validations.mk8s_gpu.nccl.enabled": {
+        "deploy.targets[].validations.mk8s_gpu.nccl.enabled": {
             "default": True,
         },
-        "deploy.validations.mk8s_gpu.nccl.max_nodes": {
+        "deploy.targets[].validations.mk8s_gpu.nccl.max_nodes": {
             "default": 8,
         },
-        "deploy.validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps": {
+        "deploy.targets[].validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps": {
             "default": 300,
         },
-        "deploy.validations.mk8s_gpu.health_checker.enabled": {
+        "deploy.targets[].validations.mk8s_gpu.health_checker.enabled": {
             "default": False,
         },
-        "deploy.observability.enabled": {
+        "deploy.targets[].observability.enabled": {
             "default": False,
         },
-        "deploy.observability.kubernetes.logs.enabled": {
+        "deploy.targets[].observability.kubernetes.logs.enabled": {
             "default": True,
         },
-        "deploy.observability.kubernetes.logs.collect_agent_logs": {
+        "deploy.targets[].observability.kubernetes.logs.collect_agent_logs": {
             "default": False,
             "prompt": False,
         },
-        "deploy.observability.kubernetes.logs.excluded_namespaces": {
+        "deploy.targets[].observability.kubernetes.logs.excluded_namespaces": {
             "default": ["kube-system"],
             "prompt": False,
         },
-        "deploy.observability.kubernetes.metrics.enabled": {
+        "deploy.targets[].observability.kubernetes.metrics.enabled": {
             "default": True,
         },
-        "deploy.observability.kubernetes.metrics.collect_agent_metrics": {
+        "deploy.targets[].observability.kubernetes.metrics.collect_agent_metrics": {
             "default": False,
             "prompt": False,
         },
-        "deploy.observability.kubernetes.metrics.collect_k8s_cluster_metrics": {
+        "deploy.targets[].observability.kubernetes.metrics.collect_k8s_cluster_metrics": {
             "default": True,
         },
-        "deploy.observability.kubernetes.metrics.excluded_namespaces": {
+        "deploy.targets[].observability.kubernetes.metrics.excluded_namespaces": {
             "default": [],
             "prompt": False,
         },
-        "deploy.observability.kubernetes.traces.enabled": {
+        "deploy.targets[].observability.kubernetes.traces.enabled": {
             "default": True,
         },
         "inputs.mk8s_cluster_overrides": {
@@ -1243,15 +1260,50 @@ def test_bundled_cert_manager_enables_chart_crds_by_default() -> None:
         explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml"
     )
     cert_manager = next(item for item in loaded.helm_charts if item.name == "cert-manager")
+    defaults = {item.target_path: item.value for item in cert_manager.defaults}
 
-    assert cert_manager.defaults == (
-        ComponentDefault(
-            target_path="values.crds.enabled",
-            value=True,
-            kind="literal",
-            source_path="",
-        ),
+    assert defaults["values.crds.enabled"] is True
+    assert defaults["values.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
+    assert defaults["values.webhook.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
+    assert defaults["values.cainjector.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
+    assert defaults["values.startupapicheck.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
+
+
+def test_bundled_cpu_only_charts_avoid_nebius_gpu_nodes_by_default() -> None:
+    loaded = load_component_sources(
+        explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml"
     )
+    charts = {item.name: item for item in loaded.helm_charts}
+
+    grafana_defaults = {item.target_path: item.value for item in charts["grafana"].defaults}
+    gateway_defaults = {item.target_path: item.value for item in charts["gateway-helm"].defaults}
+    external_dns_defaults = {
+        item.target_path: item.value for item in charts["external-dns"].defaults
+    }
+    external_secrets_defaults = {
+        item.target_path: item.value for item in charts["external-secrets"].defaults
+    }
+    n8n_defaults = {item.target_path: item.value for item in charts["n8n"].defaults}
+
+    assert grafana_defaults["values.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
+    grafana_dashboards = grafana_defaults["values.dashboards"]["nebius"]
+    assert {dashboard["datasource"] for dashboard in grafana_dashboards.values()} == {
+        "Nebius Services"
+    }
+    envoy_proxy = next(
+        item for item in grafana_defaults["values.extraObjects"] if item["kind"] == "EnvoyProxy"
+    )
+    assert (
+        envoy_proxy["spec"]["provider"]["kubernetes"]["envoyDeployment"]["pod"]["affinity"]
+        == _NEBIUS_CPU_ONLY_AFFINITY
+    )
+    assert gateway_defaults["values.deployment.pod.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
+    assert gateway_defaults["values.certgen.job.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
+    assert external_dns_defaults["values.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
+    assert external_secrets_defaults["values.global.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
+    assert n8n_defaults["values.main.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
+    assert n8n_defaults["values.worker.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
+    assert n8n_defaults["values.webhook.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
 
 
 def test_bundled_managed_postgresql_uses_wizard_profile() -> None:
@@ -1412,7 +1464,7 @@ def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> Non
         "inputs.observability_collector_prometheus_agent_port": {
             "prompt": False,
         },
-        "inputs.preemptible_priority": {
+        "inputs.recovery_policy": {
             "prompt": False,
         },
         "inputs.gpu_cluster_id": {

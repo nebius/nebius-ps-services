@@ -27,6 +27,24 @@ from nebius_cxcli.observability import (
 )
 from nebius_cxcli.runtime_introspection import reset_runtime_introspection_cache
 
+_NEBIUS_CPU_ONLY_AFFINITY = {
+    "nodeAffinity": {
+        "requiredDuringSchedulingIgnoredDuringExecution": {
+            "nodeSelectorTerms": [
+                {
+                    "matchExpressions": [
+                        {
+                            "key": "nebius.com/gpu",
+                            "operator": "NotIn",
+                            "values": ["true"],
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+}
+
 
 def _reset_catalog_override() -> None:
     set_component_sources_file_override(None)
@@ -81,25 +99,36 @@ def _base_payload(
         release_name = (
             "nebius-observability-agent" if app_id == "nebius-observability-agent" else app_id
         )
-        charts.append(
+        chart = {
+            "id": app_id,
+            "instance_id": "mk8s" if mk8s_enabled else app_id,
+            "enabled": True,
+            "group": "platform" if app_id.startswith("nvidia-") else "observability",
+            "repo": "oci://example.invalid/chart",
+            "version": "1.0.0",
+            "namespace": namespace,
+            "release-name": release_name,
+            "values": {},
+        }
+        if mk8s_enabled:
+            chart["target_ref"] = "mk8s"
+        charts.append(chart)
+    deploy = {}
+    if mk8s_enabled:
+        deploy["targets"] = [
             {
-                "id": app_id,
-                "instance_id": app_id,
-                "enabled": True,
-                "group": "platform" if app_id.startswith("nvidia-") else "observability",
-                "repo": "oci://example.invalid/chart",
-                "version": "1.0.0",
-                "namespace": namespace,
-                "release-name": release_name,
-                "values": {},
+                "instance_id": "mk8s",
+                "observability": {
+                    "enabled": observability_enabled,
+                },
             }
-        )
+        ]
+    if vm_enabled:
+        deploy["observability"] = {
+            "enabled": observability_enabled,
+        }
     payload = {
-        "deploy": {
-            "observability": {
-                "enabled": observability_enabled,
-            },
-        },
+        "deploy": deploy,
         "infra": {
             "components": [
                 {
@@ -136,6 +165,36 @@ def _chart_rows(payload: dict, app_id: str) -> list[dict]:
     return [item for item in charts if item.get("id") == app_id]
 
 
+def _set_observability_targets(payload: dict, *target_refs: str, enabled: bool = True) -> None:
+    payload["deploy"] = {
+        "targets": [
+            {
+                "instance_id": target_ref,
+                "observability": {
+                    "enabled": enabled,
+                    "kubernetes": {
+                        "logs": {
+                            "enabled": True,
+                            "collect_agent_logs": False,
+                            "excluded_namespaces": ["kube-system"],
+                        },
+                        "metrics": {
+                            "enabled": True,
+                            "collect_agent_metrics": False,
+                            "collect_k8s_cluster_metrics": True,
+                            "excluded_namespaces": ["kube-system"],
+                        },
+                        "traces": {
+                            "enabled": True,
+                        },
+                    },
+                },
+            }
+            for target_ref in target_refs
+        ]
+    }
+
+
 def test_observability_project_defaults_follow_catalog() -> None:
     defaults = observability_project_defaults()
 
@@ -170,11 +229,11 @@ def test_normalize_observability_settings_adds_project_defaults() -> None:
     changed = normalize_observability_project_settings(payload)
 
     assert changed is True
-    assert payload["deploy"]["observability"]["enabled"] is False
-    assert payload["deploy"]["observability"]["kubernetes"]["logs"]["excluded_namespaces"] == [
-        "kube-system"
-    ]
-    assert "vm" not in payload["deploy"]["observability"]
+    target = payload["deploy"]["targets"][0]
+    assert target["instance_id"] == "mk8s"
+    assert target["observability"]["enabled"] is False
+    assert target["observability"]["kubernetes"]["logs"]["excluded_namespaces"] == ["kube-system"]
+    assert "observability" not in payload["deploy"]
 
 
 def test_normalize_observability_settings_vm_only_omits_kubernetes_defaults() -> None:
@@ -201,7 +260,7 @@ def test_normalize_observability_settings_vm_only_omits_kubernetes_defaults() ->
     assert payload["deploy"]["observability"]["vm"]["logs"]["enabled"] is True
 
 
-def test_normalize_observability_settings_prunes_stale_kubernetes_branch_for_vm_only() -> None:
+def test_normalize_observability_settings_preserves_invalid_root_kubernetes_branch() -> None:
     payload = {
         "deploy": {
             "observability": {
@@ -227,7 +286,7 @@ def test_normalize_observability_settings_prunes_stale_kubernetes_branch_for_vm_
     changed = normalize_observability_project_settings(payload)
 
     assert changed is True
-    assert "kubernetes" not in payload["deploy"]["observability"]
+    assert payload["deploy"]["observability"]["kubernetes"] == {"logs": {"enabled": False}}
     assert payload["deploy"]["observability"]["enabled"] is True
     assert payload["deploy"]["observability"]["vm"]["collector"]["enabled"] is False
     assert payload["deploy"]["observability"]["vm"]["logs"]["enabled"] is True
@@ -245,8 +304,20 @@ def test_observability_auto_enables_k8s_agent_when_enabled() -> None:
     assert selection.observability_enabled is True
     assert selection.kubernetes_agent_required is True
     assert selection.collector_app_id == "nebius-observability-agent"
-    assert selection.auto_enabled_app_ids == ("nebius-observability-agent",)
-    assert selection.selected_app_ids == ("nebius-observability-agent",)
+    assert selection.grafana_app_id == "grafana"
+    assert selection.grafana_required is True
+    assert selection.grafana_gateway_app_id == "gateway-helm"
+    assert selection.grafana_gateway_required is True
+    assert selection.auto_enabled_app_ids == (
+        "gateway-helm",
+        "grafana",
+        "nebius-observability-agent",
+    )
+    assert selection.selected_app_ids == (
+        "gateway-helm",
+        "grafana",
+        "nebius-observability-agent",
+    )
 
 
 def test_ensure_observability_app_rows_seeds_collector_for_direct_config_edit() -> None:
@@ -263,6 +334,20 @@ def test_ensure_observability_app_rows_seeds_collector_for_direct_config_edit() 
     assert chart["version"] == "1.0.5"
     assert chart["namespace"] == "observability"
     assert chart["release-name"] == "nebius-observability-agent"
+    gateway = _chart_row(payload, "gateway-helm")
+    assert gateway["enabled"] is True
+    assert gateway["repo"] == "oci://docker.io/envoyproxy/gateway-helm"
+    assert gateway["version"] == "1.7.0"
+    assert gateway["namespace"] == "envoy-gateway-system"
+    assert gateway["release-name"] == "envoy-gateway"
+    assert gateway["values"]["deployment"]["pod"]["affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
+    grafana = _chart_row(payload, "grafana")
+    assert grafana["enabled"] is True
+    assert grafana["repo"] == "https://grafana-community.github.io/helm-charts"
+    assert grafana["version"] == "12.1.3"
+    assert grafana["namespace"] == "observability"
+    assert grafana["release-name"] == "grafana"
+    assert grafana["values"]["affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
 
 
 def test_ensure_observability_app_rows_seeds_one_collector_per_target() -> None:
@@ -281,6 +366,7 @@ def test_ensure_observability_app_rows_seeds_one_collector_per_target() -> None:
             "inputs": {"gpu_enabled": False},
         },
     ]
+    _set_observability_targets(payload, "blue", "green")
 
     changed = ensure_observability_app_rows(payload, app_entries=component_entries("apps"))
 
@@ -290,12 +376,25 @@ def test_ensure_observability_app_rows_seeds_one_collector_per_target() -> None:
         key=lambda item: str(item["target_ref"]),
     )
     assert [item["target_ref"] for item in charts] == ["blue", "green"]
-    assert [item["instance_id"] for item in charts] == [
-        "nebius-observability-agent-blue",
-        "nebius-observability-agent-green",
-    ]
+    assert [item["instance_id"] for item in charts] == ["blue", "green"]
     assert all(item["namespace"] == "observability" for item in charts)
     assert all(item["release-name"] == "nebius-observability-agent" for item in charts)
+    grafana_charts = sorted(
+        _chart_rows(payload, "grafana"),
+        key=lambda item: str(item["target_ref"]),
+    )
+    assert [item["target_ref"] for item in grafana_charts] == ["blue", "green"]
+    assert [item["instance_id"] for item in grafana_charts] == ["blue", "green"]
+    assert all(item["namespace"] == "observability" for item in grafana_charts)
+    assert all(item["release-name"] == "grafana" for item in grafana_charts)
+    gateway_charts = sorted(
+        _chart_rows(payload, "gateway-helm"),
+        key=lambda item: str(item["target_ref"]),
+    )
+    assert [item["target_ref"] for item in gateway_charts] == ["blue", "green"]
+    assert [item["instance_id"] for item in gateway_charts] == ["blue", "green"]
+    assert all(item["namespace"] == "envoy-gateway-system" for item in gateway_charts)
+    assert all(item["release-name"] == "envoy-gateway" for item in gateway_charts)
 
 
 def test_ensure_observability_app_rows_fills_missing_collector_target() -> None:
@@ -314,10 +413,11 @@ def test_ensure_observability_app_rows_fills_missing_collector_target() -> None:
             "inputs": {"gpu_enabled": False},
         },
     ]
+    _set_observability_targets(payload, "blue", "green")
     payload["apps"]["charts"] = [
         {
             "id": "nebius-observability-agent",
-            "instance_id": "nebius-observability-agent",
+            "instance_id": "blue",
             "enabled": True,
             "target_ref": "blue",
             "values": {},
@@ -332,10 +432,7 @@ def test_ensure_observability_app_rows_fills_missing_collector_target() -> None:
         key=lambda item: str(item["target_ref"]),
     )
     assert [item["target_ref"] for item in charts] == ["blue", "green"]
-    assert [item["instance_id"] for item in charts] == [
-        "nebius-observability-agent",
-        "nebius-observability-agent-green",
-    ]
+    assert [item["instance_id"] for item in charts] == ["blue", "green"]
 
 
 def test_observability_does_not_auto_enable_agent_when_disabled() -> None:
@@ -352,7 +449,7 @@ def test_observability_does_not_auto_enable_agent_when_disabled() -> None:
     assert selection.auto_enabled_app_ids == ()
 
 
-def test_observability_dependency_issues_require_project_toggle_for_agent() -> None:
+def test_observability_dependency_issues_require_target_toggle_for_agent() -> None:
     payload = _base_payload(
         observability_enabled=False,
         enabled_apps=("nebius-observability-agent",),
@@ -360,10 +457,74 @@ def test_observability_dependency_issues_require_project_toggle_for_agent() -> N
 
     issues = observability_dependency_issues(payload, app_entries=component_entries("apps"))
 
-    assert issues == ["apps:nebius-observability-agent requires deploy.observability.enabled=true"]
+    assert issues == [
+        "apps:nebius-observability-agent@mk8s requires "
+        "deploy.targets[instance_id=mk8s].observability.enabled=true"
+    ]
 
 
-def test_materialize_observability_agent_values_from_project_contract() -> None:
+def test_observability_dependency_issues_are_bound_to_collector_target() -> None:
+    payload = _base_payload(observability_enabled=False)
+    payload["infra"]["components"] = [
+        {
+            "id": "mk8s",
+            "instance_id": "blue",
+            "enabled": True,
+            "inputs": {"gpu_enabled": False},
+        },
+        {
+            "id": "mk8s",
+            "instance_id": "green",
+            "enabled": True,
+            "inputs": {"gpu_enabled": False},
+        },
+    ]
+    payload["deploy"] = {
+        "targets": [
+            {"instance_id": "blue", "observability": {"enabled": True}},
+            {"instance_id": "green", "observability": {"enabled": False}},
+        ]
+    }
+    payload["apps"]["charts"] = [
+        {
+            "id": "nebius-observability-agent",
+            "instance_id": "blue",
+            "enabled": True,
+            "target_ref": "blue",
+            "values": {},
+        },
+        {
+            "id": "nebius-observability-agent",
+            "instance_id": "green",
+            "enabled": True,
+            "target_ref": "green",
+            "values": {},
+        },
+        {
+            "id": "grafana",
+            "instance_id": "blue",
+            "enabled": True,
+            "target_ref": "blue",
+            "values": {},
+        },
+        {
+            "id": "gateway-helm",
+            "instance_id": "blue",
+            "enabled": True,
+            "target_ref": "blue",
+            "values": {},
+        },
+    ]
+
+    issues = observability_dependency_issues(payload, app_entries=component_entries("apps"))
+
+    assert issues == [
+        "apps:nebius-observability-agent@green requires "
+        "deploy.targets[instance_id=green].observability.enabled=true"
+    ]
+
+
+def test_materialize_observability_agent_values_from_target_contract() -> None:
     payload = _base_payload(
         observability_enabled=True,
         enabled_apps=("nebius-observability-agent",),
@@ -380,6 +541,106 @@ def test_materialize_observability_agent_values_from_project_contract() -> None:
     assert chart["values"]["config"]["metrics"]["collectK8sClusterMetrics"] is True
     assert chart["values"]["config"]["traces"]["enabled"] is True
     assert "additionalTargets" not in chart["values"]["config"]["metrics"]
+
+
+def test_materialize_observability_agent_values_adds_catalog_metric_targets() -> None:
+    payload = _base_payload(
+        observability_enabled=True,
+        enabled_apps=("nebius-observability-agent", "nvidia-gpu-operator"),
+    )
+    chart = _chart_row(payload, "nebius-observability-agent")
+    chart["values"] = {
+        "config": {
+            "metrics": {
+                "additionalTargets": [
+                    {
+                        "job_name": "customer-target",
+                        "static_configs": [{"targets": ["customer:9090"]}],
+                    }
+                ]
+            }
+        }
+    }
+
+    materialize_observability_app_values(payload)
+
+    additional_targets = chart["values"]["config"]["metrics"]["additionalTargets"]
+    assert [item["job_name"] for item in additional_targets] == [
+        "customer-target",
+        "cxcli-nvidia-dcgm-exporter",
+    ]
+    dcgm_target = additional_targets[1]
+    assert dcgm_target["kubernetes_sd_configs"] == [{"role": "endpoints"}]
+    assert dcgm_target["relabel_configs"] == [
+        {
+            "source_labels": ["__meta_kubernetes_namespace"],
+            "action": "keep",
+            "regex": "nvidia-gpu-operator",
+        },
+        {
+            "source_labels": ["__meta_kubernetes_service_name"],
+            "action": "keep",
+            "regex": "nvidia-dcgm-exporter",
+        },
+        {
+            "source_labels": ["__meta_kubernetes_endpoint_port_number"],
+            "action": "keep",
+            "regex": "9400",
+        },
+    ]
+
+    payload["apps"]["charts"] = [
+        item for item in payload["apps"]["charts"] if item["id"] != "nvidia-gpu-operator"
+    ]
+    materialize_observability_app_values(payload)
+    assert chart["values"]["config"]["metrics"]["additionalTargets"] == [
+        {
+            "job_name": "customer-target",
+            "static_configs": [{"targets": ["customer:9090"]}],
+        }
+    ]
+
+
+def test_materialize_grafana_datasources_from_observability_read_endpoints() -> None:
+    payload = _base_payload(
+        observability_enabled=True,
+        enabled_apps=("grafana",),
+    )
+    payload["client_info"] = {
+        "client_name": "client-a",
+        "nebius": {
+            "tenant_id": "tenant-123",
+            "project_id": "project-456",
+            "region_id": "eu-north1",
+        },
+    }
+
+    materialize_observability_app_values(payload)
+
+    datasources = _chart_row(payload, "grafana")["values"]["datasources"]["datasources.yaml"][
+        "datasources"
+    ]
+    assert [item["uid"] for item in datasources] == [
+        "nebius-service-metrics",
+        "nebius-user-metrics",
+        "nebius-logs",
+        "nebius-traces",
+    ]
+    assert datasources[0]["name"] == "Nebius Services"
+    assert datasources[0]["type"] == "prometheus"
+    assert datasources[0]["url"] == (
+        "https://read.monitoring.api.nebius.cloud/projects/project-456/service-provider/prometheus"
+    )
+    assert datasources[2]["type"] == "loki"
+    assert datasources[2]["url"] == "https://read.logging.api.nebius.cloud/projects/project-456"
+    assert datasources[3]["type"] == "tempo"
+    assert datasources[3]["url"] == (
+        "https://read.tracing.api.nebius.cloud/projects/project-456/tempo"
+    )
+    assert all(
+        item["secureJsonData"]["httpHeaderValue1"] == "Bearer ${NEBIUS_OBSERVABILITY_STATIC_TOKEN}"
+        for item in datasources
+    )
 
 
 def test_materialize_observability_agent_values_for_each_target_row() -> None:
@@ -401,10 +662,11 @@ def test_materialize_observability_agent_values_for_each_target_row() -> None:
             "inputs": {"gpu_enabled": False},
         },
     ]
+    _set_observability_targets(payload, "blue", "green")
     payload["apps"]["charts"] = [
         {
             "id": "nebius-observability-agent",
-            "instance_id": "nebius-observability-agent-blue",
+            "instance_id": "blue",
             "enabled": True,
             "target_ref": "blue",
             "group": "observability",
@@ -422,7 +684,7 @@ def test_materialize_observability_agent_values_for_each_target_row() -> None:
         },
         {
             "id": "nebius-observability-agent",
-            "instance_id": "nebius-observability-agent-green",
+            "instance_id": "green",
             "enabled": True,
             "target_ref": "green",
             "group": "observability",
@@ -546,7 +808,7 @@ def test_materialize_observability_infra_values_skips_dcgm_labels_when_metrics_d
         observability_enabled=True,
         enabled_apps=("nebius-observability-agent", "nvidia-gpu-operator"),
     )
-    payload["deploy"]["observability"]["kubernetes"]["metrics"]["enabled"] = False
+    payload["deploy"]["targets"][0]["observability"]["kubernetes"]["metrics"]["enabled"] = False
 
     changed = materialize_observability_infra_values(payload)
 
@@ -667,12 +929,13 @@ def test_observability_status_summary_reports_vm_agent_and_gpu_metrics() -> None
     assert summary == {
         "enabled": True,
         "kubernetes_agent": True,
+        "grafana": False,
         "vm_monitoring_agent": True,
         "vm_journald_logs": True,
         "vm_standalone_collector": False,
         "vm_standalone_metrics": False,
         "vm_standalone_logs": False,
-        "gpu_dcgm_metric_source": "prometheus_annotations",
+        "gpu_dcgm_metric_source": "additional_target",
         "gpu_dcgm_node_policy": "managed_gpu_operator_dcgm_labels",
         "gpu_dcgm_live_readiness": "verify_live_nvidia_dcgm_exporter_endpoints_after_deploy",
     }
@@ -746,8 +1009,8 @@ def test_observability_endpoint_summary_respects_disabled_kubernetes_signals() -
             "region_id": "eu-north1",
         }
     }
-    payload["deploy"]["observability"]["kubernetes"]["logs"]["enabled"] = False
-    payload["deploy"]["observability"]["kubernetes"]["traces"]["enabled"] = False
+    payload["deploy"]["targets"][0]["observability"]["kubernetes"]["logs"]["enabled"] = False
+    payload["deploy"]["targets"][0]["observability"]["kubernetes"]["traces"]["enabled"] = False
 
     summary = observability_endpoint_summary(payload)
 

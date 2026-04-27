@@ -8,8 +8,9 @@ shared:
   admin_ssh:
     user_name: ubuntu
 # `components.*` defines reusable component types only. Repeated modules or
-# charts in one project are modeled in `config.yaml` with distinct
-# `infra.components[].instance_id` / `apps.charts[].instance_id` rows.
+# charts in one project are modeled in `config.yaml` with distinct instance
+# rows; target-bound app charts select their cluster with `target_ref` and are
+# unique per chart id plus target.
 components:
   infra:
     mk8s:
@@ -126,8 +127,9 @@ components:
                 size_gib: 1023
         observability:
           # Source-owned MK8s observability contract. The `config.yaml`
-          # `deploy.observability` block decides whether cxcli deploys it; this
-          # block keeps agent choice, signal defaults, and endpoint templates.
+          # `deploy.targets[].observability` rows decide whether cxcli deploys
+          # it per cluster; this block keeps agent choice, signal defaults, and
+          # endpoint templates.
           primary_agent:
             kind: kubernetes_agent
             chart_component_id: nebius-observability-agent
@@ -147,6 +149,10 @@ components:
               excluded_namespaces: []
             traces:
               default_enabled: true
+          grafana:
+            chart_component_id: grafana
+            gateway_chart_component_id: gateway-helm
+            enabled_by_default: true
           endpoints:
             write:
               metrics_otlp: https://write.monitoring.{region}.nebius.cloud/projects/{project_id}/opentelemetry/v1/metrics
@@ -483,7 +489,9 @@ components:
         observability:
           metric_targets:
             - job_name: cxcli-nvidia-dcgm-exporter
-              # DCGM Exporter is discovered through Prometheus annotations.
+              # DCGM Exporter is scraped through a catalog-owned additional target
+              # because the GPU Operator service does not reliably carry the
+              # Prometheus annotations required for automatic discovery.
               # On `nebius_image` stacks cxcli also owns the Nebius-specific GPU
               # node-label policy required to schedule DCGM Exporter plus the
               # validator without turning on GPU Operator device-plugin or GFD.
@@ -491,7 +499,7 @@ components:
               # these extra label injections since it already includes the full GPU software
               # stack and its own DCGM Exporter install path and labels.
               discovery:
-                kind: prometheus_annotations
+                kind: additional_target
                 service_name: nvidia-dcgm-exporter
                 port: 9400
               managed_gpu_node_policy:
@@ -544,9 +552,10 @@ components:
                   - coll
                   - ^hcoll
     nebius-observability-agent:
-      # Keep this public chart pinned here because the current Nebius traces
-      # ingest workflow installs it, and its rendered surface matches
-      # cxcli's logs+metrics+traces MK8s contract.
+      # Keep this public chart pinned here because the fixed Nebius Kubernetes
+      # agent docs identify it as the supported observability-agent Helm chart,
+      # and its rendered surface matches cxcli's logs+metrics+traces MK8s contract.
+      # Ref: https://docs.nebius.com/observability/agents/nebius-o11y-agent
       # Ref: https://docs.nebius.com/observability/traces/ingest
       source:
         portable:
@@ -560,11 +569,156 @@ components:
       release:
         namespace: observability
         name: nebius-observability-agent
-      # Keep customer-facing toggles under config.yaml deploy.observability and
-      # derive them from components.infra.mk8s.cli.observability at render time.
+      # Keep customer-facing toggles under config.yaml
+      # deploy.targets[].observability and derive them from
+      # components.infra.mk8s.cli.observability at render time.
       # Only put explicit Nebius-specific chart deltas here when cxcli must
       # override an upstream chart default.
       defaults: {}
+    grafana:
+      # Official Grafana community Helm chart and Docker image. cxcli only renders
+      # chart references and deploy-time Kubernetes Secrets; it does not vendor
+      # Grafana chart/image/dashboard artifacts.
+      # Ref: https://github.com/grafana-community/helm-charts/tree/main/charts/grafana
+      source:
+        portable:
+          repo: https://grafana-community.github.io/helm-charts
+          chart: grafana
+          version: 12.1.3
+      ui:
+        title: Grafana observability console
+        group: Observability
+        enabled: false
+      release:
+        namespace: observability
+        name: grafana
+        timeout: 10m
+        install_after:
+          - gateway-helm
+      defaults:
+        values.image.registry: docker.io
+        values.image.repository: grafana/grafana
+        values.image.tag: 13.0.1
+        values.admin.existingSecret: nebius-cxcli-grafana-admin
+        values.admin.userKey: admin-user
+        values.admin.passwordKey: admin-password
+        values.envValueFrom:
+          NEBIUS_OBSERVABILITY_STATIC_TOKEN:
+            secretKeyRef:
+              name: nebius-cxcli-grafana-observability-read
+              key: token
+        # Keep CPU-only platform/observability pods off expensive GPU nodes by
+        # default. Nebius GPU worker nodes carry `nebius.com/gpu=true`; CPU nodes
+        # do not, so this hard node affinity still works across CPU platform names.
+        values.affinity: &nebius_cpu_only_node_affinity
+          nodeAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+                - matchExpressions:
+                    - key: nebius.com/gpu
+                      operator: NotIn
+                      values:
+                        - "true"
+        values.service.type: ClusterIP
+        values.route.main.enabled: true
+        values.route.main.apiVersion: gateway.networking.k8s.io/v1
+        values.route.main.kind: HTTPRoute
+        values.route.main.parentRefs:
+          - name: nebius-cxcli-grafana
+            namespace: observability
+            sectionName: http
+        values.extraObjects:
+          - apiVersion: gateway.networking.k8s.io/v1
+            kind: GatewayClass
+            metadata:
+              name: nebius-cxcli-envoy
+            spec:
+              controllerName: gateway.envoyproxy.io/gatewayclass-controller
+          - apiVersion: gateway.envoyproxy.io/v1alpha1
+            kind: EnvoyProxy
+            metadata:
+              name: nebius-cxcli-grafana-proxy
+              namespace: observability
+            spec:
+              provider:
+                type: Kubernetes
+                kubernetes:
+                  envoyDeployment:
+                    pod:
+                      affinity: *nebius_cpu_only_node_affinity
+                  envoyService:
+                    type: LoadBalancer
+                    externalTrafficPolicy: Cluster
+          - apiVersion: gateway.networking.k8s.io/v1
+            kind: Gateway
+            metadata:
+              name: nebius-cxcli-grafana
+              namespace: observability
+            spec:
+              gatewayClassName: nebius-cxcli-envoy
+              infrastructure:
+                parametersRef:
+                  group: gateway.envoyproxy.io
+                  kind: EnvoyProxy
+                  name: nebius-cxcli-grafana-proxy
+              listeners:
+                - name: http
+                  protocol: HTTP
+                  port: 80
+                  allowedRoutes:
+                    namespaces:
+                      from: Same
+        values.dashboardProviders:
+          dashboardproviders.yaml:
+            apiVersion: 1
+            providers:
+              - name: nebius
+                orgId: 1
+                folder: Nebius
+                folderUid: nebius
+                type: file
+                disableDeletion: false
+                allowUiUpdates: true
+                options:
+                  path: /var/lib/grafana/dashboards/nebius
+        values.dashboards:
+          # The top-level key is a Grafana dashboard provider/folder key, not a
+          # Grafana.com account name. Add non-Nebius Grafana.com dashboards under
+          # `nebius` to keep them in the same folder, or add another provider and
+          # matching key when you want a separate folder.
+          # Nebius dashboards expect the Prometheus datasource display name
+          # `Nebius Services`. Keep that name aligned with the generated
+          # service-metrics datasource while retaining the stable
+          # `nebius-service-metrics` UID for links and automation.
+          nebius:
+            nebius-disk:
+              gnetId: 23425
+              revision: 2
+              datasource: Nebius Services
+            nebius-gpu:
+              gnetId: 23423
+              revision: 2
+              datasource: Nebius Services
+            nebius-managed-postgres:
+              gnetId: 23525
+              revision: 1
+              datasource: Nebius Services
+            nebius-object-storage:
+              gnetId: 23392
+              revision: 6
+              datasource: Nebius Services
+            nebius-observability-platform:
+              gnetId: 24246
+              revision: 2
+              datasource: Nebius Services
+            nebius-shared-filesystem:
+              gnetId: 23313
+              revision: 5
+              datasource: Nebius Services
+            nebius-shared-filesystem-extended:
+              gnetId: 25123
+              revision: 1
+              datasource: Nebius Services
     gateway-helm:
       source:
         portable:
@@ -578,11 +732,15 @@ components:
       release:
         namespace: envoy-gateway-system
         name: envoy-gateway
+        timeout: 10m
       # Helm chart defaults are merged into apps.charts[].values when missing.
       # Example:
       # values.service.type: LoadBalancer
       # values.deployment.replicas: 2
-      defaults: {}
+      defaults:
+        values.config.envoyGateway.provider.type: Kubernetes
+        values.deployment.pod.affinity: *nebius_cpu_only_node_affinity
+        values.certgen.job.affinity: *nebius_cpu_only_node_affinity
     cert-manager:
       source:
         portable:
@@ -598,6 +756,10 @@ components:
         name: cert-manager
       defaults:
         values.crds.enabled: true
+        values.affinity: *nebius_cpu_only_node_affinity
+        values.webhook.affinity: *nebius_cpu_only_node_affinity
+        values.cainjector.affinity: *nebius_cpu_only_node_affinity
+        values.startupapicheck.affinity: *nebius_cpu_only_node_affinity
     external-dns:
       source:
         portable:
@@ -611,6 +773,8 @@ components:
       release:
         namespace: external-dns
         name: external-dns
+      defaults:
+        values.affinity: *nebius_cpu_only_node_affinity
     external-secrets:
       source:
         portable:
@@ -624,6 +788,8 @@ components:
       release:
         namespace: external-secrets
         name: external-secrets
+      defaults:
+        values.global.affinity: *nebius_cpu_only_node_affinity
     n8n:
       source:
         portable:
@@ -637,3 +803,7 @@ components:
       release:
         namespace: n8n
         name: n8n
+      defaults:
+        values.main.affinity: *nebius_cpu_only_node_affinity
+        values.worker.affinity: *nebius_cpu_only_node_affinity
+        values.webhook.affinity: *nebius_cpu_only_node_affinity

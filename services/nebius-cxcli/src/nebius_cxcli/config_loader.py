@@ -53,6 +53,7 @@ def validate_config(payload: dict[str, Any], *, base_dir: Path | None = None) ->
         raise ValueError(
             "config.yaml must use dynamic model with 'infra.components[]' and 'apps.charts[]'"
         )
+    validate_dynamic_payload_structure(payload)
     normalize_runtime_config_payload(payload, base_dir=base_dir)
     validate_dynamic_payload_structure(payload)
     validate_runtime_payload(payload)
@@ -77,10 +78,11 @@ def load_config(path: Path, *, persist_normalized: bool = False) -> AttrDict:
         raise ValueError(
             "config.yaml must use dynamic model with 'infra.components[]' and 'apps.charts[]'"
         )
-    changed = normalize_runtime_config_payload(payload, base_dir=path.parent)
-    if changed and persist_normalized:
+    before = dump_yaml(payload) if persist_normalized else ""
+    config = validate_config(payload, base_dir=path.parent)
+    if persist_normalized and dump_yaml(payload) != before:
         path.write_text(dump_yaml(payload), encoding="utf-8")
-    return validate_config(payload, base_dir=path.parent)
+    return config
 
 
 def dump_yaml(data: dict[str, Any]) -> str:

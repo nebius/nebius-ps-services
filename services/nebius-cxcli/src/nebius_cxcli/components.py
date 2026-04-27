@@ -48,6 +48,7 @@ class ComponentEntry:
     default_namespace: str | None = None
     default_release_name: str | None = None
     default_release_timeout: str | None = None
+    default_release_install_after: tuple[str, ...] = ()
     defaults: tuple[ComponentDefault, ...] = ()
     outputs: tuple[ComponentOutput, ...] = ()
     input_bindings: tuple[ComponentInputBinding, ...] = ()
@@ -168,6 +169,7 @@ def _entry_from_helm_chart(
     version: str | None,
     namespace: str | None,
     release_timeout: str | None,
+    release_install_after: tuple[str, ...],
     default_enabled: bool = False,
     selectable: bool = True,
     wizard_fields: dict[str, dict[str, Any]] | None = None,
@@ -202,6 +204,7 @@ def _entry_from_helm_chart(
         default_namespace=namespace,
         default_release_name=release_name,
         default_release_timeout=release_timeout,
+        default_release_install_after=release_install_after,
         wizard_fields=dict(wizard_fields or {}),
         defaults=defaults,
         outputs=outputs,
@@ -240,6 +243,7 @@ def _app_component_entries(
                 version=chart.version,
                 namespace=chart.namespace,
                 release_timeout=chart.release_timeout,
+                release_install_after=chart.release_install_after,
                 default_enabled=bool(chart.enable),
                 selectable=bool(chart.selectable),
                 wizard_fields=chart.wizard_fields,

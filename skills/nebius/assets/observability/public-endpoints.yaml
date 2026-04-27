@@ -27,6 +27,16 @@ services:
     read:
       tempo: "https://read.tracing.api.nebius.cloud/projects/<project-id>/tempo"
 
+helm_charts:
+  kubernetes_agent:
+    repo: "oci://cr.nebius.cloud/observability/public/nebius-observability-agent-helm"
+    chart: "nebius-observability-agent-helm"
+    release_name: "nebius-observability-agent"
+    namespace: "observability"
+    docs:
+      - "https://docs.nebius.com/observability/agents/nebius-o11y-agent"
+      - "https://docs.nebius.com/observability/traces/ingest"
+
 auth:
   kubernetes_agent:
     auth_scheme: "iam-token-file"
@@ -45,11 +55,12 @@ cxcli_contract:
     vm: "components.infra.vm.cli.observability.*"
     app_metric_targets: "components.apps.<id>.cli.observability.metric_targets"
   config:
-    project_switch: "observability.enabled"
-    project_switch_note: "Controls whether cxcli deploys/configures collectors; it does not create the project-scoped service endpoints."
-    kubernetes: "observability.kubernetes.*"
-    vm_logs: "observability.vm.logs.*"
-    vm_collector: "observability.vm.collector.*"
+    mk8s_target_switch: "deploy.targets[].observability.enabled"
+    deploy_switch_note: "Controls whether cxcli deploys/configures collectors; it does not create the project-scoped service endpoints."
+    kubernetes: "deploy.targets[].observability.kubernetes.*"
+    vm_project_switch: "deploy.observability.enabled"
+    vm_logs: "deploy.observability.vm.logs.*"
+    vm_collector: "deploy.observability.vm.collector.*"
   runtime_materialization:
     mk8s: "collector chart rows + values.config.*"
     vm: "nebius.o11y.systemd-logs-collection.* labels in infra.components[].inputs.labels"

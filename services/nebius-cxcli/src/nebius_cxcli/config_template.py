@@ -10,7 +10,11 @@ import yaml
 from .component_defaults import resolve_component_defaults
 from .component_instances import INSTANCE_ID_FIELD
 from .config_loader import normalize_runtime_config_payload
-from .deploy_targets import TARGET_REF_FIELD, enabled_cluster_target_refs
+from .deploy_targets import (
+    TARGET_REF_FIELD,
+    enabled_cluster_target_refs,
+    target_scoped_app_instance_id,
+)
 
 if TYPE_CHECKING:
     from .components import ComponentEntry
@@ -126,7 +130,14 @@ def _materialize_app_target_refs(payload: dict[str, object]) -> None:
         if not isinstance(item, dict) or not bool(item.get("enabled", False)):
             continue
         if len(target_refs) == 1:
-            item[TARGET_REF_FIELD] = target_refs[0]
+            target_ref = target_refs[0]
+            item[TARGET_REF_FIELD] = target_ref
+            chart_id = str(item.get("id", "")).strip().lower()
+            if chart_id:
+                item[INSTANCE_ID_FIELD] = target_scoped_app_instance_id(
+                    chart_id,
+                    target_ref=target_ref,
+                )
             continue
         item.pop(TARGET_REF_FIELD, None)
 

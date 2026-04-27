@@ -51,7 +51,8 @@ Core principles:
 - `config.yaml` is the canonical render/reset contract.
 - `generated/` is the deploy contract for customer repositories.
 - Project-level workflow commands use `config.yaml` as the CLI entrypoint.
-- Bundle-level Terraform/Flux validation and subpath commands operate on `generated/`.
+- Bundle-level validation can inspect any path under `generated/`; Terraform and
+  Flux subcommands stay scoped to `generated/infra/` and `generated/flux/`.
 - Source-driven component discovery from `component_sources.yaml`.
 - Runtime introspection for module/chart fields and chart dependencies.
 - Progressive-enhancement wizard model: infra inputs come from Terraform module variables and app inputs come from Helm values, and optional `wizard` metadata is reserved for explicit Nebius/chart-aware choices or other advanced integration. Complex Terraform types stay native and are entered as single-line YAML/JSON values instead of being flattened into string-only prompts.
@@ -224,7 +225,7 @@ Bundled MK8s GPU policy is split deliberately between source-owned data and code
 - The default fast validation is the GPU Visibility test, implemented as a bounded sampled CUDA probe on Ready GPU nodes rather than an unbounded every-node fan-out. The catalog controls `max_nodes`, timeout, and cleanup behavior. The saved report now also includes the selected nodes' device-plugin allocatable snapshot so operators can compare scheduler-visible resources such as `nvidia.com/gpu` or RDMA-style keys with the stronger workload-level CUDA result, but those allocatable keys remain informational rather than the pass/fail gate.
 - NCCL is a separate deploy-time validation that is enabled by default for GPU-enabled MK8s clusters and follows the public `NVIDIA/nccl-tests` + Kubeflow training-operator path. The workload manifest is rendered from the first-party `helm-charts/nccl-test` chart, `component_sources.yaml` carries both the developer-local chart path and the portable OCI source pinned to `oci://cr.<region>.nebius.cloud/<registry-short-id>/charts/nccl-test --version 0.2.8`, and the shared image/tag plus deploy-time benchmark args now come directly from the chart's own `values.yaml`. Local/unit-test default hydration falls back to that checked-in file when `helm` is unavailable so the NCCL validation spec keeps the same first-party defaults. The source chart now keeps conservative 1-GPU smoke-test worker defaults for direct Helm use, while `nebius-cxcli` auto-selects the NCCL transport from the resolved MK8s shape: Ethernet-only shapes render Socket/TCPIP mode, while GPU-cluster / InfiniBand shapes render the RDMA path and enforce the configured bandwidth threshold there. It still derives the NCCL worker GPU count from the resolved MK8s shape, but worker CPU/memory requests are computed at validation runtime from live scheduler headroom on the selected GPU nodes rather than the nominal preset, and the launcher is pinned to Ready non-GPU nodes when such nodes exist so Ethernet-only 1-GPU clusters remain schedulable without spending GPU-node headroom on the launcher. The only platform-specific MPI rule left on the app entry is the B200 `-mca coll ^hcoll` overlay, which stays catalog-owned because the official Nebius B200 NCCL example includes that flag while the H100/H200 example does not. NVIDIA HPC-X release notes / known issues also say HCOLL is unsupported on GB200/GB300; that is not a direct statement about B200, but it is a nearby Blackwell-era signal against turning the B200 workaround into a shared chart default. See: [Nebius NCCL guide](https://docs.nebius.com/kubernetes/gpu/nccl-test), [NVIDIA HPC-X General Support](https://docs.nvidia.com/networking/display/hpcvx225/hpc-x-general-support), and [NVIDIA HPC-X Known Issues](https://docs.nvidia.com/networking/display/hpcxv2251/known-issues). The Training Operator remains a transient prerequisite pinned in the catalog's NCCL validation settings rather than a persistent app release, so `deploy` can install/remove it around the `MPIJob` run. Saved GPU validation reports are intentionally ordered and compact: practical summary fields stay first, success cases omit bulky raw logs, and failures keep only the relevant log excerpts.
 - The bundled NVIDIA path intentionally does not ship a generic built-in "health checker" workload. NVIDIA's own docs separate fast install verification and sample workload validation from ongoing DCGM-based telemetry and deeper DCGM diagnostics. In cxcli, that means deploy-time checks stay focused on operator readiness, bounded CUDA visibility, and optional NCCL, while long-running telemetry/alerting remains the responsibility of DCGM Exporter / Prometheus / Grafana and deeper diagnostics remain explicit administrator workflows rather than something every `deploy` reruns. See: [About the NVIDIA GPU Operator](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/24.9/index.html), [GPU Operator Getting Started](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/23.9.0/getting-started.html), [NVIDIA GPU Telemetry](https://docs.nvidia.com/datacenter/cloud-native/gpu-telemetry/latest/index.html), [DCGM Diagnostics](https://docs.nvidia.com/datacenter/dcgm/latest/user-guide/dcgm-diagnostics.html), and [NVIDIA Network Operator readiness](https://docs.nvidia.com/networking/display/kubernetes2610/life-cycle-management.html).
-- That split still assumes DCGM Exporter itself stays enabled on the GPU Operator release. For GPU-enabled MK8s configs, cxcli treats `nvidia-gpu-operator.values.dcgmExporter.enabled=false` as an invalid contract and fails fast. Prometheus scrape wiring remains a chart-level concern under `values.dcgmExporter.serviceMonitor.*`, not a built-in `deploy` validation toggle, and should only be enabled when the target cluster has a Prometheus-operator-compatible observability stack. Live testing on the Nebius driverful-image path showed an important nuance: NVIDIA's `dcgmExporter.enabled=true` keeps the source configured in `ClusterPolicy`, but Nebius GPU nodes can carry `nvidia.com/gpu.deploy.operands=false`, which prevents GPU Operator operands from scheduling. The source catalog now closes that gap through the DCGM metric target's nested `discovery.*` metadata plus `managed_gpu_node_policy.{labels,selector,stack_sources}`. Those labels are Nebius-specific scheduling policy, not an NVIDIA chart default. When observability and Kubernetes metrics are enabled, cxcli materializes that policy into `inputs.mk8s_gpu_node_group_overrides.labels`, enabling only the GPU Operator DCGM exporter plus validator operands and explicitly keeping GPU Operator device-plugin/GFD disabled so the Nebius-managed device-plugin path is not duplicated. During `deploy`, cxcli also reconciles the same catalog-owned labels onto existing live GPU Node objects matching the catalog-owned selector because MK8s node-group label updates may not back-propagate to already-running nodes.
+- That split still assumes DCGM Exporter itself stays enabled on the GPU Operator release. For GPU-enabled MK8s, DCGM Exporter must stay enabled in GPU Operator. Omitting `nvidia-gpu-operator.values.dcgmExporter.enabled` is valid because the bundled GPU Operator chart defaults it to enabled; explicitly setting it to `false` is rejected. Scraping and pushing those metrics to Nebius Monitoring happens only when the MK8s observability metrics path is enabled. Prometheus scrape wiring remains a chart-level concern under `values.dcgmExporter.serviceMonitor.*`, not a built-in `deploy` validation toggle, and should only be enabled when the target cluster has a Prometheus-operator-compatible observability stack. For the Nebius Observability Agent path, the source catalog declares the DCGM exporter as an app metric target with `discovery.kind: additional_target`; cxcli renders that source into the agent's `config.metrics.additionalTargets` while preserving customer-provided entries. Live testing on the Nebius driverful-image path (`gpu_stack_source: nebius_image`) showed an important nuance: NVIDIA's `dcgmExporter.enabled=true` keeps the source configured in `ClusterPolicy`, but Nebius GPU nodes can carry `nvidia.com/gpu.deploy.operands=false`, which prevents GPU Operator operands from scheduling. The source catalog now closes that gap through the DCGM metric target's nested `discovery.*` metadata plus `managed_gpu_node_policy.{labels,selector,stack_sources}`. Those labels are Nebius-specific scheduling policy, not an NVIDIA chart default. When observability and Kubernetes metrics are enabled, cxcli materializes that policy into `inputs.mk8s_gpu_node_group_overrides.labels`, enabling only the GPU Operator DCGM exporter plus validator operands and explicitly keeping GPU Operator device-plugin/GFD disabled so the Nebius-managed device-plugin path is not duplicated. During `deploy`, cxcli also reconciles the same catalog-owned labels onto existing live GPU Node objects matching the catalog-owned selector because MK8s node-group label updates may not back-propagate to already-running nodes.
 - Observability architecture, endpoint guidance, project config shape, and onboarding workflow are documented in [Observability](#observability).
 - The three built-in validations are intentionally layered to avoid semantic overlap. `operator_readiness` is the cheapest prerequisite gate: policy objects plus scheduler-visible GPUs on Ready nodes. `gpu_visibility` is the bounded single-node data-path smoke test that proves a real CUDA workload can execute. `nccl` is the optional multi-node communication and bandwidth validation: Socket/TCPIP on Ethernet-only shapes, RDMA on GPU-cluster / InfiniBand shapes. The ordering is deliberate so common operator/runtime failures stop before the expensive NCCL phase, while NCCL remains the only bundled check that says anything about distributed GPU communication quality.
 - The first gate is intentionally broader than its config-key name suggests. In operator-facing output and the combined deploy report, cxcli labels it `GPU stack readiness` because the runtime check covers GPU Operator and, when required by the selected MK8s shape, Network Operator plus `NicClusterPolicy`.
@@ -235,7 +236,7 @@ Bundled MK8s GPU policy is split deliberately between source-owned data and code
 - The NCCL threshold uses NCCL's own `average bus bandwidth` metric rather than a raw link-rate threshold. For single-node runs that measures the effective GPU-to-GPU communication path inside the node. For multi-node runs it measures the normalized collective-communication bandwidth across the full topology, including intra-node GPU links and the inter-node network, so it is useful for comparing NCCL health against hardware capability but it is not a direct translation of switch-port line rate.
 - Bundled MK8s boot-disk defaults now split cleanly between source-owned policy and code-owned evaluation. `component_sources.yaml` owns `cli.boot_disk_defaults.<cpu|gpu>.default_type` plus ordered `rules` keyed by resolved preset resources such as vCPU, RAM, and GPU count, while the CLI materializes explicit `inputs.<cpu|gpu>_nodes_boot_disk_size_gib` / `inputs.<cpu|gpu>_nodes_boot_disk_type` values from the effective node-group platform/preset during `create`, `component add`, and runtime config loading. Live provider preset metadata is preferred when available and preset-name parsing is the fallback. The first matching rule becomes the cxcli-owned explicit default for that shape, and only shapes that do not match any rule fall back to the heuristic. High-performance SSD types still round to their required 93 GiB multiples; regular `NETWORK_SSD` sizes remain exact GiB values so `93 GiB` and `1023 GiB` catalog defaults stay stable instead of being inflated to synthetic 32 GiB buckets. Explicit first-class inputs or `template.boot_disk` overrides remain authoritative.
 
-When `wizard.<field>.options` is present, it acts as wiring between an existing Terraform input or Helm value path and a guided option provider. The field itself still belongs to the module/chart contract; the catalog metadata only tells the CLI how to fetch valid choices for that field. Declared wizard-only helper fields can also carry `default`, which behaves like a virtual prompt default: the operator sees and can change the value in wizard mode, but unchanged defaults are not written back into `config.yaml`. For Nebius-backed flows, that means the operator-facing destination remains something like `inputs.cpu_nodes_platform`, while `from: mk8s_compatible_platforms`, `from: compute_platform_presets`, `from: mk8s_gpu_stack_presets`, `from: mk8s_node_group_os_values`, `from: mk8s_boot_disk_types`, or `from: mk8s_control_plane_versions` tells the CLI which Nebius API-backed or Nebius-contract-backed lookup to execute. For MK8s platform fields, the provider now treats the MK8s compatibility matrix as the authoritative support filter and, when a project id is available, intersects that set with the selected project's live compute-platform inventory so the wizard only offers currently available CPU/GPU platforms. The bundled MK8s flow materializes `inputs.cpu_nodes_os`, `inputs.gpu_stack_preset`, and `inputs.gpu_nodes_os` from that same compatibility matrix using catalog-owned preference ordering, while `inputs.gpu_stack_source` stays an explicit config value that controls whether the module renders Nebius-managed `gpu_settings.drivers_preset` or uses the operator-managed GPU Operator stack. The bundled MK8s `inputs.infiniband_fabric` field is provider-wired too, but the important decision is no longer a static platform heuristic: after the operator chooses `inputs.gpu_nodes_preset`, the CLI checks the exact selected platform/preset in the live Nebius project inventory, uses the preset's `allow_gpu_clustering` metadata as the source of truth for RDMA capability, only offers the optional fabric prompt when that capability is present, and clears stale interactive fabric values if a later preset change removes that support. That keeps the concepts separate on purpose: live Nebius metadata decides whether the shape is cluster-capable, while setting `inputs.infiniband_fabric` is the operator-facing step that actually enables the GPU-cluster / InfiniBand path for render-time operator selection and deploy-time GPUDirect/NCCL behavior. The preset labels now make the interconnect contract explicit too: single-GPU non-clusterable shapes are marked as Ethernet-only testing/dev shapes, while clusterable multi-GPU shapes are marked as the InfiniBand path for distributed training. When tenant/project/region context is available, the same wizard step also queries the live Nebius Capacity Dashboard `resource-advice` surface for the exact GPU platform+preset and uses those live rows as the source of truth for the offered fabric names, current on-demand/reserved availability annotations, and the recommended default while still preserving the optional field's skip/unset behavior. GPU preset prompts can use that same live advice to rank/annotate shape choices before the operator picks a fabric. The Capacity Dashboard can still report fabric-scoped capacity rows for single-GPU shapes because capacity is physically partitioned that way; cxcli uses those rows only to rank shape availability and does not expose a fabric selector unless the live preset metadata says GPU clustering is supported. When a cluster-capable shape has no live fabric rows, the wizard falls back to manual entry for that optional field instead of relying on a baked-in static fabric list. Runtime validation also treats live Capacity Dashboard fabric rows as the source of truth for concrete `infiniband_fabric` values when those rows are available, while the selected preset's `allow_gpu_clustering` metadata remains the source of truth for whether the shape is RDMA-capable at all. Wizard metadata can also suppress optional advanced fields from interactive prompting with `prompt: false`; the bundled MK8s profile uses that for the compatibility-matrix-derived image inputs and the raw `mk8s_*_overrides` passthrough maps. The first-class boot-disk fields are now part of the interactive flow: once the effective node-group shape is known, cxcli pre-fills boot-disk size from the first matching ordered size rule for that preset-resource shape, falls back to the heuristic only when no explicit rule matches, prompts with guided Nebius disk-type labels, and refreshes the derived size when the selected shape/type changes unless the operator has already set a custom first-class or `template.boot_disk` value. The guided boot-disk prompt intentionally offers the recommended SSD-backed types `NETWORK_SSD`, `NETWORK_SSD_NON_REPLICATED`, and `NETWORK_SSD_IO_M3`; other module-supported values such as `NETWORK_HDD` remain manual-config-only. Deploy-time MK8s GPU checks now use a project-facing contract under `deploy.validations.mk8s_gpu.*`, not fake Terraform module inputs. The catalog still owns the defaults in `components.infra.mk8s.cli.gpu.validations`, and the MK8s wizard still exposes those same toggles, but the chosen per-project values persist in `config.yaml` under `deploy.validations` so they clearly belong to the CLI deploy surface. The legacy fake-input path `infra.components[].inputs.gpu_validation_overrides` is intentionally unsupported and fails fast; operators must use the canonical `deploy.validations.mk8s_gpu.*` contract instead. When GPU nodes are enabled, operators can toggle operator-readiness, GPU-visibility, and NCCL checks and tune the visibility/NCCL node fan-out; the NCCL bus-bandwidth threshold remains part of the same project contract, but the wizard hides that threshold field until the current MK8s shape is actually on the GPU-cluster / fabric path where RDMA thresholding applies. `deploy.validations.mk8s_gpu.health_checker.enabled` is a reserved app-policy hook, not a built-in validation kind: it can auto-enable a catalog app with role `health_checker`, but cxcli does not ship a built-in health-check runner and omits that setting from bundled project defaults unless the active catalog actually supplies such an app. Local `deploy` can temporarily bypass the real built-in validation kinds with `--skip-validations` or repeatable `--skip-validation <kind>` flags, which are one-run overrides and do not rewrite `config.yaml`. If the resolved MK8s GPU inputs imply required operator apps, the wizard now auto-enables and seeds those app rows after the infra pass and before the app pass, so the same `create` or `component add` run can still show their app prompts instead of only materializing them later in the saved config. Component-level phase prompts preserve that sequencing: answering `n` to `Configure '<component>' component fields now?` skips only that component and continues with the remaining selected components, while `q` still stops the wizard. Operator readiness itself is now grounded in live cluster state rather than NVIDIA label folklore: the control-plane gate is the pair of operator policy objects (`ClusterPolicy` and, when required, `NicClusterPolicy`), GPU data-plane readiness still requires Ready Kubernetes nodes to advertise allocatable `nvidia.com/gpu`, and the actual GPU-cluster / InfiniBand path additionally requires those same Ready GPU nodes to expose scheduler-visible RDMA-style allocatable resources such as `rdma/shared_device`. The saved report now also captures `NicClusterPolicy.status.appliedStates` plus daemonset rollout summaries so a green control plane is not mistaken for pod-facing GPUDirect readiness. That matches the live Nebius-image behavior where the upstream GPU Operator `ClusterPolicy` can still report a `NoGPUNodes` reason even after the cluster exposes usable GPUs. Public MK8s node-group `boot_disk` currently exposes size/type only, so optional SSD NRD / SSD IO M3 encryption remains out of scope for cxcli until Nebius exposes that field on the MK8s surface. For current disk characteristics and pricing, see [Types of storage volumes in Compute](https://docs.nebius.com/compute/storage/types) and [Compute pricing in Nebius AI Cloud](https://docs.nebius.com/compute/resources/pricing). `depends_on` is the chaining input for multi-step lookups, such as querying presets for the platform selected in a previous prompt, and that relative path is normalized against the active component instance for both prompt-time choice loading and strict provider-value validation. Chained provider-backed fields are only prompted after their dependency field has a concrete value, and enabling a sibling `<prefix>_enabled` toggle now expands those dependent prompts immediately into the remaining wizard flow instead of deferring them to a later pass. `filter_regex` is the only regex-capable selector, and it is applied consistently to displayed choices and manual-entry validation. Fields that do not need guided choices should rely on normal Terraform/Helm introspection and omit both `wizard_profile` and `wizard`.
+When `wizard.<field>.options` is present, it acts as wiring between an existing Terraform input or Helm value path and a guided option provider. The field itself still belongs to the module/chart contract; the catalog metadata only tells the CLI how to fetch valid choices for that field. Declared wizard-only helper fields can also carry `default`, which behaves like a virtual prompt default: the operator sees and can change the value in wizard mode, but unchanged defaults are not written back into `config.yaml`. For Nebius-backed flows, that means the operator-facing destination remains something like `inputs.cpu_nodes_platform`, while `from: mk8s_compatible_platforms`, `from: compute_platform_presets`, `from: mk8s_gpu_stack_presets`, `from: mk8s_node_group_os_values`, `from: mk8s_boot_disk_types`, or `from: mk8s_control_plane_versions` tells the CLI which Nebius API-backed or Nebius-contract-backed lookup to execute. For MK8s platform fields, the provider now treats the MK8s compatibility matrix as the authoritative support filter and, when a project id is available, intersects that set with the selected project's live compute-platform inventory so the wizard only offers currently available CPU/GPU platforms. The bundled MK8s flow materializes `inputs.cpu_nodes_os`, `inputs.gpu_stack_preset`, and `inputs.gpu_nodes_os` from that same compatibility matrix using catalog-owned preference ordering, while `inputs.gpu_stack_source` stays an explicit config value that controls whether the module renders Nebius-managed `gpu_settings.drivers_preset` or uses the operator-managed GPU Operator stack. The bundled MK8s `inputs.infiniband_fabric` field is provider-wired too, but the important decision is no longer a static platform heuristic: after the operator chooses `inputs.gpu_nodes_preset`, the CLI checks the exact selected platform/preset in the live Nebius project inventory, uses the preset's `allow_gpu_clustering` metadata as the source of truth for RDMA capability, only offers the optional fabric prompt when that capability is present, and clears stale interactive fabric values if a later preset change removes that support. That keeps the concepts separate on purpose: live Nebius metadata decides whether the shape is cluster-capable, while setting `inputs.infiniband_fabric` is the operator-facing step that actually enables the GPU-cluster / InfiniBand path for render-time operator selection and deploy-time GPUDirect/NCCL behavior. The preset labels now make the interconnect contract explicit too: single-GPU non-clusterable shapes are marked as Ethernet-only testing/dev shapes, while clusterable multi-GPU shapes are marked as the InfiniBand path for distributed training. When tenant/project/region context is available, the same wizard step also queries the live Nebius Capacity Dashboard `resource-advice` surface for the exact GPU platform+preset and uses those live rows as the source of truth for the offered fabric names, current on-demand/reserved availability annotations, and the recommended default while still preserving the optional field's skip/unset behavior; preset summaries aggregate matching fabric rows per selected platform/region/preset so an H100 reserved lane is not hidden by a stronger H100 on-demand fabric, and H100/H200 rows remain separated even when the preset names match. Because reservations are fabric-bound, the fabric prompt recommends the best reserved-capacity fabric first when any matching reservation slots exist; otherwise it recommends the best regular/on-demand fabric. GPU preset prompts can use that same live advice to rank/annotate shape choices before the operator picks a fabric. The Capacity Dashboard can still report fabric-scoped capacity rows for single-GPU shapes because capacity is physically partitioned that way; cxcli uses those rows only to rank shape availability and does not expose a fabric selector unless the live preset metadata says GPU clustering is supported. When a cluster-capable shape has no live fabric rows, the wizard falls back to manual entry for that optional field instead of relying on a baked-in static fabric list. Runtime validation also treats live Capacity Dashboard fabric rows as the source of truth for concrete `infiniband_fabric` values when those rows are available, while the selected preset's `allow_gpu_clustering` metadata remains the source of truth for whether the shape is RDMA-capable at all. Wizard metadata can also suppress optional advanced fields from interactive prompting with `prompt: false`; the bundled MK8s profile uses that for the compatibility-matrix-derived image inputs and the raw `mk8s_*_overrides` passthrough maps. The first-class boot-disk fields are now part of the interactive flow: once the effective node-group shape is known, cxcli pre-fills boot-disk size from the first matching ordered size rule for that preset-resource shape, falls back to the heuristic only when no explicit rule matches, prompts with guided Nebius disk-type labels, and refreshes the derived size when the selected shape/type changes unless the operator has already set a custom first-class or `template.boot_disk` value. The guided boot-disk prompt intentionally offers the recommended SSD-backed types `NETWORK_SSD`, `NETWORK_SSD_NON_REPLICATED`, and `NETWORK_SSD_IO_M3`; other module-supported values such as `NETWORK_HDD` remain manual-config-only. The MK8s preemptible switches stay ordinary first-class module inputs: `inputs.cpu_nodes_preemptible` and `inputs.gpu_nodes_preemptible` render the matching node-group `template.preemptible = {}` block for the selected CPU or GPU node group. The VM wizard keeps the Compute preemptible contract in one place too: it shows preemptible follow-up fields only for GPU platforms, suppresses direct recovery-policy prompting, and materializes `inputs.recovery_policy: FAIL` when `inputs.preemptible_enabled=true` so the VM module can render `preemptible.on_preemption = "STOP"` with a valid recovery policy. Deploy-time MK8s GPU checks now use a target-facing contract under `deploy.targets[].validations.mk8s_gpu.*`, not fake Terraform module inputs or one project-global validation block. The catalog still owns the defaults in `components.infra.mk8s.cli.gpu.validations`, and the MK8s wizard still exposes those same toggles, but the chosen per-target values persist in `config.yaml` under the matching `deploy.targets[]` row so they clearly belong to the CLI deploy surface. The legacy fake-input path `infra.components[].inputs.gpu_validation_overrides` is intentionally unsupported and fails fast; operators must use the canonical `deploy.targets[].validations.mk8s_gpu.*` contract instead. When GPU nodes are enabled, operators can toggle operator-readiness, GPU-visibility, and NCCL checks and tune the visibility/NCCL node fan-out per target; the NCCL bus-bandwidth threshold remains part of the same target contract, but the wizard hides that threshold field until the current MK8s shape is actually on the GPU-cluster / fabric path where RDMA thresholding applies. `deploy.targets[].validations.mk8s_gpu.health_checker.enabled` is a reserved app-policy hook, not a built-in validation kind: it can auto-enable a catalog app with role `health_checker`, but cxcli does not ship a built-in health-check runner and omits that setting from bundled target defaults unless an active catalog actually supplies such an app. Local `deploy` can temporarily bypass the real built-in validation kinds with `--skip-validations` or repeatable `--skip-validation <kind>` flags, which are one-run overrides and do not rewrite `config.yaml`. If the resolved MK8s GPU inputs imply required operator apps, the wizard now auto-enables and seeds those app rows after the infra pass and before the app pass, so the same `create` or `component add` run can still show their app prompts instead of only materializing them later in the saved config. Component-level phase prompts preserve that sequencing: answering `n` to `Configure '<component>' component fields now?` skips only that component and continues with the remaining selected components, while `q` still stops the wizard. The interactive field wizard also prints explicit `Infra` and `Apps` section banners and echoes each answered field as a terminal-visible `Selected <path> = <value>` line with secret-like paths redacted, so operators can scan the terminal history before reading the saved `config.yaml`. Operator readiness itself is now grounded in live cluster state rather than NVIDIA label folklore: the control-plane gate is the pair of operator policy objects (`ClusterPolicy` and, when required, `NicClusterPolicy`), GPU data-plane readiness still requires Ready Kubernetes nodes to advertise allocatable `nvidia.com/gpu`, and the actual GPU-cluster / InfiniBand path additionally requires those same Ready GPU nodes to expose scheduler-visible RDMA-style allocatable resources such as `rdma/shared_device`. The saved report now also captures `NicClusterPolicy.status.appliedStates` plus daemonset rollout summaries so a green control plane is not mistaken for pod-facing GPUDirect readiness. That matches the live Nebius-image behavior where the upstream GPU Operator `ClusterPolicy` can still report a `NoGPUNodes` reason even after the cluster exposes usable GPUs. Public MK8s node-group `boot_disk` currently exposes size/type only, so optional SSD NRD / SSD IO M3 encryption remains out of scope for cxcli until Nebius exposes that field on the MK8s surface. For current disk characteristics and pricing, see [Types of storage volumes in Compute](https://docs.nebius.com/compute/storage/types) and [Compute pricing in Nebius AI Cloud](https://docs.nebius.com/compute/resources/pricing). `depends_on` is the chaining input for multi-step lookups, such as querying presets for the platform selected in a previous prompt, and that relative path is normalized against the active component instance for both prompt-time choice loading and strict provider-value validation. Chained provider-backed fields are only prompted after their dependency field has a concrete value, and enabling a sibling `<prefix>_enabled` toggle now expands those dependent prompts immediately into the remaining wizard flow instead of deferring them to a later pass. `filter_regex` is the only regex-capable selector, and it is applied consistently to displayed choices and manual-entry validation. Fields that do not need guided choices should rely on normal Terraform/Helm introspection and omit both `wizard_profile` and `wizard`.
 
 Built-in infra `wizard_profile` names currently include:
 
@@ -252,7 +253,7 @@ Component output and handoff contract:
 - Consumer-side `input` bindings use those exported Terraform output names.
 - Cluster handoff for kubeconfig/bootstrap is code-owned, not catalog-declared.
 - Today the bundled `mk8s` component is the only built-in cluster handoff source. It uses Terraform output `cluster_id` and derives endpoint access from `inputs.mk8s_cluster_public_endpoint`.
-- Multiple enabled instances of that handoff source can be rendered and applied as infra, with each Terraform output namespaced by `instance_id`. When built-in cluster targets exist, enabled app rows bind to one target explicitly through `apps.charts[].target_ref`, using the target cluster's `instance_id`. Render derives target-scoped deploy metadata into the generated manifest and writes one flat Flux subtree per target under `generated/flux/targets/<target_ref>/`. Commands that need Kubernetes access, such as `deploy`, `flux apply`, `flux destroy`, `flux bootstrap`, or deploy-time validations, select one target with `--target <instance-id>` or run every target with `--all-targets`. Infra-only `deploy` skips the optional kubeconfig refresh when multiple handoff-capable clusters are enabled and no selected work needs Kubernetes access.
+- Multiple enabled instances of that handoff source can be rendered and applied as infra, with each Terraform output namespaced by `instance_id`. For MK8s, new wizard-created rows use `inputs.cluster_name` as the `instance_id` when the row still has the generated placeholder id, so cluster targets stay human-readable (`cluster1`, `cluster2`). When built-in cluster targets exist, enabled app rows bind to one target explicitly through `apps.charts[].target_ref`, using the target cluster's `instance_id`; target-bound app rows must use that same value as their own `instance_id`; target-scoped deploy settings bind through `deploy.targets[].instance_id` using the same cluster id. The full app identity remains `<chart-id>@<instance-id>` such as `nvidia-gpu-operator@cluster2`. App chart `target_ref` is still the cluster selector. Render derives target-scoped deploy metadata into the generated manifest and writes one flat Flux subtree per target under `generated/flux/targets/<target_ref>/`. Commands that need Kubernetes access, such as `deploy`, `flux apply`, `flux destroy`, `flux bootstrap`, or deploy-time validations, select one target with `--target <instance-id>` or run every target with `--all-targets`. Infra-only `deploy` skips the optional kubeconfig refresh when multiple handoff-capable clusters are enabled and no selected work needs Kubernetes access.
 
 Source profile contract:
 
@@ -326,7 +327,7 @@ components:
 This is the catalog shape for the bundled MK8s component after the handoff contract was moved into code.
 Terraform outputs are still exported automatically, and the built-in MK8s handoff consumes Terraform output `cluster_id`.
 Endpoint access still resolves from `inputs.mk8s_cluster_public_endpoint`, but that binding now lives in code instead of `component_sources.yaml`.
-Helm chart definitions stay cluster-agnostic; cluster selection is an operator-side binding in `config.yaml` through `apps.charts[].target_ref`, while `deploy`/`flux bootstrap`/CI resolve each built-in MK8s target separately and then run Flux/kubectl against that target's rendered Flux subtree.
+Helm chart definitions stay cluster-agnostic; cluster selection is an operator-side binding in `config.yaml` through `apps.charts[].target_ref`, while `deploy`/`flux bootstrap`/CI resolve each built-in MK8s target separately and then run Flux/kubectl against that target's rendered Flux subtree. App chart identity is the pair `<chart-id>@<instance-id>`; generated target-bound app rows use the target id as `instance_id`, so `target_ref: cluster2` and `instance_id: cluster2` describe the same cluster binding without hiding the chart type.
 Flux controller installation version for local `deploy` is configured in the same catalog under `cli.flux.version`.
 Default rendered Helm release timeout is configured in the same catalog under `cli.flux.release_timeout`.
 Managed Terraform CLI download version is configured in the same catalog under `cli.terraform.version`.
@@ -422,28 +423,30 @@ Instance self-containment:
 - `create` persists only selected `infra.components[]` and `apps.charts[]` rows in `config.yaml`.
 - When `create` overwrites an existing resolved project folder, it recreates that one folder from scratch, restarts client-info prompts from the normal create defaults, and rebuilds infra/apps selections plus component rows from the current create inputs.
 - `component add` preserves existing rows and values, appends new selected rows, and prompts only for newly added component fields.
+- In non-interactive mode, `component add` requires target-bound app charts to name the target explicitly when multiple cluster targets exist, for example `n8n@cluster2`; the saved app row uses `instance_id: cluster2` and `target_ref: cluster2`. A target-bound chart can be enabled once per chart id and cluster target; duplicate `<chart-id>@<target-id>` adds fail before writing `config.yaml`.
+- When `component add` introduces the first built-in cluster target into an app-only config, cxcli rewrites each unambiguous existing app row to the target-bound identity by setting both `target_ref` and `instance_id` to that cluster target. Duplicate unbound rows for the same chart remain an explicit operator fix instead of being guessed.
 - Interactive `component add` prompts for infra first and can complete an infra-only add without any app selection. It prompts for apps only when no infra was selected or when the operator explicitly chooses to add apps too.
 - `component add` validates `component_sources.yaml` by default, matching `create`; `--no-validate-sources` is the explicit escape hatch.
 - `component add` also revalidates the existing Nebius tenant/project scope before provider-backed field prompts so dynamic option failures surface clearly.
-- `component remove` deletes selected rows only when the resulting config still satisfies component bindings and chart dependencies.
+- `component remove` deletes selected rows only when the resulting config still satisfies component bindings, target-bound app rows, and chart dependencies.
 - `config.yaml` does not embed `component_sources`.
 - Config-based commands resolve sources from the active `component_sources.yaml` resolution path.
 - Canonical project path shape is `<deployments-root>/<tenant-folder>/<project-folder>/config.yaml`.
 - `create` still takes `tenant_id` / `project_id` as the project identity inputs. Folder names are resolved from the validated Nebius names only after ID validation succeeds, and runtime identity continues to come from `config.yaml`.
 - App chart defaults (`release.namespace`, `release.name`) can be edited in wizard mode or overridden in non-interactive mode with `--app-namespace` and `--app-releasename`.
 - App chart `release.timeout` is optional catalog metadata for Flux `HelmRelease.spec.timeout`; when omitted, the chart inherits `cli.flux.release_timeout`. That keeps a global default in the catalog while still allowing per-chart overrides without hardcoding chart-specific logic in the deploy loop.
-- `deploy.observability.*` is the canonical customer-facing observability contract. cxcli renders it into infra labels and app chart values during render/deploy, keeping `config.yaml` organized under `infra`, `apps`, and `deploy`.
+- `deploy.targets[].observability.*` is the canonical customer-facing MK8s observability contract, and `deploy.observability.vm.*` remains the VM observability contract. cxcli renders those deploy settings into infra labels and app chart values during render/deploy, keeping `config.yaml` organized under `infra`, `apps`, and `deploy`.
 
 Wizard field/option model:
 
 - Infra input fields are discovered from module `variables.tf` (required and optional variables for source-backed modules).
 - Required variables are prioritized during prompts and enforced by strict validation.
-- When an MK8s wizard answer under `deploy.observability.*` makes the bundled `nebius-observability-agent` required, cxcli auto-enables that app immediately and announces the adjustment before later infra prompts. The later app-phase prompt only controls whether to customize chart values; skipping it keeps the selected app defaults.
+- When an MK8s wizard answer under `deploy.targets[].observability.*` makes the bundled `nebius-observability-agent` required, cxcli auto-enables that target-bound app immediately and announces the adjustment before later infra prompts. The later app-phase prompt only controls whether to customize chart values; skipping it keeps the selected app defaults.
 - Runtime-required infra inputs can be promoted above raw Terraform metadata when the CLI needs a stronger contract for a specific component.
 - Prompt labels include Terraform type hints (for example `string`, `number`, `bool`) and `required` markers.
 - `create` validates `tenant_id` and `project_id` via Nebius IAM APIs before optional wizard phases.
 - Interactive `component add` and `component remove` use separate infra/apps selection prompts and an explicit confirmation before editing `config.yaml`.
-- Repeating the same component id creates a new `instance_id`; explicit selectors such as `mk8s@training-cluster` are the canonical way to keep two clusters or two modules of the same type distinct in one project.
+- Repeating the same infra component id creates a new `instance_id`; explicit selectors such as `mk8s@training-cluster` are the canonical way to keep two clusters or two modules of the same type distinct in one project. For target-bound app charts, `<app-id>@<target-id>` selects the cluster target, and the same app id cannot be added twice to the same target.
 - For source-backed modules, `inputs.parent_id`/`inputs.project_id` are pre-seeded from `client_info.nebius.project_id` when those variables are present.
 - `component_sources.yaml` can declare per-component `defaults` so known Terraform inputs and Helm values are pre-seeded before prompting; literal defaults still appear in the interactive wizard as editable current values.
 - `component_sources.yaml` can declare top-level `shared` values, and `defaults` entries can reference them with `shared.<path>` so shared values are resolved once and then materialized into component config blocks.
@@ -526,11 +529,12 @@ part of the observability contract.
    Exporter need catalog-owned prerequisites.
 2. Customer intent.
    `create`, `component add`, and direct `config.yaml` edits write only
-   customer intent under `deploy.observability.*`. The MK8s wizard prompts that
-   contract directly. When those answers make the bundled
+   customer intent under `deploy.targets[].observability.*` for MK8s and
+   `deploy.observability.vm.*` for VMs. The MK8s wizard prompts that
+   target-scoped contract directly. When those answers make the bundled
    `nebius-observability-agent` required, cxcli auto-selects the app immediately
    and emits the adjustment while the operator is still answering
-   `deploy.observability.*` prompts. The later app prompt only asks whether to
+   `deploy.targets[].observability.*` prompts. The later app prompt only asks whether to
    customize chart values; answering `n` keeps the app selected with defaults.
 3. Normalization.
    Every config load normalizes the deploy contract before runtime validation.
@@ -542,7 +546,7 @@ part of the observability contract.
    `materialize_observability_infra_values`, then
    `materialize_observability_app_values`.
    This is why a direct config edit that sets
-   `deploy.observability.enabled=true` or adds another GPU-enabled MK8s target
+   `deploy.targets[].observability.enabled=true` or adds another GPU-enabled MK8s target
    still gets the required target-bound app rows, managed app values, and
    VM/MK8s infra-side materialization without a separate day-2 command.
 4. Render and deploy materialization.
@@ -607,29 +611,32 @@ The catalog owns the source facts; Python owns only the evaluation and materiali
 Important catalog choices:
 
 - The MK8s cxcli-managed project contract is default-off, but once the operator enables it cxcli treats `collect_k8s_cluster_metrics=true` as the enabled baseline so cluster and node health are included by default. That differs from the public chart default of `false` and is an intentional cxcli opinion, not an attempt to mirror upstream defaults verbatim.
-- cxcli pins `oci://cr.nebius.cloud/observability/public/nebius-observability-agent-helm` because the current Nebius traces ingest workflow still installs that public chart, and its rendered surface matches the logs+metrics+traces contract cxcli materializes. Ref: [Nebius traces ingest](https://docs.nebius.com/observability/traces/ingest)
+- cxcli pins `oci://cr.nebius.cloud/observability/public/nebius-observability-agent-helm` because the current Nebius Observability Agent for Kubernetes docs identify that OCI chart as the supported chart, the traces ingest workflow uses the same chart, and its rendered surface matches the logs+metrics+traces contract cxcli materializes. Ref: [Nebius Observability Agent for Kubernetes](https://docs.nebius.com/observability/agents/nebius-o11y-agent), [Nebius traces ingest](https://docs.nebius.com/observability/traces/ingest)
 
 ### Customer Config Contract
 
-`config.yaml` exposes only the project-facing observability contract under `deploy`:
+`config.yaml` exposes only the deploy-facing observability contract under `deploy`:
 
 ```yaml
 deploy:
+  targets:
+  - instance_id: cluster1
+    observability:
+      enabled: false
+      kubernetes:
+        logs:
+          enabled: true
+          collect_agent_logs: false
+          excluded_namespaces:
+            - kube-system
+        metrics:
+          enabled: true
+          collect_agent_metrics: false
+          collect_k8s_cluster_metrics: true
+          excluded_namespaces: []
+        traces:
+          enabled: true
   observability:
-    enabled: false
-    kubernetes:
-      logs:
-        enabled: true
-        collect_agent_logs: false
-        excluded_namespaces:
-          - kube-system
-      metrics:
-        enabled: true
-        collect_agent_metrics: false
-        collect_k8s_cluster_metrics: true
-        excluded_namespaces: []
-      traces:
-        enabled: true
     vm:
       logs:
         enabled: true
@@ -645,14 +652,15 @@ deploy:
 
 Design rules for the customer config:
 
-- `deploy.observability.enabled` is the project-wide switch for cxcli-managed MK8s observability and opt-in VM journald collection. It does not disable or remove the built-in VM Monitoring agent metrics path on Nebius Compute VMs.
-- Nebius Monitoring/Logging/Tracing endpoints are project-scoped service surfaces. `deploy.observability.enabled` controls whether cxcli deploys or configures producers against them; it is not the thing that makes the endpoint URLs exist.
-- `deploy.observability.kubernetes.*` is only for the MK8s Kubernetes-agent path.
+- `deploy.targets[].instance_id` binds target-scoped deploy settings to an enabled MK8s cluster target.
+- `deploy.targets[].observability.enabled` is the per-cluster switch for cxcli-managed MK8s observability.
+- Nebius Monitoring/Logging/Tracing endpoints are project-scoped service surfaces. Deploy observability settings control whether cxcli deploys or configures producers against them; they are not the thing that makes the endpoint URLs exist.
+- `deploy.targets[].observability.kubernetes.*` is only for the MK8s Kubernetes-agent path.
 - `deploy.observability.vm.logs.*` is only for the VM Monitoring-agent journald-label path.
 - `deploy.observability.vm.collector.*` is the separate default-off cxcli-managed standalone VM collector path for public write-side journald logs and host metrics.
 - The bundled VM catalog defaults `deploy.observability.vm.logs.enabled` to true, but that branch is active only when `deploy.observability.enabled=true`.
 - `create` and normalization keep the contract scoped to the enabled infra set:
-  - MK8s-only projects keep `deploy.observability.kubernetes.*`
+  - MK8s-only projects keep `deploy.targets[].observability.kubernetes.*`
   - VM-only projects keep `deploy.observability.vm.logs.*` plus `deploy.observability.vm.collector.*`
   - mixed projects keep both
 - Unrelated project-scope branches are pruned instead of leaking into the customer config. For example, VM-only configs do not keep MK8s GPU deploy validations.
@@ -660,7 +668,7 @@ Design rules for the customer config:
 What cxcli intentionally does not put in `config.yaml`:
 
 - static observability keys or tokens
-- Grafana credentials or datasource objects
+- Grafana credentials or static tokens
 - raw `values.config.iam.*` auth details for the Kubernetes chart
 - raw Compute journald labels
 - whole chart `values.yaml` trees
@@ -669,8 +677,9 @@ What cxcli intentionally does not put in `config.yaml`:
 
 The source/catalog contract becomes runtime state during normalization and render:
 
-- When `deploy.observability.enabled=true` and an MK8s component is enabled, cxcli ensures the bundled collector chart row exists and materializes the project-facing toggles into chart-native `values.config.*`.
-- In multi-target projects, that materialization is target-scoped: each enabled MK8s target gets its own collector row with its own `instance_id` and `target_ref`.
+- When `deploy.targets[].observability.enabled=true` for an MK8s component, cxcli ensures the bundled collector and Grafana chart rows exist for that target. The collector materializes target-facing toggles into chart-native `values.config.*`; Grafana materializes datasource provisioning for the selected Metrics, Logs, and Traces read endpoints.
+- In multi-target projects, that materialization is target-scoped: each enabled MK8s target gets its own collector and Grafana rows with their own `instance_id` and `target_ref`.
+- Grafana datasource values are generated from the same catalog endpoint templates used by the deploy report. The generated chart values contain datasource URLs and stable UIDs only; the bearer token comes from a deploy-time Kubernetes Secret exposed as an environment variable for Grafana provisioning. Nebius dashboards expect the Prometheus service-metrics datasource display name `Nebius Services`, so cxcli provisions that name while retaining the stable `nebius-service-metrics` UID for Explore links and automation.
 - The built-in VM Monitoring agent remains platform-managed whenever a `vm` component is enabled; cxcli does not install it and does not configure its internal metrics ingest path.
 - When `deploy.observability.enabled=true` and a VM component is enabled, cxcli materializes the supported Compute labels into `infra.components[id=vm].inputs.labels`:
   - `nebius.o11y.systemd-logs-collection.enabled=true`
@@ -700,6 +709,7 @@ Kubernetes metrics:
 - The Kubernetes agent collects Prometheus-style metrics through its scrape pipeline.
 - `collect_k8s_cluster_metrics` controls cluster, node, and control-plane style metrics in that pipeline.
 - App-side metric sources, such as the GPU Operator's DCGM Exporter service, are modeled through `metric_targets` metadata when cxcli needs catalog-owned prerequisites or reporting.
+- Catalog-owned targets with `discovery.kind: additional_target` are rendered into the Nebius agent's chart-native `values.config.metrics.additionalTargets` list. User-defined `additionalTargets` on the chart row are preserved unless they reuse a catalog-owned `job_name`.
 - On Nebius driverful GPU nodes, cxcli may also materialize node labels so only the needed GPU Operator observability operands run without duplicating the Nebius-managed device-plugin path.
 
 Kubernetes traces:
@@ -758,7 +768,7 @@ Read endpoints:
 - Prometheus federation bucket URLs: `https://read.monitoring.api.nebius.cloud/projects/<project-id>/buckets/<bucket>/prometheus/federate`, where `<bucket>` is selected from the known service buckets that apply to the deployment, such as `compute`, `gpu`, `nbs`, `sp_storage`, and `msp` for managed PostgreSQL/MLflow services
 - Loki-compatible logs: `https://read.logging.api.nebius.cloud/projects/<project-id>`
 - Tempo-compatible traces: `https://read.tracing.api.nebius.cloud/projects/<project-id>/tempo`
-- Direct API probes for reachability use tool-specific subpaths below those datasource URLs, for example `/api/v1/query?query=up` for Prometheus, `/loki/api/v1/query?...` for Loki, and `/api/v2/search/tags` for Tempo. The generated report includes concrete project-scoped probe URLs for enabled read signals because the datasource base URL can return `404` when opened directly.
+- Direct API probes for reachability use tool-specific subpaths below those datasource URLs, for example `/api/v1/query?query=count(...)` or `/api/v1/query?query=up` for Prometheus, `/loki/api/v1/query?...` for Loki, and `/api/v2/search/tags` for Tempo. The generated report includes concrete project-scoped probe URLs for enabled read signals because the datasource base URL can return `404` when opened directly.
 
 Auth model:
 
@@ -772,7 +782,8 @@ Auth model:
   - the attached VM service account owns the write-side permissions
 - External collectors, `nebius logging`, Prometheus, LogCLI, or Grafana use `Authorization: Bearer <observability static token or IAM token>` supplied out of band.
 - cxcli never asks the user to paste those secrets into `config.yaml`.
-- The generated deploy report renders Grafana read data-source hints for enabled read signals: Prometheus URLs for service metrics and user-ingested metrics, the Loki log URL, the Tempo trace URL, server/proxy access mode, deployment-applicable federation bucket URLs, auth-required API probe URLs for direct reachability checks, the direct-base-URL `404` caveat for Grafana datasource URLs, and the `Authorization: Bearer <observability static token or IAM token>` header guidance.
+- For in-cluster Grafana, `deploy`, `flux apply`, and `flux bootstrap` create or reuse the target-cluster admin/password Secret and Observability read-token Secret before Helm reconciliation. If the read-token Secret is missing, cxcli ensures a project service account, grants `viewer` through a project IAM group, issues an `OBSERVABILITY` static key, and stores the one-time token only in that Kubernetes Secret.
+- The generated deploy report renders three separate user-facing sections: public write endpoints, public read endpoints, and Grafana links. The Grafana section reports the live LoadBalancer URL when the Service has an address, Metrics/Logs/Traces Explore links, dashboard links, and the `kubectl` command for retrieving the admin password. Direct read API probe URLs remain in a separate probe section because opening datasource base URLs directly can return `404`.
 
 VM-specific note:
 
@@ -785,7 +796,8 @@ VM-specific note:
 - Public docs say omitted `deploy.observability.vm.logs.systemd_units` means all systemd services. cxcli keeps that default, but explicit units are still the deterministic smoke-test path.
 - The standalone VM collector path is different from the built-in Monitoring-agent path operationally: it is installed/configured by cloud-init on first boot from the canonical public Artifactory APT repo and currently assumes an attached service account plus a module-managed Ubuntu-family image.
 - The detailed Kubernetes-agent docs define logs, metrics, and traces. That is the signal contract cxcli follows for MK8s, even though the public agents overview page summarizes the Kubernetes agent more narrowly.
-- Read-side tools stay out of `config.yaml`. cxcli reports endpoints, but Grafana datasources, Prometheus configs, and LogCLI environment variables remain operator-side concerns.
+- Grafana is the only read-side tool cxcli deploys automatically for MK8s observability. Prometheus configs, LogCLI environment variables, and any external Grafana instance remain operator-side concerns; the deploy report keeps the read endpoint URLs visible for those external tools.
+- cxcli references maintained upstream third-party artifacts from `component_sources.yaml` instead of vendoring them. The bundled observability console uses the maintained Grafana community Helm chart, the official `grafana/grafana` image, Grafana.com dashboard IDs, and Envoy Gateway for Gateway API load-balancer exposure. The catalog-created EnvoyProxy sets the generated public LoadBalancer service to `externalTrafficPolicy: Cluster`, because Nebius Managed Kubernetes load balancers reject Envoy Gateway's default `Local` policy. CPU-only platform/observability charts use hard node affinity with `nebius.com/gpu NotIn ["true"]` so Grafana, Envoy Gateway, cert-manager, ExternalDNS, External Secrets, and n8n do not consume GPU worker capacity by default. The catalog defines this block once as YAML anchor `&nebius_cpu_only_node_affinity` and reuses it with aliases, but rendered HelmRelease values contain ordinary Kubernetes affinity objects rather than YAML anchor semantics. Because it is hard affinity, GPU-only clusters need an operator override or CPU node capacity for these platform pods. Third-party binaries, Helm charts, container images, package repositories, and dashboard JSON referenced by the catalog remain governed by their own upstream licenses, support terms, usage terms, and distribution policies. This repository's license covers the cxcli source and generated automation, not the operator's deployed use of those referenced artifacts.
 
 ### Onboarding Workflow
 
@@ -800,8 +812,8 @@ Use this sequence when onboarding observability for any bundled or new service:
    - Put stable facts under `components.<scope>.<id>.cli.observability.*`.
    - Keep chart ids, endpoint templates, default toggles, and source-specific guardrails in the catalog.
 3. Expose only the customer-facing project contract in `config.yaml`.
-   - `deploy.observability.enabled`
-   - `deploy.observability.kubernetes.*`
+   - `deploy.targets[].observability.enabled`
+   - `deploy.targets[].observability.kubernetes.*`
    - `deploy.observability.vm.logs.*`
    - `deploy.observability.vm.collector.*`
 4. Materialize runtime state during normalization and render.
@@ -809,7 +821,7 @@ Use this sequence when onboarding observability for any bundled or new service:
    - VM: supported `nebius.o11y.systemd-logs-collection.*` labels
    - VM standalone collector: hidden module inputs that bootstrap the public `nebius-o11y-agent` package plus the Prometheus agent companion
 5. Validate and report the runtime contract.
-   - Fail fast on unsupported `deploy.observability.*` keys or wrong types.
+   - Fail fast on unsupported `deploy.targets[].observability.*` or `deploy.observability.*` keys or wrong types.
    - Generated reports must say which agent path is active, which signals are enabled, and which endpoints apply.
    - Standalone collector validation must keep the separation clear: service account required, at least one signal required, and built-in journald-label logging cannot be enabled at the same time as standalone collector journald logging.
 6. Prove the live path.
@@ -842,8 +854,8 @@ Legacy `client_info.env` and `client_info.cluster_name` are not supported.
 
 Canonical model is dynamic:
 
-- `infra.components[]`: `id`, `enabled`, `inputs`
-- `apps.charts[]`: `id`, `group`, `enabled`, optional `target_ref`, `repo`, `version`, `namespace`, `release-name`, `values`
+- `infra.components[]`: `id`, `instance_id`, `enabled`, `inputs`
+- `apps.charts[]`: `id`, `instance_id`, `group`, `enabled`, optional `target_ref`, `repo`, `version`, `namespace`, `release-name`, `values`
 - Source catalogs use `release.name`; project `config.yaml` uses `release-name`. Alias keys are intentionally unsupported.
 - Static nested component blocks are not accepted.
 
@@ -854,8 +866,11 @@ Commands operate from this dynamic model with infra source metadata resolved fro
 The command boundary is intentional:
 
 - Generator-side commands operate on `config.yaml`.
-- Project-level runtime commands (`deploy`, `destroy`, `report`, `email`) also start from `config.yaml` and resolve sibling `generated/`.
-- Bundle-level runtime commands (`validate-generated`, `terraform *`, `flux *`) operate on `generated/`.
+- Project-level runtime commands (`deploy`, `destroy`, `email`) also start from `config.yaml` and resolve sibling `generated/`.
+- Bundle-level runtime commands keep artifact-specific boundaries:
+  `validate-generated` accepts any path under `generated/`, `terraform *`
+  accepts `generated/` or `generated/infra/`, and `flux *` accepts
+  `generated/` or `generated/flux/`.
 - Customer CI is artifact-driven and should deploy only from canonical `<tenant-folder>/<project-folder>/generated/**` paths.
 - `create` owns project identity and initial scaffold creation from a deployments root.
 - When `create` targets an already-existing resolved project folder for the same `tenant_id`/`project_id`, interactive mode warns and asks for confirmation before recreating that folder from scratch; non-interactive mode requires `--force`.
@@ -886,10 +901,11 @@ The command boundary is intentional:
 - Read-only inspection of the current project component state against the active source catalog.
 - Reports enabled component instances and reusable catalog component types, split between infra modules and app charts.
 
-### `component add <config.yaml> [component-id...]`
+### `component add <config.yaml> [component-selector...]`
 
 - Adds source-defined components to an existing project config without rerunning `create`.
-- Component catalog entries are reusable types; each add creates a distinct enabled component instance with its own `instance_id`.
+- Component catalog entries are reusable types; each infra add creates a distinct enabled component instance with its own `instance_id`; app chart cluster placement is expressed with `target_ref`, and generated target-bound app rows use that same target id as their target-scoped `instance_id`.
+- In non-interactive multi-target configs, target-bound app additions use `<app-id>@<target-id>` and fail fast when the target is omitted.
 - Interactive mode prompts for infra first when component ids are omitted, can finish an infra-only add, and only asks for apps when no infra was selected or the operator explicitly chooses to add apps too.
 - Interactive mode confirms the add before editing `config.yaml`.
 - Auto-resolves app chart dependencies from chart metadata before persisting the updated selection.
@@ -898,17 +914,19 @@ The command boundary is intentional:
 - Accepts complex Terraform inputs such as lists/maps/objects as single-line YAML/JSON prompt values so reusable modules do not need CLI-specific scalar shims.
 - Validates the active source catalog by default before editing `config.yaml`, matching `create`.
 - Reuses the existing project tenant/project scope and validates it non-interactively before provider-backed prompts, instead of silently downgrading dynamic Nebius lookups.
-- Non-interactive mode accepts one or more explicit infra-module ids or app-chart ids, repeats of the same id to create more than one component instance, and `<component-id>@<instance-id>` when the caller wants to control the new instance id explicitly.
+- Non-interactive mode accepts one or more component selectors: `<component-id>`, `infra:<component-id>`, `apps:<component-id>`, `all`, `none`, or `<component-id>@<instance-id>`.
+- Repeats of the same reusable id create more than one component instance when that type allows multiple config rows. `<component-id>@<instance-id>` controls the new `config.yaml` `instance_id`; for target-bound app charts, the suffix is the cluster target id and becomes `apps.charts[].target_ref`.
 - Supports `--validate-sources` for a full catalog preflight.
 - After the edit, the expected source-config loop is `validate`, then `render`.
 
-### `component remove <config.yaml> [component-id...]`
+### `component remove <config.yaml> [component-selector...]`
 
 - Removes enabled component rows from an existing project config without rerunning `create`.
 - Interactive mode prompts separately for infra and apps selections when component ids are omitted.
 - Interactive mode confirms the removal before editing `config.yaml`.
+- Non-interactive mode accepts enabled row selectors: `<component-id>`, `infra:<component-id>`, `apps:<component-id>`, `all`, `none`, `<instance-id>`, or `<component-id>@<instance-id>`.
 - When more than one instance of the same component type is enabled, non-interactive remove must target an exact `instance_id` or `<component-id>@<instance-id>`.
-- Fails fast when the resulting config would break app dependencies or component input bindings.
+- Fails fast when the resulting config would break app dependencies, component input bindings, or target-bound app rows.
 - After the edit, the expected source-config loop is `validate`, then `render`.
 
 ### `validate-sources [component_sources.yaml]`
@@ -936,14 +954,15 @@ The command boundary is intentional:
 
 ### `quota-check <config.yaml>`
 
-- Runs the same live Nebius quota/capacity assessment used by `create`, `render`, and `deploy`, but as an explicit read-only operator command against one project config.
+- Runs the same live Nebius quota/capacity assessment used by `create`, `render`, and `deploy`, but as an explicit read-only operator command against one project config. It always queries current Nebius state and does not reuse a cached create-time result.
+- For existing rendered/deployed MK8s bundles, best-effort state adjustment reads the sibling generated manifest plus Terraform state and discounts quota already managed by that bundle. That keeps manual day-2 edits such as changing a node count from 4 to 6 focused on the net-new 2 nodes when state is available, while still falling back to the full desired source-config shape when no generated state can be read.
 - Quota assessment prefers operator auth such as an IAM token or Nebius CLI profile when available, then falls back to runtime project auth. That keeps tenant-scope quota and Capacity Dashboard reads working during normal operator reruns even after cxcli has bootstrapped a project-scoped runtime service account into the process environment.
 - GPU quota dimensions are centralized on the live Capacity Dashboard `resource-advice` surface for the exact platform + region + preset + fabric shape. cxcli treats the returned availability as VM slots for that preset, multiplies by the selected preset's GPU count, and compares the result with `compute.instance.gpu.*`; a two-node `8gpu-*` request requires 16 GPUs and passes when at least two matching VM slots are available. cxcli no longer overlays a separate Capacity Block Group-specific GPU path or a synthetic `compute.gpucluster.count` check.
 - Prints a concise per-component confirmed summary for the quota dimensions that were successfully checked, including the exact checked quota names listed one per line. Components with coverage gaps still appear there with a partial-coverage note, while confirmed shortages and unresolved live limits stay out of that list.
 - Returns success when no confirmed insufficiency is found, even if some live quota dimensions remain unresolved; those unresolved limits and coverage gaps are still printed as warnings.
 - Coverage-gap warnings are rendered as one component line with a vertical `gaps:` list underneath so each unresolved reason appears on its own line.
 - Optional `--all-regions` prints per-region availability for the same shape across all discovered quota regions plus any GPU regions returned by the Capacity Dashboard, but it does not change pass/fail semantics.
-- When quota-check ends with confirmed insufficiency and `--all-regions` was not requested, the CLI prints both the direct `quota-request` remediation command and the exact `quota-check --all-regions` rerun command as next steps.
+- When quota-check ends with confirmed insufficiency and `--all-regions` was not requested, the CLI prints either the direct `quota-request` remediation command for requestable tenant/project quota shortages or a GPU Capacity Dashboard shape-change hint for capacity-only shortages, plus the exact `quota-check --all-regions` rerun command as a diagnostic next step.
 - Coverage-gap-only warnings remain non-fatal and indicate partial estimator coverage, not a confirmed shortage in the quota dimensions that were successfully checked. The unresolved reasons are listed one per line under the affected component.
 - Returns a non-zero exit status only when the enabled infra shape is confirmed to exceed currently available live quota.
 
@@ -952,6 +971,16 @@ The command boundary is intentional:
 - Reuses the same live quota assessment as `quota-check`, but keeps the object
   model explicit: `QuotaAllowance` confirms what quota currently exists, while
   `QuotaRequest` is the separate resource used to ask for a limit change.
+- Acts only on shortages confirmed by the current live assessment. If the
+  config is currently sufficient, it exits as a no-op rather than pre-requesting
+  quota because the config exists.
+- Supports day-2 manual `config.yaml` edits by reusing the same best-effort
+  MK8s state discount as `quota-check`; the planned `QuotaRequest` target is
+  based on the confirmed net-new shortfall when existing generated state is
+  available.
+- Capacity Dashboard-only GPU availability shortages are not quota-request
+  targets. Operators must choose another platform/preset/fabric or region with
+  available capacity, or wait for capacity to appear.
 - No verified public Nebius quota-request API surface is assumed here.
   Automatic submission is an internal-only path: it works only on the Nebius
   internal network for Nebius employees/operators when that internal request
@@ -1010,12 +1039,13 @@ The command boundary is intentional:
   Terraform state and fails fast when a stale unmanaged live resource would
   make `terraform apply` hit `AlreadyExists`.
 - Optional `--portable` enforcement rejects generated bundles whose Terraform root still embeds local filesystem module sources.
-- Reports visible validation phases for strict readiness, MK8s preflight, live quota/capacity, backend auth preparation, Terraform validation, Flux manifest validation, and optional portability enforcement.
+- Reports visible validation phases for strict readiness, MK8s preflight, backend auth preparation, live quota/capacity, Terraform validation, Flux manifest validation, and optional portability enforcement.
 
-### `deploy <config-path>`
+### `deploy <config.yaml>`
 
 - Deploys an existing generated bundle as a reconcile/apply path: terraform apply, deploy-report refresh, then local Flux apply.
 - Requires `config.yaml` explicitly and resolves the sibling `generated/` directory, while still deploying from the generated manifest so source-file edits after render do not silently alter the applied bundle.
+- The source chain is explicit: changes to `config.yaml` affect deployment only after `render` updates `generated/nebius-cxcli-manifest.json`; `deploy` then recreates `generated/infra/terraform.auto.tfvars.json` from that manifest before Terraform runs.
 - Before Terraform apply, runs a generated-bundle deploy preflight: strict readiness checks against the manifest runtime config, MK8s network preflight, live Nebius quota/capacity validation, Terraform validation for `generated/infra`, and `kubectl kustomize` against each rendered Flux tree when apps are enabled. On bundled MK8s, that Terraform-validation pass now also fails fast on live MK8s cluster / derived GPU-cluster name collisions that are not already tracked in the current Terraform state, while treating Nebius `NOT_FOUND` responses as the expected "resource is absent" case.
 - Ensures remote-state backend bucket exists before Terraform init/apply.
 - The generated-bundle quota/capacity preflight uses the same state-aware MK8s baseline subtraction as `validate-generated`, so a sequential rerun of the same managed cluster does not fail quota as if all of its existing nodes still needed to be created from scratch.
@@ -1023,7 +1053,7 @@ The command boundary is intentional:
 - Does not rerender from `config.yaml`.
 - Uses `generated/nebius-cxcli-manifest.json` to recover the runtime config snapshot and deployment metadata.
 - The live quota/capacity preflight still fails fast with a quota-increase message and the exact `quota-request` / `quota-check --all-regions` follow-up commands when the rerun would add net-new capacity that exceeds currently available quota.
-- Applies deploy-time MK8s GPU checks from the project-facing `deploy.validations.mk8s_gpu.*` contract that was rendered into the generated manifest. Local `deploy` can bypass all of them with `--skip-validations` or a subset with repeatable `--skip-validation <kind>` flags; those are one-run overrides only and do not rewrite the source config.
+- Applies deploy-time MK8s GPU checks from the target-facing `deploy.targets[].validations.mk8s_gpu.*` contract that was rendered into the generated manifest. Local `deploy` can bypass all of them with `--skip-validations` or a subset with repeatable `--skip-validation <kind>` flags; those are one-run overrides only and do not rewrite the source config.
 - Keeps non-blocking coverage-gap detail in the generated manifest instead of repeating it in normal `deploy` terminal output. Operators can run `quota-check` against the source config when they need the full coverage-gap summary in the terminal.
 - Uses `deploy.status_watchers[]` from the generated manifest to decide which Nebius SDK pollers to run for infra status reporting. Those watcher specs are derived from `components.infra.<id>.status` in the active catalog at render time.
 - Each watcher spec resolves `parent_id` and `resource_name` from the enabled component's `inputs` payload in `config.yaml`, following the catalog-declared `status.parent_input` and `status.name_input` paths. `status.name_input` may resolve a scalar resource name or a collection of named objects, in which case the CLI expands one component row into multiple watcher specs.
@@ -1035,9 +1065,9 @@ The command boundary is intentional:
 - Must stay idempotent for the same generated bundle, but should not change into a create-only mode that ignores drift or desired updates to already managed resources.
 - Operators who need a non-mutating preview should use `terraform plan` against the same generated bundle before `deploy`.
 
-### `destroy <config-path>`
+### `destroy <config.yaml>`
 
-- Destroys an existing generated bundle as the destructive inverse of `deploy`: `destroy` requires `config.yaml`, resolves sibling `generated/`, and then uses the generated manifest as the authoritative teardown contract. When enabled apps target an external or current cluster, delete the rendered Flux resources first and then run Terraform destroy against the rendered infra bundle. When the generated bundle destroys the handed-off cluster directly, skip the separate Flux delete step and rely on cluster teardown instead.
+- Destroys all rendered project resources represented by the existing generated bundle as the destructive inverse of `deploy`: `destroy` requires `config.yaml`, resolves sibling `generated/`, and then uses the generated manifest as the authoritative project-wide teardown contract. When enabled apps target an external or current cluster, delete the rendered Flux resources first and then run Terraform destroy against the rendered infra bundle. When the generated bundle destroys the handed-off cluster directly, skip the separate Flux delete step and rely on cluster teardown instead.
 - Does not rerender from `config.yaml`.
 - Uses `generated/nebius-cxcli-manifest.json` to recover the runtime config snapshot and deployment metadata.
 - Uses the same generated manifest watcher specs/runtime auth/backends as the apply path.
@@ -1111,30 +1141,35 @@ Modules that expose collection/object inputs, such as `mysterybox.secrets`, `ssh
   - Does not run `flux bootstrap`; GitOps bootstrap/reconcile stays explicit through `flux bootstrap` or the generated CI apply workflow.
   - Does not run `bootstrap-ci` automatically, even when the generated bundle is inside a git repository; GitHub workflow/environment bootstrap stays an explicit generator-side action.
 - `destroy <config.yaml>`
-  - Full local teardown from the generated bundle: `destroy` resolves sibling `generated/`, then rendered apps are deleted first only when they target an external or current cluster; otherwise Terraform destroy removes the handed-off cluster directly.
+  - Project-wide destructive teardown from the generated bundle: `destroy` resolves sibling `generated/`, then removes all rendered resources represented by the generated manifest. Rendered apps are deleted first only when they target an external or current cluster; otherwise Terraform destroy removes the handed-off cluster directly.
   - `--auto-auth-bootstrap/--no-auto-auth-bootstrap` controls runtime auth creation (default enabled).
   - Uses guarded destroy recovery: stale-lock auto-unlock/retry first, then targeted MK8s stuck node-group cleanup only when live API state still blocks destroy.
   - Requires explicit confirmation or `--yes`.
 - `terraform apply <generated-path>`
   - Infra-only apply from the generated Terraform bundle.
+  - Accepts the project `generated/` directory or a path under `generated/infra/`; other generated subtrees are rejected.
   - `--auto-auth-bootstrap/--no-auto-auth-bootstrap` controls runtime auth creation (default enabled).
 - `terraform destroy <generated-path>`
   - Infra-only destroy from the generated Terraform bundle.
+  - Accepts the project `generated/` directory or a path under `generated/infra/`; other generated subtrees are rejected.
   - `--auto-auth-bootstrap/--no-auto-auth-bootstrap` controls runtime auth creation (default enabled).
   - Uses the same guarded stale-lock and MK8s stuck-create recovery path as top-level `destroy`.
   - Requires explicit confirmation or `--yes`.
 - `flux apply <generated-path>`
   - Apps-only direct apply from the generated Flux bundle.
+  - Accepts the project `generated/` directory or a path under `generated/flux/`; other generated subtrees are rejected.
   - When the rendered manifest needs Terraform-backed handoff or app-input outputs, it initializes `generated/infra` first and reads the current outputs from state, but it does not run `terraform apply`.
   - Its pre-apply Flux API discovery is resource-type based, so it does not wait on app target namespaces that are expected to be created by the rendered manifests themselves.
   - `--auto-auth-bootstrap/--no-auto-auth-bootstrap` controls runtime auth creation (default enabled).
 - `flux destroy <generated-path>`
   - Apps-only direct delete from the generated Flux bundle.
+  - Accepts the project `generated/` directory or a path under `generated/flux/`; other generated subtrees are rejected.
   - `--auto-auth-bootstrap/--no-auto-auth-bootstrap` controls runtime auth creation (default enabled).
   - If the target cluster is reachable but Flux CRDs are already absent, the CLI prints a skip note instead of surfacing raw `kubectl` resource-mapping errors.
   - Requires explicit confirmation or `--yes`.
 - `flux bootstrap <generated-path>`
   - GitOps bootstrap/reconcile path from the generated Flux bundle.
+  - Accepts the project `generated/` directory or a path under `generated/flux/`; other generated subtrees are rejected.
   - `--auto-auth-bootstrap/--no-auto-auth-bootstrap` controls runtime auth creation (default disabled).
 
 ## Supporting Commands
@@ -1151,30 +1186,47 @@ Modules that expose collection/object inputs, such as `mysterybox.secrets`, `ssh
   - Interactive mode prompts for `tenant_id` / `project_id` first and only warns when that resolved target already exists; choosing a different new project under the same deployments root does not trigger an overwrite warning.
   - Unless `--tenant-id` / `--project-id` were passed explicitly, interactive mode starts those identity prompts blank instead of prefilling values from an existing project under the deployments root.
   - Runs internal warning-only post-create validation on the resulting `config.yaml` by default.
-  - Runs a best-effort live Nebius quota assessment for bundled infra components and warns when the selected shape already exceeds current quota, but it does not block render or further config edits. Confirmed shortages now print the exact `quota-request <config.yaml>` follow-up command.
-  - In the bundled MK8s flow, `gpu_nodes_preset` is chosen first from live SDK shape metadata, and `infiniband_fabric` is only offered afterward when that exact preset supports GPU clustering. Single-GPU presets are labeled as Ethernet-only testing/dev shapes rather than production distributed-training shapes. When tenant/project/region context is available, those GPU preset/fabric prompts also query the live Nebius Capacity Dashboard `resource-advice` surface, use those live rows as the source of truth for offered fabric names, annotate current on-demand/reserved availability, and highlight the recommended default while still allowing the optional fabric field to stay unset. Fabric-scoped capacity rows for single-GPU shapes are used only for ranking availability, not for exposing a fabric selector. Invalid stale fabric values still fail fast during validation instead of surviving until Terraform apply, and cluster-capable shapes with no live fabric rows fall back to manual entry instead of a baked-in static list.
-  - If an operator leaves `deploy.validations.mk8s_gpu.nccl.enabled=true` on a non-cluster/Ethernet-only MK8s GPU shape, cxcli warns that the benchmark will run in Socket/TCPIP mode instead of InfiniBand / GPUDirect-RDMA. For 1-GPU presets the warning is explicit that the result is degraded and not representative of a production distributed-training environment, but the NCCL run still happens so operators can compare the measured bandwidth with RDMA-capable shapes.
+  - Runs a best-effort live Nebius quota assessment for bundled infra components and warns when the selected shape already exceeds current quota, but it does not block render or further config edits, does not reserve capacity, and is not a wizard-selectable deploy gate. Confirmed requestable quota shortages print the exact `quota-request <config.yaml>` follow-up command, while capacity-only GPU shortages point to choosing another available shape or region.
+  - In the bundled MK8s flow, `gpu_nodes_preset` is chosen first from live SDK shape metadata, and `infiniband_fabric` is only offered afterward when that exact preset supports GPU clustering. Single-GPU presets are labeled as Ethernet-only testing/dev shapes rather than production distributed-training shapes. When tenant/project/region context is available, those GPU preset/fabric prompts also query the live Nebius Capacity Dashboard `resource-advice` surface, use those live rows as the source of truth for offered fabric names, annotate current on-demand/reserved availability for the exact selected platform/region/preset, and highlight the recommended default while still allowing the optional fabric field to stay unset. When any matching fabric has reserved VM slots, that reserved-capacity fabric is recommended ahead of on-demand-only fabrics because the reservation is bound to the fabric. Fabric-scoped capacity rows for single-GPU shapes are used only for ranking availability, not for exposing a fabric selector. Invalid stale fabric values still fail fast during validation instead of surviving until Terraform apply, and cluster-capable shapes with no live fabric rows fall back to manual entry instead of a baked-in static list.
+  - If an operator leaves `deploy.targets[].validations.mk8s_gpu.nccl.enabled=true` on a non-cluster/Ethernet-only MK8s GPU shape, cxcli warns that the benchmark will run in Socket/TCPIP mode instead of InfiniBand / GPUDirect-RDMA. For 1-GPU presets the warning is explicit that the result is degraded and not representative of a production distributed-training environment, but the NCCL run still happens so operators can compare the measured bandwidth with RDMA-capable shapes.
   - Keeps non-blocking coverage-gap detail for `quota-check` and the persisted generated manifest instead of repeating it during normal `create` terminal output.
 - `quota-check <config.yaml>`
   - Read-only live quota assessment for the enabled infra components in the current project config.
+  - Reruns against current Nebius state every time instead of relying on the create-time warning result.
+  - For existing rendered/deployed MK8s bundles, discounts capacity already managed in Terraform state when the sibling generated bundle is available, so day-2 scale edits are evaluated as net-new capacity.
   - Uses the same SDK-backed logic and component estimators as the render/deploy guard rails.
   - Prints a concise per-component confirmed summary for the quota dimensions that were successfully checked, including the exact checked quota names listed one per line. Components with coverage gaps still appear there with a partial-coverage note, while confirmed shortages and unresolved live limits stay out of that list.
   - Optional `--all-regions` replays the current config's quota requirements across all discovered tenant/project regions and prints per-region availability for the same shape. This remains quota-only, does not change pass/fail semantics, and does not revalidate platform/preset compatibility in those other regions.
+- `quota-request <config.yaml>`
+  - Plans requests only for confirmed live quota shortages in the current project config.
+  - Exits as a no-op when the current live assessment has no confirmed insufficiency.
+  - For manual day-2 MK8s scale edits, plans request targets from the net-new shortfall when generated Terraform state can be read.
+  - Does not request pure GPU Capacity Dashboard capacity shortages that have no constraining tenant/project quota target.
+  - Keeps live `QuotaAllowance` reads separate from `QuotaRequest` submission, so unresolved live limits and estimator coverage gaps remain report-only instead of becoming blind quota requests.
+  - Uses the internal Nebius request path only when that path is available and permitted; otherwise it prints exact manual web-console follow-up targets with minimum total limits and increases.
 - `bootstrap-ci <config.yaml>`
   - Generates or reconciles the customer workflow. The generated workflow watches and deploys only canonical `<tenant-folder>/<project-folder>/generated/**` paths.
+  - When the deployments root is the repository root, the generated workflow uses `NEBIUS_DISCOVER_TARGET: .` and `*/*/generated/**` rather than a `./` path-filter segment.
 - `discover <deployment-scope-dir>`
   - Returns deployment-project discovery payload for CI.
+  - Uses local git/filesystem discovery over readable project `config.yaml` files and does not call Nebius APIs.
   - Accepts the deployments root or any narrower directory under it, including one project directory or `generated/`.
   - Scope filtering remains project-aware for both `--all` and changed-only mode, so a scoped `generated/` directory still maps back to that project `config.yaml`.
 - `terraform plan <generated-path>`
   - Infra-only plan from the generated Terraform bundle.
+  - Accepts the project `generated/` directory or a path under `generated/infra/`; other generated subtrees are rejected.
   - `--auto-auth-bootstrap/--no-auto-auth-bootstrap` controls runtime auth creation (default enabled).
 - `terraform unlock <generated-path>`
   - Clears a stale remote Terraform state lock for a generated infra bundle.
+  - Accepts the project `generated/` directory or a path under `generated/infra/`; other generated subtrees are rejected.
   - `--auto-auth-bootstrap/--no-auto-auth-bootstrap` controls runtime auth creation (default enabled).
   - `--force` overrides local safety checks and force-unlocks even when the lock owner is different or local processes are still active.
-- `report <config.yaml>`
-  - Rewrites `generated/inventory/deploy-report.md` from the generated bundle resolved from sibling `generated/`.
+- `flux apply <generated-path>`
+  - Applies rendered app resources from the generated Flux bundle and supports `--target <instance-id>` / `--all-targets` for multi-target MK8s bundles.
+- `flux destroy <generated-path>`
+  - Deletes rendered app resources from the generated Flux bundle, requires confirmation or `--yes`, and supports `--target <instance-id>` / `--all-targets` for multi-target MK8s bundles.
+- `flux bootstrap <generated-path>`
+  - Bootstraps or reconciles GitOps from the generated Flux bundle and supports `--target <instance-id>` / `--all-targets` for multi-target MK8s bundles.
 - `email [config.yaml]`
   - Sends `deploy-report.md` via SMTP and fails if the rendered markdown file is missing.
   - Omits the positional path only when `--setup` is used.
@@ -1187,14 +1239,15 @@ Modules that expose collection/object inputs, such as `mysterybox.secrets`, `ssh
   - Masks tenant/project identifiers in the email subject/body while leaving the local `deploy-report.md` artifact unchanged on disk.
 - `auth`
   - Manages runtime auth profiles and optional GitHub environment secret sync.
+  - Targets either `--project-config <config.yaml>` or `--project-id`; `--client-name` belongs only to the manual `--project-id` path.
 
 ## Idempotency Rules
 
 - `create`: create-if-missing for a new resolved project folder; existing resolved targets for the same `tenant_id`/`project_id` require explicit overwrite confirmation instead of reconcile.
 - `create --force`: deterministic overwrite for the same resolved project folder. It recreates only that folder and does not delete the deployments root or unrelated project folders.
 - `component list`: read-only; safe to repeat.
-- `component add`: additive, not type-idempotent; repeating a component type creates another instance. Existing rows and values remain untouched unless a new instance is explicitly added.
-- `component remove`: idempotent for already-absent components; removal is blocked when it would violate dependency contracts.
+- `component add`: additive, not type-idempotent for infra modules and non-target-bound apps; repeating a reusable type creates another uniquely identified instance. Target-bound app charts are unique per chart id and cluster target, so duplicate `<chart-id>@<target-id>` adds fail instead of inventing a second target-bound row.
+- `component remove`: idempotent for already-absent components; removal is blocked when it would violate dependency or target-binding contracts.
 - `validate-sources`: read-only; safe to repeat.
 - `validate`/`quota-check`/`render`: deterministic and repeatable, aside from expected live provider/quota state changes.
 - `render --force`: same rendered output for the same config, but intentionally bypasses the interactive overwrite confirmation.
@@ -1209,7 +1262,6 @@ Modules that expose collection/object inputs, such as `mysterybox.secrets`, `ssh
 - `flux apply`: sequentially convergent for a fixed generated bundle.
 - `flux destroy`: sequentially convergent for a fixed generated bundle, but intentionally destructive and confirmation-gated.
 - `flux bootstrap`: bootstrap once, reconcile on rerun when the cluster is already GitOps-bootstrapped.
-- `report`: deterministic local rewrite for a fixed generated bundle.
 - `email --setup`: local SMTP-config reconcile; repeating the same answers leaves the same config on disk.
 - `email`: intentionally not idempotent because each successful run sends another message.
 - `bootstrap-ci`: idempotent reconcile; reruns auto-update the CLI-managed customer workflow and re-check GitHub environment secret presence.
@@ -1246,7 +1298,7 @@ Infra render:
   - `variables.tf`: generated variable declarations for module arguments.
   - `main.tf`: module/resource orchestration only.
   - `outputs.tf`: generated root outputs required by higher-level CLI orchestration and declared component-output exports.
-  - `terraform.auto.tfvars.json`: concrete values for generated variables.
+  - `terraform.auto.tfvars.json`: concrete values for generated variables, rendered locally and recreated from `generated/nebius-cxcli-manifest.json` by generated-bundle CLI commands before Terraform runs; config edits reach this file only through a new `render` that refreshes the manifest first.
 - Generic module blocks from enabled infra module entries.
 - `render` with source profile `portable` is the default and rewrites active local developer sources to `source.portable` when a matching portable source exists.
 - `render` with source profile `local` preserves resolved filesystem module paths for workstation testing and is intentionally non-portable.
@@ -1262,7 +1314,7 @@ Infra render:
   - `generated/infra/variables.tf`
   - `generated/infra/main.tf`
   - `generated/infra/outputs.tf`
-  - `generated/infra/terraform.auto.tfvars.json`
+  - `generated/infra/terraform.auto.tfvars.json` (ignored in git and recreated from the generated manifest by cxcli runtime commands)
   - `generated/infra/.terraform.lock.hcl` (generated by backend-disabled `terraform init -backend=false` during CLI `render` when Terraform is available)
 - Remote-state backend is distinct from app/object-storage components:
   - Bucket/key/endpoint settings are derived from `client_info` (`client_name`, `project_id`, `region_id`).
@@ -1278,7 +1330,7 @@ Infra render:
 - The built-in MK8s handoff no longer hardcodes public access. It resolves the endpoint choice from `inputs.mk8s_cluster_public_endpoint`, so the CLI selects the private API endpoint automatically when the cluster is configured private-only.
 - Private-endpoint cluster access is supported, but reachability is still an environment concern. `nebius-cxcli` fails early with a targeted message when `kubectl` cannot reach a private control-plane endpoint; operators must provide that path through their own VPN, routed private network, tunnel, subnet router, or an in-network runner.
 - Before `deploy`, `flux apply`, or `flux bootstrap` starts Flux work against a handed-off MK8s cluster, the CLI now prints a node-status snapshot and then proceeds directly into Flux or validation-specific readiness checks. The blocking waits are attached to the actual resources being reconciled rather than a generic "all nodes Ready" pre-gate. When no app charts are enabled, local `deploy` still prepares the handoff and persists local kubeconfig, but it skips Flux work entirely.
-- Generated manifests can also carry deploy-time MK8s GPU validation specs. When present, local `deploy` still treats Terraform and Flux as the persistent reconciler layers, then runs the requested GPU checks against the handed-off cluster with `kubectl`, keeps machine-readable JSON detail reports under `generated/inventory/`, and refreshes one human-readable `generated/inventory/deploy-report.md` for the current run. That single Markdown artifact combines `Infra`, `Apps`, and `Validations`; for multi-target MK8s bundles it lists every cluster shape in `Infra` and keeps repeated validation headings target-scoped. The config contract stays on `deploy.validations.*`; the summary-file path is a fixed generated artifact rather than another project-level knob.
+- Generated manifests can also carry deploy-time MK8s GPU validation specs. When present, local `deploy` still treats Terraform and Flux as the persistent reconciler layers, then runs the requested GPU checks against the handed-off cluster with `kubectl`, keeps machine-readable JSON detail reports under `generated/inventory/`, and refreshes one human-readable `generated/inventory/deploy-report.md` for the current run. That single Markdown artifact combines `Infra`, `Apps`, and `Validations`; for multi-target MK8s bundles it lists every cluster shape in `Infra` and keeps repeated validation headings target-scoped. The config contract stays on `deploy.targets[].validations.*`; the summary-file path is a fixed generated artifact rather than another project-level knob.
 - Generated manifests are expected to carry `deploy.validations` metadata from `render`. Local `deploy` treats that metadata as part of the canonical generated-bundle contract and fails fast with rerender guidance when the field is missing or malformed instead of trying to recompute validations from the runtime config.
 - That deploy-time MK8s GPU validation chain now keeps one continuous spinner active and updates its message from the emitted validation progress, so the CLI stays visibly alive while it transitions between operator-readiness, GPU-visibility, and NCCL phases.
 - After that built-in MK8s handoff is prepared, the local Flux phase keeps one continuous spinner alive and updates its message across cluster reachability, Flux API discovery, rendered-manifest apply, and the final rendered-resource readiness wait so the command remains visibly active during quiet kubectl/Flux setup work.
@@ -1334,8 +1386,7 @@ Flux render:
 - `generated/inventory/deploy-report.md`
 - `deploy-report.md` is the single human-readable customer report and the body used by the `email` command.
 - The generated Markdown should stay lint-clean, including no trailing duplicate blank lines at EOF.
-- `render`, `deploy`, `terraform apply`, `flux apply`, `flux bootstrap`, and `report` refresh that report artifact for the active project.
-- Those refreshes also delete stale legacy inventory JSON files.
+- `render`, `deploy`, `terraform apply`, `flux apply`, and `flux bootstrap` refresh that report artifact for the active project.
 - Explicit Namespace docs for chart target namespaces.
 - Generic HelmRelease docs from enabled app releases.
 - Deterministic flat output under the rendered Flux tree:
@@ -1358,9 +1409,10 @@ Flux render:
 - Auto-detects the target GitHub repo from the checkout `origin` remote unless `--github-repo` overrides it.
 - Fails before writing the workflow if GitHub reconciliation prerequisites are missing.
 - Derives GitHub environment name as `<client_name>-<project_id>`, ensures that environment exists, then reconciles SMTP settings on every run and optionally Nebius CI auth secrets when `--auth-bootstrap` is enabled.
-- Generated customer workflows validate with `nebius-cxcli validate-generated --portable` before Terraform plan/apply so non-portable local module paths are rejected in PRs and main-branch deploy runs, and the same generated-bundle strict readiness/quota preflight is enforced before those Terraform steps.
+- Generated customer workflows validate with `nebius-cxcli validate-generated --portable` before `nebius-cxcli terraform plan` and `nebius-cxcli terraform apply` so non-portable local module paths are rejected in PRs and main-branch deploy runs, and the same generated-bundle strict readiness/quota preflight is enforced before those Terraform steps.
 - Generated customer workflows also support manual `workflow_dispatch`; manual runs switch discovery to `nebius-cxcli discover --all <scope>` so every tracked project under the configured deployments scope is included even without a fresh git diff.
-- Generated customer workflows rely on the same generated-bundle CLI commands, which recreate ignored `generated/infra/terraform.auto.tfvars.json` from `generated/nebius-cxcli-manifest.json` before Terraform runs.
+- If that configured deployments scope is the repository root, the workflow keeps discovery rooted at `.` and watches `*/*/generated/**` so the canonical two-level tenant/project layout still works without `./` in path filters.
+- Generated customer workflows rely on the same generated-bundle CLI commands, which recreate ignored `generated/infra/terraform.auto.tfvars.json` from `generated/nebius-cxcli-manifest.json` before Terraform runs. Raw Terraform from a fresh checkout is not the supported customer handoff path unless the operator first restores that ignored tfvars file and provides the same backend/auth environment.
 - Generated customer workflows do not install the standalone `nebius` CLI; MK8s kubeconfig generation and token retrieval stay inside `nebius-cxcli` via the Nebius SDK.
 - Generated customer workflows install `kubectl` directly from upstream Kubernetes release binaries instead of `azure/setup-kubectl`, avoiding GitHub Actions Node runtime deprecation coupling.
 - Generated customer workflows also keep the Python runtime version in one env var and write compact single-line discovery JSON to `GITHUB_OUTPUT` for stable matrix handoff.
@@ -1370,6 +1422,10 @@ Flux render:
 `auth`:
 
 - Reads `~/.config/nebius-cxcli/<client_name>-<project-id>/runtime-auth.json`.
+- Uses one runtime target mode at a time: `--project-config <config.yaml>` resolves
+  both `project_id` and `client_name`, while the manual path uses `--project-id`
+  plus `--client-name` when the cache cannot infer a unique client. Omitting both
+  target options is allowed only for global `--validate-profile`.
 - `--create`: creates runtime auth profile if cache is missing; otherwise no rotation.
 - `--recreate`: always rotates keys and refreshes cached material.
 - `--validate-profile`: checks local private key presence and verifies auth public key visibility via Nebius IAM API.

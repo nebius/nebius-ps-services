@@ -126,6 +126,24 @@ def _mk8s_payload(*, infiniband_fabric: str = "") -> dict:
     }
 
 
+def _set_mk8s_gpu_validation_config(
+    payload: dict,
+    config: dict[str, Any],
+    *,
+    instance_id: str = "mk8s",
+) -> None:
+    payload["deploy"] = {
+        "targets": [
+            {
+                "instance_id": instance_id,
+                "validations": {
+                    "mk8s_gpu": config,
+                },
+            }
+        ]
+    }
+
+
 def test_mk8s_gpu_app_selection_defaults_to_gpu_operator_for_nebius_images() -> None:
     selection = resolve_mk8s_gpu_app_selection(
         _mk8s_payload(),
@@ -144,8 +162,9 @@ def test_mk8s_gpu_app_selection_rejects_disabled_dcgm_exporter() -> None:
     payload["apps"]["charts"] = [
         {
             "id": "nvidia-gpu-operator",
-            "instance_id": "nvidia-gpu-operator",
+            "instance_id": "mk8s",
             "enabled": True,
+            "target_ref": "mk8s",
             "values": {
                 "dcgmExporter": {
                     "enabled": False,
@@ -162,7 +181,7 @@ def test_mk8s_gpu_app_selection_rejects_disabled_dcgm_exporter() -> None:
 
     assert selection.selected_app_ids == ("nvidia-gpu-operator",)
     assert selection.issues == (
-        "GPU-enabled MK8s deployment requires "
+        "GPU-enabled MK8s target 'mk8s' deployment requires "
         "'nvidia-gpu-operator.values.dcgmExporter.enabled' to stay true",
     )
 
@@ -248,8 +267,9 @@ def test_materialize_mk8s_gpu_app_values_heals_stale_network_operator_affinity_d
     payload["apps"]["charts"] = [
         {
             "id": "nvidia-network-operator",
-            "instance_id": "nvidia-network-operator",
+            "instance_id": "mk8s",
             "enabled": True,
+            "target_ref": "mk8s",
             "values": {
                 "operator": {
                     "resources": {
@@ -300,8 +320,9 @@ def test_materialize_mk8s_gpu_app_values_heals_stale_network_operator_affinity_d
         },
         {
             "id": "nvidia-gpu-operator",
-            "instance_id": "nvidia-gpu-operator",
+            "instance_id": "mk8s",
             "enabled": True,
+            "target_ref": "mk8s",
             "values": {},
         },
     ]
@@ -335,8 +356,9 @@ def test_materialize_mk8s_gpu_app_values_clears_stale_network_operator_cluster_o
     payload["apps"]["charts"] = [
         {
             "id": "nvidia-network-operator",
-            "instance_id": "nvidia-network-operator",
+            "instance_id": "mk8s",
             "enabled": True,
+            "target_ref": "mk8s",
             "values": {
                 "operator": {
                     "ofedDriver": {"deploy": True},
@@ -399,8 +421,9 @@ def test_materialize_mk8s_gpu_app_values_keeps_optional_driverful_network_operat
     payload["apps"]["charts"] = [
         {
             "id": "nvidia-network-operator",
-            "instance_id": "nvidia-network-operator",
+            "instance_id": "mk8s",
             "enabled": True,
+            "target_ref": "mk8s",
             "values": {},
         }
     ]
@@ -422,8 +445,9 @@ def test_materialize_mk8s_gpu_app_values_operator_managed_stack_disables_nebius_
     payload["apps"]["charts"] = [
         {
             "id": "nvidia-gpu-operator",
-            "instance_id": "nvidia-gpu-operator",
+            "instance_id": "mk8s",
             "enabled": True,
+            "target_ref": "mk8s",
             "values": {
                 "driver": {
                     "enabled": False,
@@ -464,21 +488,21 @@ def test_materialize_mk8s_gpu_app_values_scopes_defaults_by_target_ref() -> None
     payload["apps"]["charts"] = [
         {
             "id": "nvidia-network-operator",
-            "instance_id": "nvidia-network-operator",
+            "instance_id": "mk8s",
             "enabled": True,
             "target_ref": "mk8s",
             "values": {},
         },
         {
             "id": "nvidia-gpu-operator",
-            "instance_id": "nvidia-gpu-operator",
+            "instance_id": "mk8s",
             "enabled": True,
             "target_ref": "mk8s",
             "values": {},
         },
         {
             "id": "nvidia-gpu-operator",
-            "instance_id": "nvidia-gpu-operator-cluster2",
+            "instance_id": "cluster2",
             "enabled": True,
             "target_ref": "cluster2",
             "values": {
@@ -527,14 +551,14 @@ def test_mk8s_gpu_dependency_issues_require_app_rows_per_target() -> None:
     payload["apps"]["charts"] = [
         {
             "id": "nvidia-gpu-operator",
-            "instance_id": "nvidia-gpu-operator",
+            "instance_id": "mk8s",
             "enabled": True,
             "target_ref": "mk8s",
             "values": {},
         },
         {
             "id": "nvidia-network-operator",
-            "instance_id": "nvidia-network-operator",
+            "instance_id": "mk8s",
             "enabled": True,
             "target_ref": "mk8s",
             "values": {},
@@ -567,14 +591,14 @@ def test_ensure_mk8s_gpu_app_rows_seeds_required_apps_per_target() -> None:
     payload["apps"]["charts"] = [
         {
             "id": "nvidia-gpu-operator",
-            "instance_id": "nvidia-gpu-operator",
+            "instance_id": "mk8s",
             "enabled": True,
             "target_ref": "mk8s",
             "values": {},
         },
         {
             "id": "nvidia-network-operator",
-            "instance_id": "nvidia-network-operator",
+            "instance_id": "mk8s",
             "enabled": True,
             "target_ref": "mk8s",
             "values": {},
@@ -585,16 +609,12 @@ def test_ensure_mk8s_gpu_app_rows_seeds_required_apps_per_target() -> None:
 
     assert changed is True
     gpu_operator_rows = sorted(
-        [
-            row
-            for row in payload["apps"]["charts"]
-            if row["id"] == "nvidia-gpu-operator"
-        ],
+        [row for row in payload["apps"]["charts"] if row["id"] == "nvidia-gpu-operator"],
         key=lambda item: item["target_ref"],
     )
     assert [row["target_ref"] for row in gpu_operator_rows] == ["cluster2", "mk8s"]
     cluster2_row = gpu_operator_rows[0]
-    assert cluster2_row["instance_id"] == "nvidia-gpu-operator-cluster2"
+    assert cluster2_row["instance_id"] == "cluster2"
     assert cluster2_row["namespace"] == "nvidia-gpu-operator"
     assert cluster2_row["release-name"] == "gpu-operator"
     assert [
@@ -631,19 +651,18 @@ def test_mk8s_gpu_post_render_patches_are_target_scoped() -> None:
 
 def test_mk8s_gpu_validation_overrides_can_disable_defaults_and_tune_nccl() -> None:
     payload = _mk8s_payload(infiniband_fabric="fabric-1")
-    payload["deploy"] = {
-        "validations": {
-            "mk8s_gpu": {
-                "operator_readiness": {"enabled": False},
-                "gpu_visibility": {"enabled": False, "max_nodes": 2},
-                "nccl": {
-                    "enabled": True,
-                    "max_nodes": 4,
-                    "average_bus_bandwidth_threshold_gbps": 350,
-                },
-            }
-        }
-    }
+    _set_mk8s_gpu_validation_config(
+        payload,
+        {
+            "operator_readiness": {"enabled": False},
+            "gpu_visibility": {"enabled": False, "max_nodes": 2},
+            "nccl": {
+                "enabled": True,
+                "max_nodes": 4,
+                "average_bus_bandwidth_threshold_gbps": 350,
+            },
+        },
+    )
 
     validations = mk8s_gpu_validation_specs(payload)
 
@@ -852,13 +871,12 @@ def test_nccl_live_runtime_overrides_subtract_launcher_headroom_without_cpu_node
 
 def test_mk8s_gpu_health_checker_override_reports_missing_catalog_role() -> None:
     payload = _mk8s_payload()
-    payload["deploy"] = {
-        "validations": {
-            "mk8s_gpu": {
-                "health_checker": {"enabled": True},
-            }
-        }
-    }
+    _set_mk8s_gpu_validation_config(
+        payload,
+        {
+            "health_checker": {"enabled": True},
+        },
+    )
 
     selection = resolve_mk8s_gpu_app_selection(
         payload,
@@ -867,8 +885,8 @@ def test_mk8s_gpu_health_checker_override_reports_missing_catalog_role() -> None
     )
 
     assert selection.issues == (
-        "deploy.validations.mk8s_gpu.health_checker.enabled requires one apps component "
-        "with cli.mk8s_gpu_policy.role: health_checker",
+        "deploy.targets[].validations.mk8s_gpu.health_checker.enabled requires one apps "
+        "component with cli.mk8s_gpu_policy.role: health_checker",
     )
 
 
@@ -1155,6 +1173,15 @@ def test_gpu_visibility_node_report_includes_allocatable_resources_when_provided
     }
 
 
+def test_validation_run_token_is_never_numeric(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("nebius_cxcli.mk8s_gpu.time.time_ns", lambda: 12345678)
+
+    token = mk8s_gpu._validation_run_token()
+
+    assert token == "run-00bc614e"
+    assert not token.isdigit()
+
+
 def test_device_plugin_snapshot_filters_interesting_allocatable_resources() -> None:
     resources = _interesting_allocatable_resources(
         {
@@ -1432,8 +1459,9 @@ def test_mk8s_gpu_dependency_issues_report_disabled_dcgm_exporter() -> None:
     payload["apps"]["charts"] = [
         {
             "id": "nvidia-gpu-operator",
-            "instance_id": "nvidia-gpu-operator",
+            "instance_id": "mk8s",
             "enabled": True,
+            "target_ref": "mk8s",
             "values": {
                 "dcgmExporter": {
                     "enabled": False,
@@ -1445,7 +1473,7 @@ def test_mk8s_gpu_dependency_issues_report_disabled_dcgm_exporter() -> None:
     issues = mk8s_gpu_dependency_issues(payload)
 
     assert issues == [
-        "GPU-enabled MK8s deployment requires "
+        "GPU-enabled MK8s target 'mk8s' deployment requires "
         "'nvidia-gpu-operator.values.dcgmExporter.enabled' to stay true",
     ]
 
@@ -1463,11 +1491,16 @@ def test_normalize_mk8s_gpu_project_validation_settings_prunes_stale_block_witho
             ]
         },
         "deploy": {
-            "validations": {
-                "mk8s_gpu": {
-                    "operator_readiness": {"enabled": True},
+            "targets": [
+                {
+                    "instance_id": "mk8s",
+                    "validations": {
+                        "mk8s_gpu": {
+                            "operator_readiness": {"enabled": True},
+                        }
+                    },
                 }
-            }
+            ]
         },
     }
 

@@ -286,6 +286,13 @@ class ObservabilityEndpointTemplates:
 
 
 @dataclass(frozen=True)
+class ObservabilityGrafanaSettings:
+    chart_component_id: str = ""
+    gateway_chart_component_id: str = ""
+    enabled_by_default: bool = True
+
+
+@dataclass(frozen=True)
 class VmStandaloneCollectorLogsSettings:
     enabled_by_default: bool = True
     systemd_units: tuple[str, ...] = ()
@@ -315,6 +322,7 @@ class InfraObservabilitySettings:
     metrics: ObservabilityMetricsSettings = ObservabilityMetricsSettings()
     traces: ObservabilityTracesSettings = ObservabilityTracesSettings()
     endpoints: ObservabilityEndpointTemplates = ObservabilityEndpointTemplates()
+    grafana: ObservabilityGrafanaSettings = ObservabilityGrafanaSettings()
     standalone_collector: VmStandaloneCollectorSettings = VmStandaloneCollectorSettings()
 
 
@@ -401,6 +409,7 @@ class HelmChartSource:
     namespace: str | None = None
     release_name: str | None = None
     release_timeout: str | None = None
+    release_install_after: tuple[str, ...] = ()
     enable: bool = False
     selectable: bool = True
     description: str | None = None
@@ -1626,6 +1635,29 @@ def _parse_observability_endpoint_templates(
     )
 
 
+def _parse_observability_grafana_settings(
+    raw: Any,
+    *,
+    field_label: str,
+) -> ObservabilityGrafanaSettings:
+    if raw is None:
+        return ObservabilityGrafanaSettings()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {"chart_component_id", "gateway_chart_component_id", "enabled_by_default"}
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    chart_component_id = _as_text(raw.get("chart_component_id"))
+    if not chart_component_id:
+        raise ValueError(f"{field_label}.chart_component_id is required")
+    return ObservabilityGrafanaSettings(
+        chart_component_id=chart_component_id,
+        gateway_chart_component_id=_as_text(raw.get("gateway_chart_component_id")),
+        enabled_by_default=bool(raw.get("enabled_by_default", True)),
+    )
+
+
 def _parse_vm_standalone_collector_logs_settings(
     raw: Any,
     *,
@@ -1726,6 +1758,7 @@ def _parse_infra_observability_settings(
     supported_keys = {
         "primary_agent",
         "endpoints",
+        "grafana",
         "public_ingest",
     }
     unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
@@ -1794,6 +1827,12 @@ def _parse_infra_observability_settings(
     )
     if module_name != "vm" and standalone_collector != VmStandaloneCollectorSettings():
         raise ValueError(f"{field_label}.public_ingest is only supported for the vm component")
+    grafana_settings = _parse_observability_grafana_settings(
+        raw.get("grafana"),
+        field_label=f"{field_label}.grafana",
+    )
+    if module_name != "mk8s" and grafana_settings != ObservabilityGrafanaSettings():
+        raise ValueError(f"{field_label}.grafana is only supported for the mk8s component")
     return InfraObservabilitySettings(
         mode=mode,
         chart_component_id=chart_component_id,
@@ -1813,6 +1852,7 @@ def _parse_infra_observability_settings(
             raw.get("endpoints"),
             field_label=f"{field_label}.endpoints",
         ),
+        grafana=grafana_settings,
         standalone_collector=standalone_collector,
     )
 
@@ -2374,25 +2414,25 @@ def _derived_mk8s_gpu_validation_wizard_fields(
 ) -> dict[str, dict[str, Any]]:
     validations = mk8s_gpu.validations
     return {
-        "deploy.validations.mk8s_gpu.operator_readiness.enabled": {
+        "deploy.targets[].validations.mk8s_gpu.operator_readiness.enabled": {
             "default": validations.operator_readiness.enabled_by_default,
         },
-        "deploy.validations.mk8s_gpu.gpu_visibility.enabled": {
+        "deploy.targets[].validations.mk8s_gpu.gpu_visibility.enabled": {
             "default": validations.gpu_visibility.enabled_by_default,
         },
-        "deploy.validations.mk8s_gpu.gpu_visibility.max_nodes": {
+        "deploy.targets[].validations.mk8s_gpu.gpu_visibility.max_nodes": {
             "default": validations.gpu_visibility.max_nodes,
         },
-        "deploy.validations.mk8s_gpu.nccl.enabled": {
+        "deploy.targets[].validations.mk8s_gpu.nccl.enabled": {
             "default": validations.nccl.enabled_by_default,
         },
-        "deploy.validations.mk8s_gpu.nccl.max_nodes": {
+        "deploy.targets[].validations.mk8s_gpu.nccl.max_nodes": {
             "default": validations.nccl.max_nodes,
         },
-        "deploy.validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps": {
+        "deploy.targets[].validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps": {
             "default": validations.nccl.average_bus_bandwidth_threshold_gbps,
         },
-        "deploy.validations.mk8s_gpu.health_checker.enabled": {
+        "deploy.targets[].validations.mk8s_gpu.health_checker.enabled": {
             "default": validations.health_checker.enabled_by_default,
         },
     }
@@ -2403,35 +2443,35 @@ def _derived_observability_wizard_fields(
 ) -> dict[str, dict[str, Any]]:
     if observability.mode == "kubernetes_agent":
         return {
-            "deploy.observability.enabled": {
+            "deploy.targets[].observability.enabled": {
                 "default": False,
             },
-            "deploy.observability.kubernetes.logs.enabled": {
+            "deploy.targets[].observability.kubernetes.logs.enabled": {
                 "default": observability.logs.enabled_by_default,
             },
-            "deploy.observability.kubernetes.logs.collect_agent_logs": {
+            "deploy.targets[].observability.kubernetes.logs.collect_agent_logs": {
                 "default": observability.logs.collect_agent_logs,
                 "prompt": False,
             },
-            "deploy.observability.kubernetes.logs.excluded_namespaces": {
+            "deploy.targets[].observability.kubernetes.logs.excluded_namespaces": {
                 "default": list(observability.logs.excluded_namespaces),
                 "prompt": False,
             },
-            "deploy.observability.kubernetes.metrics.enabled": {
+            "deploy.targets[].observability.kubernetes.metrics.enabled": {
                 "default": observability.metrics.enabled_by_default,
             },
-            "deploy.observability.kubernetes.metrics.collect_agent_metrics": {
+            "deploy.targets[].observability.kubernetes.metrics.collect_agent_metrics": {
                 "default": observability.metrics.collect_agent_metrics,
                 "prompt": False,
             },
-            "deploy.observability.kubernetes.metrics.collect_k8s_cluster_metrics": {
+            "deploy.targets[].observability.kubernetes.metrics.collect_k8s_cluster_metrics": {
                 "default": observability.metrics.collect_k8s_cluster_metrics,
             },
-            "deploy.observability.kubernetes.metrics.excluded_namespaces": {
+            "deploy.targets[].observability.kubernetes.metrics.excluded_namespaces": {
                 "default": list(observability.metrics.excluded_namespaces),
                 "prompt": False,
             },
-            "deploy.observability.kubernetes.traces.enabled": {
+            "deploy.targets[].observability.kubernetes.traces.enabled": {
                 "default": observability.traces.enabled_by_default,
             },
         }
@@ -2864,7 +2904,7 @@ def _parse_sources_payload(
             release_block = {}
         if not isinstance(release_block, dict):
             raise ValueError(f"components.apps.{component_id} release must be a mapping")
-        supported_release_keys = {"namespace", "name", "timeout"}
+        supported_release_keys = {"namespace", "name", "timeout", "install_after"}
         unknown_release_keys = sorted(
             str(key) for key in release_block if str(key) not in supported_release_keys
         )
@@ -2910,6 +2950,10 @@ def _parse_sources_payload(
                 namespace=namespace,
                 release_name=release_name,
                 release_timeout=release_timeout,
+                release_install_after=_parse_string_list(
+                    release_block.get("install_after"),
+                    field_label=f"components.apps.{component_id}.release.install_after",
+                ),
                 enable=enable,
                 selectable=selectable,
                 description=description,

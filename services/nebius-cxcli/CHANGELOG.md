@@ -6,6 +6,143 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Clarified the quota workflow across `create`, `quota-check`, and
+  `quota-request`: create-time quota/capacity assessment is warning-only and
+  does not reserve capacity, `quota-check` reruns against current live Nebius
+  state, and `quota-request` is a no-op unless the current assessment confirms a
+  requestable shortage. Capacity Dashboard-only GPU shortages now point
+  operators toward another platform/preset/fabric or region instead of a quota
+  request that cannot be derived.
+- Made explicit `quota-check` and `quota-request` better aligned with day-2
+  MK8s config edits by best-effort discounting capacity already managed in the
+  sibling generated Terraform state. Scaling a configured node count from 4 to 6
+  now plans against the net-new shortfall when state is available instead of
+  treating the full desired count as additional quota.
+- Improved the interactive component field wizard. It now prints visible Infra
+  and Apps section separators, echoes each answered field as a persistent
+  terminal `Selected <path> = <value>` line with secret-like paths redacted, and
+  keeps the VM preemptible flow aligned with Nebius Compute requirements by
+  showing preemptible follow-ups only for GPU platforms, materializing
+  `recovery_policy=FAIL` when `preemptible_enabled=true`, and leaving
+  `preemptible_priority` as the conditional follow-up field.
+- Moved target-scoped deploy settings to a single `deploy.targets[]` contract
+  keyed by `instance_id`. MK8s Kubernetes observability now lives under
+  `deploy.targets[].observability.*`, MK8s GPU validation settings remain under
+  `deploy.targets[].validations.mk8s_gpu.*`, and root `deploy.observability.*`
+  is kept for VM observability settings that are not Kubernetes target installs.
+- Aligned the README and design-doc command references with the current CLI help
+  surface: Quick Start now names `create <deployments-root>`, supporting-command
+  maps include `quota-request <config.yaml>`, and the common flag summary lists
+  deploy/Flux multi-target plus deploy validation-skip flags.
+- Clarified the generated Terraform inputs handoff. The README, design doc, and
+  managed deployments `.gitignore` wording now state that
+  `generated/infra/terraform.auto.tfvars.json` is an ignored duplicate recreated
+  from `generated/nebius-cxcli-manifest.json` by `nebius-cxcli` generated-bundle
+  commands before Terraform runs, and that `config.yaml` changes reach Terraform
+  only after `render` refreshes the generated manifest. Fresh checkouts should
+  use the cxcli wrapper commands rather than raw `terraform apply`.
+- Clarified and normalized multi-target component identity: new MK8s rows created
+  by the wizard use `inputs.cluster_name` as the cluster target `instance_id`
+  when the row still has a generated placeholder id, while target-bound app rows
+  keep `target_ref` as the cluster binding and use the target id as their
+  target-scoped installation id, so generated identities read clearly as
+  `nvidia-gpu-operator@cluster2`.
+- Removed the old compatibility path for implicit or chart-named app instances:
+  config validation now requires explicit `instance_id` on every infra/app row,
+  rejects target-bound app rows whose `instance_id` does not match `target_ref`,
+  and rejects root Kubernetes deploy settings instead of pruning or migrating
+  them.
+- Tightened `component add` for target-bound app charts. The command now fails
+  before writing when the same chart is already enabled for that cluster target,
+  and the interactive field wizard tracks newly added app rows by
+  `<chart-id>@<target-id>` so existing apps on the same target are not prompted
+  as if they were newly added.
+- Tightened day-2 component target-binding edits. `component add` now
+  target-binds existing app-only chart rows when the first built-in cluster
+  target is added and the mapping is unambiguous, and `component remove` now
+  fails before writing when removing a cluster target would leave enabled app
+  rows pointing at a missing `target_ref`.
+- Clarified the `component add` / `component remove` selector contract in
+  CLI help, README, and design docs. The positional argument is now described
+  as a component selector, matching the supported `infra:<id>`, `apps:<id>`,
+  `all`, `none`, bare instance id for remove, and
+  `<component-id>@<instance-id>` forms that edit `config.yaml` rows from the
+  active `component_sources.yaml` catalog.
+- Clarified the validation command contract. `validate` is the source
+  `config.yaml` readiness gate, `validate-sources` is the active
+  `component_sources.yaml` catalog/source gate, and `validate-generated` is the
+  rendered-bundle gate; docs now list generated-bundle backend auth before the
+  state-aware live quota/capacity phase, matching the implementation.
+- Removed the standalone `report` command. Deploy reports are generated as part
+  of the lifecycle commands that actually render or apply state (`render`,
+  `deploy`, `terraform apply`, `flux apply`, and `flux bootstrap`), while
+  `email` now only sends the existing `generated/inventory/deploy-report.md`
+  artifact instead of pointing operators at a separate manual rewrite command.
+  The render overwrite detector now recognizes only the current
+  `nebius-cxcli render` starter report scaffold, and report refresh no longer
+  carries cleanup logic for removed inventory sidecar formats.
+- Tightened generated-bundle target validation for the lower-level runtime
+  commands. `terraform *` now accepts only the project `generated/` root or
+  paths under `generated/infra/`, while `flux *` accepts only `generated/` or
+  paths under `generated/flux/`, so infra-only commands cannot silently accept
+  app manifest paths and apps-only commands cannot silently accept Terraform
+  artifact paths.
+- Aligned the `discover` and `bootstrap-ci` CI contract. `discover` is now
+  documented as local git/filesystem discovery that does not require Nebius API
+  credentials, and generated customer workflows now render clean repo-root
+  deployment path filters with `*/*/generated/**` instead of `**/./...`.
+- Tightened the `auth` target contract. `--project-config` now owns resolving
+  both `project_id` and `client_name`, `--project-id` remains the manual target
+  mode, and ambiguous mixes such as `--project-config` with `--project-id` or
+  `--client-name` now fail before touching runtime auth state.
+- Clarified the top-level `destroy` contract across CLI help, confirmations,
+  README, and design docs. `destroy <config.yaml>` is now described as the
+  project-wide destructive teardown path for all rendered resources represented
+  by the sibling generated bundle and generated manifest.
+- Moved deploy-time MK8s GPU validation settings to target-scoped
+  `deploy.targets[].validations.mk8s_gpu.*` rows. Multi-cluster configs can now
+  enable validations on one MK8s target and disable them on another without
+  carrying a project-global validation block.
+- Tightened Kubernetes observability collector validation so an enabled
+  `nebius-observability-agent` app row must be backed by observability enabled
+  on that same `target_ref`, instead of passing because another MK8s target has
+  observability enabled.
+- Confirmed the bundled MK8s observability collector uses the current Nebius
+  Observability Agent for Kubernetes OCI chart,
+  `oci://cr.nebius.cloud/observability/public/nebius-observability-agent-helm`,
+  and aligned the catalog, README, design notes, and Nebius skill reference to
+  that source.
+- Switched the bundled GPU DCGM metric target to the Nebius agent's
+  `config.metrics.additionalTargets` path so GPU metrics ingestion is generated
+  from catalog YAML instead of depending on Prometheus annotations on the GPU
+  Operator service. Customer-defined `additionalTargets` are preserved.
+- Added the bundled MK8s Grafana observability console. When MK8s observability
+  is enabled, cxcli now auto-enables target-scoped `gateway-helm` and `grafana`
+  Helm releases, uses the maintained Grafana community chart with the official
+  `grafana/grafana` image, exposes Grafana through Envoy Gateway/Gateway API,
+  forces Envoy's generated LoadBalancer service to `externalTrafficPolicy:
+  Cluster` for Nebius compatibility,
+  provisions Prometheus/Loki/Tempo datasources from the Nebius public read
+  endpoints, and seeds the Nebius Grafana.com dashboard IDs from
+  `component_sources.yaml`. Local deploy/Flux paths create the runtime-only
+  Kubernetes Secrets for Grafana admin credentials and the Observability read
+  static token, issuing a `viewer` service-account static key only when the
+  token Secret is missing. The deploy report now separates public write
+  endpoints, public read endpoints, live Grafana links, and read endpoint probes.
+- Added CPU-node scheduling defaults for non-GPU bundled Helm charts. Grafana,
+  Envoy Gateway, cert-manager, ExternalDNS, External Secrets, and n8n now use
+  chart-native hard node affinity with `nebius.com/gpu NotIn ["true"]` so these
+  pods avoid Nebius GPU workers when CPU nodes are present; the Grafana-managed
+  EnvoyProxy applies the same affinity to the generated Envoy data-plane pods.
+  README and design docs now also explain that the catalog stores this policy
+  once with YAML anchor `&nebius_cpu_only_node_affinity` and renders ordinary
+  Kubernetes affinity into HelmRelease values.
+- Aligned the bundled Nebius Grafana dashboards with their upstream datasource
+  variable by provisioning the service-metrics datasource as `Nebius Services`
+  while keeping the stable `nebius-service-metrics` UID. The deploy report now
+  probes the service-provider metrics read endpoint with a metric-count query
+  instead of `up`, because Nebius service metrics can be healthy without an
+  `up` series.
 - Fixed multi-target MK8s GPU app materialization and reporting. GPU Operator,
   Network Operator, and their post-render patches are now resolved against the
   chart row's `target_ref`, so one deployment can mix an InfiniBand/RDMA MK8s
@@ -26,6 +163,15 @@ All notable changes to this project are tracked here. This changelog follows
   two-node request that needs 16 GPUs. Generated-bundle quota failures from
   `deploy` and `validate-generated` now also print the exact `quota-request`
   and `quota-check --all-regions` follow-up commands.
+- Fixed GPU preset wizard capacity summaries. `compute_platform_presets` now
+  aggregates live Capacity Dashboard rows per exact selected
+  platform/region/preset instead of keeping only one fabric row, so matching
+  H100 and H200 preset names stay separated and reserved VM availability is not
+  hidden when the best reserved fabric differs from the best on-demand fabric.
+- Fixed MK8s InfiniBand fabric recommendations for reserved GPU capacity. When
+  live Capacity Dashboard rows show reservation slots on a different fabric
+  than the strongest on-demand lane, the wizard now recommends the reserved
+  fabric first and labels it `recommended for reservations`.
 - Closed Nebius SDK instances used by runtime-auth IAM bootstrap and stale-profile
   validation and added a token-exchange readiness wait after new runtime auth
   keys are created. Fresh auth keys can be visible in IAM before the token
@@ -33,13 +179,13 @@ All notable changes to this project are tracked here. This changelog follows
   first-attempt deleted-key refresh traceback instead of letting that SDK stack
   trace appear while Terraform continues.
 - Moved the MK8s observability-agent auto-selection notice in the interactive
-  wizard so it appears immediately after `deploy.observability.*` answers make the
+  wizard so it appears immediately after target observability answers make the
   chart required, instead of after later MK8s infra prompts. The notice now
   also clarifies that the later app field prompt only controls chart-value
   customization: answering `n` keeps the auto-selected
   `nebius-observability-agent` app with defaults. The canonical customer
-  observability contract now lives under `deploy.observability:`; top-level
-  `observability:` is no longer accepted.
+  observability contract now lives under `deploy:`; top-level `observability:`
+  is no longer accepted.
 - Expanded `generated/inventory/deploy-report.md` with Grafana read data-source
   hints for enabled observability signals, including Prometheus, Loki, and Tempo
   data-source types, real Nebius read URLs, server/proxy access mode, and the
@@ -49,7 +195,7 @@ All notable changes to this project are tracked here. This changelog follows
   for deployment-applicable service buckets, and includes auth-required API
   probe URLs for direct reachability checks because opening Grafana datasource
   base URLs directly can return `404`. The Observability design doc now records
-  the implemented workflow from catalog metadata through `deploy.observability.*`
+  the implemented workflow from catalog metadata through deploy observability
   normalization, render/deploy materialization, deploy-time GPU label
   reconciliation, and generated report/Grafana handoff.
 - Renamed the MK8s GPU stack-source enum from `manual` to
@@ -111,8 +257,8 @@ All notable changes to this project are tracked here. This changelog follows
   runtime normalization also prune irrelevant project-scope branches, so
   VM-only configs no longer carry MK8s-only deploy validation defaults.
 - Fixed two project-creation/runtime-auth contract gaps. The bundled `mk8s` wizard now treats
-  `deploy.observability.*` as project-scoped fields, so `create` and interactive `component add` can
-  actually prompt `deploy.observability.enabled` and the main signal toggles at wizard time and then
+  target observability as deploy-scoped fields, so `create` and interactive `component add` can
+  actually prompt the target observability switch and main signal toggles at wizard time and then
   auto-enable the collector app in the same run. Commands that use `--auto-auth-bootstrap` now
   also self-heal a cached runtime-auth profile when its Nebius auth public key has been deleted
   or the cached private-key metadata is broken; when auto bootstrap is disabled, the CLI now
@@ -154,10 +300,10 @@ All notable changes to this project are tracked here. This changelog follows
   `deploy.targets[]`, and `deploy`, `flux apply`, `flux destroy`, and
   `flux bootstrap` accept `--target <instance-id>` / `--all-targets` instead of
   relying on implicit cluster order or a single global kubeconfig context.
-- Added a source-driven observability stack contract. `deploy.observability.*` is now a
-  first-class project setting that stays disabled by default; when enabled for
-  MK8s, cxcli auto-enables the bundled `nebius-observability-agent` Helm chart,
-  materializes the customer-facing logs/metrics/traces toggles into
+- Added a source-driven observability stack contract. Deploy observability is
+  a first-class setting that stays disabled by default; when enabled for an
+  MK8s target, cxcli auto-enables the bundled `nebius-observability-agent` Helm
+  chart, materializes the customer-facing logs/metrics/traces toggles into
   `values.config.*`, and keeps auth on the public-safe Nebius metadata/IAM
   token-file path instead of requiring secrets in repo config. The bundled
   catalog also now carries app-side observability metadata and records the GPU
@@ -168,7 +314,7 @@ All notable changes to this project are tracked here. This changelog follows
   GPU Nodes using the catalog-owned selector, while VM observability stays on
   the Nebius platform monitoring agent that is already present on
   Nebius-managed VMs and MK8s worker nodes. Direct `config.yaml` edits that set
-  `deploy.observability.enabled=true` now seed the required collector app row during
+  target observability enabled now seed the required collector app row during
   config normalization, matching the wizard/create behavior. Generated deploy
   reports now also include signal-aware public read endpoints for Grafana/external
   tools and regional collector write endpoints for metrics, logs, and traces from
@@ -236,12 +382,6 @@ All notable changes to this project are tracked here. This changelog follows
   keeps unchanged reruns of an existing cluster idempotent instead of failing
   like fresh creates, while still failing fast when the rerun would add real
   net-new capacity such as more nodes or a larger GPU shape.
-- Flattened the deploy-report refresh CLI to one canonical command:
-  `nebius-cxcli report <config.yaml>` now directly rewrites
-  `generated/inventory/deploy-report.md`, replacing the confusing one-off
-  `report write` subcommand. Help text, docs, and follow-up guidance now name
-  the exact artifact path so operators can immediately see what the command is
-  for.
 - Added a new early design-doc section, `How Flux Works`, to explain the shared
   Flux controller model, the difference between `HelmRepository` vs
   `HelmRelease` status, what `image-automation-controller` is, how local
@@ -270,7 +410,7 @@ All notable changes to this project are tracked here. This changelog follows
   `nvidia-network-operator` install with Kubernetes validation errors.
 - Fixed generated-bundle MK8s resource-name preflight to treat Nebius
   `Request error NOT_FOUND: ...` responses as the expected "resource absent"
-  case. That keeps `deploy`, `validate-generated`, and `terraform plan/apply`
+  case. That keeps `deploy`, `validate-generated`, `terraform plan`, and `terraform apply`
   from falsely failing after operators delete a stale live MK8s or GPU cluster,
   while still failing fast on real live-name collisions that would make
   Terraform hit `AlreadyExists`.
@@ -353,13 +493,13 @@ All notable changes to this project are tracked here. This changelog follows
   tenant/project, and only then warns before overwriting that resolved folder.
 - Merged the human-readable inventory and deploy-validation markdown outputs
   into one canonical `generated/inventory/deploy-report.md`. It now combines
-  `Infra`, `Apps`, and `Validations`, `report` refreshes that single
-  file, `email` sends that same file, deploy-time validations still keep their
+  `Infra`, `Apps`, and `Validations`, `email` sends that same file,
+  deploy-time validations still keep their
   per-validation JSON detail reports, and stale markdown/report artifacts are
   cleared before each deploy run so skipped or failed runs do not leave
   misleading old summaries behind.
 - Tightened the project-level runtime entrypoints to one canonical target:
-  `deploy`, `destroy`, `report`, and `email` now accept only
+  `deploy`, `destroy`, and `email` now accept only
   `config.yaml`, resolve sibling `generated/` automatically, and reject direct
   `generated/` targets instead of keeping a backward-compatibility dual path.
   The generated manifest and rendered inventory artifacts remain the
@@ -373,7 +513,7 @@ All notable changes to this project are tracked here. This changelog follows
   for overwrite, the client name / region / notification prompts restart from
   the normal create defaults instead of reusing the old config values.
 - Fixed the MK8s GPU validation wizard to hide the
-  `deploy.validations.mk8s_gpu.health_checker.enabled` toggle unless the active
+  `deploy.targets[].validations.mk8s_gpu.health_checker.enabled` toggle unless the active
   catalog actually exposes an apps component with
   `cli.mk8s_gpu_policy.role: health_checker`, so bundled catalogs no longer
   present an impossible health-checker prompt during `create` / `component add`.
@@ -385,7 +525,7 @@ All notable changes to this project are tracked here. This changelog follows
   `nvidia-gpu-operator` prompt from appearing at all.
 - Tightened the MK8s GPU health-checker contract so the bundled NVIDIA path
   treats it strictly as a custom app-policy hook instead of a built-in deploy
-  validation: bundled project defaults now omit `health_checker` unless the
+  validation: bundled target defaults now omit `health_checker` unless the
   active catalog actually supplies a compatible app, and `deploy
   --skip-validation` no longer advertises a nonexistent `health-checker`
   built-in validation kind.
@@ -422,8 +562,8 @@ All notable changes to this project are tracked here. This changelog follows
   repo `.gitignore`, and clarified that the managed customer deployments
   `.gitignore` stays intentionally narrow to generated Terraform runtime files
   and tfvars instead of acting like a generic developer ignore file.
-- Exposed bundled MK8s GPU validation controls as a project-facing deploy
-  contract under `deploy.validations.mk8s_gpu.*`, so these CLI deploy checks
+- Exposed bundled MK8s GPU validation controls as a target-facing deploy
+  contract under `deploy.targets[].validations.mk8s_gpu.*`, so these CLI deploy checks
   no longer masquerade as Terraform inputs. The wizard still surfaces the same
   toggles from catalog defaults, but the resulting values now persist in
   `config.yaml` as deploy settings, and local `deploy` also supports one-run

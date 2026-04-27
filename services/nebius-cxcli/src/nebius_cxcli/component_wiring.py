@@ -90,15 +90,15 @@ def _component_rows(
     payload: Mapping[str, Any],
     *,
     scope: str,
-) -> dict[str, dict[str, Any]]:
+) -> list[dict[str, Any]]:
     if scope == "infra":
         rows = payload.get("infra", {}).get("components", [])
     else:
         rows = payload.get("apps", {}).get("charts", [])
     if not isinstance(rows, list):
-        return {}
+        return []
 
-    resolved: dict[str, dict[str, Any]] = {}
+    resolved: list[dict[str, Any]] = []
     entry_by_id = {
         entry.id: entry for entry in component_entries("infra" if scope == "infra" else "apps")
     }
@@ -122,7 +122,7 @@ def _component_rows(
         instance_id = component_instance_id(resolved_row)
         if not instance_id:
             continue
-        resolved[instance_id] = resolved_row
+        resolved.append(resolved_row)
     return resolved
 
 
@@ -138,8 +138,17 @@ def resolved_component_row(
         return None, None
     rows = _component_rows(payload, scope=entry.scope)
     if instance_id is not None:
-        return entry, rows.get(instance_id)
-    matched_rows = [row for row in rows.values() if component_type_id(row) == component_id]
+        matched_instance = str(instance_id).strip().lower()
+        return entry, next(
+            (
+                row
+                for row in rows
+                if component_type_id(row) == component_id
+                and component_instance_id(row) == matched_instance
+            ),
+            None,
+        )
+    matched_rows = [row for row in rows if component_type_id(row) == component_id]
     if len(matched_rows) > 1:
         raise ValueError(
             f"Component '{component_id}' has multiple enabled instances. "

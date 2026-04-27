@@ -320,6 +320,145 @@ def test_render_skips_empty_flux_repository_file_when_no_apps_are_enabled(
     assert kustomization_doc["resources"] == []
 
 
+def test_render_passes_mk8s_preemptible_node_group_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_catalog_override(_local_catalog_path(), source_profile=SourceProfile.PORTABLE)
+    reset_component_entry_cache()
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
+    mk8s = _infra_component_row(payload, "mk8s")
+    mk8s_inputs = mk8s.setdefault("inputs", {})
+    assert isinstance(mk8s_inputs, dict)
+    mk8s_inputs.update(
+        {
+            "subnet_id": "subnet-abc123",
+            "cpu_nodes_platform": "cpu-d3",
+            "cpu_nodes_preset": "4vcpu-16gb",
+            "cpu_nodes_preemptible": True,
+            "gpu_enabled": True,
+            "gpu_node_groups": 1,
+            "gpu_nodes_count_per_group": 1,
+            "gpu_nodes_platform": "gpu-h100-sxm",
+            "gpu_nodes_preset": "1gpu-16vcpu-200gb",
+            "gpu_nodes_preemptible": True,
+        }
+    )
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    monkeypatch.setattr(
+        "nebius_cxcli.infra_render.module_variables",
+        lambda _source: (
+            ModuleVariable(name="parent_id", required=False, type_hint="string"),
+            ModuleVariable(name="cluster_name", required=False, type_hint="string"),
+            ModuleVariable(name="cpu_nodes_count", required=False, type_hint="number"),
+            ModuleVariable(name="cpu_nodes_platform", required=False, type_hint="string"),
+            ModuleVariable(name="cpu_nodes_preset", required=False, type_hint="string"),
+            ModuleVariable(name="cpu_nodes_preemptible", required=False, type_hint="bool"),
+            ModuleVariable(name="subnet_id", required=False, type_hint="string"),
+            ModuleVariable(name="gpu_enabled", required=False, type_hint="bool"),
+            ModuleVariable(name="gpu_node_groups", required=False, type_hint="number"),
+            ModuleVariable(
+                name="gpu_nodes_count_per_group", required=False, type_hint="number"
+            ),
+            ModuleVariable(name="gpu_nodes_platform", required=False, type_hint="string"),
+            ModuleVariable(name="gpu_nodes_preset", required=False, type_hint="string"),
+            ModuleVariable(name="gpu_nodes_preemptible", required=False, type_hint="bool"),
+            ModuleVariable(name="gpu_stack_source", required=False, type_hint="string"),
+            ModuleVariable(
+                name="mk8s_cluster_public_endpoint",
+                required=False,
+                type_hint="bool",
+            ),
+            ModuleVariable(
+                name="kube_network_service_cidrs",
+                required=False,
+                type_hint="list(string)",
+            ),
+        ),
+    )
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+
+    render_project(config, paths, source_profile=SourceProfile.PORTABLE)
+
+    main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
+    tfvars = yaml.safe_load(
+        (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
+    )
+
+    assert "cpu_nodes_preemptible = var.mk8s_cpu_nodes_preemptible" in main_tf
+    assert "gpu_nodes_preemptible = var.mk8s_gpu_nodes_preemptible" in main_tf
+    assert tfvars["mk8s_cpu_nodes_preemptible"] is True
+    assert tfvars["mk8s_gpu_nodes_preemptible"] is True
+
+
+def test_render_passes_vm_preemptible_contract_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_catalog_override(_local_catalog_path(), source_profile=SourceProfile.PORTABLE)
+    reset_component_entry_cache()
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"vm"}, selected_apps=set())
+    vm = _infra_component_row(payload, "vm")
+    vm_inputs = vm.setdefault("inputs", {})
+    assert isinstance(vm_inputs, dict)
+    vm_inputs.update(
+        {
+            "name": "gpu-preemptible-vm",
+            "subnet_id": "subnet-abc123",
+            "platform": "gpu-h100-sxm",
+            "preset": "1gpu-16vcpu-200gb",
+            "source_image_family": "ubuntu24.04-cuda13.0",
+            "ssh_user_name": "ubuntu",
+            "preemptible_enabled": True,
+            "preemptible_priority": 1,
+            "recovery_policy": "FAIL",
+        }
+    )
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    monkeypatch.setattr(
+        "nebius_cxcli.infra_render.module_variables",
+        lambda _source: (
+            ModuleVariable(name="parent_id", required=False, type_hint="string"),
+            ModuleVariable(name="name", required=False, type_hint="string"),
+            ModuleVariable(name="subnet_id", required=False, type_hint="string"),
+            ModuleVariable(name="platform", required=False, type_hint="string"),
+            ModuleVariable(name="preset", required=False, type_hint="string"),
+            ModuleVariable(name="source_image_family", required=False, type_hint="string"),
+            ModuleVariable(name="ssh_user_name", required=False, type_hint="string"),
+            ModuleVariable(name="preemptible_enabled", required=False, type_hint="bool"),
+            ModuleVariable(name="preemptible_priority", required=False, type_hint="number"),
+            ModuleVariable(name="recovery_policy", required=False, type_hint="string"),
+        ),
+    )
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+
+    render_project(config, paths, source_profile=SourceProfile.PORTABLE)
+
+    main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
+    tfvars = yaml.safe_load(
+        (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
+    )
+
+    assert "preemptible_enabled = var.vm_preemptible_enabled" in main_tf
+    assert "preemptible_priority = var.vm_preemptible_priority" in main_tf
+    assert "recovery_policy = var.vm_recovery_policy" in main_tf
+    assert tfvars["vm_preemptible_enabled"] is True
+    assert tfvars["vm_preemptible_priority"] == 1
+    assert tfvars["vm_recovery_policy"] == "FAIL"
+
+
 def test_render_keeps_duplicate_component_instances_distinct(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -393,6 +532,115 @@ def test_render_keeps_duplicate_component_instances_distinct(
     assert 'output "mk8s_2_cluster_id" {' in outputs_tf
 
 
+def test_render_uses_cluster_instance_ids_for_multi_target_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_catalog_override(_local_catalog_path(), source_profile=SourceProfile.PORTABLE)
+    reset_component_entry_cache()
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra=set(), selected_apps=set())
+    payload["infra"]["components"] = [
+        {
+            "id": "mk8s",
+            "instance_id": "cluster1",
+            "enabled": True,
+            "inputs": {
+                "parent_id": "project-456",
+                "cluster_name": "cluster1",
+                "cpu_nodes_platform": "cpu-d3",
+                "cpu_nodes_preset": "4vcpu-16gb",
+                "gpu_enabled": False,
+            },
+        },
+        {
+            "id": "mk8s",
+            "instance_id": "cluster2",
+            "enabled": True,
+            "inputs": {
+                "parent_id": "project-456",
+                "cluster_name": "cluster2",
+                "cpu_nodes_platform": "cpu-d3",
+                "cpu_nodes_preset": "4vcpu-16gb",
+                "gpu_enabled": False,
+            },
+        },
+    ]
+    payload["apps"]["charts"] = [
+        {
+            "id": "demo-app",
+            "instance_id": "cluster1",
+            "group": "workloads",
+            "enabled": True,
+            "repo": "https://example.invalid/charts",
+            "version": "1.0.0",
+            "target_ref": "cluster1",
+            "namespace": "demo",
+            "release-name": "demo",
+            "values": {},
+        },
+        {
+            "id": "demo-app",
+            "instance_id": "cluster2",
+            "group": "workloads",
+            "enabled": True,
+            "repo": "https://example.invalid/charts",
+            "version": "1.0.0",
+            "target_ref": "cluster2",
+            "namespace": "demo",
+            "release-name": "demo",
+            "values": {},
+        },
+    ]
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    monkeypatch.setattr(
+        "nebius_cxcli.infra_render.module_variables",
+        lambda _source: (
+            ModuleVariable(name="parent_id", required=False, type_hint="string"),
+            ModuleVariable(name="cluster_name", required=False, type_hint="string"),
+            ModuleVariable(name="cpu_nodes_count", required=False, type_hint="number"),
+            ModuleVariable(name="cpu_nodes_platform", required=False, type_hint="string"),
+            ModuleVariable(name="cpu_nodes_preset", required=False, type_hint="string"),
+            ModuleVariable(name="gpu_enabled", required=False, type_hint="bool"),
+            ModuleVariable(name="gpu_stack_source", required=False, type_hint="string"),
+            ModuleVariable(
+                name="mk8s_cluster_public_endpoint",
+                required=False,
+                type_hint="bool",
+            ),
+            ModuleVariable(
+                name="kube_network_service_cidrs",
+                required=False,
+                type_hint="list(string)",
+            ),
+        ),
+    )
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+
+    render_project(config, paths, source_profile=SourceProfile.PORTABLE)
+
+    main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
+    outputs_tf = (paths.infra_dir / "outputs.tf").read_text(encoding="utf-8")
+
+    assert 'module "cluster1" {' in main_tf
+    assert 'module "cluster2" {' in main_tf
+    assert 'module "mk8s" {' not in main_tf
+    assert "var.mk8s_" not in main_tf
+    assert 'output "cluster1_cluster_id" {' in outputs_tf
+    assert 'output "cluster2_cluster_id" {' in outputs_tf
+    assert "module.cluster1.cluster_id" in outputs_tf
+    assert "module.cluster2.cluster_id" in outputs_tf
+
+    assert (_target_flux_dir(paths, "cluster1") / "helmrelease-workloads-demo.yaml").exists()
+    assert (_target_flux_dir(paths, "cluster2") / "helmrelease-workloads-demo.yaml").exists()
+    assert not _target_flux_dir(paths, "mk8s").exists()
+
+
 def test_render_dynamic_chart_shape_writes_flux_manifests(tmp_path: Path) -> None:
     reset_component_entry_cache()
     config_path = _project_config_path(tmp_path)
@@ -403,6 +651,7 @@ def test_render_dynamic_chart_shape_writes_flux_manifests(tmp_path: Path) -> Non
     dynamic_payload["apps"]["charts"] = [
         {
             "id": "runtime-app",
+            "instance_id": "runtime-app",
             "group": "workloads",
             "enabled": True,
             "repo": "https://example.invalid/charts",
@@ -540,6 +789,7 @@ def test_render_dynamic_oci_chart_writes_flux_oci_repository(tmp_path: Path) -> 
     dynamic_payload["apps"]["charts"] = [
         {
             "id": "gateway-helm",
+            "instance_id": "gateway-helm",
             "group": "platform",
             "enabled": True,
             "repo": "oci://docker.io/envoyproxy/gateway-helm",
@@ -606,6 +856,7 @@ def test_render_dynamic_oci_chart_uses_catalog_chart_name_when_id_differs(tmp_pa
     dynamic_payload["apps"]["charts"] = [
         {
             "id": "nvidia-network-operator",
+            "instance_id": "nvidia-network-operator",
             "group": "platform",
             "enabled": True,
             "repo": "oci://cr.eu-north1.nebius.cloud/marketplace/nebius/nvidia-network-operator/chart/network-operator",
@@ -1160,12 +1411,17 @@ def test_render_ignores_declared_mk8s_gpu_validation_helper_inputs(
         "gpu_nodes_preset": "8gpu-128vcpu-1600gb",
     }
     payload["deploy"] = {
-        "validations": {
-            "mk8s_gpu": {
-                "operator_readiness": {"enabled": False},
-                "gpu_visibility": {"enabled": True, "max_nodes": 2},
+        "targets": [
+            {
+                "instance_id": "mk8s",
+                "validations": {
+                    "mk8s_gpu": {
+                        "operator_readiness": {"enabled": False},
+                        "gpu_visibility": {"enabled": True, "max_nodes": 2},
+                    }
+                },
             }
-        },
+        ],
     }
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
@@ -1334,6 +1590,7 @@ def test_render_uses_materialized_shared_defaults_for_app_chart_values(
             "charts": [
                 {
                     "id": "demo-app",
+                    "instance_id": "demo-app",
                     "group": "workloads",
                     "enabled": True,
                     "repo": "https://example.invalid/charts",
@@ -1417,8 +1674,20 @@ def test_render_supports_infra_input_binding_from_component_output(
         },
         "infra": {
             "components": [
-                {"id": "producer", "enabled": True, "source": str(producer_dir), "inputs": {}},
-                {"id": "consumer", "enabled": True, "source": str(consumer_dir), "inputs": {}},
+                {
+                    "id": "producer",
+                    "instance_id": "producer",
+                    "enabled": True,
+                    "source": str(producer_dir),
+                    "inputs": {},
+                },
+                {
+                    "id": "consumer",
+                    "instance_id": "consumer",
+                    "enabled": True,
+                    "source": str(consumer_dir),
+                    "inputs": {},
+                },
             ]
         },
         "apps": {"charts": []},
@@ -1513,6 +1782,7 @@ def test_render_supports_app_input_binding_from_component_output(
             "charts": [
                 {
                     "id": "demo-app",
+                    "instance_id": "mk8s-blue",
                     "group": "workloads",
                     "enabled": True,
                     "target_ref": "mk8s-blue",
@@ -1626,6 +1896,7 @@ def test_render_supports_explicit_instance_qualified_app_input_binding(
             "charts": [
                 {
                     "id": "demo-app",
+                    "instance_id": "demo-app",
                     "group": "workloads",
                     "enabled": True,
                     "repo": "https://example.invalid/charts",
@@ -1723,13 +1994,20 @@ def test_render_uses_component_source_defaults_when_config_omits_values(
         },
         "infra": {
             "components": [
-                {"id": "demo-module", "enabled": True, "source": str(module_dir), "inputs": {}},
+                {
+                    "id": "demo-module",
+                    "instance_id": "demo-module",
+                    "enabled": True,
+                    "source": str(module_dir),
+                    "inputs": {},
+                },
             ]
         },
         "apps": {
             "charts": [
                 {
                     "id": "demo-app",
+                    "instance_id": "demo-app",
                     "group": "workloads",
                     "enabled": True,
                     "repo": "https://example.invalid/charts",

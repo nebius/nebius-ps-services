@@ -39,6 +39,20 @@ class CIIdentityEnsureResult:
     roles_already_present: list[str]
 
 
+@dataclass(frozen=True)
+class StaticKeyIssueResult:
+    """One-time static key material for an IAM service account."""
+
+    project_id: str
+    service_account_name: str
+    service_account_id: str
+    service_account_created: bool
+    roles_created: list[str]
+    roles_already_present: list[str]
+    static_key_id: str
+    token: str
+
+
 def _close_sdk(sdk: object) -> None:
     close = getattr(sdk, "sync_close", None)
     if not callable(close):
@@ -511,6 +525,76 @@ def bootstrap_ci_service_account(
             s3_access_key_id=s3_access_key_id,
             s3_secret_access_key=s3_secret_access_key,
         )
+    finally:
+        _close_sdk(sdk)
+
+
+def issue_observability_static_key(
+    *,
+    project_id: str,
+    service_account_name: str,
+    service_account_description: str,
+    key_name: str,
+    role_ids: list[str],
+    profile: str | None,
+    endpoint: str | None,
+    config_file: Path | None,
+) -> StaticKeyIssueResult:
+    """Ensure a viewer identity and issue a one-time Observability static key."""
+    identity = ensure_ci_service_account_identity(
+        project_id=project_id,
+        service_account_name=service_account_name,
+        service_account_description=service_account_description,
+        role_ids=role_ids,
+        profile=profile,
+        endpoint=endpoint,
+        config_file=config_file,
+    )
+    sdk = _init_sdk(
+        profile=profile,
+        endpoint=endpoint,
+        config_file=config_file,
+        prefer_operator_auth=True,
+    )
+    try:
+        from nebius.api.nebius.common.v1 import ResourceMetadata
+        from nebius.api.nebius.iam.v1 import (
+            IssueStaticKeyRequest,
+            StaticKeyServiceClient,
+            StaticKeySpec,
+        )
+
+        static_keys = StaticKeyServiceClient(sdk)
+        response = static_keys.issue(
+            IssueStaticKeyRequest(
+                metadata=ResourceMetadata(parent_id=project_id, name=key_name),
+                spec=StaticKeySpec(
+                    account=_account_ref(identity.service_account_id),
+                    service=StaticKeySpec.ClientService.OBSERVABILITY,
+                ),
+            )
+        ).wait()
+        operation = getattr(response, "operation", None)
+        static_key_id = getattr(operation, "resource_id", "")
+        token = getattr(response, "token", "")
+        if not static_key_id:
+            raise RuntimeError("Observability static key was issued but key ID was not returned")
+        if not token:
+            raise RuntimeError("Observability static key was issued but token was not returned")
+        return StaticKeyIssueResult(
+            project_id=identity.project_id,
+            service_account_name=identity.service_account_name,
+            service_account_id=identity.service_account_id,
+            service_account_created=identity.service_account_created,
+            roles_created=identity.roles_created,
+            roles_already_present=identity.roles_already_present,
+            static_key_id=static_key_id,
+            token=token,
+        )
+    except Exception as exc:
+        if isinstance(exc, RuntimeError):
+            raise
+        raise RuntimeError(f"Failed to issue Observability static key '{key_name}': {exc}") from exc
     finally:
         _close_sdk(sdk)
 

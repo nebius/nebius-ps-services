@@ -219,14 +219,19 @@ def test_runtime_validation_plugins_reject_invalid_mk8s_gpu_validation_override(
     payload = {
         "__shared_admin_ssh_user_name__": "ubuntu",
         "deploy": {
-            "validations": {
-                "mk8s_gpu": {
-                    "gpu_visibility": {
-                        "enabled": True,
-                        "max_nodes": 0,
-                    }
+            "targets": [
+                {
+                    "instance_id": "mk8s",
+                    "validations": {
+                        "mk8s_gpu": {
+                            "gpu_visibility": {
+                                "enabled": True,
+                                "max_nodes": 0,
+                            }
+                        }
+                    },
                 }
-            }
+            ]
         },
         "infra": {
             "mk8s": {
@@ -240,7 +245,8 @@ def test_runtime_validation_plugins_reject_invalid_mk8s_gpu_validation_override(
     }
 
     with pytest.raises(
-        ValueError, match="deploy\\.validations\\.mk8s_gpu\\.gpu_visibility\\.max_nodes must be > 0"
+        ValueError,
+        match="deploy\\.targets\\[0\\]\\.validations\\.mk8s_gpu\\.gpu_visibility\\.max_nodes must be > 0",
     ):
         run_runtime_validation_plugins(
             payload=payload,

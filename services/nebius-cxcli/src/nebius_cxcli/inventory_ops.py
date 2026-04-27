@@ -14,6 +14,7 @@ from .deploy_validation_report import (
     build_deploy_validation_report,
     validation_section_lines,
 )
+from .grafana_runtime import read_grafana_status
 from .observability import observability_endpoint_summary, observability_status_summary
 from .paths import ProjectPaths
 from .runtime_config import to_plain_data
@@ -152,6 +153,11 @@ def _service_provider_metric_buckets(payload: Mapping[str, Any]) -> tuple[str, .
 
 def _format_backtick_list(values: Sequence[str]) -> str:
     return ", ".join(f"`{value}`" for value in values)
+
+
+def _markdown_link(label: str, url: Any) -> str:
+    value = str(url or "").strip()
+    return f"[{label}]({value})" if value else "`pending`"
 
 
 def _shape_label(*parts: Any) -> str:
@@ -357,19 +363,6 @@ def write_inventory(
     """Write the human-readable deploy report artifact to disk."""
     payload = _build_payload(config, paths)
     paths.inventory_dir.mkdir(parents=True, exist_ok=True)
-    for stale_path in (
-        paths.inventory_dir / "infra.json",
-        paths.inventory_dir / "mk8s.json",
-        paths.inventory_dir / "postgresql.json",
-        paths.inventory_dir / "sfs.json",
-        paths.inventory_dir / "apps.json",
-    ):
-        stale_path.unlink(missing_ok=True)
-    for stale_markdown in (
-        paths.inventory_dir / "inventory.md",
-        paths.inventory_dir / "deploy-validation-report.md",
-    ):
-        stale_markdown.unlink(missing_ok=True)
 
     payload_data = to_plain_data(config)
     client_info = _mapping(payload_data if isinstance(payload_data, dict) else {})
@@ -417,6 +410,7 @@ def write_inventory(
             f"- ExternalDNS: `{payload['apps']['external_dns']}`",
             f"- Observability: `{_coalesce(_lookup(observability_summary, 'enabled'), False)}`",
             f"- K8s o11y agent: `{_coalesce(_lookup(observability_summary, 'kubernetes_agent'), False)}`",
+            f"- Grafana: `{_coalesce(_lookup(observability_summary, 'grafana'), False)}`",
             f"- VM monitoring agent: `{_coalesce(_lookup(observability_summary, 'vm_monitoring_agent'), False)}`",
             f"- VM journald logs (systemd services): `{_coalesce(_lookup(observability_summary, 'vm_journald_logs'), False)}`",
             f"- VM standalone collector: `{_coalesce(_lookup(observability_summary, 'vm_standalone_collector'), False)}`",
@@ -434,17 +428,19 @@ def write_inventory(
         bool(_lookup(observability_summary, "enabled"))
         or bool(_lookup(observability_summary, "vm_monitoring_agent"))
     ):
-        endpoint_lines: list[str] = []
+        read_lines: list[str] = []
+        write_lines: list[str] = []
         service_provider_metric_buckets = _service_provider_metric_buckets(payload)
 
         def _append_endpoint(
             label: str,
             endpoints: dict[str, Any],
             key: str,
+            target: list[str],
         ) -> None:
             value = _lookup(endpoints, key)
             if value:
-                endpoint_lines.append(f"- {label}: `{value}`")
+                target.append(f"- {label}: `{value}`")
 
         def _append_federate_endpoints() -> None:
             value = str(
@@ -453,23 +449,15 @@ def write_inventory(
             if not value:
                 return
             if "<service-provider>" not in value:
-                endpoint_lines.append(f"- Metrics read (federate): `{value}`")
+                read_lines.append(f"- Metrics read (federate): `{value}`")
                 return
             for bucket in service_provider_metric_buckets:
-                endpoint_lines.append(
+                read_lines.append(
                     f"- Metrics read (federate, `{bucket}` bucket): "
                     f"`{value.replace('<service-provider>', bucket)}`"
                 )
 
-        grafana_lines: list[str] = []
         probe_lines: list[str] = []
-
-        def _append_grafana_datasource(label: str, datasource_type: str, key: str) -> None:
-            value = _lookup(observability_read_endpoints, key)
-            if value:
-                grafana_lines.append(
-                    f"- {label}: type `{datasource_type}`, URL `{value}`, access `Server`"
-                )
 
         def _append_probe_url(label: str, key: str, suffix: str) -> None:
             value = str(_lookup(observability_read_endpoints, key) or "").strip().rstrip("/")
@@ -477,38 +465,28 @@ def write_inventory(
                 probe_lines.append(f"- {label}: `{value}{suffix}`")
 
         _append_endpoint(
-            "Metrics datasource base (Nebius service metrics)",
+            "Metrics read (Prometheus, Nebius service metrics)",
             observability_read_endpoints,
             "metrics_service_provider_read",
+            read_lines,
         )
         _append_endpoint(
-            "Metrics datasource base (user-ingested metrics)",
+            "Metrics read (Prometheus, user-ingested metrics)",
             observability_read_endpoints,
             "metrics_user_read",
+            read_lines,
         )
         _append_federate_endpoints()
         _append_endpoint(
-            "Logs datasource base (Loki)", observability_read_endpoints, "logs_loki_read"
+            "Logs read (Loki)", observability_read_endpoints, "logs_loki_read", read_lines
         )
         _append_endpoint(
-            "Traces datasource base (Tempo)", observability_read_endpoints, "traces_tempo_read"
+            "Traces read (Tempo)", observability_read_endpoints, "traces_tempo_read", read_lines
         )
-        _append_grafana_datasource(
-            "Metrics datasource (Nebius service metrics)",
-            "Prometheus",
-            "metrics_service_provider_read",
-        )
-        _append_grafana_datasource(
-            "Metrics datasource (user-ingested metrics)",
-            "Prometheus",
-            "metrics_user_read",
-        )
-        _append_grafana_datasource("Logs datasource", "Loki", "logs_loki_read")
-        _append_grafana_datasource("Traces datasource", "Tempo", "traces_tempo_read")
         _append_probe_url(
             "Metrics API probe (Nebius service metrics)",
             "metrics_service_provider_read",
-            "/api/v1/query?query=up",
+            "/api/v1/query?query=count%28%7B__name__%3D~%22.%2B%22%7D%29",
         )
         _append_probe_url(
             "Metrics API probe (user-ingested metrics)",
@@ -525,58 +503,96 @@ def write_inventory(
             "Metrics write (OTLP HTTP/protobuf)",
             observability_write_endpoints,
             "metrics_otlp_write",
+            write_lines,
         )
         _append_endpoint(
             "Metrics write (Prometheus Remote Write)",
             observability_write_endpoints,
             "metrics_prometheus_remote_write",
+            write_lines,
         )
         _append_endpoint(
             "Metrics write (VM monitoring agent)",
             observability_write_endpoints,
             "metrics_platform_managed_write",
+            write_lines,
         )
         _append_endpoint(
             "Logs write (direct/self-managed)",
             observability_write_endpoints,
             "logs_otlp_write",
+            write_lines,
         )
         _append_endpoint(
             "Logs write (Nebius agent gRPC)",
             observability_write_endpoints,
             "logs_agent_grpc_write",
+            write_lines,
         )
         _append_endpoint(
             "Logs write (VM monitoring agent)",
             observability_write_endpoints,
             "logs_platform_managed_write",
+            write_lines,
         )
         _append_endpoint(
             "Traces write (OTLP gRPC)",
             observability_write_endpoints,
             "traces_otlp_grpc_write",
+            write_lines,
         )
-        if endpoint_lines:
-            endpoint_lines.append(f"- Read auth: `{_lookup(observability_auth, 'read')}`")
-            endpoint_lines.append(f"- Write auth: `{_lookup(observability_auth, 'write')}`")
-            lines.extend(["## Observability Endpoints", "", *endpoint_lines, ""])
-        if grafana_lines:
-            grafana_lines.append(
-                "- HTTP header: `Authorization: Bearer <observability static token or IAM token>`"
-            )
-            grafana_lines.append("- Credential requirement: project observability read access.")
-            grafana_lines.append(
-                "- URL note: use these URLs as Grafana datasource URLs; opening a datasource "
-                "base URL directly can return `404` because Grafana calls Prometheus, Loki, "
-                "and Tempo API subpaths below it."
-            )
-            grafana_lines.append(
+        if write_lines:
+            write_lines.append(f"- Write auth: `{_lookup(observability_auth, 'write')}`")
+            lines.extend(["## Observability Write Endpoints", "", *write_lines, ""])
+        if read_lines:
+            read_lines.append(f"- Read auth: `{_lookup(observability_auth, 'read')}`")
+            read_lines.append(
                 "- Bucket note: `service-provider` is a literal path segment for Nebius "
                 "service metrics. Only the federation template placeholder "
                 "`<service-provider>` should be replaced. This deployment shows "
                 f"{_format_backtick_list(service_provider_metric_buckets)} bucket URLs."
             )
-            lines.extend(["## Grafana Read Data Sources", "", *grafana_lines, ""])
+            lines.extend(["## Observability Read Endpoints", "", *read_lines, ""])
+        grafana_statuses = read_grafana_status(paths)
+        grafana_lines: list[str] = []
+        for status in grafana_statuses:
+            target_label = str(_lookup(status, "target_ref") or "current-cluster").strip()
+            namespace = str(_lookup(status, "namespace") or "observability").strip()
+            admin_secret = str(_lookup(status, "admin_secret_name") or "").strip()
+            password_key = str(_lookup(status, "admin_password_key") or "admin-password").strip()
+            password_command = (
+                f"printf '%s\\n' \"$(kubectl -n {namespace} get secret {admin_secret} "
+                f"-o jsonpath='{{.data.{password_key}}}' | base64 -d)\""
+            )
+            grafana_lines.extend(
+                [
+                    f"- Target `{target_label}` Grafana: {_markdown_link('Open Grafana', _lookup(status, 'base_url'))}",
+                    f"- Target `{target_label}` metrics: {_markdown_link('Open metrics Explore', _lookup(status, 'metrics_url'))}",
+                    f"- Target `{target_label}` logs: {_markdown_link('Open logs Explore', _lookup(status, 'logs_url'))}",
+                    f"- Target `{target_label}` traces: {_markdown_link('Open traces Explore', _lookup(status, 'traces_url'))}",
+                    f"- Target `{target_label}` dashboards: {_markdown_link('Open dashboards', _lookup(status, 'dashboards_url'))}",
+                    f"- Target `{target_label}` credentials: user `admin`; password command:",
+                    "```bash",
+                    password_command,
+                    "```",
+                ]
+            )
+        if bool(_lookup(observability_summary, "grafana")) and not grafana_lines:
+            grafana_lines.append(
+                "- Grafana is configured for this project. The live Gateway/LoadBalancer URL is "
+                "written after `deploy` or `flux apply` can read the Gateway status."
+            )
+        if grafana_lines:
+            grafana_lines.append(
+                "- Datasources are provisioned in Grafana with server/proxy access and a deploy-time "
+                "Kubernetes Secret containing an Observability static token."
+            )
+            grafana_lines.append(
+                "- Nebius dashboards expect the Prometheus service-metrics datasource name "
+                "`Nebius Services`; cxcli provisions that display name with stable UID "
+                "`nebius-service-metrics`."
+            )
+            lines.extend(["## Grafana", "", *grafana_lines, ""])
         if probe_lines:
             lines.extend(
                 [
