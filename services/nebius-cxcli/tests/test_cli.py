@@ -397,6 +397,55 @@ def test_create_preflights_source_validation_tools_before_identity_prompts(
     assert "Tenant ID" not in result.output
 
 
+def test_create_preflights_git_for_github_tree_chart_sources_before_identity_prompts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                apps={
+                    "n8n": {
+                        "source": _portable_chart_source(
+                            repo="https://github.com/example/charts/tree/main/charts/n8n",
+                            chart="n8n",
+                        ),
+                        "ui": {"enabled": True},
+                    }
+                }
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        cli_module.shutil,
+        "which",
+        lambda name: None if name == "git" else f"/usr/bin/{name}",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "--component-sources-file",
+            str(sources_file),
+            "--source-profile",
+            "portable",
+            "create",
+            str(deployments_root),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "git is required for component source validation" in result.output
+    assert "Git tree" in result.output
+    assert "Helm app charts: n8n" in result.output
+    assert "Tenant ID" not in result.output
+
+
 def test_create_reprompts_invalid_interactive_client_name(tmp_path: Path) -> None:
     deployments_root = tmp_path / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)
@@ -425,9 +474,8 @@ def test_create_reprompts_invalid_interactive_client_name(tmp_path: Path) -> Non
 def test_wizard_field_prompt_describes_q_as_previous_field() -> None:
     rendered = cli_module._wizard_field_prompt_suffix("infra.components[0].inputs.name")
 
-    assert "enter q to revisit the previous answered field" in rendered
-    assert "qq stops wizard" in rendered
-    assert "go back" not in rendered
+    assert "enter q to go back" in rendered
+    assert "qq quits wizard" in rendered
 
 
 def _apps_enabled_map(payload: dict) -> dict[str, bool]:
@@ -711,7 +759,7 @@ def test_create_interactive_existing_project_requires_confirmation(
     assert "Project ID [project-456]" not in result.output
     assert "Existing project detected." in result.output
     assert "Continue and overwrite the existing project folder from scratch?" in result.output
-    assert "(y/n, q=stop wizard) [n]" in result.output
+    assert "(y/n, q/qq=stop wizard) [n]" in result.output
     assert "Existing deployments root detected." not in result.output
     assert "Continue and enter project identity?" not in result.output
     assert "Client name [client-a]" not in result.output
@@ -1210,7 +1258,7 @@ def test_create_interactive_force_existing_project_still_requires_confirmation(
     assert result.exit_code == 0, result.output
     assert "Existing project detected." in result.output
     assert "Continue and overwrite the existing project folder from scratch?" in result.output
-    assert "(y/n, q=stop wizard) [n]" in result.output
+    assert "(y/n, q/qq=stop wizard) [n]" in result.output
     assert "Existing deployments root detected." not in result.output
     assert "No changes applied." in result.output
     assert config_path.read_text(encoding="utf-8") == original

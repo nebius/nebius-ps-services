@@ -110,11 +110,23 @@ def _run_helm_show(subcommand: str, ref: str, *, repo: str = "", version: str = 
 
 
 def _run_git_clone(git_url: str, ref: str) -> Path:
+    git_binary = shutil.which("git")
+    if not git_binary:
+        raise RuntimeError("git is required for Git tree Helm chart sources but was not found in PATH")
     tmp_root = Path(tempfile.mkdtemp(prefix="nebius-cxcli-helm-git-"))
     timeout_seconds = _helm_timeout_seconds(default=DEFAULT_GIT_CLONE_TIMEOUT_SECONDS)
     try:
         result = subprocess.run(
-            ["git", "clone", "--depth", "1", "--branch", ref, git_url, str(tmp_root / "repo")],
+            [
+                git_binary,
+                "clone",
+                "--depth",
+                "1",
+                "--branch",
+                ref,
+                git_url,
+                str(tmp_root / "repo"),
+            ],
             capture_output=True,
             text=True,
             timeout=timeout_seconds,

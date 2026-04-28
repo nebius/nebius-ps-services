@@ -184,7 +184,8 @@ def test_run_component_field_wizard_announces_observability_app_at_enable_prompt
 ) -> None:
     events: list[str] = []
 
-    def _capture_continue_phase(label: str, *, default: bool = True) -> bool:
+    def _capture_continue_phase(label: str, *, default: bool = True, allow_back: bool = False) -> bool:
+        _ = allow_back
         events.append(f"phase:{label}")
         return label == "Configure 'mk8s' component fields now?"
 
@@ -252,7 +253,8 @@ def test_run_component_field_wizard_removes_backtracked_observability_app(
     monkeypatch.setattr("nebius_cxcli.cli.helm_chart_default_values", lambda **_kwargs: {})
     monkeypatch.setattr(
         "nebius_cxcli.cli._wizard_continue_phase",
-        lambda label, default=True: label == "Configure 'mk8s' component fields now?",
+        lambda label, default=True, allow_back=False: label
+        == "Configure 'mk8s' component fields now?",
     )
     monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _answer_prompt)
     monkeypatch.setattr(cli_module.console, "print", lambda *_args, **_kwargs: None)
@@ -287,7 +289,7 @@ def test_run_component_field_wizard_keeps_chart_defaults_virtual_on_stop(monkeyp
     )
     monkeypatch.setattr(
         "nebius_cxcli.cli._wizard_continue_phase",
-        lambda _label, default=True: True,
+        lambda _label, default=True, allow_back=False: True,
     )
     monkeypatch.setattr(
         "nebius_cxcli.cli._prompt_scalar_override",
@@ -350,7 +352,8 @@ def test_run_component_field_wizard_keeps_chart_defaults_virtual_on_stop(monkeyp
 def test_run_component_field_wizard_uses_scope_specific_phase_defaults(monkeypatch) -> None:
     prompts: list[tuple[str, bool]] = []
 
-    def _capture_continue_phase(label: str, *, default: bool = True) -> bool:
+    def _capture_continue_phase(label: str, *, default: bool = True, allow_back: bool = False) -> bool:
+        _ = allow_back
         prompts.append((label, default))
         return False
 

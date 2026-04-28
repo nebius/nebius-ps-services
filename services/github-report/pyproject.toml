@@ -1,7 +1,7 @@
 [project]
 name = "github-report"
 dynamic = ["version"]
-description = "CLI to rank GitHub contributors across repositories owned by organizations or personal accounts."
+description = "CLI to rank GitHub contributors and count repository source lines for organizations or personal accounts."
 readme = "README.md"
 authors = [{ name = "Nebius" }]
 requires-python = ">=3.11,<3.14"

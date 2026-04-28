@@ -2302,7 +2302,8 @@ def test_wizard_auto_enabled_mk8s_gpu_apps_are_prompted_in_same_pass(monkeypatch
 
     phase_prompts: list[tuple[str, bool]] = []
 
-    def _capture_continue_phase(label: str, *, default: bool = True) -> bool:
+    def _capture_continue_phase(label: str, *, default: bool = True, allow_back: bool = False) -> bool:
+        _ = allow_back
         phase_prompts.append((label, default))
         return True
 
@@ -2448,7 +2449,8 @@ def test_wizard_skipping_one_auto_enabled_app_still_prompts_the_next_app(
     phase_prompts: list[tuple[str, bool]] = []
     phase_answers = iter((True, False, True))
 
-    def _capture_continue_phase(label: str, *, default: bool = True):
+    def _capture_continue_phase(label: str, *, default: bool = True, allow_back: bool = False):
+        _ = allow_back
         phase_prompts.append((label, default))
         return next(phase_answers)
 

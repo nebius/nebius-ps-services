@@ -4,6 +4,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 import nebius_cxcli.cli as cli
 from nebius_cxcli.components import ComponentEntry
@@ -151,7 +152,7 @@ def test_prompt_scalar_override_parses_yaml_mapping(monkeypatch) -> None:
     assert value == {"app": {"name": "app-runtime", "payload_keys": ["API_KEY"]}}
 
 
-def test_prompt_component_with_checkboxes_tty_cancel_raises_abort(monkeypatch) -> None:
+def test_prompt_component_with_checkboxes_tty_cancel_quits_wizard(monkeypatch) -> None:
     monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
 
     class _FakePrompt:
@@ -172,12 +173,166 @@ def test_prompt_component_with_checkboxes_tty_cancel_raises_abort(monkeypatch) -
         ),
     )
 
-    with pytest.raises(cli.typer.Abort):
+    with pytest.raises(cli._WizardQuitRequested):
         cli._prompt_component_with_checkboxes(
             scope="infra",
             entries=entries,
             defaults=set(),
         )
+
+
+def test_wizard_continue_phase_q_backs_when_enabled(monkeypatch) -> None:
+    monkeypatch.setattr(cli.typer, "prompt", lambda *_args, **_kwargs: "q")
+
+    decision = cli._wizard_continue_phase("Configure component?", allow_back=True)
+
+    assert decision.back is True
+    assert decision.quit is False
+
+
+def test_wizard_continue_phase_qq_quits(monkeypatch) -> None:
+    monkeypatch.setattr(cli.typer, "prompt", lambda *_args, **_kwargs: "qq")
+
+    decision = cli._wizard_continue_phase("Configure component?", allow_back=True)
+
+    assert decision.quit is True
+    assert cli._wizard_phase_stop_requested(decision) is True
+
+
+def test_prompt_component_with_checkboxes_text_q_backs(monkeypatch) -> None:
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: False)
+    monkeypatch.setattr(cli.typer, "prompt", lambda *_args, **_kwargs: "q")
+    entries = (
+        ComponentEntry(
+            id="mk8s",
+            scope="infra",
+            config_path="infra.mk8s",
+            description="mk8s",
+        ),
+    )
+
+    with pytest.raises(cli._WizardBackRequested):
+        cli._prompt_component_with_checkboxes(scope="infra", entries=entries, defaults=set())
+
+
+def test_component_field_wizard_q_at_first_field_returns_to_component_phase(monkeypatch) -> None:
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "eu-north1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "demo",
+                    "instance_id": "demo",
+                    "enabled": True,
+                    "inputs": {"first": "one"},
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+    entry = ComponentEntry(
+        id="demo",
+        scope="infra",
+        config_path="infra.components[].inputs",
+        description="demo",
+        wizard_fields={"inputs.first": {}},
+    )
+    decisions = [
+        cli._WizardPhaseDecision(proceed=True),
+        cli._WizardPhaseDecision(proceed=False),
+    ]
+
+    monkeypatch.setattr(cli, "_wizard_continue_phase", lambda *_args, **_kwargs: decisions.pop(0))
+    monkeypatch.setattr(
+        cli,
+        "_prompt_scalar_override",
+        lambda *_args, **_kwargs: (cli._WIZARD_BACKTRACK, False),
+    )
+    monkeypatch.setattr(cli.typer, "prompt", lambda *_args, **_kwargs: "n")
+
+    updated_yaml, completed = cli._run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra={"demo"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+    )
+
+    updated_payload = yaml.safe_load(updated_yaml)
+    assert completed is True
+    assert updated_payload["infra"]["components"][0]["inputs"]["first"] == "one"
+    assert decisions == []
+
+
+def test_component_field_wizard_q_revisits_previous_field(monkeypatch) -> None:
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "eu-north1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "demo",
+                    "instance_id": "demo",
+                    "enabled": True,
+                    "inputs": {"first": "one", "second": "two"},
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+    entry = ComponentEntry(
+        id="demo",
+        scope="infra",
+        config_path="infra.components[].inputs",
+        description="demo",
+        wizard_fields={"inputs.first": {}, "inputs.second": {}},
+    )
+    answers = {
+        "infra.components[0].inputs.first": ["one-updated", "one-final"],
+        "infra.components[0].inputs.second": [cli._WIZARD_BACKTRACK, "two-final"],
+    }
+
+    def _answer(path_label: str, current, **_kwargs):
+        pending = answers[path_label]
+        answer = pending.pop(0)
+        return answer, False
+
+    monkeypatch.setattr(
+        cli,
+        "_wizard_continue_phase",
+        lambda *_args, **_kwargs: cli._WizardPhaseDecision(proceed=True),
+    )
+    monkeypatch.setattr(cli, "_prompt_scalar_override", _answer)
+
+    updated_yaml, completed = cli._run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra={"demo"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+    )
+
+    updated_payload = yaml.safe_load(updated_yaml)
+    assert completed is True
+    assert updated_payload["infra"]["components"][0]["inputs"]["first"] == "one-final"
+    assert updated_payload["infra"]["components"][0]["inputs"]["second"] == "two-final"
 
 
 def test_prompt_choice_override_defaults_to_first_option_when_required(monkeypatch) -> None:

@@ -12,7 +12,14 @@ from rich.console import Group, RenderableType
 from rich.table import Table
 from rich.text import Text
 
-from github_report.models import RepoContributorRow, ReportBundle, RepositoryRef, UserContributorRow
+from github_report.models import (
+    LocLanguageRow,
+    LocReport,
+    RepoContributorRow,
+    ReportBundle,
+    RepositoryRef,
+    UserContributorRow,
+)
 from github_report.settings import OutputFormat, SortBy, WindowKind
 
 
@@ -140,6 +147,18 @@ def render_repo_list(
     return "\n".join(lines)
 
 
+def render_loc_report(report: LocReport, *, output_format: OutputFormat) -> str:
+    """Render a repository line-count report."""
+
+    if output_format is OutputFormat.csv:
+        return render_loc_report_csv(report)
+    if output_format is OutputFormat.html:
+        return render_loc_report_html(report)
+    if output_format is OutputFormat.text:
+        return render_loc_report_text(report)
+    return render_loc_report_markdown(report)
+
+
 def render_top_users_terminal(report: ReportBundle, *, limit: int) -> RenderableType:
     """Render the aggregated contributor view for interactive terminals."""
 
@@ -223,6 +242,35 @@ def render_repo_list_terminal(
     )
 
 
+def render_loc_report_terminal(report: LocReport) -> RenderableType:
+    """Render line-count totals for interactive terminals."""
+
+    table = Table(box=box.ROUNDED, header_style="bold cyan")
+    table.add_column("Language", overflow="fold")
+    table.add_column("Files", justify="right")
+    table.add_column("Code", justify="right")
+    table.add_column("Comments", justify="right")
+    table.add_column("Blank", justify="right")
+    table.add_column("Total", justify="right")
+
+    for row in report.language_rows:
+        table.add_row(
+            row.language,
+            str(row.file_count),
+            str(row.code_lines),
+            str(row.comment_lines),
+            str(row.blank_lines),
+            str(row.total_lines),
+        )
+
+    total = loc_total_row(report)
+    return Group(
+        Text(loc_report_title(report), style="bold"),
+        _build_loc_summary_table(report, total),
+        table,
+    )
+
+
 def render_top_users_csv(rows: list[UserContributorRow]) -> str:
     """Render aggregated contributor rows as CSV."""
 
@@ -257,6 +305,28 @@ def render_repo_breakdown_csv(rows: list[RepoContributorRow]) -> str:
                 row.num_modifications,
                 row.num_commits,
             ],
+        )
+    return buffer.getvalue()
+
+
+def render_loc_report_csv(report: LocReport) -> str:
+    """Render line-count rows as CSV."""
+
+    buffer = StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(
+        ["language", "files", "code_lines", "comment_lines", "blank_lines", "total_lines"]
+    )
+    for row in [*report.language_rows, loc_total_row(report)]:
+        writer.writerow(
+            [
+                row.language,
+                row.file_count,
+                row.code_lines,
+                row.comment_lines,
+                row.blank_lines,
+                row.total_lines,
+            ]
         )
     return buffer.getvalue()
 
@@ -338,6 +408,32 @@ def render_repo_list_text(
     )
 
 
+def render_loc_report_text(report: LocReport) -> str:
+    """Render a line-count report as plain text."""
+
+    entry_lines: list[str] = []
+    for index, row in enumerate(report.language_rows, start=1):
+        entry_lines.extend(
+            _render_text_entry(
+                rank=index,
+                title=row.language,
+                fields=[
+                    ("Files", f"{row.file_count:,}"),
+                    ("Code lines", f"{row.code_lines:,}"),
+                    ("Comment lines", f"{row.comment_lines:,}"),
+                    ("Blank lines", f"{row.blank_lines:,}"),
+                    ("Total lines", f"{row.total_lines:,}"),
+                ],
+            )
+        )
+    return render_text_document(
+        title=loc_report_title(report),
+        summary_rows=build_loc_summary_rows(report, loc_total_row(report)),
+        body_title="Languages",
+        body_lines=entry_lines,
+    )
+
+
 def render_top_users_markdown(report: ReportBundle, rows: list[UserContributorRow]) -> str:
     """Render aggregated contributor rows as Markdown."""
 
@@ -388,6 +484,35 @@ def render_repo_breakdown_markdown(report: ReportBundle, rows: list[RepoContribu
             f"| {rank} | {escape_markdown_cell(display_user(row.display_name, row.user_name))} | "
             f"{escape_markdown_cell(row.repo_name)} | {row.num_modifications} | "
             f"{row.num_commits} |",
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def render_loc_report_markdown(report: LocReport) -> str:
+    """Render a line-count report as Markdown."""
+
+    total = loc_total_row(report)
+    lines = [
+        f"# {loc_report_title(report)}",
+        "",
+        f"- Generated at: `{format_datetime_for_display(report.metadata.generated_at)}`",
+        f"- Ref: `{report.metadata.ref}`",
+        f"- Scope: `{loc_scope_label(report.metadata.path)}`",
+        f"- Files counted: `{report.metadata.files_counted}`",
+        f"- Files skipped: `{report.metadata.files_skipped}`",
+        f"- Code lines: `{total.code_lines}`",
+        f"- Comment lines: `{total.comment_lines}`",
+        f"- Blank lines: `{total.blank_lines}`",
+        f"- Total lines: `{total.total_lines}`",
+        "",
+        "| language | files | code_lines | comment_lines | blank_lines | total_lines |",
+        "| --- | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for row in report.language_rows:
+        lines.append(
+            f"| {escape_markdown_cell(row.language)} | {row.file_count} | {row.code_lines} | "
+            f"{row.comment_lines} | {row.blank_lines} | {row.total_lines} |"
         )
     lines.append("")
     return "\n".join(lines)
@@ -476,6 +601,34 @@ def render_repo_list_html(
     )
 
 
+def render_loc_report_html(report: LocReport) -> str:
+    """Render a line-count report as HTML."""
+
+    return render_html_document(
+        title=loc_report_title(report),
+        summary_rows=build_loc_summary_rows(report, loc_total_row(report)),
+        headers=[
+            ("language", "text"),
+            ("files", "num"),
+            ("code_lines", "num"),
+            ("comment_lines", "num"),
+            ("blank_lines", "num"),
+            ("total_lines", "num"),
+        ],
+        rows=[
+            [
+                row.language,
+                str(row.file_count),
+                str(row.code_lines),
+                str(row.comment_lines),
+                str(row.blank_lines),
+                str(row.total_lines),
+            ]
+            for row in report.language_rows
+        ],
+    )
+
+
 def repo_visibility(repository: RepositoryRef) -> str:
     """Render repository visibility in a stable, user-facing form."""
 
@@ -503,6 +656,48 @@ def build_summary_rows(report: ReportBundle) -> list[tuple[str, str]]:
         ("Bots included", "yes" if metadata.include_bots else "no"),
         ("Ranking metric", describe_ranking(metadata.sort_by)),
     ]
+
+
+def loc_total_row(report: LocReport) -> LocLanguageRow:
+    """Return report totals as a synthetic language row."""
+
+    return LocLanguageRow(
+        language="Total",
+        file_count=sum(row.file_count for row in report.language_rows),
+        code_lines=sum(row.code_lines for row in report.language_rows),
+        comment_lines=sum(row.comment_lines for row in report.language_rows),
+        blank_lines=sum(row.blank_lines for row in report.language_rows),
+        total_lines=sum(row.total_lines for row in report.language_rows),
+    )
+
+
+def build_loc_summary_rows(report: LocReport, total: LocLanguageRow) -> list[tuple[str, str]]:
+    """Build summary rows shared by line-count renderers."""
+
+    return [
+        ("Generated at", format_datetime_for_display(report.metadata.generated_at)),
+        ("Repository", f"{report.metadata.owner}/{report.metadata.repo}"),
+        ("Ref", report.metadata.ref),
+        ("Scope", loc_scope_label(report.metadata.path)),
+        ("Files counted", f"{report.metadata.files_counted:,}"),
+        ("Files skipped", f"{report.metadata.files_skipped:,}"),
+        ("Code lines", f"{total.code_lines:,}"),
+        ("Comment lines", f"{total.comment_lines:,}"),
+        ("Blank lines", f"{total.blank_lines:,}"),
+        ("Total lines", f"{total.total_lines:,}"),
+    ]
+
+
+def loc_report_title(report: LocReport) -> str:
+    """Return the title for a line-count report."""
+
+    return f"Lines of Code for {report.metadata.owner}/{report.metadata.repo}"
+
+
+def loc_scope_label(path: str) -> str:
+    """Return a stable display label for the selected repository scope."""
+
+    return path or "repository root"
 
 
 def render_text_document(
@@ -645,5 +840,16 @@ def _build_report_summary_table(report: ReportBundle) -> Table:
     table.add_column(style="bold")
     table.add_column()
     for label, value in build_summary_rows(report):
+        table.add_row(label, value)
+    return table
+
+
+def _build_loc_summary_table(report: LocReport, total: LocLanguageRow) -> Table:
+    """Build a compact line-count metadata table for terminal rendering."""
+
+    table = Table.grid(padding=(0, 1))
+    table.add_column(style="bold")
+    table.add_column()
+    for label, value in build_loc_summary_rows(report, total):
         table.add_row(label, value)
     return table

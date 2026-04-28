@@ -77,3 +77,50 @@ class ReportBundle:
     metadata: ReportMetadata
     top_users: list[UserContributorRow]
     repo_rows: list[RepoContributorRow]
+
+
+@dataclass(slots=True, frozen=True)
+class LocTarget:
+    """Resolved repository and optional path scope for a line-count report."""
+
+    owner: str
+    repo: str
+    path: str = ""
+
+    @property
+    def full_name(self) -> str:
+        return f"{self.owner}/{self.repo}"
+
+
+@dataclass(slots=True)
+class LocLanguageRow:
+    """Line-count totals for one detected source language."""
+
+    language: str
+    file_count: int = 0
+    code_lines: int = 0
+    comment_lines: int = 0
+    blank_lines: int = 0
+    total_lines: int = 0
+
+
+@dataclass(slots=True)
+class LocReportMetadata:
+    """Metadata for a line-count report."""
+
+    owner: str
+    repo: str
+    ref: str
+    path: str
+    generated_at: datetime
+    files_counted: int
+    files_skipped: int
+    branch_scope: str
+
+
+@dataclass(slots=True)
+class LocReport:
+    """Physical line-count report grouped by language."""
+
+    metadata: LocReportMetadata
+    language_rows: list[LocLanguageRow]

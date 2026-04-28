@@ -12,7 +12,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 DEFAULT_TOP = 10
 DEFAULT_LOOKBACK_DAYS = 30
 DEFAULT_TIMEOUT_SECONDS = 30.0
+DEFAULT_ARCHIVE_TIMEOUT_SECONDS = 120.0
 DEFAULT_CONCURRENCY = 4
+DEFAULT_LOC_REF = "main"
 
 
 class OutputFormat(StrEnum):
@@ -93,6 +95,42 @@ class ListReposOptions(BaseModel):
         return normalized
 
 
+class LocOptions(BaseModel):
+    """Validated settings for repository line-count reports."""
+
+    model_config = ConfigDict(frozen=True)
+
+    target: str = Field(min_length=1)
+    owner: str | None = None
+    ref: str = Field(default=DEFAULT_LOC_REF, min_length=1)
+    format: OutputFormat = OutputFormat.markdown
+    output: Path | None = None
+    timeout_seconds: float = Field(default=DEFAULT_ARCHIVE_TIMEOUT_SECONDS, gt=0.0, le=300.0)
+
+    @field_validator("target")
+    @classmethod
+    def normalize_target(cls, value: str) -> str:
+        return normalize_repo_path_target(value)
+
+    @field_validator("owner")
+    @classmethod
+    def normalize_optional_owner(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        return normalized
+
+    @field_validator("ref")
+    @classmethod
+    def normalize_ref(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Git ref must not be empty.")
+        return normalized
+
+
 def utc_now() -> datetime:
     """Return the current UTC time with second precision."""
 
@@ -159,6 +197,20 @@ def normalize_repo_name(owner: str, repo_name: str) -> str:
     if not name:
         raise ValueError(f"Repository {candidate!r} is invalid.")
     return candidate
+
+
+def normalize_repo_path_target(value: str) -> str:
+    """Normalize a repository or repository/path target."""
+
+    candidate = value.strip().strip("/")
+    while candidate.startswith("./"):
+        candidate = candidate[2:]
+    parts = [part for part in candidate.split("/") if part]
+    if not parts:
+        raise ValueError("Repository target must not be empty.")
+    if any(part in {".", ".."} for part in parts):
+        raise ValueError("Repository target must not contain '.' or '..' path segments.")
+    return "/".join(parts)
 
 
 def parse_repo_csv(raw_value: str | None) -> list[str]:
@@ -271,6 +323,27 @@ def build_list_repos_options(
         include_private=include_private,
         format=format,
         output=output,
+    )
+
+
+def build_loc_options(
+    *,
+    target: str,
+    owner: str | None = None,
+    ref: str = DEFAULT_LOC_REF,
+    format: OutputFormat = OutputFormat.markdown,
+    output: Path | None = None,
+    timeout_seconds: float = DEFAULT_ARCHIVE_TIMEOUT_SECONDS,
+) -> LocOptions:
+    """Build a validated line-count settings object from raw CLI input."""
+
+    return LocOptions(
+        target=target,
+        owner=owner,
+        ref=ref,
+        format=format,
+        output=output,
+        timeout_seconds=timeout_seconds,
     )
 
 

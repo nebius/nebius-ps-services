@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import httpx
 from github import Auth, Github
@@ -57,6 +57,10 @@ class GitHubClientError(RuntimeError):
     """Raised when GitHub API calls fail."""
 
 
+class GitHubRepositoryNotFoundError(GitHubClientError):
+    """Raised when a requested GitHub repository does not exist or is not visible."""
+
+
 @dataclass(slots=True, frozen=True)
 class AuthorIdentity:
     """Stable contributor identity plus human-friendly display label."""
@@ -97,6 +101,112 @@ class GitHubMetadataClient:
             ) from exc
 
         return sorted(repositories, key=lambda repo: repo.full_name)
+
+
+class GitHubArchiveClient:
+    """REST client for repository metadata lookup and archive downloads."""
+
+    def __init__(self, token: str, *, timeout_seconds: float) -> None:
+        self._client = httpx.Client(
+            base_url="https://api.github.com",
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {token}",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            timeout=httpx.Timeout(timeout_seconds),
+        )
+
+    def get_repository(self, owner_name: str, repo_name: str) -> RepositoryRef:
+        """Return repository metadata for an owner-qualified repository."""
+
+        encoded_owner = quote(owner_name, safe="")
+        encoded_repo = quote(repo_name, safe="")
+        response = self._client.get(f"/repos/{encoded_owner}/{encoded_repo}")
+        if response.status_code == 404:
+            raise GitHubRepositoryNotFoundError(
+                f"Repository {owner_name}/{repo_name} was not found or is not visible."
+            )
+        _raise_for_status(response, f"GitHub repository lookup failed for {owner_name}/{repo_name}")
+        return _repository_ref_from_payload(response.json())
+
+    def find_repository_by_name(self, repo_name: str) -> RepositoryRef:
+        """Resolve a bare repository name to one exact visible GitHub repository."""
+
+        response = self._client.get(
+            "/search/repositories",
+            params={"q": f"{repo_name} in:name", "per_page": "100"},
+        )
+        _raise_for_status(
+            response,
+            f"GitHub repository search failed for repository name {repo_name!r}",
+        )
+        payload = response.json()
+        matches = [
+            item
+            for item in payload.get("items", [])
+            if str(item.get("name", "")).casefold() == repo_name.casefold()
+        ]
+        unique_matches = {
+            str(item["full_name"]): _repository_ref_from_payload(item)
+            for item in matches
+            if item.get("full_name")
+        }
+        if not unique_matches:
+            raise GitHubRepositoryNotFoundError(
+                f"Repository {repo_name!r} was not found by exact name search. "
+                "Provide --owner or an owner-qualified target."
+            )
+        if len(unique_matches) > 1:
+            choices = ", ".join(sorted(unique_matches))
+            raise GitHubClientError(
+                f"Repository name {repo_name!r} is ambiguous: {choices}. "
+                "Provide --owner or an owner-qualified target."
+            )
+        return next(iter(unique_matches.values()))
+
+    def download_repository_zipball(
+        self,
+        repository: RepositoryRef,
+        *,
+        ref: str,
+    ) -> bytes:
+        """Download a repository zip archive for a branch, tag, or SHA ref."""
+
+        owner_name, repo_name = repository.full_name.split("/", 1)
+        encoded_owner = quote(owner_name, safe="")
+        encoded_repo = quote(repo_name, safe="")
+        encoded_ref = quote(ref, safe="")
+        response = self._client.get(
+            f"/repos/{encoded_owner}/{encoded_repo}/zipball/{encoded_ref}",
+            follow_redirects=False,
+        )
+        if response.status_code in {301, 302, 303, 307, 308}:
+            redirect_url = response.headers.get("location")
+            if not redirect_url:
+                raise GitHubClientError(
+                    f"GitHub archive download for {repository.full_name}@{ref} "
+                    "did not include a redirect URL."
+                )
+            _validate_archive_redirect_url(redirect_url)
+            response = self._client.get(redirect_url)
+
+        if response.status_code == 404:
+            raise GitHubRepositoryNotFoundError(
+                f"Archive for {repository.full_name}@{ref} was not found. "
+                "Check that the repository is visible and the ref exists."
+            )
+        _raise_for_status(
+            response,
+            f"GitHub archive download failed for {repository.full_name}@{ref}",
+        )
+        return response.content
+
+    def close(self) -> None:
+        """Close the underlying HTTP connection pool."""
+
+        self._client.close()
+
 
 class GitHubGraphQLClient:
     """Async GraphQL client for batched default-branch commit history scans."""
@@ -315,13 +425,47 @@ class GitHubGraphQLClient:
                     break
                 await asyncio.sleep(2 ** (attempt - 1))
 
-        raise GitHubClientError(f"GitHub account lookup failed for login {login!r}.") from last_error
+        raise GitHubClientError(
+            f"GitHub account lookup failed for login {login!r}."
+        ) from last_error
 
 
 def _format_git_timestamp(value: datetime | None) -> str | None:
     if value is None:
         return None
     return value.isoformat().replace("+00:00", "Z")
+
+
+def _repository_ref_from_payload(payload: dict) -> RepositoryRef:
+    full_name = str(payload.get("full_name") or "")
+    if "/" not in full_name:
+        raise GitHubClientError("GitHub repository response did not include a full_name.")
+    return RepositoryRef(
+        name=str(payload.get("name") or full_name.split("/", 1)[1]),
+        full_name=full_name,
+        default_branch=(
+            str(payload["default_branch"]) if payload.get("default_branch") is not None else None
+        ),
+        is_archived=bool(payload.get("archived", False)),
+        is_private=bool(payload.get("private", False)),
+    )
+
+
+def _raise_for_status(response: httpx.Response, message: str) -> None:
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise GitHubClientError(
+            f"{message}: HTTP {response.status_code} {response.reason_phrase}."
+        ) from exc
+
+
+def _validate_archive_redirect_url(redirect_url: str) -> None:
+    hostname = urlparse(redirect_url).hostname
+    if hostname not in {"api.github.com", "codeload.github.com"}:
+        raise GitHubClientError(
+            f"GitHub archive download redirected to unexpected host {hostname!r}."
+        )
 
 
 def _is_retryable(exc: Exception) -> bool:
