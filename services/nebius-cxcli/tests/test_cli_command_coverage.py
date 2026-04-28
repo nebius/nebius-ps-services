@@ -1964,6 +1964,11 @@ def test_deploy_command_passes_auto_auth_flag(
     assert result.exit_code == 0, result.output
     output = _plain_output(result.output)
     assert "Local deploy completed from" in output
+    unwrapped_output = output.replace("\n", "")
+    assert (
+        f"Complete deploy report: {fake_paths.inventory_dir / 'deploy-report.md'}"
+        in unwrapped_output
+    )
     assert captured == {
         "config": "cfg",
         "paths": fake_paths,
@@ -2055,7 +2060,14 @@ def test_deploy_command_accepts_config_yaml_target(
 
     assert result.exit_code == 0, result.output
     assert captured["target"] == fake_paths.config_path
-    assert "Local deploy completed from" in _plain_output(result.output)
+    output = _plain_output(result.output)
+    unwrapped_output = output.replace("\n", "")
+    assert f"Local deploy completed from {fake_paths.generated_dir}" in unwrapped_output
+    assert (
+        unwrapped_output.endswith(
+            f"Complete deploy report: {fake_paths.inventory_dir / 'deploy-report.md'}"
+        )
+    )
 
 
 def test_deploy_command_rejects_generated_target_with_guidance(

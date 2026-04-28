@@ -1174,7 +1174,7 @@ The command boundary is intentional:
 
 ### `deploy <config.yaml>`
 
-- Deploys an existing generated bundle as a reconcile/apply path: terraform apply, deploy-report refresh, then local Flux apply.
+- Deploys an existing generated bundle as a reconcile/apply path: terraform apply, deploy-report refresh, then local Flux apply. On success, the terminal footer includes the complete report path at `generated/inventory/deploy-report.md`.
 - Requires `config.yaml` explicitly and resolves the sibling `generated/` directory, while still deploying from the generated manifest so source-file edits after render do not silently alter the applied bundle.
 - The source chain is explicit: changes to `config.yaml` affect deployment only after `render` updates `generated/nebius-cxcli-manifest.json`; `deploy` then recreates `generated/infra/terraform.auto.tfvars.json` from that manifest before Terraform runs.
 - Before Terraform apply, runs a generated-bundle deploy preflight: strict readiness checks against the manifest runtime config, MK8s network preflight, live Nebius quota/capacity validation, Terraform validation for `generated/infra`, and `kubectl kustomize` against each rendered Flux tree when apps are enabled. On bundled MK8s, that Terraform-validation pass now also fails fast on live MK8s cluster / derived GPU-cluster name collisions that are not already tracked in the current Terraform state, while treating Nebius `NOT_FOUND` responses as the expected "resource is absent" case.

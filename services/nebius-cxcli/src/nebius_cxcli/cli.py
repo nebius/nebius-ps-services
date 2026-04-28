@@ -14322,7 +14322,8 @@ def deploy_command(
     When deploy-time validations are configured, deploy keeps the
     machine-readable JSON detail files under `generated/inventory/`, refreshes
     the combined `generated/inventory/deploy-report.md`, and prints the same
-    validation summary in the terminal.
+    validation summary in the terminal. On success, deploy prints the complete
+    deploy report path so operators know where to find the full run summary.
     """
     try:
         config, paths, manifest = _load_deploy_context(config_path)
@@ -14338,6 +14339,9 @@ def deploy_command(
             all_targets=all_targets,
         )
         console.print(f"Local deploy completed from {paths.generated_dir}")
+        console.print(
+            f"Complete deploy report: {paths.inventory_dir / DEPLOY_REPORT_FILENAME}"
+        )
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 
