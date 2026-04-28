@@ -13,3 +13,4 @@ def test_cli_help_smoke() -> None:
 
     assert result.exit_code == 0
     assert "Rank GitHub contributors" in result.stdout
+    assert "count repository lines" in result.stdout

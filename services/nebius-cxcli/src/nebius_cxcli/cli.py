@@ -854,6 +854,8 @@ NEBIUS_CI_SECRET_KEYS = [
 FLUX_SECRET_KEY = "FLUX_GITHUB_TOKEN"
 WIZARD_EXIT_TOKEN = "q"
 WIZARD_ABORT_TOKEN = "qq"
+_WIZARD_BACK_CHOICE = "__wizard_back__"
+_WIZARD_QUIT_CHOICE = "__wizard_quit__"
 PayloadPath = tuple[str | int, ...]
 _TEMP_PRIVATE_KEY_FILES: list[Path] = []
 _RUNTIME_TF_SERVICE_ACCOUNT_NAME = "nebius-cxcli-tf-sa"
@@ -870,6 +872,20 @@ _BENIGN_KUBECTL_OUTPUT_MARKERS = (
 )
 _WIZARD_BACKTRACK = object()
 _WIZARD_DEFAULT_MISSING = object()
+
+
+class _WizardBackRequested(Exception):
+    """Raised when the interactive wizard should move to the previous step."""
+
+
+class _WizardQuitRequested(Exception):
+    """Raised when the interactive wizard should stop immediately."""
+
+
+class _WizardComponentOutcome:
+    CONTINUE = "continue"
+    BACK = "back"
+    QUIT = "quit"
 _DEPLOYMENTS_ROOT_ARGUMENT_HELP = (
     "Deployments root directory. Pass the folder that contains or will contain "
     "<tenant-folder>/<project-folder>/config.yaml; any existing directory works."
@@ -1668,6 +1684,19 @@ def _component_source_tool_preflight_issues(*, explicit: Path | None = None) -> 
             f"{source_path} declares Helm app charts: "
             f"{_format_component_id_sample(helm_chart_ids)}. "
             "Install helm or rerun with --no-validate-sources."
+        )
+    git_tree_chart_ids = sorted(
+        _non_empty_text(chart.name)
+        for chart in sources.helm_charts
+        if _non_empty_text(chart.name)
+        and _is_github_tree_chart_repo(_non_empty_text(chart.repo))
+    )
+    if git_tree_chart_ids and not shutil.which("git"):
+        issues.append(
+            "git is required for component source validation because "
+            f"{source_path} declares Git tree Helm app charts: "
+            f"{_format_component_id_sample(git_tree_chart_ids)}. "
+            "Install git or rerun with --no-validate-sources."
         )
     return tuple(issues)
 
@@ -2737,21 +2766,34 @@ def _prompt_component_with_checkboxes(
             )
         else:
             _configure_questionary_checkbox_symbols()
+            rendered_choices = [
+                questionary.Choice(title="< Back", value=_WIZARD_BACK_CHOICE, checked=False),
+                questionary.Choice(
+                    title="< Quit wizard",
+                    value=_WIZARD_QUIT_CHOICE,
+                    checked=False,
+                ),
+            ]
+            rendered_choices.extend(
+                questionary.Choice(
+                    title=f"{_component_selector_label(entry, scope=scope)}  ({entry.description})",
+                    value=entry.id,
+                    checked=entry.id in default_selectable,
+                )
+                for entry in selectable_entries
+            )
             selected = questionary.checkbox(
                 f"Select {scope} components",
-                choices=[
-                    questionary.Choice(
-                        title=f"{_component_selector_label(entry, scope=scope)}  ({entry.description})",
-                        value=entry.id,
-                        checked=entry.id in default_selectable,
-                    )
-                    for entry in selectable_entries
-                ],
-                instruction="Use arrows and space to toggle; press Enter to confirm.",
+                choices=rendered_choices,
+                instruction="Use arrows and space to toggle; choose Back or Quit when needed.",
                 qmark="",
             ).ask()
             if selected is None:
-                raise typer.Abort()
+                raise _WizardQuitRequested()
+            if _WIZARD_QUIT_CHOICE in selected:
+                raise _WizardQuitRequested()
+            if _WIZARD_BACK_CHOICE in selected:
+                raise _WizardBackRequested()
             return [str(item).strip().lower() for item in selected if str(item).strip()]
 
     console.print(f"\n{scope.upper()} components:")
@@ -2763,9 +2805,13 @@ def _prompt_component_with_checkboxes(
         console.print(f"  {marker} [{index}] {display_id:<28} {entry.description}")
     default_prompt = ",".join(default_selectable)
     raw = typer.prompt(
-        f"Select {scope} components (comma-separated ids or indexes)",
+        f"Select {scope} components (comma-separated ids or indexes, q=back, qq=quit wizard)",
         default=default_prompt,
     ).strip()
+    if raw == WIZARD_ABORT_TOKEN:
+        raise _WizardQuitRequested()
+    if raw == WIZARD_EXIT_TOKEN:
+        raise _WizardBackRequested()
     return _split_multi_value_tokens([raw])
 
 
@@ -2802,34 +2848,57 @@ def _resolve_component_ids(
 class _WizardPhaseDecision:
     proceed: bool
     stop: bool = False
+    back: bool = False
+    quit: bool = False
 
     def __bool__(self) -> bool:
         return self.proceed
 
 
 def _wizard_phase_stop_requested(decision: object) -> bool:
-    return isinstance(decision, _WizardPhaseDecision) and decision.stop
+    return isinstance(decision, _WizardPhaseDecision) and (decision.stop or decision.quit)
 
 
-def _wizard_continue_phase(prompt_label: str, *, default: bool = True) -> _WizardPhaseDecision:
+def _wizard_phase_back_requested(decision: object) -> bool:
+    return isinstance(decision, _WizardPhaseDecision) and decision.back
+
+
+def _wizard_continue_phase(
+    prompt_label: str,
+    *,
+    default: bool = True,
+    allow_back: bool = False,
+) -> _WizardPhaseDecision:
     default_raw = "y" if default else "n"
+    controls = (
+        f"y/n, {WIZARD_EXIT_TOKEN}=back, {WIZARD_ABORT_TOKEN}=quit wizard"
+        if allow_back
+        else f"y/n, {WIZARD_EXIT_TOKEN}/{WIZARD_ABORT_TOKEN}=stop wizard"
+    )
     while True:
         raw = (
             typer.prompt(
-                f"{prompt_label} (y/n, {WIZARD_EXIT_TOKEN}=stop wizard)",
+                f"{prompt_label} ({controls})",
                 default=default_raw,
                 show_default=True,
             )
             .strip()
             .lower()
         )
+        if raw == WIZARD_ABORT_TOKEN:
+            return _WizardPhaseDecision(proceed=False, stop=True, quit=True)
         if raw == WIZARD_EXIT_TOKEN:
-            return _WizardPhaseDecision(proceed=False, stop=True)
+            if allow_back:
+                return _WizardPhaseDecision(proceed=False, back=True)
+            return _WizardPhaseDecision(proceed=False, stop=True, quit=True)
         if raw in {"y", "yes"}:
             return _WizardPhaseDecision(proceed=True)
         if raw in {"n", "no"}:
             return _WizardPhaseDecision(proceed=False)
-        console.print(f"{error_markup('Invalid selection')}. Enter y, n, or {WIZARD_EXIT_TOKEN}.")
+        console.print(
+            f"{error_markup('Invalid selection')}. "
+            f"Enter y, n, {WIZARD_EXIT_TOKEN}, or {WIZARD_ABORT_TOKEN}."
+        )
 
 
 def _resolve_payload_path(payload: dict[str, Any], config_path: str) -> PayloadPath | None:
@@ -4650,8 +4719,8 @@ def _seed_component_prompt_fields(
 
 def _wizard_field_prompt_suffix(rendered_label: str) -> str:
     return (
-        f"{rendered_label} (enter {WIZARD_EXIT_TOKEN} to revisit the previous answered field; "
-        f"{WIZARD_ABORT_TOKEN} stops wizard)"
+        f"{rendered_label} (enter {WIZARD_EXIT_TOKEN} to go back; "
+        f"{WIZARD_ABORT_TOKEN} quits wizard)"
     )
 
 
@@ -4745,23 +4814,14 @@ def _wizard_backtrack_target_index(
     *,
     prompt_paths: list[PayloadPath],
     prompt_history: list[PayloadPath],
-    current_path: PayloadPath,
-) -> int:
+) -> int | None:
     previous_prompt_index = _wizard_previous_prompt_index(
         prompt_paths=prompt_paths,
         prompt_history=prompt_history,
     )
     if previous_prompt_index is not None:
         return previous_prompt_index
-    console.print(
-        warning_markup(
-            "Already at the first wizard field; staying on the current prompt. "
-            f"Use {WIZARD_ABORT_TOKEN} to stop the wizard."
-        )
-    )
-    with suppress(ValueError):
-        return prompt_paths.index(current_path)
-    return 0
+    return None
 
 
 def _payload_path_has_prefix(path: PayloadPath, prefix: PayloadPath) -> bool:
@@ -4827,8 +4887,12 @@ def _prompt_choice_override(
             import questionary
 
             rendered_choices = [
-                questionary.Choice(title=choice.label, value=choice.value) for choice in choices
+                questionary.Choice(title="< Back", value=_WIZARD_BACK_CHOICE),
+                questionary.Choice(title="< Quit wizard", value=_WIZARD_QUIT_CHOICE),
             ]
+            rendered_choices.extend(
+                questionary.Choice(title=choice.label, value=choice.value) for choice in choices
+            )
             if not required and not has_explicit_current:
                 rendered_choices.insert(
                     0,
@@ -4845,6 +4909,10 @@ def _prompt_choice_override(
             ).ask()
             if selected is None:
                 return current, True
+            if selected == _WIZARD_QUIT_CHOICE:
+                return current, True
+            if selected == _WIZARD_BACK_CHOICE:
+                return _WIZARD_BACKTRACK, False
             if selected == "__skip__":
                 return current, False
             if selected != "__manual__":
@@ -5233,16 +5301,19 @@ def _run_component_field_wizard(
             "only controls chart value customization; answering 'n' keeps the selected app defaults."
         )
 
-    def _run_component(entry: ComponentEntry, instance_id: str) -> bool:
+    def _run_component(entry: ComponentEntry, instance_id: str) -> str:
         component_label = _wizard_component_label(entry, instance_id)
         decision = _wizard_continue_phase(
             f"Configure '{component_label}' component fields now?",
             default=entry.scope == "infra",
+            allow_back=True,
         )
+        if _wizard_phase_back_requested(decision):
+            return _WizardComponentOutcome.BACK
         if _wizard_phase_stop_requested(decision):
-            return False
+            return _WizardComponentOutcome.QUIT
         if not decision:
-            return True
+            return _WizardComponentOutcome.CONTINUE
 
         required_leaf_names = _required_leaf_names_for_entry(entry)
         required_leaf_names -= set(shared_default_input_sources(entry))
@@ -5858,13 +5929,14 @@ def _run_component_field_wizard(
                     required=full_path_label in required_prompt_labels,
                 )
                 if should_stop:
-                    return False
+                    return _WizardComponentOutcome.QUIT
                 if _wizard_backtrack_requested(updated):
                     prompt_index = _wizard_backtrack_target_index(
                         prompt_paths=prompt_paths,
                         prompt_history=prompt_history,
-                        current_path=full_path,
                     )
+                    if prompt_index is None:
+                        return _WizardComponentOutcome.BACK
                     continue
                 backtracked = False
                 while allowed_provider_values:
@@ -5891,13 +5963,14 @@ def _run_component_field_wizard(
                         required=full_path_label in required_prompt_labels,
                     )
                     if should_stop:
-                        return False
+                        return _WizardComponentOutcome.QUIT
                     if _wizard_backtrack_requested(updated):
                         prompt_index = _wizard_backtrack_target_index(
                             prompt_paths=prompt_paths,
                             prompt_history=prompt_history,
-                            current_path=full_path,
                         )
+                        if prompt_index is None:
+                            return _WizardComponentOutcome.BACK
                         backtracked = True
                         break
                 if backtracked:
@@ -5981,22 +6054,97 @@ def _run_component_field_wizard(
                     required_prompt_labels=required_prompt_labels,
                 ),
             )
-        return True
+        return _WizardComponentOutcome.CONTINUE
+
+    def _confirm_exit_from_first_step() -> bool:
+        console.print(
+            warning_markup("Already at the first wizard step.")
+            + " There is no earlier component field to revisit."
+        )
+        while True:
+            raw = (
+                typer.prompt(
+                    f"Exit wizard and save the current config? (y/n, {WIZARD_ABORT_TOKEN}=quit wizard)",
+                    default="n",
+                    show_default=True,
+                )
+                .strip()
+                .lower()
+            )
+            if raw == WIZARD_ABORT_TOKEN:
+                return True
+            if raw in {"y", "yes"}:
+                return True
+            if raw in {"n", "no", WIZARD_EXIT_TOKEN}:
+                return False
+            console.print(
+                f"{error_markup('Invalid selection')}. "
+                f"Enter y, n, or {WIZARD_ABORT_TOKEN}."
+            )
 
     infra_components = _selected_components_for_scope("infra")
-    _print_wizard_section_banner(title="Infra", components=infra_components)
-    for entry, instance_id in infra_components:
-        if not _run_component(entry, instance_id):
-            return yaml.safe_dump(payload, sort_keys=False), False
+    app_components = [] if infra_components else _selected_components_for_scope("apps")
+    section: ComponentScope = "infra" if infra_components else "apps"
+    infra_index = 0
+    app_index = 0
+    active_section: ComponentScope | None = None
 
-    _materialize_wizard_auto_enabled_gpu_apps()
-    _materialize_wizard_auto_enabled_observability_apps()
+    while True:
+        if section == "infra":
+            if active_section != "infra":
+                _print_wizard_section_banner(title="Infra", components=infra_components)
+                active_section = "infra"
+            if not infra_components:
+                section = "apps"
+                active_section = None
+                continue
+            entry, instance_id = infra_components[infra_index]
+            outcome = _run_component(entry, instance_id)
+            if outcome == _WizardComponentOutcome.QUIT:
+                return yaml.safe_dump(payload, sort_keys=False), False
+            if outcome == _WizardComponentOutcome.BACK:
+                if infra_index > 0:
+                    infra_index -= 1
+                    continue
+                if _confirm_exit_from_first_step():
+                    return yaml.safe_dump(payload, sort_keys=False), False
+                continue
+            infra_index += 1
+            if infra_index < len(infra_components):
+                continue
 
-    app_components = _selected_components_for_scope("apps")
-    _print_wizard_section_banner(title="Apps", components=app_components)
-    for entry, instance_id in app_components:
-        if not _run_component(entry, instance_id):
+            _materialize_wizard_auto_enabled_gpu_apps()
+            _materialize_wizard_auto_enabled_observability_apps()
+            app_components = _selected_components_for_scope("apps")
+            section = "apps"
+            app_index = 0
+            active_section = None
+            continue
+
+        if active_section != "apps":
+            _print_wizard_section_banner(title="Apps", components=app_components)
+            active_section = "apps"
+        if not app_components:
+            return yaml.safe_dump(payload, sort_keys=False), True
+        entry, instance_id = app_components[app_index]
+        outcome = _run_component(entry, instance_id)
+        if outcome == _WizardComponentOutcome.QUIT:
             return yaml.safe_dump(payload, sort_keys=False), False
+        if outcome == _WizardComponentOutcome.BACK:
+            if app_index > 0:
+                app_index -= 1
+                continue
+            if infra_components:
+                section = "infra"
+                infra_index = len(infra_components) - 1
+                active_section = None
+                continue
+            if _confirm_exit_from_first_step():
+                return yaml.safe_dump(payload, sort_keys=False), False
+            continue
+        app_index += 1
+        if app_index >= len(app_components):
+            return yaml.safe_dump(payload, sort_keys=False), True
 
     return yaml.safe_dump(payload, sort_keys=False), True
 
@@ -12296,22 +12444,87 @@ def create_command(
 
         optional_wizard_mode = interactive_mode
         if interactive_mode:
-            optional_wizard_mode = _wizard_continue_phase(
-                "Continue with optional wizard phases (component selection and fields)?",
-                default=True,
+            selected_infra_raw: set[str] = set()
+            selected_apps_raw: set[str] = set()
+            while True:
+                optional_decision = _wizard_continue_phase(
+                    "Continue with optional wizard phases (component selection and fields)?",
+                    default=True,
+                )
+                if _wizard_phase_stop_requested(optional_decision) or not optional_decision:
+                    optional_wizard_mode = False
+                    selected_infra_raw = _resolve_component_ids(
+                        scope="infra",
+                        raw_values=infra_components_opt,
+                        interactive=False,
+                        entries=infra_entries,
+                    )
+                    selected_apps_raw = _resolve_component_ids(
+                        scope="apps",
+                        raw_values=apps_components_opt,
+                        interactive=False,
+                        entries=app_entries,
+                    )
+                    break
+
+                optional_wizard_mode = True
+                selection_stage: ComponentScope = "infra"
+                try:
+                    while True:
+                        try:
+                            if selection_stage == "infra":
+                                selected_infra_raw = _resolve_component_ids(
+                                    scope="infra",
+                                    raw_values=infra_components_opt,
+                                    interactive=True,
+                                    entries=infra_entries,
+                                    seed_defaults=selected_infra_raw or None,
+                                )
+                                selection_stage = "apps"
+                            selected_apps_raw = _resolve_component_ids(
+                                scope="apps",
+                                raw_values=apps_components_opt,
+                                interactive=True,
+                                entries=app_entries,
+                                seed_defaults=selected_apps_raw or None,
+                            )
+                            break
+                        except _WizardBackRequested:
+                            if selection_stage == "apps":
+                                selection_stage = "infra"
+                                continue
+                            raise
+                except _WizardBackRequested:
+                    continue
+                except _WizardQuitRequested:
+                    optional_wizard_mode = False
+                    selected_infra_raw = _resolve_component_ids(
+                        scope="infra",
+                        raw_values=infra_components_opt,
+                        interactive=False,
+                        entries=infra_entries,
+                    )
+                    selected_apps_raw = _resolve_component_ids(
+                        scope="apps",
+                        raw_values=apps_components_opt,
+                        interactive=False,
+                        entries=app_entries,
+                    )
+                    break
+                break
+        else:
+            selected_infra_raw = _resolve_component_ids(
+                scope="infra",
+                raw_values=infra_components_opt,
+                interactive=False,
+                entries=infra_entries,
             )
-        selected_infra_raw = _resolve_component_ids(
-            scope="infra",
-            raw_values=infra_components_opt,
-            interactive=optional_wizard_mode,
-            entries=infra_entries,
-        )
-        selected_apps_raw = _resolve_component_ids(
-            scope="apps",
-            raw_values=apps_components_opt,
-            interactive=optional_wizard_mode,
-            entries=app_entries,
-        )
+            selected_apps_raw = _resolve_component_ids(
+                scope="apps",
+                raw_values=apps_components_opt,
+                interactive=False,
+                entries=app_entries,
+            )
         app_namespace_overrides = _parse_component_value_overrides(
             raw_values=app_namespace_opt,
             option_name="--app-namespace",
@@ -12763,28 +12976,43 @@ def component_add_command(
 
         raw_tokens = _split_multi_value_tokens(component_ids)
         if not raw_tokens and interactive_mode:
-            requested_infra = _prompt_component_scope_selection(
-                action="add",
-                scope="infra",
-                entries=infra_entries,
-            )
-            requested_apps: set[str] = set()
-            select_apps = not requested_infra
-            if requested_infra:
-                apps_decision = _wizard_continue_phase(
-                    "Select apps components to add too?",
-                    default=False,
-                )
-                if _wizard_phase_stop_requested(apps_decision):
+            while True:
+                try:
+                    requested_infra = _prompt_component_scope_selection(
+                        action="add",
+                        scope="infra",
+                        entries=infra_entries,
+                    )
+                except (_WizardBackRequested, _WizardQuitRequested):
                     console.print("No component changes applied.")
                     return
-                select_apps = bool(apps_decision)
-            if select_apps:
-                requested_apps = _prompt_component_scope_selection(
-                    action="add",
-                    scope="apps",
-                    entries=app_entries,
-                )
+                requested_apps: set[str] = set()
+                select_apps = not requested_infra
+                if requested_infra:
+                    apps_decision = _wizard_continue_phase(
+                        "Select apps components to add too?",
+                        default=False,
+                        allow_back=True,
+                    )
+                    if _wizard_phase_back_requested(apps_decision):
+                        continue
+                    if _wizard_phase_stop_requested(apps_decision):
+                        console.print("No component changes applied.")
+                        return
+                    select_apps = bool(apps_decision)
+                if select_apps:
+                    try:
+                        requested_apps = _prompt_component_scope_selection(
+                            action="add",
+                            scope="apps",
+                            entries=app_entries,
+                        )
+                    except _WizardBackRequested:
+                        continue
+                    except _WizardQuitRequested:
+                        console.print("No component changes applied.")
+                        return
+                break
             add_targets = [
                 *(
                     _ComponentAddTarget(scope="infra", component_id=component_id)

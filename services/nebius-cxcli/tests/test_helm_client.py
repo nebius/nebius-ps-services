@@ -11,6 +11,7 @@ from nebius_cxcli.helm_client import (
     HelmClient,
     _materialize_chart_dir,
     _resolve_show_ref,
+    _run_git_clone,
     _run_helm_show,
     chart_cli_contract_findings,
     render_chart_template_documents,
@@ -112,6 +113,20 @@ def test_resolve_show_ref_github_tree_chart_name_supported(
     assert repo == ""
     assert version == ""
     assert cleanup_dir == checkout_dir.parent
+
+
+def test_run_git_clone_requires_git(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("nebius_cxcli.helm_client.shutil.which", lambda _name: None)
+    monkeypatch.setattr(
+        "nebius_cxcli.helm_client.subprocess.run",
+        lambda *_args, **_kwargs: pytest.fail("git clone should not run when git is missing"),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="git is required for Git tree Helm chart sources but was not found in PATH",
+    ):
+        _run_git_clone("https://github.com/example/charts.git", "main")
 
 
 def test_search_repo_skips_oci_sources(monkeypatch: pytest.MonkeyPatch) -> None:

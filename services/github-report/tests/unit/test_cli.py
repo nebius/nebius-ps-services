@@ -9,6 +9,9 @@ from typer.testing import CliRunner
 
 from github_report.cli import app
 from github_report.models import (
+    LocLanguageRow,
+    LocReport,
+    LocReportMetadata,
     RepoContributorRow,
     ReportBundle,
     ReportMetadata,
@@ -57,6 +60,31 @@ def sample_report() -> ReportBundle:
                 "acme/pysdk",
                 num_commits=5,
                 num_modifications=15,
+            )
+        ],
+    )
+
+
+def sample_loc_report() -> LocReport:
+    return LocReport(
+        metadata=LocReportMetadata(
+            owner="nebius",
+            repo="nebius-ps-services",
+            ref="main",
+            path="services/nebius-cxcli",
+            generated_at=datetime(2026, 3, 13, 12, 0, 0, tzinfo=UTC),
+            files_counted=2,
+            files_skipped=1,
+            branch_scope="main archive",
+        ),
+        language_rows=[
+            LocLanguageRow(
+                language="Python",
+                file_count=2,
+                code_lines=42,
+                comment_lines=3,
+                blank_lines=7,
+                total_lines=52,
             )
         ],
     )
@@ -162,7 +190,10 @@ def test_top_users_command_enters_spinner_context() -> None:
 
     assert result.exit_code == 0
     assert mock_status.call_count == 1
-    assert mock_status.call_args.args[0] == "Collecting GitHub activity for acme (all accessible repos)..."
+    assert (
+        mock_status.call_args.args[0]
+        == "Collecting GitHub activity for acme (all accessible repos)..."
+    )
 
 
 def test_top_users_spinner_mentions_excluded_repositories() -> None:
@@ -381,8 +412,9 @@ def test_list_repos_command_renders_markdown() -> None:
 
 def test_list_repos_all_flag_passes_include_private() -> None:
     runner = CliRunner()
-    with patch("github_report.cli.build_list_repos_options") as mock_build_options, patch(
-        "github_report.cli.service.list_repositories", return_value=[]
+    with (
+        patch("github_report.cli.build_list_repos_options") as mock_build_options,
+        patch("github_report.cli.service.list_repositories", return_value=[]),
     ):
         mock_build_options.return_value = type(
             "Options",
@@ -400,6 +432,64 @@ def test_list_repos_all_flag_passes_include_private() -> None:
     assert mock_build_options.call_args.kwargs["include_private"] is True
 
 
+def test_loc_command_renders_csv_for_bare_repo_path_target() -> None:
+    runner = CliRunner()
+    with patch(
+        "github_report.cli.service.build_loc_report", return_value=sample_loc_report()
+    ) as mock_build:
+        result = runner.invoke(
+            app,
+            [
+                "loc",
+                "nebius-ps-services/services/nebius-cxcli/",
+                "--format",
+                "csv",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert "language,files,code_lines,comment_lines,blank_lines,total_lines" in result.stdout
+    assert "Python,2,42,3,7,52" in result.stdout
+    assert "Total,2,42,3,7,52" in result.stdout
+    options = mock_build.call_args.args[0]
+    assert options.target == "nebius-ps-services/services/nebius-cxcli"
+    assert options.owner is None
+    assert options.ref == "main"
+
+
+def test_root_owner_option_flows_into_loc_command() -> None:
+    runner = CliRunner()
+    with patch(
+        "github_report.cli.service.build_loc_report", return_value=sample_loc_report()
+    ) as mock_build:
+        result = runner.invoke(
+            app,
+            ["--owner", "nebius", "loc", "nebius-ps-services", "--format", "csv"],
+        )
+
+    assert result.exit_code == 0
+    assert mock_build.call_args.args[0].owner == "nebius"
+
+
+def test_loc_output_csv_infers_format_from_extension(tmp_path) -> None:
+    runner = CliRunner()
+    output_path = tmp_path / "loc.csv"
+    with patch("github_report.cli.service.build_loc_report", return_value=sample_loc_report()):
+        result = runner.invoke(
+            app,
+            ["loc", "nebius-ps-services", "--output", str(output_path)],
+        )
+
+    assert result.exit_code == 0
+    assert "Wrote" in result.stderr
+    assert result.stdout == ""
+    assert output_path.read_text(encoding="utf-8").splitlines() == [
+        "language,files,code_lines,comment_lines,blank_lines,total_lines",
+        "Python,2,42,3,7,52",
+        "Total,2,42,3,7,52",
+    ]
+
+
 def test_list_repos_requires_owner() -> None:
     result = CliRunner().invoke(app, ["list-repos"])
 
@@ -413,16 +503,22 @@ def test_root_help_mentions_owner_requirement() -> None:
 
     assert result.exit_code == 0
     assert "--owner" in output
-    assert "Each command requires `--owner`" in output
+    assert "Owner-wide commands require `--owner`" in output
+    assert "Default GitHub owner for commands that accept an" in output
+    assert "Contributor reports and repository listings" in output
+    assert "require an owner" in output
     assert "Examples:" in output
     assert "github-report top-users --owner nebius" in output
-    assert "github-report top-users --owner lm-academy --top 5 --days 60 --output report.txt" in output
+    assert (
+        "github-report top-users --owner lm-academy --top 5 --days 60 --output report.txt" in output
+    )
     assert "Output formats:" in output
     assert "markdown (default): raw Markdown;" in output
     assert "text: plain text; inferred from .txt." in output
     assert "html: Word-friendly HTML; inferred from .html or .htm." in output
     assert "csv: comma-separated values; inferred from .csv." in output
     assert "github-report list-repos --owner nebius --output repos.txt" in output
+    assert "github-report loc nebius-ps-services/services/nebius-cxcli/" in output
     assert "repo-breakdown" not in output
 
 
@@ -470,3 +566,17 @@ def test_list_repos_help_includes_examples() -> None:
     assert "github-report list-repos --owner nebius --format csv --output repos.csv" in output
     assert "github-report list-repos --owner lm-academy --output repos.txt" in output
     assert "github-report list-repos --owner nebius --format html --output repos.html" in output
+
+
+def test_loc_help_includes_repo_path_examples() -> None:
+    result = CliRunner().invoke(app, ["loc", "--help"])
+    output = _normalize_help_output(result.stdout)
+
+    assert result.exit_code == 0
+    assert "Count physical source lines" in output
+    assert "github-report loc nebius-ps-services" in output
+    assert "github-report loc nebius-ps-services/services/nebius-cxcli/" in output
+    assert "github-report loc nebius/nebius-ps-services/services/nebius-cxcli/" in output
+    assert "--ref" in output
+    assert "--owner" in output
+    assert "Bare repo names are resolved by exact GitHub repository-name search" in output

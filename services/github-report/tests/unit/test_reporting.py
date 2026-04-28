@@ -140,9 +140,7 @@ def test_list_repositories_all_includes_private(monkeypatch) -> None:
     monkeypatch.setattr("github_report.services.reporting.resolve_github_token", lambda: "token")
     service = GitHubReportService(metadata_client_cls=_FakeMetadataClient)
 
-    repositories = service.list_repositories(
-        ListReposOptions(owner="nebius", include_private=True)
-    )
+    repositories = service.list_repositories(ListReposOptions(owner="nebius", include_private=True))
 
     assert [repo.full_name for repo in repositories] == [
         "nebius/api",

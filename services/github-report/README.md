@@ -1,14 +1,18 @@
 # github-report
 
-`github-report` is a Python CLI that ranks contributors across GitHub
-repositories owned by a GitHub organization or personal account.
+`github-report` is a Python CLI that ranks contributors and counts source
+lines across GitHub repositories owned by a GitHub organization or personal
+account.
 
-It works with any GitHub owner that your token can access. `--owner` is
-required for every report or listing command.
+It works with any GitHub owner that your token can access. Contributor reports
+and repository listings require `--owner`; `loc` can resolve an owner from the
+target or use `--owner` for bare `repo/path` targets.
 
 It is optimized for executive reporting:
 
-- scans only each repository's default branch
+- scans each repository's default branch for contributor reports
+- counts physical source lines from a repository archive or a monorepo folder
+  scope
 - ranks by commits or total code modifications (`additions + deletions`)
 - filters the scope to all accessible repos, a comma-separated repo list, a
   text file, or a comma-separated exclusion list
@@ -38,7 +42,8 @@ Word or Google Docs with table formatting preserved.
 
 ## Defaults
 
-- owner: none, must be provided with `--owner`
+- owner: none; `top-users` and `list-repos` require `--owner`; `loc` uses
+  `--owner` only for bare `repo/path` targets
 - report window: relative days, defaulting to `--days 30`
 - output format: `markdown`
 - ranking: `modifications`
@@ -47,7 +52,8 @@ Word or Google Docs with table formatting preserved.
 - repositories: all accessible repos under the selected owner
 - `list-repos` visibility: public repos only by default; pass `--all` to include
   private repos that are accessible with the current token
-- branch scope: repository default branch only
+- `loc` ref: `main`
+- contributor branch scope: repository default branch only
 
 When you omit `--since` and `--all-time`, the CLI uses a relative-days window.
 If you also omit `--days`, it behaves as if `--days 30` was provided.
@@ -61,7 +67,7 @@ branch instead of the default `--days 30` window.
 
 ## Output Formats
 
-Both `top-users` and `list-repos` support the same output formats:
+`top-users`, `list-repos`, and `loc` support the same output formats:
 
 - `markdown`: default format. Use `--format markdown`, or let `--output` infer
   it from `.md` or `.markdown`.
@@ -269,6 +275,42 @@ This visibility filter applies only to `list-repos`.
 `top-users` still scans all accessible repositories by default unless you limit
 the scope with `--repos`, `--repos-file`, or `--exclude`.
 
+Count source lines for the `main` branch of a repository as one project:
+
+```bash
+github-report loc nebius-ps-services
+```
+
+Count only a folder inside a monorepo as a standalone project:
+
+```bash
+github-report loc nebius-ps-services/services/nebius-cxcli/
+```
+
+`loc` accepts targets as `repo`, `repo/path`, `owner/repo`, or
+`owner/repo/path`. Bare repository names are resolved by exact GitHub
+repository-name search. If more than one visible repository has that exact
+name, pass `--owner` or use an owner-qualified target:
+
+```bash
+github-report loc --owner nebius nebius-ps-services/services/nebius-cxcli/
+
+github-report loc nebius/nebius-ps-services/services/nebius-cxcli/
+```
+
+`loc` counts physical source lines from the repository archive at `--ref main`
+by default. It groups results by detected language and reports counted files,
+skipped files, code lines, comment lines, blank lines, and total lines. CSV
+output also includes a final `Total` row. It skips common dependency, build,
+cache, virtual environment, lock, binary, and documentation files so the total
+reflects source/config/IaC content.
+
+Write the line-count report as CSV:
+
+```bash
+github-report loc nebius-ps-services --format csv --output loc.csv
+```
+
 ## Repo Filter File
 
 `--repos-file` accepts one repo per line. Short names are resolved against the
@@ -296,6 +338,15 @@ nebius/api
 - `repo_name`
 - `num_modifications`
 - `num_commits`
+
+`loc` returns one row per detected source language with:
+
+- `language`
+- `files`
+- `code_lines`
+- `comment_lines`
+- `blank_lines`
+- `total_lines`
 
 ## Development
 

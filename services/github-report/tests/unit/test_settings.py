@@ -9,6 +9,7 @@ from github_report.settings import (
     SortBy,
     WindowKind,
     build_list_repos_options,
+    build_loc_options,
     build_report_options,
 )
 
@@ -110,3 +111,22 @@ def test_build_list_repos_options_defaults_to_public_only() -> None:
     assert options.owner == "acme"
     assert options.include_private is False
     assert options.format is OutputFormat.markdown
+
+
+def test_build_loc_options_normalizes_repo_path_target() -> None:
+    options = build_loc_options(
+        target="./nebius-ps-services/services/nebius-cxcli/",
+        owner=" nebius ",
+        ref=" main ",
+        format=OutputFormat.csv,
+    )
+
+    assert options.target == "nebius-ps-services/services/nebius-cxcli"
+    assert options.owner == "nebius"
+    assert options.ref == "main"
+    assert options.format is OutputFormat.csv
+
+
+def test_build_loc_options_rejects_parent_path_segments() -> None:
+    with pytest.raises(ValueError, match="must not contain"):
+        build_loc_options(target="nebius-ps-services/../private")

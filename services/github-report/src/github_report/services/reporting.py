@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from github_report.models import (
+    LocReport,
+    LocTarget,
     RepoContributorRow,
     ReportBundle,
     ReportMetadata,
@@ -10,11 +12,15 @@ from github_report.models import (
     UserContributorRow,
 )
 from github_report.services.github_client import (
+    GitHubArchiveClient,
     GitHubGraphQLClient,
     GitHubMetadataClient,
+    GitHubRepositoryNotFoundError,
 )
+from github_report.services.loc import build_loc_report_from_zip
 from github_report.settings import (
     ListReposOptions,
+    LocOptions,
     ReportOptions,
     SortBy,
     resolve_github_token,
@@ -30,9 +36,11 @@ class GitHubReportService:
         *,
         metadata_client_cls: type[GitHubMetadataClient] = GitHubMetadataClient,
         graphql_client_cls: type[GitHubGraphQLClient] = GitHubGraphQLClient,
+        archive_client_cls: type[GitHubArchiveClient] = GitHubArchiveClient,
     ) -> None:
         self._metadata_client_cls = metadata_client_cls
         self._graphql_client_cls = graphql_client_cls
+        self._archive_client_cls = archive_client_cls
 
     def list_repositories(self, options: ListReposOptions) -> list[RepositoryRef]:
         """Return accessible repositories for an owner."""
@@ -88,6 +96,61 @@ class GitHubReportService:
             lookback_days=options.lookback_days,
         )
         return ReportBundle(metadata=metadata, top_users=top_users, repo_rows=repo_rows)
+
+    def build_loc_report(self, options: LocOptions) -> LocReport:
+        """Build a repository or repository-path line-count report."""
+
+        token = resolve_github_token()
+        archive_client = self._archive_client_cls(
+            token,
+            timeout_seconds=options.timeout_seconds,
+        )
+        try:
+            target = resolve_loc_target(archive_client, options)
+            repository = archive_client.get_repository(target.owner, target.repo)
+            archive_bytes = archive_client.download_repository_zipball(
+                repository,
+                ref=options.ref,
+            )
+            return build_loc_report_from_zip(
+                archive_bytes,
+                target=target,
+                ref=options.ref,
+                generated_at=utc_now(),
+            )
+        finally:
+            close = getattr(archive_client, "close", None)
+            if close is not None:
+                close()
+
+
+def resolve_loc_target(
+    archive_client: GitHubArchiveClient,
+    options: LocOptions,
+) -> LocTarget:
+    """Resolve CLI target syntax into an owner-qualified repository and path."""
+
+    parts = options.target.split("/")
+    if options.owner:
+        if len(parts) >= 2 and parts[0] == options.owner:
+            return LocTarget(owner=parts[0], repo=parts[1], path="/".join(parts[2:]))
+        return LocTarget(owner=options.owner, repo=parts[0], path="/".join(parts[1:]))
+
+    if len(parts) >= 2:
+        try:
+            repository = archive_client.get_repository(parts[0], parts[1])
+        except GitHubRepositoryNotFoundError:
+            repository = archive_client.find_repository_by_name(parts[0])
+            return _loc_target_from_repository(repository, path="/".join(parts[1:]))
+        return _loc_target_from_repository(repository, path="/".join(parts[2:]))
+
+    repository = archive_client.find_repository_by_name(parts[0])
+    return _loc_target_from_repository(repository, path="")
+
+
+def _loc_target_from_repository(repository: RepositoryRef, *, path: str) -> LocTarget:
+    owner, repo_name = repository.full_name.split("/", 1)
+    return LocTarget(owner=owner, repo=repo_name, path=path)
 
 
 def select_repositories(
@@ -155,6 +218,8 @@ def summarize_users(
         user_row.repos = tuple(sorted(repo_names_by_user[user_name]))
 
     return sorted(aggregated.values(), key=lambda row: user_sort_key(row, sort_by))
+
+
 def sort_repo_rows(rows: list[RepoContributorRow], sort_by: SortBy) -> list[RepoContributorRow]:
     """Sort the detailed rows for consistent output."""
 

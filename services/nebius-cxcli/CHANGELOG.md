@@ -71,6 +71,12 @@ All notable changes to this project are tracked here. This changelog follows
   showing preemptible follow-ups only for GPU platforms, materializing
   `recovery_policy=FAIL` when `preemptible_enabled=true`, and leaving
   `preemptible_priority` as the conditional follow-up field.
+- Simplified optional wizard navigation for `create` and `component add`: `q`
+  now backs up through component selection, component phase prompts, and field
+  prompts so operators can revise earlier answers, while `qq` stops the wizard
+  immediately and preserves the current config payload.
+- Added fail-fast Git tooling checks for Git tree Helm chart sources, including
+  `create --validate-sources` preflight coverage before identity prompts.
 - Moved target-scoped deploy settings to a single `deploy.targets[]` contract
   keyed by `instance_id`. MK8s Kubernetes observability now lives under
   `deploy.targets[].observability.*`, MK8s GPU validation settings remain under
@@ -743,8 +749,8 @@ All notable changes to this project are tracked here. This changelog follows
   first live Nebius control-plane version is now auto-selected into the
   interactive flow instead of defaulting to an unset value.
 - Refined interactive wizard exit behavior for field prompts: `q` now backs
-  out one prompt-prefix level within the current component instead of aborting
-  the whole wizard immediately, while `qq` preserves the full wizard stop path.
+  through previous wizard steps instead of aborting the whole wizard immediately,
+  while `qq` preserves the full wizard stop path.
 - Adjusted per-component field-phase defaults in the interactive wizard so
   infra components still default to `y`, while app chart field prompts now
   default to `n` because chart overrides are normally optional.

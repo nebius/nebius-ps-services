@@ -14,8 +14,10 @@ from pydantic import ValidationError
 from rich.console import Console, RenderableType
 
 from github_report import __version__
-from github_report.models import ReportBundle
+from github_report.models import LocReport, ReportBundle
 from github_report.renderers import (
+    render_loc_report,
+    render_loc_report_terminal,
     render_repo_breakdown,
     render_repo_breakdown_terminal,
     render_repo_list,
@@ -26,13 +28,17 @@ from github_report.renderers import (
 from github_report.services.github_client import GitHubClientError
 from github_report.services.reporting import GitHubReportService
 from github_report.settings import (
+    DEFAULT_ARCHIVE_TIMEOUT_SECONDS,
     DEFAULT_CONCURRENCY,
+    DEFAULT_LOC_REF,
     DEFAULT_TIMEOUT_SECONDS,
     DEFAULT_TOP,
+    LocOptions,
     OutputFormat,
     ReportOptions,
     SortBy,
     build_list_repos_options,
+    build_loc_options,
     build_report_options,
 )
 
@@ -83,6 +89,10 @@ ROOT_EPILOG = dedent(
 
       github-report list-repos --owner nebius --output repos.txt
 
+      github-report loc nebius-ps-services
+
+      github-report loc nebius-ps-services/services/nebius-cxcli/
+
     {OUTPUT_FORMAT_GUIDE}
     """
 ).strip()
@@ -91,8 +101,8 @@ app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
     help=(
-        "Rank GitHub contributors across the default branches of repositories owned by "
-        "a GitHub organization or personal account. Each command requires `--owner`."
+        "Rank GitHub contributors, list repositories, and count repository lines of "
+        "code. Owner-wide commands require `--owner`; `loc` accepts a repo/path target."
     ),
     epilog=ROOT_EPILOG,
 )
@@ -146,6 +156,28 @@ LIST_REPOS_EPILOG = dedent(
     """
 ).strip()
 
+LOC_EPILOG = dedent(
+    f"""
+    Examples:
+
+      github-report loc nebius-ps-services
+
+      github-report loc nebius-ps-services/services/nebius-cxcli/
+
+      github-report loc nebius/nebius-ps-services/services/nebius-cxcli/
+
+      github-report loc --owner nebius nebius-ps-services/services/nebius-cxcli/
+
+      github-report loc nebius-ps-services --format csv --output loc.csv
+
+    Targets can be repo, repo/path, owner/repo, or owner/repo/path. Bare repo names
+    are resolved by exact GitHub repository-name search; use --owner or an
+    owner-qualified target if the name is ambiguous.
+
+    {OUTPUT_FORMAT_GUIDE}
+    """
+).strip()
+
 
 def _version_callback(value: bool) -> None:
     if value:
@@ -161,8 +193,9 @@ def callback(
         typer.Option(
             "--owner",
             help=(
-                "GitHub owner for commands. Supports organizations and personal "
-                "accounts. Required unless provided on the subcommand."
+                "Default GitHub owner for commands that accept an owner. "
+                "Contributor reports and repository listings require an owner; "
+                "`loc` can also resolve one from an owner-qualified target."
             ),
             show_default=False,
         ),
@@ -227,9 +260,7 @@ def top_users(
     ] = None,
     exclude: Annotated[
         str | None,
-        typer.Option(
-            help="Comma-separated repo names or owner/repo identifiers to exclude."
-        ),
+        typer.Option(help="Comma-separated repo names or owner/repo identifiers to exclude."),
     ] = None,
     repos_file: Annotated[
         Path | None,
@@ -376,6 +407,73 @@ def list_repos(
     )
 
 
+@app.command("loc", epilog=LOC_EPILOG)
+def loc(
+    ctx: typer.Context,
+    target: Annotated[
+        str,
+        typer.Argument(
+            help=(
+                "Repository target as repo, repo/path, owner/repo, or owner/repo/path. "
+                "A path scope is counted as a standalone project within the repository."
+            )
+        ),
+    ],
+    owner: Annotated[
+        str | None,
+        typer.Option(
+            help=("GitHub owner for bare repo/path targets. Overrides the root `--owner`."),
+            show_default=False,
+        ),
+    ] = None,
+    ref: Annotated[
+        str,
+        typer.Option(
+            "--ref",
+            help="Git branch, tag, or SHA to inspect.",
+            show_default=DEFAULT_LOC_REF,
+        ),
+    ] = DEFAULT_LOC_REF,
+    format: Annotated[
+        OutputFormat,
+        typer.Option(help=OUTPUT_FORMAT_HELP),
+    ] = OutputFormat.markdown,
+    output: Annotated[
+        Path | None,
+        typer.Option(help=OUTPUT_FILE_HELP),
+    ] = None,
+    timeout_seconds: Annotated[
+        float,
+        typer.Option(help="Repository archive download timeout in seconds."),
+    ] = DEFAULT_ARCHIVE_TIMEOUT_SECONDS,
+) -> None:
+    """Count physical source lines in a repository or folder, defaulting to `main`."""
+
+    resolved_format = _resolve_output_format(ctx, format, output)
+    try:
+        options = build_loc_options(
+            target=target,
+            owner=_resolve_optional_owner(ctx, owner),
+            ref=ref,
+            format=resolved_format,
+            output=output,
+            timeout_seconds=timeout_seconds,
+        )
+    except (ValidationError, ValueError) as exc:
+        _exit_with_error(str(exc), code=2)
+
+    report = _run_loc_report(options)
+    _write_output(
+        render_loc_report(report, output_format=options.format),
+        options.output,
+        renderable=(
+            render_loc_report_terminal(report)
+            if options.output is None and options.format is OutputFormat.markdown
+            else None
+        ),
+    )
+
+
 def main() -> None:
     """Invoke the Typer application."""
 
@@ -393,6 +491,14 @@ def _run_report(options: ReportOptions) -> ReportBundle:
     try:
         with _status_context(_build_report_status_message(options)):
             return asyncio.run(service.build_report(options))
+    except (GitHubClientError, ValueError) as exc:
+        _exit_with_error(str(exc), code=1)
+
+
+def _run_loc_report(options: LocOptions) -> LocReport:
+    try:
+        with _status_context(_build_loc_status_message(options)):
+            return service.build_loc_report(options)
     except (GitHubClientError, ValueError) as exc:
         _exit_with_error(str(exc), code=1)
 
@@ -430,10 +536,14 @@ def _build_report_status_message(options: ReportOptions) -> str:
     )
     if excluded_repo_count:
         repo_scope = (
-            f"{repo_scope}, excluding {excluded_repo_count} "
-            f"{_pluralize_repos(excluded_repo_count)}"
+            f"{repo_scope}, excluding {excluded_repo_count} {_pluralize_repos(excluded_repo_count)}"
         )
     return f"Collecting GitHub activity for {options.owner} ({repo_scope})..."
+
+
+def _build_loc_status_message(options: LocOptions) -> str:
+    owner_prefix = f"{options.owner}/" if options.owner else ""
+    return f"Counting lines of code for {owner_prefix}{options.target}@{options.ref}..."
 
 
 def _status_context(message: str):
@@ -458,6 +568,14 @@ def _resolve_owner(ctx: typer.Context, command_owner: str | None) -> str:
         "Missing required option '--owner'. Provide a GitHub organization or personal account.",
         code=2,
     )
+
+
+def _resolve_optional_owner(ctx: typer.Context, command_owner: str | None) -> str | None:
+    if command_owner:
+        return command_owner
+    if isinstance(ctx.obj, dict) and ctx.obj.get("owner"):
+        return str(ctx.obj["owner"])
+    return None
 
 
 def _resolve_output_format(
