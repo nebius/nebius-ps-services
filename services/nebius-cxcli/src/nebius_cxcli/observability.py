@@ -18,10 +18,12 @@ from .component_instances import (
 )
 from .component_sources import (
     AppObservabilitySettings,
+    GrafanaCliSettings,
     InfraObservabilitySettings,
-    ObservabilityEndpointTemplates,
+    ObservabilityEndpointTemplate,
     ObservabilityGrafanaSettings,
     ObservabilityMetricTarget,
+    ObservabilityServiceBucket,
     helm_chart_source_by_id,
     load_component_sources,
     tf_module_source_by_id,
@@ -61,7 +63,14 @@ class VmStandaloneCollectorConfig:
     metrics_enabled: bool
     logs_enabled: bool
     logs_systemd_units: tuple[str, ...]
+    package_name: str
     package_version: str
+    apt_repository: str
+    apt_key_url: str
+    apt_suite: str
+    apt_component: str
+    apt_origin: str
+    prometheus_package_name: str
     iam_token_file: str
     metrics_export_port: int
     prometheus_agent_port: int
@@ -89,46 +98,18 @@ class ObservabilityGpuNodeLabelReconciliation:
     labels: tuple[tuple[str, str], ...] = ()
 
 
-_DEFAULT_OBSERVABILITY_ENDPOINTS = ObservabilityEndpointTemplates(
-    metrics_otlp_write=(
-        "https://write.monitoring.{region}.nebius.cloud/projects/"
-        "{project_id}/opentelemetry/v1/metrics"
-    ),
-    metrics_prometheus_remote_write=(
-        "https://write.monitoring.{region}.nebius.cloud/projects/"
-        "{project_id}/prometheus/api/v1/write"
-    ),
-    metrics_platform_managed_write=(
-        "Nebius-managed Monitoring agent metrics ingest is automatic for Compute VMs "
-        "and uses platform-managed regional endpoints; cxcli does not configure a "
-        "public customer write endpoint for this path."
-    ),
-    logs_otlp_write="https://write.logging.{region}.nebius.cloud",
-    logs_agent_grpc_write="dns:///write.logging.{region}.nebius.cloud:443",
-    logs_platform_managed_write=(
-        "When journald collection is enabled, the Nebius-managed Monitoring agent "
-        "forwards VM logs through the platform-managed Logging ingest path; cxcli "
-        "does not configure a public customer write endpoint for this path."
-    ),
-    traces_otlp_grpc_write="dns:///write.tracing.{region}.nebius.cloud:443",
-    metrics_service_provider_read=(
-        "https://read.monitoring.api.nebius.cloud/projects/{project_id}/service-provider/prometheus"
-    ),
-    metrics_user_read=("https://read.monitoring.api.nebius.cloud/projects/{project_id}/prometheus"),
-    metrics_federate_read=(
-        "https://read.monitoring.api.nebius.cloud/projects/"
-        "{project_id}/buckets/<service-provider>/prometheus/federate"
-    ),
-    logs_loki_read="https://read.logging.api.nebius.cloud/projects/{project_id}",
-    traces_tempo_read="https://read.tracing.api.nebius.cloud/projects/{project_id}/tempo",
-)
-
-_SERVICE_PROVIDER_METRIC_BUCKETS = ("compute", "gpu", "nbs", "sp_storage", "msp")
 _VM_JOURNALD_LOGS_ENABLED_LABEL = "nebius.o11y.systemd-logs-collection.enabled"
 _VM_JOURNALD_LOGS_UNITS_LABEL = "nebius.o11y.systemd-logs-collection.units"
 _VM_COLLECTOR_ENABLED_INPUT = "observability_collector_enabled"
 _VM_COLLECTOR_REGION_INPUT = "observability_collector_region_id"
+_VM_COLLECTOR_PACKAGE_NAME_INPUT = "observability_collector_package_name"
 _VM_COLLECTOR_PACKAGE_VERSION_INPUT = "observability_collector_package_version"
+_VM_COLLECTOR_APT_REPOSITORY_INPUT = "observability_collector_apt_repository"
+_VM_COLLECTOR_APT_KEY_URL_INPUT = "observability_collector_apt_key_url"
+_VM_COLLECTOR_APT_SUITE_INPUT = "observability_collector_apt_suite"
+_VM_COLLECTOR_APT_COMPONENT_INPUT = "observability_collector_apt_component"
+_VM_COLLECTOR_APT_ORIGIN_INPUT = "observability_collector_apt_origin"
+_VM_COLLECTOR_PROMETHEUS_PACKAGE_INPUT = "observability_collector_prometheus_package_name"
 _VM_COLLECTOR_IAM_TOKEN_FILE_INPUT = "observability_collector_iam_token_file"
 _VM_COLLECTOR_LOGS_ENABLED_INPUT = "observability_collector_logs_enabled"
 _VM_COLLECTOR_LOGS_SYSTEMD_UNITS_INPUT = "observability_collector_logs_systemd_units"
@@ -138,7 +119,14 @@ _VM_COLLECTOR_PROMETHEUS_AGENT_PORT_INPUT = "observability_collector_prometheus_
 _VM_COLLECTOR_MANAGED_INPUTS = (
     _VM_COLLECTOR_ENABLED_INPUT,
     _VM_COLLECTOR_REGION_INPUT,
+    _VM_COLLECTOR_PACKAGE_NAME_INPUT,
     _VM_COLLECTOR_PACKAGE_VERSION_INPUT,
+    _VM_COLLECTOR_APT_REPOSITORY_INPUT,
+    _VM_COLLECTOR_APT_KEY_URL_INPUT,
+    _VM_COLLECTOR_APT_SUITE_INPUT,
+    _VM_COLLECTOR_APT_COMPONENT_INPUT,
+    _VM_COLLECTOR_APT_ORIGIN_INPUT,
+    _VM_COLLECTOR_PROMETHEUS_PACKAGE_INPUT,
     _VM_COLLECTOR_IAM_TOKEN_FILE_INPUT,
     _VM_COLLECTOR_LOGS_ENABLED_INPUT,
     _VM_COLLECTOR_LOGS_SYSTEMD_UNITS_INPUT,
@@ -146,15 +134,6 @@ _VM_COLLECTOR_MANAGED_INPUTS = (
     _VM_COLLECTOR_METRICS_EXPORT_PORT_INPUT,
     _VM_COLLECTOR_PROMETHEUS_AGENT_PORT_INPUT,
 )
-_GRAFANA_SERVICE_METRICS_DATASOURCE_NAME = "Nebius Services"
-_GRAFANA_SERVICE_METRICS_DATASOURCE_UID = "nebius-service-metrics"
-_GRAFANA_USER_METRICS_DATASOURCE_NAME = "Nebius User Metrics"
-_GRAFANA_USER_METRICS_DATASOURCE_UID = "nebius-user-metrics"
-_GRAFANA_LOGS_DATASOURCE_NAME = "Nebius Logs"
-_GRAFANA_LOGS_DATASOURCE_UID = "nebius-logs"
-_GRAFANA_TRACES_DATASOURCE_NAME = "Nebius Traces"
-_GRAFANA_TRACES_DATASOURCE_UID = "nebius-traces"
-_GRAFANA_STATIC_TOKEN_ENV = "NEBIUS_OBSERVABILITY_STATIC_TOKEN"
 
 
 def _as_text(value: Any) -> str:
@@ -257,6 +236,14 @@ def _grafana_app_id() -> str:
 def _grafana_gateway_app_id() -> str:
     settings = _grafana_settings()
     return settings.gateway_chart_component_id if settings.enabled_by_default else ""
+
+
+def _grafana_cli_settings() -> GrafanaCliSettings:
+    grafana_app_id = _grafana_app_id()
+    if not grafana_app_id:
+        return GrafanaCliSettings()
+    chart = helm_chart_source_by_id(grafana_app_id, sources=_catalog_sources())
+    return chart.grafana if chart is not None else GrafanaCliSettings()
 
 
 def _observability_target_scoped_app_ids() -> set[str]:
@@ -528,34 +515,12 @@ def _payload_region_id(payload: dict[str, Any]) -> str:
     return _as_text(nebius.get("region_id") or nebius.get("region"))
 
 
-def _endpoint_templates(settings: InfraObservabilitySettings) -> ObservabilityEndpointTemplates:
-    endpoints = settings.endpoints
-    if endpoints == ObservabilityEndpointTemplates():
-        return _DEFAULT_OBSERVABILITY_ENDPOINTS
-    return endpoints
-
-
-def _merge_endpoint_templates(
-    base: ObservabilityEndpointTemplates,
-    overlay: ObservabilityEndpointTemplates,
-) -> ObservabilityEndpointTemplates:
-    merged: dict[str, str] = {}
-    for field_name in ObservabilityEndpointTemplates.__dataclass_fields__:
-        merged[field_name] = _as_text(getattr(overlay, field_name)) or _as_text(
-            getattr(base, field_name)
-        )
-    return ObservabilityEndpointTemplates(**merged)
-
-
-def _combined_endpoint_templates() -> ObservabilityEndpointTemplates:
-    templates = _DEFAULT_OBSERVABILITY_ENDPOINTS
-    templates = _merge_endpoint_templates(
-        templates, _endpoint_templates(_mk8s_observability_settings())
-    )
-    templates = _merge_endpoint_templates(
-        templates, _endpoint_templates(_vm_observability_settings())
-    )
-    return templates
+def _global_endpoint_templates() -> tuple[
+    tuple[ObservabilityEndpointTemplate, ...],
+    tuple[ObservabilityEndpointTemplate, ...],
+]:
+    templates = load_component_sources().observability.endpoints
+    return templates.read, templates.write
 
 
 def _render_endpoint_template(
@@ -568,22 +533,32 @@ def _render_endpoint_template(
 
 
 def _render_observability_endpoint_group(
-    templates: ObservabilityEndpointTemplates,
+    endpoints: tuple[ObservabilityEndpointTemplate, ...],
     *,
     project_id: str,
     region_id: str,
-    names: tuple[str, ...],
-) -> dict[str, str]:
+    signals: Mapping[str, bool],
+) -> tuple[dict[str, str], dict[str, dict[str, str]]]:
     rendered: dict[str, str] = {}
-    for name in names:
+    metadata: dict[str, dict[str, str]] = {}
+    for endpoint in endpoints:
+        include_when = endpoint.include_when or ("always",)
+        if not any(
+            condition == "always" or bool(signals.get(condition)) for condition in include_when
+        ):
+            continue
         value = _render_endpoint_template(
-            getattr(templates, name, ""),
+            endpoint.template,
             project_id=project_id,
             region_id=region_id,
         )
         if value:
-            rendered[name] = value
-    return rendered
+            rendered[endpoint.key] = value
+            metadata[endpoint.key] = {
+                "label": endpoint.label,
+                "bucket_placeholder": endpoint.bucket_placeholder,
+            }
+    return rendered, metadata
 
 
 def observability_project_defaults(
@@ -929,7 +904,16 @@ def _effective_vm_standalone_collector_config(
             logs.get("systemd_units"),
             default=tuple(default_logs.get("systemd_units", [])),
         ),
-        package_version=_as_text(settings.standalone_collector.package_version),
+        package_name=_as_text(settings.standalone_collector.package.name),
+        package_version=_as_text(settings.standalone_collector.package.version),
+        apt_repository=_as_text(settings.standalone_collector.package.apt_repository),
+        apt_key_url=_as_text(settings.standalone_collector.package.apt_key_url),
+        apt_suite=_as_text(settings.standalone_collector.package.apt_suite),
+        apt_component=_as_text(settings.standalone_collector.package.apt_component),
+        apt_origin=_as_text(settings.standalone_collector.package.apt_origin),
+        prometheus_package_name=_as_text(
+            settings.standalone_collector.prometheus.package_name
+        ),
         iam_token_file=_as_text(settings.standalone_collector.iam_token_file)
         or "/mnt/cloud-metadata/token",
         metrics_export_port=settings.standalone_collector.metrics_export_port,
@@ -1056,6 +1040,24 @@ def _vm_standalone_collector_logs_enabled(
     )
 
 
+def _vm_standalone_collector_missing_catalog_fields(
+    collector_settings: VmStandaloneCollectorConfig,
+) -> tuple[str, ...]:
+    required_fields = {
+        "public_ingest.package.name": collector_settings.package_name,
+        "public_ingest.package.version": collector_settings.package_version,
+        "public_ingest.package.apt_repository": collector_settings.apt_repository,
+        "public_ingest.package.apt_key_url": collector_settings.apt_key_url,
+        "public_ingest.package.apt_suite": collector_settings.apt_suite,
+        "public_ingest.package.apt_component": collector_settings.apt_component,
+        "public_ingest.package.apt_origin": collector_settings.apt_origin,
+        "public_ingest.prometheus.package_name": collector_settings.prometheus_package_name,
+    }
+    return tuple(
+        field_name for field_name, value in required_fields.items() if not _as_text(value)
+    )
+
+
 def _selected_app_metric_targets(
     payload: dict[str, Any],
 ) -> tuple[tuple[dict[str, Any], ObservabilityMetricTarget], ...]:
@@ -1079,6 +1081,60 @@ def _infra_component_rows(payload: dict[str, Any]) -> list[Any]:
         return []
     components = infra.get("components")
     return components if isinstance(components, list) else []
+
+
+def _path_lookup(node: Mapping[str, Any], path: str) -> Any:
+    current: Any = node
+    for part in path.split("."):
+        if not isinstance(current, Mapping):
+            return None
+        current = current.get(part)
+    return current
+
+
+def _service_bucket_condition_matches(condition: str, row: Mapping[str, Any]) -> bool:
+    normalized = _as_text(condition)
+    if not normalized or normalized == "always":
+        return True
+    if normalized == "enabled":
+        return bool(row.get("enabled", False))
+    if normalized.startswith("inputs."):
+        value = _path_lookup(_mapping(row.get("inputs")), normalized.removeprefix("inputs."))
+        return bool(value)
+    return False
+
+
+def _service_bucket_matches(row: Mapping[str, Any], bucket: ObservabilityServiceBucket) -> bool:
+    conditions = bucket.include_when or ("enabled",)
+    return any(_service_bucket_condition_matches(condition, row) for condition in conditions)
+
+
+def _observability_service_buckets(
+    payload: dict[str, Any],
+    *,
+    signal: str,
+) -> tuple[str, ...]:
+    sources_by_component = {module.module: module for module in _catalog_sources().tf_modules}
+    selected: list[str] = []
+    seen: set[str] = set()
+    for raw_row in _infra_component_rows(payload):
+        if not isinstance(raw_row, Mapping) or not bool(raw_row.get("enabled", False)):
+            continue
+        component_id = component_type_id(raw_row)
+        module = sources_by_component.get(component_id)
+        if module is None:
+            continue
+        buckets = (
+            module.observability.service_metrics
+            if signal == "metrics"
+            else module.observability.service_logs
+        )
+        for bucket in buckets:
+            if bucket.name in seen or not _service_bucket_matches(raw_row, bucket):
+                continue
+            seen.add(bucket.name)
+            selected.append(bucket.name)
+    return tuple(selected)
 
 
 def _mk8s_gpu_nodes_enabled(row: Mapping[str, Any]) -> bool:
@@ -1478,6 +1534,16 @@ def observability_dependency_issues(
             "deploy.observability.vm.collector.logs.enabled to stay true"
         )
     if collector_requested:
+        missing_catalog_fields = _vm_standalone_collector_missing_catalog_fields(
+            collector_settings
+        )
+        if missing_catalog_fields:
+            issues.append(
+                "VM standalone collector requires catalog fields under "
+                "components.infra.vm.cli.observability: "
+                + ", ".join(missing_catalog_fields)
+            )
+    if collector_requested:
         missing_service_accounts = [
             component_instance_label(component_type_id(row), component_instance_id(row))
             for row in _enabled_vm_rows(payload)
@@ -1616,7 +1682,30 @@ def ensure_observability_app_rows(
 
 
 def _path_segments(path: str) -> tuple[str, ...]:
-    return tuple(segment for segment in str(path).split(".") if segment)
+    segments: list[str] = []
+    current: list[str] = []
+    escaped = False
+    for char in str(path):
+        if escaped:
+            current.append(char)
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == ".":
+            segment = "".join(current)
+            if segment:
+                segments.append(segment)
+            current = []
+            continue
+        current.append(char)
+    if escaped:
+        current.append("\\")
+    segment = "".join(current)
+    if segment:
+        segments.append(segment)
+    return tuple(segments)
 
 
 def _set_path_value(node: dict[str, Any], path: str, value: Any) -> None:
@@ -1666,7 +1755,12 @@ _COLLECTOR_MANAGED_VALUE_PATHS = (
     "values.config.traces.enabled",
 )
 _GRAFANA_MANAGED_VALUE_PATHS = (
+    "values.admin",
+    "values.dashboardProviders",
+    "values.dashboards",
     "values.datasources",
+    "values.envValueFrom",
+    "values.grafana\\.ini.auth",
     "values.service.type",
     "values.route.main",
     "values.extraObjects",
@@ -1715,6 +1809,7 @@ def _grafana_authorized_datasource(
     uid: str,
     datasource_type: str,
     url: str,
+    token_env: str,
     is_default: bool = False,
 ) -> dict[str, Any]:
     return {
@@ -1729,7 +1824,7 @@ def _grafana_authorized_datasource(
             "httpHeaderName1": "Authorization",
         },
         "secureJsonData": {
-            "httpHeaderValue1": f"Bearer ${{{_GRAFANA_STATIC_TOKEN_ENV}}}",
+            "httpHeaderValue1": f"Bearer ${{{token_env}}}",
         },
     }
 
@@ -1738,48 +1833,37 @@ def _grafana_managed_values(
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     managed = _grafana_catalog_managed_values()
+    grafana_settings = _grafana_cli_settings()
+    if grafana_settings.admin_secret != GrafanaCliSettings().admin_secret:
+        managed["values.admin"] = {
+            "existingSecret": grafana_settings.admin_secret.secret_name,
+            "userKey": grafana_settings.admin_secret.user_key,
+            "passwordKey": grafana_settings.admin_secret.password_key,
+        }
+    if grafana_settings.read_token != GrafanaCliSettings().read_token:
+        managed["values.envValueFrom"] = {
+            grafana_settings.read_token.env: {
+                "secretKeyRef": {
+                    "name": grafana_settings.read_token.secret_name,
+                    "key": grafana_settings.read_token.key,
+                }
+            }
+        }
     endpoints = observability_endpoint_summary(payload)
     read_endpoints = _mapping(endpoints.get("read"))
     datasources: list[dict[str, Any]] = []
-    service_metrics_url = _as_text(read_endpoints.get("metrics_service_provider_read"))
-    user_metrics_url = _as_text(read_endpoints.get("metrics_user_read"))
-    logs_url = _as_text(read_endpoints.get("logs_loki_read"))
-    traces_url = _as_text(read_endpoints.get("traces_tempo_read"))
-    if service_metrics_url:
+    for datasource in grafana_settings.datasources:
+        url = _as_text(read_endpoints.get(datasource.read_endpoint))
+        if not url:
+            continue
         datasources.append(
             _grafana_authorized_datasource(
-                name=_GRAFANA_SERVICE_METRICS_DATASOURCE_NAME,
-                uid=_GRAFANA_SERVICE_METRICS_DATASOURCE_UID,
-                datasource_type="prometheus",
-                url=service_metrics_url,
-                is_default=True,
-            )
-        )
-    if user_metrics_url:
-        datasources.append(
-            _grafana_authorized_datasource(
-                name=_GRAFANA_USER_METRICS_DATASOURCE_NAME,
-                uid=_GRAFANA_USER_METRICS_DATASOURCE_UID,
-                datasource_type="prometheus",
-                url=user_metrics_url,
-            )
-        )
-    if logs_url:
-        datasources.append(
-            _grafana_authorized_datasource(
-                name=_GRAFANA_LOGS_DATASOURCE_NAME,
-                uid=_GRAFANA_LOGS_DATASOURCE_UID,
-                datasource_type="loki",
-                url=logs_url,
-            )
-        )
-    if traces_url:
-        datasources.append(
-            _grafana_authorized_datasource(
-                name=_GRAFANA_TRACES_DATASOURCE_NAME,
-                uid=_GRAFANA_TRACES_DATASOURCE_UID,
-                datasource_type="tempo",
-                url=traces_url,
+                name=datasource.name,
+                uid=datasource.uid,
+                datasource_type=datasource.datasource_type,
+                url=url,
+                token_env=grafana_settings.read_token.env,
+                is_default=datasource.is_default,
             )
         )
     managed["values.datasources"] = {
@@ -1788,6 +1872,11 @@ def _grafana_managed_values(
             "datasources": datasources,
         }
     }
+    logout_timeout = grafana_settings.logout_timeout
+    if logout_timeout:
+        managed["values.grafana\\.ini.auth.login_maximum_inactive_lifetime_duration"] = (
+            logout_timeout
+        )
     return managed
 
 
@@ -1971,7 +2060,16 @@ def materialize_observability_infra_values(payload_or_config: Any) -> bool:
             managed_inputs: dict[str, Any] = {
                 _VM_COLLECTOR_ENABLED_INPUT: True,
                 _VM_COLLECTOR_REGION_INPUT: collector_region,
+                _VM_COLLECTOR_PACKAGE_NAME_INPUT: collector_settings.package_name,
                 _VM_COLLECTOR_PACKAGE_VERSION_INPUT: collector_settings.package_version,
+                _VM_COLLECTOR_APT_REPOSITORY_INPUT: collector_settings.apt_repository,
+                _VM_COLLECTOR_APT_KEY_URL_INPUT: collector_settings.apt_key_url,
+                _VM_COLLECTOR_APT_SUITE_INPUT: collector_settings.apt_suite,
+                _VM_COLLECTOR_APT_COMPONENT_INPUT: collector_settings.apt_component,
+                _VM_COLLECTOR_APT_ORIGIN_INPUT: collector_settings.apt_origin,
+                _VM_COLLECTOR_PROMETHEUS_PACKAGE_INPUT: (
+                    collector_settings.prometheus_package_name
+                ),
                 _VM_COLLECTOR_IAM_TOKEN_FILE_INPUT: collector_settings.iam_token_file,
                 _VM_COLLECTOR_LOGS_ENABLED_INPUT: bool(collector_settings.logs_enabled),
                 _VM_COLLECTOR_LOGS_SYSTEMD_UNITS_INPUT: list(collector_settings.logs_systemd_units),
@@ -2125,13 +2223,27 @@ def observability_endpoint_summary(
         payload,
         collector_settings=collector_settings,
     )
+    service_metric_buckets = _observability_service_buckets(payload, signal="metrics")
+    service_log_buckets = _observability_service_buckets(payload, signal="logs")
+    service_metrics_enabled = bool(service_metric_buckets)
+    service_logs_enabled = bool(service_log_buckets)
     metrics_enabled = bool(
-        kubernetes_metrics_enabled or vm_service_metrics_enabled or vm_standalone_metrics_enabled
+        kubernetes_metrics_enabled
+        or vm_service_metrics_enabled
+        or vm_standalone_metrics_enabled
+        or service_metrics_enabled
     )
     signals = {
-        "logs": bool(kubernetes_logs_enabled or vm_logs_enabled or vm_standalone_logs_enabled),
+        "logs": bool(
+            kubernetes_logs_enabled
+            or vm_logs_enabled
+            or vm_standalone_logs_enabled
+            or service_logs_enabled
+        ),
         "metrics": metrics_enabled,
         "traces": kubernetes_traces_enabled,
+        "service_metrics": service_metrics_enabled,
+        "service_logs": service_logs_enabled,
         "kubernetes_logs": kubernetes_logs_enabled,
         "kubernetes_metrics": kubernetes_metrics_enabled,
         "kubernetes_traces": kubernetes_traces_enabled,
@@ -2144,59 +2256,43 @@ def observability_endpoint_summary(
         "vm_standalone_metrics": vm_standalone_metrics_enabled,
         "vm_standalone_logs": vm_standalone_logs_enabled,
     }
-    templates = _combined_endpoint_templates()
+    read_templates, write_templates = _global_endpoint_templates()
     if not configured:
         return {
             "configured": False,
             "reason": "project_id_and_region_id_required",
             "signals": signals,
             "read": {},
+            "read_metadata": {},
             "write": {},
+            "write_metadata": {},
             "auth": {},
-            "service_provider_metric_buckets": list(_SERVICE_PROVIDER_METRIC_BUCKETS),
+            "service_provider_metric_buckets": list(service_metric_buckets),
+            "service_log_buckets": list(service_log_buckets),
         }
 
-    read_names: list[str] = []
-    write_names: list[str] = []
-    if metrics_enabled:
-        read_names.extend(("metrics_service_provider_read", "metrics_federate_read"))
-    if kubernetes_metrics_enabled:
-        read_names.append("metrics_user_read")
-        write_names.extend(("metrics_otlp_write", "metrics_prometheus_remote_write"))
-    if vm_standalone_metrics_enabled:
-        read_names.append("metrics_user_read")
-        write_names.append("metrics_prometheus_remote_write")
-    if vm_service_metrics_enabled:
-        write_names.append("metrics_platform_managed_write")
-    if kubernetes_logs_enabled or vm_logs_enabled or vm_standalone_logs_enabled:
-        read_names.append("logs_loki_read")
-    if kubernetes_logs_enabled:
-        write_names.extend(("logs_otlp_write", "logs_agent_grpc_write"))
-    if vm_standalone_logs_enabled:
-        write_names.append("logs_agent_grpc_write")
-    if vm_logs_enabled:
-        write_names.append("logs_platform_managed_write")
-    if kubernetes_traces_enabled:
-        read_names.append("traces_tempo_read")
-        write_names.append("traces_otlp_grpc_write")
+    read_endpoints, read_metadata = _render_observability_endpoint_group(
+        read_templates,
+        project_id=resolved_project_id,
+        region_id=resolved_region_id,
+        signals=signals,
+    )
+    write_endpoints, write_metadata = _render_observability_endpoint_group(
+        write_templates,
+        project_id=resolved_project_id,
+        region_id=resolved_region_id,
+        signals=signals,
+    )
 
     return {
         "configured": True,
         "project_id": resolved_project_id,
         "region": resolved_region_id,
         "signals": signals,
-        "read": _render_observability_endpoint_group(
-            templates,
-            project_id=resolved_project_id,
-            region_id=resolved_region_id,
-            names=tuple(read_names),
-        ),
-        "write": _render_observability_endpoint_group(
-            templates,
-            project_id=resolved_project_id,
-            region_id=resolved_region_id,
-            names=tuple(write_names),
-        ),
+        "read": read_endpoints,
+        "read_metadata": read_metadata,
+        "write": write_endpoints,
+        "write_metadata": write_metadata,
         "auth": {
             "read": (
                 "Authorization: Bearer <observability static token or IAM token>; "
@@ -2210,7 +2306,8 @@ def observability_endpoint_summary(
                 "for ingest."
             ),
         },
-        "service_provider_metric_buckets": list(_SERVICE_PROVIDER_METRIC_BUCKETS),
+        "service_provider_metric_buckets": list(service_metric_buckets),
+        "service_log_buckets": list(service_log_buckets),
     }
 
 
@@ -2263,6 +2360,8 @@ def observability_status_summary(
         dcgm_metric_source_configured
         and observability_gpu_node_label_reconciliation(payload).enabled
     )
+    service_metric_buckets = _observability_service_buckets(payload, signal="metrics")
+    service_log_buckets = _observability_service_buckets(payload, signal="logs")
     return {
         "enabled": selection.observability_enabled,
         "kubernetes_agent": collector_enabled,
@@ -2281,6 +2380,8 @@ def observability_status_summary(
             payload,
             collector_settings=vm_collector,
         ),
+        "service_provider_metric_buckets": list(service_metric_buckets),
+        "service_log_buckets": list(service_log_buckets),
         "gpu_dcgm_metric_source": dcgm_metric_source
         if dcgm_metric_source_configured
         else "disabled",

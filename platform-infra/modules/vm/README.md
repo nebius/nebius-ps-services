@@ -182,8 +182,8 @@ agent path.
 
 What it does:
 
-- installs a pinned public `nebius-o11y-agent` deb package on first boot
-- pulls that package from the canonical public Artifactory APT repo at `https://artifactory.nebius.dev/artifactory/nebius-o11y-agent`
+- installs a pinned public collector deb package on first boot
+- pulls that package from the configured APT repo/key/suite/component inputs
 - configures journald log forwarding through the public Logging gRPC endpoint
 - configures host metrics export plus a Prometheus agent companion for
   Monitoring Prometheus remote_write
@@ -203,7 +203,14 @@ Key inputs:
 
 - `observability_collector_enabled`
 - `observability_collector_region_id`
+- `observability_collector_package_name`
 - `observability_collector_package_version`
+- `observability_collector_apt_repository`
+- `observability_collector_apt_key_url`
+- `observability_collector_apt_suite`
+- `observability_collector_apt_component`
+- `observability_collector_apt_origin`
+- `observability_collector_prometheus_package_name`
 - `observability_collector_iam_token_file`
 - `observability_collector_logs_enabled`
 - `observability_collector_logs_systemd_units`

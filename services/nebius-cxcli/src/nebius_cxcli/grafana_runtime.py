@@ -8,28 +8,32 @@ import re
 import secrets
 import string
 import subprocess
+import time
+from base64 import b64decode, b64encode
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urljoin
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urljoin, urlparse
+from urllib.request import Request, urlopen
 
 import yaml
 
 from .component_instances import component_type_id
+from .component_sources import (
+    GrafanaCliSettings,
+    GrafanaDatasourceSpec,
+    GrafanaReportDashboardBinding,
+    load_component_sources,
+)
 from .deploy_targets import app_chart_target_ref
 from .iam_bootstrap import issue_observability_static_key
+from .observability import observability_endpoint_summary
 from .runtime_config import to_plain_data
 
-GRAFANA_APP_ID = "grafana"
 GRAFANA_STATUS_FILENAME = "grafana-status.json"
-GRAFANA_STATIC_TOKEN_ENV = "NEBIUS_OBSERVABILITY_STATIC_TOKEN"
-DEFAULT_ADMIN_SECRET_NAME = "nebius-cxcli-grafana-admin"
-DEFAULT_TOKEN_SECRET_NAME = "nebius-cxcli-grafana-observability-read"
-DEFAULT_ADMIN_USER_KEY = "admin-user"
-DEFAULT_ADMIN_PASSWORD_KEY = "admin-password"
-DEFAULT_TOKEN_KEY = "token"
 
 
 @dataclass(frozen=True)
@@ -39,6 +43,7 @@ class GrafanaReleaseSpec:
     release_name: str
     service_name: str
     admin_secret_name: str
+    admin_user: str
     admin_user_key: str
     admin_password_key: str
     token_secret_name: str
@@ -56,7 +61,26 @@ def _mapping(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
+def _grafana_component_id() -> str:
+    try:
+        sources = load_component_sources()
+    except (OSError, ValueError, RuntimeError):
+        return ""
+    for module in sources.tf_modules:
+        component_id = str(module.observability.grafana.chart_component_id or "").strip()
+        if component_id:
+            return component_id
+    empty_settings = GrafanaCliSettings()
+    for chart in sources.helm_charts:
+        if chart.grafana != empty_settings:
+            return chart.name
+    return ""
+
+
 def _active_grafana_rows(payload_or_config: Any) -> tuple[dict[str, Any], ...]:
+    grafana_component_id = _grafana_component_id()
+    if not grafana_component_id:
+        return ()
     payload = _as_payload(payload_or_config)
     rows = _mapping(payload.get("apps")).get("charts")
     if not isinstance(rows, list):
@@ -66,7 +90,7 @@ def _active_grafana_rows(payload_or_config: Any) -> tuple[dict[str, Any], ...]:
         for row in rows
         if isinstance(row, Mapping)
         and bool(row.get("enabled", False))
-        and component_type_id(row) == GRAFANA_APP_ID
+        and component_type_id(row) == grafana_component_id
     )
 
 
@@ -76,6 +100,10 @@ def grafana_release_specs(
     target_ref: str = "",
 ) -> tuple[GrafanaReleaseSpec, ...]:
     normalized_target_ref = str(target_ref or "").strip().lower()
+    grafana_component_id = _grafana_component_id()
+    if not grafana_component_id:
+        return ()
+    grafana_settings = _grafana_cli_settings()
     specs: list[GrafanaReleaseSpec] = []
     for row in _active_grafana_rows(payload_or_config):
         row_target_ref = app_chart_target_ref(row)
@@ -86,7 +114,8 @@ def grafana_release_specs(
         values = _mapping(row.get("values"))
         admin = _mapping(values.get("admin"))
         env_value_from = _mapping(values.get("envValueFrom"))
-        token_env = _mapping(env_value_from.get(GRAFANA_STATIC_TOKEN_ENV))
+        read_token_env = grafana_settings.read_token.env
+        token_env = _mapping(env_value_from.get(read_token_env)) if read_token_env else {}
         token_secret_ref = _mapping(token_env.get("secretKeyRef"))
         route_main = _mapping(_mapping(values.get("route")).get("main"))
         parent_refs = route_main.get("parentRefs")
@@ -96,7 +125,9 @@ def grafana_release_specs(
             parent_ref = _mapping(parent_refs[0])
             gateway_name = str(parent_ref.get("name") or "").strip()
             gateway_namespace = str(parent_ref.get("namespace") or "").strip()
-        release_name = str(row.get("release-name") or GRAFANA_APP_ID).strip() or GRAFANA_APP_ID
+        release_name = (
+            str(row.get("release-name") or grafana_component_id).strip() or grafana_component_id
+        )
         namespace = str(row.get("namespace") or "observability").strip() or "observability"
         if gateway_name and not gateway_namespace:
             gateway_namespace = namespace
@@ -107,21 +138,21 @@ def grafana_release_specs(
                 release_name=release_name,
                 service_name=release_name,
                 admin_secret_name=str(
-                    admin.get("existingSecret") or DEFAULT_ADMIN_SECRET_NAME
-                ).strip()
-                or DEFAULT_ADMIN_SECRET_NAME,
-                admin_user_key=str(admin.get("userKey") or DEFAULT_ADMIN_USER_KEY).strip()
-                or DEFAULT_ADMIN_USER_KEY,
+                    admin.get("existingSecret") or grafana_settings.admin_secret.secret_name
+                ).strip(),
+                admin_user=grafana_settings.admin_secret.user,
+                admin_user_key=str(
+                    admin.get("userKey") or grafana_settings.admin_secret.user_key
+                ).strip(),
                 admin_password_key=str(
-                    admin.get("passwordKey") or DEFAULT_ADMIN_PASSWORD_KEY
-                ).strip()
-                or DEFAULT_ADMIN_PASSWORD_KEY,
+                    admin.get("passwordKey") or grafana_settings.admin_secret.password_key
+                ).strip(),
                 token_secret_name=str(
-                    token_secret_ref.get("name") or DEFAULT_TOKEN_SECRET_NAME
-                ).strip()
-                or DEFAULT_TOKEN_SECRET_NAME,
-                token_key=str(token_secret_ref.get("key") or DEFAULT_TOKEN_KEY).strip()
-                or DEFAULT_TOKEN_KEY,
+                    token_secret_ref.get("name") or grafana_settings.read_token.secret_name
+                ).strip(),
+                token_key=str(
+                    token_secret_ref.get("key") or grafana_settings.read_token.key
+                ).strip(),
                 gateway_name=gateway_name,
                 gateway_namespace=gateway_namespace,
             )
@@ -219,11 +250,39 @@ def _secret_has_keys(
     try:
         payload = json.loads(completed.stdout or "{}")
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"kubectl -n {namespace} get secret {name} returned invalid JSON") from exc
+        raise RuntimeError(
+            f"kubectl -n {namespace} get secret {name} returned invalid JSON"
+        ) from exc
     data = payload.get("data")
     if not isinstance(data, Mapping):
         return False
     return all(str(key) in data for key in keys)
+
+
+def _secret_data_values(
+    *,
+    namespace: str,
+    name: str,
+    keys: Sequence[str],
+    extra_env: Mapping[str, str] | None,
+) -> dict[str, str]:
+    payload = _kubectl_json(
+        ["-n", namespace, "get", "secret", name, "-o", "json"],
+        extra_env=extra_env,
+    )
+    data = _mapping(payload.get("data"))
+    values: dict[str, str] = {}
+    for key in keys:
+        encoded = data.get(str(key))
+        if not isinstance(encoded, str) or not encoded:
+            continue
+        try:
+            values[str(key)] = b64decode(encoded).decode("utf-8")
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise RuntimeError(
+                f"kubectl -n {namespace} get secret {name} returned invalid data for {key}"
+            ) from exc
+    return values
 
 
 def _ensure_namespace(namespace: str, *, extra_env: Mapping[str, str] | None) -> None:
@@ -305,6 +364,88 @@ def _issue_read_token(payload_or_config: Any, *, target_ref: str) -> str:
     return result.token
 
 
+def _read_token_probe_url(payload_or_config: Any) -> str:
+    endpoints = _mapping(observability_endpoint_summary(payload_or_config).get("read"))
+    for datasource in _grafana_cli_settings().datasources:
+        if datasource.datasource_type != "prometheus":
+            continue
+        read_endpoint = str(endpoints.get(datasource.read_endpoint) or "").strip()
+        if read_endpoint:
+            return read_endpoint.rstrip("/") + "/api/v1/query?query=1"
+    return ""
+
+
+def _observability_read_token_status(
+    payload_or_config: Any,
+    token: str,
+    *,
+    timeout: int = 10,
+) -> bool | None:
+    probe_url = _read_token_probe_url(payload_or_config)
+    if not probe_url or not token:
+        return None
+    request = Request(
+        probe_url,
+        headers={"Authorization": f"Bearer {token}"},
+        method="GET",
+    )
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            return 200 <= int(getattr(response, "status", 0) or 0) < 300
+    except HTTPError as exc:
+        if exc.code in {401, 403}:
+            return False
+        return None
+    except URLError:
+        return None
+
+
+def _ensure_grafana_read_token_secret(
+    payload_or_config: Any,
+    spec: GrafanaReleaseSpec,
+    *,
+    extra_env: Mapping[str, str] | None,
+    target_ref: str,
+    emit: Any | None,
+) -> None:
+    if not _secret_has_keys(
+        namespace=spec.namespace,
+        name=spec.token_secret_name,
+        keys=(spec.token_key,),
+        extra_env=extra_env,
+    ):
+        token = _issue_read_token(payload_or_config, target_ref=spec.target_ref or target_ref)
+        _apply_secret(
+            namespace=spec.namespace,
+            name=spec.token_secret_name,
+            string_data={spec.token_key: token},
+            extra_env=extra_env,
+        )
+        if callable(emit):
+            emit(f"Created Grafana Observability read-token secret `{spec.token_secret_name}`.")
+        return
+
+    token_values = _secret_data_values(
+        namespace=spec.namespace,
+        name=spec.token_secret_name,
+        keys=(spec.token_key,),
+        extra_env=extra_env,
+    )
+    token = token_values.get(spec.token_key, "")
+    token_status = _observability_read_token_status(payload_or_config, token)
+    if token_status is not False:
+        return
+    replacement = _issue_read_token(payload_or_config, target_ref=spec.target_ref or target_ref)
+    _apply_secret(
+        namespace=spec.namespace,
+        name=spec.token_secret_name,
+        string_data={spec.token_key: replacement},
+        extra_env=extra_env,
+    )
+    if callable(emit):
+        emit(f"Refreshed Grafana Observability read-token secret `{spec.token_secret_name}`.")
+
+
 def ensure_grafana_runtime_secrets(
     payload_or_config: Any,
     *,
@@ -325,28 +466,20 @@ def ensure_grafana_runtime_secrets(
                 namespace=spec.namespace,
                 name=spec.admin_secret_name,
                 string_data={
-                    spec.admin_user_key: "admin",
+                    spec.admin_user_key: spec.admin_user,
                     spec.admin_password_key: _generate_password(),
                 },
                 extra_env=extra_env,
             )
             if callable(emit):
                 emit(f"Created Grafana admin credential secret `{spec.admin_secret_name}`.")
-        if not _secret_has_keys(
-            namespace=spec.namespace,
-            name=spec.token_secret_name,
-            keys=(spec.token_key,),
+        _ensure_grafana_read_token_secret(
+            payload_or_config,
+            spec,
             extra_env=extra_env,
-        ):
-            token = _issue_read_token(payload_or_config, target_ref=spec.target_ref or target_ref)
-            _apply_secret(
-                namespace=spec.namespace,
-                name=spec.token_secret_name,
-                string_data={spec.token_key: token},
-                extra_env=extra_env,
-            )
-            if callable(emit):
-                emit(f"Created Grafana Observability read-token secret `{spec.token_secret_name}`.")
+            target_ref=target_ref,
+            emit=emit,
+        )
 
 
 def _load_balancer_base_url(
@@ -428,16 +561,495 @@ def _grafana_base_url(
     return _load_balancer_base_url(service)
 
 
-def _explore_url(base_url: str, *, datasource_uid: str, query: str = "") -> str:
-    left: dict[str, Any] = {
-        "datasource": datasource_uid,
-        "queries": [{"refId": "A"}],
-        "range": {"from": "now-1h", "to": "now"},
+def _current_kube_context(extra_env: Mapping[str, str] | None) -> str:
+    kubeconfig_value = str(
+        (extra_env or {}).get("KUBECONFIG") or os.environ.get("KUBECONFIG") or ""
+    )
+    kubeconfig_paths = (
+        tuple(item for item in kubeconfig_value.split(os.pathsep) if item)
+        if kubeconfig_value
+        else (str(Path.home().expanduser() / ".kube" / "config"),)
+    )
+    for kubeconfig_path in kubeconfig_paths:
+        path = Path(kubeconfig_path).expanduser()
+        if not path.exists():
+            continue
+        try:
+            payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError):
+            continue
+        context = str(_mapping(payload).get("current-context") or "").strip()
+        if context:
+            return context
+    return ""
+
+
+def _explore_url(
+    base_url: str,
+    *,
+    datasource_uid: str,
+    datasource_type: str,
+    org_id: int,
+    query: str = "",
+) -> str:
+    query_payload: dict[str, Any] = {
+        "refId": "A",
+        "datasource": {
+            "uid": datasource_uid,
+            "type": datasource_type,
+        },
     }
     if query:
-        left["queries"][0]["expr"] = query
-    encoded = quote(json.dumps(left, separators=(",", ":")), safe="")
-    return urljoin(base_url, f"explore?orgId=1&left={encoded}")
+        query_payload["expr"] = query
+    panes: dict[str, Any] = {
+        "cxcli": {
+            "datasource": datasource_uid,
+            "queries": [query_payload],
+            "range": {"from": "now-1h", "to": "now"},
+        }
+    }
+    encoded = quote(json.dumps(panes, separators=(",", ":")), safe="")
+    return urljoin(base_url, f"explore?schemaVersion=1&panes={encoded}&orgId={org_id}")
+
+
+def _grafana_admin_credentials(
+    spec: GrafanaReleaseSpec,
+    *,
+    extra_env: Mapping[str, str] | None,
+) -> tuple[str, str] | None:
+    values = _secret_data_values(
+        namespace=spec.namespace,
+        name=spec.admin_secret_name,
+        keys=(spec.admin_user_key, spec.admin_password_key),
+        extra_env=extra_env,
+    )
+    password = values.get(spec.admin_password_key)
+    if not password:
+        return None
+    return values.get(spec.admin_user_key) or spec.admin_user, password
+
+
+def _grafana_relative_path(url: str) -> str:
+    parsed = urlparse(url)
+    path = (parsed.path or "/").lstrip("/")
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+    if parsed.fragment:
+        path = f"{path}#{parsed.fragment}"
+    return path
+
+
+def _post_grafana_short_url(
+    base_url: str,
+    path: str,
+    *,
+    username: str,
+    password: str,
+) -> dict[str, Any]:
+    credentials = b64encode(f"{username}:{password}".encode()).decode("ascii")
+    request = Request(
+        urljoin(base_url, "api/short-urls"),
+        data=json.dumps({"path": path}).encode("utf-8"),
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Basic {credentials}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=20) as response:
+            body = response.read().decode("utf-8")
+    except HTTPError as exc:
+        raise RuntimeError(f"Grafana short URL API returned HTTP {exc.code}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"Grafana short URL API request failed: {exc.reason}") from exc
+    try:
+        payload = json.loads(body or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Grafana short URL API returned invalid JSON") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("Grafana short URL API did not return a JSON object")
+    return payload
+
+
+def _get_grafana_json(
+    base_url: str,
+    path: str,
+    *,
+    username: str,
+    password: str,
+) -> Any:
+    credentials = b64encode(f"{username}:{password}".encode()).decode("ascii")
+    request = Request(
+        urljoin(base_url, path),
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Basic {credentials}",
+        },
+        method="GET",
+    )
+    try:
+        with urlopen(request, timeout=20) as response:
+            body = response.read().decode("utf-8")
+    except HTTPError as exc:
+        raise RuntimeError(f"Grafana API returned HTTP {exc.code}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"Grafana API request failed: {exc.reason}") from exc
+    try:
+        return json.loads(body or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Grafana API returned invalid JSON") from exc
+
+
+def _public_grafana_url(base_url: str, grafana_url: str) -> str:
+    parsed = urlparse(grafana_url)
+    path = parsed.path.lstrip("/")
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+    if parsed.fragment:
+        path = f"{path}#{parsed.fragment}"
+    return urljoin(base_url, path)
+
+
+def _grafana_dashboard_gnet_id(
+    base_url: str,
+    uid: str,
+    *,
+    username: str,
+    password: str,
+) -> int | None:
+    payload = _get_grafana_json(
+        base_url,
+        f"api/dashboards/uid/{quote(uid, safe='')}",
+        username=username,
+        password=password,
+    )
+    if not isinstance(payload, Mapping):
+        raise RuntimeError("Grafana dashboard detail API did not return a JSON object")
+    dashboard = payload.get("dashboard")
+    if not isinstance(dashboard, Mapping):
+        return None
+    raw_gnet_id = dashboard.get("gnetId")
+    try:
+        gnet_id = int(raw_gnet_id)
+    except (TypeError, ValueError):
+        return None
+    return gnet_id if gnet_id > 0 else None
+
+
+def _grafana_dashboard_url(
+    base_url: str,
+    dashboard_key: str,
+    gnet_id: int,
+    *,
+    username: str,
+    password: str,
+) -> str:
+    payload = _get_grafana_json(
+        base_url,
+        "api/search?type=dash-db&limit=5000",
+        username=username,
+        password=password,
+    )
+    if not isinstance(payload, list):
+        raise RuntimeError("Grafana dashboard search API did not return a JSON array")
+    candidates = [
+        item
+        for item in payload
+        if isinstance(item, Mapping)
+        and str(item.get("uid") or "").strip()
+        and str(item.get("url") or "").strip()
+    ]
+    dashboard_key = dashboard_key.strip()
+    preferred: list[Mapping[str, Any]] = []
+    other: list[Mapping[str, Any]] = []
+    for item in candidates:
+        url = str(item.get("url") or "").strip()
+        if f"/{dashboard_key}" in url:
+            preferred.append(item)
+        else:
+            other.append(item)
+    for item in [*preferred, *other]:
+        uid = str(item.get("uid") or "").strip()
+        try:
+            candidate_gnet_id = _grafana_dashboard_gnet_id(
+                base_url,
+                uid,
+                username=username,
+                password=password,
+            )
+        except RuntimeError:
+            continue
+        if candidate_gnet_id == gnet_id:
+            url = str(item.get("url") or "").strip()
+            return _public_grafana_url(base_url, url) if url else ""
+    return ""
+
+
+def _grafana_dashboard_url_for_spec(
+    base_url: str,
+    dashboard_key: str,
+    gnet_id: int,
+    spec: GrafanaReleaseSpec,
+    *,
+    extra_env: Mapping[str, str] | None,
+) -> str:
+    try:
+        credentials = _grafana_admin_credentials(spec, extra_env=extra_env)
+    except RuntimeError:
+        return ""
+    if not credentials:
+        return ""
+    username, password = credentials
+    try:
+        return _grafana_dashboard_url(
+            base_url,
+            dashboard_key,
+            gnet_id,
+            username=username,
+            password=password,
+        )
+    except RuntimeError:
+        return ""
+
+
+def _grafana_cli_settings() -> GrafanaCliSettings:
+    grafana_component_id = _grafana_component_id()
+    if not grafana_component_id:
+        return GrafanaCliSettings()
+    try:
+        sources = load_component_sources()
+    except (OSError, ValueError, RuntimeError):
+        return GrafanaCliSettings()
+    for chart in sources.helm_charts:
+        if chart.name == grafana_component_id:
+            return chart.grafana
+    return GrafanaCliSettings()
+
+
+def _grafana_report_dashboard_bindings() -> dict[str, GrafanaReportDashboardBinding]:
+    settings = _grafana_cli_settings()
+    return {item.signal: item for item in settings.report_dashboards}
+
+
+def _grafana_datasources_by_name() -> dict[str, GrafanaDatasourceSpec]:
+    settings = _grafana_cli_settings()
+    return {item.name: item for item in settings.datasources}
+
+
+def _grafana_explore_urls(
+    base_url: str,
+    bindings: Mapping[str, GrafanaReportDashboardBinding],
+    datasources_by_name: Mapping[str, GrafanaDatasourceSpec],
+    *,
+    explore_queries: Mapping[str, str],
+    org_id: int,
+) -> dict[str, str]:
+    urls: dict[str, str] = {}
+    for signal, binding in bindings.items():
+        datasource = datasources_by_name.get(binding.datasource)
+        if datasource is None:
+            continue
+        urls[f"{signal}_url"] = _explore_url(
+            base_url,
+            datasource_uid=datasource.uid,
+            datasource_type=datasource.datasource_type,
+            org_id=org_id,
+            query=explore_queries.get(signal, ""),
+        )
+    return urls
+
+
+def _grafana_helm_release_root_url(
+    spec: GrafanaReleaseSpec,
+    *,
+    extra_env: Mapping[str, str] | None,
+) -> str:
+    helm_release = _kubectl_json(
+        ["-n", spec.namespace, "get", "helmrelease", spec.release_name, "-o", "json"],
+        extra_env=extra_env,
+    )
+    values = _mapping(_mapping(helm_release.get("spec")).get("values"))
+    grafana_ini = _mapping(values.get("grafana.ini"))
+    server = _mapping(grafana_ini.get("server"))
+    return str(server.get("root_url") or "").strip()
+
+
+def _grafana_configmap_has_root_url(
+    spec: GrafanaReleaseSpec,
+    root_url: str,
+    *,
+    extra_env: Mapping[str, str] | None,
+) -> bool:
+    configmap = _kubectl_json(
+        ["-n", spec.namespace, "get", "configmap", spec.release_name, "-o", "json"],
+        extra_env=extra_env,
+    )
+    data = _mapping(configmap.get("data"))
+    grafana_ini = str(data.get("grafana.ini") or "")
+    return root_url in grafana_ini
+
+
+def _patch_grafana_helm_release_root_url(
+    spec: GrafanaReleaseSpec,
+    root_url: str,
+    *,
+    extra_env: Mapping[str, str] | None,
+) -> None:
+    patch = {
+        "spec": {
+            "values": {
+                "grafana.ini": {
+                    "server": {
+                        "root_url": root_url,
+                    }
+                }
+            }
+        }
+    }
+    _run_kubectl(
+        [
+            "-n",
+            spec.namespace,
+            "patch",
+            "helmrelease",
+            spec.release_name,
+            "--type",
+            "merge",
+            "-p",
+            json.dumps(patch, separators=(",", ":")),
+        ],
+        extra_env=extra_env,
+    )
+    _run_kubectl(
+        [
+            "-n",
+            spec.namespace,
+            "annotate",
+            "helmrelease",
+            spec.release_name,
+            f"reconcile.fluxcd.io/requestedAt={datetime.now(UTC).isoformat()}",
+            "--overwrite",
+        ],
+        extra_env=extra_env,
+    )
+
+
+def _wait_for_grafana_public_root_url(
+    spec: GrafanaReleaseSpec,
+    root_url: str,
+    *,
+    extra_env: Mapping[str, str] | None,
+    timeout_seconds: float = 180.0,
+    poll_interval_seconds: float = 5.0,
+) -> bool:
+    deadline = time.monotonic() + max(0.0, timeout_seconds)
+    while True:
+        try:
+            if _grafana_configmap_has_root_url(spec, root_url, extra_env=extra_env):
+                break
+        except RuntimeError:
+            pass
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(max(0.1, poll_interval_seconds), remaining))
+    try:
+        _run_kubectl(
+            [
+                "-n",
+                spec.namespace,
+                "rollout",
+                "status",
+                f"deployment/{spec.release_name}",
+                "--timeout=180s",
+            ],
+            extra_env=extra_env,
+            timeout=210,
+        )
+    except RuntimeError:
+        return False
+    return True
+
+
+def _ensure_grafana_public_root_url(
+    spec: GrafanaReleaseSpec,
+    base_url: str,
+    *,
+    extra_env: Mapping[str, str] | None,
+) -> bool:
+    root_url = base_url.rstrip("/") + "/"
+    try:
+        current_root_url = _grafana_helm_release_root_url(spec, extra_env=extra_env)
+        if current_root_url != root_url:
+            _patch_grafana_helm_release_root_url(spec, root_url, extra_env=extra_env)
+        elif _grafana_configmap_has_root_url(spec, root_url, extra_env=extra_env):
+            return True
+        else:
+            _patch_grafana_helm_release_root_url(spec, root_url, extra_env=extra_env)
+        return _wait_for_grafana_public_root_url(spec, root_url, extra_env=extra_env)
+    except RuntimeError:
+        return False
+
+
+def _public_goto_url(base_url: str, uid: str, *, org_id: int) -> str:
+    return urljoin(base_url, f"goto/{quote(uid, safe='')}?orgId={org_id}")
+
+
+def _create_grafana_short_url(
+    base_url: str,
+    url: str,
+    *,
+    org_id: int,
+    username: str,
+    password: str,
+) -> str:
+    payload = _post_grafana_short_url(
+        base_url,
+        _grafana_relative_path(url),
+        username=username,
+        password=password,
+    )
+    uid = str(payload.get("uid") or "").strip()
+    if uid:
+        return _public_goto_url(base_url, uid, org_id=org_id)
+    returned_url = str(payload.get("url") or "").strip()
+    returned_path = urlparse(returned_url).path.lstrip("/")
+    if returned_path.startswith("goto/"):
+        returned_query = urlparse(returned_url).query or f"orgId={org_id}"
+        return urljoin(base_url, f"{returned_path}?{returned_query}")
+    raise RuntimeError("Grafana short URL API response did not include a short URL uid")
+
+
+def _shorten_grafana_urls(
+    base_url: str,
+    urls: Mapping[str, str],
+    spec: GrafanaReleaseSpec,
+    *,
+    extra_env: Mapping[str, str] | None,
+    org_id: int,
+) -> dict[str, str]:
+    try:
+        credentials = _grafana_admin_credentials(spec, extra_env=extra_env)
+    except RuntimeError:
+        credentials = None
+    if not credentials:
+        return dict(urls)
+    username, password = credentials
+    shortened: dict[str, str] = {}
+    for key, url in urls.items():
+        try:
+            shortened[key] = _create_grafana_short_url(
+                base_url,
+                url,
+                org_id=org_id,
+                username=username,
+                password=password,
+            )
+        except RuntimeError:
+            shortened[key] = url
+    return shortened
 
 
 def collect_grafana_runtime_status(
@@ -447,6 +1059,9 @@ def collect_grafana_runtime_status(
     target_ref: str = "",
 ) -> tuple[dict[str, Any], ...]:
     statuses: list[dict[str, Any]] = []
+    kube_context = _current_kube_context(extra_env)
+    grafana_settings = _grafana_cli_settings()
+    explore_queries = {item.signal: item.query for item in grafana_settings.explore_queries}
     for spec in grafana_release_specs(payload_or_config, target_ref=target_ref):
         base_url = _grafana_base_url(spec, extra_env=extra_env)
         status: dict[str, Any] = {
@@ -455,6 +1070,7 @@ def collect_grafana_runtime_status(
             "release_name": spec.release_name,
             "service_name": spec.service_name,
             "admin_secret_name": spec.admin_secret_name,
+            "admin_user": spec.admin_user,
             "admin_user_key": spec.admin_user_key,
             "admin_password_key": spec.admin_password_key,
             "token_secret_name": spec.token_secret_name,
@@ -462,30 +1078,79 @@ def collect_grafana_runtime_status(
             "gateway_namespace": spec.gateway_namespace,
             "base_url": base_url,
         }
+        if kube_context:
+            status["kube_context"] = kube_context
         if base_url:
-            status["metrics_url"] = _explore_url(
+            report_bindings = _grafana_report_dashboard_bindings()
+            datasources_by_name = _grafana_datasources_by_name()
+            explore_urls = _grafana_explore_urls(
                 base_url,
-                datasource_uid="nebius-service-metrics",
-                query='count({__name__=~".+"})',
+                report_bindings,
+                datasources_by_name,
+                explore_queries=explore_queries,
+                org_id=grafana_settings.org_id,
             )
-            status["logs_url"] = _explore_url(
-                base_url,
-                datasource_uid="nebius-logs",
-                query='{__bucket__="default"}',
-            )
-            status["traces_url"] = _explore_url(base_url, datasource_uid="nebius-traces")
+            if _ensure_grafana_public_root_url(spec, base_url, extra_env=extra_env):
+                for signal, binding in report_bindings.items():
+                    url_key = f"{signal}_url"
+                    if url_key not in explore_urls:
+                        continue
+                    dashboard_url = _grafana_dashboard_url_for_spec(
+                        base_url,
+                        binding.dashboard,
+                        binding.gnet_id,
+                        spec,
+                        extra_env=extra_env,
+                    )
+                    if dashboard_url:
+                        explore_urls[url_key] = dashboard_url
+                        status[f"{signal}_url_kind"] = "dashboard"
+                        status[f"{signal}_url_gnet_id"] = binding.gnet_id
+                        status[f"{signal}_url_dashboard"] = f"{binding.folder}/{binding.dashboard}"
+                    else:
+                        status[f"{signal}_url_kind"] = "explore"
+                status.update(
+                    _shorten_grafana_urls(
+                        base_url,
+                        explore_urls,
+                        spec,
+                        extra_env=extra_env,
+                        org_id=grafana_settings.org_id,
+                    )
+                )
+            else:
+                status.update(explore_urls)
             status["dashboards_url"] = urljoin(base_url, "dashboards")
         statuses.append(status)
     return tuple(statuses)
 
 
-def write_grafana_status(paths: Any, statuses: Sequence[Mapping[str, Any]]) -> Path:
+def _grafana_status_key(status: Mapping[str, Any]) -> tuple[str, str, str]:
+    target_ref = str(status.get("target_ref") or "current-cluster").strip()
+    namespace = str(status.get("namespace") or "observability").strip()
+    release_name = str(
+        status.get("release_name") or status.get("service_name") or "grafana"
+    ).strip()
+    return target_ref, namespace, release_name
+
+
+def write_grafana_status(
+    paths: Any,
+    statuses: Sequence[Mapping[str, Any]],
+    *,
+    preserve_existing: bool = False,
+) -> Path:
     inventory_dir = Path(paths.inventory_dir)
     inventory_dir.mkdir(parents=True, exist_ok=True)
     status_path = inventory_dir / GRAFANA_STATUS_FILENAME
+    rows = [dict(item) for item in statuses]
+    if preserve_existing:
+        merged = {_grafana_status_key(item): dict(item) for item in read_grafana_status(paths)}
+        for item in rows:
+            merged[_grafana_status_key(item)] = dict(item)
+        rows = list(merged.values())
     status_path.write_text(
-        json.dumps({"grafana": [dict(item) for item in statuses]}, indent=2, sort_keys=True)
-        + "\n",
+        json.dumps({"grafana": rows}, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     return status_path

@@ -7,6 +7,77 @@ cli:
 shared:
   admin_ssh:
     user_name: ubuntu
+observability:
+  # Project-scoped Nebius Observability endpoint templates. These Read/Write
+  # APIs are not owned by a single component; all Nebius resources in the
+  # tenant/project can use the matching read or ingest surface.
+  endpoints:
+    write:
+      metrics_platform_managed_write:
+        label: Metrics write (VM monitoring agent)
+        template: Nebius-managed Monitoring agent metrics ingest is automatic for Compute VMs and uses platform-managed regional endpoints; cxcli does not configure a public customer write endpoint for this path.
+        include_when:
+          - vm_service_metrics
+      metrics_otlp_write:
+        label: Metrics write (OTLP HTTP/protobuf)
+        template: https://write.monitoring.{region}.nebius.cloud/projects/{project_id}/opentelemetry/v1/metrics
+        include_when:
+          - kubernetes_metrics
+      metrics_prometheus_remote_write:
+        label: Metrics write (Prometheus Remote Write)
+        template: https://write.monitoring.{region}.nebius.cloud/projects/{project_id}/prometheus/api/v1/write
+        include_when:
+          - kubernetes_metrics
+          - vm_standalone_metrics
+      logs_platform_managed_write:
+        label: Logs write (VM monitoring agent)
+        template: When journald collection is enabled, the Nebius-managed Monitoring agent forwards VM logs through the platform-managed Logging ingest path; cxcli does not configure a public customer write endpoint for this path.
+        include_when:
+          - vm_logs
+      logs_otlp_write:
+        label: Logs write (direct/self-managed)
+        template: https://write.logging.{region}.nebius.cloud
+        include_when:
+          - kubernetes_logs
+      logs_agent_grpc_write:
+        label: Logs write (Nebius agent gRPC)
+        template: dns:///write.logging.{region}.nebius.cloud:443
+        include_when:
+          - kubernetes_logs
+          - vm_standalone_logs
+      traces_otlp_grpc_write:
+        label: Traces write (OTLP gRPC)
+        template: dns:///write.tracing.{region}.nebius.cloud:443
+        include_when:
+          - kubernetes_traces
+    read:
+      metrics_service_provider_read:
+        label: Metrics read (Prometheus, Nebius service metrics)
+        template: https://read.monitoring.api.nebius.cloud/projects/{project_id}/service-provider/prometheus
+        include_when:
+          - metrics
+      metrics_user_read:
+        label: Metrics read (Prometheus, user-ingested metrics)
+        template: https://read.monitoring.api.nebius.cloud/projects/{project_id}/prometheus
+        include_when:
+          - kubernetes_metrics
+          - vm_standalone_metrics
+      metrics_federate_read:
+        label: Metrics read (federate)
+        template: https://read.monitoring.api.nebius.cloud/projects/{project_id}/buckets/<service-provider>/prometheus/federate
+        include_when:
+          - metrics
+        bucket_placeholder: <service-provider>
+      logs_loki_read:
+        label: Logs read (Loki)
+        template: https://read.logging.api.nebius.cloud/projects/{project_id}
+        include_when:
+          - logs
+      traces_tempo_read:
+        label: Traces read (Tempo)
+        template: https://read.tracing.api.nebius.cloud/projects/{project_id}/tempo
+        include_when:
+          - traces
 # `components.*` defines reusable component types only. Repeated modules or
 # charts in one project are modeled in `config.yaml` with distinct instance
 # rows; target-bound app charts select their cluster with `target_ref` and are
@@ -129,7 +200,7 @@ components:
           # Source-owned MK8s observability contract. The `config.yaml`
           # `deploy.targets[].observability` rows decide whether cxcli deploys
           # it per cluster; this block keeps agent choice, signal defaults, and
-          # endpoint templates.
+          # component-specific service buckets.
           primary_agent:
             kind: kubernetes_agent
             chart_component_id: nebius-observability-agent
@@ -153,19 +224,22 @@ components:
             chart_component_id: grafana
             gateway_chart_component_id: gateway-helm
             enabled_by_default: true
-          endpoints:
-            write:
-              metrics_otlp: https://write.monitoring.{region}.nebius.cloud/projects/{project_id}/opentelemetry/v1/metrics
-              metrics_prometheus_remote_write: https://write.monitoring.{region}.nebius.cloud/projects/{project_id}/prometheus/api/v1/write
-              logs_otlp: https://write.logging.{region}.nebius.cloud
-              logs_agent_grpc: dns:///write.logging.{region}.nebius.cloud:443
-              traces_otlp_grpc: dns:///write.tracing.{region}.nebius.cloud:443
-            read:
-              metrics_service_provider: https://read.monitoring.api.nebius.cloud/projects/{project_id}/service-provider/prometheus
-              metrics_user: https://read.monitoring.api.nebius.cloud/projects/{project_id}/prometheus
-              metrics_federate: https://read.monitoring.api.nebius.cloud/projects/{project_id}/buckets/<service-provider>/prometheus/federate
-              logs_loki: https://read.logging.api.nebius.cloud/projects/{project_id}
-              traces_tempo: https://read.tracing.api.nebius.cloud/projects/{project_id}/tempo
+          service_metrics:
+            buckets:
+              compute:
+                label: Compute metrics for MK8s node VMs
+              nbs:
+                label: Compute volume metrics for MK8s node disks
+              gpu:
+                label: GPU service metrics for GPU-backed MK8s nodes
+                include_when:
+                  - inputs.gpu_enabled
+          service_logs:
+            buckets:
+              sp_mk8s_control_plane:
+                label: Managed Kubernetes control plane logs
+              sp_mk8s_audit_logs:
+                label: Managed Kubernetes audit logs
       wizard_profile: mk8s
     managed-postgresql:
       source:
@@ -177,6 +251,16 @@ components:
         enabled: false
       status:
         kind: nebius.msp.postgresql.cluster
+      cli:
+        observability:
+          service_metrics:
+            buckets:
+              msp:
+                label: Managed Service for PostgreSQL metrics
+          service_logs:
+            buckets:
+              sp_postgres:
+                label: Managed Service for PostgreSQL logs
       wizard_profile: managed-postgresql
     sfs:
       source:
@@ -188,6 +272,12 @@ components:
         enabled: false
       status:
         kind: nebius.compute.filesystem
+      cli:
+        observability:
+          service_metrics:
+            buckets:
+              nbs:
+                label: Compute storage metrics for shared filesystem backing resources
     object-storage:
       source:
         portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/object-storage?ref=main
@@ -198,6 +288,14 @@ components:
         enabled: false
       status:
         kind: nebius.storage.bucket
+      cli:
+        observability:
+          service_metrics:
+            buckets:
+              sp_storage:
+                label: Object Storage service metrics
+          # Object Storage request logs are exposed through Audit Logs, not
+          # through the Loki-compatible Logging read endpoint.
       wizard_profile: object-storage
     mysterybox:
       source:
@@ -252,7 +350,16 @@ components:
             # Default-off public-ingest collector. It installs the public
             # `nebius-o11y-agent` package plus a Prometheus agent companion.
             default_enabled: false
-            package_version: 0.2.130
+            package:
+              name: nebius-o11y-agent
+              version: 0.2.130
+              apt_repository: https://artifactory.nebius.dev/artifactory/nebius-o11y-agent
+              apt_key_url: https://artifactory.nebius.dev/artifactory/nebius-o11y-agent/key.gpg
+              apt_suite: stable
+              apt_component: main
+              apt_origin: artifactory.nebius.dev
+            prometheus:
+              package_name: prometheus
             # Metadata token for the VM-attached service account.
             metadata_token_file: /mnt/cloud-metadata/token
             metrics_export_port: 19090
@@ -262,17 +369,16 @@ components:
               systemd_units: []
             metrics:
               default_enabled: true
-          endpoints:
-            write:
-              metrics_platform_managed: Nebius-managed Monitoring agent metrics ingest is automatic for Compute VMs and uses platform-managed regional endpoints; cxcli does not configure a public customer write endpoint for this path.
-              metrics_prometheus_remote_write: https://write.monitoring.{region}.nebius.cloud/projects/{project_id}/prometheus/api/v1/write
-              logs_platform_managed: When journald collection is enabled, the Nebius-managed Monitoring agent forwards VM logs through the platform-managed Logging ingest path; cxcli does not configure a public customer write endpoint for this path.
-              logs_agent_grpc: dns:///write.logging.{region}.nebius.cloud:443
-            read:
-              metrics_service_provider: https://read.monitoring.api.nebius.cloud/projects/{project_id}/service-provider/prometheus
-              metrics_user: https://read.monitoring.api.nebius.cloud/projects/{project_id}/prometheus
-              metrics_federate: https://read.monitoring.api.nebius.cloud/projects/{project_id}/buckets/<service-provider>/prometheus/federate
-              logs_loki: https://read.logging.api.nebius.cloud/projects/{project_id}
+          service_metrics:
+            buckets:
+              compute:
+                label: Compute VM metrics
+              nbs:
+                label: Compute volume metrics for VM disks
+          service_logs:
+            buckets:
+              sp_serial:
+                label: Compute VM serial logs
     wireguard-jumphost:
       source:
         portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/wireguard-jumphost?ref=main
@@ -595,18 +701,61 @@ components:
         timeout: 10m
         install_after:
           - gateway-helm
+      cli:
+        grafana:
+          orgId: 1
+          logout-timeout: 20m
+          admin:
+            secret: nebius-cxcli-grafana-admin
+            user: admin
+            user_key: admin-user
+            password_key: admin-password
+          read_token:
+            env: NEBIUS_OBSERVABILITY_STATIC_TOKEN
+            secret: nebius-cxcli-grafana-observability-read
+            key: token
+          datasources:
+            # Keep both Prometheus datasources. The service-provider endpoint
+            # reads Nebius/provider service metrics; the user endpoint reads
+            # customer/user-ingested Prometheus metrics.
+            service-metrics:
+              name: Nebius Services
+              uid: nebius-service-metrics
+              type: prometheus
+              read_endpoint: metrics_service_provider_read
+              isDefault: true
+            user-metrics:
+              name: Nebius User Metrics
+              uid: nebius-user-metrics
+              type: prometheus
+              read_endpoint: metrics_user_read
+              isDefault: false
+            logs:
+              name: Nebius Logs
+              uid: nebius-logs
+              type: loki
+              read_endpoint: logs_loki_read
+              isDefault: false
+            traces:
+              name: Nebius Traces
+              uid: nebius-traces
+              type: tempo
+              read_endpoint: traces_tempo_read
+              isDefault: false
+          explore_queries:
+            metrics: count({__name__=~".+"})
+            logs: '{__bucket__="default"}'
+          # Report bindings are source metadata, not Helm chart values. Keep
+          # them next to the chart so report links can point at dashboards
+          # without hardcoding dashboard selection in Python.
+          report_dashboards:
+            metrics: nebius/kubernetes-cluster-monitoring
+            logs: nebius/kubernetes-logs-from-loki
+            traces: nebius/guardrails-starter-traces
       defaults:
         values.image.registry: docker.io
         values.image.repository: grafana/grafana
         values.image.tag: 13.0.1
-        values.admin.existingSecret: nebius-cxcli-grafana-admin
-        values.admin.userKey: admin-user
-        values.admin.passwordKey: admin-password
-        values.envValueFrom:
-          NEBIUS_OBSERVABILITY_STATIC_TOKEN:
-            secretKeyRef:
-              name: nebius-cxcli-grafana-observability-read
-              key: token
         # Keep CPU-only platform/observability pods off expensive GPU nodes by
         # default. Nebius GPU worker nodes carry `nebius.com/gpu=true`; CPU nodes
         # do not, so this hard node affinity still works across CPU platform names.
@@ -682,14 +831,8 @@ components:
                 options:
                   path: /var/lib/grafana/dashboards/nebius
         values.dashboards:
-          # The top-level key is a Grafana dashboard provider/folder key, not a
-          # Grafana.com account name. Add non-Nebius Grafana.com dashboards under
-          # `nebius` to keep them in the same folder, or add another provider and
-          # matching key when you want a separate folder.
-          # Nebius dashboards expect the Prometheus datasource display name
-          # `Nebius Services`. Keep that name aligned with the generated
-          # service-metrics datasource while retaining the stable
-          # `nebius-service-metrics` UID for links and automation.
+          # Nebius service dashboards use the service-provider Monitoring
+          # service-metrics datasource name.
           nebius:
             nebius-disk:
               gnetId: 23425
@@ -719,6 +862,18 @@ components:
               gnetId: 25123
               revision: 1
               datasource: Nebius Services
+            kubernetes-cluster-monitoring:
+              gnetId: 315
+              revision: 3
+              datasource: Nebius User Metrics
+            kubernetes-logs-from-loki:
+              gnetId: 18494
+              revision: 1
+              datasource: Nebius Logs
+            guardrails-starter-traces:
+              gnetId: 20600
+              revision: 2
+              datasource: Nebius Traces
     gateway-helm:
       source:
         portable:

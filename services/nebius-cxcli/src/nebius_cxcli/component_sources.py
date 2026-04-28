@@ -37,6 +37,7 @@ DEFAULT_FLUX_VERSION = "v2.8.0"
 DEFAULT_FLUX_RELEASE_TIMEOUT = "5m"
 DEFAULT_TERRAFORM_VERSION = "1.14.1"
 GO_DURATION_RE = re.compile(r"(?:\d+(?:\.\d+)?(?:ns|us|µs|ms|s|m|h))+")
+GRAFANA_DURATION_RE = re.compile(r"(?:\d+(?:\.\d+)?(?:ns|us|µs|ms|s|m|h|d|w|M))+")
 LINUX_USER_NAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 COMPUTE_DISK_TYPES = frozenset(
     {
@@ -270,19 +271,30 @@ class ObservabilityTracesSettings:
 
 
 @dataclass(frozen=True)
+class ObservabilityEndpointTemplate:
+    key: str
+    label: str
+    template: str
+    include_when: tuple[str, ...] = ()
+    bucket_placeholder: str = ""
+
+
+@dataclass(frozen=True)
 class ObservabilityEndpointTemplates:
-    metrics_otlp_write: str = ""
-    metrics_prometheus_remote_write: str = ""
-    metrics_platform_managed_write: str = ""
-    logs_otlp_write: str = ""
-    logs_agent_grpc_write: str = ""
-    logs_platform_managed_write: str = ""
-    traces_otlp_grpc_write: str = ""
-    metrics_service_provider_read: str = ""
-    metrics_user_read: str = ""
-    metrics_federate_read: str = ""
-    logs_loki_read: str = ""
-    traces_tempo_read: str = ""
+    read: tuple[ObservabilityEndpointTemplate, ...] = ()
+    write: tuple[ObservabilityEndpointTemplate, ...] = ()
+
+
+@dataclass(frozen=True)
+class GlobalObservabilitySettings:
+    endpoints: ObservabilityEndpointTemplates = ObservabilityEndpointTemplates()
+
+
+@dataclass(frozen=True)
+class ObservabilityServiceBucket:
+    name: str
+    label: str = ""
+    include_when: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -304,9 +316,28 @@ class VmStandaloneCollectorMetricsSettings:
 
 
 @dataclass(frozen=True)
+class VmStandaloneCollectorPackageSettings:
+    name: str = ""
+    version: str = ""
+    apt_repository: str = ""
+    apt_key_url: str = ""
+    apt_suite: str = ""
+    apt_component: str = ""
+    apt_origin: str = ""
+
+
+@dataclass(frozen=True)
+class VmStandaloneCollectorPrometheusSettings:
+    package_name: str = ""
+
+
+@dataclass(frozen=True)
 class VmStandaloneCollectorSettings:
     enabled_by_default: bool = False
-    package_version: str = ""
+    package: VmStandaloneCollectorPackageSettings = VmStandaloneCollectorPackageSettings()
+    prometheus: VmStandaloneCollectorPrometheusSettings = (
+        VmStandaloneCollectorPrometheusSettings()
+    )
     iam_token_file: str = "/mnt/cloud-metadata/token"
     metrics_export_port: int = 19090
     prometheus_agent_port: int = 19091
@@ -321,7 +352,8 @@ class InfraObservabilitySettings:
     logs: ObservabilityLogsSettings = ObservabilityLogsSettings()
     metrics: ObservabilityMetricsSettings = ObservabilityMetricsSettings()
     traces: ObservabilityTracesSettings = ObservabilityTracesSettings()
-    endpoints: ObservabilityEndpointTemplates = ObservabilityEndpointTemplates()
+    service_metrics: tuple[ObservabilityServiceBucket, ...] = ()
+    service_logs: tuple[ObservabilityServiceBucket, ...] = ()
     grafana: ObservabilityGrafanaSettings = ObservabilityGrafanaSettings()
     standalone_collector: VmStandaloneCollectorSettings = VmStandaloneCollectorSettings()
 
@@ -340,6 +372,57 @@ class ObservabilityMetricTarget:
 @dataclass(frozen=True)
 class AppObservabilitySettings:
     metric_targets: tuple[ObservabilityMetricTarget, ...] = ()
+
+
+@dataclass(frozen=True)
+class GrafanaReportDashboardBinding:
+    signal: str
+    folder: str
+    dashboard: str
+    gnet_id: int
+    datasource: str
+
+
+@dataclass(frozen=True)
+class GrafanaDatasourceSpec:
+    key: str
+    name: str
+    uid: str
+    datasource_type: str
+    read_endpoint: str
+    is_default: bool = False
+
+
+@dataclass(frozen=True)
+class GrafanaAdminSecretSpec:
+    secret_name: str = ""
+    user: str = ""
+    user_key: str = ""
+    password_key: str = ""
+
+
+@dataclass(frozen=True)
+class GrafanaReadTokenSecretSpec:
+    env: str = ""
+    secret_name: str = ""
+    key: str = ""
+
+
+@dataclass(frozen=True)
+class GrafanaExploreQuerySpec:
+    signal: str
+    query: str
+
+
+@dataclass(frozen=True)
+class GrafanaCliSettings:
+    admin_secret: GrafanaAdminSecretSpec = GrafanaAdminSecretSpec()
+    datasources: tuple[GrafanaDatasourceSpec, ...] = ()
+    explore_queries: tuple[GrafanaExploreQuerySpec, ...] = ()
+    logout_timeout: str = "20m"
+    org_id: int = 1
+    read_token: GrafanaReadTokenSecretSpec = GrafanaReadTokenSecretSpec()
+    report_dashboards: tuple[GrafanaReportDashboardBinding, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -420,6 +503,7 @@ class HelmChartSource:
     input_bindings: tuple[ComponentInputBinding, ...] = ()
     mk8s_gpu: Mk8sGpuAppPolicy = Mk8sGpuAppPolicy()
     observability: AppObservabilitySettings = AppObservabilitySettings()
+    grafana: GrafanaCliSettings = GrafanaCliSettings()
 
     @property
     def chart_name(self) -> str | None:
@@ -444,6 +528,7 @@ class ComponentSources:
     shared: dict[str, Any]
     tf_modules: tuple[TFModuleSource, ...]
     helm_charts: tuple[HelmChartSource, ...]
+    observability: GlobalObservabilitySettings = GlobalObservabilitySettings()
 
 
 def tf_module_source_by_id(
@@ -1595,44 +1680,129 @@ def _parse_observability_endpoint_templates(
         raise ValueError(f"{field_label}.read must be a mapping")
     if not isinstance(write_raw, dict):
         raise ValueError(f"{field_label}.write must be a mapping")
-    read_supported_keys = {
-        "metrics_service_provider",
-        "metrics_user",
-        "metrics_federate",
-        "logs_loki",
-        "traces_tempo",
-    }
-    write_supported_keys = {
-        "metrics_otlp",
-        "metrics_prometheus_remote_write",
-        "metrics_platform_managed",
-        "logs_otlp",
-        "logs_agent_grpc",
-        "logs_platform_managed",
-        "traces_otlp_grpc",
-    }
-    read_unknown = sorted(str(key) for key in read_raw if str(key) not in read_supported_keys)
-    if read_unknown:
-        raise ValueError(f"{field_label}.read has unsupported field(s): " + ", ".join(read_unknown))
-    write_unknown = sorted(str(key) for key in write_raw if str(key) not in write_supported_keys)
-    if write_unknown:
-        raise ValueError(
-            f"{field_label}.write has unsupported field(s): " + ", ".join(write_unknown)
-        )
     return ObservabilityEndpointTemplates(
-        metrics_otlp_write=_as_text(write_raw.get("metrics_otlp")),
-        metrics_prometheus_remote_write=_as_text(write_raw.get("metrics_prometheus_remote_write")),
-        metrics_platform_managed_write=_as_text(write_raw.get("metrics_platform_managed")),
-        logs_otlp_write=_as_text(write_raw.get("logs_otlp")),
-        logs_agent_grpc_write=_as_text(write_raw.get("logs_agent_grpc")),
-        logs_platform_managed_write=_as_text(write_raw.get("logs_platform_managed")),
-        traces_otlp_grpc_write=_as_text(write_raw.get("traces_otlp_grpc")),
-        metrics_service_provider_read=_as_text(read_raw.get("metrics_service_provider")),
-        metrics_user_read=_as_text(read_raw.get("metrics_user")),
-        metrics_federate_read=_as_text(read_raw.get("metrics_federate")),
-        logs_loki_read=_as_text(read_raw.get("logs_loki")),
-        traces_tempo_read=_as_text(read_raw.get("traces_tempo")),
+        read=_parse_observability_endpoint_group(
+            read_raw,
+            field_label=f"{field_label}.read",
+        ),
+        write=_parse_observability_endpoint_group(
+            write_raw,
+            field_label=f"{field_label}.write",
+        ),
     )
+
+
+def _parse_observability_endpoint_group(
+    raw: Mapping[Any, Any],
+    *,
+    field_label: str,
+) -> tuple[ObservabilityEndpointTemplate, ...]:
+    endpoints: list[ObservabilityEndpointTemplate] = []
+    seen: set[str] = set()
+    for key_raw, value_raw in raw.items():
+        key = _as_text(key_raw)
+        item_label = f"{field_label}.{key}"
+        if not key:
+            raise ValueError(f"{field_label} keys must be non-empty strings")
+        if key in seen:
+            raise ValueError(f"{item_label} duplicates another observability endpoint")
+        seen.add(key)
+        if not isinstance(value_raw, dict):
+            raise ValueError(f"{item_label} must be a mapping")
+        supported_keys = {"label", "template", "include_when", "bucket_placeholder"}
+        unknown = sorted(str(item) for item in value_raw if str(item) not in supported_keys)
+        if unknown:
+            raise ValueError(f"{item_label} has unsupported field(s): " + ", ".join(unknown))
+        label = _as_text(value_raw.get("label"))
+        template = _as_text(value_raw.get("template"))
+        if not label:
+            raise ValueError(f"{item_label}.label is required")
+        if not template:
+            raise ValueError(f"{item_label}.template is required")
+        include_when = _parse_string_list(
+            value_raw.get("include_when"),
+            field_label=f"{item_label}.include_when",
+        )
+        if not include_when:
+            include_when = ("always",)
+        endpoints.append(
+            ObservabilityEndpointTemplate(
+                key=key,
+                label=label,
+                template=template,
+                include_when=include_when,
+                bucket_placeholder=_as_text(value_raw.get("bucket_placeholder")),
+            )
+        )
+    return tuple(endpoints)
+
+
+def _parse_global_observability_settings(
+    raw: Any,
+    *,
+    field_label: str = "observability",
+) -> GlobalObservabilitySettings:
+    if raw is None:
+        return GlobalObservabilitySettings()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {"endpoints"}
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    return GlobalObservabilitySettings(
+        endpoints=_parse_observability_endpoint_templates(
+            raw.get("endpoints"),
+            field_label=f"{field_label}.endpoints",
+        )
+    )
+
+
+def _parse_observability_service_buckets(
+    raw: Any,
+    *,
+    field_label: str,
+) -> tuple[ObservabilityServiceBucket, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {"buckets"}
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    buckets_raw = raw.get("buckets") or {}
+    if not isinstance(buckets_raw, dict):
+        raise ValueError(f"{field_label}.buckets must be a mapping")
+    buckets: list[ObservabilityServiceBucket] = []
+    seen: set[str] = set()
+    for bucket_raw, value_raw in buckets_raw.items():
+        bucket = _as_text(bucket_raw)
+        item_label = f"{field_label}.buckets.{bucket}"
+        if not bucket:
+            raise ValueError(f"{field_label}.buckets keys must be non-empty strings")
+        if bucket in seen:
+            raise ValueError(f"{item_label} duplicates another observability service bucket")
+        seen.add(bucket)
+        if not isinstance(value_raw, dict):
+            raise ValueError(f"{item_label} must be a mapping")
+        supported_item_keys = {"label", "include_when"}
+        item_unknown = sorted(
+            str(item) for item in value_raw if str(item) not in supported_item_keys
+        )
+        if item_unknown:
+            raise ValueError(f"{item_label} has unsupported field(s): " + ", ".join(item_unknown))
+        buckets.append(
+            ObservabilityServiceBucket(
+                name=bucket,
+                label=_as_text(value_raw.get("label")),
+                include_when=_parse_string_list(
+                    value_raw.get("include_when"),
+                    field_label=f"{item_label}.include_when",
+                ),
+            )
+        )
+    return tuple(buckets)
 
 
 def _parse_observability_grafana_settings(
@@ -1701,6 +1871,72 @@ def _parse_vm_standalone_collector_metrics_settings(
     )
 
 
+def _parse_vm_standalone_collector_package_settings(
+    raw: Any,
+    *,
+    field_label: str,
+) -> VmStandaloneCollectorPackageSettings:
+    if raw is None:
+        return VmStandaloneCollectorPackageSettings()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {
+        "name",
+        "version",
+        "apt_repository",
+        "apt_key_url",
+        "apt_suite",
+        "apt_component",
+        "apt_origin",
+    }
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    package = VmStandaloneCollectorPackageSettings(
+        name=_as_text(raw.get("name")),
+        version=_as_text(raw.get("version")),
+        apt_repository=_as_text(raw.get("apt_repository")),
+        apt_key_url=_as_text(raw.get("apt_key_url")),
+        apt_suite=_as_text(raw.get("apt_suite")),
+        apt_component=_as_text(raw.get("apt_component")),
+        apt_origin=_as_text(raw.get("apt_origin")),
+    )
+    required = {
+        "name": package.name,
+        "version": package.version,
+        "apt_repository": package.apt_repository,
+        "apt_key_url": package.apt_key_url,
+        "apt_suite": package.apt_suite,
+        "apt_component": package.apt_component,
+        "apt_origin": package.apt_origin,
+    }
+    missing = [key for key, value in required.items() if not value]
+    if missing:
+        raise ValueError(
+            f"{field_label} is missing required field(s): " + ", ".join(sorted(missing))
+        )
+    return package
+
+
+def _parse_vm_standalone_collector_prometheus_settings(
+    raw: Any,
+    *,
+    field_label: str,
+) -> VmStandaloneCollectorPrometheusSettings:
+    if raw is None:
+        return VmStandaloneCollectorPrometheusSettings()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {"package_name"}
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    package_name = _as_text(raw.get("package_name"))
+    if not package_name:
+        raise ValueError(f"{field_label}.package_name is required")
+    return VmStandaloneCollectorPrometheusSettings(package_name=package_name)
+
+
 def _parse_vm_standalone_collector_settings(
     raw: Any,
     *,
@@ -1712,7 +1948,8 @@ def _parse_vm_standalone_collector_settings(
         raise ValueError(f"{field_label} must be a mapping")
     supported_keys = {
         "default_enabled",
-        "package_version",
+        "package",
+        "prometheus",
         "metadata_token_file",
         "metrics_export_port",
         "prometheus_agent_port",
@@ -1728,9 +1965,20 @@ def _parse_vm_standalone_collector_settings(
         raise ValueError(f"{field_label}.metrics_export_port must be a positive integer")
     if not isinstance(prometheus_agent_port, int) or prometheus_agent_port <= 0:
         raise ValueError(f"{field_label}.prometheus_agent_port must be a positive integer")
+    if raw.get("package") is None:
+        raise ValueError(f"{field_label}.package is required")
+    if raw.get("prometheus") is None:
+        raise ValueError(f"{field_label}.prometheus is required")
     return VmStandaloneCollectorSettings(
         enabled_by_default=bool(raw.get("default_enabled", False)),
-        package_version=_as_text(raw.get("package_version")),
+        package=_parse_vm_standalone_collector_package_settings(
+            raw.get("package"),
+            field_label=f"{field_label}.package",
+        ),
+        prometheus=_parse_vm_standalone_collector_prometheus_settings(
+            raw.get("prometheus"),
+            field_label=f"{field_label}.prometheus",
+        ),
         iam_token_file=_as_text(raw.get("metadata_token_file")) or "/mnt/cloud-metadata/token",
         metrics_export_port=metrics_export_port,
         prometheus_agent_port=prometheus_agent_port,
@@ -1757,7 +2005,8 @@ def _parse_infra_observability_settings(
         raise ValueError(f"{field_label} must be a mapping")
     supported_keys = {
         "primary_agent",
-        "endpoints",
+        "service_metrics",
+        "service_logs",
         "grafana",
         "public_ingest",
     }
@@ -1848,9 +2097,13 @@ def _parse_infra_observability_settings(
             primary_traces_raw,
             field_label=f"{field_label}.primary_agent.traces",
         ),
-        endpoints=_parse_observability_endpoint_templates(
-            raw.get("endpoints"),
-            field_label=f"{field_label}.endpoints",
+        service_metrics=_parse_observability_service_buckets(
+            raw.get("service_metrics"),
+            field_label=f"{field_label}.service_metrics",
+        ),
+        service_logs=_parse_observability_service_buckets(
+            raw.get("service_logs"),
+            field_label=f"{field_label}.service_logs",
         ),
         grafana=grafana_settings,
         standalone_collector=standalone_collector,
@@ -2001,6 +2254,365 @@ def _parse_app_observability_settings(
     return AppObservabilitySettings(metric_targets=metric_targets)
 
 
+def _parse_grafana_report_dashboard_bindings(
+    raw: Any,
+    *,
+    field_label: str,
+) -> tuple[GrafanaReportDashboardBinding, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    valid_signals = {"metrics", "logs", "traces"}
+    unknown_signals = sorted(str(key) for key in raw if str(key) not in valid_signals)
+    if unknown_signals:
+        raise ValueError(f"{field_label} has unsupported signal(s): " + ", ".join(unknown_signals))
+    bindings: list[GrafanaReportDashboardBinding] = []
+    for signal, item in raw.items():
+        item_label = f"{field_label}.{signal}"
+        ref = _as_text(item)
+        if not ref or "/" not in ref:
+            raise ValueError(f"{item_label} must use '<folder>/<dashboard>'")
+        folder, _, dashboard = ref.partition("/")
+        folder = folder.strip()
+        dashboard = dashboard.strip()
+        if not folder or not dashboard or "/" in dashboard:
+            raise ValueError(f"{item_label} must use '<folder>/<dashboard>'")
+        bindings.append(
+            GrafanaReportDashboardBinding(
+                signal=str(signal),
+                folder=folder,
+                dashboard=dashboard,
+                gnet_id=0,
+                datasource="",
+            )
+        )
+    return tuple(bindings)
+
+
+def _parse_grafana_datasources(
+    raw: Any,
+    *,
+    field_label: str,
+) -> tuple[GrafanaDatasourceSpec, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    datasources: list[GrafanaDatasourceSpec] = []
+    names: set[str] = set()
+    uids: set[str] = set()
+    default_count = 0
+    for key, item in raw.items():
+        item_label = f"{field_label}.{key}"
+        if not isinstance(item, dict):
+            raise ValueError(f"{item_label} must be a mapping")
+        supported_keys = {"name", "uid", "type", "read_endpoint", "isDefault"}
+        unknown = sorted(str(value) for value in item if str(value) not in supported_keys)
+        if unknown:
+            raise ValueError(f"{item_label} has unsupported field(s): " + ", ".join(unknown))
+        name = _as_text(item.get("name"))
+        uid = _as_text(item.get("uid"))
+        datasource_type = _as_text(item.get("type"))
+        read_endpoint = _as_text(item.get("read_endpoint"))
+        is_default = _parse_optional_bool(
+            item.get("isDefault"),
+            field_label=f"{item_label}.isDefault",
+        )
+        if not name:
+            raise ValueError(f"{item_label}.name is required")
+        if name in names:
+            raise ValueError(f"{item_label}.name duplicates another Grafana datasource")
+        names.add(name)
+        if not uid:
+            raise ValueError(f"{item_label}.uid is required")
+        if uid in uids:
+            raise ValueError(f"{item_label}.uid duplicates another Grafana datasource")
+        uids.add(uid)
+        if not datasource_type:
+            raise ValueError(f"{item_label}.type is required")
+        if not read_endpoint:
+            raise ValueError(f"{item_label}.read_endpoint is required")
+        if bool(is_default):
+            default_count += 1
+        datasources.append(
+            GrafanaDatasourceSpec(
+                key=str(key),
+                name=name,
+                uid=uid,
+                datasource_type=datasource_type,
+                read_endpoint=read_endpoint,
+                is_default=bool(is_default),
+            )
+        )
+    if default_count > 1:
+        raise ValueError(f"{field_label} must not declare more than one default datasource")
+    return tuple(datasources)
+
+
+def _parse_grafana_admin_secret(
+    raw: Any,
+    *,
+    field_label: str,
+) -> GrafanaAdminSecretSpec:
+    if raw is None:
+        return GrafanaAdminSecretSpec()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {"secret", "user", "user_key", "password_key"}
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    secret_name = _as_text(raw.get("secret"))
+    user = _as_text(raw.get("user"))
+    user_key = _as_text(raw.get("user_key"))
+    password_key = _as_text(raw.get("password_key"))
+    if not secret_name:
+        raise ValueError(f"{field_label}.secret is required")
+    if not user:
+        raise ValueError(f"{field_label}.user is required")
+    if not user_key:
+        raise ValueError(f"{field_label}.user_key is required")
+    if not password_key:
+        raise ValueError(f"{field_label}.password_key is required")
+    return GrafanaAdminSecretSpec(
+        secret_name=secret_name,
+        user=user,
+        user_key=user_key,
+        password_key=password_key,
+    )
+
+
+def _parse_grafana_read_token_secret(
+    raw: Any,
+    *,
+    field_label: str,
+) -> GrafanaReadTokenSecretSpec:
+    if raw is None:
+        return GrafanaReadTokenSecretSpec()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {"env", "secret", "key"}
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    env = _as_text(raw.get("env"))
+    secret_name = _as_text(raw.get("secret"))
+    key = _as_text(raw.get("key"))
+    if not env:
+        raise ValueError(f"{field_label}.env is required")
+    if not secret_name:
+        raise ValueError(f"{field_label}.secret is required")
+    if not key:
+        raise ValueError(f"{field_label}.key is required")
+    return GrafanaReadTokenSecretSpec(
+        env=env,
+        secret_name=secret_name,
+        key=key,
+    )
+
+
+def _parse_grafana_explore_queries(
+    raw: Any,
+    *,
+    field_label: str,
+) -> tuple[GrafanaExploreQuerySpec, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    valid_signals = {"metrics", "logs", "traces"}
+    unknown_signals = sorted(str(key) for key in raw if str(key) not in valid_signals)
+    if unknown_signals:
+        raise ValueError(f"{field_label} has unsupported signal(s): " + ", ".join(unknown_signals))
+    queries: list[GrafanaExploreQuerySpec] = []
+    for signal, query_raw in raw.items():
+        signal_text = _as_text(signal)
+        if not signal_text:
+            raise ValueError(f"{field_label} keys must be non-empty")
+        query = _as_text(query_raw)
+        if not query:
+            raise ValueError(f"{field_label}.{signal_text} must be a non-empty string")
+        queries.append(GrafanaExploreQuerySpec(signal=signal_text, query=query))
+    return tuple(queries)
+
+
+def _parse_grafana_logout_timeout(raw: Any, *, field_label: str) -> str:
+    if raw is None:
+        return "20m"
+    value = _as_text(raw)
+    if not value:
+        raise ValueError(f"{field_label} must be a non-empty Grafana duration")
+    if value.lower() == "never":
+        raise ValueError(
+            f"{field_label} must be a Grafana duration such as 20m, 1h, or 7d; "
+            "Grafana does not support a safe 'never' value for auth session expiry"
+        )
+    if not GRAFANA_DURATION_RE.fullmatch(value):
+        raise ValueError(f"{field_label} must be a Grafana duration such as 20m, 1h, or 7d")
+    return value
+
+
+def _parse_grafana_cli_settings(
+    raw: Any,
+    *,
+    field_label: str,
+) -> GrafanaCliSettings:
+    if raw is None:
+        return GrafanaCliSettings()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {
+        "admin",
+        "datasources",
+        "explore_queries",
+        "logout-timeout",
+        "orgId",
+        "read_token",
+        "report_dashboards",
+    }
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    org_id = _parse_optional_positive_int(
+        raw.get("orgId"),
+        field_label=f"{field_label}.orgId",
+    )
+    return GrafanaCliSettings(
+        admin_secret=_parse_grafana_admin_secret(
+            raw.get("admin"),
+            field_label=f"{field_label}.admin",
+        ),
+        datasources=_parse_grafana_datasources(
+            raw.get("datasources"),
+            field_label=f"{field_label}.datasources",
+        ),
+        explore_queries=_parse_grafana_explore_queries(
+            raw.get("explore_queries"),
+            field_label=f"{field_label}.explore_queries",
+        ),
+        logout_timeout=_parse_grafana_logout_timeout(
+            raw.get("logout-timeout"),
+            field_label=f"{field_label}.logout-timeout",
+        ),
+        org_id=org_id or 1,
+        read_token=_parse_grafana_read_token_secret(
+            raw.get("read_token"),
+            field_label=f"{field_label}.read_token",
+        ),
+        report_dashboards=_parse_grafana_report_dashboard_bindings(
+            raw.get("report_dashboards"),
+            field_label=f"{field_label}.report_dashboards",
+        ),
+    )
+
+
+def _grafana_dashboard_default(
+    defaults: tuple[ComponentDefault, ...],
+    *,
+    folder: str,
+    dashboard: str,
+) -> Mapping[str, Any] | None:
+    exact_path = f"values.dashboards.{folder}.{dashboard}"
+    folder_path = f"values.dashboards.{folder}"
+    for default in defaults:
+        if default.kind != "literal":
+            continue
+        if default.target_path == exact_path and isinstance(default.value, Mapping):
+            return default.value
+        if default.target_path == folder_path and isinstance(default.value, Mapping):
+            item = default.value.get(dashboard)
+            if isinstance(item, Mapping):
+                return item
+        if default.target_path == "values.dashboards" and isinstance(default.value, Mapping):
+            folder_node = default.value.get(folder)
+            if isinstance(folder_node, Mapping):
+                item = folder_node.get(dashboard)
+                if isinstance(item, Mapping):
+                    return item
+    return None
+
+
+def _validate_grafana_report_dashboard_bindings(
+    *,
+    component_id: str,
+    defaults: tuple[ComponentDefault, ...],
+    grafana: GrafanaCliSettings,
+) -> GrafanaCliSettings:
+    resolved_bindings: list[GrafanaReportDashboardBinding] = []
+    datasource_names = {datasource.name for datasource in grafana.datasources}
+    for binding in grafana.report_dashboards:
+        dashboard = _grafana_dashboard_default(
+            defaults,
+            folder=binding.folder,
+            dashboard=binding.dashboard,
+        )
+        field_label = (
+            f"components.apps.{component_id}.cli.grafana.report_dashboards.{binding.signal}"
+        )
+        if dashboard is None:
+            raise ValueError(
+                f"{field_label} references values.dashboards.{binding.folder}."
+                f"{binding.dashboard}, but that dashboard is not declared in defaults"
+            )
+        gnet_id = _parse_optional_positive_int(
+            dashboard.get("gnetId"),
+            field_label=(f"values.dashboards.{binding.folder}.{binding.dashboard}.gnetId"),
+        )
+        if gnet_id is None:
+            raise ValueError(
+                f"{field_label} references values.dashboards.{binding.folder}."
+                f"{binding.dashboard}, but that dashboard does not declare gnetId"
+            )
+        datasource = _as_text(dashboard.get("datasource"))
+        if not datasource:
+            raise ValueError(
+                f"{field_label} references values.dashboards.{binding.folder}."
+                f"{binding.dashboard}, but that dashboard does not declare datasource"
+            )
+        if datasource not in datasource_names:
+            raise ValueError(
+                f"{field_label} references values.dashboards.{binding.folder}."
+                f"{binding.dashboard} datasource '{datasource}', but that datasource "
+                "is not declared in cli.grafana.datasources"
+            )
+        resolved_bindings.append(
+            GrafanaReportDashboardBinding(
+                signal=binding.signal,
+                folder=binding.folder,
+                dashboard=binding.dashboard,
+                gnet_id=gnet_id,
+                datasource=datasource,
+            )
+        )
+    return GrafanaCliSettings(
+        admin_secret=grafana.admin_secret,
+        datasources=grafana.datasources,
+        explore_queries=grafana.explore_queries,
+        logout_timeout=grafana.logout_timeout,
+        org_id=grafana.org_id,
+        read_token=grafana.read_token,
+        report_dashboards=tuple(resolved_bindings),
+    )
+
+
+def _validate_grafana_datasource_read_endpoints(
+    *,
+    observability: GlobalObservabilitySettings,
+    helm_charts: tuple[HelmChartSource, ...],
+) -> None:
+    read_endpoint_keys = {endpoint.key for endpoint in observability.endpoints.read}
+    for chart in helm_charts:
+        for datasource in chart.grafana.datasources:
+            if datasource.read_endpoint not in read_endpoint_keys:
+                raise ValueError(
+                    f"components.apps.{chart.name}.cli.grafana.datasources."
+                    f"{datasource.key}.read_endpoint references "
+                    f"'{datasource.read_endpoint}', but that read endpoint is not "
+                    "declared under observability.endpoints.read"
+                )
+
+
 def _parse_infra_component_cli(
     raw: Any,
     *,
@@ -2067,14 +2679,19 @@ def _parse_infra_component_cli(
             ),
         )
 
-    unknown = sorted(str(key) for key in raw)
+    supported_keys = {"observability"}
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
     if unknown:
         raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
     return (
         Mk8sGpuSettings(),
         Mk8sBootDiskSettings(),
         VmImagePreferenceSettings(),
-        InfraObservabilitySettings(),
+        _parse_infra_observability_settings(
+            raw.get("observability"),
+            module_name=module_name,
+            field_label=f"{field_label}.observability",
+        ),
     )
 
 
@@ -2082,12 +2699,12 @@ def _parse_app_component_cli(
     raw: Any,
     *,
     field_label: str,
-) -> tuple[Mk8sGpuAppPolicy, AppObservabilitySettings]:
+) -> tuple[Mk8sGpuAppPolicy, AppObservabilitySettings, GrafanaCliSettings]:
     if raw is None:
-        return Mk8sGpuAppPolicy(), AppObservabilitySettings()
+        return Mk8sGpuAppPolicy(), AppObservabilitySettings(), GrafanaCliSettings()
     if not isinstance(raw, dict):
         raise ValueError(f"{field_label} must be a mapping")
-    supported_keys = {"mk8s_gpu_policy", "observability"}
+    supported_keys = {"mk8s_gpu_policy", "observability", "grafana"}
     unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
     if unknown:
         raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
@@ -2099,6 +2716,10 @@ def _parse_app_component_cli(
         _parse_app_observability_settings(
             raw.get("observability"),
             field_label=f"{field_label}.observability",
+        ),
+        _parse_grafana_cli_settings(
+            raw.get("grafana"),
+            field_label=f"{field_label}.grafana",
         ),
     )
 
@@ -2724,7 +3345,7 @@ def _parse_sources_payload(
 ) -> ComponentSources:
     if not isinstance(payload, dict):
         raise ValueError("component_sources root must be a mapping")
-    supported_root_keys = {"cli", "shared", "components"}
+    supported_root_keys = {"cli", "shared", "observability", "components"}
     unknown_root = sorted(str(key) for key in payload if str(key) not in supported_root_keys)
     if unknown_root:
         raise ValueError(
@@ -2733,6 +3354,7 @@ def _parse_sources_payload(
 
     cli = _parse_cli_settings(payload.get("cli"))
     shared = _parse_shared_values(payload.get("shared"), source_root=source_root)
+    global_observability = _parse_global_observability_settings(payload.get("observability"))
     components = payload.get("components", {})
     if components is None:
         components = {}
@@ -2936,9 +3558,14 @@ def _parse_sources_payload(
             raw.get("defaults"),
             field_label=f"components.apps.{component_id}",
         )
-        mk8s_gpu, observability = _parse_app_component_cli(
+        mk8s_gpu, observability, grafana = _parse_app_component_cli(
             raw.get("cli"),
             field_label=f"components.apps.{component_id}.cli",
+        )
+        grafana = _validate_grafana_report_dashboard_bindings(
+            component_id=component_id,
+            defaults=defaults,
+            grafana=grafana,
         )
         input_bindings = _parse_component_input_bindings(raw.get("input"))
         helm_charts.append(
@@ -2964,14 +3591,22 @@ def _parse_sources_payload(
                 input_bindings=input_bindings,
                 mk8s_gpu=mk8s_gpu,
                 observability=observability,
+                grafana=grafana,
             )
         )
 
+    tf_module_tuple = tuple(tf_modules)
+    helm_chart_tuple = tuple(helm_charts)
+    _validate_grafana_datasource_read_endpoints(
+        observability=global_observability,
+        helm_charts=helm_chart_tuple,
+    )
     return ComponentSources(
         cli=cli,
         shared=shared,
-        tf_modules=tuple(tf_modules),
-        helm_charts=tuple(helm_charts),
+        tf_modules=tf_module_tuple,
+        helm_charts=helm_chart_tuple,
+        observability=global_observability,
     )
 
 

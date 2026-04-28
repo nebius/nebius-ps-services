@@ -2899,6 +2899,75 @@ def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env
     ]
 
 
+def test_collect_grafana_status_after_flux_waits_until_url_is_assigned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts: list[str] = []
+    sleeps: list[float] = []
+    printed: list[str] = []
+
+    def _fake_collect(*_args: object, **_kwargs: object) -> tuple[dict[str, object], ...]:
+        attempts.append("attempt")
+        if len(attempts) == 1:
+            return ({"target_ref": "cluster2", "base_url": ""},)
+        return ({"target_ref": "cluster2", "base_url": "http://203.0.113.10/"},)
+
+    monotonic_values = iter([100.0, 100.0])
+    monkeypatch.setattr(cli, "grafana_enabled_for_target", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(cli, "collect_grafana_runtime_status", _fake_collect)
+    monkeypatch.setattr(cli.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(cli.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(
+        cli.console,
+        "print",
+        lambda message, *args, **kwargs: printed.append(str(message)),
+    )
+
+    statuses = cli._collect_grafana_status_after_flux(
+        {},
+        extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
+        target_ref="cluster2",
+        timeout_seconds=30.0,
+        poll_interval_seconds=5.0,
+    )
+
+    assert statuses == ({"target_ref": "cluster2", "base_url": "http://203.0.113.10/"},)
+    assert sleeps == [5.0]
+    assert printed == ["Waiting for Grafana Gateway/LoadBalancer address for cluster2..."]
+
+
+def test_collect_grafana_status_after_flux_returns_pending_status_after_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    printed: list[str] = []
+
+    monkeypatch.setattr(cli, "grafana_enabled_for_target", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        cli,
+        "collect_grafana_runtime_status",
+        lambda *_args, **_kwargs: ({"target_ref": "cluster2", "base_url": ""},),
+    )
+    monotonic_values = iter([100.0, 102.0])
+    monkeypatch.setattr(cli.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        cli.console,
+        "print",
+        lambda message, *args, **kwargs: printed.append(str(message)),
+    )
+
+    statuses = cli._collect_grafana_status_after_flux(
+        {},
+        extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
+        target_ref="cluster2",
+        timeout_seconds=1.0,
+        poll_interval_seconds=5.0,
+    )
+
+    assert statuses == ({"target_ref": "cluster2", "base_url": ""},)
+    assert any("Grafana URL for cluster2 is still pending" in message for message in printed)
+
+
 def test_deploy_generated_artifacts_without_apps_still_prepares_kube_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

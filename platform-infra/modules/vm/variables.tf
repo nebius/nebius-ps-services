@@ -278,7 +278,7 @@ variable "observability_collector_region_id" {
 }
 
 variable "observability_collector_package_version" {
-  description = "Pinned nebius-o11y-agent deb package version for the standalone collector."
+  description = "Pinned deb package version for the standalone collector."
   type        = string
   default     = ""
   nullable    = false
@@ -291,13 +291,114 @@ variable "observability_collector_package_version" {
   }
 }
 
+variable "observability_collector_package_name" {
+  description = "Deb package name for the standalone collector."
+  type        = string
+  default     = ""
+  nullable    = false
+  validation {
+    condition = (
+      length(trimspace(var.observability_collector_package_name)) > 0 ||
+      !var.observability_collector_enabled
+    )
+    error_message = "observability_collector_package_name must be a non-empty package name when observability_collector_enabled=true."
+  }
+}
+
+variable "observability_collector_apt_repository" {
+  description = "APT repository URL for the standalone collector package."
+  type        = string
+  default     = ""
+  nullable    = false
+  validation {
+    condition = (
+      length(trimspace(var.observability_collector_apt_repository)) > 0 ||
+      !var.observability_collector_enabled
+    )
+    error_message = "observability_collector_apt_repository must be a non-empty URL when observability_collector_enabled=true."
+  }
+}
+
+variable "observability_collector_apt_key_url" {
+  description = "APT repository signing key URL for the standalone collector package."
+  type        = string
+  default     = ""
+  nullable    = false
+  validation {
+    condition = (
+      length(trimspace(var.observability_collector_apt_key_url)) > 0 ||
+      !var.observability_collector_enabled
+    )
+    error_message = "observability_collector_apt_key_url must be a non-empty URL when observability_collector_enabled=true."
+  }
+}
+
+variable "observability_collector_apt_suite" {
+  description = "APT suite for the standalone collector package repository."
+  type        = string
+  default     = ""
+  nullable    = false
+  validation {
+    condition = (
+      length(trimspace(var.observability_collector_apt_suite)) > 0 ||
+      !var.observability_collector_enabled
+    )
+    error_message = "observability_collector_apt_suite must be non-empty when observability_collector_enabled=true."
+  }
+}
+
+variable "observability_collector_apt_component" {
+  description = "APT component for the standalone collector package repository."
+  type        = string
+  default     = ""
+  nullable    = false
+  validation {
+    condition = (
+      length(trimspace(var.observability_collector_apt_component)) > 0 ||
+      !var.observability_collector_enabled
+    )
+    error_message = "observability_collector_apt_component must be non-empty when observability_collector_enabled=true."
+  }
+}
+
+variable "observability_collector_apt_origin" {
+  description = "APT origin host allowed for the standalone collector package."
+  type        = string
+  default     = ""
+  nullable    = false
+  validation {
+    condition = (
+      length(trimspace(var.observability_collector_apt_origin)) > 0 ||
+      !var.observability_collector_enabled
+    )
+    error_message = "observability_collector_apt_origin must be non-empty when observability_collector_enabled=true."
+  }
+}
+
+variable "observability_collector_prometheus_package_name" {
+  description = "Deb package name for the Prometheus agent companion."
+  type        = string
+  default     = ""
+  nullable    = false
+  validation {
+    condition = (
+      length(trimspace(var.observability_collector_prometheus_package_name)) > 0 ||
+      !(
+        var.observability_collector_enabled &&
+        var.observability_collector_metrics_enabled
+      )
+    )
+    error_message = "observability_collector_prometheus_package_name must be non-empty when observability_collector_enabled=true and observability_collector_metrics_enabled=true."
+  }
+}
+
 variable "observability_collector_iam_token_file" {
   description = "IAM token file path used by the standalone collector."
   type        = string
   default     = "/mnt/cloud-metadata/token"
   nullable    = false
   validation {
-    condition = length(trimspace(var.observability_collector_iam_token_file)) > 0
+    condition     = length(trimspace(var.observability_collector_iam_token_file)) > 0
     error_message = "observability_collector_iam_token_file must be a non-empty path."
   }
 }

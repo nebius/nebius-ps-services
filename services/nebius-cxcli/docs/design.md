@@ -182,6 +182,7 @@ Sections:
 - `cli.flux.version`
 - `cli.flux.release_timeout`
 - `cli.terraform.version`
+- `observability.endpoints.<read|write>.<endpoint-key>`
 - `components.infra.<component-id>`
   - `source.portable`, optional `source.local`, optional `ui`, optional `status`, optional `defaults`, optional component-local `cli`, optional `wizard_profile`, optional `wizard`, optional `input`
 - `components.apps.<component-id>`
@@ -500,6 +501,13 @@ Nebius observability has three public services:
 - Logging stores logs and exposes them through the web console, Loki-compatible APIs, the Nebius CLI, and Grafana-compatible read paths.
 - Tracing stores traces and exposes them through OpenTelemetry write APIs plus Tempo-compatible read paths.
 
+Nebius service telemetry is separate from cxcli-managed collectors. The current
+[supported-services page](https://docs.nebius.com/observability/services) lists
+Monitoring metrics for Compute VMs/volumes, MK8s, Object Storage, MLflow, and
+Managed PostgreSQL, and Logging for Compute serial logs, MLflow, Managed
+PostgreSQL, MK8s, and MK8s applications. cxcli models those service-side
+metric/log domains as source catalog buckets.
+
 Nebius also has two agent families with different responsibilities:
 
 - The Monitoring agent runs on Compute virtual machines and Managed Kubernetes node VMs. It is preinstalled by Nebius, collects system metrics, and can also forward journald logs from systemd services when the supported VM labels are enabled.
@@ -524,9 +532,22 @@ part of the observability contract.
 1. Catalog authorship.
    `component_sources.yaml` owns stable source facts: which built-in component
    provides an observability path, which chart is the MK8s collector, which
-   signal defaults are customer-facing, which endpoint templates should be
-   rendered into reports, and which app-side metric targets such as DCGM
-   Exporter need catalog-owned prerequisites.
+   signal defaults are customer-facing, which read/write endpoint records should
+   be rendered into reports, which Grafana dashboards should be bound to the
+   Metrics/Logs/Traces report links, and which app-side metric targets such as
+   DCGM Exporter need catalog-owned prerequisites. Endpoint records are global
+   metadata under `observability.endpoints.<read|write>` because Nebius
+   Observability read/write APIs are tenant/project surfaces, not MK8s-owned or
+   VM-owned resources. Each record owns the endpoint key, report label,
+   URL/template text, `include_when` selectors, and optional bucket placeholder
+   expansion. Grafana
+   report bindings are metadata under `components.apps.grafana.cli.grafana`:
+   `datasources` declares the display names, stable UIDs, types, default marker,
+   and Observability read endpoint keys that cxcli provisions into Grafana;
+   `logout-timeout` sets Grafana's idle auth-session duration and defaults to `20m`;
+   `report_dashboards` binds each signal to one `<folder>/<dashboard>` reference under
+   `values.dashboards.*`, and the referenced dashboard default must declare
+   `gnetId` plus a datasource declared in `cli.grafana.datasources`.
 2. Customer intent.
    `create`, `component add`, and direct `config.yaml` edits write only
    customer intent under `deploy.targets[].observability.*` for MK8s and
@@ -571,42 +592,150 @@ includes three observability sections when the selected signals require them:
 - `Observability Endpoints`: project-scoped datasource base URLs and regional
   write URLs, including concrete Prometheus federation URLs for service buckets
   that apply to the selected/deploy-created resources. Datasource base URLs are
-  not direct browser health checks; use the probe URLs below for direct
-  reachability checks.
-- `Grafana Read Data Sources`: the datasource base URLs and datasource types
-  to enter in Grafana. These are the URLs from the Nebius Grafana workflows;
-  opening a datasource base URL directly can return `404` because Grafana
-  calls Prometheus, Loki, and Tempo API subpaths below it.
-- `Read Endpoint Probe URLs`: auth-required API URLs for direct browser or
-  `curl` checks. Without credentials, a live route can return `401` or `403`;
-  with credentials, the probe URL can succeed even when the corresponding
-  datasource base URL returns `404` in a browser. Those probe URLs are for
-  reachability diagnostics; they are not the values to paste into the Grafana
-  datasource URL field.
+  kept visible for external tools, but the report does not include raw API probe
+  URLs by default.
+- `Grafana`: the live bundled Grafana URL, short Metrics/Logs/Traces report
+  links, dashboard index links, and the target-scoped admin-password command for
+  every configured Grafana target. Report links use the catalog-bound dashboard
+  for each signal when Grafana has imported it and fall back to the matching
+  Explore view otherwise.
 
 The report intentionally does not write credentials. Operators supply
 `Authorization: Bearer <observability static token or IAM token>` out of band,
 using a service account or IAM token with project observability read access for
 Grafana and other read-side tools.
 
+Grafana datasource contract:
+
+- The bundled `grafana` app declares its read-side contract under
+  `components.apps.grafana.cli.grafana` in `component_sources.yaml`.
+  `admin` owns the runtime admin username plus Secret name/keys, and
+  `read_token` owns the Observability read-token Secret name/key and Grafana
+  environment variable. cxcli issues that key for an ensured service account
+  with the `viewer` role and stores the token only in the runtime Kubernetes
+  Secret named by this catalog record. `datasources` owns the Grafana display name, UID,
+  datasource type, default marker, and read endpoint key. `orgId` and
+  `explore_queries` own generated link org selection and fallback Explore
+  queries. `report_dashboards` owns the
+  Metrics/Logs/Traces report binding by pointing each signal at one
+  `values.dashboards.<folder>.<dashboard>` entry. The referenced dashboard
+  entry owns the Grafana.com `gnetId`, revision, and datasource display name.
+- `service-metrics` provisions the `Nebius Services` Prometheus datasource from
+  the `metrics_service_provider_read` endpoint key. That endpoint renders to
+  `https://read.monitoring.api.nebius.cloud/projects/<project-id>/service-provider/prometheus`
+  and reads Nebius/provider service metrics. This metric domain includes
+  Nebius-managed service telemetry, platform/node-style metrics, GPU/DCGM
+  metrics exposed through the service-provider path, and other metrics owned by
+  Nebius service integrations.
+- `user-metrics` provisions the `Nebius User Metrics` Prometheus datasource from
+  the `metrics_user_read` endpoint key. That endpoint renders to
+  `https://read.monitoring.api.nebius.cloud/projects/<project-id>/prometheus`
+  and reads customer/user-ingested Prometheus metrics. For cxcli-managed MK8s
+  observability, this is where Kubernetes API server, cAdvisor/container,
+  namespace, pod, and workload-style metrics from the Nebius observability agent
+  are read back.
+- The two Prometheus datasources are not duplicates and are not a single
+  automatic aggregation layer. They are separate server-side read views into
+  different metric domains. PromQL aggregation still happens only when the
+  dashboard query asks for it with expressions such as `sum by (...)`,
+  `avg by (...)`, or `rate(...)`.
+- This split is intentional in the workflow. `validate-sources` verifies that a
+  report dashboard references a declared dashboard default and that the
+  dashboard's datasource name is declared in `cli.grafana.datasources`.
+  It also verifies that every Grafana datasource `read_endpoint` references a
+  read endpoint declared under `observability.endpoints.read`.
+  Normalization/render materializes both datasource entries into the target
+  Grafana HelmRelease. `deploy`, `flux apply`, and `flux bootstrap` create the
+  read-token Secret, mount it into Grafana provisioning, set the live public
+  `root_url`, and generate short report links against the dashboard selected by
+  `report_dashboards`. If an existing read-token Secret is present but a
+  catalog-bound Prometheus read endpoint rejects it with `401` or `403`, cxcli
+  refreshes the Secret with a newly issued Observability static key. Kubernetes
+  workload dashboards should bind to
+  `Nebius User Metrics`; Nebius service/platform dashboards should bind to
+  `Nebius Services`.
+
 ### Source Catalog Contract
 
 `component_sources.yaml` is the authoritative source-owned observability registry:
 
+- `observability.endpoints.*` defines the tenant/project-wide Nebius Observability
+  read/write endpoint templates used by reports, Grafana datasource bindings,
+  and collector guidance:
+  - `endpoints.write.*` covers public Monitoring, Logging, and Tracing ingest
+    endpoints plus platform-managed write notes
+  - `endpoints.read.*` covers public Prometheus, Loki, Tempo, and federation
+    read endpoints
+  - endpoint records are global because those APIs are reusable by MK8s, VM,
+    Object Storage, PostgreSQL, and future Nebius resource types
 - `components.infra.mk8s.cli.observability.*` defines the Kubernetes-agent contract:
   - `primary_agent.kind: kubernetes_agent`
   - `primary_agent.chart_component_id`
   - `primary_agent.{logs,metrics,traces}` keep the customer-facing signal defaults
-  - nested `endpoints.write.*` and `endpoints.read.*` templates for generated inventory/report guidance
+  - `service_metrics.buckets` and `service_logs.buckets` declare the Nebius-managed service metric/log domains that exist for the cluster itself
 - `components.infra.vm.cli.observability.*` defines the VM Monitoring-agent contract:
   - `primary_agent.kind: monitoring_agent`
   - `primary_agent.metrics` records the built-in VM metrics path
   - `primary_agent.logs` keeps the VM journald collection defaults
-  - default-off `public_ingest.*` defaults for public write-side ingest
-  - nested `endpoints.write.*` and `endpoints.read.*` templates
+  - `service_metrics.buckets` and `service_logs.buckets` declare the automatic Compute metric domains and Compute serial-log bucket
+  - default-off `public_ingest.*` defaults for public write-side ingest, including the collector package source and Prometheus companion package
+- Other Nebius service components use the same `cli.observability.service_metrics.buckets`
+  and `cli.observability.service_logs.buckets` shape without pretending to own
+  an agent. In the bundled catalog, Object Storage declares the `sp_storage`
+  service-metrics bucket, Managed PostgreSQL declares the `msp` metrics bucket
+  and `sp_postgres` log bucket, and Object Storage request logs stay documented
+  as Audit Logs rather than a Loki bucket.
 - `components.apps.<id>.cli.observability.metric_targets` is the app-side source-owned place for metrics endpoints or prerequisites when cxcli must reason about them. In the bundled catalog this is how cxcli tracks the GPU Operator DCGM Exporter source through `discovery.*` metadata and the Nebius-specific GPU node policy required to make that source actually run on Nebius driverful nodes.
 
-The catalog owns the source facts; Python owns only the evaluation and materialization logic.
+Each endpoint record has this shape:
+
+```yaml
+observability:
+  endpoints:
+    read:
+      metrics_user_read:
+        label: Metrics read (Prometheus, user-ingested metrics)
+        template: https://read.monitoring.api.nebius.cloud/projects/{project_id}/prometheus
+        include_when:
+          - kubernetes_metrics
+          - vm_standalone_metrics
+    write:
+      metrics_prometheus_remote_write:
+        label: Metrics write (Prometheus Remote Write)
+        template: https://write.monitoring.{region}.nebius.cloud/projects/{project_id}/prometheus/api/v1/write
+        include_when:
+          - kubernetes_metrics
+          - vm_standalone_metrics
+```
+
+The endpoint key is the stable binding handle. Grafana datasources refer to
+that key with `read_endpoint`; reports use `label`; endpoint rendering uses
+`template`; and `include_when` selects the endpoint from computed deployment
+signals such as `kubernetes_metrics`, `vm_standalone_logs`, `logs`, or
+`metrics`. A future read endpoint can be added by declaring a new
+`observability.endpoints.read.<key>` record and binding a Grafana datasource to
+that key.
+Python owns only signal evaluation and materialization, not the endpoint
+allowlist.
+
+Service metric/log bucket records have this shape:
+
+```yaml
+service_metrics:
+  buckets:
+    sp_storage:
+      label: Object Storage service metrics
+service_logs:
+  buckets:
+    sp_postgres:
+      label: Managed Service for PostgreSQL logs
+```
+
+The bucket key is the value used in service-provider Prometheus federation URLs
+or the Loki `__bucket__` selector. `include_when` is optional and can refer to
+generic component conditions such as `inputs.gpu_enabled`; if omitted, the
+bucket applies whenever that component row is enabled. This keeps future Nebius
+service bucket additions in `component_sources.yaml` instead of Python.
 
 Important catalog choices:
 
@@ -655,6 +784,7 @@ Design rules for the customer config:
 - `deploy.targets[].instance_id` binds target-scoped deploy settings to an enabled MK8s cluster target.
 - `deploy.targets[].observability.enabled` is the per-cluster switch for cxcli-managed MK8s observability.
 - Nebius Monitoring/Logging/Tracing endpoints are project-scoped service surfaces. Deploy observability settings control whether cxcli deploys or configures producers against them; they are not the thing that makes the endpoint URLs exist.
+- Nebius-managed service metrics/logs for enabled resources are represented by catalog bucket metadata, not by customer `deploy.observability.*` toggles. For example, PostgreSQL and Object Storage service metrics can appear in the report even when no cxcli-managed collector is enabled.
 - `deploy.targets[].observability.kubernetes.*` is only for the MK8s Kubernetes-agent path.
 - `deploy.observability.vm.logs.*` is only for the VM Monitoring-agent journald-label path.
 - `deploy.observability.vm.collector.*` is the separate default-off cxcli-managed standalone VM collector path for public write-side journald logs and host metrics.
@@ -679,14 +809,15 @@ The source/catalog contract becomes runtime state during normalization and rende
 
 - When `deploy.targets[].observability.enabled=true` for an MK8s component, cxcli ensures the bundled collector and Grafana chart rows exist for that target. The collector materializes target-facing toggles into chart-native `values.config.*`; Grafana materializes datasource provisioning for the selected Metrics, Logs, and Traces read endpoints.
 - In multi-target projects, that materialization is target-scoped: each enabled MK8s target gets its own collector and Grafana rows with their own `instance_id` and `target_ref`.
-- Grafana datasource values are generated from the same catalog endpoint templates used by the deploy report. The generated chart values contain datasource URLs and stable UIDs only; the bearer token comes from a deploy-time Kubernetes Secret exposed as an environment variable for Grafana provisioning. Nebius dashboards expect the Prometheus service-metrics datasource display name `Nebius Services`, so cxcli provisions that name while retaining the stable `nebius-service-metrics` UID for Explore links and automation.
+- Grafana admin Secret values, read-token Secret/environment values, datasource values, fallback Explore queries, report dashboard bindings, org ID, and the idle auth-session timeout are generated from the active catalog. Datasource URLs use the same catalog endpoint records used by the deploy report. The bearer token comes from a deploy-time Kubernetes Secret exposed as an environment variable for Grafana provisioning. `Nebius Services` points at the service-provider Monitoring read endpoint; `Nebius User Metrics` points at the user-ingested Prometheus read endpoint because that endpoint contains the cxcli-managed Kubernetes agent metrics. Logs and traces use `Nebius Logs` and `Nebius Traces`. Catalog validation fails if a report binding references a missing dashboard default, a dashboard default without `gnetId` and `datasource` metadata, a datasource name not declared under `cli.grafana.datasources`, or a datasource read endpoint not declared under the observability endpoint registry.
 - The built-in VM Monitoring agent remains platform-managed whenever a `vm` component is enabled; cxcli does not install it and does not configure its internal metrics ingest path.
 - When `deploy.observability.enabled=true` and a VM component is enabled, cxcli materializes the supported Compute labels into `infra.components[id=vm].inputs.labels`:
   - `nebius.o11y.systemd-logs-collection.enabled=true`
   - optional `nebius.o11y.systemd-logs-collection.units=<unit1;unit2>`
 - When `deploy.observability.enabled=true` and `deploy.observability.vm.collector.enabled=true`, cxcli also materializes hidden VM module inputs that bootstrap the standalone collector:
-  - pinned `nebius-o11y-agent` package version
-  - canonical public APT repo `https://artifactory.nebius.dev/artifactory/nebius-o11y-agent`
+  - catalog-defined collector package name/version
+  - catalog-defined APT repository URL, key URL, suite, component, and origin
+  - catalog-defined Prometheus companion package name
   - VM metadata token path
   - public regional write endpoints derived from `client_info.nebius.region_id`
   - loopback ports for the local metrics export and Prometheus agent
@@ -726,7 +857,7 @@ VM metrics:
 
 VM standalone collector metrics:
 
-- The default-off standalone collector uses `nebius-o11y-agent` on the VM to expose host metrics on loopback and a Prometheus agent companion to remote-write them to Monitoring.
+- The default-off standalone collector uses the catalog-defined `nebius-o11y-agent` package on the VM to expose host metrics on loopback and a catalog-defined Prometheus agent companion to remote-write them to Monitoring.
 - This is intentionally a customer-managed public-ingest path, separate from the built-in Monitoring agent.
 - The current cxcli-managed metrics set is host-oriented and comes from the public `nodeexporterreceiver` path. It is meant to give customers one cross-resource dashboard path for VM and MK8s metrics, not to replace Nebius service metrics.
 
@@ -740,7 +871,7 @@ VM journald logs:
 VM standalone collector logs:
 
 - The default-off standalone collector can also forward journald logs through the public Logging gRPC endpoint.
-- cxcli uses the public `nebius-o11y-agent` package for that path and authenticates it with the VM metadata token, again keeping this separate from the built-in Monitoring-agent journald-label path.
+- cxcli uses the public `nebius-o11y-agent` package for the bundled default path and authenticates it with the VM metadata token, again keeping this separate from the built-in Monitoring-agent journald-label path. The VM module no longer hardcodes the package repository or companion package; cxcli materializes those fields from `components.infra.vm.cli.observability.public_ingest`.
 - The same optional `systemd_units` allowlist concept exists here, but it applies to the standalone collector's own journald receiver config rather than Compute labels.
 
 ### Endpoints and Auth
@@ -763,12 +894,12 @@ Write endpoints relevant to the standalone VM collector path:
 
 Read endpoints:
 
-- Nebius service metrics: `https://read.monitoring.api.nebius.cloud/projects/<project-id>/service-provider/prometheus` (`service-provider` is literal)
-- User-ingested metrics: `https://read.monitoring.api.nebius.cloud/projects/<project-id>/prometheus`
-- Prometheus federation bucket URLs: `https://read.monitoring.api.nebius.cloud/projects/<project-id>/buckets/<bucket>/prometheus/federate`, where `<bucket>` is selected from the known service buckets that apply to the deployment, such as `compute`, `gpu`, `nbs`, `sp_storage`, and `msp` for managed PostgreSQL/MLflow services
+- Nebius/provider service metrics: `https://read.monitoring.api.nebius.cloud/projects/<project-id>/service-provider/prometheus` (`service-provider` is literal). The bundled Grafana `Nebius Services` datasource uses this endpoint.
+- Customer/user-ingested metrics: `https://read.monitoring.api.nebius.cloud/projects/<project-id>/prometheus`. The bundled Grafana `Nebius User Metrics` datasource uses this endpoint.
+- Prometheus federation bucket URLs: `https://read.monitoring.api.nebius.cloud/projects/<project-id>/buckets/<bucket>/prometheus/federate`, where `<bucket>` is selected from catalog-declared service buckets that apply to the deployment, such as `compute`, `gpu`, `nbs`, `sp_storage`, and `msp`
 - Loki-compatible logs: `https://read.logging.api.nebius.cloud/projects/<project-id>`
 - Tempo-compatible traces: `https://read.tracing.api.nebius.cloud/projects/<project-id>/tempo`
-- Direct API probes for reachability use tool-specific subpaths below those datasource URLs, for example `/api/v1/query?query=count(...)` or `/api/v1/query?query=up` for Prometheus, `/loki/api/v1/query?...` for Loki, and `/api/v2/search/tags` for Tempo. The generated report includes concrete project-scoped probe URLs for enabled read signals because the datasource base URL can return `404` when opened directly.
+- Direct API probes for reachability use tool-specific subpaths below those datasource URLs, for example `/api/v1/query?query=count(...)` or `/api/v1/query?query=up` for Prometheus, `/loki/api/v1/query?...` for Loki, and `/api/v2/search/tags` for Tempo. The generated report intentionally omits those raw probe URLs by default because the bundled Grafana links and datasource base URLs are the customer-facing handoff.
 
 Auth model:
 
@@ -783,7 +914,7 @@ Auth model:
 - External collectors, `nebius logging`, Prometheus, LogCLI, or Grafana use `Authorization: Bearer <observability static token or IAM token>` supplied out of band.
 - cxcli never asks the user to paste those secrets into `config.yaml`.
 - For in-cluster Grafana, `deploy`, `flux apply`, and `flux bootstrap` create or reuse the target-cluster admin/password Secret and Observability read-token Secret before Helm reconciliation. If the read-token Secret is missing, cxcli ensures a project service account, grants `viewer` through a project IAM group, issues an `OBSERVABILITY` static key, and stores the one-time token only in that Kubernetes Secret.
-- The generated deploy report renders three separate user-facing sections: public write endpoints, public read endpoints, and Grafana links. The Grafana section reports the live LoadBalancer URL when the Service has an address, Metrics/Logs/Traces Explore links, dashboard links, and the `kubectl` command for retrieving the admin password. Direct read API probe URLs remain in a separate probe section because opening datasource base URLs directly can return `404`.
+- The generated deploy report renders three user-facing observability surfaces: public write endpoints, public read endpoints, and Grafana links. The Grafana section lists every configured Grafana target, shows pending links until `deploy` or `flux apply` can read the target Gateway/LoadBalancer status, waits briefly for a newly created Gateway/LoadBalancer address, then reports the live URL, catalog-bound Metrics/Logs/Traces dashboard links when Grafana has imported them, fallback Explore links using Grafana's `panes` URL schema when a dashboard is not ready, dashboard index links, and the target-specific `kubectl --context=...` command for retrieving the admin password. Direct read API probe URLs are kept out of the default report to keep the customer handoff compact.
 
 VM-specific note:
 
@@ -794,9 +925,9 @@ VM-specific note:
 
 - Existing VMs need a stop/start cycle after changing journald labels before the Monitoring agent picks up the new configuration.
 - Public docs say omitted `deploy.observability.vm.logs.systemd_units` means all systemd services. cxcli keeps that default, but explicit units are still the deterministic smoke-test path.
-- The standalone VM collector path is different from the built-in Monitoring-agent path operationally: it is installed/configured by cloud-init on first boot from the canonical public Artifactory APT repo and currently assumes an attached service account plus a module-managed Ubuntu-family image.
+- The standalone VM collector path is different from the built-in Monitoring-agent path operationally: it is installed/configured by cloud-init on first boot from the package source materialized out of `component_sources.yaml` and currently assumes an attached service account plus a module-managed Ubuntu-family image.
 - The detailed Kubernetes-agent docs define logs, metrics, and traces. That is the signal contract cxcli follows for MK8s, even though the public agents overview page summarizes the Kubernetes agent more narrowly.
-- Grafana is the only read-side tool cxcli deploys automatically for MK8s observability. Prometheus configs, LogCLI environment variables, and any external Grafana instance remain operator-side concerns; the deploy report keeps the read endpoint URLs visible for those external tools.
+- Grafana is the only read-side tool cxcli deploys automatically for MK8s observability. Prometheus configs, LogCLI environment variables, and any external Grafana instance remain operator-side concerns; the deploy report keeps the read endpoint URLs visible for those external tools. For bundled Grafana, deploy-time status collection loads `components.apps.grafana.cli.grafana.report_dashboards`, `explore_queries`, and `orgId` from the active source catalog and prefers those imported dashboards for Metrics, Logs, and Traces. The bundled catalog binds Metrics to Grafana.com dashboard `315` with `Nebius User Metrics` because it uses cAdvisor-style Prometheus metrics for cluster CPU, memory, filesystem, network, pod, and container views; Logs to dashboard `18494` with `Nebius Logs`; and Traces to dashboard `20600` with `Nebius Traces`. Nebius service dashboards bind to `Nebius Services`, a separate Prometheus datasource for the service-provider Monitoring read endpoint. The Traces dashboard is Tempo-compatible and therefore fits the provisioned datasource, but it is workload-specific and may be sparse unless workloads emit compatible traces. Prometheus-only Tempo backend dashboards are intentionally not bound to the Traces report link. If any dashboard is not imported yet, that signal falls back to the catalog-defined Explore `panes` query for the datasource declared by the bound dashboard. cxcli sets the live Grafana root URL to the discovered public Gateway/LoadBalancer address, asks Grafana to persist short `/goto/...` links for the selected dashboard or Explore pages, and then emits those public links in the report so Grafana's own redirect cannot point at `localhost`.
 - cxcli references maintained upstream third-party artifacts from `component_sources.yaml` instead of vendoring them. The bundled observability console uses the maintained Grafana community Helm chart, the official `grafana/grafana` image, Grafana.com dashboard IDs, and Envoy Gateway for Gateway API load-balancer exposure. The catalog-created EnvoyProxy sets the generated public LoadBalancer service to `externalTrafficPolicy: Cluster`, because Nebius Managed Kubernetes load balancers reject Envoy Gateway's default `Local` policy. CPU-only platform/observability charts use hard node affinity with `nebius.com/gpu NotIn ["true"]` so Grafana, Envoy Gateway, cert-manager, ExternalDNS, External Secrets, and n8n do not consume GPU worker capacity by default. The catalog defines this block once as YAML anchor `&nebius_cpu_only_node_affinity` and reuses it with aliases, but rendered HelmRelease values contain ordinary Kubernetes affinity objects rather than YAML anchor semantics. Because it is hard affinity, GPU-only clusters need an operator override or CPU node capacity for these platform pods. Third-party binaries, Helm charts, container images, package repositories, and dashboard JSON referenced by the catalog remain governed by their own upstream licenses, support terms, usage terms, and distribution policies. This repository's license covers the cxcli source and generated automation, not the operator's deployed use of those referenced artifacts.
 
 ### Onboarding Workflow
@@ -810,7 +941,7 @@ Use this sequence when onboarding observability for any bundled or new service:
    - If Nebius already provides a managed agent path, keep that path authoritative unless the user is explicitly asking for the standalone collector behavior.
 2. Declare source-owned observability metadata in `component_sources.yaml`.
    - Put stable facts under `components.<scope>.<id>.cli.observability.*`.
-   - Keep chart ids, endpoint templates, default toggles, and source-specific guardrails in the catalog.
+   - Keep chart ids, global endpoint templates, default toggles, and source-specific guardrails in the catalog.
 3. Expose only the customer-facing project contract in `config.yaml`.
    - `deploy.targets[].observability.enabled`
    - `deploy.targets[].observability.kubernetes.*`
@@ -819,7 +950,7 @@ Use this sequence when onboarding observability for any bundled or new service:
 4. Materialize runtime state during normalization and render.
    - MK8s: chart rows plus managed `values.config.*`
    - VM: supported `nebius.o11y.systemd-logs-collection.*` labels
-   - VM standalone collector: hidden module inputs that bootstrap the public `nebius-o11y-agent` package plus the Prometheus agent companion
+   - VM standalone collector: hidden module inputs that bootstrap the catalog-defined public collector package plus the catalog-defined Prometheus agent companion
 5. Validate and report the runtime contract.
    - Fail fast on unsupported `deploy.targets[].observability.*` or `deploy.observability.*` keys or wrong types.
    - Generated reports must say which agent path is active, which signals are enabled, and which endpoints apply.

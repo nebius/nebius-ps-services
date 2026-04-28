@@ -270,6 +270,8 @@ from .terraform_ops import (
 from .terraform_provider import build_provider_module_name
 
 console = Console()
+GRAFANA_STATUS_POLL_INTERVAL_SECONDS = 15.0
+GRAFANA_STATUS_TIMEOUT_SECONDS = 300.0
 
 
 def _console_is_terminal() -> bool:
@@ -10266,14 +10268,54 @@ def _collect_grafana_status_after_flux(
     *,
     extra_env: dict[str, str] | None,
     target_ref: str = "",
+    timeout_seconds: float = GRAFANA_STATUS_TIMEOUT_SECONDS,
+    poll_interval_seconds: float = GRAFANA_STATUS_POLL_INTERVAL_SECONDS,
 ) -> tuple[dict[str, Any], ...]:
     if not grafana_enabled_for_target(config, target_ref=target_ref):
         return ()
-    try:
-        return collect_grafana_runtime_status(config, extra_env=extra_env, target_ref=target_ref)
-    except Exception as exc:
-        console.print(f"{warning_markup('WARNING:', bold=True)} Failed to resolve Grafana URL: {exc}")
-        return ()
+    target_label = target_ref or "current cluster"
+    deadline = time.monotonic() + max(0.0, timeout_seconds)
+    last_statuses: tuple[dict[str, Any], ...] = ()
+    last_error: Exception | None = None
+    announced_wait = False
+    while True:
+        try:
+            statuses = collect_grafana_runtime_status(
+                config,
+                extra_env=extra_env,
+                target_ref=target_ref,
+            )
+            if statuses:
+                last_statuses = statuses
+                last_error = None
+            if statuses and all(str(status.get("base_url") or "").strip() for status in statuses):
+                return statuses
+        except Exception as exc:
+            last_error = exc
+
+        now = time.monotonic()
+        remaining = deadline - now
+        if remaining <= 0:
+            if last_statuses:
+                console.print(
+                    f"{warning_markup('WARNING:', bold=True)} Grafana URL for {target_label} "
+                    "is still pending; deploy-report.md will keep pending links until "
+                    "a later deploy or flux apply can read the Gateway/LoadBalancer status."
+                )
+                return last_statuses
+            detail = f": {last_error}" if last_error is not None else ""
+            console.print(
+                f"{warning_markup('WARNING:', bold=True)} Failed to resolve Grafana URL "
+                f"for {target_label}{detail}"
+            )
+            return ()
+
+        if not announced_wait:
+            console.print(
+                f"Waiting for Grafana Gateway/LoadBalancer address for {target_label}..."
+            )
+            announced_wait = True
+        time.sleep(min(max(0.1, poll_interval_seconds), remaining))
 
 
 def _deploy_generated_artifacts(
@@ -10464,7 +10506,15 @@ def _deploy_generated_artifacts(
                 except Exception as exc:
                     validation_error = exc
     if grafana_statuses:
-        write_grafana_status(paths, grafana_statuses)
+        write_grafana_status(
+            paths,
+            grafana_statuses,
+            preserve_existing=bool(
+                manifest_targets
+                and selected_targets
+                and len(selected_targets) < len(manifest_targets)
+            ),
+        )
         write_inventory(config, paths, validations=declared_validations)
     if declared_validations:
         artifacts = write_inventory(config, paths, validations=declared_validations)
@@ -14820,7 +14870,15 @@ def flux_apply_command(
             _warn_if_flux_gitops_not_bootstrapped(config, paths, extra_env=None)
             console.print(f"Flux applied from {paths.flux_dir}")
         if grafana_statuses:
-            write_grafana_status(paths, grafana_statuses)
+            write_grafana_status(
+                paths,
+                grafana_statuses,
+                preserve_existing=bool(
+                    manifest_targets
+                    and selected_targets
+                    and len(selected_targets) < len(manifest_targets)
+                ),
+            )
             write_inventory(config, paths, validations=_manifest_deploy_validations(manifest))
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)

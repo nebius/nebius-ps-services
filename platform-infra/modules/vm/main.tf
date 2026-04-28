@@ -221,6 +221,7 @@ resource "nebius_compute_v1_instance" "vm" {
 
     precondition {
       condition = !(
+        var.observability_collector_enabled &&
         var.observability_collector_metrics_enabled &&
         var.observability_collector_metrics_export_port == var.observability_collector_prometheus_agent_port
       )

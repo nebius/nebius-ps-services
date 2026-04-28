@@ -41,30 +41,30 @@ write_files:
       export PATH="/usr/sbin:/usr/bin:/sbin:/bin"
 
       install -m 0755 -d /etc/apt/keyrings
-      curl -fsSL https://artifactory.nebius.dev/artifactory/nebius-o11y-agent/key.gpg -o /etc/apt/keyrings/o11y.gpg
+      curl -fsSL "${observability_collector_apt_key_url}" -o /etc/apt/keyrings/o11y.gpg
 
       cat >/etc/apt/sources.list.d/nebius-o11y.list <<'EOF'
-      deb [signed-by=/etc/apt/keyrings/o11y.gpg] https://artifactory.nebius.dev/artifactory/nebius-o11y-agent stable main
+      deb [signed-by=/etc/apt/keyrings/o11y.gpg] ${observability_collector_apt_repository} ${observability_collector_apt_suite} ${observability_collector_apt_component}
       EOF
 
       cat >/etc/apt/preferences.d/nebius-o11y-allowlist <<'EOF'
       Package: *
-      Pin: origin "artifactory.nebius.dev"
+      Pin: origin "${observability_collector_apt_origin}"
       Pin-Priority: -1
 
-      Package: nebius-o11y-agent
-      Pin: origin "artifactory.nebius.dev"
+      Package: ${observability_collector_package_name}
+      Pin: origin "${observability_collector_apt_origin}"
       Pin-Priority: 1001
       EOF
 
       apt-get update
 %{ if observability_collector_metrics_enabled ~}
-      apt-get install -y "nebius-o11y-agent=${observability_collector_package_version}" prometheus
+      apt-get install -y "${observability_collector_package_name}=${observability_collector_package_version}" "${observability_collector_prometheus_package_name}"
       systemctl disable --now prometheus.service >/dev/null 2>&1 || true
       install -m 0755 -d /var/lib/prometheus-cxcli-vm-agent
       chown prometheus:prometheus /var/lib/prometheus-cxcli-vm-agent
 %{ else ~}
-      apt-get install -y "nebius-o11y-agent=${observability_collector_package_version}"
+      apt-get install -y "${observability_collector_package_name}=${observability_collector_package_version}"
 %{ endif ~}
       install -m 0755 -d /etc/nebius-o11y-agent
       install -m 0755 -d /var/lib/nebius-o11y-agent

@@ -7,7 +7,9 @@ import pytest
 import nebius_cxcli.component_sources as component_sources
 from nebius_cxcli.component_sources import (
     ComponentOutput,
+    InfraObservabilitySettings,
     SourceProfile,
+    VmStandaloneCollectorSettings,
     reset_component_sources_cache,
     set_component_sources_file_override,
     set_component_sources_profile_override,
@@ -617,9 +619,21 @@ def test_materialize_grafana_datasources_from_observability_read_endpoints() -> 
 
     materialize_observability_app_values(payload)
 
-    datasources = _chart_row(payload, "grafana")["values"]["datasources"]["datasources.yaml"][
-        "datasources"
-    ]
+    values = _chart_row(payload, "grafana")["values"]
+    assert values["admin"] == {
+        "existingSecret": "nebius-cxcli-grafana-admin",
+        "userKey": "admin-user",
+        "passwordKey": "admin-password",
+    }
+    assert values["envValueFrom"] == {
+        "NEBIUS_OBSERVABILITY_STATIC_TOKEN": {
+            "secretKeyRef": {
+                "name": "nebius-cxcli-grafana-observability-read",
+                "key": "token",
+            }
+        }
+    }
+    datasources = values["datasources"]["datasources.yaml"]["datasources"]
     assert [item["uid"] for item in datasources] == [
         "nebius-service-metrics",
         "nebius-user-metrics",
@@ -641,6 +655,7 @@ def test_materialize_grafana_datasources_from_observability_read_endpoints() -> 
         item["secureJsonData"]["httpHeaderValue1"] == "Bearer ${NEBIUS_OBSERVABILITY_STATIC_TOKEN}"
         for item in datasources
     )
+    assert values["grafana.ini"]["auth"]["login_maximum_inactive_lifetime_duration"] == "20m"
 
 
 def test_materialize_observability_agent_values_for_each_target_row() -> None:
@@ -879,7 +894,18 @@ def test_materialize_observability_infra_values_sets_vm_standalone_collector_inp
     assert changed is True
     assert vm_inputs["observability_collector_enabled"] is True
     assert vm_inputs["observability_collector_region_id"] == "eu-north1"
+    assert vm_inputs["observability_collector_package_name"] == "nebius-o11y-agent"
     assert vm_inputs["observability_collector_package_version"] == "0.2.130"
+    assert vm_inputs["observability_collector_apt_repository"] == (
+        "https://artifactory.nebius.dev/artifactory/nebius-o11y-agent"
+    )
+    assert vm_inputs["observability_collector_apt_key_url"] == (
+        "https://artifactory.nebius.dev/artifactory/nebius-o11y-agent/key.gpg"
+    )
+    assert vm_inputs["observability_collector_apt_suite"] == "stable"
+    assert vm_inputs["observability_collector_apt_component"] == "main"
+    assert vm_inputs["observability_collector_apt_origin"] == "artifactory.nebius.dev"
+    assert vm_inputs["observability_collector_prometheus_package_name"] == "prometheus"
     assert vm_inputs["observability_collector_iam_token_file"] == "/mnt/cloud-metadata/token"
     assert vm_inputs["observability_collector_logs_enabled"] is True
     assert vm_inputs["observability_collector_logs_systemd_units"] == []
@@ -900,7 +926,18 @@ def test_materialize_observability_infra_values_cleans_vm_standalone_collector_i
         {
             "observability_collector_enabled": True,
             "observability_collector_region_id": "eu-north1",
+            "observability_collector_package_name": "nebius-o11y-agent",
             "observability_collector_package_version": "0.2.130",
+            "observability_collector_apt_repository": (
+                "https://artifactory.nebius.dev/artifactory/nebius-o11y-agent"
+            ),
+            "observability_collector_apt_key_url": (
+                "https://artifactory.nebius.dev/artifactory/nebius-o11y-agent/key.gpg"
+            ),
+            "observability_collector_apt_suite": "stable",
+            "observability_collector_apt_component": "main",
+            "observability_collector_apt_origin": "artifactory.nebius.dev",
+            "observability_collector_prometheus_package_name": "prometheus",
             "observability_collector_iam_token_file": "/mnt/cloud-metadata/token",
             "observability_collector_logs_enabled": True,
             "observability_collector_logs_systemd_units": ["sshd.service"],
@@ -935,6 +972,8 @@ def test_observability_status_summary_reports_vm_agent_and_gpu_metrics() -> None
         "vm_standalone_collector": False,
         "vm_standalone_metrics": False,
         "vm_standalone_logs": False,
+        "service_provider_metric_buckets": ["compute", "nbs", "gpu"],
+        "service_log_buckets": ["sp_mk8s_control_plane", "sp_mk8s_audit_logs", "sp_serial"],
         "gpu_dcgm_metric_source": "additional_target",
         "gpu_dcgm_node_policy": "managed_gpu_operator_dcgm_labels",
         "gpu_dcgm_live_readiness": "verify_live_nvidia_dcgm_exporter_endpoints_after_deploy",
@@ -1014,13 +1053,14 @@ def test_observability_endpoint_summary_respects_disabled_kubernetes_signals() -
 
     summary = observability_endpoint_summary(payload)
 
-    assert summary["signals"]["logs"] is False
+    assert summary["signals"]["logs"] is True
+    assert summary["signals"]["service_logs"] is True
     assert summary["signals"]["metrics"] is True
     assert summary["signals"]["traces"] is False
     assert "metrics_service_provider_read" in summary["read"]
     assert "metrics_user_read" in summary["read"]
     assert "metrics_otlp_write" in summary["write"]
-    assert "logs_loki_read" not in summary["read"]
+    assert "logs_loki_read" in summary["read"]
     assert "logs_agent_grpc_write" not in summary["write"]
     assert "traces_tempo_read" not in summary["read"]
     assert "traces_otlp_grpc_write" not in summary["write"]
@@ -1043,11 +1083,14 @@ def test_observability_endpoint_summary_vm_only_reports_service_metrics_read_pat
 
     assert summary["signals"]["vm_service_metrics"] is True
     assert summary["signals"]["kubernetes_metrics"] is False
-    assert summary["signals"]["logs"] is False
+    assert summary["signals"]["logs"] is True
+    assert summary["signals"]["service_logs"] is True
     assert summary["signals"]["traces"] is False
     assert "metrics_service_provider_read" in summary["read"]
     assert "metrics_federate_read" in summary["read"]
     assert "metrics_user_read" not in summary["read"]
+    assert summary["service_provider_metric_buckets"] == ["compute", "nbs"]
+    assert summary["service_log_buckets"] == ["sp_serial"]
     assert (
         "platform-managed regional endpoints" in summary["write"]["metrics_platform_managed_write"]
     )
@@ -1110,6 +1153,50 @@ def test_observability_endpoint_summary_vm_standalone_collector_adds_user_write_
     )
 
 
+def test_observability_endpoint_summary_managed_service_buckets_follow_catalog() -> None:
+    payload = _base_payload(
+        observability_enabled=False,
+        mk8s_enabled=False,
+        vm_enabled=False,
+    )
+    payload["infra"]["components"].extend(
+        [
+            {
+                "id": "object-storage",
+                "instance_id": "object-storage",
+                "enabled": True,
+                "inputs": {},
+            },
+            {
+                "id": "managed-postgresql",
+                "instance_id": "managed-postgresql",
+                "enabled": True,
+                "inputs": {},
+            },
+        ]
+    )
+    payload["client_info"] = {
+        "nebius": {
+            "project_id": "project-example",
+            "region_id": "eu-north1",
+        }
+    }
+
+    summary = observability_endpoint_summary(payload)
+
+    assert summary["signals"]["service_metrics"] is True
+    assert summary["signals"]["service_logs"] is True
+    assert summary["read"]["metrics_service_provider_read"] == (
+        "https://read.monitoring.api.nebius.cloud/projects/"
+        "project-example/service-provider/prometheus"
+    )
+    assert summary["read"]["logs_loki_read"] == (
+        "https://read.logging.api.nebius.cloud/projects/project-example"
+    )
+    assert summary["service_provider_metric_buckets"] == ["sp_storage", "msp"]
+    assert summary["service_log_buckets"] == ["sp_postgres"]
+
+
 def test_observability_dependency_issues_require_vm_service_account_for_standalone_collector() -> (
     None
 ):
@@ -1125,4 +1212,35 @@ def test_observability_dependency_issues_require_vm_service_account_for_standalo
 
     assert issues == [
         "VM standalone collector requires inputs.service_account_id on enabled vm component(s): vm"
+    ]
+
+
+def test_observability_dependency_issues_require_vm_public_ingest_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "nebius_cxcli.observability._vm_observability_settings",
+        lambda: InfraObservabilitySettings(
+            mode="monitoring_agent",
+            standalone_collector=VmStandaloneCollectorSettings(),
+        ),
+    )
+    payload = _base_payload(
+        observability_enabled=True,
+        mk8s_enabled=False,
+        vm_enabled=True,
+    )
+    payload["deploy"]["observability"]["vm"]["collector"]["enabled"] = True
+    payload["deploy"]["observability"]["vm"]["logs"]["enabled"] = False
+    payload["infra"]["components"][1]["inputs"]["service_account_id"] = "serviceaccount-1"
+
+    issues = observability_dependency_issues(payload)
+
+    assert issues == [
+        "VM standalone collector requires catalog fields under "
+        "components.infra.vm.cli.observability: public_ingest.package.name, "
+        "public_ingest.package.version, public_ingest.package.apt_repository, "
+        "public_ingest.package.apt_key_url, public_ingest.package.apt_suite, "
+        "public_ingest.package.apt_component, public_ingest.package.apt_origin, "
+        "public_ingest.prometheus.package_name"
     ]

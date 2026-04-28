@@ -8,6 +8,7 @@ import yaml
 from nebius_cxcli.components import component_entries, reset_component_entry_cache
 from nebius_cxcli.config_loader import load_config
 from nebius_cxcli.config_template import starter_config_yaml
+from nebius_cxcli.grafana_runtime import read_grafana_status, write_grafana_status
 from nebius_cxcli.inventory_ops import write_inventory
 from nebius_cxcli.paths import resolve_project_paths, validate_path_alignment
 
@@ -229,43 +230,27 @@ def test_write_inventory_includes_observability_endpoint_contract(tmp_path: Path
     assert "https://write.logging.eu-north1.nebius.cloud" in markdown
     assert "dns:///write.tracing.eu-north1.nebius.cloud:443" in markdown
     assert "## Grafana" in markdown
+    assert "- Target `mk8s` Grafana: `pending`" in markdown
+    assert "- Target `mk8s` metrics: `pending`" in markdown
     assert (
-        "- Grafana is configured for this project. The live Gateway/LoadBalancer URL is "
-        "written after `deploy` or `flux apply` can read the Gateway status."
+        "- Pending Grafana links are populated after `deploy` or `flux apply` can "
+        "read each target Gateway/LoadBalancer status."
     ) in markdown
     assert "Datasources are provisioned in Grafana with server/proxy access" in markdown
     assert (
         "- Bucket note: `service-provider` is a literal path segment for Nebius service "
         "metrics. Only the federation template placeholder `<service-provider>` should be "
-        "replaced. This deployment shows `compute`, `gpu`, `nbs`, `sp_storage` bucket URLs."
-    ) in markdown
-    assert "## Read Endpoint Probe URLs" in markdown
-    assert (
-        "- Metrics API probe (Nebius service metrics): "
-        "`https://read.monitoring.api.nebius.cloud/projects/"
-        "project-456/service-provider/prometheus/api/v1/query?"
-        "query=count%28%7B__name__%3D~%22.%2B%22%7D%29`"
+        "replaced. This deployment shows `compute`, `nbs`, `gpu` bucket URLs."
     ) in markdown
     assert (
-        "- Metrics API probe (user-ingested metrics): "
-        "`https://read.monitoring.api.nebius.cloud/projects/"
-        "project-456/prometheus/api/v1/query?query=up`"
+        "- Log bucket note: Nebius service logs are selected with the Loki `__bucket__` "
+        "label. This deployment has `sp_mk8s_control_plane`, `sp_mk8s_audit_logs` "
+        "service log buckets."
     ) in markdown
-    assert (
-        "- Logs API probe (default bucket): "
-        "`https://read.logging.api.nebius.cloud/projects/"
-        "project-456/loki/api/v1/query?query=%7B__bucket__%3D%22default%22%7D`"
-    ) in markdown
-    assert (
-        "- Traces API probe: "
-        "`https://read.tracing.api.nebius.cloud/projects/"
-        "project-456/tempo/api/v2/search/tags`"
-    ) in markdown
-    assert ("Region `eu-north1` applies to the write endpoints above.") in markdown
-    assert (
-        "opening a Grafana datasource base URL directly can return `404` even when its API "
-        "subpaths are reachable."
-    ) in markdown
+    assert "## Read Endpoint Probe URLs" not in markdown
+    assert "Metrics API probe" not in markdown
+    assert "Logs API probe" not in markdown
+    assert "Traces API probe" not in markdown
     assert "Bearer <observability static token or IAM token>" in markdown
 
 
@@ -290,11 +275,16 @@ def test_write_inventory_includes_live_grafana_urls_when_status_exists(tmp_path:
                         "target_ref": "mk8s",
                         "namespace": "observability",
                         "admin_secret_name": "nebius-cxcli-grafana-admin",
+                        "admin_user": "admin",
                         "admin_password_key": "admin-password",
+                        "kube_context": "nebius-cluster2-mk8scluster-123-external",
                         "base_url": "http://203.0.113.10/",
-                        "metrics_url": "http://203.0.113.10/explore?metrics",
-                        "logs_url": "http://203.0.113.10/explore?logs",
-                        "traces_url": "http://203.0.113.10/explore?traces",
+                        "metrics_url_kind": "dashboard",
+                        "metrics_url": "http://203.0.113.10/goto/metrics123?orgId=1",
+                        "logs_url_kind": "dashboard",
+                        "logs_url": "http://203.0.113.10/goto/logs123?orgId=1",
+                        "traces_url_kind": "dashboard",
+                        "traces_url": "http://203.0.113.10/goto/traces123?orgId=1",
                         "dashboards_url": "http://203.0.113.10/dashboards",
                     }
                 ]
@@ -309,20 +299,141 @@ def test_write_inventory_includes_live_grafana_urls_when_status_exists(tmp_path:
     assert "- Target `mk8s` Grafana: [Open Grafana](http://203.0.113.10/)" in markdown
     assert (
         "- Target `mk8s` metrics: "
-        "[Open metrics Explore](http://203.0.113.10/explore?metrics)"
+        "[Open metrics dashboard](http://203.0.113.10/goto/metrics123?orgId=1)"
+    ) in markdown
+    assert (
+        "- Target `mk8s` logs: [Open logs dashboard](http://203.0.113.10/goto/logs123?orgId=1)"
+    ) in markdown
+    assert (
+        "- Target `mk8s` traces: "
+        "[Open traces dashboard](http://203.0.113.10/goto/traces123?orgId=1)"
     ) in markdown
     assert "- Target `mk8s` credentials: user `admin`; password command:" in markdown
     assert (
+        "- Target `mk8s` credentials: user `admin`; password command:\n\n"
         "```bash\n"
-        "printf '%s\\n' \"$(kubectl -n observability get secret "
+        "printf '%s\\n' \"$(kubectl --context=nebius-cluster2-mk8scluster-123-external "
+        "-n observability get secret "
         "nebius-cxcli-grafana-admin -o jsonpath='{.data.admin-password}' | base64 -d)\"\n"
-        "```"
+        "```\n"
     ) in markdown
     assert (
-        "- Nebius dashboards expect the Prometheus service-metrics datasource name "
-        "`Nebius Services`; cxcli provisions that display name with stable UID "
-        "`nebius-service-metrics`."
+        "- Prometheus datasources are catalog-bound: "
+        "`Nebius Services` uses `Metrics read (Prometheus, Nebius service metrics)`; "
+        "`Nebius User Metrics` uses `Metrics read (Prometheus, user-ingested metrics)`."
     ) in markdown
+    assert (
+        "- Report links open the catalog-bound dashboards for Metrics, Logs, or Traces "
+        "when Grafana has imported them; otherwise they fall back to the matching "
+        "Explore view."
+    ) in markdown
+
+
+def test_write_inventory_lists_pending_grafana_links_per_target(tmp_path: Path) -> None:
+    reset_component_entry_cache()
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
+    mk8s = _infra_component_row(payload, "mk8s")
+    mk8s["instance_id"] = "cluster1"
+    mk8s["inputs"]["cluster_name"] = "cluster1"
+    cluster2 = yaml.safe_load(yaml.safe_dump(mk8s, sort_keys=False))
+    cluster2["instance_id"] = "cluster2"
+    cluster2["inputs"]["cluster_name"] = "cluster2"
+    payload["infra"]["components"].append(cluster2)
+    payload["deploy"] = {"targets": []}
+    _enable_mk8s_observability(payload, target_ref="cluster1")
+    _enable_mk8s_observability(payload, target_ref="cluster2")
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+
+    artifacts = write_inventory(config, paths)
+    markdown = artifacts.markdown.read_text(encoding="utf-8")
+
+    assert "- Target `cluster1` Grafana: `pending`" in markdown
+    assert "- Target `cluster2` Grafana: `pending`" in markdown
+    assert "- Target `cluster1` credentials: user `admin`; password command:" in markdown
+    assert "- Target `cluster2` credentials: user `admin`; password command:" in markdown
+
+
+def test_write_inventory_ignores_runtime_grafana_status_for_removed_target(
+    tmp_path: Path,
+) -> None:
+    reset_component_entry_cache()
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
+    mk8s = _infra_component_row(payload, "mk8s")
+    mk8s["instance_id"] = "cluster1"
+    mk8s["inputs"]["cluster_name"] = "cluster1"
+    payload["deploy"] = {"targets": []}
+    _enable_mk8s_observability(payload, target_ref="cluster1")
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+    paths.inventory_dir.mkdir(parents=True, exist_ok=True)
+    write_grafana_status(
+        paths,
+        (
+            {
+                "target_ref": "cluster2",
+                "namespace": "observability",
+                "release_name": "grafana",
+                "base_url": "http://203.0.113.20/",
+            },
+        ),
+    )
+
+    artifacts = write_inventory(config, paths)
+    markdown = artifacts.markdown.read_text(encoding="utf-8")
+
+    assert "- Target `cluster1` Grafana: `pending`" in markdown
+    assert "cluster2" not in markdown
+    assert "203.0.113.20" not in markdown
+
+
+def test_write_grafana_status_can_preserve_existing_target_statuses(tmp_path: Path) -> None:
+    paths = resolve_project_paths(_project_config_path(tmp_path))
+    paths.inventory_dir.mkdir(parents=True, exist_ok=True)
+
+    write_grafana_status(
+        paths,
+        (
+            {
+                "target_ref": "cluster1",
+                "namespace": "observability",
+                "release_name": "grafana",
+                "base_url": "http://203.0.113.10/",
+            },
+        ),
+    )
+    write_grafana_status(
+        paths,
+        (
+            {
+                "target_ref": "cluster2",
+                "namespace": "observability",
+                "release_name": "grafana",
+                "base_url": "http://203.0.113.20/",
+            },
+        ),
+        preserve_existing=True,
+    )
+
+    statuses = read_grafana_status(paths)
+
+    assert [item["target_ref"] for item in statuses] == ["cluster1", "cluster2"]
+    assert [item["base_url"] for item in statuses] == [
+        "http://203.0.113.10/",
+        "http://203.0.113.20/",
+    ]
 
 
 def test_write_inventory_includes_msp_federation_bucket_when_postgresql_enabled(
@@ -384,10 +495,11 @@ def test_write_inventory_omits_disabled_observability_signal_endpoints(tmp_path:
     assert "## Observability Write Endpoints" in markdown
     assert "## Observability Read Endpoints" in markdown
     assert "Metrics write (OTLP HTTP/protobuf)" in markdown
-    assert "Logs read (Loki)" not in markdown
+    assert "Logs read (Loki)" in markdown
     assert "Logs write (bundled agent gRPC)" not in markdown
     assert "Traces read (Tempo)" not in markdown
     assert "Traces write (OTLP gRPC)" not in markdown
+    assert "## Read Endpoint Probe URLs" not in markdown
     assert "Logs API probe" not in markdown
     assert "Traces API probe" not in markdown
 

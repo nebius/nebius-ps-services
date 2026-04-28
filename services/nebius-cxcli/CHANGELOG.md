@@ -6,6 +6,46 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Improved multi-target Grafana reporting: deploy reports now list each
+  configured Grafana target with pending links until `deploy` or `flux apply`
+  captures the target Gateway/LoadBalancer status, wait briefly for newly
+  created Gateway/LoadBalancer addresses, import datasource-matched
+  Grafana.com dashboards for Metrics, Logs, and Traces from the source catalog,
+  point report links at each catalog-bound dashboard when Grafana has imported
+  it, write short public Grafana `/goto/...` links by setting the live Grafana
+  root URL to the discovered public address before using Grafana's short URL
+  API over the selected dashboard or current Explore `panes` URL schema,
+  move Grafana datasource names, UIDs, types, default marker, and read endpoint
+  bindings into `component_sources.yaml`, keep the service-provider
+  Prometheus datasource as `Nebius Services`, keep the separate
+  `Nebius User Metrics` datasource for user-ingested Kubernetes metrics,
+  move the Grafana admin Secret contract, read-token Secret contract, org ID,
+  and fallback Explore queries into `component_sources.yaml`,
+  make Observability read/write endpoint records catalog-defined under the
+  global `observability.endpoints` section with source-owned labels, templates,
+  inclusion conditions, and bucket expansion,
+  move service-provider metric bucket and service log bucket selection for
+  VM, MK8s, Object Storage, shared storage, and Managed PostgreSQL into
+  `component_sources.yaml`,
+  validate Grafana datasource `read_endpoint` bindings against those catalog
+  endpoint keys, refresh a runtime Grafana read-token Secret when a
+  catalog-bound Prometheus read endpoint clearly rejects the existing token,
+  validate that report dashboard bindings are single `<folder>/<dashboard>`
+  references to declared dashboards with `gnetId` and datasource metadata, include
+  target-specific `kubectl --context=...` password commands, and avoid
+  collapsing target-scoped Grafana installs into one generic fallback sentence.
+- Removed the raw read-endpoint API probe URL section from the generated deploy
+  report. The report still shows public read endpoint bases and bundled Grafana
+  links, but omits diagnostic Prometheus/Loki/Tempo probe URLs to keep the
+  customer handoff lighter.
+- Documented the bundled Grafana Prometheus datasource split: `Nebius Services`
+  reads Nebius/provider metrics from `/service-provider/prometheus`, while
+  `Nebius User Metrics` reads customer/user-ingested metrics from `/prometheus`.
+- Moved the VM standalone collector package source out of the VM cloud-init
+  template and into `component_sources.yaml`. The catalog now owns the
+  `nebius-o11y-agent` package name/version, APT repo/key/suite/component/origin,
+  and Prometheus companion package name; cxcli materializes those as hidden VM
+  module inputs.
 - Clarified the quota workflow across `create`, `quota-check`, and
   `quota-request`: create-time quota/capacity assessment is warning-only and
   does not reserve capacity, `quota-check` reruns against current live Nebius
@@ -124,7 +164,9 @@ All notable changes to this project are tracked here. This changelog follows
   Cluster` for Nebius compatibility,
   provisions Prometheus/Loki/Tempo datasources from the Nebius public read
   endpoints, and seeds the Nebius Grafana.com dashboard IDs from
-  `component_sources.yaml`. Local deploy/Flux paths create the runtime-only
+  `component_sources.yaml`. Grafana datasource definitions, read-endpoint
+  bindings, report-dashboard bindings, and the default `20m` idle session
+  timeout are now catalog-owned. Local deploy/Flux paths create the runtime-only
   Kubernetes Secrets for Grafana admin credentials and the Observability read
   static token, issuing a `viewer` service-account static key only when the
   token Secret is missing. The deploy report now separates public write
@@ -138,11 +180,11 @@ All notable changes to this project are tracked here. This changelog follows
   once with YAML anchor `&nebius_cpu_only_node_affinity` and renders ordinary
   Kubernetes affinity into HelmRelease values.
 - Aligned the bundled Nebius Grafana dashboards with their upstream datasource
-  variable by provisioning the service-metrics datasource as `Nebius Services`
-  while keeping the stable `nebius-service-metrics` UID. The deploy report now
-  probes the service-provider metrics read endpoint with a metric-count query
-  instead of `up`, because Nebius service metrics can be healthy without an
-  `up` series.
+  variable by provisioning the service-provider metrics datasource from the
+  source catalog.
+  The deploy report now opens the catalog-bound Metrics, Logs, and Traces
+  dashboards through public Grafana `/goto/...` links after live Gateway status
+  is available.
 - Fixed multi-target MK8s GPU app materialization and reporting. GPU Operator,
   Network Operator, and their post-render patches are now resolved against the
   chart row's `target_ref`, so one deployment can mix an InfiniBand/RDMA MK8s
@@ -192,9 +234,7 @@ All notable changes to this project are tracked here. This changelog follows
   required `Authorization: Bearer <observability static token or IAM token>`
   header guidance. The report now also clarifies that `service-provider` is
   literal in the Grafana service-metrics URL, expands federation bucket URLs
-  for deployment-applicable service buckets, and includes auth-required API
-  probe URLs for direct reachability checks because opening Grafana datasource
-  base URLs directly can return `404`. The Observability design doc now records
+  for deployment-applicable service buckets. The Observability design doc now records
   the implemented workflow from catalog metadata through deploy observability
   normalization, render/deploy materialization, deploy-time GPU label
   reconciliation, and generated report/Grafana handoff.
@@ -223,7 +263,7 @@ All notable changes to this project are tracked here. This changelog follows
   Ubuntu-family VMs, using the VM metadata token and attached service account
   to push journald logs and host metrics through Nebius public write endpoints
   without conflating that path with the built-in Monitoring agent. The VM
-  bootstrap now uses the canonical public Artifactory APT repo directly rather
+  bootstrap now uses the catalog-provided public Artifactory APT repo rather
   than the older mirror redirect.
 - Corrected the VM observability contract to match the built-in Nebius
   Monitoring agent behavior. VM service metrics are now treated as always-on
