@@ -9,6 +9,9 @@ All notable changes to this project are tracked here. This changelog follows
 - Added a deploy completion footer that prints the complete
   `generated/inventory/deploy-report.md` path after a successful local
   `deploy`.
+- Removed a CodeQL `py/incomplete-url-substring-sanitization` warning from the
+  deploy-report tests by checking rendered Observability endpoint lines exactly
+  instead of searching for URL substrings.
 - Improved multi-target Grafana reporting: deploy reports now list each
   configured Grafana target with pending links until `deploy` or `flux apply`
   captures the target Gateway/LoadBalancer status, wait briefly for newly

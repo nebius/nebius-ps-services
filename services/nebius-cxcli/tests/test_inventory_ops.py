@@ -205,6 +205,7 @@ def test_write_inventory_includes_observability_endpoint_contract(tmp_path: Path
 
     artifacts = write_inventory(config, paths)
     markdown = artifacts.markdown.read_text(encoding="utf-8")
+    markdown_lines = markdown.splitlines()
 
     assert "## Observability Write Endpoints" in markdown
     assert "## Observability Read Endpoints" in markdown
@@ -212,23 +213,29 @@ def test_write_inventory_includes_observability_endpoint_contract(tmp_path: Path
         "- Metrics read (Prometheus, Nebius service metrics): "
         "`https://read.monitoring.api.nebius.cloud/projects/"
         "project-456/service-provider/prometheus`"
-    ) in markdown
-    assert (
-        "https://read.monitoring.api.nebius.cloud/projects/project-456/service-provider/prometheus"
-    ) in markdown
+    ) in markdown_lines
     assert (
         "- Metrics read (federate, `gpu` bucket): "
         "`https://read.monitoring.api.nebius.cloud/projects/"
         "project-456/buckets/gpu/prometheus/federate`"
-    ) in markdown
+    ) in markdown_lines
     assert "- Metrics read (federate, `msp` bucket): " not in markdown
-    assert "/buckets/<service-provider>/" not in markdown
+    assert all("/buckets/<service-provider>/" not in line for line in markdown_lines)
     assert (
+        "- Metrics write (OTLP HTTP/protobuf): "
+        "`"
         "https://write.monitoring.eu-north1.nebius.cloud/projects/"
         "project-456/opentelemetry/v1/metrics"
-    ) in markdown
-    assert "https://write.logging.eu-north1.nebius.cloud" in markdown
-    assert "dns:///write.tracing.eu-north1.nebius.cloud:443" in markdown
+        "`"
+    ) in markdown_lines
+    assert (
+        "- Logs write (direct/self-managed): "
+        "`https://write.logging.eu-north1.nebius.cloud`"
+    ) in markdown_lines
+    assert (
+        "- Traces write (OTLP gRPC): "
+        "`dns:///write.tracing.eu-north1.nebius.cloud:443`"
+    ) in markdown_lines
     assert "## Grafana" in markdown
     assert "- Target `mk8s` Grafana: `pending`" in markdown
     assert "- Target `mk8s` metrics: `pending`" in markdown
@@ -453,13 +460,14 @@ def test_write_inventory_includes_msp_federation_bucket_when_postgresql_enabled(
 
     artifacts = write_inventory(config, paths)
     markdown = artifacts.markdown.read_text(encoding="utf-8")
+    markdown_lines = markdown.splitlines()
 
     assert "- Managed PostgreSQL: `True`" in markdown
     assert (
         "- Metrics read (federate, `msp` bucket): "
         "`https://read.monitoring.api.nebius.cloud/projects/"
         "project-456/buckets/msp/prometheus/federate`"
-    ) in markdown
+    ) in markdown_lines
 
 
 def test_write_inventory_omits_disabled_observability_signal_endpoints(tmp_path: Path) -> None:
