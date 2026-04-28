@@ -94,7 +94,7 @@ def _validate_mk8s_gpu(
     if legacy_gpu_validation_overrides is not None:
         raise ValueError(
             f"{base}.gpu_validation_overrides is no longer supported; use "
-            "deploy.validations.mk8s_gpu.*"
+            "deploy.targets[].validations.mk8s_gpu.*"
         )
 
     gpu_enabled = bool(get_path(payload, f"{base}.gpu_enabled", False))
@@ -121,7 +121,21 @@ def _validate_mk8s_gpu(
     infiniband_fabric = as_text(get_path(payload, f"{base}.infiniband_fabric"))
     mig_strategy = as_text(get_path(payload, f"{base}.mig_strategy"))
     mig_parted_config = as_text(get_path(payload, f"{base}.mig_parted_config"))
-    project_gpu_validations = get_path(payload, "deploy.validations.mk8s_gpu", {})
+    project_gpu_validations_by_label: list[tuple[str, Mapping[str, Any]]] = []
+    deploy = payload.get("deploy")
+    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    if isinstance(targets, list):
+        for index, raw_target in enumerate(targets):
+            if not isinstance(raw_target, Mapping):
+                continue
+            validations = raw_target.get("validations")
+            if not isinstance(validations, Mapping):
+                continue
+            mk8s_gpu_validations = validations.get("mk8s_gpu")
+            if isinstance(mk8s_gpu_validations, Mapping):
+                project_gpu_validations_by_label.append(
+                    (f"deploy.targets[{index}].validations.mk8s_gpu", mk8s_gpu_validations)
+                )
 
     if gpu_enabled:
         if _coerce_int(gpu_node_groups) <= 0:
@@ -181,29 +195,27 @@ def _validate_mk8s_gpu(
     if (mig_strategy or mig_parted_config) and not gpu_enabled:
         raise ValueError("mig_strategy/mig_parted_config require gpu_enabled=true")
 
-    if isinstance(project_gpu_validations, Mapping):
+    for validation_label, project_gpu_validations in project_gpu_validations_by_label:
         operator_readiness = project_gpu_validations.get("operator_readiness", {})
         gpu_visibility = project_gpu_validations.get("gpu_visibility", {})
         nccl = project_gpu_validations.get("nccl", {})
         health_checker = project_gpu_validations.get("health_checker", {})
         operator_enabled = (
-            operator_readiness.get("enabled")
-            if isinstance(operator_readiness, Mapping)
-            else None
+            operator_readiness.get("enabled") if isinstance(operator_readiness, Mapping) else None
         )
 
         for field_label, value in (
-            ("deploy.validations.mk8s_gpu.operator_readiness.enabled", operator_enabled),
+            (f"{validation_label}.operator_readiness.enabled", operator_enabled),
             (
-                "deploy.validations.mk8s_gpu.gpu_visibility.enabled",
+                f"{validation_label}.gpu_visibility.enabled",
                 gpu_visibility.get("enabled") if isinstance(gpu_visibility, Mapping) else None,
             ),
             (
-                "deploy.validations.mk8s_gpu.nccl.enabled",
+                f"{validation_label}.nccl.enabled",
                 nccl.get("enabled") if isinstance(nccl, Mapping) else None,
             ),
             (
-                "deploy.validations.mk8s_gpu.health_checker.enabled",
+                f"{validation_label}.health_checker.enabled",
                 health_checker.get("enabled") if isinstance(health_checker, Mapping) else None,
             ),
         ):
@@ -213,28 +225,29 @@ def _validate_mk8s_gpu(
         gpu_visibility_max_nodes = (
             gpu_visibility.get("max_nodes") if isinstance(gpu_visibility, Mapping) else None
         )
-        if gpu_visibility_max_nodes is not None and _coerce_int(gpu_visibility_max_nodes, default=0) <= 0:
-            raise ValueError("deploy.validations.mk8s_gpu.gpu_visibility.max_nodes must be > 0")
+        if (
+            gpu_visibility_max_nodes is not None
+            and _coerce_int(gpu_visibility_max_nodes, default=0) <= 0
+        ):
+            raise ValueError(f"{validation_label}.gpu_visibility.max_nodes must be > 0")
 
         nccl_max_nodes = nccl.get("max_nodes") if isinstance(nccl, Mapping) else None
         if nccl_max_nodes is not None and _coerce_int(nccl_max_nodes, default=0) <= 0:
-            raise ValueError("deploy.validations.mk8s_gpu.nccl.max_nodes must be > 0")
+            raise ValueError(f"{validation_label}.nccl.max_nodes must be > 0")
 
         nccl_threshold = (
-            nccl.get("average_bus_bandwidth_threshold_gbps")
-            if isinstance(nccl, Mapping)
-            else None
+            nccl.get("average_bus_bandwidth_threshold_gbps") if isinstance(nccl, Mapping) else None
         )
         if nccl_threshold is not None:
             try:
                 parsed_threshold = float(nccl_threshold)
             except (TypeError, ValueError) as exc:
                 raise ValueError(
-                    "deploy.validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps must be numeric"
+                    f"{validation_label}.nccl.average_bus_bandwidth_threshold_gbps must be numeric"
                 ) from exc
             if parsed_threshold <= 0:
                 raise ValueError(
-                    "deploy.validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps must be > 0"
+                    f"{validation_label}.nccl.average_bus_bandwidth_threshold_gbps must be > 0"
                 )
 
 
@@ -320,7 +333,9 @@ def _validate_vm(
         raise ValueError(f"{base}.public_ip_mode must be one of: none, dynamic, static, allocation")
     public_ip_allocation_id = as_text(get_path(payload, f"{base}.public_ip_allocation_id"))
     if public_ip_mode == "allocation" and not public_ip_allocation_id:
-        raise ValueError(f"{base}.public_ip_allocation_id is required when public_ip_mode=allocation")
+        raise ValueError(
+            f"{base}.public_ip_allocation_id is required when public_ip_mode=allocation"
+        )
     if public_ip_mode != "allocation" and public_ip_allocation_id:
         raise ValueError(
             f"{base}.public_ip_allocation_id can only be used when public_ip_mode=allocation"
@@ -345,10 +360,12 @@ def _validate_vm(
         if project_id and platform and preset:
             from .provider_options import ProviderOptionLookup
 
-            allow_gpu_clustering = ProviderOptionLookup().compute_platform_preset_allows_gpu_clustering(
-                project_id=project_id,
-                platform_name=platform,
-                preset_name=preset,
+            allow_gpu_clustering = (
+                ProviderOptionLookup().compute_platform_preset_allows_gpu_clustering(
+                    project_id=project_id,
+                    platform_name=platform,
+                    preset_name=preset,
+                )
             )
         if allow_gpu_clustering is False:
             raise ValueError(

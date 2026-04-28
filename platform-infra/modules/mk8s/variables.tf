@@ -311,13 +311,13 @@ variable "gpu_stack_preset" {
 }
 
 variable "gpu_stack_source" {
-  description = "How the GPU software stack reaches MK8s nodes: nebius_image renders template.gpu_settings.drivers_preset so Managed Kubernetes preinstalls the Nebius image stack; manual omits gpu_settings so operators or other tooling can manage drivers, toolkit, and kernels."
+  description = "How the GPU software stack reaches MK8s nodes: nebius_image renders template.gpu_settings.drivers_preset so Managed Kubernetes preinstalls the Nebius image stack; operator_managed omits gpu_settings so operators or other tooling can manage drivers, toolkit, and kernels."
   type        = string
   default     = "nebius_image"
   nullable    = false
   validation {
-    condition     = contains(["nebius_image", "manual"], trimspace(var.gpu_stack_source))
-    error_message = "gpu_stack_source must be 'nebius_image' or 'manual'."
+    condition     = contains(["nebius_image", "operator_managed"], trimspace(var.gpu_stack_source))
+    error_message = "gpu_stack_source must be 'nebius_image' or 'operator_managed'."
   }
 }
 

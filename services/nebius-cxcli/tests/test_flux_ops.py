@@ -228,7 +228,9 @@ def test_wait_for_flux_resource_apis_checks_resource_types_without_target_namesp
     monkeypatch.setattr(
         flux_ops.subprocess,
         "run",
-        lambda cmd, **kwargs: (calls.append(cmd) or SimpleNamespace(returncode=0, stdout="", stderr="")),
+        lambda cmd, **kwargs: (
+            calls.append(cmd) or SimpleNamespace(returncode=0, stdout="", stderr="")
+        ),
     )
 
     flux_ops.wait_for_flux_resource_apis(fake_paths, timeout_seconds=5, poll_interval_seconds=0.01)

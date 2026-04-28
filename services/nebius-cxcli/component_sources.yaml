@@ -7,6 +7,81 @@ cli:
 shared:
   admin_ssh:
     user_name: ubuntu
+observability:
+  # Project-scoped Nebius Observability endpoint templates. These Read/Write
+  # APIs are not owned by a single component; all Nebius resources in the
+  # tenant/project can use the matching read or ingest surface.
+  endpoints:
+    write:
+      metrics_platform_managed_write:
+        label: Metrics write (VM monitoring agent)
+        template: Nebius-managed Monitoring agent metrics ingest is automatic for Compute VMs and uses platform-managed regional endpoints; cxcli does not configure a public customer write endpoint for this path.
+        include_when:
+          - vm_service_metrics
+      metrics_otlp_write:
+        label: Metrics write (OTLP HTTP/protobuf)
+        template: https://write.monitoring.{region}.nebius.cloud/projects/{project_id}/opentelemetry/v1/metrics
+        include_when:
+          - kubernetes_metrics
+      metrics_prometheus_remote_write:
+        label: Metrics write (Prometheus Remote Write)
+        template: https://write.monitoring.{region}.nebius.cloud/projects/{project_id}/prometheus/api/v1/write
+        include_when:
+          - kubernetes_metrics
+          - vm_standalone_metrics
+      logs_platform_managed_write:
+        label: Logs write (VM monitoring agent)
+        template: When journald collection is enabled, the Nebius-managed Monitoring agent forwards VM logs through the platform-managed Logging ingest path; cxcli does not configure a public customer write endpoint for this path.
+        include_when:
+          - vm_logs
+      logs_otlp_write:
+        label: Logs write (direct/self-managed)
+        template: https://write.logging.{region}.nebius.cloud
+        include_when:
+          - kubernetes_logs
+      logs_agent_grpc_write:
+        label: Logs write (Nebius agent gRPC)
+        template: dns:///write.logging.{region}.nebius.cloud:443
+        include_when:
+          - kubernetes_logs
+          - vm_standalone_logs
+      traces_otlp_grpc_write:
+        label: Traces write (OTLP gRPC)
+        template: dns:///write.tracing.{region}.nebius.cloud:443
+        include_when:
+          - kubernetes_traces
+    read:
+      metrics_service_provider_read:
+        label: Metrics read (Prometheus, Nebius service metrics)
+        template: https://read.monitoring.api.nebius.cloud/projects/{project_id}/service-provider/prometheus
+        include_when:
+          - metrics
+      metrics_user_read:
+        label: Metrics read (Prometheus, user-ingested metrics)
+        template: https://read.monitoring.api.nebius.cloud/projects/{project_id}/prometheus
+        include_when:
+          - kubernetes_metrics
+          - vm_standalone_metrics
+      metrics_federate_read:
+        label: Metrics read (federate)
+        template: https://read.monitoring.api.nebius.cloud/projects/{project_id}/buckets/<service-provider>/prometheus/federate
+        include_when:
+          - metrics
+        bucket_placeholder: <service-provider>
+      logs_loki_read:
+        label: Logs read (Loki)
+        template: https://read.logging.api.nebius.cloud/projects/{project_id}
+        include_when:
+          - logs
+      traces_tempo_read:
+        label: Traces read (Tempo)
+        template: https://read.tracing.api.nebius.cloud/projects/{project_id}/tempo
+        include_when:
+          - traces
+# `components.*` defines reusable component types only. Repeated modules or
+# charts in one project are modeled in `config.yaml` with distinct instance
+# rows; target-bound app charts select their cluster with `target_ref` and are
+# unique per chart id plus target.
 components:
   infra:
     mk8s:
@@ -23,7 +98,7 @@ components:
       defaults:
         inputs.cpu_nodes_count: 2
         # Default to Nebius-managed GPU images and stack presets. Advanced
-        # manual/operator-managed stacks can switch this to `manual`.
+        # operator-managed stacks can switch this to `operator_managed`.
         inputs.gpu_stack_source: nebius_image
         inputs.mk8s_cluster_public_endpoint: true
         inputs.kube_network_service_cidrs:
@@ -121,6 +196,50 @@ components:
               - min_gpu: 8
                 max_gpu: 8
                 size_gib: 1023
+        observability:
+          # Source-owned MK8s observability contract. The `config.yaml`
+          # `deploy.targets[].observability` rows decide whether cxcli deploys
+          # it per cluster; this block keeps agent choice, signal defaults, and
+          # component-specific service buckets.
+          primary_agent:
+            kind: kubernetes_agent
+            chart_component_id: nebius-observability-agent
+            logs:
+              default_enabled: true
+              collect_agent_logs: false
+              # Exclude list; all other namespaces remain eligible.
+              excluded_namespaces:
+                - kube-system
+            metrics:
+              default_enabled: true
+              collect_agent_metrics: false
+              # Include cluster/node/control-plane metrics when this
+              # cxcli-managed MK8s path is enabled.
+              collect_k8s_cluster_metrics: true
+              # Exclude list; all other namespaces remain eligible.
+              excluded_namespaces: []
+            traces:
+              default_enabled: true
+          grafana:
+            chart_component_id: grafana
+            gateway_chart_component_id: gateway-helm
+            enabled_by_default: true
+          service_metrics:
+            buckets:
+              compute:
+                label: Compute metrics for MK8s node VMs
+              nbs:
+                label: Compute volume metrics for MK8s node disks
+              gpu:
+                label: GPU service metrics for GPU-backed MK8s nodes
+                include_when:
+                  - inputs.gpu_enabled
+          service_logs:
+            buckets:
+              sp_mk8s_control_plane:
+                label: Managed Kubernetes control plane logs
+              sp_mk8s_audit_logs:
+                label: Managed Kubernetes audit logs
       wizard_profile: mk8s
     managed-postgresql:
       source:
@@ -132,6 +251,16 @@ components:
         enabled: false
       status:
         kind: nebius.msp.postgresql.cluster
+      cli:
+        observability:
+          service_metrics:
+            buckets:
+              msp:
+                label: Managed Service for PostgreSQL metrics
+          service_logs:
+            buckets:
+              sp_postgres:
+                label: Managed Service for PostgreSQL logs
       wizard_profile: managed-postgresql
     sfs:
       source:
@@ -143,6 +272,12 @@ components:
         enabled: false
       status:
         kind: nebius.compute.filesystem
+      cli:
+        observability:
+          service_metrics:
+            buckets:
+              nbs:
+                label: Compute storage metrics for shared filesystem backing resources
     object-storage:
       source:
         portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/object-storage?ref=main
@@ -153,6 +288,14 @@ components:
         enabled: false
       status:
         kind: nebius.storage.bucket
+      cli:
+        observability:
+          service_metrics:
+            buckets:
+              sp_storage:
+                label: Object Storage service metrics
+          # Object Storage request logs are exposed through Audit Logs, not
+          # through the Loki-compatible Logging read endpoint.
       wizard_profile: object-storage
     mysterybox:
       source:
@@ -188,11 +331,54 @@ components:
             - ubuntu24.04-driverless
             - ubuntu22.04-driverless
           # GPU VMs prefer Nebius GPU images first. Driverless families remain
-          # compatible for manual stacks, but they sort after the recommended
+          # compatible for operator-managed stacks, but they sort after the recommended
           # GPU image families returned by the live Nebius inventory.
           preferred_gpu_image_families:
             - ubuntu24.04-cuda13.0
             - ubuntu24.04-cuda12
+        observability:
+          # VM observability has two paths: the built-in Monitoring agent and
+          # an optional cxcli-managed public-ingest collector.
+          primary_agent:
+            kind: monitoring_agent
+            metrics:
+              default_enabled: true
+            logs:
+              default_enabled: true
+              systemd_units: []
+          public_ingest:
+            # Default-off public-ingest collector. It installs the public
+            # `nebius-o11y-agent` package plus a Prometheus agent companion.
+            default_enabled: false
+            package:
+              name: nebius-o11y-agent
+              version: 0.2.130
+              apt_repository: https://artifactory.nebius.dev/artifactory/nebius-o11y-agent
+              apt_key_url: https://artifactory.nebius.dev/artifactory/nebius-o11y-agent/key.gpg
+              apt_suite: stable
+              apt_component: main
+              apt_origin: artifactory.nebius.dev
+            prometheus:
+              package_name: prometheus
+            # Metadata token for the VM-attached service account.
+            metadata_token_file: /mnt/cloud-metadata/token
+            metrics_export_port: 19090
+            prometheus_agent_port: 19091
+            logs:
+              default_enabled: true
+              systemd_units: []
+            metrics:
+              default_enabled: true
+          service_metrics:
+            buckets:
+              compute:
+                label: Compute VM metrics
+              nbs:
+                label: Compute volume metrics for VM disks
+          service_logs:
+            buckets:
+              sp_serial:
+                label: Compute VM serial logs
     wireguard-jumphost:
       source:
         portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/wireguard-jumphost?ref=main
@@ -305,7 +491,7 @@ components:
           rules:
             - gpu_cluster_enabled: true
               auto_enable: true
-            - gpu_stack_source: manual
+            - gpu_stack_source: operator_managed
               auto_enable: true
               # Separate Nebius platform ids and regions; both are NVIDIA B200.
               match_platforms:
@@ -325,7 +511,7 @@ components:
                 - driverful_infiniband_nfd
               post_render_patches_from:
                 - rdma_shared_device_plugin
-            - gpu_stack_source: manual
+            - gpu_stack_source: operator_managed
               gpu_cluster_enabled: true
               # The driverless InfiniBand path still needs an explicit RDMA
               # shared-device policy; the Network Operator chart default CR
@@ -333,8 +519,8 @@ components:
               # itself.
               post_render_patches_from:
                 - rdma_shared_device_plugin
-            - gpu_stack_source: manual
-              # Manual GPU stacks still need the Network Operator to lay down
+            - gpu_stack_source: operator_managed
+              # Operator-managed GPU stacks still need the Network Operator to lay down
               # host OFED/RDMA bits for GPUDirect and NCCL validation.
               defaults:
                 values.operator.ofedDriver.deploy: true
@@ -377,26 +563,28 @@ components:
               # InfiniBand path, let it own the single NFD instance.
               defaults:
                 values.nfd.enabled: false
-            - gpu_stack_source: manual
-              # Manual B200/B200A stacks also auto-enable Network Operator for
+            - gpu_stack_source: operator_managed
+              # Operator-managed B200/B200A stacks also auto-enable Network Operator for
               # RDMA plumbing, so keep NFD single-owned there too.
               match_platforms:
                 - gpu-b200-sxm
                 - gpu-b200-sxm-a
               defaults:
                 values.nfd.enabled: false
-            - gpu_stack_source: manual
-              # Manual GPU stacks expect GPU Operator to install and manage the
-              # host GPU driver plus the NVIDIA Container Toolkit runtime.
+            - gpu_stack_source: operator_managed
+              # Operator-managed GPU stacks keep the host driver/toolkit path in
+              # GPU Operator, but still avoid the broken Nebius NVIDIADriver
+              # CRD template path in gpu-operator@v25.10.0.
               defaults:
                 values.driver.enabled: true
                 values.toolkit.enabled: true
-            - gpu_stack_source: manual
+                values.driver.nvidiaDriverCRD.enabled: false
+            - gpu_stack_source: operator_managed
               match_platforms:
                 - gpu-b300-sxm
               defaults:
                 # Ref: https://docs.nebius.com/kubernetes/gpu/set-up
-                # Nebius docs pin the B300 manual-install path to
+                # Nebius docs pin the B300 operator-managed install path to
                 # --set driver.version=580.95.05. Keep it catalog-owned rather
                 # than hardcoded in Python.
                 values.driver.version: 580.95.05
@@ -404,6 +592,33 @@ components:
           # wait for Network Operator first.
           install_after:
             - nvidia-network-operator
+        observability:
+          metric_targets:
+            - job_name: cxcli-nvidia-dcgm-exporter
+              # DCGM Exporter is scraped through a catalog-owned additional target
+              # because the GPU Operator service does not reliably carry the
+              # Prometheus annotations required for automatic discovery.
+              # On `nebius_image` stacks cxcli also owns the Nebius-specific GPU
+              # node-label policy required to schedule DCGM Exporter plus the
+              # validator without turning on GPU Operator device-plugin or GFD.
+              # Keep this as `nebius_image` only. The operator-managed image does not need
+              # these extra label injections since it already includes the full GPU software
+              # stack and its own DCGM Exporter install path and labels.
+              discovery:
+                kind: additional_target
+                service_name: nvidia-dcgm-exporter
+                port: 9400
+              managed_gpu_node_policy:
+                stack_sources:
+                  - nebius_image
+                selector:
+                  nebius.com/gpu: "true"
+                labels:
+                  nvidia.com/gpu.deploy.operands: "true"
+                  nvidia.com/gpu.deploy.dcgm-exporter: "true"
+                  nvidia.com/gpu.deploy.operator-validator: "true"
+                  nvidia.com/gpu.deploy.device-plugin: "false"
+                  nvidia.com/gpu.deploy.gpu-feature-discovery: "false"
     nccl-test:
       source:
         portable:
@@ -442,6 +657,223 @@ components:
                   - -mca
                   - coll
                   - ^hcoll
+    nebius-observability-agent:
+      # Keep this public chart pinned here because the fixed Nebius Kubernetes
+      # agent docs identify it as the supported observability-agent Helm chart,
+      # and its rendered surface matches cxcli's logs+metrics+traces MK8s contract.
+      # Ref: https://docs.nebius.com/observability/agents/nebius-o11y-agent
+      # Ref: https://docs.nebius.com/observability/traces/ingest
+      source:
+        portable:
+          repo: oci://cr.nebius.cloud/observability/public/nebius-observability-agent-helm
+          chart: nebius-observability-agent-helm
+          version: 1.0.5
+      ui:
+        title: Nebius observability agent
+        group: Observability
+        enabled: false
+      release:
+        namespace: observability
+        name: nebius-observability-agent
+      # Keep customer-facing toggles under config.yaml
+      # deploy.targets[].observability and derive them from
+      # components.infra.mk8s.cli.observability at render time.
+      # Only put explicit Nebius-specific chart deltas here when cxcli must
+      # override an upstream chart default.
+      defaults: {}
+    grafana:
+      # Official Grafana community Helm chart and Docker image. cxcli only renders
+      # chart references and deploy-time Kubernetes Secrets; it does not vendor
+      # Grafana chart/image/dashboard artifacts.
+      # Ref: https://github.com/grafana-community/helm-charts/tree/main/charts/grafana
+      source:
+        portable:
+          repo: https://grafana-community.github.io/helm-charts
+          chart: grafana
+          version: 12.1.3
+      ui:
+        title: Grafana observability console
+        group: Observability
+        enabled: false
+      release:
+        namespace: observability
+        name: grafana
+        timeout: 10m
+        install_after:
+          - gateway-helm
+      cli:
+        grafana:
+          orgId: 1
+          logout-timeout: 20m
+          admin:
+            secret: nebius-cxcli-grafana-admin
+            user: admin
+            user_key: admin-user
+            password_key: admin-password
+          read_token:
+            env: NEBIUS_OBSERVABILITY_STATIC_TOKEN
+            secret: nebius-cxcli-grafana-observability-read
+            key: token
+          datasources:
+            # Keep both Prometheus datasources. The service-provider endpoint
+            # reads Nebius/provider service metrics; the user endpoint reads
+            # customer/user-ingested Prometheus metrics.
+            service-metrics:
+              name: Nebius Services
+              uid: nebius-service-metrics
+              type: prometheus
+              read_endpoint: metrics_service_provider_read
+              isDefault: true
+            user-metrics:
+              name: Nebius User Metrics
+              uid: nebius-user-metrics
+              type: prometheus
+              read_endpoint: metrics_user_read
+              isDefault: false
+            logs:
+              name: Nebius Logs
+              uid: nebius-logs
+              type: loki
+              read_endpoint: logs_loki_read
+              isDefault: false
+            traces:
+              name: Nebius Traces
+              uid: nebius-traces
+              type: tempo
+              read_endpoint: traces_tempo_read
+              isDefault: false
+          explore_queries:
+            metrics: count({__name__=~".+"})
+            logs: '{__bucket__="default"}'
+          # Report bindings are source metadata, not Helm chart values. Keep
+          # them next to the chart so report links can point at dashboards
+          # without hardcoding dashboard selection in Python.
+          report_dashboards:
+            metrics: nebius/kubernetes-cluster-monitoring
+            logs: nebius/kubernetes-logs-from-loki
+            traces: nebius/guardrails-starter-traces
+      defaults:
+        values.image.registry: docker.io
+        values.image.repository: grafana/grafana
+        values.image.tag: 13.0.1
+        # Keep CPU-only platform/observability pods off expensive GPU nodes by
+        # default. Nebius GPU worker nodes carry `nebius.com/gpu=true`; CPU nodes
+        # do not, so this hard node affinity still works across CPU platform names.
+        values.affinity: &nebius_cpu_only_node_affinity
+          nodeAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+                - matchExpressions:
+                    - key: nebius.com/gpu
+                      operator: NotIn
+                      values:
+                        - "true"
+        values.service.type: ClusterIP
+        values.route.main.enabled: true
+        values.route.main.apiVersion: gateway.networking.k8s.io/v1
+        values.route.main.kind: HTTPRoute
+        values.route.main.parentRefs:
+          - name: nebius-cxcli-grafana
+            namespace: observability
+            sectionName: http
+        values.extraObjects:
+          - apiVersion: gateway.networking.k8s.io/v1
+            kind: GatewayClass
+            metadata:
+              name: nebius-cxcli-envoy
+            spec:
+              controllerName: gateway.envoyproxy.io/gatewayclass-controller
+          - apiVersion: gateway.envoyproxy.io/v1alpha1
+            kind: EnvoyProxy
+            metadata:
+              name: nebius-cxcli-grafana-proxy
+              namespace: observability
+            spec:
+              provider:
+                type: Kubernetes
+                kubernetes:
+                  envoyDeployment:
+                    pod:
+                      affinity: *nebius_cpu_only_node_affinity
+                  envoyService:
+                    type: LoadBalancer
+                    externalTrafficPolicy: Cluster
+          - apiVersion: gateway.networking.k8s.io/v1
+            kind: Gateway
+            metadata:
+              name: nebius-cxcli-grafana
+              namespace: observability
+            spec:
+              gatewayClassName: nebius-cxcli-envoy
+              infrastructure:
+                parametersRef:
+                  group: gateway.envoyproxy.io
+                  kind: EnvoyProxy
+                  name: nebius-cxcli-grafana-proxy
+              listeners:
+                - name: http
+                  protocol: HTTP
+                  port: 80
+                  allowedRoutes:
+                    namespaces:
+                      from: Same
+        values.dashboardProviders:
+          dashboardproviders.yaml:
+            apiVersion: 1
+            providers:
+              - name: nebius
+                orgId: 1
+                folder: Nebius
+                folderUid: nebius
+                type: file
+                disableDeletion: false
+                allowUiUpdates: true
+                options:
+                  path: /var/lib/grafana/dashboards/nebius
+        values.dashboards:
+          # Nebius service dashboards use the service-provider Monitoring
+          # service-metrics datasource name.
+          nebius:
+            nebius-disk:
+              gnetId: 23425
+              revision: 2
+              datasource: Nebius Services
+            nebius-gpu:
+              gnetId: 23423
+              revision: 2
+              datasource: Nebius Services
+            nebius-managed-postgres:
+              gnetId: 23525
+              revision: 1
+              datasource: Nebius Services
+            nebius-object-storage:
+              gnetId: 23392
+              revision: 6
+              datasource: Nebius Services
+            nebius-observability-platform:
+              gnetId: 24246
+              revision: 2
+              datasource: Nebius Services
+            nebius-shared-filesystem:
+              gnetId: 23313
+              revision: 5
+              datasource: Nebius Services
+            nebius-shared-filesystem-extended:
+              gnetId: 25123
+              revision: 1
+              datasource: Nebius Services
+            kubernetes-cluster-monitoring:
+              gnetId: 315
+              revision: 3
+              datasource: Nebius User Metrics
+            kubernetes-logs-from-loki:
+              gnetId: 18494
+              revision: 1
+              datasource: Nebius Logs
+            guardrails-starter-traces:
+              gnetId: 20600
+              revision: 2
+              datasource: Nebius Traces
     gateway-helm:
       source:
         portable:
@@ -455,11 +887,15 @@ components:
       release:
         namespace: envoy-gateway-system
         name: envoy-gateway
+        timeout: 10m
       # Helm chart defaults are merged into apps.charts[].values when missing.
       # Example:
       # values.service.type: LoadBalancer
       # values.deployment.replicas: 2
-      defaults: {}
+      defaults:
+        values.config.envoyGateway.provider.type: Kubernetes
+        values.deployment.pod.affinity: *nebius_cpu_only_node_affinity
+        values.certgen.job.affinity: *nebius_cpu_only_node_affinity
     cert-manager:
       source:
         portable:
@@ -475,6 +911,10 @@ components:
         name: cert-manager
       defaults:
         values.crds.enabled: true
+        values.affinity: *nebius_cpu_only_node_affinity
+        values.webhook.affinity: *nebius_cpu_only_node_affinity
+        values.cainjector.affinity: *nebius_cpu_only_node_affinity
+        values.startupapicheck.affinity: *nebius_cpu_only_node_affinity
     external-dns:
       source:
         portable:
@@ -488,6 +928,8 @@ components:
       release:
         namespace: external-dns
         name: external-dns
+      defaults:
+        values.affinity: *nebius_cpu_only_node_affinity
     external-secrets:
       source:
         portable:
@@ -501,6 +943,8 @@ components:
       release:
         namespace: external-secrets
         name: external-secrets
+      defaults:
+        values.global.affinity: *nebius_cpu_only_node_affinity
     n8n:
       source:
         portable:
@@ -514,3 +958,7 @@ components:
       release:
         namespace: n8n
         name: n8n
+      defaults:
+        values.main.affinity: *nebius_cpu_only_node_affinity
+        values.worker.affinity: *nebius_cpu_only_node_affinity
+        values.webhook.affinity: *nebius_cpu_only_node_affinity

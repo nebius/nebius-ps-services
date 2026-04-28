@@ -65,9 +65,10 @@ blocker instead of guessing.
 ### `align`
 
 `align` is the end-to-end repair and consistency skill. Use it when a project
-needs code, tests, CI, CLI behavior, examples, help output, and docs reviewed
-together so broken flows, stale wording, and mismatched contracts are fixed in
-one pass instead of being reported separately.
+needs code, module wiring, tests, CI, CLI behavior, config, examples, help
+output, README/design docs, workflows, and applicable project skills reviewed
+together so verified gaps are fixed in one safe, focused pass instead of being
+reported separately or handled as speculative rewrites.
 
 ### `attach-ubuntu`
 

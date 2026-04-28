@@ -10,9 +10,7 @@ from nebius_cxcli.config_loader import load_config
 from nebius_cxcli.config_template import starter_config_yaml
 
 _VALID_ED25519_PUBLIC_KEY = (
-    "ssh-ed25519 "
-    "AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f "
-    "demo@example"
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f demo@example"
 )
 
 
@@ -52,6 +50,7 @@ def test_schema_accepts_ssh_public_key_local_file_path(tmp_path: Path) -> None:
     payload["infra"]["components"] = [
         {
             "id": "wireguard-jumphost",
+            "instance_id": "wireguard-jumphost",
             "enabled": True,
             "inputs": {
                 "ssh_user_name": "ubuntu",
@@ -59,6 +58,7 @@ def test_schema_accepts_ssh_public_key_local_file_path(tmp_path: Path) -> None:
             },
         }
     ]
+    payload.pop("deploy", None)
 
     config_path = tmp_path / "config.yaml"
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
@@ -92,7 +92,7 @@ def test_schema_rejects_duplicate_infra_component_ids(tmp_path: Path) -> None:
     payload = _dynamic_payload()
     components = payload["infra"]["components"]
     assert isinstance(components, list)
-    components.append({"id": "mk8s", "enabled": True, "inputs": {}})
+    components.append({"id": "mk8s", "instance_id": "mk8s", "enabled": True, "inputs": {}})
 
     config_path = tmp_path / "config.yaml"
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
@@ -165,6 +165,18 @@ def test_schema_rejects_unknown_root_key(tmp_path: Path) -> None:
     assert "unknown field(s) at root" in str(exc_info.value)
 
 
+def test_schema_rejects_top_level_observability_contract(tmp_path: Path) -> None:
+    payload = _dynamic_payload()
+    payload["observability"] = {"enabled": True}
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc_info:
+        load_config(config_path)
+    assert "unknown field(s) at root: observability" in str(exc_info.value)
+
+
 def test_schema_rejects_shared_root_key(tmp_path: Path) -> None:
     payload = _dynamic_payload()
     payload["shared"] = {
@@ -199,6 +211,7 @@ def test_schema_rejects_legacy_mk8s_gpu_validation_overrides_input(tmp_path: Pat
     payload["infra"]["components"] = [
         {
             "id": "mk8s",
+            "instance_id": "cluster-a",
             "enabled": True,
             "inputs": {
                 "cluster_name": "cluster-a",
@@ -218,7 +231,9 @@ def test_schema_rejects_legacy_mk8s_gpu_validation_overrides_input(tmp_path: Pat
     payload["apps"]["charts"] = [
         {
             "id": "nvidia-gpu-operator",
+            "instance_id": "cluster-a",
             "enabled": True,
+            "target_ref": "cluster-a",
             "values": {},
         }
     ]
@@ -229,3 +244,131 @@ def test_schema_rejects_legacy_mk8s_gpu_validation_overrides_input(tmp_path: Pat
     with pytest.raises(ValueError) as exc_info:
         load_config(config_path)
     assert "gpu_validation_overrides is no longer supported" in str(exc_info.value)
+
+
+def test_schema_rejects_root_mk8s_gpu_deploy_validations(tmp_path: Path) -> None:
+    payload = _dynamic_payload()
+    payload["deploy"] = {
+        "validations": {
+            "mk8s_gpu": {
+                "operator_readiness": {
+                    "enabled": True,
+                },
+            },
+        },
+    }
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc_info:
+        load_config(config_path)
+    assert "deploy has unsupported field(s): validations" in str(exc_info.value)
+
+
+def test_schema_rejects_missing_infra_instance_id(tmp_path: Path) -> None:
+    payload = _dynamic_payload()
+    components = payload["infra"]["components"]
+    assert isinstance(components, list)
+    components[0].pop("instance_id", None)
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc_info:
+        load_config(config_path)
+    assert "infra.components[0].instance_id is required" in str(exc_info.value)
+
+
+def test_schema_rejects_missing_app_instance_id(tmp_path: Path) -> None:
+    payload = _dynamic_payload()
+    payload["apps"]["charts"] = [
+        {
+            "id": "nvidia-gpu-operator",
+            "enabled": True,
+            "target_ref": "mk8s",
+            "values": {},
+        }
+    ]
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc_info:
+        load_config(config_path)
+    assert "apps.charts[0].instance_id is required" in str(exc_info.value)
+
+
+def test_schema_rejects_target_bound_app_instance_id_mismatch(tmp_path: Path) -> None:
+    payload = _dynamic_payload()
+    payload["infra"]["components"] = [
+        {
+            "id": "mk8s",
+            "instance_id": "cluster-a",
+            "enabled": True,
+            "inputs": {},
+        }
+    ]
+    payload["deploy"] = {"targets": [{"instance_id": "cluster-a"}]}
+    payload["apps"]["charts"] = [
+        {
+            "id": "nvidia-gpu-operator",
+            "instance_id": "nvidia-gpu-operator",
+            "enabled": True,
+            "target_ref": "cluster-a",
+            "values": {},
+        }
+    ]
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc_info:
+        load_config(config_path)
+    assert "apps.charts[0].instance_id must match apps.charts[0].target_ref" in str(
+        exc_info.value
+    )
+
+
+def test_schema_rejects_root_kubernetes_observability(tmp_path: Path) -> None:
+    payload = _dynamic_payload()
+    payload["deploy"] = {
+        "observability": {
+            "enabled": True,
+            "kubernetes": {"metrics": {"enabled": True}},
+        }
+    }
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc_info:
+        load_config(config_path)
+    assert "deploy.observability is only supported for enabled infra:vm components" in str(
+        exc_info.value
+    )
+
+
+def test_schema_rejects_root_kubernetes_observability_with_vm(tmp_path: Path) -> None:
+    payload = _dynamic_payload()
+    payload["infra"]["components"] = [
+        {
+            "id": "vm",
+            "instance_id": "vm",
+            "enabled": True,
+            "inputs": {},
+        }
+    ]
+    payload["deploy"] = {
+        "observability": {
+            "enabled": True,
+            "kubernetes": {"metrics": {"enabled": True}},
+        }
+    }
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc_info:
+        load_config(config_path)
+    assert "deploy.observability has unsupported field(s): kubernetes" in str(exc_info.value)

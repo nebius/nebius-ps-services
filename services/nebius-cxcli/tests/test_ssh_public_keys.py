@@ -10,9 +10,7 @@ from nebius_cxcli.ssh_public_keys import (
 )
 
 _VALID_ED25519_PUBLIC_KEY = (
-    "ssh-ed25519 "
-    "AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f "
-    "demo@example"
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f demo@example"
 )
 _VALID_RSA_PUBLIC_KEY = (
     "ssh-rsa "

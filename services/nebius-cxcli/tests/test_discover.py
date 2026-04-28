@@ -143,7 +143,9 @@ def test_discover_generated_change_maps_back_to_instance_config(
     monkeypatch.chdir(repo_root)
     monkeypatch.setattr(
         "nebius_cxcli.discover_ops._changed_files",
-        lambda *, cwd: ["deployments/tenant-name-example/project-name-example/generated/flux/helmrelease-demo.yaml"],
+        lambda *, cwd: [
+            "deployments/tenant-name-example/project-name-example/generated/flux/helmrelease-demo.yaml"
+        ],
     )
     payload = discover_configs(
         deployments_dir="deployments",

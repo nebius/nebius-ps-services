@@ -41,7 +41,7 @@ resource "nebius_mk8s_v1_cluster" "this" {
     precondition {
       condition = (
         !var.gpu_enabled ||
-        var.gpu_stack_source == "manual" ||
+        var.gpu_stack_source == "operator_managed" ||
         (
           local.gpu_effective_stack_preset != null &&
           length(trimspace(local.gpu_effective_stack_preset)) > 0

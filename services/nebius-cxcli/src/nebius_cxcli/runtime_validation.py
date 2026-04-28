@@ -12,6 +12,7 @@ from .component_defaults import (
     shared_default_target_paths,
 )
 from .component_instances import (
+    INSTANCE_ID_FIELD,
     INSTANCE_ID_PATTERN,
     component_instance_id,
     component_type_id,
@@ -22,7 +23,9 @@ from .components import (
     component_lookup,
     parse_dependency_ref,
 )
+from .deploy_targets import TARGET_REF_FIELD, app_chart_target_ref
 from .mk8s_gpu import mk8s_gpu_dependency_issues
+from .observability import observability_dependency_issues
 from .runtime_config import read_path_with_catalog
 from .runtime_plugin_validation import run_runtime_validation_plugins
 
@@ -103,29 +106,279 @@ def _validate_deploy(payload: Mapping[str, Any]) -> None:
     if not isinstance(deploy, Mapping):
         raise ValueError("deploy must be a mapping")
 
-    supported_deploy_keys = {"validations"}
-    unknown_deploy_keys = sorted(str(key) for key in deploy if str(key) not in supported_deploy_keys)
+    supported_deploy_keys = {"observability", "targets"}
+    unknown_deploy_keys = sorted(
+        str(key) for key in deploy if str(key) not in supported_deploy_keys
+    )
     if unknown_deploy_keys:
         raise ValueError("deploy has unsupported field(s): " + ", ".join(unknown_deploy_keys))
 
-    validations = deploy.get("validations")
-    if validations is None:
-        return
-    if not isinstance(validations, Mapping):
-        raise ValueError("deploy.validations must be a mapping")
-
-    supported_validation_keys = {"mk8s_gpu"}
-    unknown_validation_keys = sorted(
-        str(key) for key in validations if str(key) not in supported_validation_keys
+    _validate_observability(
+        deploy.get("observability"),
+        field_label="deploy.observability",
+        allow_kubernetes=False,
     )
-    if unknown_validation_keys:
+
+    targets = deploy.get("targets")
+    if targets is not None:
+        if not isinstance(targets, list):
+            raise ValueError("deploy.targets must be a list")
+        seen_target_refs: set[str] = set()
+        for index, raw_target in enumerate(targets):
+            if not isinstance(raw_target, Mapping):
+                raise ValueError(f"deploy.targets[{index}] must be a mapping")
+            unknown_target_keys = sorted(
+                str(key)
+                for key in raw_target
+                if str(key) not in {INSTANCE_ID_FIELD, "observability", "validations"}
+            )
+            if unknown_target_keys:
+                raise ValueError(
+                    f"deploy.targets[{index}] has unsupported field(s): "
+                    + ", ".join(unknown_target_keys)
+                )
+            target_ref = _as_text(raw_target.get(INSTANCE_ID_FIELD)).lower()
+            if not target_ref:
+                raise ValueError(f"deploy.targets[{index}].{INSTANCE_ID_FIELD} is required")
+            if not INSTANCE_ID_PATTERN.fullmatch(target_ref):
+                raise ValueError(
+                    f"deploy.targets[{index}].{INSTANCE_ID_FIELD} must use lowercase letters, digits, and hyphens"
+                )
+            if target_ref in seen_target_refs:
+                raise ValueError(
+                    f"deploy.targets[{index}].{INSTANCE_ID_FIELD} '{target_ref}' is duplicated"
+                )
+            seen_target_refs.add(target_ref)
+            _validate_observability(
+                raw_target.get("observability"),
+                field_label=f"deploy.targets[{index}].observability",
+                allow_vm=False,
+            )
+            target_validations = raw_target.get("validations")
+            if target_validations is None:
+                continue
+            if not isinstance(target_validations, Mapping):
+                raise ValueError(f"deploy.targets[{index}].validations must be a mapping")
+            unknown_target_validation_keys = sorted(
+                str(key) for key in target_validations if str(key) not in {"mk8s_gpu"}
+            )
+            if unknown_target_validation_keys:
+                raise ValueError(
+                    f"deploy.targets[{index}].validations has unsupported field(s): "
+                    + ", ".join(unknown_target_validation_keys)
+                )
+            mk8s_gpu = target_validations.get("mk8s_gpu")
+            if mk8s_gpu is not None and not isinstance(mk8s_gpu, Mapping):
+                raise ValueError(f"deploy.targets[{index}].validations.mk8s_gpu must be a mapping")
+
+
+def _validate_observability(
+    observability: Any,
+    *,
+    field_label: str,
+    allow_vm: bool = True,
+    allow_kubernetes: bool = True,
+) -> None:
+    if observability is None:
+        return
+    if not isinstance(observability, Mapping):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {"enabled"}
+    if allow_kubernetes:
+        supported_keys.add("kubernetes")
+    if allow_vm:
+        supported_keys.add("vm")
+    unknown_keys = sorted(str(key) for key in observability if str(key) not in supported_keys)
+    if unknown_keys:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown_keys))
+    enabled = observability.get("enabled")
+    if enabled is not None and not isinstance(enabled, bool):
+        raise ValueError(f"{field_label}.enabled must be true or false")
+
+    kubernetes = observability.get("kubernetes")
+    if kubernetes is not None:
+        if not isinstance(kubernetes, Mapping):
+            raise ValueError(f"{field_label}.kubernetes must be a mapping")
+        supported_kubernetes_keys = {"logs", "metrics", "traces"}
+        unknown_kubernetes_keys = sorted(
+            str(key) for key in kubernetes if str(key) not in supported_kubernetes_keys
+        )
+        if unknown_kubernetes_keys:
+            raise ValueError(
+                f"{field_label}.kubernetes has unsupported field(s): "
+                + ", ".join(unknown_kubernetes_keys)
+            )
+
+        logs = kubernetes.get("logs")
+        if logs is not None:
+            if not isinstance(logs, Mapping):
+                raise ValueError(f"{field_label}.kubernetes.logs must be a mapping")
+            supported_log_keys = {"enabled", "collect_agent_logs", "excluded_namespaces"}
+            unknown_log_keys = sorted(
+                str(key) for key in logs if str(key) not in supported_log_keys
+            )
+            if unknown_log_keys:
+                raise ValueError(
+                    f"{field_label}.kubernetes.logs has unsupported field(s): "
+                    + ", ".join(unknown_log_keys)
+                )
+            for field in ("enabled", "collect_agent_logs"):
+                value = logs.get(field)
+                if value is not None and not isinstance(value, bool):
+                    raise ValueError(f"{field_label}.kubernetes.logs.{field} must be true or false")
+            excluded_namespaces = logs.get("excluded_namespaces")
+            if excluded_namespaces is not None and (
+                not isinstance(excluded_namespaces, list)
+                or any(not isinstance(item, str) for item in excluded_namespaces)
+            ):
+                raise ValueError(
+                    f"{field_label}.kubernetes.logs.excluded_namespaces must be a list of strings"
+                )
+
+        metrics = kubernetes.get("metrics")
+        if metrics is not None:
+            if not isinstance(metrics, Mapping):
+                raise ValueError(f"{field_label}.kubernetes.metrics must be a mapping")
+            supported_metric_keys = {
+                "enabled",
+                "collect_agent_metrics",
+                "collect_k8s_cluster_metrics",
+                "excluded_namespaces",
+            }
+            unknown_metric_keys = sorted(
+                str(key) for key in metrics if str(key) not in supported_metric_keys
+            )
+            if unknown_metric_keys:
+                raise ValueError(
+                    f"{field_label}.kubernetes.metrics has unsupported field(s): "
+                    + ", ".join(unknown_metric_keys)
+                )
+            for field in ("enabled", "collect_agent_metrics", "collect_k8s_cluster_metrics"):
+                value = metrics.get(field)
+                if value is not None and not isinstance(value, bool):
+                    raise ValueError(
+                        f"{field_label}.kubernetes.metrics.{field} must be true or false"
+                    )
+            excluded_namespaces = metrics.get("excluded_namespaces")
+            if excluded_namespaces is not None and (
+                not isinstance(excluded_namespaces, list)
+                or any(not isinstance(item, str) for item in excluded_namespaces)
+            ):
+                raise ValueError(
+                    f"{field_label}.kubernetes.metrics.excluded_namespaces must be a list of strings"
+                )
+
+        traces = kubernetes.get("traces")
+        if traces is not None:
+            if not isinstance(traces, Mapping):
+                raise ValueError(f"{field_label}.kubernetes.traces must be a mapping")
+            supported_trace_keys = {"enabled"}
+            unknown_trace_keys = sorted(
+                str(key) for key in traces if str(key) not in supported_trace_keys
+            )
+            if unknown_trace_keys:
+                raise ValueError(
+                    f"{field_label}.kubernetes.traces has unsupported field(s): "
+                    + ", ".join(unknown_trace_keys)
+                )
+            value = traces.get("enabled")
+            if value is not None and not isinstance(value, bool):
+                raise ValueError(f"{field_label}.kubernetes.traces.enabled must be true or false")
+
+    vm = observability.get("vm")
+    if vm is None:
+        return
+    if not isinstance(vm, Mapping):
+        raise ValueError(f"{field_label}.vm must be a mapping")
+    supported_vm_keys = {"logs", "collector"}
+    unknown_vm_keys = sorted(str(key) for key in vm if str(key) not in supported_vm_keys)
+    if unknown_vm_keys:
         raise ValueError(
-            "deploy.validations has unsupported field(s): " + ", ".join(unknown_validation_keys)
+            f"{field_label}.vm has unsupported field(s): " + ", ".join(unknown_vm_keys)
         )
 
-    mk8s_gpu = validations.get("mk8s_gpu")
-    if mk8s_gpu is not None and not isinstance(mk8s_gpu, Mapping):
-        raise ValueError("deploy.validations.mk8s_gpu must be a mapping")
+    logs = vm.get("logs")
+    if logs is None:
+        return
+    if not isinstance(logs, Mapping):
+        raise ValueError(f"{field_label}.vm.logs must be a mapping")
+    supported_vm_log_keys = {"enabled", "systemd_units"}
+    unknown_vm_log_keys = sorted(str(key) for key in logs if str(key) not in supported_vm_log_keys)
+    if unknown_vm_log_keys:
+        raise ValueError(
+            f"{field_label}.vm.logs has unsupported field(s): " + ", ".join(unknown_vm_log_keys)
+        )
+    enabled = logs.get("enabled")
+    if enabled is not None and not isinstance(enabled, bool):
+        raise ValueError(f"{field_label}.vm.logs.enabled must be true or false")
+    systemd_units = logs.get("systemd_units")
+    if systemd_units is not None and (
+        not isinstance(systemd_units, list)
+        or any(not isinstance(item, str) for item in systemd_units)
+    ):
+        raise ValueError(f"{field_label}.vm.logs.systemd_units must be a list of strings")
+
+    collector = vm.get("collector")
+    if collector is None:
+        return
+    if not isinstance(collector, Mapping):
+        raise ValueError(f"{field_label}.vm.collector must be a mapping")
+    supported_collector_keys = {"enabled", "logs", "metrics"}
+    unknown_collector_keys = sorted(
+        str(key) for key in collector if str(key) not in supported_collector_keys
+    )
+    if unknown_collector_keys:
+        raise ValueError(
+            f"{field_label}.vm.collector has unsupported field(s): "
+            + ", ".join(unknown_collector_keys)
+        )
+    collector_enabled = collector.get("enabled")
+    if collector_enabled is not None and not isinstance(collector_enabled, bool):
+        raise ValueError(f"{field_label}.vm.collector.enabled must be true or false")
+
+    collector_logs = collector.get("logs")
+    if collector_logs is not None:
+        if not isinstance(collector_logs, Mapping):
+            raise ValueError(f"{field_label}.vm.collector.logs must be a mapping")
+        supported_collector_log_keys = {"enabled", "systemd_units"}
+        unknown_collector_log_keys = sorted(
+            str(key) for key in collector_logs if str(key) not in supported_collector_log_keys
+        )
+        if unknown_collector_log_keys:
+            raise ValueError(
+                f"{field_label}.vm.collector.logs has unsupported field(s): "
+                + ", ".join(unknown_collector_log_keys)
+            )
+        collector_logs_enabled = collector_logs.get("enabled")
+        if collector_logs_enabled is not None and not isinstance(collector_logs_enabled, bool):
+            raise ValueError(f"{field_label}.vm.collector.logs.enabled must be true or false")
+        collector_units = collector_logs.get("systemd_units")
+        if collector_units is not None and (
+            not isinstance(collector_units, list)
+            or any(not isinstance(item, str) for item in collector_units)
+        ):
+            raise ValueError(
+                f"{field_label}.vm.collector.logs.systemd_units must be a list of strings"
+            )
+
+    collector_metrics = collector.get("metrics")
+    if collector_metrics is not None:
+        if not isinstance(collector_metrics, Mapping):
+            raise ValueError(f"{field_label}.vm.collector.metrics must be a mapping")
+        supported_collector_metric_keys = {"enabled"}
+        unknown_collector_metric_keys = sorted(
+            str(key) for key in collector_metrics if str(key) not in supported_collector_metric_keys
+        )
+        if unknown_collector_metric_keys:
+            raise ValueError(
+                f"{field_label}.vm.collector.metrics has unsupported field(s): "
+                + ", ".join(unknown_collector_metric_keys)
+            )
+        collector_metrics_enabled = collector_metrics.get("enabled")
+        if collector_metrics_enabled is not None and not isinstance(
+            collector_metrics_enabled, bool
+        ):
+            raise ValueError(f"{field_label}.vm.collector.metrics.enabled must be true or false")
 
 
 def _enabled_component_ids(payload: Mapping[str, Any], *, scope: ComponentScope) -> set[str]:
@@ -242,8 +495,10 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
         raise ValueError("apps.charts must be a list in dynamic config mode")
 
     app_lookup = component_lookup("apps")
+    infra_lookup = component_lookup("infra")
     seen_infra_instance_ids: set[str] = set()
-    seen_global_instance_ids: set[str] = set()
+    cluster_target_refs: set[str] = set()
+    enabled_vm_instance_ids: set[str] = set()
     for index, raw_component in enumerate(infra_components):
         if not isinstance(raw_component, Mapping):
             raise ValueError(f"infra.components[{index}] must be a mapping")
@@ -265,21 +520,16 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
                 f"infra.components[{index}].id must use lowercase letters, digits, and hyphens"
             )
         raw_instance_id = _as_text(raw_component.get("instance_id")).lower()
-        if raw_instance_id and not INSTANCE_ID_PATTERN.fullmatch(raw_instance_id):
+        if not raw_instance_id:
+            raise ValueError(f"infra.components[{index}].instance_id is required")
+        if not INSTANCE_ID_PATTERN.fullmatch(raw_instance_id):
             raise ValueError(
                 f"infra.components[{index}].instance_id must use lowercase letters, digits, and hyphens"
             )
-        instance_id = component_instance_id(raw_component)
-        if not instance_id:
-            raise ValueError(f"infra.components[{index}].instance_id could not be derived")
+        instance_id = raw_instance_id
         if instance_id in seen_infra_instance_ids:
             raise ValueError(f"infra.components[{index}].instance_id '{instance_id}' is duplicated")
-        if instance_id in seen_global_instance_ids:
-            raise ValueError(
-                f"component instance_id '{instance_id}' is duplicated across infra/apps"
-            )
         seen_infra_instance_ids.add(instance_id)
-        seen_global_instance_ids.add(instance_id)
 
         if not isinstance(raw_component.get("enabled"), bool):
             raise ValueError(f"infra.components[{index}].enabled must be true or false")
@@ -300,10 +550,40 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
         if component_id == "mk8s" and "gpu_validation_overrides" in inputs:
             raise ValueError(
                 "infra.components[].inputs.gpu_validation_overrides is no longer supported; "
-                "use deploy.validations.mk8s_gpu.*"
+                "use deploy.targets[].validations.mk8s_gpu.*"
             )
+        entry = infra_lookup.get(component_id)
+        if (
+            entry is not None
+            and entry.handoff is not None
+            and bool(raw_component.get("enabled", False))
+        ):
+            cluster_target_refs.add(instance_id)
+        if component_id == "vm" and bool(raw_component.get("enabled", False)):
+            enabled_vm_instance_ids.add(instance_id)
 
-    seen_app_instance_ids: set[str] = set()
+    deploy = payload.get("deploy")
+    deploy_targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    if isinstance(deploy_targets, list):
+        if deploy_targets and not cluster_target_refs:
+            raise ValueError("deploy.targets requires at least one enabled cluster target")
+        for index, raw_target in enumerate(deploy_targets):
+            if not isinstance(raw_target, Mapping):
+                continue
+            target_ref = _as_text(raw_target.get(INSTANCE_ID_FIELD)).lower()
+            if target_ref and cluster_target_refs and target_ref not in cluster_target_refs:
+                available = ", ".join(sorted(cluster_target_refs)) or "(none)"
+                raise ValueError(
+                    f"deploy.targets[{index}].{INSTANCE_ID_FIELD} must reference one of the enabled cluster targets: {available}"
+                )
+    root_observability = deploy.get("observability") if isinstance(deploy, Mapping) else None
+    if root_observability is not None and not enabled_vm_instance_ids:
+        raise ValueError(
+            "deploy.observability is only supported for enabled infra:vm components; "
+            "use deploy.targets[].observability for MK8s targets"
+        )
+
+    seen_app_instance_keys: set[tuple[str, str]] = set()
     for index, raw_chart in enumerate(apps_charts):
         if not isinstance(raw_chart, Mapping):
             raise ValueError(f"apps.charts[{index}] must be a mapping")
@@ -318,6 +598,7 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
                 "enabled",
                 "repo",
                 "version",
+                TARGET_REF_FIELD,
                 "namespace",
                 "release-name",
                 "values",
@@ -336,21 +617,19 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
                 f"apps.charts[{index}].id must use lowercase letters, digits, and hyphens"
             )
         raw_instance_id = _as_text(raw_chart.get("instance_id")).lower()
-        if raw_instance_id and not INSTANCE_ID_PATTERN.fullmatch(raw_instance_id):
+        if not raw_instance_id:
+            raise ValueError(f"apps.charts[{index}].instance_id is required")
+        if not INSTANCE_ID_PATTERN.fullmatch(raw_instance_id):
             raise ValueError(
                 f"apps.charts[{index}].instance_id must use lowercase letters, digits, and hyphens"
             )
-        instance_id = component_instance_id(raw_chart)
-        if not instance_id:
-            raise ValueError(f"apps.charts[{index}].instance_id could not be derived")
-        if instance_id in seen_app_instance_ids:
-            raise ValueError(f"apps.charts[{index}].instance_id '{instance_id}' is duplicated")
-        if instance_id in seen_global_instance_ids:
+        instance_id = raw_instance_id
+        instance_key = (chart_id, instance_id)
+        if instance_key in seen_app_instance_keys:
             raise ValueError(
-                f"component instance_id '{instance_id}' is duplicated across infra/apps"
+                f"apps.charts[{index}] duplicates chart '{chart_id}' instance_id '{instance_id}'"
             )
-        seen_app_instance_ids.add(instance_id)
-        seen_global_instance_ids.add(instance_id)
+        seen_app_instance_keys.add(instance_key)
 
         entry = app_lookup.get(chart_id)
 
@@ -371,11 +650,39 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
             value = raw_chart.get(key)
             if value is not None and not isinstance(value, str):
                 raise ValueError(f"apps.charts[{index}].{key} must be a string when set")
+        target_ref = raw_chart.get(TARGET_REF_FIELD)
+        if target_ref is not None and not isinstance(target_ref, str):
+            raise ValueError(f"apps.charts[{index}].{TARGET_REF_FIELD} must be a string when set")
+        normalized_target_ref = app_chart_target_ref(raw_chart)
+        if target_ref and not INSTANCE_ID_PATTERN.fullmatch(normalized_target_ref):
+            raise ValueError(
+                f"apps.charts[{index}].{TARGET_REF_FIELD} must use lowercase letters, digits, and hyphens"
+            )
         release_name = raw_chart.get("release-name")
         if release_name is not None and not isinstance(release_name, str):
             raise ValueError(f"apps.charts[{index}].release-name must be a string when set")
         if not isinstance(raw_chart.get("values"), Mapping):
             raise ValueError(f"apps.charts[{index}].values must be a mapping")
+        if bool(raw_chart.get("enabled", False)):
+            if cluster_target_refs:
+                if not normalized_target_ref:
+                    raise ValueError(
+                        f"apps.charts[{index}].{TARGET_REF_FIELD} is required when cluster targets are enabled"
+                    )
+                if instance_id != normalized_target_ref:
+                    raise ValueError(
+                        f"apps.charts[{index}].instance_id must match "
+                        f"apps.charts[{index}].{TARGET_REF_FIELD} for target-bound charts"
+                    )
+                if normalized_target_ref not in cluster_target_refs:
+                    available = ", ".join(sorted(cluster_target_refs))
+                    raise ValueError(
+                        f"apps.charts[{index}].{TARGET_REF_FIELD} must reference one of the enabled cluster targets: {available}"
+                    )
+            elif normalized_target_ref:
+                raise ValueError(
+                    f"apps.charts[{index}].{TARGET_REF_FIELD} is not allowed when no built-in cluster target is enabled"
+                )
 
 
 def validate_runtime_payload(payload: Mapping[str, Any]) -> None:
@@ -429,6 +736,9 @@ def validate_runtime_payload(payload: Mapping[str, Any]) -> None:
     gpu_issues = mk8s_gpu_dependency_issues(payload)
     if gpu_issues:
         raise ValueError(gpu_issues[0])
+    observability_issues = observability_dependency_issues(payload)
+    if observability_issues:
+        raise ValueError(observability_issues[0])
 
     _validate_materialized_shared_defaults(payload)
 

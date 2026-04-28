@@ -1,0 +1,67 @@
+services:
+  monitoring:
+    write:
+      otlp_metrics: "https://write.monitoring.<region>.nebius.cloud/projects/<project-id>/opentelemetry/v1/metrics"
+      prometheus_remote_write: "https://write.monitoring.<region>.nebius.cloud/projects/<project-id>/prometheus/api/v1/write"
+      vm_monitoring_agent_managed: "Built-in VM Monitoring agent metrics ingest is automatic and uses Nebius-managed internal regional endpoints rather than the public customer write endpoints."
+      vm_standalone_collector_prometheus_remote_write: "https://write.monitoring.<region>.nebius.cloud/projects/<project-id>/prometheus/api/v1/write"
+    read:
+      service_provider_prometheus: "https://read.monitoring.api.nebius.cloud/projects/<project-id>/service-provider/prometheus"
+      user_prometheus: "https://read.monitoring.api.nebius.cloud/projects/<project-id>/prometheus"
+      federate: "https://read.monitoring.api.nebius.cloud/projects/<project-id>/buckets/<service-provider>/prometheus/federate"
+
+  logging:
+    write:
+      https_ingest: "https://write.logging.<region>.nebius.cloud"
+      kubernetes_agent_grpc: "dns:///write.logging.<region>.nebius.cloud:443"
+      vm_monitoring_agent_managed: "When journald collection is enabled, the built-in VM Monitoring agent forwards logs through the Nebius-managed internal Logging ingest path rather than the public customer write endpoints."
+      vm_standalone_collector_grpc: "dns:///write.logging.<region>.nebius.cloud:443"
+    read:
+      loki: "https://read.logging.api.nebius.cloud/projects/<project-id>"
+      user_ingested_bucket: "default"
+
+  tracing:
+    write:
+      otlp_grpc: "dns:///write.tracing.<region>.nebius.cloud:443"
+      kubernetes_agent_service: "nebius-observability-agent.<namespace>.svc.cluster.local:4317"
+    read:
+      tempo: "https://read.tracing.api.nebius.cloud/projects/<project-id>/tempo"
+
+helm_charts:
+  kubernetes_agent:
+    repo: "oci://cr.nebius.cloud/observability/public/nebius-observability-agent-helm"
+    chart: "nebius-observability-agent-helm"
+    release_name: "nebius-observability-agent"
+    namespace: "observability"
+    docs:
+      - "https://docs.nebius.com/observability/agents/nebius-o11y-agent"
+      - "https://docs.nebius.com/observability/traces/ingest"
+
+auth:
+  kubernetes_agent:
+    auth_scheme: "iam-token-file"
+    token_file: "/mnt/cloud-metadata/tsa-token"
+    iam_endpoint: "tokens.iam.api.nebius.cloud:443"
+  vm_standalone_collector:
+    auth_scheme: "metadata-token-file"
+    token_file: "/mnt/cloud-metadata/token"
+    note: "Requires a VM-attached service account with observability write permissions."
+  operator_tools:
+    authorization_header: "Authorization: Bearer <observability static token or IAM token>"
+
+cxcli_contract:
+  catalog:
+    mk8s: "components.infra.mk8s.cli.observability.*"
+    vm: "components.infra.vm.cli.observability.*"
+    app_metric_targets: "components.apps.<id>.cli.observability.metric_targets"
+  config:
+    mk8s_target_switch: "deploy.targets[].observability.enabled"
+    deploy_switch_note: "Controls whether cxcli deploys/configures collectors; it does not create the project-scoped service endpoints."
+    kubernetes: "deploy.targets[].observability.kubernetes.*"
+    vm_project_switch: "deploy.observability.enabled"
+    vm_logs: "deploy.observability.vm.logs.*"
+    vm_collector: "deploy.observability.vm.collector.*"
+  runtime_materialization:
+    mk8s: "collector chart rows + values.config.*"
+    vm: "nebius.o11y.systemd-logs-collection.* labels in infra.components[].inputs.labels"
+    vm_standalone_collector: "hidden VM module inputs that bootstrap nebius-o11y-agent plus a Prometheus agent companion"

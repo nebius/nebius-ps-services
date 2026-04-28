@@ -135,6 +135,67 @@ def resolve_generated_paths(
     return resolve_project_paths(config_path, deployments_dir_hint=deployments_dir_hint)
 
 
+def resolve_generated_subtree_paths(
+    target_path: Path,
+    *,
+    subtree_name: str,
+    command_label: str,
+    deployments_dir_hint: str | None = None,
+) -> ProjectPaths:
+    resolved = target_path.resolve()
+    generated_dir: Path | None = None
+
+    if resolved.name == "generated":
+        generated_dir = resolved
+    else:
+        for candidate in [resolved.parent, *resolved.parents]:
+            if candidate.name == "generated":
+                generated_dir = candidate
+                break
+
+    expected_label = f"generated/{subtree_name}"
+    if generated_dir is None:
+        raise ValueError(
+            f"{command_label} target must point to `generated/` or `{expected_label}/`."
+        )
+
+    subtree_dir = generated_dir / subtree_name
+    if resolved != generated_dir and resolved != subtree_dir and subtree_dir not in resolved.parents:
+        try:
+            actual_label = f"generated/{resolved.relative_to(generated_dir)}"
+        except ValueError:
+            actual_label = str(resolved)
+        raise ValueError(
+            f"{command_label} target must point to `generated/` or `{expected_label}/`, "
+            f"not `{actual_label}`."
+        )
+
+    config_path = generated_dir.parent / "config.yaml"
+    return resolve_project_paths(config_path, deployments_dir_hint=deployments_dir_hint)
+
+
+def resolve_generated_infra_paths(
+    target_path: Path, deployments_dir_hint: str | None = None
+) -> ProjectPaths:
+    return resolve_generated_subtree_paths(
+        target_path,
+        subtree_name="infra",
+        command_label="Terraform",
+        deployments_dir_hint=deployments_dir_hint,
+    )
+
+
+def resolve_generated_flux_paths(
+    target_path: Path, deployments_dir_hint: str | None = None
+) -> ProjectPaths:
+    return resolve_generated_subtree_paths(
+        target_path,
+        subtree_name="flux",
+        command_label="Flux",
+        deployments_dir_hint=deployments_dir_hint,
+    )
+
+
 def resolve_generated_bundle_config_paths(
     target_path: Path,
     *,
@@ -145,7 +206,9 @@ def resolve_generated_bundle_config_paths(
     if resolved.name == "config.yaml":
         return resolve_project_paths(resolved, deployments_dir_hint=deployments_dir_hint)
 
-    if resolved.name == "generated" or any(candidate.name == "generated" for candidate in resolved.parents):
+    if resolved.name == "generated" or any(
+        candidate.name == "generated" for candidate in resolved.parents
+    ):
         raise ValueError(
             f"{command_label} target must be project config.yaml, not generated/. "
             f"Pass <tenant-folder>/<project-folder>/config.yaml; {command_label.lower()} resolves sibling generated/ automatically."
@@ -173,16 +236,6 @@ def resolve_destroy_config_paths(
     return resolve_generated_bundle_config_paths(
         target_path,
         command_label="Destroy",
-        deployments_dir_hint=deployments_dir_hint,
-    )
-
-
-def resolve_report_config_paths(
-    target_path: Path, deployments_dir_hint: str | None = None
-) -> ProjectPaths:
-    return resolve_generated_bundle_config_paths(
-        target_path,
-        command_label="Report",
         deployments_dir_hint=deployments_dir_hint,
     )
 

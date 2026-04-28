@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from nebius_cxcli.deploy_targets import flux_target_dir
 from nebius_cxcli.generated_manifest import (
     GENERATED_MANIFEST_FILENAME,
     GENERATED_MANIFEST_SCHEMA,
@@ -62,6 +63,18 @@ def _runtime_payload() -> dict:
     }
 
 
+def _mk8s_target(paths: ProjectPaths, *, target_ref: str = "mk8s") -> dict[str, str]:
+    return {
+        "component_id": "mk8s",
+        "instance_id": target_ref,
+        "target_ref": target_ref,
+        "cluster_id_output_name": f"{target_ref.replace('-', '_')}_cluster_id",
+        "component_output_ref": f"{target_ref}.cluster_id",
+        "access": "external",
+        "flux_dir": str(flux_target_dir(paths, target_ref)),
+    }
+
+
 def test_build_generated_manifest_uses_repo_relative_paths(tmp_path: Path) -> None:
     paths = _project_paths(tmp_path)
     validations = [
@@ -75,7 +88,7 @@ def test_build_generated_manifest_uses_repo_relative_paths(tmp_path: Path) -> No
     manifest = build_generated_manifest(
         config=_runtime_payload(),
         paths=paths,
-        handoffs=[{"component_id": "mk8s", "access": "external"}],
+        targets=[_mk8s_target(paths)],
         required_component_outputs=[{"component_id": "mk8s", "output_name": "cluster_id"}],
         status_watchers=[
             {
@@ -111,7 +124,17 @@ def test_build_generated_manifest_uses_repo_relative_paths(tmp_path: Path) -> No
         "flux_version": "v2.8.0",
         "terraform_version": "1.14.1",
     }
-    assert manifest["deploy"]["handoffs"] == [{"component_id": "mk8s", "access": "external"}]
+    assert manifest["deploy"]["targets"] == [
+        {
+            "component_id": "mk8s",
+            "instance_id": "mk8s",
+            "target_ref": "mk8s",
+            "cluster_id_output_name": "mk8s_cluster_id",
+            "component_output_ref": "mk8s.cluster_id",
+            "access": "external",
+            "flux_dir": "deployments/tenant-name-example/project-name-example/generated/flux/targets/mk8s",
+        }
+    ]
     assert manifest["deploy"]["required_component_outputs"] == [
         {"component_id": "mk8s", "output_name": "cluster_id"}
     ]
@@ -136,7 +159,7 @@ def test_write_load_and_runtime_config_round_trip(tmp_path: Path) -> None:
     written_path = write_generated_manifest(
         config=_runtime_payload(),
         paths=paths,
-        handoffs=[{"component_id": "mk8s"}],
+        targets=[_mk8s_target(paths)],
         required_component_outputs=[{"component_id": "mk8s", "output_name": "cluster_id"}],
         terraform_tfvars={"mk8s_cluster_name": "clust1"},
         flux_version="v2.8.0",
@@ -168,7 +191,7 @@ def test_write_generated_manifest_to_path_uses_explicit_output_path(tmp_path: Pa
         explicit_path,
         config=_runtime_payload(),
         paths=paths,
-        handoffs=[{"component_id": "mk8s"}],
+        targets=[_mk8s_target(paths)],
         required_component_outputs=[{"component_id": "mk8s", "output_name": "cluster_id"}],
         terraform_tfvars={"mk8s_cluster_name": "clust1"},
         flux_version="v2.8.0",
@@ -187,7 +210,7 @@ def test_build_generated_manifest_includes_quota_report(tmp_path: Path) -> None:
     manifest = build_generated_manifest(
         config=_runtime_payload(),
         paths=paths,
-        handoffs=[],
+        targets=[],
         required_component_outputs=[],
         quota_report={
             "tenant_id": "tenant-123",

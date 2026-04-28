@@ -9,7 +9,6 @@ import yaml
 import nebius_cxcli.component_sources as component_sources
 from nebius_cxcli.cli import _validate_component_sources_registry
 from nebius_cxcli.component_sources import (
-    ComponentDefault,
     ComponentOutput,
     SourceProfile,
     load_component_sources,
@@ -22,10 +21,26 @@ from nebius_cxcli.component_sources import (
 from nebius_cxcli.runtime_introspection import reset_runtime_introspection_cache
 
 _VALID_ED25519_PUBLIC_KEY = (
-    "ssh-ed25519 "
-    "AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f "
-    "demo@example"
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f demo@example"
 )
+
+_NEBIUS_CPU_ONLY_AFFINITY = {
+    "nodeAffinity": {
+        "requiredDuringSchedulingIgnoredDuringExecution": {
+            "nodeSelectorTerms": [
+                {
+                    "matchExpressions": [
+                        {
+                            "key": "nebius.com/gpu",
+                            "operator": "NotIn",
+                            "values": ["true"],
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+}
 
 
 def _reset_sources_state() -> None:
@@ -144,6 +159,7 @@ def _catalog(
     apps: dict[str, object] | None = None,
     cli: dict[str, object] | None = None,
     shared: dict[str, object] | None = None,
+    observability: dict[str, object] | None = None,
 ) -> dict[str, object]:
     payload: dict[str, object] = {
         "components": {
@@ -155,6 +171,8 @@ def _catalog(
         payload["cli"] = cli
     if shared is not None:
         payload["shared"] = shared
+    if observability is not None:
+        payload["observability"] = observability
     return payload
 
 
@@ -859,8 +877,325 @@ def test_load_component_sources_rejects_runtime_block(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match=r"components\.infra\.mk8s has unsupported field\(s\): runtime"):
+    with pytest.raises(
+        ValueError, match=r"components\.infra\.mk8s has unsupported field\(s\): runtime"
+    ):
         load_component_sources(explicit=sources_file)
+
+
+def test_load_component_sources_rejects_grafana_report_dashboard_missing_gnet_id(
+    tmp_path: Path,
+) -> None:
+    sources_file = tmp_path / "component-sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                apps={
+                    "grafana": {
+                        "source": _portable_chart_source(
+                            repo="https://example.invalid/charts",
+                            chart="grafana",
+                            version="1.0.0",
+                        ),
+                        "release": {
+                            "namespace": "observability",
+                            "name": "grafana",
+                        },
+                        "defaults": {
+                            "values.dashboards.nebius.kubernetes-logs-from-loki": {
+                                "revision": 1,
+                                "datasource": "Nebius Logs",
+                            }
+                        },
+                        "cli": {
+                            "grafana": {
+                                "report_dashboards": {
+                                    "logs": "nebius/kubernetes-logs-from-loki",
+                                }
+                            }
+                        },
+                    }
+                }
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"components\.apps\.grafana\.cli\.grafana\.report_dashboards\.logs"
+            r" references values\.dashboards\.nebius\.kubernetes-logs-from-loki, "
+            r"but that dashboard does not declare gnetId"
+        ),
+    ):
+        load_component_sources(explicit=sources_file)
+
+
+def test_load_component_sources_rejects_grafana_logout_timeout_never(tmp_path: Path) -> None:
+    sources_file = tmp_path / "component-sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                apps={
+                    "grafana": {
+                        "source": _portable_chart_source(
+                            repo="https://example.invalid/charts",
+                            chart="grafana",
+                            version="1.0.0",
+                        ),
+                        "release": {
+                            "namespace": "observability",
+                            "name": "grafana",
+                        },
+                        "cli": {
+                            "grafana": {
+                                "logout-timeout": "never",
+                            }
+                        },
+                    }
+                }
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"components\.apps\.grafana\.cli\.grafana\.logout-timeout must be "
+            r"a Grafana duration"
+        ),
+    ):
+        load_component_sources(explicit=sources_file)
+
+
+def test_load_component_sources_rejects_grafana_datasource_unknown_read_endpoint(
+    tmp_path: Path,
+) -> None:
+    sources_file = tmp_path / "component-sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                apps={
+                    "grafana": {
+                        "source": _portable_chart_source(
+                            repo="https://example.invalid/charts",
+                            chart="grafana",
+                            version="1.0.0",
+                        ),
+                        "release": {
+                            "namespace": "observability",
+                            "name": "grafana",
+                        },
+                        "cli": {
+                            "grafana": {
+                                "datasources": {
+                                    "future": {
+                                        "name": "Future Read API",
+                                        "uid": "future-read-api",
+                                        "type": "prometheus",
+                                        "read_endpoint": "future_read",
+                                    }
+                                }
+                            }
+                        },
+                    }
+                }
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"components\.apps\.grafana\.cli\.grafana\.datasources\.future"
+            r"\.read_endpoint references 'future_read', but that read endpoint "
+            r"is not declared under observability\.endpoints\.read"
+        ),
+    ):
+        load_component_sources(explicit=sources_file)
+
+
+def test_load_component_sources_allows_grafana_datasource_bound_to_catalog_read_endpoint(
+    tmp_path: Path,
+) -> None:
+    sources_file = tmp_path / "component-sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                observability={
+                    "endpoints": {
+                        "read": {
+                            "future_read": {
+                                "label": "Future read API",
+                                "template": "https://read.example.invalid/projects/{project_id}",
+                                "include_when": ["metrics"],
+                            }
+                        }
+                    }
+                },
+                infra={
+                    "mk8s": {
+                        "source": {
+                            "portable": (
+                                "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3"
+                            )
+                        },
+                        "ui": {"enabled": True},
+                        "cli": {
+                            "observability": {
+                                "primary_agent": {
+                                    "kind": "kubernetes_agent",
+                                    "chart_component_id": "nebius-observability-agent",
+                                },
+                            }
+                        },
+                    }
+                },
+                apps={
+                    "grafana": {
+                        "source": _portable_chart_source(
+                            repo="https://example.invalid/charts",
+                            chart="grafana",
+                            version="1.0.0",
+                        ),
+                        "release": {
+                            "namespace": "observability",
+                            "name": "grafana",
+                        },
+                        "cli": {
+                            "grafana": {
+                                "datasources": {
+                                    "future": {
+                                        "name": "Future Read API",
+                                        "uid": "future-read-api",
+                                        "type": "prometheus",
+                                        "read_endpoint": "future_read",
+                                    }
+                                }
+                            }
+                        },
+                    }
+                },
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_component_sources(explicit=sources_file)
+
+    grafana = next(item for item in loaded.helm_charts if item.name == "grafana")
+    assert grafana.grafana.datasources[0].read_endpoint == "future_read"
+
+
+def test_load_component_sources_rejects_component_local_observability_endpoints(
+    tmp_path: Path,
+) -> None:
+    sources_file = tmp_path / "component-sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                infra={
+                    "mk8s": {
+                        "source": {
+                            "portable": (
+                                "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3"
+                            )
+                        },
+                        "ui": {"enabled": True},
+                        "cli": {
+                            "observability": {
+                                "primary_agent": {
+                                    "kind": "kubernetes_agent",
+                                    "chart_component_id": "nebius-observability-agent",
+                                },
+                                "endpoints": {
+                                    "read": {
+                                        "future_read": {
+                                            "label": "Future read API",
+                                            "template": (
+                                                "https://read.example.invalid/projects/{project_id}"
+                                            ),
+                                        }
+                                    }
+                                },
+                            }
+                        },
+                    }
+                },
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"components\.infra\.mk8s\.cli\.observability has unsupported field\(s\): "
+            r"endpoints"
+        ),
+    ):
+        load_component_sources(explicit=sources_file)
+
+
+def test_load_component_sources_allows_service_observability_for_non_agent_infra(
+    tmp_path: Path,
+) -> None:
+    sources_file = tmp_path / "component-sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                infra={
+                    "object-storage": {
+                        "source": {
+                            "portable": (
+                                "git::https://github.com/example/infra.git//modules/object-storage?ref=v1.2.3"
+                            )
+                        },
+                        "ui": {"enabled": True},
+                        "cli": {
+                            "observability": {
+                                "service_metrics": {
+                                    "buckets": {
+                                        "future_storage": {
+                                            "label": "Future storage metrics",
+                                        }
+                                    }
+                                },
+                                "service_logs": {
+                                    "buckets": {
+                                        "future_logs": {
+                                            "label": "Future service logs",
+                                            "include_when": ["inputs.audit_enabled"],
+                                        }
+                                    }
+                                },
+                            }
+                        },
+                    }
+                },
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_component_sources(explicit=sources_file)
+
+    object_storage = next(item for item in loaded.tf_modules if item.module == "object-storage")
+    assert [bucket.name for bucket in object_storage.observability.service_metrics] == [
+        "future_storage"
+    ]
+    assert object_storage.observability.service_logs[0].include_when == (
+        "inputs.audit_enabled",
+    )
 
 
 def test_load_component_sources_falls_back_to_repo_default_catalog_when_bundled_missing(
@@ -915,6 +1250,10 @@ def test_bundled_object_storage_declares_bucket_status_watcher() -> None:
     assert object_storage.status.kind == "nebius.storage.bucket"
     assert object_storage.status.parent_input == "parent_id"
     assert object_storage.status.name_input == "name"
+    assert [bucket.name for bucket in object_storage.observability.service_metrics] == [
+        "sp_storage"
+    ]
+    assert object_storage.observability.service_logs == ()
 
 
 def test_bundled_mysterybox_declares_secret_status_watcher() -> None:
@@ -952,6 +1291,151 @@ def test_bundled_vm_like_modules_declare_compute_instance_status_watchers() -> N
     assert ssh.status.kind == "nebius.compute.instance"
     assert ssh.status.parent_input == "parent_id"
     assert ssh.status.name_input == "name"
+
+
+def test_bundled_global_observability_declares_public_endpoint_templates() -> None:
+    loaded = load_component_sources(
+        explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml"
+    )
+    read = {endpoint.key: endpoint for endpoint in loaded.observability.endpoints.read}
+    write = {endpoint.key: endpoint for endpoint in loaded.observability.endpoints.write}
+
+    assert write["metrics_otlp_write"].template == (
+        "https://write.monitoring.{region}.nebius.cloud/projects/"
+        "{project_id}/opentelemetry/v1/metrics"
+    )
+    assert write["metrics_otlp_write"].label == "Metrics write (OTLP HTTP/protobuf)"
+    assert write["metrics_otlp_write"].include_when == ("kubernetes_metrics",)
+    assert write["metrics_prometheus_remote_write"].template == (
+        "https://write.monitoring.{region}.nebius.cloud/projects/"
+        "{project_id}/prometheus/api/v1/write"
+    )
+    assert write["metrics_prometheus_remote_write"].include_when == (
+        "kubernetes_metrics",
+        "vm_standalone_metrics",
+    )
+    assert write["logs_otlp_write"].template == ("https://write.logging.{region}.nebius.cloud")
+    assert write["logs_agent_grpc_write"].template == (
+        "dns:///write.logging.{region}.nebius.cloud:443"
+    )
+    assert write["logs_agent_grpc_write"].include_when == (
+        "kubernetes_logs",
+        "vm_standalone_logs",
+    )
+    assert "platform-managed regional endpoints" in (
+        write["metrics_platform_managed_write"].template
+    )
+    assert "platform-managed Logging ingest path" in (write["logs_platform_managed_write"].template)
+    assert read["metrics_service_provider_read"].template == (
+        "https://read.monitoring.api.nebius.cloud/projects/{project_id}/service-provider/prometheus"
+    )
+    assert read["logs_loki_read"].template == (
+        "https://read.logging.api.nebius.cloud/projects/{project_id}"
+    )
+    assert read["traces_tempo_read"].template == (
+        "https://read.tracing.api.nebius.cloud/projects/{project_id}/tempo"
+    )
+    assert read["metrics_federate_read"].bucket_placeholder == "<service-provider>"
+
+
+def test_bundled_vm_observability_declares_service_buckets() -> None:
+    loaded = load_component_sources(
+        explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml"
+    )
+    vm = next(item for item in loaded.tf_modules if item.module == "vm")
+
+    collector = vm.observability.standalone_collector
+    assert collector.package.name == "nebius-o11y-agent"
+    assert collector.package.version == "0.2.130"
+    assert collector.package.apt_repository == (
+        "https://artifactory.nebius.dev/artifactory/nebius-o11y-agent"
+    )
+    assert collector.package.apt_key_url == (
+        "https://artifactory.nebius.dev/artifactory/nebius-o11y-agent/key.gpg"
+    )
+    assert collector.package.apt_suite == "stable"
+    assert collector.package.apt_component == "main"
+    assert collector.package.apt_origin == "artifactory.nebius.dev"
+    assert collector.prometheus.package_name == "prometheus"
+    assert [bucket.name for bucket in vm.observability.service_metrics] == ["compute", "nbs"]
+    assert [bucket.name for bucket in vm.observability.service_logs] == ["sp_serial"]
+
+
+def test_bundled_gpu_operator_observability_declares_dcgm_node_policy() -> None:
+    loaded = load_component_sources(
+        explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml"
+    )
+    gpu_operator = next(item for item in loaded.helm_charts if item.name == "nvidia-gpu-operator")
+
+    target = gpu_operator.observability.metric_targets[0]
+
+    assert target.job_name == "cxcli-nvidia-dcgm-exporter"
+    assert target.discovery == "additional_target"
+    assert dict(target.required_gpu_node_labels) == {
+        "nvidia.com/gpu.deploy.operands": "true",
+        "nvidia.com/gpu.deploy.dcgm-exporter": "true",
+        "nvidia.com/gpu.deploy.operator-validator": "true",
+        "nvidia.com/gpu.deploy.device-plugin": "false",
+        "nvidia.com/gpu.deploy.gpu-feature-discovery": "false",
+    }
+    assert dict(target.required_gpu_node_selector) == {"nebius.com/gpu": "true"}
+    assert target.required_gpu_node_label_stack_sources == ("nebius_image",)
+
+
+def test_component_sources_rejects_invalid_observability_gpu_node_label_stack_source(
+    tmp_path: Path,
+) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                apps={
+                    "gpu-operator": {
+                        "source": _portable_chart_source(
+                            repo="https://example.invalid/charts",
+                            chart="gpu-operator",
+                            version="1.0.0",
+                        ),
+                        "release": {
+                            "namespace": "gpu-system",
+                            "name": "gpu-operator",
+                        },
+                        "ui": {"enabled": False},
+                        "cli": {
+                            "observability": {
+                                "metric_targets": [
+                                    {
+                                        "job_name": "cxcli-nvidia-dcgm-exporter",
+                                        "discovery": {
+                                            "kind": "prometheus_annotations",
+                                            "service_name": "nvidia-dcgm-exporter",
+                                        },
+                                        "managed_gpu_node_policy": {
+                                            "stack_sources": [
+                                                "driverful",
+                                            ]
+                                        },
+                                    }
+                                ]
+                            }
+                        },
+                    }
+                }
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "components\\.apps\\.gpu-operator\\.cli\\.observability\\.metric_targets"
+            "\\[0\\]\\.managed_gpu_node_policy\\.stack_sources\\[0\\] must be "
+            "'nebius_image' or 'operator_managed'"
+        ),
+    ):
+        load_component_sources(explicit=sources_file)
 
 
 def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
@@ -1048,26 +1532,57 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
                 "auto_select_first": True,
             },
         },
-        "deploy.validations.mk8s_gpu.operator_readiness.enabled": {
+        "deploy.targets[].validations.mk8s_gpu.operator_readiness.enabled": {
             "default": True,
         },
-        "deploy.validations.mk8s_gpu.gpu_visibility.enabled": {
+        "deploy.targets[].validations.mk8s_gpu.gpu_visibility.enabled": {
             "default": True,
         },
-        "deploy.validations.mk8s_gpu.gpu_visibility.max_nodes": {
+        "deploy.targets[].validations.mk8s_gpu.gpu_visibility.max_nodes": {
             "default": 3,
         },
-        "deploy.validations.mk8s_gpu.nccl.enabled": {
+        "deploy.targets[].validations.mk8s_gpu.nccl.enabled": {
             "default": True,
         },
-        "deploy.validations.mk8s_gpu.nccl.max_nodes": {
+        "deploy.targets[].validations.mk8s_gpu.nccl.max_nodes": {
             "default": 8,
         },
-        "deploy.validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps": {
+        "deploy.targets[].validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps": {
             "default": 300,
         },
-        "deploy.validations.mk8s_gpu.health_checker.enabled": {
+        "deploy.targets[].validations.mk8s_gpu.health_checker.enabled": {
             "default": False,
+        },
+        "deploy.targets[].observability.enabled": {
+            "default": False,
+        },
+        "deploy.targets[].observability.kubernetes.logs.enabled": {
+            "default": True,
+        },
+        "deploy.targets[].observability.kubernetes.logs.collect_agent_logs": {
+            "default": False,
+            "prompt": False,
+        },
+        "deploy.targets[].observability.kubernetes.logs.excluded_namespaces": {
+            "default": ["kube-system"],
+            "prompt": False,
+        },
+        "deploy.targets[].observability.kubernetes.metrics.enabled": {
+            "default": True,
+        },
+        "deploy.targets[].observability.kubernetes.metrics.collect_agent_metrics": {
+            "default": False,
+            "prompt": False,
+        },
+        "deploy.targets[].observability.kubernetes.metrics.collect_k8s_cluster_metrics": {
+            "default": True,
+        },
+        "deploy.targets[].observability.kubernetes.metrics.excluded_namespaces": {
+            "default": [],
+            "prompt": False,
+        },
+        "deploy.targets[].observability.kubernetes.traces.enabled": {
+            "default": True,
         },
         "inputs.mk8s_cluster_overrides": {
             "prompt": False,
@@ -1090,15 +1605,143 @@ def test_bundled_cert_manager_enables_chart_crds_by_default() -> None:
         explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml"
     )
     cert_manager = next(item for item in loaded.helm_charts if item.name == "cert-manager")
+    defaults = {item.target_path: item.value for item in cert_manager.defaults}
 
-    assert cert_manager.defaults == (
-        ComponentDefault(
-            target_path="values.crds.enabled",
-            value=True,
-            kind="literal",
-            source_path="",
-        ),
+    assert defaults["values.crds.enabled"] is True
+    assert defaults["values.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
+    assert defaults["values.webhook.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
+    assert defaults["values.cainjector.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
+    assert defaults["values.startupapicheck.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
+
+
+def test_bundled_cpu_only_charts_avoid_nebius_gpu_nodes_by_default() -> None:
+    loaded = load_component_sources(
+        explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml"
     )
+    charts = {item.name: item for item in loaded.helm_charts}
+
+    grafana_defaults = {item.target_path: item.value for item in charts["grafana"].defaults}
+    gateway_defaults = {item.target_path: item.value for item in charts["gateway-helm"].defaults}
+    external_dns_defaults = {
+        item.target_path: item.value for item in charts["external-dns"].defaults
+    }
+    external_secrets_defaults = {
+        item.target_path: item.value for item in charts["external-secrets"].defaults
+    }
+    n8n_defaults = {item.target_path: item.value for item in charts["n8n"].defaults}
+
+    assert grafana_defaults["values.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
+    grafana_settings = charts["grafana"].grafana
+    assert grafana_settings.org_id == 1
+    assert grafana_settings.logout_timeout == "20m"
+    assert grafana_settings.admin_secret.secret_name == "nebius-cxcli-grafana-admin"
+    assert grafana_settings.admin_secret.user == "admin"
+    assert grafana_settings.admin_secret.user_key == "admin-user"
+    assert grafana_settings.admin_secret.password_key == "admin-password"
+    assert grafana_settings.read_token.env == "NEBIUS_OBSERVABILITY_STATIC_TOKEN"
+    assert grafana_settings.read_token.secret_name == "nebius-cxcli-grafana-observability-read"
+    assert grafana_settings.read_token.key == "token"
+    assert {item.signal: item.query for item in grafana_settings.explore_queries} == {
+        "metrics": 'count({__name__=~".+"})',
+        "logs": '{__bucket__="default"}',
+    }
+    datasources = {item.key: item for item in grafana_settings.datasources}
+    assert {
+        key: {
+            "name": datasource.name,
+            "uid": datasource.uid,
+            "type": datasource.datasource_type,
+            "read_endpoint": datasource.read_endpoint,
+            "is_default": datasource.is_default,
+        }
+        for key, datasource in datasources.items()
+    } == {
+        "service-metrics": {
+            "name": "Nebius Services",
+            "uid": "nebius-service-metrics",
+            "type": "prometheus",
+            "read_endpoint": "metrics_service_provider_read",
+            "is_default": True,
+        },
+        "user-metrics": {
+            "name": "Nebius User Metrics",
+            "uid": "nebius-user-metrics",
+            "type": "prometheus",
+            "read_endpoint": "metrics_user_read",
+            "is_default": False,
+        },
+        "logs": {
+            "name": "Nebius Logs",
+            "uid": "nebius-logs",
+            "type": "loki",
+            "read_endpoint": "logs_loki_read",
+            "is_default": False,
+        },
+        "traces": {
+            "name": "Nebius Traces",
+            "uid": "nebius-traces",
+            "type": "tempo",
+            "read_endpoint": "traces_tempo_read",
+            "is_default": False,
+        },
+    }
+    report_dashboards = {binding.signal: binding for binding in grafana_settings.report_dashboards}
+    assert {
+        signal: {
+            "folder": binding.folder,
+            "dashboard": binding.dashboard,
+            "gnet_id": binding.gnet_id,
+            "datasource": binding.datasource,
+        }
+        for signal, binding in report_dashboards.items()
+    } == {
+        "metrics": {
+            "folder": "nebius",
+            "dashboard": "kubernetes-cluster-monitoring",
+            "gnet_id": 315,
+            "datasource": "Nebius User Metrics",
+        },
+        "logs": {
+            "folder": "nebius",
+            "dashboard": "kubernetes-logs-from-loki",
+            "gnet_id": 18494,
+            "datasource": "Nebius Logs",
+        },
+        "traces": {
+            "folder": "nebius",
+            "dashboard": "guardrails-starter-traces",
+            "gnet_id": 20600,
+            "datasource": "Nebius Traces",
+        },
+    }
+    grafana_dashboards = grafana_defaults["values.dashboards"]["nebius"]
+    for binding in report_dashboards.values():
+        assert binding.folder == "nebius"
+        dashboard = grafana_dashboards[binding.dashboard]
+        assert dashboard["gnetId"] == binding.gnet_id
+        assert dashboard["datasource"] == binding.datasource
+    assert grafana_dashboards["kubernetes-cluster-monitoring"]["gnetId"] == 315
+    assert grafana_dashboards["kubernetes-logs-from-loki"]["gnetId"] == 18494
+    assert grafana_dashboards["guardrails-starter-traces"]["gnetId"] == 20600
+    assert {
+        dashboard["datasource"]
+        for key, dashboard in grafana_dashboards.items()
+        if key.startswith("nebius-")
+    } == {"Nebius Services"}
+    envoy_proxy = next(
+        item for item in grafana_defaults["values.extraObjects"] if item["kind"] == "EnvoyProxy"
+    )
+    assert (
+        envoy_proxy["spec"]["provider"]["kubernetes"]["envoyDeployment"]["pod"]["affinity"]
+        == _NEBIUS_CPU_ONLY_AFFINITY
+    )
+    assert gateway_defaults["values.deployment.pod.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
+    assert gateway_defaults["values.certgen.job.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
+    assert external_dns_defaults["values.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
+    assert external_secrets_defaults["values.global.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
+    assert n8n_defaults["values.main.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
+    assert n8n_defaults["values.worker.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
+    assert n8n_defaults["values.webhook.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
 
 
 def test_bundled_managed_postgresql_uses_wizard_profile() -> None:
@@ -1107,6 +1750,8 @@ def test_bundled_managed_postgresql_uses_wizard_profile() -> None:
     )
     module = next(item for item in loaded.tf_modules if item.module == "managed-postgresql")
 
+    assert [bucket.name for bucket in module.observability.service_metrics] == ["msp"]
+    assert [bucket.name for bucket in module.observability.service_logs] == ["sp_postgres"]
     assert module.wizard_fields == {
         "inputs.network_id": {
             "options": {
@@ -1175,6 +1820,27 @@ def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> Non
                 "skip_prompt_if_no_choices": True,
             }
         },
+        "deploy.observability.enabled": {
+            "default": False,
+        },
+        "deploy.observability.vm.collector.enabled": {
+            "default": False,
+        },
+        "deploy.observability.vm.collector.metrics.enabled": {
+            "default": True,
+        },
+        "deploy.observability.vm.collector.logs.enabled": {
+            "default": True,
+        },
+        "deploy.observability.vm.collector.logs.systemd_units": {
+            "default": [],
+        },
+        "deploy.observability.vm.logs.enabled": {
+            "default": True,
+        },
+        "deploy.observability.vm.logs.systemd_units": {
+            "default": [],
+        },
         "inputs.boot_disk_existing_id": {
             "prompt": False,
         },
@@ -1196,9 +1862,6 @@ def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> Non
         "inputs.hostname": {
             "prompt": False,
         },
-        "inputs.service_account_id": {
-            "prompt": False,
-        },
         "inputs.stopped": {
             "prompt": False,
         },
@@ -1214,7 +1877,55 @@ def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> Non
         "inputs.filesystems": {
             "prompt": False,
         },
-        "inputs.preemptible_priority": {
+        "inputs.observability_collector_enabled": {
+            "prompt": False,
+        },
+        "inputs.observability_collector_region_id": {
+            "prompt": False,
+        },
+        "inputs.observability_collector_package_name": {
+            "prompt": False,
+        },
+        "inputs.observability_collector_package_version": {
+            "prompt": False,
+        },
+        "inputs.observability_collector_apt_repository": {
+            "prompt": False,
+        },
+        "inputs.observability_collector_apt_key_url": {
+            "prompt": False,
+        },
+        "inputs.observability_collector_apt_suite": {
+            "prompt": False,
+        },
+        "inputs.observability_collector_apt_component": {
+            "prompt": False,
+        },
+        "inputs.observability_collector_apt_origin": {
+            "prompt": False,
+        },
+        "inputs.observability_collector_prometheus_package_name": {
+            "prompt": False,
+        },
+        "inputs.observability_collector_iam_token_file": {
+            "prompt": False,
+        },
+        "inputs.observability_collector_logs_enabled": {
+            "prompt": False,
+        },
+        "inputs.observability_collector_logs_systemd_units": {
+            "prompt": False,
+        },
+        "inputs.observability_collector_metrics_enabled": {
+            "prompt": False,
+        },
+        "inputs.observability_collector_metrics_export_port": {
+            "prompt": False,
+        },
+        "inputs.observability_collector_prometheus_agent_port": {
+            "prompt": False,
+        },
+        "inputs.recovery_policy": {
             "prompt": False,
         },
         "inputs.gpu_cluster_id": {
@@ -1255,7 +1966,7 @@ def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> Non
                 "from": "compute_platform_presets",
                 "args": {"platform_path": "inputs.platform"},
             }
-        }
+        },
     }
     assert ssh.wizard_fields == {
         "inputs.subnet_id": {
@@ -1273,7 +1984,7 @@ def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> Non
                 "from": "compute_platform_presets",
                 "args": {"platform_path": "inputs.platform"},
             }
-        }
+        },
     }
 
 
@@ -1514,7 +2225,26 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                                         "max_nodes": 6,
                                     },
                                 },
-                            }
+                            },
+                            "observability": {
+                                "primary_agent": {
+                                    "kind": "kubernetes_agent",
+                                    "chart_component_id": "nebius-observability-agent",
+                                    "logs": {
+                                        "default_enabled": True,
+                                        "collect_agent_logs": False,
+                                        "excluded_namespaces": ["kube-system"],
+                                    },
+                                    "metrics": {
+                                        "default_enabled": True,
+                                        "collect_agent_metrics": False,
+                                        "collect_k8s_cluster_metrics": True,
+                                    },
+                                    "traces": {
+                                        "default_enabled": True,
+                                    },
+                                },
+                            },
                         },
                     }
                 },
@@ -1552,7 +2282,7 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                                         },
                                     },
                                     {
-                                        "gpu_stack_source": "manual",
+                                        "gpu_stack_source": "operator_managed",
                                         "match_platforms": [
                                             "gpu-b200-sxm",
                                             "gpu-b200-sxm-a",
@@ -1561,9 +2291,41 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                                             "values.nfd.enabled": False,
                                         },
                                     },
+                                    {
+                                        "gpu_stack_source": "operator_managed",
+                                        "defaults": {
+                                            "values.driver.enabled": True,
+                                            "values.toolkit.enabled": True,
+                                            "values.driver.nvidiaDriverCRD.enabled": False,
+                                        },
+                                    },
                                 ],
                                 "install_after": ["network-op"],
-                            }
+                            },
+                            "observability": {
+                                "metric_targets": [
+                                    {
+                                        "job_name": "cxcli-nvidia-dcgm-exporter",
+                                        "discovery": {
+                                            "kind": "prometheus_annotations",
+                                            "service_name": "nvidia-dcgm-exporter",
+                                            "port": 9400,
+                                        },
+                                        "managed_gpu_node_policy": {
+                                            "labels": {
+                                                "nvidia.com/gpu.deploy.operands": "true",
+                                                "nvidia.com/gpu.deploy.dcgm-exporter": "true",
+                                            },
+                                            "selector": {
+                                                "nebius.com/gpu": "true",
+                                            },
+                                            "stack_sources": [
+                                                "nebius_image",
+                                            ],
+                                        },
+                                    }
+                                ]
+                            },
                         },
                     },
                     "network-op": {
@@ -1604,7 +2366,7 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                                                         "image": "k8s-rdma-shared-dev-plugin",
                                                         "repository": "nvcr.io/nvidia/mellanox",
                                                         "version": "network-operator-v25.7.0",
-                                                        "config": "{\"configList\":[]}",
+                                                        "config": '{"configList":[]}',
                                                     }
                                                 },
                                             },
@@ -1613,7 +2375,7 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                                 },
                                 "rules": [
                                     {
-                                        "gpu_stack_source": "manual",
+                                        "gpu_stack_source": "operator_managed",
                                         "match_platforms": ["gpu-b200-sxm"],
                                         "auto_enable": True,
                                     },
@@ -1622,7 +2384,7 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                                         "gpu_cluster_enabled": True,
                                         "defaults_from": ["driverful_infiniband_nfd"],
                                         "post_render_patches_from": ["rdma_shared_device_plugin"],
-                                    }
+                                    },
                                 ],
                             }
                         },
@@ -1682,7 +2444,7 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
     assert [item.name for item in network_operator.mk8s_gpu.post_render_patch_sets] == [
         "rdma_shared_device_plugin",
     ]
-    assert network_operator.mk8s_gpu.rules[0].gpu_stack_source == "manual"
+    assert network_operator.mk8s_gpu.rules[0].gpu_stack_source == "operator_managed"
     assert network_operator.mk8s_gpu.rules[0].match_platforms == ("gpu-b200-sxm",)
     assert network_operator.mk8s_gpu.rules[0].auto_enable is True
     assert network_operator.mk8s_gpu.rules[1].gpu_stack_source == "nebius_image"
@@ -1717,12 +2479,31 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
     assert [item.target_path for item in gpu_cluster_nfd_rule.defaults] == [
         "values.nfd.enabled",
     ]
-    manual_b200_nfd_rule = next(
+    operator_managed_driver_rule = next(
         rule
         for rule in gpu_operator.mk8s_gpu.rules
-        if rule.gpu_stack_source == "manual" and rule.match_platforms == ("gpu-b200-sxm", "gpu-b200-sxm-a")
+        if rule.gpu_stack_source == "operator_managed"
+        and not rule.match_platforms
+        and rule.defaults
+        and {item.target_path for item in rule.defaults}
+        >= {
+            "values.driver.enabled",
+            "values.toolkit.enabled",
+            "values.driver.nvidiaDriverCRD.enabled",
+        }
     )
-    assert [item.target_path for item in manual_b200_nfd_rule.defaults] == [
+    assert {item.target_path: item.value for item in operator_managed_driver_rule.defaults} == {
+        "values.driver.enabled": True,
+        "values.toolkit.enabled": True,
+        "values.driver.nvidiaDriverCRD.enabled": False,
+    }
+    operator_managed_b200_nfd_rule = next(
+        rule
+        for rule in gpu_operator.mk8s_gpu.rules
+        if rule.gpu_stack_source == "operator_managed"
+        and rule.match_platforms == ("gpu-b200-sxm", "gpu-b200-sxm-a")
+    )
+    assert [item.target_path for item in operator_managed_b200_nfd_rule.defaults] == [
         "values.nfd.enabled",
     ]
     assert mk8s.mk8s_gpu.validations.operator_readiness.timeout == "20m"
@@ -1730,6 +2511,21 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
     assert mk8s.mk8s_gpu.validations.gpu_visibility.max_nodes == 4
     assert mk8s.mk8s_gpu.validations.nccl.chart_component_id == "nccl-test"
     assert mk8s.mk8s_gpu.validations.nccl.max_nodes == 6
+    assert mk8s.observability.mode == "kubernetes_agent"
+    assert mk8s.observability.chart_component_id == "nebius-observability-agent"
+    assert mk8s.observability.logs.excluded_namespaces == ("kube-system",)
+    assert gpu_operator.observability.metric_targets[0].job_name == "cxcli-nvidia-dcgm-exporter"
+    assert gpu_operator.observability.metric_targets[0].discovery == "prometheus_annotations"
+    assert dict(gpu_operator.observability.metric_targets[0].required_gpu_node_labels) == {
+        "nvidia.com/gpu.deploy.operands": "true",
+        "nvidia.com/gpu.deploy.dcgm-exporter": "true",
+    }
+    assert dict(gpu_operator.observability.metric_targets[0].required_gpu_node_selector) == {
+        "nebius.com/gpu": "true",
+    }
+    assert gpu_operator.observability.metric_targets[0].required_gpu_node_label_stack_sources == (
+        "nebius_image",
+    )
 
 
 def test_load_component_sources_parses_vm_cli_settings(tmp_path: Path) -> None:
@@ -1754,7 +2550,19 @@ def test_load_component_sources_parses_vm_cli_settings(tmp_path: Path) -> None:
                                     "ubuntu24.04-cuda13.0",
                                     "ubuntu24.04-cuda12",
                                 ],
-                            }
+                            },
+                            "observability": {
+                                "primary_agent": {
+                                    "kind": "monitoring_agent",
+                                    "metrics": {
+                                        "default_enabled": True,
+                                    },
+                                    "logs": {
+                                        "default_enabled": False,
+                                        "systemd_units": ["sshd.service"],
+                                    },
+                                },
+                            },
                         },
                     }
                 },
@@ -1775,6 +2583,184 @@ def test_load_component_sources_parses_vm_cli_settings(tmp_path: Path) -> None:
         "ubuntu24.04-cuda13.0",
         "ubuntu24.04-cuda12",
     )
+    assert vm.observability.mode == "monitoring_agent"
+    assert vm.observability.metrics.enabled_by_default is True
+    assert vm.observability.logs.enabled_by_default is False
+    assert vm.observability.logs.systemd_units == ("sshd.service",)
+
+
+def test_load_component_sources_parses_vm_public_ingest_package_source(
+    tmp_path: Path,
+) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                infra={
+                    "vm": {
+                        "source": {
+                            "portable": "git::https://example.invalid/modules/vm?ref=main",
+                            "local": "../../platform-infra/modules/vm",
+                        },
+                        "ui": {"enabled": False},
+                        "cli": {
+                            "observability": {
+                                "primary_agent": {
+                                    "kind": "monitoring_agent",
+                                },
+                                "public_ingest": {
+                                    "default_enabled": True,
+                                    "package": {
+                                        "name": "custom-o11y-agent",
+                                        "version": "1.2.3",
+                                        "apt_repository": "https://repo.example.invalid/o11y",
+                                        "apt_key_url": "https://repo.example.invalid/key.gpg",
+                                        "apt_suite": "stable",
+                                        "apt_component": "main",
+                                        "apt_origin": "repo.example.invalid",
+                                    },
+                                    "prometheus": {
+                                        "package_name": "prometheus-agent",
+                                    },
+                                    "metadata_token_file": "/metadata/token",
+                                    "metrics_export_port": 19190,
+                                    "prometheus_agent_port": 19191,
+                                },
+                            },
+                        },
+                    }
+                },
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_component_sources(explicit=sources_file)
+    vm = next(module for module in loaded.tf_modules if module.module == "vm")
+    collector = vm.observability.standalone_collector
+
+    assert collector.enabled_by_default is True
+    assert collector.package.name == "custom-o11y-agent"
+    assert collector.package.version == "1.2.3"
+    assert collector.package.apt_repository == "https://repo.example.invalid/o11y"
+    assert collector.package.apt_key_url == "https://repo.example.invalid/key.gpg"
+    assert collector.package.apt_suite == "stable"
+    assert collector.package.apt_component == "main"
+    assert collector.package.apt_origin == "repo.example.invalid"
+    assert collector.prometheus.package_name == "prometheus-agent"
+    assert collector.iam_token_file == "/metadata/token"
+    assert collector.metrics_export_port == 19190
+    assert collector.prometheus_agent_port == 19191
+
+
+@pytest.mark.parametrize(
+    ("public_ingest", "message"),
+    (
+        (
+            {
+                "package_version": "0.2.130",
+                "metadata_token_file": "/mnt/cloud-metadata/token",
+            },
+            r"components\.infra\.vm\.cli\.observability\.public_ingest "
+            r"has unsupported field\(s\): package_version",
+        ),
+        (
+            {
+                "prometheus": {"package_name": "prometheus"},
+            },
+            r"components\.infra\.vm\.cli\.observability\.public_ingest\.package is required",
+        ),
+        (
+            {
+                "package": {
+                    "name": "nebius-o11y-agent",
+                    "version": "0.2.130",
+                    "apt_repository": "https://repo.example.invalid/o11y",
+                    "apt_key_url": "https://repo.example.invalid/key.gpg",
+                    "apt_suite": "stable",
+                    "apt_component": "main",
+                    "apt_origin": "repo.example.invalid",
+                },
+            },
+            r"components\.infra\.vm\.cli\.observability\.public_ingest\.prometheus "
+            r"is required",
+        ),
+    ),
+)
+def test_load_component_sources_rejects_incomplete_vm_public_ingest(
+    tmp_path: Path,
+    public_ingest: dict[str, object],
+    message: str,
+) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                infra={
+                    "vm": {
+                        "source": {
+                            "portable": "git::https://example.invalid/modules/vm?ref=main",
+                            "local": "../../platform-infra/modules/vm",
+                        },
+                        "ui": {"enabled": False},
+                        "cli": {
+                            "observability": {
+                                "primary_agent": {
+                                    "kind": "monitoring_agent",
+                                },
+                                "public_ingest": public_ingest,
+                            },
+                        },
+                    }
+                },
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        load_component_sources(explicit=sources_file)
+
+
+def test_load_component_sources_rejects_top_level_infra_observability_signals(
+    tmp_path: Path,
+) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            _catalog(
+                infra={
+                    "vm": {
+                        "source": {
+                            "portable": "git::https://example.invalid/modules/vm?ref=main",
+                            "local": "../../platform-infra/modules/vm",
+                        },
+                        "ui": {"enabled": False},
+                        "cli": {
+                            "observability": {
+                                "primary_agent": {
+                                    "kind": "monitoring_agent",
+                                },
+                                "logs": {
+                                    "default_enabled": False,
+                                },
+                            },
+                        },
+                    }
+                },
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"components\.infra\.vm\.cli\.observability has unsupported field\(s\): logs",
+    ):
+        load_component_sources(explicit=sources_file)
 
 
 def test_load_component_sources_resolves_local_nccl_chart_source(tmp_path: Path) -> None:
@@ -1939,7 +2925,7 @@ def test_load_component_sources_rejects_empty_mk8s_gpu_rule(tmp_path: Path) -> N
                                 "role": "gpu_operator",
                                 "rules": [
                                     {
-                                        "gpu_stack_source": "manual",
+                                        "gpu_stack_source": "operator_managed",
                                     }
                                 ],
                             }
@@ -2288,7 +3274,7 @@ def test_validate_sources_reports_chart_contract_findings(
         "nebius_cxcli.cli.chart_cli_contract_findings",
         lambda **_kwargs: (
             ("materialized chart is missing Chart.yaml in /tmp/fake-chart",),
-            ("materialized chart is missing README.md in /tmp/fake-chart",),
+            (),
         ),
     )
     monkeypatch.chdir(tmp_path)
@@ -2298,7 +3284,7 @@ def test_validate_sources_reports_chart_contract_findings(
     _resolved_path, issues, warnings = _validate_component_sources_registry()
 
     assert any("missing Chart.yaml" in issue for issue in issues)
-    assert any("missing README.md" in warning for warning in warnings)
+    assert not any("missing README.md" in warning for warning in warnings)
 
 
 def test_validate_sources_rejects_https_git_repo_module_source_without_git_prefix(

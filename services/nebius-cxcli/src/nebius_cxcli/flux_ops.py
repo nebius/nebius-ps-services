@@ -383,9 +383,11 @@ def _format_flux_target_summary(
     ready = _ready_condition(payload)
     stalled = _stalled_condition(payload)
     if _condition_status_true(stalled):
-        reason = str(stalled.get("reason", "")).strip() or str(
-            (ready or {}).get("reason", "")
-        ).strip() or "Stalled"
+        reason = (
+            str(stalled.get("reason", "")).strip()
+            or str((ready or {}).get("reason", "")).strip()
+            or "Stalled"
+        )
         message = (
             _first_non_empty_line(str(stalled.get("message", "")).strip())
             or _first_non_empty_line(str((ready or {}).get("message", "")).strip())
@@ -491,8 +493,10 @@ def _flux_status_block(
     )
     non_ready_statuses = [status for status in statuses if not status.is_ready]
     terminal_failures = [status for status in non_ready_statuses if status.is_terminal_failure]
-    only_sources_pending = bool(non_ready_statuses) and not terminal_failures and all(
-        status.target.is_source for status in non_ready_statuses
+    only_sources_pending = (
+        bool(non_ready_statuses)
+        and not terminal_failures
+        and all(status.target.is_source for status in non_ready_statuses)
     )
     return statuses, ready_count == total, only_sources_pending, "\n".join([header, *lines])
 
@@ -596,9 +600,7 @@ def wait_for_rendered_flux_resources(
             "reconciling in the cluster after this CLI command exits."
         )
     else:
-        guidance = (
-            f"Flux resource {target_label} did not become Ready within {effective_timeout_seconds}s."
-        )
+        guidance = f"Flux resource {target_label} did not become Ready within {effective_timeout_seconds}s."
     if last_emitted:
         guidance += "\nLast known status:\n" + last_emitted
     raise RuntimeError(

@@ -165,3 +165,65 @@ def test_build_deploy_validation_report_formats_socket_mode_nccl_summary(tmp_pat
         f"  Combined report: {tmp_path / DEPLOY_REPORT_FILENAME}",
         f"  JSON detail: {tmp_path / 'nccl-test-report.json'}",
     ]
+
+
+def test_build_deploy_validation_report_prefers_target_scoped_spec_name(
+    tmp_path: Path,
+) -> None:
+    validations = [
+        {
+            "kind": "mk8s_nccl",
+            "name": "NCCL test (cluster2)",
+            "report_file": "nccl-test-report-cluster2.json",
+        }
+    ]
+    (tmp_path / "nccl-test-report-cluster2.json").write_text(
+        json.dumps(
+            {
+                "validation": "NCCL test",
+                "passed": True,
+                "launcher_phase": "Succeeded",
+                "transport_label": "Socket/TCPIP",
+                "avg_bus_bandwidth_gbps": 1.0,
+                "threshold_enforced": False,
+                "selected_worker_node_count": 2,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = build_deploy_validation_report(validations, inventory_dir=tmp_path)
+
+    assert report.results[0].name == "NCCL test (cluster2)"
+
+
+def test_build_deploy_validation_report_summarizes_error_report(tmp_path: Path) -> None:
+    validations = [
+        {
+            "kind": "mk8s_nccl",
+            "name": "NCCL test",
+            "report_file": "nccl-test-report.json",
+        }
+    ]
+    (tmp_path / "nccl-test-report.json").write_text(
+        json.dumps(
+            {
+                "validation": "NCCL test",
+                "passed": False,
+                "error": "kubectl get pod nccl-test-nebius-launcher timed out after 30 seconds",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = build_deploy_validation_report(validations, inventory_dir=tmp_path)
+
+    assert format_deploy_validation_summary_lines(report) == [
+        "Deploy validation summary:",
+        "  Overall: FAIL (1/1 completed, 0 not run)",
+        "  FAIL NCCL test: Failed before completion: kubectl get pod nccl-test-nebius-launcher timed out after 30 seconds",
+        f"  Combined report: {tmp_path / DEPLOY_REPORT_FILENAME}",
+        f"  JSON detail: {tmp_path / 'nccl-test-report.json'}",
+    ]

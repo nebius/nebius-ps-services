@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from .component_instances import component_instance_id, ensure_component_instance_id
+from .deploy_targets import TARGET_REF_FIELD
 
 
 def _deep_copy(value: Any) -> Any:
@@ -31,6 +32,16 @@ def _normalize_group(value: Any, *, default: str = "workloads") -> str:
     token = "".join(ch if ch.isalnum() or ch == "-" else "-" for ch in raw)
     token = "-".join(part for part in token.split("-") if part)
     return token or default
+
+
+def _runtime_component_key(component_id: str, instance_id: str) -> str:
+    normalized_component = str(component_id or "").strip().lower().replace("-", "_")
+    normalized_instance = str(instance_id or "").strip().lower().replace("-", "_")
+    if not normalized_instance or normalized_instance == normalized_component:
+        return normalized_component
+    if not normalized_component:
+        return normalized_instance
+    return f"{normalized_component}_{normalized_instance}"
 
 
 def to_dynamic_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -137,10 +148,11 @@ def to_runtime_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
                     group_node = {}
                     runtime_apps[group] = group_node
                 instance_id = component_instance_id(copied_item)
-                group_node[instance_id.replace("-", "_")] = {
+                group_node[_runtime_component_key(chart_id, instance_id)] = {
                     "enabled": enabled,
                     "repo": str(copied_item.get("repo", "")).strip(),
                     "version": str(copied_item.get("version", "")).strip(),
+                    TARGET_REF_FIELD: str(copied_item.get(TARGET_REF_FIELD, "")).strip(),
                     "namespace": str(copied_item.get("namespace", "")).strip(),
                     "release_name": str(copied_item.get("release-name", instance_id)).strip()
                     or instance_id,

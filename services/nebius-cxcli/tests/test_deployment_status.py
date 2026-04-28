@@ -851,9 +851,7 @@ def test_object_storage_status_poller_exposes_terminal_operation_failure(monkeyp
     monkeypatch.setattr(
         deployment_status_module,
         "_latest_operation_failure",
-        lambda operation_service, resource_id: (
-            "Create bucket [RESOURCE_EXHAUSTED]: quota exceeded"
-        ),
+        lambda operation_service, resource_id: "Create bucket [RESOURCE_EXHAUSTED]: quota exceeded",
     )
 
     failure = poller.terminal_failure()

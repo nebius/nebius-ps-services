@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import re
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
-from .sdk_auth import init_nebius_sdk
+from .sdk_auth import init_nebius_sdk, suppress_deleted_key_refresh_logs
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,28 @@ class CIIdentityEnsureResult:
     roles_already_present: list[str]
 
 
+@dataclass(frozen=True)
+class StaticKeyIssueResult:
+    """One-time static key material for an IAM service account."""
+
+    project_id: str
+    service_account_name: str
+    service_account_id: str
+    service_account_created: bool
+    roles_created: list[str]
+    roles_already_present: list[str]
+    static_key_id: str
+    token: str
+
+
+def _close_sdk(sdk: object) -> None:
+    close = getattr(sdk, "sync_close", None)
+    if not callable(close):
+        return
+    with suppress(Exception):
+        close()
+
+
 def _is_not_found_error(exc: Exception) -> bool:
     message = str(exc).lower()
     return "not found" in message or "statuscode.not_found" in message
@@ -63,12 +86,14 @@ def _init_sdk(
     profile: str | None,
     endpoint: str | None,
     config_file: Path | None,
+    prefer_operator_auth: bool = False,
 ):
     return init_nebius_sdk(
         profile=profile,
         endpoint=endpoint,
         config_file=config_file,
         context="auth bootstrap",
+        prefer_operator_auth=prefer_operator_auth,
     )
 
 
@@ -461,40 +486,117 @@ def bootstrap_ci_service_account(
         config_file=config_file,
     )
 
-    sdk = _init_sdk(profile=profile, endpoint=endpoint, config_file=config_file)
-
-    from nebius.api.nebius.iam.v1 import AuthPublicKeyServiceClient
-    from nebius.api.nebius.iam.v2 import AccessKeyServiceClient
-
-    auth_keys = AuthPublicKeyServiceClient(sdk)
-    access_keys = AccessKeyServiceClient(sdk)
-
-    auth_public_key_id, auth_private_key_pem = _create_auth_public_key(
-        auth_keys=auth_keys,
-        project_id=identity.project_id,
-        service_account_id=identity.service_account_id,
-        description=auth_key_description,
+    sdk = _init_sdk(
+        profile=profile,
+        endpoint=endpoint,
+        config_file=config_file,
+        prefer_operator_auth=True,
     )
+    try:
+        from nebius.api.nebius.iam.v1 import AuthPublicKeyServiceClient
+        from nebius.api.nebius.iam.v2 import AccessKeyServiceClient
 
-    s3_access_key_id, s3_secret_access_key = _create_object_storage_access_key(
-        access_keys=access_keys,
-        project_id=identity.project_id,
-        service_account_id=identity.service_account_id,
-        description=access_key_description,
-    )
+        auth_keys = AuthPublicKeyServiceClient(sdk)
+        access_keys = AccessKeyServiceClient(sdk)
 
-    return CIBootstrapResult(
-        project_id=identity.project_id,
-        service_account_name=identity.service_account_name,
-        service_account_id=identity.service_account_id,
-        service_account_created=identity.service_account_created,
-        roles_created=identity.roles_created,
-        roles_already_present=identity.roles_already_present,
-        auth_public_key_id=auth_public_key_id,
-        auth_private_key_pem=auth_private_key_pem,
-        s3_access_key_id=s3_access_key_id,
-        s3_secret_access_key=s3_secret_access_key,
+        auth_public_key_id, auth_private_key_pem = _create_auth_public_key(
+            auth_keys=auth_keys,
+            project_id=identity.project_id,
+            service_account_id=identity.service_account_id,
+            description=auth_key_description,
+        )
+
+        s3_access_key_id, s3_secret_access_key = _create_object_storage_access_key(
+            access_keys=access_keys,
+            project_id=identity.project_id,
+            service_account_id=identity.service_account_id,
+            description=access_key_description,
+        )
+
+        return CIBootstrapResult(
+            project_id=identity.project_id,
+            service_account_name=identity.service_account_name,
+            service_account_id=identity.service_account_id,
+            service_account_created=identity.service_account_created,
+            roles_created=identity.roles_created,
+            roles_already_present=identity.roles_already_present,
+            auth_public_key_id=auth_public_key_id,
+            auth_private_key_pem=auth_private_key_pem,
+            s3_access_key_id=s3_access_key_id,
+            s3_secret_access_key=s3_secret_access_key,
+        )
+    finally:
+        _close_sdk(sdk)
+
+
+def issue_observability_static_key(
+    *,
+    project_id: str,
+    service_account_name: str,
+    service_account_description: str,
+    key_name: str,
+    role_ids: list[str],
+    profile: str | None,
+    endpoint: str | None,
+    config_file: Path | None,
+) -> StaticKeyIssueResult:
+    """Ensure a viewer identity and issue a one-time Observability static key."""
+    identity = ensure_ci_service_account_identity(
+        project_id=project_id,
+        service_account_name=service_account_name,
+        service_account_description=service_account_description,
+        role_ids=role_ids,
+        profile=profile,
+        endpoint=endpoint,
+        config_file=config_file,
     )
+    sdk = _init_sdk(
+        profile=profile,
+        endpoint=endpoint,
+        config_file=config_file,
+        prefer_operator_auth=True,
+    )
+    try:
+        from nebius.api.nebius.common.v1 import ResourceMetadata
+        from nebius.api.nebius.iam.v1 import (
+            IssueStaticKeyRequest,
+            StaticKeyServiceClient,
+            StaticKeySpec,
+        )
+
+        static_keys = StaticKeyServiceClient(sdk)
+        response = static_keys.issue(
+            IssueStaticKeyRequest(
+                metadata=ResourceMetadata(parent_id=project_id, name=key_name),
+                spec=StaticKeySpec(
+                    account=_account_ref(identity.service_account_id),
+                    service=StaticKeySpec.ClientService.OBSERVABILITY,
+                ),
+            )
+        ).wait()
+        operation = getattr(response, "operation", None)
+        static_key_id = getattr(operation, "resource_id", "")
+        token = getattr(response, "token", "")
+        if not static_key_id:
+            raise RuntimeError("Observability static key was issued but key ID was not returned")
+        if not token:
+            raise RuntimeError("Observability static key was issued but token was not returned")
+        return StaticKeyIssueResult(
+            project_id=identity.project_id,
+            service_account_name=identity.service_account_name,
+            service_account_id=identity.service_account_id,
+            service_account_created=identity.service_account_created,
+            roles_created=identity.roles_created,
+            roles_already_present=identity.roles_already_present,
+            static_key_id=static_key_id,
+            token=token,
+        )
+    except Exception as exc:
+        if isinstance(exc, RuntimeError):
+            raise
+        raise RuntimeError(f"Failed to issue Observability static key '{key_name}': {exc}") from exc
+    finally:
+        _close_sdk(sdk)
 
 
 def ensure_ci_service_account_identity(
@@ -511,55 +613,62 @@ def ensure_ci_service_account_identity(
     if not role_ids:
         raise ValueError("role_ids must not be empty")
 
-    sdk = _init_sdk(profile=profile, endpoint=endpoint, config_file=config_file)
-
-    from nebius.api.nebius.iam.v1 import (
-        AccessPermitServiceClient,
-        GroupMembershipServiceClient,
-        GroupServiceClient,
-        ServiceAccountServiceClient,
+    sdk = _init_sdk(
+        profile=profile,
+        endpoint=endpoint,
+        config_file=config_file,
+        prefer_operator_auth=True,
     )
+    try:
+        from nebius.api.nebius.iam.v1 import (
+            AccessPermitServiceClient,
+            GroupMembershipServiceClient,
+            GroupServiceClient,
+            ServiceAccountServiceClient,
+        )
 
-    service_accounts = ServiceAccountServiceClient(sdk)
-    groups = GroupServiceClient(sdk)
-    group_memberships = GroupMembershipServiceClient(sdk)
-    access_permits = AccessPermitServiceClient(sdk)
+        service_accounts = ServiceAccountServiceClient(sdk)
+        groups = GroupServiceClient(sdk)
+        group_memberships = GroupMembershipServiceClient(sdk)
+        access_permits = AccessPermitServiceClient(sdk)
 
-    service_account_id, service_account_created = _ensure_service_account(
-        service_accounts=service_accounts,
-        project_id=project_id,
-        service_account_name=service_account_name,
-        service_account_description=service_account_description,
-    )
+        service_account_id, service_account_created = _ensure_service_account(
+            service_accounts=service_accounts,
+            project_id=project_id,
+            service_account_name=service_account_name,
+            service_account_description=service_account_description,
+        )
 
-    permit_group_name = _group_name_for_service_account(service_account_name)
-    permit_group_id, _ = _ensure_group(
-        groups=groups,
-        project_id=project_id,
-        group_name=permit_group_name,
-    )
-    _ensure_group_membership(
-        group_memberships=group_memberships,
-        group_id=permit_group_id,
-        member_id=service_account_id,
-    )
+        permit_group_name = _group_name_for_service_account(service_account_name)
+        permit_group_id, _ = _ensure_group(
+            groups=groups,
+            project_id=project_id,
+            group_name=permit_group_name,
+        )
+        _ensure_group_membership(
+            group_memberships=group_memberships,
+            group_id=permit_group_id,
+            member_id=service_account_id,
+        )
 
-    roles_created, roles_already_present = _ensure_project_role_permits(
-        access_permits=access_permits,
-        permit_parent_id=permit_group_id,
-        principal_label=f"IAM group '{permit_group_name}'",
-        project_id=project_id,
-        role_ids=role_ids,
-    )
+        roles_created, roles_already_present = _ensure_project_role_permits(
+            access_permits=access_permits,
+            permit_parent_id=permit_group_id,
+            principal_label=f"IAM group '{permit_group_name}'",
+            project_id=project_id,
+            role_ids=role_ids,
+        )
 
-    return CIIdentityEnsureResult(
-        project_id=project_id,
-        service_account_name=service_account_name,
-        service_account_id=service_account_id,
-        service_account_created=service_account_created,
-        roles_created=roles_created,
-        roles_already_present=roles_already_present,
-    )
+        return CIIdentityEnsureResult(
+            project_id=project_id,
+            service_account_name=service_account_name,
+            service_account_id=service_account_id,
+            service_account_created=service_account_created,
+            roles_created=roles_created,
+            roles_already_present=roles_already_present,
+        )
+    finally:
+        _close_sdk(sdk)
 
 
 def auth_public_key_exists(
@@ -570,13 +679,18 @@ def auth_public_key_exists(
     config_file: Path | None,
 ) -> bool:
     """Return true when IAM auth public key exists and is readable."""
-    sdk = _init_sdk(profile=profile, endpoint=endpoint, config_file=config_file)
-
-    from nebius.api.nebius.iam.v1 import AuthPublicKeyServiceClient, GetAuthPublicKeyRequest
-
-    auth_keys = AuthPublicKeyServiceClient(sdk)
+    sdk = _init_sdk(
+        profile=profile,
+        endpoint=endpoint,
+        config_file=config_file,
+        prefer_operator_auth=True,
+    )
     try:
-        auth_keys.get(GetAuthPublicKeyRequest(id=auth_public_key_id)).wait()
+        from nebius.api.nebius.iam.v1 import AuthPublicKeyServiceClient, GetAuthPublicKeyRequest
+
+        auth_keys = AuthPublicKeyServiceClient(sdk)
+        with suppress_deleted_key_refresh_logs():
+            auth_keys.get(GetAuthPublicKeyRequest(id=auth_public_key_id)).wait()
         return True
     except Exception as exc:
         if _is_not_found_error(exc):
@@ -584,3 +698,5 @@ def auth_public_key_exists(
         raise RuntimeError(
             f"Failed to verify auth public key '{auth_public_key_id}' via Nebius API: {exc}"
         ) from exc
+    finally:
+        _close_sdk(sdk)

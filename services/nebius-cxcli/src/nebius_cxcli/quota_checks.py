@@ -131,7 +131,11 @@ def _mk8s_effective_node_count(inputs: dict[str, Any], *, gpu: bool) -> int | No
         else None
     )
     if autoscaling is None:
-        return override_fixed_count if override_fixed_count is not None else _positive_int(inputs.get(count_key))
+        return (
+            override_fixed_count
+            if override_fixed_count is not None
+            else _positive_int(inputs.get(count_key))
+        )
 
     if override_fixed_count is not None:
         return override_fixed_count
@@ -171,7 +175,9 @@ def _mk8s_effective_preemptible(inputs: dict[str, Any], *, gpu: bool) -> bool:
     override_key = "mk8s_gpu_node_group_overrides" if gpu else "mk8s_cpu_node_group_overrides"
     field_key = "gpu_nodes_preemptible" if gpu else "cpu_nodes_preemptible"
     overrides = inputs.get(override_key)
-    override_value = _path_value(overrides, "template.preemptible") if isinstance(overrides, dict) else None
+    override_value = (
+        _path_value(overrides, "template.preemptible") if isinstance(overrides, dict) else None
+    )
     if override_value is not None:
         return True
     return _mapping_bool(inputs, field_key, default=False)
@@ -196,7 +202,9 @@ def _mk8s_effective_public_ips(inputs: dict[str, Any], *, gpu: bool) -> bool:
 def _mk8s_boot_disk_override(inputs: dict[str, Any], *, gpu: bool) -> dict[str, Any]:
     override_key = "mk8s_gpu_node_group_overrides" if gpu else "mk8s_cpu_node_group_overrides"
     overrides = inputs.get(override_key)
-    override_value = _path_value(overrides, "template.boot_disk") if isinstance(overrides, dict) else None
+    override_value = (
+        _path_value(overrides, "template.boot_disk") if isinstance(overrides, dict) else None
+    )
     return dict(override_value) if isinstance(override_value, dict) else {}
 
 
@@ -446,12 +454,7 @@ def _format_amount(amount: int | None, unit: str) -> str:
 
 def _format_console_amount(amount: int | None, unit: str) -> str:
     formatted = _format_amount(amount, unit)
-    if (
-        amount is None
-        or unit != "byte"
-        or amount == 0
-        or formatted == f"{amount} byte"
-    ):
+    if amount is None or unit != "byte" or amount == 0 or formatted == f"{amount} byte":
         return formatted
     return f"{formatted} ({amount} byte)"
 
@@ -616,7 +619,9 @@ def _confirmed_component_summaries(report: QuotaReport) -> list[tuple[str, tuple
         check_count = int(state["check_count"])
         if state["blocked"] or check_count <= 0:
             continue
-        dimension_label = "checked quota dimension" if check_count == 1 else "checked quota dimensions"
+        dimension_label = (
+            "checked quota dimension" if check_count == 1 else "checked quota dimensions"
+        )
         regions = sorted(str(item) for item in state["regions"] if str(item).strip())
         if not regions:
             scope = "in the selected region"
@@ -648,8 +653,7 @@ def _regional_availability_lines(report: QuotaReport) -> list[str]:
     for item in report.regional_availability:
         required = _format_amount(item.required, item.unit)
         lines.append(
-            "  - "
-            f"{item.component_label}: {item.quota_name} requires {required} ({item.reason})"
+            f"  - {item.component_label}: {item.quota_name} requires {required} ({item.reason})"
         )
         for check in item.region_checks:
             available = _format_amount(check.available, check.unit)
@@ -682,8 +686,7 @@ def format_quota_report_lines(
             lines.append(f"  - {item}")
     if report.insufficient_checks:
         lines.append(
-            f"{warning_markup('Quota warning:')} "
-            f"{phase} detected insufficient Nebius quota."
+            f"{warning_markup('Quota warning:')} {phase} detected insufficient Nebius quota."
         )
         for item in report.insufficient_checks:
             required = _format_amount(item.required, item.unit)
@@ -971,7 +974,11 @@ class _QuotaSession:
         stdout = result.stdout.strip()
         stderr = _clean_npc_stderr(result.stderr)
         if result.returncode != 0:
-            detail = stderr or stdout or f"`npc {' '.join(args)}` failed with exit code {result.returncode}"
+            detail = (
+                stderr
+                or stdout
+                or f"`npc {' '.join(args)}` failed with exit code {result.returncode}"
+            )
             raise RuntimeError(detail)
         if not stdout:
             return {}
@@ -1011,9 +1018,7 @@ class _QuotaSession:
         if not raw_items:
             return changes
 
-        input_by_key = {
-            (item.container_id, item.quota_name, item.region): item for item in changes
-        }
+        input_by_key = {(item.container_id, item.quota_name, item.region): item for item in changes}
         recommended: dict[tuple[str, str, str], QuotaRequestChange] = {}
 
         for raw_item in raw_items:
@@ -1027,7 +1032,9 @@ class _QuotaSession:
                 continue
 
             allowance = self.list_quotas(parent_id=parent_id).get((quota_name, region))
-            current_limit = _positive_int(status.get("current_limit")) if isinstance(status, dict) else None
+            current_limit = (
+                _positive_int(status.get("current_limit")) if isinstance(status, dict) else None
+            )
             if current_limit is None and allowance is not None:
                 current_limit = allowance.limit
 
@@ -1035,7 +1042,9 @@ class _QuotaSession:
                 _positive_int(status.get("recommended_limit")) if isinstance(status, dict) else None
             )
             if recommended_limit is None:
-                recommended_limit = _positive_int(spec.get("requested_limit")) if isinstance(spec, dict) else None
+                recommended_limit = (
+                    _positive_int(spec.get("requested_limit")) if isinstance(spec, dict) else None
+                )
 
             fallback = input_by_key.get((parent_id, quota_name, region))
             if recommended_limit is None and fallback is not None:
@@ -1044,7 +1053,9 @@ class _QuotaSession:
                 continue
 
             current_usage = allowance.usage if allowance is not None else 0
-            unit = _mapping_text(status, "unit") or (allowance.unit if allowance is not None else "")
+            unit = _mapping_text(status, "unit") or (
+                allowance.unit if allowance is not None else ""
+            )
             minimum_increase = max(recommended_limit - int(current_limit or 0), 0)
             required = max(minimum_increase, fallback.required if fallback is not None else 0)
 
@@ -1085,7 +1096,9 @@ class _QuotaSession:
             json.dumps(requested_items, separators=(",", ":")),
         )
 
-    def list_capacity_resource_advice(self, *, parent_id: str) -> tuple[CapacityResourceAdvice, ...]:
+    def list_capacity_resource_advice(
+        self, *, parent_id: str
+    ) -> tuple[CapacityResourceAdvice, ...]:
         if parent_id in self._capacity_resource_advice_cache:
             return self._capacity_resource_advice_cache[parent_id]
 
@@ -1177,7 +1190,7 @@ def _evaluate_requirement(
             capacity_resource_advice=capacity_resource_advice,
         )
         unit = unit or "count"
-        description = description or dashboard_description
+        description = dashboard_description or description
     elif regular_available is not None:
         available = regular_available
         sufficient = requirement.required <= regular_available
@@ -1274,7 +1287,10 @@ def _gpu_capacity_availability(
     lane_name, lane = capacity_lane(selected, mode=shape.mode)
     available = lane.available * shape.gpu_count_per_instance
     fabric_detail = f", fabric {selected.fabric}" if selected.fabric else ""
-    description = f"Capacity Dashboard GPU availability ({lane_name}{fabric_detail})"
+    description = (
+        "Capacity Dashboard GPU availability "
+        f"({lane_name} VM slots{fabric_detail}, converted to GPU units)"
+    )
     return (
         available,
         requirement.required <= available,
@@ -1661,7 +1677,9 @@ def _estimate_vm_requirements(
             )
 
     if not _mapping_text(inputs, "boot_disk_existing_id"):
-        disk_type = _disk_quota_suffix(_mapping_text(inputs, "boot_disk_type", default="NETWORK_SSD"))
+        disk_type = _disk_quota_suffix(
+            _mapping_text(inputs, "boot_disk_type", default="NETWORK_SSD")
+        )
         disk_size_gib = _positive_int(inputs.get("boot_disk_size_gib")) or 60
         _append_requirement(
             requirements,
@@ -1952,7 +1970,9 @@ def _estimate_mk8s_requirements(
                 )
             else:
                 resources = (
-                    session.preset_resources(project_id=project_id, platform=cpu_platform, preset=cpu_preset)
+                    session.preset_resources(
+                        project_id=project_id, platform=cpu_platform, preset=cpu_preset
+                    )
                     if cpu_platform and cpu_preset
                     else None
                 )
@@ -2387,7 +2407,9 @@ def assess_live_quotas(
         aggregated_requirements = _aggregate_requirements(requirements)
         if any(item.gpu_capacity_shape is not None for item in aggregated_requirements):
             try:
-                capacity_resource_advice = session.list_capacity_resource_advice(parent_id=tenant_id)
+                capacity_resource_advice = session.list_capacity_resource_advice(
+                    parent_id=tenant_id
+                )
             except Exception as exc:
                 capacity_resource_advice = None
                 errors.append(f"tenant Capacity Dashboard lookup failed for {tenant_id}: {exc}")

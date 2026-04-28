@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +24,12 @@ from .component_wiring import (
     resolve_input_binding_source,
 )
 from .components import component_entries, component_entry_chart_name
+from .deploy_targets import (
+    TARGET_REF_FIELD,
+    app_chart_target_ref,
+    enabled_cluster_target_refs,
+    flux_target_dir,
+)
 from .mk8s_gpu import (
     mk8s_gpu_flux_release_dependencies,
     mk8s_gpu_flux_release_post_render_patches,
@@ -180,6 +186,7 @@ def _configured_app_release_specs(
     resolved_component_outputs = component_output_values or {}
     entry_by_id = {entry.id: entry for entry in component_entries("apps")}
     all_entry_by_id = component_entry_lookup()
+    cluster_target_refs = set(enabled_cluster_target_refs(payload))
     apps_node = payload.get("apps")
     if isinstance(apps_node, dict):
         dynamic_charts = apps_node.get("charts")
@@ -192,6 +199,20 @@ def _configured_app_release_specs(
                     continue
                 entry = entry_by_id.get(entry_id)
                 chart_node = dict(raw_chart)
+                instance_id = str(chart_node.get("instance_id", entry_id)).strip() or entry_id
+                target_ref = app_chart_target_ref(chart_node)
+                if cluster_target_refs:
+                    if not target_ref:
+                        raise ValueError(
+                            f"apps.charts[{instance_id}].{TARGET_REF_FIELD} is required when cluster targets are enabled"
+                        )
+                    if target_ref not in cluster_target_refs:
+                        available = ", ".join(sorted(cluster_target_refs))
+                        raise ValueError(
+                            f"apps.charts[{instance_id}].{TARGET_REF_FIELD} must reference one of the enabled cluster targets: {available}"
+                        )
+                else:
+                    target_ref = ""
                 if entry is not None and entry.defaults:
                     chart_node = resolve_component_defaults(
                         payload=payload,
@@ -309,6 +330,8 @@ def _configured_app_release_specs(
                     {
                         "scope": scope,
                         "entry_id": entry_id,
+                        "instance_id": instance_id,
+                        "target_ref": target_ref,
                         "release_name": release_name,
                         "namespace": namespace,
                         "source_name": repo_name,
@@ -322,6 +345,9 @@ def _configured_app_release_specs(
                         "timeout": release_timeout,
                         "values": chart_values,
                         "depends_on": [],
+                        "install_after": tuple(entry.default_release_install_after or ())
+                        if entry is not None
+                        else (),
                     }
                 )
     dependency_map = mk8s_gpu_flux_release_dependencies(
@@ -332,32 +358,45 @@ def _configured_app_release_specs(
             if str(item.get("entry_id", "")).strip()
         },
     )
-    spec_by_entry_id = {
-        str(item.get("entry_id", "")).strip(): item
-        for item in specs
-        if str(item.get("entry_id", "")).strip()
-    }
+    specs_by_target_and_entry_id: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for item in specs:
+        entry_id = str(item.get("entry_id", "")).strip()
+        if not entry_id:
+            continue
+        key = (str(item.get("target_ref", "")).strip(), entry_id)
+        specs_by_target_and_entry_id.setdefault(key, []).append(item)
     post_render_patch_map = mk8s_gpu_flux_release_post_render_patches(
         payload,
-        release_entry_ids=set(spec_by_entry_id),
+        release_entry_ids={
+            str(item.get("entry_id", "")).strip()
+            for item in specs
+            if str(item.get("entry_id", "")).strip()
+        },
     )
-    for entry_id, dependency_ids in dependency_map.items():
-        release = spec_by_entry_id.get(entry_id)
-        if release is None:
+    for release in specs:
+        entry_id = str(release.get("entry_id", "")).strip()
+        if not entry_id:
             continue
-        release["depends_on"] = [
-            {
-                "name": str(spec_by_entry_id[dependency_id]["release_name"]),
-                "namespace": str(spec_by_entry_id[dependency_id]["namespace"]),
-            }
-            for dependency_id in dependency_ids
-            if dependency_id in spec_by_entry_id
-        ]
-    for entry_id, patches in post_render_patch_map.items():
-        release = spec_by_entry_id.get(entry_id)
-        if release is None:
-            continue
-        release["post_render_patches"] = [dict(item) for item in patches]
+        target_ref = str(release.get("target_ref", "")).strip()
+        dependency_ids = tuple(
+            dict.fromkeys(
+                tuple(release.get("install_after") or ()) + tuple(dependency_map.get(entry_id, ()))
+            )
+        )
+        depends_on: list[dict[str, str]] = []
+        for dependency_id in dependency_ids:
+            for dependency in specs_by_target_and_entry_id.get((target_ref, dependency_id), ()):
+                depends_on.append(
+                    {
+                        "name": str(dependency["release_name"]),
+                        "namespace": str(dependency["namespace"]),
+                    }
+                )
+        if depends_on:
+            release["depends_on"] = depends_on
+        patches = post_render_patch_map.get((target_ref, entry_id))
+        if patches:
+            release["post_render_patches"] = [dict(item) for item in patches]
     return specs
 
 
@@ -453,6 +492,32 @@ class _FluxRenderState:
         self.resources.append(f"./{relative_file.as_posix()}")
 
 
+def _finalize_flux_render_state(state: _FluxRenderState) -> None:
+    repos_path = state.paths.flux_dir / "helm-repositories.yaml"
+    if state.repositories:
+        _ensure_parent(repos_path)
+        repo_yaml = (
+            "\n---\n".join(
+                yaml.safe_dump(doc, sort_keys=False).strip() for doc in state.repositories
+            )
+            + "\n"
+        )
+        repos_path.write_text(repo_yaml, encoding="utf-8")
+        state.files.append(repos_path)
+        state.resources.insert(0, "./helm-repositories.yaml")
+    else:
+        repos_path.unlink(missing_ok=True)
+
+    kustomization_doc = {
+        "apiVersion": "kustomize.config.k8s.io/v1beta1",
+        "kind": "Kustomization",
+        "resources": state.resources,
+    }
+    kustomization_path = state.paths.flux_dir / "kustomization.yaml"
+    _write_text(kustomization_path, yaml.safe_dump(kustomization_doc, sort_keys=False))
+    state.files.append(kustomization_path)
+
+
 def _render_flux_app_helm_releases(
     state: _FluxRenderState, *, release_specs: list[dict[str, Any]]
 ) -> None:
@@ -516,39 +581,34 @@ def render_flux(
             f"{locations}"
         )
 
-    state = _FluxRenderState(paths=paths)
-    _render_flux_app_helm_releases(
-        state,
-        release_specs=_configured_app_release_specs(
-            config,
-            component_output_values=component_output_values,
-        ),
+    release_specs = _configured_app_release_specs(
+        config,
+        component_output_values=component_output_values,
     )
-
-    repos_path = paths.flux_dir / "helm-repositories.yaml"
-    if state.repositories:
-        _ensure_parent(repos_path)
-        repo_yaml = (
-            "\n---\n".join(
-                yaml.safe_dump(doc, sort_keys=False).strip() for doc in state.repositories
+    cluster_target_refs = enabled_cluster_target_refs(config)
+    if cluster_target_refs:
+        written: list[Path] = []
+        release_specs_by_target: dict[str, list[dict[str, Any]]] = {
+            target_ref: [] for target_ref in cluster_target_refs
+        }
+        for item in release_specs:
+            release_specs_by_target.setdefault(str(item.get("target_ref", "")).strip(), []).append(
+                item
             )
-            + "\n"
-        )
-        repos_path.write_text(repo_yaml, encoding="utf-8")
-        state.files.append(repos_path)
-        state.resources.insert(0, "./helm-repositories.yaml")
-    else:
-        repos_path.unlink(missing_ok=True)
+        for target_ref in cluster_target_refs:
+            target_paths = replace(paths, flux_dir=flux_target_dir(paths, target_ref))
+            state = _FluxRenderState(paths=target_paths)
+            _render_flux_app_helm_releases(
+                state,
+                release_specs=release_specs_by_target.get(target_ref, []),
+            )
+            _finalize_flux_render_state(state)
+            written.extend(state.files)
+        return written
 
-    kustomization_doc = {
-        "apiVersion": "kustomize.config.k8s.io/v1beta1",
-        "kind": "Kustomization",
-        "resources": state.resources,
-    }
-    kustomization_path = paths.flux_dir / "kustomization.yaml"
-    _write_text(kustomization_path, yaml.safe_dump(kustomization_doc, sort_keys=False))
-    state.files.append(kustomization_path)
-
+    state = _FluxRenderState(paths=paths)
+    _render_flux_app_helm_releases(state, release_specs=release_specs)
+    _finalize_flux_render_state(state)
     return state.files
 
 

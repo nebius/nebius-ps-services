@@ -18,9 +18,7 @@ from nebius_cxcli.config_template import starter_config_yaml
 from nebius_cxcli.runtime_introspection import reset_runtime_introspection_cache
 
 _VALID_ED25519_PUBLIC_KEY = (
-    "ssh-ed25519 "
-    "AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f "
-    "demo@example"
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f demo@example"
 )
 
 
@@ -117,6 +115,7 @@ def test_strict_validation_checks_dynamic_custom_component_source(
     payload["infra"]["components"] = [
         {
             "id": "runtime-custom",
+            "instance_id": "runtime-custom",
             "enabled": True,
             "source": "",
             "inputs": {},
@@ -380,6 +379,7 @@ def test_strict_validation_rejects_missing_local_custom_module_source_dir(tmp_pa
     payload["infra"]["components"] = [
         {
             "id": "runtime-custom",
+            "instance_id": "runtime-custom",
             "enabled": True,
             "source": str(tmp_path / "missing-module"),
             "inputs": {},
@@ -405,6 +405,7 @@ def test_strict_validation_rejects_local_custom_module_source_without_tf_files(
     payload["infra"]["components"] = [
         {
             "id": "runtime-custom",
+            "instance_id": "runtime-custom",
             "enabled": True,
             "source": str(module_dir),
             "inputs": {},

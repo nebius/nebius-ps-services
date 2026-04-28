@@ -189,6 +189,47 @@ resource "nebius_compute_v1_instance" "vm" {
 
     precondition {
       condition = !(
+        var.observability_collector_enabled &&
+        var.service_account_id == null
+      )
+      error_message = "observability_collector_enabled=true requires service_account_id so the VM metadata token can authenticate writes."
+    }
+
+    precondition {
+      condition = !(
+        var.observability_collector_enabled &&
+        !(
+          var.observability_collector_metrics_enabled ||
+          var.observability_collector_logs_enabled
+        )
+      )
+      error_message = "observability_collector_enabled=true requires observability_collector_metrics_enabled or observability_collector_logs_enabled."
+    }
+
+    precondition {
+      condition = !(
+        var.observability_collector_enabled &&
+        (
+          var.boot_disk_existing_id != null ||
+          var.source_image_id != null ||
+          var.source_image_family == null ||
+          !strcontains(lower(var.source_image_family), "ubuntu")
+        )
+      )
+      error_message = "observability_collector_enabled=true currently supports module-managed Ubuntu image-family boot disks only."
+    }
+
+    precondition {
+      condition = !(
+        var.observability_collector_enabled &&
+        var.observability_collector_metrics_enabled &&
+        var.observability_collector_metrics_export_port == var.observability_collector_prometheus_agent_port
+      )
+      error_message = "observability_collector_metrics_export_port and observability_collector_prometheus_agent_port must differ."
+    }
+
+    precondition {
+      condition = !(
         var.container_enabled &&
         var.container_image == null
       )

@@ -135,7 +135,7 @@ def send_deploy_report_email(
     if not markdown_path.exists():
         raise RuntimeError(
             f"Deploy report markdown is missing: {markdown_path}. "
-            "Run `nebius-cxcli report <config.yaml>` or rerender first."
+            "Run `nebius-cxcli render <config.yaml>` or deploy/apply again first."
         )
     body = markdown_path.read_text(encoding="utf-8")
     if tenant_id:

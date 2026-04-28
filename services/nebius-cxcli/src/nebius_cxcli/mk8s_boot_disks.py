@@ -22,9 +22,7 @@ _HEURISTIC_VCPU_FACTOR = 0.75
 _HEURISTIC_MEMORY_FACTOR = 0.10
 _HEURISTIC_GPU_NODE_OVERHEAD_GIB = 12.0
 _HEURISTIC_PER_GPU_GIB = 8.0
-_HIGH_PERFORMANCE_BOOT_DISK_TYPES = frozenset(
-    {"NETWORK_SSD_NON_REPLICATED", "NETWORK_SSD_IO_M3"}
-)
+_HIGH_PERFORMANCE_BOOT_DISK_TYPES = frozenset({"NETWORK_SSD_NON_REPLICATED", "NETWORK_SSD_IO_M3"})
 
 
 @dataclass(frozen=True)
@@ -81,7 +79,9 @@ def _positive_int(value: Any) -> int | None:
 def _override_boot_disk(inputs: dict[str, Any], *, gpu: bool) -> dict[str, Any]:
     override_key = "mk8s_gpu_node_group_overrides" if gpu else "mk8s_cpu_node_group_overrides"
     overrides = inputs.get(override_key)
-    boot_disk = _path_value(overrides, "template.boot_disk") if isinstance(overrides, dict) else None
+    boot_disk = (
+        _path_value(overrides, "template.boot_disk") if isinstance(overrides, dict) else None
+    )
     return dict(boot_disk) if isinstance(boot_disk, dict) else {}
 
 
@@ -89,7 +89,11 @@ def _effective_platform(inputs: dict[str, Any], *, gpu: bool) -> str:
     override_key = "mk8s_gpu_node_group_overrides" if gpu else "mk8s_cpu_node_group_overrides"
     platform_key = "gpu_nodes_platform" if gpu else "cpu_nodes_platform"
     overrides = inputs.get(override_key)
-    override_value = _path_value(overrides, "template.resources.platform") if isinstance(overrides, dict) else None
+    override_value = (
+        _path_value(overrides, "template.resources.platform")
+        if isinstance(overrides, dict)
+        else None
+    )
     return _as_text(override_value) or _as_text(inputs.get(platform_key))
 
 
@@ -97,7 +101,9 @@ def _effective_preset(inputs: dict[str, Any], *, gpu: bool) -> str:
     override_key = "mk8s_gpu_node_group_overrides" if gpu else "mk8s_cpu_node_group_overrides"
     preset_key = "gpu_nodes_preset" if gpu else "cpu_nodes_preset"
     overrides = inputs.get(override_key)
-    override_value = _path_value(overrides, "template.resources.preset") if isinstance(overrides, dict) else None
+    override_value = (
+        _path_value(overrides, "template.resources.preset") if isinstance(overrides, dict) else None
+    )
     return _as_text(override_value) or _as_text(inputs.get(preset_key))
 
 
@@ -145,7 +151,9 @@ def _resolved_first_class_disk_size(inputs: dict[str, Any], *, gpu: bool) -> int
     return _positive_int(inputs.get(size_field))
 
 
-def _parse_preset_resources_from_name(preset_name: str) -> tuple[int | None, int | None, int | None]:
+def _parse_preset_resources_from_name(
+    preset_name: str,
+) -> tuple[int | None, int | None, int | None]:
     vcpu_count: int | None = None
     memory_gibibytes: int | None = None
     gpu_count: int | None = None
@@ -235,29 +243,36 @@ def _default_disk_type(*, gpu: bool) -> str:
 
 
 def _rule_matches(context: Mk8sBootDiskContext, rule: Mk8sBootDiskRule) -> bool:
-    if rule.gpu_cluster_enabled is not None and context.gpu_cluster_enabled != rule.gpu_cluster_enabled:
+    if (
+        rule.gpu_cluster_enabled is not None
+        and context.gpu_cluster_enabled != rule.gpu_cluster_enabled
+    ):
         return False
     if rule.match_platforms and context.platform not in rule.match_platforms:
         return False
     if rule.match_presets and context.preset not in rule.match_presets:
         return False
-    if rule.min_vcpu is not None and (context.vcpu_count is None or context.vcpu_count < rule.min_vcpu):
-        return False
-    if rule.max_vcpu is not None and (context.vcpu_count is None or context.vcpu_count > rule.max_vcpu):
-        return False
-    if (
-        rule.min_memory_gib is not None
-        and (context.memory_gibibytes is None or context.memory_gibibytes < rule.min_memory_gib)
+    if rule.min_vcpu is not None and (
+        context.vcpu_count is None or context.vcpu_count < rule.min_vcpu
     ):
         return False
-    if (
-        rule.max_memory_gib is not None
-        and (context.memory_gibibytes is None or context.memory_gibibytes > rule.max_memory_gib)
+    if rule.max_vcpu is not None and (
+        context.vcpu_count is None or context.vcpu_count > rule.max_vcpu
+    ):
+        return False
+    if rule.min_memory_gib is not None and (
+        context.memory_gibibytes is None or context.memory_gibibytes < rule.min_memory_gib
+    ):
+        return False
+    if rule.max_memory_gib is not None and (
+        context.memory_gibibytes is None or context.memory_gibibytes > rule.max_memory_gib
     ):
         return False
     if rule.min_gpu is not None and (context.gpu_count is None or context.gpu_count < rule.min_gpu):
         return False
-    return not (rule.max_gpu is not None and (context.gpu_count is None or context.gpu_count > rule.max_gpu))
+    return not (
+        rule.max_gpu is not None and (context.gpu_count is None or context.gpu_count > rule.max_gpu)
+    )
 
 
 def _matched_policy_rule(
@@ -344,7 +359,9 @@ def resolve_mk8s_boot_disk_recommendation(
         or _as_text(matched_rule.type if matched_rule is not None else "").upper()
         or _as_text(policy.default_type).upper()
     )
-    size_gib = _recommended_size_gib(context, disk_type=disk_type, policy=policy) if disk_type else None
+    size_gib = (
+        _recommended_size_gib(context, disk_type=disk_type, policy=policy) if disk_type else None
+    )
     return Mk8sBootDiskRecommendation(
         context=context,
         disk_type=disk_type,
@@ -457,7 +474,9 @@ def refresh_mk8s_boot_disk_defaults(
             if previous_auto_recommendation is not None
             else _default_disk_type(gpu=gpu)
         )
-        previous_type = _resolved_first_class_disk_type(previous_inputs, gpu=gpu) or previous_auto_type
+        previous_type = (
+            _resolved_first_class_disk_type(previous_inputs, gpu=gpu) or previous_auto_type
+        )
         previous_recommendation = resolve_mk8s_boot_disk_recommendation(
             component_id=component_id,
             instance_id=instance_id,
@@ -467,7 +486,9 @@ def refresh_mk8s_boot_disk_defaults(
             provider_lookup=provider_lookup,
             disk_type_override=previous_type,
         )
-        previous_size = previous_recommendation.size_gib if previous_recommendation is not None else None
+        previous_size = (
+            previous_recommendation.size_gib if previous_recommendation is not None else None
+        )
         current_type = _resolved_first_class_disk_type(inputs, gpu=gpu)
         current_size = _resolved_first_class_disk_size(inputs, gpu=gpu)
         size_override_explicit = any(
@@ -488,9 +509,8 @@ def refresh_mk8s_boot_disk_defaults(
             if current_auto_recommendation is not None
             else _default_disk_type(gpu=gpu)
         )
-        refresh_first_class_type = (
-            not type_override_explicit
-            and (not current_type or current_type == previous_auto_type)
+        refresh_first_class_type = not type_override_explicit and (
+            not current_type or current_type == previous_auto_type
         )
         effective_type = current_type
         if refresh_first_class_type and new_default_type:
@@ -523,13 +543,8 @@ def refresh_mk8s_boot_disk_defaults(
                 changed = True
             continue
 
-        refresh_first_class_size = (
-            not size_override_explicit
-            and (
-                current_size is None
-                or previous_size is None
-                or current_size == previous_size
-            )
+        refresh_first_class_size = not size_override_explicit and (
+            current_size is None or previous_size is None or current_size == previous_size
         )
         if (
             refresh_first_class_size

@@ -1,6 +1,6 @@
 ---
 name: nebius
-description: Implement Nebius cloud automation in Python using the Nebius SDK, including IAM/Object Storage workflows, VPC networking inspection/design, live quota management, and MK8s compatibility/readiness checks. Use when building or reviewing Nebius auth bootstrap, service accounts, access keys, Terraform state buckets, VPC pools, subnet inheritance, route tables, quota-aware Nebius provisioning checks, or live MK8s GPU platform/preset/fabric and operator compatibility.
+description: Implement Nebius cloud automation in Python using the Nebius SDK, including IAM/Object Storage workflows, VPC networking inspection/design, live quota management, MK8s compatibility/readiness checks, and Nebius observability architecture/onboarding. Use when building or reviewing Nebius auth bootstrap, observability endpoint/auth wiring, service accounts, access keys, Terraform state buckets, VPC pools, subnet inheritance, route tables, quota-aware Nebius provisioning checks, or live MK8s GPU platform/preset/fabric and operator compatibility.
 ---
 
 # Nebius
@@ -34,7 +34,7 @@ Implement Nebius IAM/Object Storage, VPC networking, quota-management, and MK8s 
   - GPU platform, OS, and `drivers_preset` selection
   - GPU preset eligibility checks for InfiniBand / GPU clustering
   - single-GPU Ethernet-only versus multi-GPU InfiniBand-capable shape review
-  - driverful Nebius-image versus manual/operator-managed GPU stack decisions
+  - driverful Nebius-image versus operator-managed GPU stack decisions
   - GPU Operator and Network Operator ordering, ownership, and NFD scoping
   - scheduler-visible RDMA exposure checks such as `rdma/shared_device`
   - NCCL suitability review for MK8s GPU node groups
@@ -42,6 +42,13 @@ Implement Nebius IAM/Object Storage, VPC networking, quota-management, and MK8s 
   - rolling-update quota and public-IP headroom review
   - node infra-version drift checks when provisioning or autoscaling behaves unexpectedly
   - maintenance-behavior review for MK8s nodes
+- Nebius observability:
+  - Monitoring, Logging, and Tracing architecture
+  - Monitoring agent versus Nebius Observability Agent for Kubernetes
+  - public write/read endpoint mapping
+  - IAM/static-token auth boundaries for agents, Grafana, and CLI tools
+  - VM journald label contract and MK8s cluster-agent contract
+  - public-safe `nebius-cxcli` observability onboarding and config design
 
 ## Workflow
 
@@ -74,6 +81,13 @@ Implement Nebius IAM/Object Storage, VPC networking, quota-management, and MK8s 
      - when the task is specific to `services/nebius-cxcli`, warn if NCCL is forced onto a 1-GPU or other non-cluster MK8s shape because it would run over Ethernet/TCPIP rather than InfiniBand / GPUDirect-RDMA
      - when the host uses a Nebius driverful GPU image, treat host GPU driver, NVIDIA Container Toolkit, and Nebius-provided OFED as separate concerns from Kubernetes-side device plugins and RDMA exposure
      - when both NVIDIA operators are needed, install or reconcile Network Operator before GPU Operator and keep exactly one NFD owner
+   - Observability:
+     - start with `references/observability.md`
+     - reuse `assets/observability/public-endpoints.yaml`
+     - verify the Kubernetes agent chart source against the current Nebius
+       Observability Agent docs; the cxcli catalog pins
+       `oci://cr.nebius.cloud/observability/public/nebius-observability-agent-helm`
+     - when the task is specific to `services/nebius-cxcli`, treat `component_sources.yaml` and `src/nebius_cxcli/observability.py` as the contract owners for observability defaults, runtime materialization, and report endpoint summaries
 2. For live Nebius VPC inspection, run:
    - `scripts/inspect_vpc_topology.py`
    - `scripts/inspect_vpc_routes.py`
@@ -81,6 +95,7 @@ Implement Nebius IAM/Object Storage, VPC networking, quota-management, and MK8s 
    - `scripts/inspect_quotas.py`
 3. Load only the references needed for the task:
    - `references/cloud-patterns.md`
+   - `references/observability.md`
    - `references/route-inspection.md`
    - `references/quota-management.md`
    - `references/mk8s-compatibility.md`
@@ -127,7 +142,7 @@ Implement Nebius IAM/Object Storage, VPC networking, quota-management, and MK8s 
 - Prefer exact preset/image tags such as `cuda13.0`; do not use shorthand aliases such as `cuda13` or floating tags such as `latest`.
 - If a compatibility lookup returns exactly one valid `drivers_preset` for the selected Kubernetes version and GPU platform, use that as the default while still allowing an explicit override.
 - Do not trust stale static platform-to-driver maps without revalidating them against the live compatibility matrix.
-- Nebius driverful GPU images and manual/operator-managed GPU stacks are different operating modes. Do not install host GPU drivers or the NVIDIA Container Toolkit from GPU Operator on top of a Nebius driverful image unless the task explicitly requires changing that ownership model.
+- Nebius driverful GPU images and operator-managed GPU stacks are different operating modes. Do not install host GPU drivers or the NVIDIA Container Toolkit from GPU Operator on top of a Nebius driverful image unless the task explicitly requires changing that ownership model.
 - `toolkit.enabled` in GPU Operator controls the NVIDIA Container Toolkit runtime, not the CUDA Toolkit.
 - NVIDIA Network Operator is required for Nebius MK8s GPU node groups that do not use the Nebius GPU image and either join a GPU cluster for InfiniBand or use B200/B200A GPUs. In all other cases, follow the current Nebius docs and active automation contract instead of assuming Network Operator is always needed.
 - If both NVIDIA operators are installed, keep exactly one NFD instance. Disable GPU Operator's NFD when Network Operator is the intended NFD owner.
@@ -163,17 +178,22 @@ Implement Nebius IAM/Object Storage, VPC networking, quota-management, and MK8s 
 - `assets/gpu/nicclusterpolicy-driverful-rdma-shared.yaml`
   - reference `NicClusterPolicy` for exposing `rdma/shared_device` on driverful InfiniBand-capable nodes
 - `assets/gpu/gpu-operator-manual-values.yaml`
-  - reference values for a manual/operator-managed host path where GPU Operator owns the host GPU driver and NVIDIA Container Toolkit runtime
+  - reference values for an operator-managed host path where GPU Operator owns the host GPU driver and NVIDIA Container Toolkit runtime
 - `assets/gpu/network-operator-manual-values.yaml`
-  - reference values for the manual B200/B200A or InfiniBand path where Network Operator owns host OFED installation
+  - reference values for the operator-managed B200/B200A or InfiniBand path where Network Operator owns host OFED installation
 - `assets/gpu/nicclusterpolicy-manual-rdma-shared.yaml`
-  - reference `NicClusterPolicy` patch for exposing `rdma/shared_device` on manual/operator-managed InfiniBand-capable nodes
+  - reference `NicClusterPolicy` patch for exposing `rdma/shared_device` on operator-managed InfiniBand-capable nodes
 - `assets/gpu/check-cluster-readiness.sh`
   - quick cluster-wide check for operator policy state, operator pods, daemonsets, labels, and allocatable GPU/RDMA resources
 - `assets/gpu/inspect-driverful-host.sh`
   - privileged host inspection helper for checking installed GPU packages, NVIDIA Container Toolkit runtime config, and loaded kernel modules on a Nebius driverful GPU node
 - `assets/gpu/proof-rdma-gpu-pod.yaml`
   - reference proof pod that requests both `nvidia.com/gpu` and `rdma/shared_device`
+
+### Observability assets
+
+- `assets/observability/public-endpoints.yaml`
+  - public-safe endpoint/auth map plus cxcli config-branch summary for Monitoring, Logging, Tracing, the VM Monitoring agent, and the Kubernetes agent
 
 ### VPC inspection scripts
 
@@ -191,6 +211,7 @@ Run scripts relative to the skill directory.
 - `references/iam.md`
 - `references/vpc-networking.md`
 - `references/cloud-patterns.md`
+- `references/observability.md`
 - `references/route-inspection.md`
 - `references/quota-management.md`
 - `references/mk8s-compatibility.md`

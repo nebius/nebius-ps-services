@@ -28,9 +28,7 @@ from nebius_cxcli.runtime_config import to_plain_data
 runner = CliRunner()
 
 _VALID_ED25519_PUBLIC_KEY = (
-    "ssh-ed25519 "
-    "AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f "
-    "demo@example"
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f demo@example"
 )
 
 
@@ -209,7 +207,9 @@ def _catalog(
 def _write_mk8s_boot_disk_sources_file(path: Path, *, module_dir: Path) -> None:
     module_dir.mkdir(parents=True, exist_ok=True)
     (module_dir / "main.tf").write_text("terraform {}\n", encoding="utf-8")
-    (module_dir / "variables.tf").write_text('variable "cpu_nodes_count" { type = number }\n', encoding="utf-8")
+    (module_dir / "variables.tf").write_text(
+        'variable "cpu_nodes_count" { type = number }\n', encoding="utf-8"
+    )
     path.write_text(
         yaml.safe_dump(
             _catalog(
@@ -378,6 +378,58 @@ def _infra_enabled_map(payload: dict) -> dict[str, bool]:
     return result
 
 
+def test_create_preflights_source_validation_tools_before_identity_prompts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    def _fail_preflight() -> None:
+        raise RuntimeError("helm missing from PATH")
+
+    monkeypatch.setattr(cli_module, "_preflight_component_source_tools_or_raise", _fail_preflight)
+
+    result = runner.invoke(app, ["create", str(deployments_root)])
+
+    assert result.exit_code == 1
+    assert "helm missing from PATH" in result.output
+    assert "Tenant ID" not in result.output
+
+
+def test_create_reprompts_invalid_interactive_client_name(tmp_path: Path) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    result = runner.invoke(
+        app,
+        [
+            "create",
+            str(deployments_root),
+            "--tenant-id",
+            "tenant-123",
+            "--project-id",
+            "project-456",
+            "--no-validate-sources",
+        ],
+        input="Test\nclient-a\n\n\nn\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "client_info.client_name must use lowercase" in result.output
+    assert "letters, digits, and hyphens" in result.output
+    payload = yaml.safe_load(_project_config_path(deployments_root).read_text(encoding="utf-8"))
+    assert payload["client_info"]["client_name"] == "client-a"
+
+
+def test_wizard_field_prompt_describes_q_as_previous_field() -> None:
+    rendered = cli_module._wizard_field_prompt_suffix("infra.components[0].inputs.name")
+
+    assert "enter q to revisit the previous answered field" in rendered
+    assert "qq stops wizard" in rendered
+    assert "go back" not in rendered
+
+
 def _apps_enabled_map(payload: dict) -> dict[str, bool]:
     rows = payload.get("apps", {}).get("charts", [])
     if not isinstance(rows, list):
@@ -397,6 +449,7 @@ def _patch_late_mk8s_gpu_enable_wizard(
     monkeypatch: pytest.MonkeyPatch,
     *,
     infiniband_fabric: str = "",
+    cluster_name: str = "",
 ) -> None:
     monkeypatch.setattr(cli_module, "_wizard_continue_phase", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(cli_module, "_optional_email_or_prompt", lambda *_args, **_kwargs: None)
@@ -421,6 +474,8 @@ def _patch_late_mk8s_gpu_enable_wizard(
         )
         inputs = mk8s_row.setdefault("inputs", {})
         assert isinstance(inputs, dict)
+        if cluster_name:
+            inputs["cluster_name"] = cluster_name
         inputs["gpu_enabled"] = True
         inputs["gpu_stack_source"] = "nebius_image"
         inputs["gpu_node_groups"] = 1
@@ -431,6 +486,36 @@ def _patch_late_mk8s_gpu_enable_wizard(
             inputs["infiniband_fabric"] = infiniband_fabric
         else:
             inputs.pop("infiniband_fabric", None)
+        return yaml.safe_dump(payload, sort_keys=False), True
+
+    monkeypatch.setattr(cli_module, "_run_component_field_wizard", _fake_run_component_field_wizard)
+
+
+def _patch_late_observability_enable_wizard(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli_module, "_wizard_continue_phase", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(cli_module, "_optional_email_or_prompt", lambda *_args, **_kwargs: None)
+
+    def _fake_run_component_field_wizard(
+        *,
+        config_yaml: str,
+        selected_infra: set[str],
+        selected_apps: set[str],
+        infra_entries,
+        app_entries,
+        provider_lookup=None,
+    ) -> tuple[str, bool]:
+        _ = selected_infra, selected_apps, infra_entries, app_entries, provider_lookup
+        payload = yaml.safe_load(config_yaml) or {}
+        assert isinstance(payload, dict)
+        deploy = payload.setdefault("deploy", {})
+        assert isinstance(deploy, dict)
+        targets = deploy.setdefault("targets", [{"instance_id": "mk8s"}])
+        assert isinstance(targets, list)
+        target = targets[0]
+        assert isinstance(target, dict)
+        observability = target.setdefault("observability", {})
+        assert isinstance(observability, dict)
+        observability["enabled"] = True
         return yaml.safe_dump(payload, sort_keys=False), True
 
     monkeypatch.setattr(cli_module, "_run_component_field_wizard", _fake_run_component_field_wizard)
@@ -586,7 +671,7 @@ def test_create_no_validate_config_still_prints_mk8s_gpu_validation_warning(
         cli_module,
         "mk8s_gpu_validation_warnings",
         lambda _payload: (
-            "deploy.validations.mk8s_gpu.nccl.enabled is set on an Ethernet-only test shape.",
+            "deploy.targets[].validations.mk8s_gpu.nccl.enabled is set on an Ethernet-only test shape.",
         ),
     )
 
@@ -668,11 +753,15 @@ def test_create_interactive_existing_root_new_project_skips_overwrite_warning(
     assert "Client name [client-a]" not in result.output
     assert "Created project:" in result.output
     assert config_path.read_text(encoding="utf-8") == original
-    assert _project_dir(
-        deployments_root,
-        tenant_id="tenant-123",
-        project_id="project-789",
-    ).joinpath("config.yaml").exists()
+    assert (
+        _project_dir(
+            deployments_root,
+            tenant_id="tenant-123",
+            project_id="project-789",
+        )
+        .joinpath("config.yaml")
+        .exists()
+    )
 
 
 def test_create_non_interactive_existing_tenant_new_project_creates_config(
@@ -708,11 +797,15 @@ def test_create_non_interactive_existing_tenant_new_project_creates_config(
     assert "Existing project detected." not in result.output
     assert "Created project:" in result.output
     assert original_config_path.read_text(encoding="utf-8") == original
-    assert _project_dir(
-        deployments_root,
-        tenant_id="tenant-123",
-        project_id="project-789",
-    ).joinpath("config.yaml").exists()
+    assert (
+        _project_dir(
+            deployments_root,
+            tenant_id="tenant-123",
+            project_id="project-789",
+        )
+        .joinpath("config.yaml")
+        .exists()
+    )
 
 
 def test_create_refuses_name_based_path_collision_with_different_project_ids(
@@ -763,6 +856,9 @@ def test_create_writes_deployments_gitignore_when_target_is_in_git_repo(tmp_path
     content = gitignore_path.read_text(encoding="utf-8")
     assert "*/*/generated/" not in content.splitlines()
     assert "*/*/config.yaml" not in content
+    assert "Managed by `nebius-cxcli`" in content
+    assert "Keep config.yaml and generated/nebius-cxcli-manifest.json versioned" in content
+    assert "tfvars duplicates recreated from the generated manifest" in content
     assert "*/*/generated/infra/.terraform/" in content
     assert "*/*/generated/infra/crash.*.log" in content
     assert "*/*/generated/infra/terraform.auto.tfvars.json" in content
@@ -809,6 +905,9 @@ def test_render_recreates_deployments_gitignore_in_git_repo(tmp_path: Path) -> N
     content = gitignore_path.read_text(encoding="utf-8")
     assert "*/*/generated/" not in content.splitlines()
     assert "*/*/config.yaml" not in content
+    assert "Managed by `nebius-cxcli`" in content
+    assert "Keep config.yaml and generated/nebius-cxcli-manifest.json versioned" in content
+    assert "tfvars duplicates recreated from the generated manifest" in content
     assert "*/*/generated/infra/.terraform/" in content
     assert "*/*/generated/infra/crash.*.log" in content
     assert "*/*/generated/infra/terraform.auto.tfvars.json" in content
@@ -855,7 +954,9 @@ def test_render_normalizes_ssh_public_key_file_path_into_config(
         "render_terraform_artifacts",
         lambda _config, _paths, *, source_profile: [tmp_path / "main.tf"],
     )
-    monkeypatch.setattr(cli_module, "_runtime_component_output_values", lambda _config, _paths, **_kwargs: {})
+    monkeypatch.setattr(
+        cli_module, "_runtime_component_output_values", lambda _config, _paths, **_kwargs: {}
+    )
     monkeypatch.setattr(
         cli_module,
         "render_flux",
@@ -1144,7 +1245,10 @@ def test_create_interactive_overwrite_restarts_client_info_prompts_from_fresh_de
 
     assert result.exit_code == 0, result.output
     assert "Client name [proserv1]" not in result.output
-    assert "Notifications email (optional; leave blank to keep email disabled) [ops@example.com]" not in result.output
+    assert (
+        "Notifications email (optional; leave blank to keep email disabled) [ops@example.com]"
+        not in result.output
+    )
 
     refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert refreshed["client_info"]["client_name"] == "client-b"
@@ -1269,6 +1373,136 @@ def test_create_auto_enables_network_operator_only_for_gpu_cluster_shapes(
     assert apps_enabled["nvidia-network-operator"] is True
 
 
+def test_create_names_new_mk8s_target_from_cluster_name_and_retargets_apps(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    _patch_late_mk8s_gpu_enable_wizard(
+        monkeypatch,
+        infiniband_fabric="fabric-1",
+        cluster_name="cluster1",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "create",
+            str(deployments_root),
+            "--client-name",
+            "client-a",
+            "--tenant-id",
+            "tenant-123",
+            "--project-id",
+            "project-456",
+            "--region-id",
+            "eu-north1",
+            "--no-validate-sources",
+            "--no-validate-config",
+            "--infra",
+            "mk8s",
+            "--app",
+            "none",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = yaml.safe_load(_project_config_path(deployments_root).read_text(encoding="utf-8"))
+    mk8s_row = next(
+        row
+        for row in payload["infra"]["components"]
+        if isinstance(row, dict) and row.get("id") == "mk8s"
+    )
+    assert mk8s_row["instance_id"] == "cluster1"
+    assert mk8s_row["inputs"]["cluster_name"] == "cluster1"
+
+    charts = {
+        str(row["id"]): row
+        for row in payload["apps"]["charts"]
+        if isinstance(row, dict) and bool(row.get("enabled"))
+    }
+    assert charts["nvidia-gpu-operator"]["target_ref"] == "cluster1"
+    assert charts["nvidia-gpu-operator"]["instance_id"] == "cluster1"
+    assert charts["nvidia-network-operator"]["target_ref"] == "cluster1"
+    assert charts["nvidia-network-operator"]["instance_id"] == "cluster1"
+
+
+def test_create_auto_enables_observability_agent_when_wizard_turns_on_observability(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    _patch_late_observability_enable_wizard(monkeypatch)
+
+    result = runner.invoke(
+        app,
+        [
+            "create",
+            str(deployments_root),
+            "--client-name",
+            "client-a",
+            "--tenant-id",
+            "tenant-123",
+            "--project-id",
+            "project-456",
+            "--region-id",
+            "eu-north1",
+            "--no-validate-sources",
+            "--no-validate-config",
+            "--infra",
+            "mk8s",
+            "--app",
+            "none",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Adjusted component selection:" in result.output
+    assert "'apps:nebius-observability-agent'" in result.output
+
+    payload = yaml.safe_load(_project_config_path(deployments_root).read_text(encoding="utf-8"))
+    apps_enabled = _apps_enabled_map(payload)
+    assert apps_enabled["nebius-observability-agent"] is True
+
+
+def test_create_vm_only_omits_kubernetes_observability_defaults(tmp_path: Path) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    result = runner.invoke(
+        app,
+        [
+            "create",
+            str(deployments_root),
+            "--client-name",
+            "client-a",
+            "--tenant-id",
+            "tenant-123",
+            "--project-id",
+            "project-456",
+            "--region-id",
+            "eu-north1",
+            "--infra",
+            "vm",
+            "--app",
+            "none",
+            "--no-interactive",
+            "--no-validate-sources",
+            "--no-validate-config",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = yaml.safe_load(_project_config_path(deployments_root).read_text(encoding="utf-8"))
+    observability = payload["deploy"]["observability"]
+    assert "kubernetes" not in observability
+    assert observability["vm"]["logs"]["enabled"] is True
+    deploy = payload.get("deploy", {})
+    assert "validations" not in deploy
+
+
 def test_create_prunes_redundant_live_chart_default_values_from_existing_config(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1320,7 +1554,11 @@ def test_create_prunes_redundant_live_chart_default_values_from_existing_config(
     cleaned_gateway = next(
         item for item in cleaned["apps"]["charts"] if item.get("id") == "gateway-helm"
     )
-    assert cleaned_gateway["values"] == {}
+    assert "securityContext" not in cleaned_gateway["values"]["certgen"]["job"]
+    assert cleaned_gateway["values"]["certgen"]["job"]["affinity"] == cleaned_gateway["values"][
+        "deployment"
+    ]["pod"]["affinity"]
+    assert cleaned_gateway["values"]["config"]["envoyGateway"]["provider"]["type"] == "Kubernetes"
 
 
 def test_create_warns_when_early_exit_leaves_required_fields_missing(
@@ -1448,11 +1686,24 @@ def test_load_context_uses_component_sources_override_file(tmp_path: Path) -> No
 
     external_sources = tmp_path / "external-component-sources.yaml"
     external_sources.write_text(
-        yaml.safe_dump(
-            _catalog(
-                apps={
-                    "nginx": {
-                        "source": _portable_chart_source(
+            yaml.safe_dump(
+                _catalog(
+                    infra={
+                        "mk8s": {
+                            "source": {
+                                "portable": (
+                                    "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3"
+                                ),
+                            },
+                            "status": {
+                                "kind": "nebius.mk8s.cluster",
+                                "name_input": "cluster_name",
+                            },
+                        }
+                    },
+                    apps={
+                        "nginx": {
+                            "source": _portable_chart_source(
                             repo="https://charts.bitnami.com/bitnami",
                             chart="nginx",
                         ),
@@ -1908,8 +2159,7 @@ def test_create_materializes_shared_admin_ssh_username_into_config(tmp_path: Pat
     jump_hosts = {
         item["id"]: item
         for item in payload["infra"]["components"]
-        if isinstance(item, dict)
-        and item.get("id") in {"wireguard-jumphost", "ssh-jumphost"}
+        if isinstance(item, dict) and item.get("id") in {"wireguard-jumphost", "ssh-jumphost"}
     }
 
     assert jump_hosts["wireguard-jumphost"]["inputs"]["ssh_user_name"] == "ubuntu"
@@ -2365,6 +2615,159 @@ def test_component_add_allows_multiple_instances_of_same_component_type(tmp_path
     ]
 
 
+def test_component_add_allows_multiple_mk8s_instances(tmp_path: Path) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    created = _create_non_interactive(deployments_root, "--infra", "mk8s")
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    result = _component_add(config_path, "mk8s", "--no-interactive")
+
+    assert result.exit_code == 0, result.output
+    assert "Added infra components: mk8s@mk8s-2" in result.output
+
+    refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    components = refreshed.get("infra", {}).get("components", [])
+    assert isinstance(components, list)
+    mk8s_rows = [
+        row
+        for row in components
+        if isinstance(row, dict) and str(row.get("id", "")).strip() == "mk8s"
+    ]
+    assert [row.get("instance_id") for row in mk8s_rows] == ["mk8s", "mk8s-2"]
+
+
+def test_component_add_list_remove_bind_app_instance_to_explicit_mk8s_target(
+    tmp_path: Path,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    created = _create_non_interactive(deployments_root, "--infra", "mk8s", "--app", "none")
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    add_cluster = _component_add(config_path, "mk8s", "--no-interactive")
+    assert add_cluster.exit_code == 0, add_cluster.output
+
+    missing_target = _component_add(config_path, "n8n", "--no-interactive")
+    assert missing_target.exit_code != 0
+    assert "must be added for an explicit cluster target" in missing_target.output
+    assert "n8n@<target-id>" in missing_target.output
+
+    add_app = _component_add(config_path, "n8n@mk8s-2", "--no-interactive")
+    assert add_app.exit_code == 0, add_app.output
+    assert "Added apps components: n8n@mk8s-2" in add_app.output
+
+    duplicate_app = _component_add(config_path, "n8n@mk8s-2", "--no-interactive")
+    assert duplicate_app.exit_code != 0
+    assert "already enabled for cluster target 'mk8s-2'" in duplicate_app.output
+
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    charts = payload.get("apps", {}).get("charts", [])
+    assert isinstance(charts, list)
+    n8n_row = next(row for row in charts if isinstance(row, dict) and row.get("id") == "n8n")
+    assert n8n_row["instance_id"] == "mk8s-2"
+    assert n8n_row["target_ref"] == "mk8s-2"
+    assert n8n_row["release-name"] == "n8n"
+
+    listed = runner.invoke(app, ["component", "list", str(config_path)])
+    assert listed.exit_code == 0, listed.output
+    assert "n8n @ mk8s-2 on mk8s-2" in listed.output
+
+    removed = _component_remove(config_path, "n8n@mk8s-2", "--no-interactive")
+    assert removed.exit_code == 0, removed.output
+    assert "Removed apps components: n8n@mk8s-2" in removed.output
+
+
+def test_component_add_first_cluster_target_rebinds_existing_app_only_rows(
+    tmp_path: Path,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    created = _create_non_interactive(deployments_root, "--app", "n8n")
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    result = _component_add(config_path, "mk8s", "--no-interactive")
+    assert result.exit_code == 0, result.output
+
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    charts = payload.get("apps", {}).get("charts", [])
+    assert isinstance(charts, list)
+    n8n_row = next(row for row in charts if isinstance(row, dict) and row.get("id") == "n8n")
+    assert n8n_row["instance_id"] == "mk8s"
+    assert n8n_row["target_ref"] == "mk8s"
+    assert n8n_row["release-name"] == "n8n"
+    _load_context(config_path)
+
+
+def test_component_remove_blocks_cluster_target_removal_with_target_bound_apps(
+    tmp_path: Path,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    created = _create_non_interactive(deployments_root, "--infra", "mk8s", "--app", "n8n")
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    before = config_path.read_text(encoding="utf-8")
+    result = _component_remove(config_path, "mk8s", "--no-interactive")
+    assert result.exit_code == 1, result.output
+    assert "Component remove would leave config.yaml with unresolved dependencies" in result.output
+    normalized_output = " ".join(result.output.split())
+    assert (
+        "apps.charts[n8n@mk8s].target_ref 'mk8s' no longer has an enabled cluster target"
+        in normalized_output
+    )
+    assert config_path.read_text(encoding="utf-8") == before
+
+
+def test_component_add_wizard_tracks_target_bound_app_by_chart_and_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "mk8s",
+        "--app",
+        "gateway-helm",
+    )
+    assert created.exit_code == 0, created.output
+
+    captured_selected_apps: list[set[str]] = []
+    monkeypatch.setattr(cli_module, "_wizard_continue_phase", lambda *_args, **_kwargs: True)
+
+    def _fake_run_component_field_wizard(
+        *,
+        config_yaml: str,
+        selected_infra: set[str],
+        selected_apps: set[str],
+        infra_entries,
+        app_entries,
+        provider_lookup=None,
+    ) -> tuple[str, bool]:
+        _ = selected_infra, infra_entries, app_entries, provider_lookup
+        captured_selected_apps.append(set(selected_apps))
+        return config_yaml, True
+
+    monkeypatch.setattr(cli_module, "_run_component_field_wizard", _fake_run_component_field_wizard)
+
+    config_path = _project_config_path(deployments_root)
+    result = _component_add(config_path, "n8n")
+    assert result.exit_code == 0, result.output
+    assert captured_selected_apps == [{"n8n@mk8s"}]
+    assert "Added apps components: n8n@mk8s" in result.output
+
+
 def test_component_add_interactive_prompts_for_new_component_fields(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2390,6 +2793,8 @@ def test_component_add_interactive_prompts_for_new_component_fields(
         input_text="managed-postgresql\n\n\ny\ndemo-pg\n",
     )
     assert result.exit_code == 0, result.output
+    assert "Select apps components to add too?" in result.output
+    assert "Select apps components (comma-separated ids or indexes)" not in result.output
 
     refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     components = refreshed.get("infra", {}).get("components", [])
@@ -2682,6 +3087,29 @@ def test_bootstrap_ci_no_auth_writes_workflow_in_repo_root(
     )
 
 
+def test_bootstrap_ci_repo_root_deployments_uses_clean_generated_glob(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path / "customer-repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    _git_init(repo_root)
+
+    create_result = _create_non_interactive(repo_root)
+    assert create_result.exit_code == 0, create_result.output
+    _mock_bootstrap_ci_github_sync(monkeypatch)
+
+    config_path = _project_config_path(repo_root)
+    bootstrap = runner.invoke(app, ["bootstrap-ci", str(config_path), "--no-auth-bootstrap"])
+    assert bootstrap.exit_code == 0, bootstrap.output
+
+    workflow = repo_root / ".github" / "workflows" / "nebius-deployments.yml"
+    content = workflow.read_text(encoding="utf-8")
+
+    assert "NEBIUS_DISCOVER_TARGET: ." in content
+    assert '- "*/*/generated/**"' in content
+    assert "**/./*/*/generated/**" not in content
+
+
 def test_bootstrap_ci_no_auth_is_idempotent_without_force(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2759,6 +3187,9 @@ def test_bootstrap_ci_recreates_deployments_gitignore_in_git_repo(
     assert gitignore_path.exists()
 
     content = gitignore_path.read_text(encoding="utf-8")
+    assert "Managed by `nebius-cxcli`" in content
+    assert "Keep config.yaml and generated/nebius-cxcli-manifest.json versioned" in content
+    assert "tfvars duplicates recreated from the generated manifest" in content
     assert "*/*/generated/infra/.terraform/" in content
     assert "*/*/generated/infra/crash.*.log" in content
     assert "*/*/generated/infra/terraform.auto.tfvars.json" in content
@@ -3243,6 +3674,32 @@ def test_discover_in_git_repo_outputs_repo_relative_paths(tmp_path: Path) -> Non
     }
 
 
+def test_discover_accepts_repo_root_deployment_scope(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    _git_init(repo_root)
+
+    config_path = _project_config_path(repo_root)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(_discover_config_payload(), encoding="utf-8")
+
+    result = runner.invoke(app, ["discover", str(repo_root), "--all"])
+    assert result.exit_code == 0, result.output
+
+    payload = json.loads(result.stdout)
+    assert payload == {
+        "include": [
+            {
+                "config": f"{_tenant_folder_name()}/{_project_folder_name()}/config.yaml",
+                "generated": f"{_tenant_folder_name()}/{_project_folder_name()}/generated",
+                "config_changed": False,
+                "generated_changed": False,
+                "github_environment": "client-a-project-456",
+            }
+        ]
+    }
+
+
 def test_discover_accepts_generated_subdirectory_scope(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir(parents=True, exist_ok=True)
@@ -3273,3 +3730,76 @@ def test_discover_accepts_generated_subdirectory_scope(tmp_path: Path) -> None:
             }
         ]
     }
+
+
+def test_reconcile_observability_gpu_node_labels_uses_catalog_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cli_module,
+        "observability_gpu_node_label_reconciliation",
+        lambda _config: SimpleNamespace(
+            enabled=True,
+            selector=(("nebius.com/gpu", "true"),),
+            labels=(
+                ("nvidia.com/gpu.deploy.operands", "true"),
+                ("nvidia.com/gpu.deploy.dcgm-exporter", "true"),
+                ("nvidia.com/gpu.deploy.operator-validator", "true"),
+                ("nvidia.com/gpu.deploy.device-plugin", "false"),
+            ),
+        ),
+    )
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append((cmd, kwargs))
+        return subprocess.CompletedProcess(cmd, 0, stdout="node/gpu-a labeled\n", stderr="")
+
+    monkeypatch.setattr(cli_module.subprocess, "run", fake_run)
+
+    cli_module._reconcile_observability_gpu_node_labels(
+        {"deploy": {"observability": {"enabled": True}}},
+        extra_env={"KUBECONFIG": "/tmp/kubeconfig", "NEBIUS_IAM_TOKEN": "token-123"},
+    )
+
+    assert len(calls) == 1
+    command, kwargs = calls[0]
+    assert command == [
+        "kubectl",
+        "label",
+        "nodes",
+        "-l",
+        "nebius.com/gpu=true",
+        "nvidia.com/gpu.deploy.operands=true",
+        "nvidia.com/gpu.deploy.dcgm-exporter=true",
+        "nvidia.com/gpu.deploy.operator-validator=true",
+        "nvidia.com/gpu.deploy.device-plugin=false",
+        "--overwrite",
+    ]
+    assert kwargs["capture_output"] is True
+    assert kwargs["text"] is True
+    assert kwargs["timeout"] == 120
+    env = kwargs["env"]
+    assert isinstance(env, dict)
+    assert env["KUBECONFIG"] == "/tmp/kubeconfig"
+    assert env["NEBIUS_IAM_TOKEN"] == "token-123"
+
+
+def test_reconcile_observability_gpu_node_labels_noops_without_enabled_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cli_module,
+        "observability_gpu_node_label_reconciliation",
+        lambda _config: SimpleNamespace(enabled=False, selector=(), labels=()),
+    )
+    monkeypatch.setattr(
+        cli_module.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("kubectl should not be called"),
+    )
+
+    cli_module._reconcile_observability_gpu_node_labels(
+        {"deploy": {"observability": {"enabled": False}}},
+        extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
+    )

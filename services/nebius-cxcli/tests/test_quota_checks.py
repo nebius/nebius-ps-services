@@ -269,7 +269,11 @@ def test_estimate_mk8s_requirements_cover_boot_disk_quota_from_explicit_inputs()
                     memory_gibibytes=128,
                     gpu_count=0,
                 )
-            if (project_id, platform, preset) == ("project-1", "gpu-b300-sxm", "8gpu-192vcpu-2768gb"):
+            if (project_id, platform, preset) == (
+                "project-1",
+                "gpu-b300-sxm",
+                "8gpu-192vcpu-2768gb",
+            ):
                 return _resources(
                     platform=platform,
                     preset=preset,
@@ -411,7 +415,98 @@ def test_evaluate_requirement_uses_matching_capacity_dashboard_row_for_gpu_quota
     assert check.available == 8
     assert check.sufficient is True
     assert check.source_scope == "capacity-dashboard/on-demand"
-    assert check.description == "NVIDIA B300 for regular VMs without reservations"
+    assert check.description == (
+        "Capacity Dashboard GPU availability "
+        "(on-demand VM slots, fabric uk-south1-a, converted to GPU units)"
+    )
+
+
+def test_evaluate_requirement_converts_capacity_dashboard_vm_slots_to_gpu_units() -> None:
+    requirement = AggregatedQuotaRequirement(
+        component_id="mk8s",
+        instance_id="mk8s",
+        component_label="mk8s",
+        quota_name="compute.instance.gpu.h100",
+        region="eu-north1",
+        required=16,
+        reason="2 GPU node(s) at gpu-h100-sxm/8gpu-128vcpu-1600gb",
+        gpu_capacity_shape=GpuCapacityShape(
+            platform="gpu-h100-sxm",
+            preset="8gpu-128vcpu-1600gb",
+            fabric="fabric-6",
+            mode="regular",
+            gpu_count_per_instance=8,
+        ),
+    )
+
+    check = _evaluate_requirement(
+        requirement,
+        tenant_quotas={},
+        project_quotas={},
+        capacity_resource_advice=(
+            _capacity_advice(
+                region="eu-north1",
+                platform="gpu-h100-sxm",
+                preset="8gpu-128vcpu-1600gb",
+                fabric="fabric-6",
+                reserved_available=3,
+                reserved_limit=3,
+                reserved_level="AVAILABILITY_LEVEL_HIGH",
+            ),
+        ),
+    )
+
+    assert check.available == 24
+    assert check.sufficient is True
+    assert check.source_scope == "capacity-dashboard/reserved"
+    assert check.description == (
+        "Capacity Dashboard GPU availability "
+        "(reserved VM slots, fabric fabric-6, converted to GPU units)"
+    )
+
+
+def test_evaluate_requirement_requires_exact_selected_gpu_fabric() -> None:
+    requirement = AggregatedQuotaRequirement(
+        component_id="mk8s",
+        instance_id="mk8s",
+        component_label="mk8s",
+        quota_name="compute.instance.gpu.h100",
+        region="eu-north1",
+        required=16,
+        reason="2 GPU node(s) at gpu-h100-sxm/8gpu-128vcpu-1600gb",
+        gpu_capacity_shape=GpuCapacityShape(
+            platform="gpu-h100-sxm",
+            preset="8gpu-128vcpu-1600gb",
+            fabric="fabric-4",
+            mode="regular",
+            gpu_count_per_instance=8,
+        ),
+    )
+
+    check = _evaluate_requirement(
+        requirement,
+        tenant_quotas={},
+        project_quotas={},
+        capacity_resource_advice=(
+            _capacity_advice(
+                region="eu-north1",
+                platform="gpu-h100-sxm",
+                preset="8gpu-128vcpu-1600gb",
+                fabric="fabric-6",
+                reserved_available=3,
+                reserved_limit=3,
+                reserved_level="AVAILABILITY_LEVEL_HIGH",
+            ),
+        ),
+    )
+
+    assert check.available == 0
+    assert check.sufficient is False
+    assert check.source_scope == "capacity-dashboard"
+    assert check.description == (
+        "Capacity Dashboard reported no matching GPU shape row for "
+        "gpu-h100-sxm/8gpu-128vcpu-1600gb, fabric fabric-4"
+    )
 
 
 def test_evaluate_requirement_picks_best_capacity_dashboard_row_when_fabric_is_not_fixed() -> None:
@@ -443,7 +538,7 @@ def test_evaluate_requirement_picks_best_capacity_dashboard_row_when_fabric_is_n
                 preset="8gpu-128vcpu-1600gb",
                 fabric="fabric-4",
                 on_demand_available=0,
-                on_demand_limit=2,
+                on_demand_limit=32,
                 on_demand_level="AVAILABILITY_LEVEL_LOW",
             ),
             _capacity_advice(
@@ -452,7 +547,7 @@ def test_evaluate_requirement_picks_best_capacity_dashboard_row_when_fabric_is_n
                 preset="8gpu-128vcpu-1600gb",
                 fabric="fabric-2",
                 on_demand_available=2,
-                on_demand_limit=2,
+                on_demand_limit=32,
                 on_demand_level="AVAILABILITY_LEVEL_MEDIUM",
             ),
         ),
@@ -461,7 +556,10 @@ def test_evaluate_requirement_picks_best_capacity_dashboard_row_when_fabric_is_n
     assert check.available == 16
     assert check.sufficient is True
     assert check.source_scope == "capacity-dashboard/on-demand"
-    assert check.description == "Capacity Dashboard GPU availability (on-demand, fabric fabric-2)"
+    assert check.description == (
+        "Capacity Dashboard GPU availability "
+        "(on-demand VM slots, fabric fabric-2, converted to GPU units)"
+    )
 
 
 def test_evaluate_requirement_uses_preemptible_capacity_dashboard_lane_for_gpu_quota() -> None:
@@ -504,7 +602,9 @@ def test_evaluate_requirement_uses_preemptible_capacity_dashboard_lane_for_gpu_q
     assert check.source_scope == "capacity-dashboard/preemptible"
 
 
-def test_evaluate_requirement_marks_gpu_quota_unknown_when_capacity_dashboard_lookup_fails() -> None:
+def test_evaluate_requirement_marks_gpu_quota_unknown_when_capacity_dashboard_lookup_fails() -> (
+    None
+):
     requirement = AggregatedQuotaRequirement(
         component_id="mk8s",
         instance_id="mk8s",
@@ -967,7 +1067,9 @@ def test_quota_session_prefers_operator_auth(monkeypatch: pytest.MonkeyPatch) ->
         lambda **kwargs: captured.update(kwargs) or _FakeSdk(),
     )
 
-    session = quota_checks._QuotaSession(context="deploy quota assessment", project_id="project-456")
+    session = quota_checks._QuotaSession(
+        context="deploy quota assessment", project_id="project-456"
+    )
     session.close()
 
     assert captured["parent_id"] == "project-456"
@@ -1006,7 +1108,9 @@ def test_format_quota_report_lines_include_unresolved_limits() -> None:
 
     lines = format_quota_report_lines(report, phase="quota check")
 
-    assert any("quota check could not resolve one or more live quota limits" in line for line in lines)
+    assert any(
+        "quota check could not resolve one or more live quota limits" in line for line in lines
+    )
     assert any("mk8s.cluster.count requires 1, available unknown" in line for line in lines)
 
 
@@ -1094,9 +1198,7 @@ def test_format_quota_report_lines_include_confirmed_components_even_with_covera
     )
 
     assert any(
-        "live quota was sufficient for the following checked component(s)"
-        in line
-        for line in lines
+        "live quota was sufficient for the following checked component(s)" in line for line in lines
     )
     assert "  - ssh-jumphost: 1 checked quota dimension confirmed in eu-north1" in lines
     assert "    checked:" in lines
@@ -1173,10 +1275,7 @@ def test_format_quota_report_lines_include_regional_availability() -> None:
     lines = format_quota_report_lines(report, phase="quota check")
 
     assert any("Regional quota availability for the current config shape" in line for line in lines)
-    assert any(
-        "mk8s: compute.instance.gpu.b200 requires 8" in line
-        for line in lines
-    )
+    assert any("mk8s: compute.instance.gpu.b200 requires 8" in line for line in lines)
     assert any("us-central1 (current): available 2 (insufficient)" in line for line in lines)
     assert any("eu-north1: available 18 (sufficient)" in line for line in lines)
 
@@ -1259,7 +1358,9 @@ def test_estimate_vm_requirements_cover_preemptible_gpu_capacity() -> None:
         "compute.instance.preemptible.count",
         "compute.instance.gpu.h100",
     ]
-    gpu_requirement = next(item for item in requirements if item.quota_name == "compute.instance.gpu.h100")
+    gpu_requirement = next(
+        item for item in requirements if item.quota_name == "compute.instance.gpu.h100"
+    )
     assert gpu_requirement.gpu_capacity_shape == GpuCapacityShape(
         platform="gpu-h100-sxm",
         preset="1gpu-16vcpu-200gb",

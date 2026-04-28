@@ -2,13 +2,46 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
+
+_DELETED_KEY_REFRESH_LOG_MARKERS = (
+    "public key not exists",
+    "jwtkeynotexists",
+    "expired or deactivated",
+)
 
 
 def _as_text(value: object) -> str:
     return str(value or "").strip()
+
+
+def deleted_key_refresh_log(record: logging.LogRecord) -> bool:
+    message = record.getMessage().lower()
+    return "failed refresh token" in message and any(
+        marker in message for marker in _DELETED_KEY_REFRESH_LOG_MARKERS
+    )
+
+
+class _SuppressDeletedKeyRefreshLog(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not deleted_key_refresh_log(record)
+
+
+@contextmanager
+def suppress_deleted_key_refresh_logs():
+    """Suppress expected SDK token-refresh tracebacks for stale auth public keys."""
+
+    refresh_logger = logging.getLogger("nebius.aio.token.renewable")
+    deleted_key_filter = _SuppressDeletedKeyRefreshLog()
+    refresh_logger.addFilter(deleted_key_filter)
+    try:
+        yield
+    finally:
+        refresh_logger.removeFilter(deleted_key_filter)
 
 
 def _ensure_iam_token_from_cli(*, timeout_seconds: int = 10) -> str | None:

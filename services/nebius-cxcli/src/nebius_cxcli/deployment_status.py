@@ -504,8 +504,7 @@ class _Mk8sStatusPoller:
                 details.append(status_code)
             detail_summary = f" [{' / '.join(details)}]" if details else ""
             return (
-                f"mk8s node group '{name}' reported a terminal API error"
-                f"{detail_summary}: {message}"
+                f"mk8s node group '{name}' reported a terminal API error{detail_summary}: {message}"
             )
         return None
 
@@ -974,9 +973,7 @@ class _ComputeInstanceStatusPoller:
                 operation_failure=failure,
             )
         if state_normalized in {"ERROR", "FAILED"}:
-            return (
-                f"compute instance '{self._target.resource_name}' entered terminal state {state}"
-            )
+            return f"compute instance '{self._target.resource_name}' entered terminal state {state}"
         return None
 
     def close(self) -> None:
@@ -1056,7 +1053,9 @@ class _MysteryBoxSecretStatusPoller:
                 operation_failure=failure,
             )
         if state_normalized in {"ERROR", "FAILED"}:
-            return f"mysterybox secret '{self._target.resource_name}' entered terminal state {state}"
+            return (
+                f"mysterybox secret '{self._target.resource_name}' entered terminal state {state}"
+            )
         return None
 
     def close(self) -> None:
