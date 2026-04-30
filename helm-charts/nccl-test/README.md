@@ -154,7 +154,9 @@ helm pull \
   transport and disables IB verbs, and `rdma` forces the NCCL `IB` transport
   used for InfiniBand or RoCE-style RDMA environments.
 - Override `benchmark.mpiExtraArgs` for platform-specific MPI flags instead of
-  mutating the shared base arguments in the chart.
+  mutating the shared base arguments in the chart. The chart default stays
+  empty; `nebius-cxcli` appends `-x NCCL_DMABUF_ENABLE=1` when it renders the
+  chart for RDMA validation so its managed path stays on DMA-BUF GPUDirect RDMA.
 - The chart itself assumes the `MPIJob` CRD already exists. In the
   `nebius-cxcli` validation flow, Kubeflow Training Operator is treated as a
   transient prerequisite and installed/removed around the NCCL run instead of
@@ -202,7 +204,9 @@ helm template smoke ./helm-charts/nccl-test \
   the shared chart default empty. In the official Nebius NCCL guide, the B200
   example adds `-mca coll ^hcoll` while the H100/H200 example omits it, so
   `nebius-cxcli` injects that flag only for B200 platforms instead of baking
-  it into global chart defaults. See the
+  it into global chart defaults. On the cxcli-managed RDMA path, cxcli also
+  appends `-x NCCL_DMABUF_ENABLE=1`; direct chart users who need to force the
+  same DMA-BUF GPUDirect RDMA path can set it here. See the
   [official Nebius NCCL guide](https://docs.nebius.com/kubernetes/gpu/nccl-test).
 - `benchmark.args`: arguments passed directly to `all_reduce_perf`.
 - `launcher.waitForWorkers.*`: gate `mpirun` on worker-container readiness.

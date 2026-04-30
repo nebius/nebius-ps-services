@@ -24,6 +24,7 @@ from nebius_cxcli.mk8s_gpu import (
     _gpu_device_plugin_snapshot,
     _gpu_visibility_node_report,
     _interesting_allocatable_resources,
+    _nccl_dmabuf_metadata,
     _nccl_json_report_summary,
     _rdma_resource_keys,
     _report_log_excerpt,
@@ -256,7 +257,10 @@ def test_mk8s_gpu_cluster_adds_network_operator_and_nccl_validation() -> None:
         "-T",
         "180",
     ]
-    assert "mpiExtraArgs" not in nccl_spec["chart_values"]["benchmark"]
+    assert nccl_spec["chart_values"]["benchmark"]["mpiExtraArgs"] == [
+        "-x",
+        "NCCL_DMABUF_ENABLE=1",
+    ]
     assert dependencies == {
         "nvidia-gpu-operator": ("nvidia-network-operator",),
     }
@@ -525,12 +529,20 @@ def test_materialize_mk8s_gpu_app_values_scopes_defaults_by_target_ref() -> None
     assert rdma_gpu_values["toolkit"]["enabled"] is False
     assert rdma_gpu_values["driver"]["nvidiaDriverCRD"]["enabled"] is False
     assert rdma_gpu_values["nfd"]["enabled"] is False
+    assert "node-feature-discovery" not in rdma_gpu_values
 
     ethernet_gpu_values = payload["apps"]["charts"][2]["values"]
     assert ethernet_gpu_values["driver"]["enabled"] is False
     assert ethernet_gpu_values["toolkit"]["enabled"] is False
     assert ethernet_gpu_values["driver"]["nvidiaDriverCRD"]["enabled"] is False
     assert "nfd" not in ethernet_gpu_values
+    assert ethernet_gpu_values["node-feature-discovery"]["worker"]["affinity"]["nodeAffinity"][
+        "requiredDuringSchedulingIgnoredDuringExecution"
+    ]["nodeSelectorTerms"][0]["matchExpressions"][0] == {
+        "key": "nebius.com/gpu",
+        "operator": "In",
+        "values": ["true"],
+    }
 
 
 def test_mk8s_gpu_dependency_issues_require_app_rows_per_target() -> None:
@@ -569,7 +581,7 @@ def test_mk8s_gpu_dependency_issues_require_app_rows_per_target() -> None:
 
     assert issues == [
         "GPU-enabled MK8s target 'cluster2' requires 'apps:nvidia-gpu-operator' "
-        "to be enabled with target_ref 'cluster2'",
+        "to be enabled with instance_id 'cluster2'",
     ]
 
 
@@ -917,6 +929,42 @@ def test_operator_managed_b200_requires_network_operator_without_infiniband() ->
     )
 
 
+def test_operator_managed_b200_materializes_single_network_operator_nfd_owner() -> None:
+    payload = _mk8s_payload()
+    payload["infra"]["components"][0]["inputs"]["gpu_stack_source"] = "operator_managed"
+    payload["infra"]["components"][0]["inputs"]["gpu_nodes_platform"] = "gpu-b200-sxm"
+    payload["apps"]["charts"] = [
+        {
+            "id": "nvidia-network-operator",
+            "instance_id": "mk8s",
+            "enabled": True,
+            "target_ref": "mk8s",
+            "values": {},
+        },
+        {
+            "id": "nvidia-gpu-operator",
+            "instance_id": "mk8s",
+            "enabled": True,
+            "target_ref": "mk8s",
+            "values": {},
+        },
+    ]
+
+    mk8s_gpu.materialize_mk8s_gpu_app_values(payload)
+
+    network_values = payload["apps"]["charts"][0]["values"]
+    assert network_values["operator"]["ofedDriver"]["deploy"] is True
+    assert network_values["nfd"]["enabled"] is True
+    assert network_values["nfd"]["deployNodeFeatureRules"] is True
+    assert "node-feature-discovery" not in network_values
+
+    gpu_values = payload["apps"]["charts"][1]["values"]
+    assert gpu_values["driver"]["enabled"] is True
+    assert gpu_values["toolkit"]["enabled"] is True
+    assert gpu_values["driver"]["nvidiaDriverCRD"]["enabled"] is False
+    assert gpu_values["nfd"]["enabled"] is False
+
+
 def test_operator_managed_b200_nccl_validation_keeps_b200_mpi_overlay() -> None:
     payload = _mk8s_payload(infiniband_fabric="fabric-1")
     payload["infra"]["components"][0]["inputs"]["gpu_stack_source"] = "operator_managed"
@@ -936,6 +984,8 @@ def test_operator_managed_b200_nccl_validation_keeps_b200_mpi_overlay() -> None:
         "-mca",
         "coll",
         "^hcoll",
+        "-x",
+        "NCCL_DMABUF_ENABLE=1",
     ]
 
 
@@ -964,7 +1014,11 @@ def test_operator_managed_b200_nccl_validation_keeps_b200_mpi_overlay() -> None:
             "socket",
             ("NCCL_NET=Socket", "NCCL_IB_DISABLE=1"),
         ),
-        (_mk8s_payload(infiniband_fabric="fabric-1"), "rdma", ("NCCL_NET=IB",)),
+        (
+            _mk8s_payload(infiniband_fabric="fabric-1"),
+            "rdma",
+            ("NCCL_NET=IB", "NCCL_DMABUF_ENABLE=1"),
+        ),
     ],
 )
 def test_nccl_validation_chart_values_render_with_transport_mode(
@@ -1070,6 +1124,44 @@ def test_nccl_json_report_summary_keeps_customer_report_compact() -> None:
     }
 
 
+def test_nccl_dmabuf_metadata_reports_rendered_mpi_env() -> None:
+    assert _nccl_dmabuf_metadata(
+        transport_mode="rdma",
+        benchmark_map={
+            "mpiBaseArgs": ["-x", "NCCL_DEBUG=WARN"],
+            "mpiExtraArgs": [
+                "-x",
+                "NCCL_DMABUF_ENABLE=0",
+                "-x",
+                "NCCL_DMABUF_ENABLE=1",
+            ],
+        },
+    ) == {
+        "gpudirect_mode": "dma-buf",
+        "nccl_dmabuf_env_name": "NCCL_DMABUF_ENABLE",
+        "nccl_dmabuf_enable": "1",
+        "nccl_dmabuf_enable_source": "explicit MPI environment",
+    }
+    assert _nccl_dmabuf_metadata(
+        transport_mode="rdma",
+        benchmark_map={"mpiExtraArgs": []},
+    ) == {
+        "gpudirect_mode": "dma-buf default when supported",
+        "nccl_dmabuf_env_name": "NCCL_DMABUF_ENABLE",
+        "nccl_dmabuf_enable": "unset",
+        "nccl_dmabuf_enable_source": "unset",
+    }
+    assert _nccl_dmabuf_metadata(
+        transport_mode="socket",
+        benchmark_map={"mpiExtraArgs": ["-x", "NCCL_DMABUF_ENABLE=1"]},
+    ) == {
+        "gpudirect_mode": "",
+        "nccl_dmabuf_env_name": "NCCL_DMABUF_ENABLE",
+        "nccl_dmabuf_enable": "1",
+        "nccl_dmabuf_enable_source": "explicit MPI environment",
+    }
+
+
 def test_run_kubectl_timeout_reports_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:
     def _timeout(*_args, **_kwargs):  # type: ignore[no-untyped-def]
         raise subprocess.TimeoutExpired(["kubectl", "get", "pod"], timeout=30)
@@ -1078,6 +1170,68 @@ def test_run_kubectl_timeout_reports_runtime_error(monkeypatch: pytest.MonkeyPat
 
     with pytest.raises(RuntimeError, match="kubectl get pod timed out after 30 seconds"):
         mk8s_gpu._run_kubectl(["get", "pod"], extra_env=None, timeout_seconds=30)
+
+
+def test_gpu_visibility_retries_transient_pod_phase_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    node_name = "gpu-node-a"
+    spec = {
+        "namespace": "gpu-validation",
+        "image": "cuda-sample",
+        "cleanup": True,
+        "timeout": "1m",
+        "max_nodes": 1,
+        "report_file": "gpu-visibility-report.json",
+    }
+    emits: list[str] = []
+    snapshot_calls = 0
+
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_gpu_nodes",
+        lambda **_kwargs: [
+            {
+                "name": node_name,
+                "gpu_count": 1,
+                "allocatable_resources": {"nvidia.com/gpu": "1"},
+            }
+        ],
+    )
+    monkeypatch.setattr(mk8s_gpu, "_gpu_device_plugin_snapshot", lambda _nodes: {})
+    monkeypatch.setattr(mk8s_gpu, "_apply_docs", lambda _docs, **_kwargs: None)
+    monkeypatch.setattr(mk8s_gpu, "_delete_resource", lambda _args, **_kwargs: None)
+    monkeypatch.setattr(mk8s_gpu.time, "sleep", lambda _seconds: None)
+
+    def _snapshot(*, pod_names, **_kwargs):  # type: ignore[no-untyped-def]
+        nonlocal snapshot_calls
+        snapshot_calls += 1
+        if snapshot_calls == 1:
+            raise RuntimeError("kubectl get pod timed out after 30 seconds")
+        return {pod_names[0]: "Succeeded"}, True, False, "Succeeded=1/1"
+
+    monkeypatch.setattr(mk8s_gpu, "_pod_phase_snapshot", _snapshot)
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_run_kubectl",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            ["kubectl"], 0, stdout="Test PASSED\n", stderr=""
+        ),
+    )
+
+    report_path = mk8s_gpu._run_gpu_visibility_validation(
+        spec=spec,
+        inventory_dir=tmp_path,
+        extra_env=None,
+        emit=emits.append,
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert snapshot_calls == 2
+    assert report["passed"] is True
+    assert report["passed_node_count"] == 1
+    assert any("last kubectl poll failed" in item for item in emits)
 
 
 def test_run_mk8s_gpu_validations_writes_error_report_on_nccl_exception(
@@ -1095,6 +1249,11 @@ def test_run_mk8s_gpu_validations_writes_error_report_on_nccl_exception(
             "report_file": "nccl-test-report.json",
             "transport_mode": "socket",
             "threshold_enforced": False,
+            "chart_values": {
+                "benchmark": {
+                    "mpiExtraArgs": ["-x", "NCCL_DMABUF_ENABLE=1"],
+                },
+            },
         }
     ]
 
@@ -1109,6 +1268,8 @@ def test_run_mk8s_gpu_validations_writes_error_report_on_nccl_exception(
     assert report["validation"] == "NCCL test"
     assert report["passed"] is False
     assert report["launcher_phase"] == "error"
+    assert report["nccl_dmabuf_enable"] == "1"
+    assert report["nccl_dmabuf_enable_source"] == "explicit MPI environment"
     assert "nccl-test-nebius-launcher timed out" in report["error"]
 
 

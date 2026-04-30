@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import copy
+import json
 import os
 import re
 import sys
 from collections.abc import Mapping
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from functools import lru_cache
 from importlib import resources as importlib_resources
@@ -26,11 +27,15 @@ from .wizard_profiles import resolve_builtin_wizard_profile
 DEFAULT_COMPONENT_SOURCES_FILE = (
     Path(__file__).resolve().parents[2] / "component_sources.yaml"
 ).resolve()
+DEFAULT_COMPONENT_CLI_SETTINGS_FILE = (
+    Path(__file__).resolve().parents[2] / "component_cli_settings.yaml"
+).resolve()
 USER_COMPONENT_SOURCES_FILE = (
     Path.home() / ".config" / "nebius-cxcli" / "component_sources.yaml"
 ).resolve()
 GLOBAL_COMPONENT_SOURCES_FILE = Path("/etc/nebius-cxcli/component_sources.yaml")
 BUNDLED_COMPONENT_SOURCES_FILENAME = "component_sources.yaml"
+BUNDLED_COMPONENT_CLI_SETTINGS_FILENAME = "component_cli_settings.yaml"
 COMPONENT_SOURCES_FILE_ENV = "NEBIUS_CXCLI_COMPONENT_SOURCES_FILE"
 COMPONENT_SOURCES_PROFILE_ENV = "NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE"
 DEFAULT_FLUX_VERSION = "v2.8.0"
@@ -38,6 +43,17 @@ DEFAULT_FLUX_RELEASE_TIMEOUT = "5m"
 DEFAULT_TERRAFORM_VERSION = "1.14.1"
 GO_DURATION_RE = re.compile(r"(?:\d+(?:\.\d+)?(?:ns|us|µs|ms|s|m|h))+")
 GRAFANA_DURATION_RE = re.compile(r"(?:\d+(?:\.\d+)?(?:ns|us|µs|ms|s|m|h|d|w|M))+")
+GRAFANA_CLI_SETTING_KEYS = frozenset(
+    {
+        "admin",
+        "datasources",
+        "explore_queries",
+        "logout-timeout",
+        "orgId",
+        "read_token",
+        "report_dashboards",
+    }
+)
 LINUX_USER_NAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 COMPUTE_DISK_TYPES = frozenset(
     {
@@ -186,6 +202,7 @@ class Mk8sNcclSettings:
     training_operator_namespace: str = ""
     average_bus_bandwidth_threshold_gbps: float = 0.0
     max_nodes: int = 8
+    rdma_mpi_extra_args: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -271,6 +288,38 @@ class ObservabilityTracesSettings:
 
 
 @dataclass(frozen=True)
+class ObservabilityTraceServiceValidationSettings:
+    name: str = "nebius-observability-agent"
+    port: int = 4317
+    endpoint_slice_selector: str = "kubernetes.io/service-name=nebius-observability-agent"
+    endpoint_slice_check_limit: int = 5
+
+
+def _default_observability_signal_value_paths() -> dict[str, str]:
+    return {
+        "logs": "spec.values.config.logs.enabled",
+        "metrics": "spec.values.config.metrics.enabled",
+        "traces": "spec.values.config.traces.enabled",
+    }
+
+
+@dataclass(frozen=True)
+class ObservabilityAgentValidationSettings:
+    enabled: bool = True
+    helmrelease_ready_condition: str = "Ready"
+    signal_value_paths: dict[str, str] = field(
+        default_factory=_default_observability_signal_value_paths
+    )
+    cluster_metric_targets_path: str = "spec.values.config.metrics.additionalTargets"
+    daemonset_name: str = "o11y-agent"
+    pod_selector: str = "app.kubernetes.io/instance=nebius-observability-agent"
+    pod_failure_sample_limit: int = 5
+    trace_otlp_service: ObservabilityTraceServiceValidationSettings = (
+        ObservabilityTraceServiceValidationSettings()
+    )
+
+
+@dataclass(frozen=True)
 class ObservabilityEndpointTemplate:
     key: str
     label: str
@@ -352,6 +401,7 @@ class InfraObservabilitySettings:
     logs: ObservabilityLogsSettings = ObservabilityLogsSettings()
     metrics: ObservabilityMetricsSettings = ObservabilityMetricsSettings()
     traces: ObservabilityTracesSettings = ObservabilityTracesSettings()
+    validation: ObservabilityAgentValidationSettings = ObservabilityAgentValidationSettings()
     service_metrics: tuple[ObservabilityServiceBucket, ...] = ()
     service_logs: tuple[ObservabilityServiceBucket, ...] = ()
     grafana: ObservabilityGrafanaSettings = ObservabilityGrafanaSettings()
@@ -381,6 +431,8 @@ class GrafanaReportDashboardBinding:
     dashboard: str
     gnet_id: int
     datasource: str
+    read_endpoint: str = ""
+    dashboard_uid: str = ""
 
 
 @dataclass(frozen=True)
@@ -391,6 +443,17 @@ class GrafanaDatasourceSpec:
     datasource_type: str
     read_endpoint: str
     is_default: bool = False
+    description: str = ""
+
+
+@dataclass(frozen=True)
+class _GrafanaDashboardSource:
+    folder: str
+    dashboard: str
+    gnet_id: int
+    datasource: str
+    read_endpoint: str
+    dashboard_uid: str
 
 
 @dataclass(frozen=True)
@@ -429,6 +492,14 @@ class GrafanaCliSettings:
 class CliSettings:
     flux: FluxSettings = FluxSettings()
     terraform: TerraformSettings = TerraformSettings()
+
+
+@dataclass(frozen=True)
+class ComponentCliSettingsPayload:
+    cli: CliSettings = CliSettings()
+    observability: GlobalObservabilitySettings = GlobalObservabilitySettings()
+    infra: dict[str, Any] = field(default_factory=dict)
+    apps: dict[str, Any] = field(default_factory=dict)
 
 
 def _normalize_component_output_name(value: str) -> str:
@@ -656,6 +727,18 @@ def resolve_component_sources_file(*, explicit: Path | None = None) -> Path:
         f"or repo default {DEFAULT_COMPONENT_SOURCES_FILE}. "
         "A bundled package default is used automatically by load_component_sources() "
         "when no external source file is configured."
+    )
+
+
+def resolve_component_cli_settings_file(*, component_sources_file: Path) -> Path:
+    """Resolve the CLI settings file paired with a component sources file."""
+    resolved_sources = component_sources_file.expanduser().resolve()
+    candidate = resolved_sources.with_name(BUNDLED_COMPONENT_CLI_SETTINGS_FILENAME)
+    if candidate.exists() and candidate.is_file():
+        return candidate
+    raise ValueError(
+        "No component CLI settings file found. "
+        f"Expected sibling {candidate} for component sources file {resolved_sources}."
     )
 
 
@@ -956,6 +1039,79 @@ def _parse_named_flux_post_render_patch_sets(
             raise ValueError(f"{field_label}.{name} must not be empty")
         sets.append(Mk8sGpuAppPostRenderPatchSet(name=name, patches=patches))
     return tuple(sets)
+
+
+def _render_chart_version_template(
+    text: str,
+    *,
+    chart_version: str,
+    field_label: str,
+) -> str:
+    token = "{chart_version}"
+    if token not in text:
+        return text
+    if not chart_version:
+        raise ValueError(
+            f"{field_label} references {token} but source.portable.version is empty"
+        )
+    return text.replace(token, chart_version)
+
+
+def _render_flux_patch_chart_version_templates(
+    patches: tuple[FluxPostRenderPatch, ...],
+    *,
+    chart_version: str,
+    field_label: str,
+) -> tuple[FluxPostRenderPatch, ...]:
+    rendered: list[FluxPostRenderPatch] = []
+    for index, patch in enumerate(patches):
+        rendered.append(
+            replace(
+                patch,
+                patch=_render_chart_version_template(
+                    patch.patch,
+                    chart_version=chart_version,
+                    field_label=f"{field_label}[{index}].patch",
+                ),
+            )
+        )
+    return tuple(rendered)
+
+
+def _render_mk8s_gpu_policy_chart_version_templates(
+    policy: Mk8sGpuAppPolicy,
+    *,
+    chart_version: str,
+    field_label: str,
+) -> Mk8sGpuAppPolicy:
+    post_render_patch_sets = tuple(
+        replace(
+            patch_set,
+            patches=_render_flux_patch_chart_version_templates(
+                patch_set.patches,
+                chart_version=chart_version,
+                field_label=f"{field_label}.post_render_patch_sets.{patch_set.name}",
+            ),
+        )
+        for patch_set in policy.post_render_patch_sets
+    )
+    rules = tuple(
+        replace(
+            rule,
+            post_render_patches=_render_flux_patch_chart_version_templates(
+                rule.post_render_patches,
+                chart_version=chart_version,
+                field_label=f"{field_label}.rules[{index}].post_render_patches",
+            ),
+            post_render_patches_from=rule.post_render_patches_from,
+        )
+        for index, rule in enumerate(policy.rules)
+    )
+    return replace(
+        policy,
+        post_render_patch_sets=post_render_patch_sets,
+        rules=rules,
+    )
 
 
 def _parse_portable_local_source_block(
@@ -1390,6 +1546,7 @@ def _parse_mk8s_nccl_settings(
         "training_operator_namespace",
         "average_bus_bandwidth_threshold_gbps",
         "max_nodes",
+        "rdma_mpi_extra_args",
     }
     unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
     if unknown:
@@ -1413,6 +1570,19 @@ def _parse_mk8s_nccl_settings(
         raise ValueError(f"{field_label}.max_nodes must be an integer >= 1") from exc
     if max_nodes < 1:
         raise ValueError(f"{field_label}.max_nodes must be >= 1")
+    if "rdma_mpi_extra_args" not in raw or raw.get("rdma_mpi_extra_args") is None:
+        rdma_mpi_extra_args: tuple[str, ...] = ()
+        rdma_mpi_extra_args_raw = None
+    else:
+        rdma_mpi_extra_args_raw = raw.get("rdma_mpi_extra_args")
+    if isinstance(rdma_mpi_extra_args_raw, list):
+        rdma_mpi_extra_args = tuple(_as_text(item) for item in rdma_mpi_extra_args_raw)
+        if any(not item for item in rdma_mpi_extra_args):
+            raise ValueError(
+                f"{field_label}.rdma_mpi_extra_args must be a list of non-empty strings"
+            )
+    elif rdma_mpi_extra_args_raw is not None:
+        raise ValueError(f"{field_label}.rdma_mpi_extra_args must be a list")
     return Mk8sNcclSettings(
         enabled_by_default=bool(raw.get("enabled_by_default", True)),
         chart_component_id=_as_text(raw.get("chart_component_id")),
@@ -1421,6 +1591,7 @@ def _parse_mk8s_nccl_settings(
         training_operator_namespace=_as_text(raw.get("training_operator_namespace")),
         average_bus_bandwidth_threshold_gbps=threshold,
         max_nodes=max_nodes,
+        rdma_mpi_extra_args=rdma_mpi_extra_args,
     )
 
 
@@ -1659,6 +1830,18 @@ def _parse_observability_traces_settings(
     if unknown:
         raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
     return ObservabilityTracesSettings(enabled_by_default=bool(raw.get("default_enabled", True)))
+
+
+def _parse_observability_agent_validation_settings(
+    raw: Any,
+    *,
+    field_label: str,
+) -> ObservabilityAgentValidationSettings:
+    if raw is None:
+        return ObservabilityAgentValidationSettings()
+    if not isinstance(raw, bool):
+        raise ValueError(f"{field_label} must be a boolean")
+    return ObservabilityAgentValidationSettings(enabled=raw)
 
 
 def _parse_observability_endpoint_templates(
@@ -2020,7 +2203,14 @@ def _parse_infra_observability_settings(
     else:
         if not isinstance(primary_agent_raw, dict):
             raise ValueError(f"{field_label}.primary_agent must be a mapping")
-        primary_supported_keys = {"kind", "chart_component_id", "logs", "metrics", "traces"}
+        primary_supported_keys = {
+            "kind",
+            "chart_component_id",
+            "logs",
+            "metrics",
+            "traces",
+            "validation",
+        }
         primary_unknown = sorted(
             str(key) for key in primary_agent_raw if str(key) not in primary_supported_keys
         )
@@ -2049,17 +2239,18 @@ def _parse_infra_observability_settings(
             f"{field_label}.primary_agent.chart_component_id is only supported when primary_agent.kind=kubernetes_agent"
         )
     allowed_signal_keys = {
-        "kubernetes_agent": {"logs", "metrics", "traces"},
+        "kubernetes_agent": {"logs", "metrics", "traces", "validation"},
         "monitoring_agent": {"logs", "metrics"},
     }.get(mode, set())
     if primary_agent_raw is None:
         primary_logs_raw = None
         primary_metrics_raw = None
         primary_traces_raw = None
+        primary_validation_raw = None
     else:
         signal_unknown = sorted(
             str(key)
-            for key in ("logs", "metrics", "traces")
+            for key in ("logs", "metrics", "traces", "validation")
             if primary_agent_raw.get(key) is not None and key not in allowed_signal_keys
         )
         if signal_unknown:
@@ -2070,6 +2261,7 @@ def _parse_infra_observability_settings(
         primary_logs_raw = primary_agent_raw.get("logs")
         primary_metrics_raw = primary_agent_raw.get("metrics")
         primary_traces_raw = primary_agent_raw.get("traces")
+        primary_validation_raw = primary_agent_raw.get("validation")
     standalone_collector = _parse_vm_standalone_collector_settings(
         raw.get("public_ingest"),
         field_label=f"{field_label}.public_ingest",
@@ -2096,6 +2288,10 @@ def _parse_infra_observability_settings(
         traces=_parse_observability_traces_settings(
             primary_traces_raw,
             field_label=f"{field_label}.primary_agent.traces",
+        ),
+        validation=_parse_observability_agent_validation_settings(
+            primary_validation_raw if primary_agent_raw is not None else None,
+            field_label=f"{field_label}.primary_agent.validation",
         ),
         service_metrics=_parse_observability_service_buckets(
             raw.get("service_metrics"),
@@ -2285,6 +2481,8 @@ def _parse_grafana_report_dashboard_bindings(
                 dashboard=dashboard,
                 gnet_id=0,
                 datasource="",
+                read_endpoint="",
+                dashboard_uid="",
             )
         )
     return tuple(bindings)
@@ -2307,7 +2505,7 @@ def _parse_grafana_datasources(
         item_label = f"{field_label}.{key}"
         if not isinstance(item, dict):
             raise ValueError(f"{item_label} must be a mapping")
-        supported_keys = {"name", "uid", "type", "read_endpoint", "isDefault"}
+        supported_keys = {"name", "uid", "type", "read_endpoint", "isDefault", "description"}
         unknown = sorted(str(value) for value in item if str(value) not in supported_keys)
         if unknown:
             raise ValueError(f"{item_label} has unsupported field(s): " + ", ".join(unknown))
@@ -2343,6 +2541,7 @@ def _parse_grafana_datasources(
                 datasource_type=datasource_type,
                 read_endpoint=read_endpoint,
                 is_default=bool(is_default),
+                description=_as_text(item.get("description")),
             )
         )
     if default_count > 1:
@@ -2462,16 +2661,7 @@ def _parse_grafana_cli_settings(
         return GrafanaCliSettings()
     if not isinstance(raw, dict):
         raise ValueError(f"{field_label} must be a mapping")
-    supported_keys = {
-        "admin",
-        "datasources",
-        "explore_queries",
-        "logout-timeout",
-        "orgId",
-        "read_token",
-        "report_dashboards",
-    }
-    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    unknown = sorted(str(key) for key in raw if str(key) not in GRAFANA_CLI_SETTING_KEYS)
     if unknown:
         raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
     org_id = _parse_optional_positive_int(
@@ -2507,30 +2697,242 @@ def _parse_grafana_cli_settings(
     )
 
 
-def _grafana_dashboard_default(
+def _grafana_dashboard_defaults(
+    defaults: tuple[ComponentDefault, ...],
+) -> dict[tuple[str, str], Mapping[str, Any]]:
+    dashboards: dict[tuple[str, str], Mapping[str, Any]] = {}
+    for default in defaults:
+        if default.kind != "literal" or not default.target_path.startswith("values.dashboards"):
+            continue
+        path_parts = default.target_path.split(".")
+        if default.target_path == "values.dashboards" and isinstance(default.value, Mapping):
+            for folder, folder_dashboards in default.value.items():
+                if not isinstance(folder_dashboards, Mapping):
+                    continue
+                for dashboard, dashboard_spec in folder_dashboards.items():
+                    if isinstance(dashboard_spec, Mapping):
+                        dashboards[(str(folder), str(dashboard))] = dashboard_spec
+        elif len(path_parts) == 3 and isinstance(default.value, Mapping):
+            folder = path_parts[2]
+            for dashboard, dashboard_spec in default.value.items():
+                if isinstance(dashboard_spec, Mapping):
+                    dashboards[(folder, str(dashboard))] = dashboard_spec
+        elif len(path_parts) == 4 and isinstance(default.value, Mapping):
+            dashboards[(path_parts[2], path_parts[3])] = default.value
+    return dashboards
+
+
+def _parse_dashboard_json_uid(raw_json: str, *, field_label: str) -> str:
+    dashboard_json = _as_text(raw_json)
+    if not dashboard_json:
+        raise ValueError(f"{field_label} must be a non-empty dashboard JSON string")
+    try:
+        payload = json.loads(dashboard_json)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{field_label} must be valid dashboard JSON") from exc
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"{field_label} must be a dashboard JSON object")
+    dashboard_uid = _as_text(payload.get("uid"))
+    if not dashboard_uid:
+        raise ValueError(f"{field_label} must declare a top-level uid")
+    return dashboard_uid
+
+
+def _read_dashboard_json_file(
+    json_file: str,
+    *,
+    source_root: Path | None,
+    field_label: str,
+) -> str:
+    path_text = _as_text(json_file)
+    if not path_text:
+        raise ValueError(f"{field_label} must be a non-empty dashboard JSON file path")
+    path = Path(path_text).expanduser()
+    if path.is_absolute():
+        candidates = (path,)
+    else:
+        candidates = ((source_root / path),) if source_root is not None else ()
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            dashboard_json = candidate.read_text(encoding="utf-8")
+            _parse_dashboard_json_uid(dashboard_json, field_label=field_label)
+            return dashboard_json
+
+    if path.is_absolute():
+        raise ValueError(f"{field_label} does not resolve to an existing dashboard JSON file")
+
+    resource_parts = tuple(part for part in path.parts if part not in {"", "."})
+    resource = importlib_resources.files("nebius_cxcli").joinpath(*resource_parts)
+    try:
+        dashboard_json = resource.read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError) as exc:
+        raise ValueError(f"{field_label} does not resolve to an existing dashboard JSON file") from exc
+    _parse_dashboard_json_uid(dashboard_json, field_label=field_label)
+    return dashboard_json
+
+
+def _materialize_dashboard_json_file(
+    dashboard: Mapping[str, Any],
+    *,
+    source_root: Path | None,
+    field_label: str,
+) -> dict[str, Any]:
+    materialized = copy.deepcopy(dict(dashboard))
+    json_file = materialized.get("json_file")
+    if json_file is None:
+        return materialized
+    if "json" in materialized:
+        raise ValueError(f"{field_label} must not declare both json and json_file")
+    materialized["json"] = _read_dashboard_json_file(
+        _as_text(json_file),
+        source_root=source_root,
+        field_label=f"{field_label}.json_file",
+    )
+    materialized.pop("json_file", None)
+    return materialized
+
+
+def _materialize_grafana_dashboard_defaults(
     defaults: tuple[ComponentDefault, ...],
     *,
-    folder: str,
-    dashboard: str,
-) -> Mapping[str, Any] | None:
-    exact_path = f"values.dashboards.{folder}.{dashboard}"
-    folder_path = f"values.dashboards.{folder}"
+    source_root: Path | None,
+    field_label: str,
+) -> tuple[ComponentDefault, ...]:
+    materialized_defaults: list[ComponentDefault] = []
     for default in defaults:
-        if default.kind != "literal":
+        if default.kind != "literal" or not default.target_path.startswith("values.dashboards"):
+            materialized_defaults.append(default)
             continue
-        if default.target_path == exact_path and isinstance(default.value, Mapping):
-            return default.value
-        if default.target_path == folder_path and isinstance(default.value, Mapping):
-            item = default.value.get(dashboard)
-            if isinstance(item, Mapping):
-                return item
-        if default.target_path == "values.dashboards" and isinstance(default.value, Mapping):
-            folder_node = default.value.get(folder)
-            if isinstance(folder_node, Mapping):
-                item = folder_node.get(dashboard)
-                if isinstance(item, Mapping):
-                    return item
-    return None
+        value = copy.deepcopy(default.value)
+        path_parts = default.target_path.split(".")
+        if default.target_path == "values.dashboards" and isinstance(value, Mapping):
+            next_value: dict[str, Any] = copy.deepcopy(dict(value))
+            for folder, folder_dashboards in list(next_value.items()):
+                if not isinstance(folder_dashboards, Mapping):
+                    continue
+                next_folder = copy.deepcopy(dict(folder_dashboards))
+                for dashboard, dashboard_spec in list(next_folder.items()):
+                    if isinstance(dashboard_spec, Mapping):
+                        next_folder[dashboard] = _materialize_dashboard_json_file(
+                            dashboard_spec,
+                            source_root=source_root,
+                            field_label=f"{field_label}.{default.target_path}.{folder}.{dashboard}",
+                        )
+                next_value[folder] = next_folder
+            value = next_value
+        elif len(path_parts) == 3 and isinstance(value, Mapping):
+            next_value = copy.deepcopy(dict(value))
+            for dashboard, dashboard_spec in list(next_value.items()):
+                if isinstance(dashboard_spec, Mapping):
+                    next_value[dashboard] = _materialize_dashboard_json_file(
+                        dashboard_spec,
+                        source_root=source_root,
+                        field_label=f"{field_label}.{default.target_path}.{dashboard}",
+                    )
+            value = next_value
+        elif len(path_parts) == 4 and isinstance(value, Mapping):
+            folder = path_parts[2]
+            dashboard = path_parts[3]
+            value = _materialize_dashboard_json_file(
+                value,
+                source_root=source_root,
+                field_label=f"{field_label}.values.dashboards.{folder}.{dashboard}",
+            )
+        materialized_defaults.append(
+            ComponentDefault(
+                target_path=default.target_path,
+                value=value,
+                kind=default.kind,
+                source_path=default.source_path,
+            )
+        )
+    return tuple(materialized_defaults)
+
+
+def _grafana_inline_dashboard_uid(
+    dashboard: Mapping[str, Any],
+    *,
+    field_label: str,
+) -> str:
+    raw_json = dashboard.get("json")
+    if raw_json is None:
+        return ""
+    return _parse_dashboard_json_uid(_as_text(raw_json), field_label=f"{field_label}.json")
+
+
+def _validate_grafana_dashboard_sources(
+    *,
+    component_id: str,
+    defaults: tuple[ComponentDefault, ...],
+    grafana: GrafanaCliSettings,
+) -> dict[tuple[str, str], _GrafanaDashboardSource]:
+    if not grafana.datasources and not grafana.report_dashboards:
+        return {}
+
+    resolved: dict[tuple[str, str], _GrafanaDashboardSource] = {}
+    datasources_by_name = {datasource.name: datasource for datasource in grafana.datasources}
+    folder_source_modes: dict[str, str] = {}
+    for (folder, dashboard_name), dashboard in _grafana_dashboard_defaults(defaults).items():
+        field_label = (
+            f"components.apps.{component_id}.defaults.values.dashboards."
+            f"{folder}.{dashboard_name}"
+        )
+        gnet_id = _parse_optional_positive_int(
+            dashboard.get("gnetId"),
+            field_label=f"{field_label}.gnetId",
+        )
+        dashboard_uid = _grafana_inline_dashboard_uid(dashboard, field_label=field_label)
+        if gnet_id is not None:
+            if dashboard_uid:
+                raise ValueError(f"{field_label} must not declare both gnetId and dashboard JSON")
+            source_mode = "gnetId"
+            revision = _parse_optional_positive_int(
+                dashboard.get("revision"),
+                field_label=f"{field_label}.revision",
+            )
+            if revision is None:
+                raise ValueError(f"{field_label}.revision is required for gnetId dashboards")
+            dashboard_uid = _as_text(dashboard.get("uid"))
+            if not dashboard_uid:
+                raise ValueError(
+                    f"{field_label}.uid is required for gnetId dashboards so "
+                    "validate-dashboards can look up the imported dashboard"
+                )
+        elif not dashboard_uid:
+            raise ValueError(
+                f"{field_label} must declare gnetId plus uid or dashboard JSON "
+                "with a top-level uid"
+            )
+        else:
+            source_mode = "json"
+
+        previous_source_mode = folder_source_modes.setdefault(folder, source_mode)
+        if previous_source_mode != source_mode:
+            raise ValueError(
+                f"components.apps.{component_id}.defaults.values.dashboards.{folder} "
+                "must not mix Grafana.com gnetId dashboards with dashboard JSON. "
+                "The Grafana Helm chart requires a provider key to use either "
+                "values.dashboards imports or dashboardsConfigMaps, not both."
+            )
+
+        datasource = _as_text(dashboard.get("datasource"))
+        if not datasource:
+            raise ValueError(f"{field_label}.datasource is required")
+        datasource_spec = datasources_by_name.get(datasource)
+        if datasource_spec is None:
+            raise ValueError(
+                f"{field_label}.datasource references '{datasource}', but that datasource "
+                "is not declared in cli.datasources"
+            )
+        resolved[(folder, dashboard_name)] = _GrafanaDashboardSource(
+            folder=folder,
+            dashboard=dashboard_name,
+            gnet_id=gnet_id or 0,
+            datasource=datasource,
+            read_endpoint=datasource_spec.read_endpoint,
+            dashboard_uid=dashboard_uid,
+        )
+    return resolved
 
 
 def _validate_grafana_report_dashboard_bindings(
@@ -2540,49 +2942,28 @@ def _validate_grafana_report_dashboard_bindings(
     grafana: GrafanaCliSettings,
 ) -> GrafanaCliSettings:
     resolved_bindings: list[GrafanaReportDashboardBinding] = []
-    datasource_names = {datasource.name for datasource in grafana.datasources}
+    dashboard_sources = _validate_grafana_dashboard_sources(
+        component_id=component_id,
+        defaults=defaults,
+        grafana=grafana,
+    )
     for binding in grafana.report_dashboards:
-        dashboard = _grafana_dashboard_default(
-            defaults,
-            folder=binding.folder,
-            dashboard=binding.dashboard,
-        )
-        field_label = (
-            f"components.apps.{component_id}.cli.grafana.report_dashboards.{binding.signal}"
-        )
-        if dashboard is None:
+        field_label = f"components.apps.{component_id}.cli.report_dashboards.{binding.signal}"
+        source = dashboard_sources.get((binding.folder, binding.dashboard))
+        if source is None:
             raise ValueError(
                 f"{field_label} references values.dashboards.{binding.folder}."
                 f"{binding.dashboard}, but that dashboard is not declared in defaults"
-            )
-        gnet_id = _parse_optional_positive_int(
-            dashboard.get("gnetId"),
-            field_label=(f"values.dashboards.{binding.folder}.{binding.dashboard}.gnetId"),
-        )
-        if gnet_id is None:
-            raise ValueError(
-                f"{field_label} references values.dashboards.{binding.folder}."
-                f"{binding.dashboard}, but that dashboard does not declare gnetId"
-            )
-        datasource = _as_text(dashboard.get("datasource"))
-        if not datasource:
-            raise ValueError(
-                f"{field_label} references values.dashboards.{binding.folder}."
-                f"{binding.dashboard}, but that dashboard does not declare datasource"
-            )
-        if datasource not in datasource_names:
-            raise ValueError(
-                f"{field_label} references values.dashboards.{binding.folder}."
-                f"{binding.dashboard} datasource '{datasource}', but that datasource "
-                "is not declared in cli.grafana.datasources"
             )
         resolved_bindings.append(
             GrafanaReportDashboardBinding(
                 signal=binding.signal,
                 folder=binding.folder,
                 dashboard=binding.dashboard,
-                gnet_id=gnet_id,
-                datasource=datasource,
+                gnet_id=source.gnet_id,
+                datasource=source.datasource,
+                read_endpoint=source.read_endpoint,
+                dashboard_uid=source.dashboard_uid,
             )
         )
     return GrafanaCliSettings(
@@ -2606,7 +2987,7 @@ def _validate_grafana_datasource_read_endpoints(
         for datasource in chart.grafana.datasources:
             if datasource.read_endpoint not in read_endpoint_keys:
                 raise ValueError(
-                    f"components.apps.{chart.name}.cli.grafana.datasources."
+                    f"components.apps.{chart.name}.cli.datasources."
                     f"{datasource.key}.read_endpoint references "
                     f"'{datasource.read_endpoint}', but that read endpoint is not "
                     "declared under observability.endpoints.read"
@@ -2704,10 +3085,11 @@ def _parse_app_component_cli(
         return Mk8sGpuAppPolicy(), AppObservabilitySettings(), GrafanaCliSettings()
     if not isinstance(raw, dict):
         raise ValueError(f"{field_label} must be a mapping")
-    supported_keys = {"mk8s_gpu_policy", "observability", "grafana"}
+    supported_keys = {"mk8s_gpu_policy", "observability"} | GRAFANA_CLI_SETTING_KEYS
     unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
     if unknown:
         raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    grafana_raw = {key: raw[key] for key in GRAFANA_CLI_SETTING_KEYS if key in raw}
     return (
         _parse_mk8s_gpu_app_policy(
             raw.get("mk8s_gpu_policy"),
@@ -2718,8 +3100,8 @@ def _parse_app_component_cli(
             field_label=f"{field_label}.observability",
         ),
         _parse_grafana_cli_settings(
-            raw.get("grafana"),
-            field_label=f"{field_label}.grafana",
+            grafana_raw or None,
+            field_label=field_label,
         ),
     )
 
@@ -3337,24 +3719,92 @@ def _parse_ui_block(
     return title, group, enabled, selectable
 
 
+def _parse_component_cli_settings_payload(payload: Any) -> ComponentCliSettingsPayload:
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        raise ValueError("component_cli_settings root must be a mapping")
+    supported_root_keys = {"cli", "observability", "components"}
+    unknown_root = sorted(str(key) for key in payload if str(key) not in supported_root_keys)
+    if unknown_root:
+        raise ValueError(
+            "component_cli_settings root has unsupported field(s): "
+            + ", ".join(unknown_root)
+        )
+
+    components = payload.get("components", {}) or {}
+    if not isinstance(components, dict):
+        raise ValueError("component_cli_settings.components must be a mapping")
+    supported_component_scopes = {"infra", "apps"}
+    unknown_components = sorted(
+        str(key) for key in components if str(key) not in supported_component_scopes
+    )
+    if unknown_components:
+        raise ValueError(
+            "component_cli_settings.components has unsupported field(s): "
+            + ", ".join(unknown_components)
+        )
+
+    component_cli: dict[str, dict[str, Any]] = {"infra": {}, "apps": {}}
+    for scope in ("infra", "apps"):
+        scope_raw = components.get(scope, {}) or {}
+        if not isinstance(scope_raw, dict):
+            raise ValueError(
+                f"component_cli_settings.components.{scope} must be a mapping"
+            )
+        for component_id_raw, component_raw in scope_raw.items():
+            component_id = _as_text(component_id_raw)
+            if scope == "infra":
+                component_id = component_id.lower()
+            if not component_id:
+                raise ValueError(
+                    f"component_cli_settings.components.{scope} keys must not be empty"
+                )
+            if not isinstance(component_raw, dict):
+                raise ValueError(
+                    f"component_cli_settings.components.{scope}.{component_id} must be a mapping"
+                )
+            supported_component_keys = {"cli"}
+            unknown_component_keys = sorted(
+                str(key) for key in component_raw if str(key) not in supported_component_keys
+            )
+            if unknown_component_keys:
+                raise ValueError(
+                    f"component_cli_settings.components.{scope}.{component_id} "
+                    "has unsupported field(s): "
+                    + ", ".join(unknown_component_keys)
+                )
+            component_cli[scope][component_id] = component_raw.get("cli")
+
+    return ComponentCliSettingsPayload(
+        cli=_parse_cli_settings(payload.get("cli")),
+        observability=_parse_global_observability_settings(payload.get("observability")),
+        infra=component_cli["infra"],
+        apps=component_cli["apps"],
+    )
+
+
 def _parse_sources_payload(
     payload: Any,
     *,
+    cli_settings_payload: Any,
     source_profile: SourceProfile,
     source_root: Path | None = None,
+    cli_source_root: Path | None = None,
 ) -> ComponentSources:
     if not isinstance(payload, dict):
         raise ValueError("component_sources root must be a mapping")
-    supported_root_keys = {"cli", "shared", "observability", "components"}
+    supported_root_keys = {"shared", "components"}
     unknown_root = sorted(str(key) for key in payload if str(key) not in supported_root_keys)
     if unknown_root:
         raise ValueError(
             "component_sources root has unsupported field(s): " + ", ".join(unknown_root)
         )
 
-    cli = _parse_cli_settings(payload.get("cli"))
+    cli_settings = _parse_component_cli_settings_payload(cli_settings_payload)
+    cli = cli_settings.cli
     shared = _parse_shared_values(payload.get("shared"), source_root=source_root)
-    global_observability = _parse_global_observability_settings(payload.get("observability"))
+    global_observability = cli_settings.observability
     components = payload.get("components", {})
     if components is None:
         components = {}
@@ -3377,6 +3827,18 @@ def _parse_sources_payload(
         raise ValueError("components.infra must be a mapping of component id -> component config")
     if not isinstance(apps, dict):
         raise ValueError("components.apps must be a mapping of component id -> chart config")
+    unknown_infra_cli = sorted(set(cli_settings.infra) - {_as_text(key).lower() for key in infra})
+    if unknown_infra_cli:
+        raise ValueError(
+            "component_cli_settings.components.infra references unknown component(s): "
+            + ", ".join(unknown_infra_cli)
+        )
+    unknown_app_cli = sorted(set(cli_settings.apps) - {_as_text(key) for key in apps})
+    if unknown_app_cli:
+        raise ValueError(
+            "component_cli_settings.components.apps references unknown component(s): "
+            + ", ".join(unknown_app_cli)
+        )
 
     tf_modules: list[TFModuleSource] = []
     for module_name_raw, raw in infra.items():
@@ -3390,7 +3852,6 @@ def _parse_sources_payload(
             "ui",
             "status",
             "defaults",
-            "cli",
             "wizard_profile",
             "wizard",
             "input",
@@ -3435,12 +3896,13 @@ def _parse_sources_payload(
             field_label=f"components.infra.{module_name}",
         )
         validation_profile = resolve_builtin_validation_profile(module_name)
+        raw_cli = cli_settings.infra.get(module_name)
         mk8s_gpu, mk8s_boot_disks, vm_images, observability = _parse_infra_component_cli(
-            raw.get("cli"),
+            raw_cli,
             module_name=module_name,
             field_label=f"components.infra.{module_name}.cli",
             source_profile=source_profile,
-            source_root=source_root,
+            source_root=cli_source_root,
         )
         wizard_fields = _parse_component_wizard_fields(
             component_id=module_name,
@@ -3448,7 +3910,7 @@ def _parse_sources_payload(
             raw_wizard=raw.get("wizard"),
             derived_wizard=_derived_infra_component_wizard_fields(
                 module_name=module_name,
-                raw_cli=raw.get("cli"),
+                raw_cli=raw_cli,
                 mk8s_gpu=mk8s_gpu,
                 observability=observability,
             ),
@@ -3502,7 +3964,6 @@ def _parse_sources_payload(
             "ui",
             "release",
             "defaults",
-            "cli",
             "wizard",
             "input",
         }
@@ -3558,9 +4019,20 @@ def _parse_sources_payload(
             raw.get("defaults"),
             field_label=f"components.apps.{component_id}",
         )
+        defaults = _materialize_grafana_dashboard_defaults(
+            defaults,
+            source_root=source_root,
+            field_label=f"components.apps.{component_id}.defaults",
+        )
+        raw_cli = cli_settings.apps.get(component_id)
         mk8s_gpu, observability, grafana = _parse_app_component_cli(
-            raw.get("cli"),
+            raw_cli,
             field_label=f"components.apps.{component_id}.cli",
+        )
+        mk8s_gpu = _render_mk8s_gpu_policy_chart_version_templates(
+            mk8s_gpu,
+            chart_version=_as_text(portable_source.version),
+            field_label=f"components.apps.{component_id}.cli.mk8s_gpu_policy",
         )
         grafana = _validate_grafana_report_dashboard_bindings(
             component_id=component_id,
@@ -3610,38 +4082,70 @@ def _parse_sources_payload(
     )
 
 
-def _load_sources_from_path(path: Path, *, source_profile: SourceProfile) -> ComponentSources:
+def _load_yaml_mapping_from_path(path: Path, *, subject: str) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as handle:
         payload = yaml.safe_load(handle) or {}
+    if not isinstance(payload, dict):
+        raise ValueError(f"{subject} root must be a mapping")
+    return payload
+
+
+def _load_sources_from_path(path: Path, *, source_profile: SourceProfile) -> ComponentSources:
+    payload = _load_yaml_mapping_from_path(path, subject="component_sources")
+    cli_source_root = path.parent
+    try:
+        cli_settings_path = resolve_component_cli_settings_file(component_sources_file=path)
+    except ValueError:
+        cli_settings_payload: dict[str, Any] = {}
+    else:
+        cli_settings_payload = _load_yaml_mapping_from_path(
+            cli_settings_path,
+            subject="component_cli_settings",
+        )
+        cli_source_root = cli_settings_path.parent
     return _parse_sources_payload(
         payload,
+        cli_settings_payload=cli_settings_payload,
         source_profile=source_profile,
         source_root=path.parent,
+        cli_source_root=cli_source_root,
     )
 
 
 def _load_cli_settings_from_path(path: Path) -> CliSettings:
-    with path.open("r", encoding="utf-8") as handle:
-        payload = yaml.safe_load(handle) or {}
-    if not isinstance(payload, dict):
-        raise ValueError("component sources root must be a mapping")
-    return _parse_cli_settings(payload.get("cli"))
+    payload = _load_yaml_mapping_from_path(path, subject="component_cli_settings")
+    return _parse_component_cli_settings_payload(payload).cli
 
 
 def _load_bundled_component_sources(*, source_profile: SourceProfile) -> ComponentSources:
-    resource = importlib_resources.files("nebius_cxcli").joinpath(
-        BUNDLED_COMPONENT_SOURCES_FILENAME
-    )
+    package_resources = importlib_resources.files("nebius_cxcli")
+    resource = package_resources.joinpath(BUNDLED_COMPONENT_SOURCES_FILENAME)
+    cli_settings_resource = package_resources.joinpath(BUNDLED_COMPONENT_CLI_SETTINGS_FILENAME)
     try:
         payload = yaml.safe_load(resource.read_text(encoding="utf-8")) or {}
-        return _parse_sources_payload(payload, source_profile=source_profile)
+        cli_settings_payload = (
+            yaml.safe_load(cli_settings_resource.read_text(encoding="utf-8")) or {}
+        )
+        return _parse_sources_payload(
+            payload,
+            cli_settings_payload=cli_settings_payload,
+            source_profile=source_profile,
+        )
     except FileNotFoundError:
         pass
     except OSError:
         pass
 
     prefix_candidate = Path(sys.prefix) / "nebius_cxcli" / BUNDLED_COMPONENT_SOURCES_FILENAME
-    if prefix_candidate.exists() and prefix_candidate.is_file():
+    prefix_cli_settings = (
+        Path(sys.prefix) / "nebius_cxcli" / BUNDLED_COMPONENT_CLI_SETTINGS_FILENAME
+    )
+    if (
+        prefix_candidate.exists()
+        and prefix_candidate.is_file()
+        and prefix_cli_settings.exists()
+        and prefix_cli_settings.is_file()
+    ):
         return _load_sources_from_path(prefix_candidate, source_profile=source_profile)
 
     if DEFAULT_COMPONENT_SOURCES_FILE.exists() and DEFAULT_COMPONENT_SOURCES_FILE.is_file():
@@ -3650,33 +4154,36 @@ def _load_bundled_component_sources(*, source_profile: SourceProfile) -> Compone
         )
 
     raise FileNotFoundError(
-        "Bundled component sources file is missing from the installed package layout."
+        "Bundled component CLI settings file is missing from the installed package layout."
     )
 
 
 def _load_bundled_cli_settings() -> CliSettings:
     resource = importlib_resources.files("nebius_cxcli").joinpath(
-        BUNDLED_COMPONENT_SOURCES_FILENAME
+        BUNDLED_COMPONENT_CLI_SETTINGS_FILENAME
     )
     try:
         payload = yaml.safe_load(resource.read_text(encoding="utf-8")) or {}
-        if not isinstance(payload, dict):
-            raise ValueError("component sources root must be a mapping")
-        return _parse_cli_settings(payload.get("cli"))
+        return _parse_component_cli_settings_payload(payload).cli
     except FileNotFoundError:
         pass
     except OSError:
         pass
 
-    prefix_candidate = Path(sys.prefix) / "nebius_cxcli" / BUNDLED_COMPONENT_SOURCES_FILENAME
+    prefix_candidate = (
+        Path(sys.prefix) / "nebius_cxcli" / BUNDLED_COMPONENT_CLI_SETTINGS_FILENAME
+    )
     if prefix_candidate.exists() and prefix_candidate.is_file():
         return _load_cli_settings_from_path(prefix_candidate)
 
-    if DEFAULT_COMPONENT_SOURCES_FILE.exists() and DEFAULT_COMPONENT_SOURCES_FILE.is_file():
-        return _load_cli_settings_from_path(DEFAULT_COMPONENT_SOURCES_FILE)
+    if (
+        DEFAULT_COMPONENT_CLI_SETTINGS_FILE.exists()
+        and DEFAULT_COMPONENT_CLI_SETTINGS_FILE.is_file()
+    ):
+        return _load_cli_settings_from_path(DEFAULT_COMPONENT_CLI_SETTINGS_FILE)
 
     raise FileNotFoundError(
-        "Bundled component sources file is missing from the installed package layout."
+        "Bundled component CLI settings file is missing from the installed package layout."
     )
 
 
@@ -3725,11 +4232,15 @@ def load_component_sources(
 
 def load_cli_settings(*, explicit: Path | None = None) -> CliSettings:
     try:
-        path = resolve_component_sources_file(explicit=explicit)
+        sources_path = resolve_component_sources_file(explicit=explicit)
     except ValueError:
         if _can_use_bundled_default(explicit=explicit):
             return _load_bundled_cli_settings_cached()
         raise
+    try:
+        path = resolve_component_cli_settings_file(component_sources_file=sources_path)
+    except ValueError:
+        return CliSettings()
     return _load_cli_settings_cached(str(path))
 
 

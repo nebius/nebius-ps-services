@@ -82,6 +82,10 @@ def _select_bundled_component_sources(project_root: Path) -> Path:
     return project_root / "component_sources.yaml"
 
 
+def _component_cli_settings_for_sources(source: Path) -> Path:
+    return source.with_name("component_cli_settings.yaml")
+
+
 class build_py(_build_py):
     def run(self) -> None:
         super().run()
@@ -89,10 +93,17 @@ class build_py(_build_py):
         source = _select_bundled_component_sources(project_root)
         if not source.exists() or not source.is_file():
             raise FileNotFoundError(f"Component sources file not found: {source}")
+        cli_settings = _component_cli_settings_for_sources(source)
+        if not cli_settings.exists() or not cli_settings.is_file():
+            raise FileNotFoundError(f"Component CLI settings file not found: {cli_settings}")
 
         target = Path(self.build_lib) / "nebius_cxcli" / "component_sources.yaml"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(_render_bundled_component_sources(source), encoding="utf-8")
+        cli_settings_target = (
+            Path(self.build_lib) / "nebius_cxcli" / "component_cli_settings.yaml"
+        )
+        cli_settings_target.write_text(cli_settings.read_text(encoding="utf-8"), encoding="utf-8")
 
 
 setup(cmdclass={"build_py": build_py})

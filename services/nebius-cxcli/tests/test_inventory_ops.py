@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 import yaml
 
+import nebius_cxcli.inventory_ops as inventory_ops
 from nebius_cxcli.components import component_entries, reset_component_entry_cache
 from nebius_cxcli.config_loader import load_config
 from nebius_cxcli.config_template import starter_config_yaml
@@ -114,14 +116,21 @@ def test_write_inventory_handles_dynamic_component_model(tmp_path: Path) -> None
     assert artifacts.markdown.exists()
     assert artifacts.markdown.name == "deploy-report.md"
     markdown = artifacts.markdown.read_text(encoding="utf-8")
-    assert "## Infra\n\n- Client:" in markdown
-    assert "- MK8s: `True`" in markdown
-    assert "## Apps\n\n- Envoy Gateway:" in markdown
+    assert "## Client\n\n- Client:" in markdown
+    assert "## Infra\n\n### Component Status\n\n- MK8s:" in markdown
+    assert "- MK8s: `enabled`" in markdown
+    assert "### MK8s Clusters" in markdown
+    assert "## Apps\n\n### Platform Apps\n\n- Envoy Gateway:" in markdown
+    assert "### Observability Apps" in markdown
+    assert "### Workloads" in markdown
     assert "## Validations\n\n- No deploy-time validations configured." in markdown
-    assert "- n8n: `True` (n8n.example.com)" in markdown
+    assert "- n8n: `enabled`; hostname `n8n.example.com`" in markdown
 
 
-def test_write_inventory_lists_each_mk8s_cluster(tmp_path: Path) -> None:
+def test_write_inventory_lists_each_mk8s_cluster(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     reset_component_entry_cache()
     config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -160,7 +169,6 @@ def test_write_inventory_lists_each_mk8s_cluster(tmp_path: Path) -> None:
             "id": "nvidia-gpu-operator",
             "instance_id": "cluster2",
             "enabled": True,
-            "target_ref": "cluster2",
             "values": {},
         }
     )
@@ -169,21 +177,33 @@ def test_write_inventory_lists_each_mk8s_cluster(tmp_path: Path) -> None:
     config = load_config(config_path)
     paths = resolve_project_paths(config_path)
     validate_path_alignment(config, paths)
+    (paths.infra_dir / ".terraform").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        inventory_ops,
+        "terraform_output_json",
+        lambda _infra_dir, *, initialize: {
+            "mk8s_cluster_id": {"value": "mk8scluster-111"},
+            "mk8s_cluster_name": {"value": "cluster1"},
+            "cluster2_cluster_id": {"value": "mk8scluster-222"},
+            "cluster2_cluster_name": {"value": "cluster2"},
+        },
+    )
 
     artifacts = write_inventory(config, paths)
     markdown = artifacts.markdown.read_text(encoding="utf-8")
 
-    assert (
-        "- MK8s cluster `mk8s` (`cluster1`): CPU `2` node(s) at "
-        "`cpu-d3/32vcpu-128gb`; GPU `1x2` node(s) at "
-        "`gpu-h100-sxm/8gpu-128vcpu-1600gb`; fabric `fabric-6`; "
-        "public endpoint `True`"
-    ) in markdown
-    assert (
-        "- MK8s cluster `cluster2` (`cluster2`): CPU `2` node(s) at "
-        "`cpu-d3/32vcpu-128gb`; GPU `1x2` node(s) at "
-        "`gpu-h100-sxm/1gpu-16vcpu-200gb`; fabric `none`; public endpoint `True`"
-    ) in markdown
+    assert "- `mk8s` (`cluster1`)" in markdown
+    assert "  - CPU nodes: `2` at `cpu-d3/32vcpu-128gb`" in markdown
+    assert "  - GPU nodes: `1x2` node(s) at `gpu-h100-sxm/8gpu-128vcpu-1600gb`" in markdown
+    assert "  - InfiniBand fabric: `fabric-6`" in markdown
+    assert "  - Public endpoint: `enabled`" in markdown
+    assert "  - Cluster ID: `mk8scluster-111`" in markdown
+    assert "  - Kube context: `nebius-cluster1-mk8scluster-111-external`" in markdown
+    assert "- `cluster2` (`cluster2`)" in markdown
+    assert "  - GPU nodes: `1x2` node(s) at `gpu-h100-sxm/1gpu-16vcpu-200gb`" in markdown
+    assert "  - InfiniBand fabric: `none`" in markdown
+    assert "  - Cluster ID: `mk8scluster-222`" in markdown
+    assert "  - Kube context: `nebius-cluster2-mk8scluster-222-external`" in markdown
 
 
 def test_write_inventory_includes_observability_endpoint_contract(tmp_path: Path) -> None:
@@ -229,16 +249,16 @@ def test_write_inventory_includes_observability_endpoint_contract(tmp_path: Path
         "`"
     ) in markdown_lines
     assert (
-        "- Logs write (direct/self-managed): "
-        "`https://write.logging.eu-north1.nebius.cloud`"
+        "- Logs write (direct/self-managed): `https://write.logging.eu-north1.nebius.cloud`"
     ) in markdown_lines
     assert (
-        "- Traces write (OTLP gRPC): "
-        "`dns:///write.tracing.eu-north1.nebius.cloud:443`"
+        "- Traces write (OTLP gRPC): `dns:///write.tracing.eu-north1.nebius.cloud:443`"
     ) in markdown_lines
     assert "## Grafana" in markdown
-    assert "- Target `mk8s` Grafana: `pending`" in markdown
-    assert "- Target `mk8s` metrics: `pending`" in markdown
+    assert "### Target `mk8s`" in markdown
+    assert "- Grafana: `pending`" in markdown
+    assert "- Metrics: `pending`" in markdown
+    assert "### Notes" in markdown
     assert (
         "- Pending Grafana links are populated after `deploy` or `flux apply` can "
         "read each target Gateway/LoadBalancer status."
@@ -303,31 +323,35 @@ def test_write_inventory_includes_live_grafana_urls_when_status_exists(tmp_path:
     artifacts = write_inventory(config, paths)
     markdown = artifacts.markdown.read_text(encoding="utf-8")
 
-    assert "- Target `mk8s` Grafana: [Open Grafana](http://203.0.113.10/)" in markdown
+    assert "### Target `mk8s`" in markdown
+    assert "- Grafana: [Open Grafana](http://203.0.113.10/)" in markdown
     assert (
-        "- Target `mk8s` metrics: "
-        "[Open metrics dashboard](http://203.0.113.10/goto/metrics123?orgId=1)"
+        "- Metrics: [Open metrics dashboard](http://203.0.113.10/goto/metrics123?orgId=1)"
     ) in markdown
     assert (
-        "- Target `mk8s` logs: [Open logs dashboard](http://203.0.113.10/goto/logs123?orgId=1)"
+        "- Logs: [Open logs dashboard](http://203.0.113.10/goto/logs123?orgId=1)"
     ) in markdown
     assert (
-        "- Target `mk8s` traces: "
-        "[Open traces dashboard](http://203.0.113.10/goto/traces123?orgId=1)"
+        "- Traces: [Open traces dashboard](http://203.0.113.10/goto/traces123?orgId=1)"
     ) in markdown
-    assert "- Target `mk8s` credentials: user `admin`; password command:" in markdown
+    assert "- Credentials: user `admin`; password command:" in markdown
     assert (
-        "- Target `mk8s` credentials: user `admin`; password command:\n\n"
+        "- Credentials: user `admin`; password command:\n\n"
         "```bash\n"
         "printf '%s\\n' \"$(kubectl --context=nebius-cluster2-mk8scluster-123-external "
         "-n observability get secret "
         "nebius-cxcli-grafana-admin -o jsonpath='{.data.admin-password}' | base64 -d)\"\n"
         "```\n"
     ) in markdown
+    assert "- Prometheus datasource split:" in markdown
     assert (
-        "- Prometheus datasources are catalog-bound: "
-        "`Nebius Services` uses `Metrics read (Prometheus, Nebius service metrics)`; "
-        "`Nebius User Metrics` uses `Metrics read (Prometheus, user-ingested metrics)`."
+        "  - `Nebius Services` reads `Metrics read (Prometheus, Nebius service metrics)`: "
+        "Nebius/provider service metrics for cloud resources and Nebius service dashboards."
+    ) in markdown
+    assert (
+        "  - `Nebius User Metrics` reads `Metrics read (Prometheus, user-ingested metrics)`: "
+        "Customer/user-ingested Prometheus metrics, including Kubernetes metrics written by "
+        "the Nebius observability agent."
     ) in markdown
     assert (
         "- Report links open the catalog-bound dashboards for Metrics, Logs, or Traces "
@@ -336,7 +360,10 @@ def test_write_inventory_includes_live_grafana_urls_when_status_exists(tmp_path:
     ) in markdown
 
 
-def test_write_inventory_lists_pending_grafana_links_per_target(tmp_path: Path) -> None:
+def test_write_inventory_lists_pending_grafana_links_per_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     reset_component_entry_cache()
     config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -357,14 +384,33 @@ def test_write_inventory_lists_pending_grafana_links_per_target(tmp_path: Path) 
     config = load_config(config_path)
     paths = resolve_project_paths(config_path)
     validate_path_alignment(config, paths)
+    (paths.infra_dir / ".terraform").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        inventory_ops,
+        "terraform_output_json",
+        lambda _infra_dir, *, initialize: {
+            "cluster1_cluster_id": {"value": "mk8scluster-111"},
+            "cluster1_cluster_name": {"value": "cluster1"},
+            "cluster2_cluster_id": {"value": "mk8scluster-222"},
+            "cluster2_cluster_name": {"value": "cluster2"},
+        },
+    )
 
     artifacts = write_inventory(config, paths)
     markdown = artifacts.markdown.read_text(encoding="utf-8")
 
-    assert "- Target `cluster1` Grafana: `pending`" in markdown
-    assert "- Target `cluster2` Grafana: `pending`" in markdown
-    assert "- Target `cluster1` credentials: user `admin`; password command:" in markdown
-    assert "- Target `cluster2` credentials: user `admin`; password command:" in markdown
+    assert "### Target `cluster1`" in markdown
+    assert "### Target `cluster2`" in markdown
+    assert markdown.count("- Grafana: `pending`") == 2
+    assert (
+        "- MK8s: cluster ID `mk8scluster-222`; "
+        "kube context `nebius-cluster2-mk8scluster-222-external`"
+    ) in markdown
+    assert markdown.count("- Credentials: user `admin`; password command:") == 2
+    assert (
+        "kubectl --context=nebius-cluster2-mk8scluster-222-external -n observability "
+        "get secret nebius-cxcli-grafana-admin"
+    ) in markdown
 
 
 def test_write_inventory_ignores_runtime_grafana_status_for_removed_target(
@@ -401,7 +447,8 @@ def test_write_inventory_ignores_runtime_grafana_status_for_removed_target(
     artifacts = write_inventory(config, paths)
     markdown = artifacts.markdown.read_text(encoding="utf-8")
 
-    assert "- Target `cluster1` Grafana: `pending`" in markdown
+    assert "### Target `cluster1`" in markdown
+    assert "- Grafana: `pending`" in markdown
     assert "cluster2" not in markdown
     assert "203.0.113.20" not in markdown
 
@@ -462,7 +509,7 @@ def test_write_inventory_includes_msp_federation_bucket_when_postgresql_enabled(
     markdown = artifacts.markdown.read_text(encoding="utf-8")
     markdown_lines = markdown.splitlines()
 
-    assert "- Managed PostgreSQL: `True`" in markdown
+    assert "- Managed PostgreSQL: `enabled`" in markdown
     assert (
         "- Metrics read (federate, `msp` bucket): "
         "`https://read.monitoring.api.nebius.cloud/projects/"
@@ -545,8 +592,8 @@ def test_write_inventory_includes_vm_observability_read_paths_and_managed_write_
     artifacts = write_inventory(config, paths)
     markdown = artifacts.markdown.read_text(encoding="utf-8")
 
-    assert "VM monitoring agent: `True`" in markdown
-    assert "VM journald logs (systemd services): `True`" in markdown
+    assert "VM monitoring agent: `enabled`" in markdown
+    assert "VM journald logs (systemd services): `enabled`" in markdown
     assert "Metrics read (Prometheus, Nebius service metrics)" in markdown
     assert "Logs read (Loki)" in markdown
     assert "Metrics write (VM monitoring agent)" in markdown
@@ -586,12 +633,12 @@ def test_write_inventory_includes_vm_metrics_even_when_project_observability_is_
     artifacts = write_inventory(config, paths)
     markdown = artifacts.markdown.read_text(encoding="utf-8")
 
-    assert "VM monitoring agent: `True`" in markdown
+    assert "VM monitoring agent: `enabled`" in markdown
     assert "## Observability Write Endpoints" in markdown
     assert "## Observability Read Endpoints" in markdown
     assert "Metrics read (Prometheus, Nebius service metrics)" in markdown
     assert "Metrics write (VM monitoring agent)" in markdown
-    assert "VM journald logs (systemd services): `False`" in markdown
+    assert "VM journald logs (systemd services): `disabled`" in markdown
 
 
 def test_write_inventory_merges_validation_status_into_deploy_report(tmp_path: Path) -> None:

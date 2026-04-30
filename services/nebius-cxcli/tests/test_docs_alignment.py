@@ -23,8 +23,8 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
 
     assert "nebius-cxcli quota-request /path/to/config.yaml" in supporting
     assert (
-        "`component`, `validate`, `quota-check`, `quota-request`, `render`, "
-        "`bootstrap-ci`, `deploy`, `destroy`, `email`"
+        "`component`, `validate`, `validate-dashboards`, `quota-check`, "
+        "`quota-request`, `render`, `bootstrap-ci`, `deploy`, `destroy`, `email`"
     ) in supporting
     assert "- `quota-request <config.yaml>`" in supporting
 
@@ -82,10 +82,7 @@ def test_docs_define_auth_target_modes() -> None:
         "`--project-id <id>` is the manual target mode; use `--client-name <name>` "
         "when creating or when the project id cannot be mapped to exactly one cached profile."
     ) in readme
-    assert (
-        "Omitting both target options is valid only for global `--validate-profile`"
-        in readme
-    )
+    assert "Omitting both target options is valid only for global `--validate-profile`" in readme
     assert (
         "Targets either `--project-config <config.yaml>` or `--project-id`; "
         "`--client-name` belongs only to the manual `--project-id` path."
@@ -121,7 +118,7 @@ def test_design_uses_config_yaml_for_project_runtime_command_headings() -> None:
     assert "`destroy <config-path>`" not in design
 
 
-def test_docs_define_target_ref_as_cluster_binding() -> None:
+def test_docs_define_app_instance_id_as_cluster_binding() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
 
@@ -130,7 +127,15 @@ def test_docs_define_target_ref_as_cluster_binding() -> None:
         in readme
     )
     assert "`nvidia-gpu-operator@cluster2`" in readme
-    assert "App chart `target_ref` is still the cluster selector" in design
+    assert (
+        "Authored `config.yaml` does not use `apps.charts[].target_ref`; any internal generated "
+        "`target_ref` is derived from and must equal the same target `instance_id`."
+    ) in readme
+    assert "target-bound app rows use the target id as `instance_id`" in design
+    assert (
+        "Internal generated rows may also carry `target_ref`, but that field is a derived "
+        "runtime alias for the same target `instance_id`, not a second user-facing binding."
+    ) in design
     assert "`infra.components[]`: `id`, `instance_id`, `enabled`, `inputs`" in design
 
 
@@ -141,11 +146,11 @@ def test_docs_define_component_selector_contract() -> None:
     assert "`component add <config.yaml> [component-selector...]`" in design
     assert "`component remove <config.yaml> [component-selector...]`" in design
     assert (
-        "`<component-id>`, `infra:<component-id>`, `apps:<component-id>`, `all`, `none`"
-        in readme
+        "`<component-id>`, `infra:<component-id>`, `apps:<component-id>`, `all`, `none`" in readme
     )
     assert "`<instance-id>`, or `<component-id>@<instance-id>`" in readme
-    assert "apps.charts[].target_ref" in readme
+    assert "becomes `apps.charts[].instance_id`" in readme
+    assert "removes app chart rows and `deploy.targets[]` settings" in design
 
 
 def test_docs_define_validation_command_boundaries() -> None:
@@ -156,6 +161,9 @@ def test_docs_define_validation_command_boundaries() -> None:
     assert "active `component_sources.yaml` catalog" in readme
     assert "- `validate <config.yaml>`" in readme
     assert "project config contract and deployment-readiness shape" in readme
+    assert "Use `--target <instance-id>` to validate one target-scoped Grafana row" in readme
+    assert "each target must resolve an explicit kube context" in readme
+    assert "Use `--target <target_ref>`" not in readme
     assert "- `validate-generated <generated-dir>`" in readme
     assert "existing generated bundle without rerendering it" in readme
     assert (
@@ -164,11 +172,57 @@ def test_docs_define_validation_command_boundaries() -> None:
     ) in readme
     assert "### `validate-sources [component_sources.yaml]`" in design
     assert "### `validate <config.yaml>`" in design
+    assert "Supports `--target <instance-id>` for multi-target configs." in design
+    assert "Target-scoped rows must resolve an explicit kube context" in design
     assert "### `validate-generated <generated-path>`" in design
     assert (
         "strict readiness, MK8s preflight, backend auth preparation, "
         "live quota/capacity, Terraform validation"
     ) in design
+
+
+def test_docs_define_target_scoped_deploy_validation_report_filtering() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
+
+    assert (
+        "When a run selects one target with `--target <instance-id>`, the refreshed "
+        "validation section is scoped to that selected target instead of marking "
+        "unselected target validations as not run; `--all-targets` reports every "
+        "selected target."
+    ) in readme
+    assert (
+        "When a run selects one target with `--target <instance-id>`, the refreshed "
+        "validation section includes only that target's validations; `--all-targets` "
+        "reports every selected target."
+    ) in design
+
+
+def test_design_documents_grafana_dashboard_binding_workflow() -> None:
+    design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
+    normalized_design = " ".join(design.split())
+
+    assert "- [Grafana Dashboards](#grafana-dashboards)" in design
+    assert "### Grafana Dashboards" in design
+    assert "The bundled Grafana contract is the binding chain" in design
+    assert "`observability.endpoints.read.<key>` declares a Nebius read endpoint" in design
+    assert "`components.apps.grafana.cli.datasources.<id>` binds" in design
+    assert (
+        "`components.apps.grafana.defaults.values.dashboards.<folder>.<dashboard>`"
+        in design
+    )
+    assert "`components.apps.grafana.cli.report_dashboards.<signal>` is not" in design
+    assert "components.apps.grafana.cli.grafana" not in design
+    assert "Dashboard source materialization workflow:" in design
+    assert "does not dynamically generate or rewrite dashboards" in design
+    assert "It does not mutate, regenerate, or repair dashboard JSON." in normalized_design
+    assert "Dashboard generation and materialization workflow:" not in design
+    assert "`load_component_sources()` resolves the `json_file` relative" in design
+    assert "`validate-dashboards <config.yaml>` checks the live post-deploy state" in design
+    assert "Current bundled report dashboards:" in design
+    assert "`kubernetes_io_hostname`" in design
+    assert "`k8s_namespace_name` plus `k8s_pod_name`" in design
+    assert "Live fit validation rules:" in design
 
 
 def test_design_supporting_commands_include_quota_request_and_flux_targets() -> None:

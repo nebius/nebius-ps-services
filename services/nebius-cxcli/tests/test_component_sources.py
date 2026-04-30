@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
 
@@ -98,58 +100,55 @@ def _write_sources_file(
     module_name: str,
     local_source: str | None = None,
 ) -> None:
-    path.write_text(
-        yaml.safe_dump(
-            {
-                "cli": {
-                    "flux": {
-                        "version": "v2.8.0",
-                    },
-                    "terraform": {
-                        "version": "1.14.1",
-                    },
+    _write_catalog_file(
+        path,
+        {
+            "cli": {
+                "flux": {
+                    "version": "v2.8.0",
                 },
-                "components": {
-                    "infra": {
-                        module_name: {
-                            "source": {
-                                "portable": (
-                                    "git::https://github.com/example/infra.git//modules/"
-                                    f"{module_name}?ref=v1.2.3"
-                                ),
-                                "local": (
-                                    f"platform-infra/modules/{module_name}"
-                                    if local_source is None
-                                    else local_source
-                                ),
-                            },
-                            "ui": {
-                                "title": f"{module_name} module",
-                                "enabled": True,
-                            },
-                        }
-                    },
-                    "apps": {
-                        "demo-app": {
-                            "source": _portable_chart_source(
-                                repo="https://example.invalid/charts",
-                                chart="demo-app",
-                                version="1.0.0",
+                "terraform": {
+                    "version": "1.14.1",
+                },
+            },
+            "components": {
+                "infra": {
+                    module_name: {
+                        "source": {
+                            "portable": (
+                                "git::https://github.com/example/infra.git//modules/"
+                                f"{module_name}?ref=v1.2.3"
                             ),
-                            "release": {
-                                "namespace": "demo",
-                                "name": "demo-app",
-                            },
-                            "ui": {
-                                "enabled": False,
-                            },
-                        }
+                            "local": (
+                                f"platform-infra/modules/{module_name}"
+                                if local_source is None
+                                else local_source
+                            ),
+                        },
+                        "ui": {
+                            "title": f"{module_name} module",
+                            "enabled": True,
+                        },
+                    }
+                },
+                "apps": {
+                    "demo-app": {
+                        "source": _portable_chart_source(
+                            repo="https://example.invalid/charts",
+                            chart="demo-app",
+                            version="1.0.0",
+                        ),
+                        "release": {
+                            "namespace": "demo",
+                            "name": "demo-app",
+                        },
+                        "ui": {
+                            "enabled": False,
+                        },
                     },
                 },
             },
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+        },
     )
 
 
@@ -176,6 +175,42 @@ def _catalog(
     return payload
 
 
+def _split_component_cli_settings(
+    payload: dict[str, object],
+) -> tuple[dict[str, object], dict[str, object]]:
+    sources = deepcopy(payload)
+    settings: dict[str, object] = {}
+    for key in ("cli", "observability"):
+        if key in sources:
+            settings[key] = sources.pop(key)
+    components = sources.get("components")
+    if isinstance(components, dict):
+        settings_components: dict[str, object] = {}
+        for scope in ("infra", "apps"):
+            scope_components = components.get(scope)
+            if not isinstance(scope_components, dict):
+                continue
+            settings_scope: dict[str, object] = {}
+            for component_id, component in scope_components.items():
+                if isinstance(component, dict) and "cli" in component:
+                    settings_scope[str(component_id)] = {"cli": component.pop("cli")}
+            if settings_scope:
+                settings_components[scope] = settings_scope
+        if settings_components:
+            settings["components"] = settings_components
+    return sources, settings
+
+
+def _write_catalog_file(path: Path, payload: dict[str, object]) -> None:
+    sources, settings = _split_component_cli_settings(payload)
+    path.write_text(yaml.safe_dump(sources, sort_keys=False), encoding="utf-8")
+    settings_path = path.with_name("component_cli_settings.yaml")
+    if settings:
+        settings_path.write_text(yaml.safe_dump(settings, sort_keys=False), encoding="utf-8")
+    elif settings_path.exists():
+        settings_path.unlink()
+
+
 def _portable_chart_source(*, repo: str, chart: str, version: str = "") -> dict[str, object]:
     portable: dict[str, object] = {
         "repo": repo,
@@ -184,6 +219,10 @@ def _portable_chart_source(*, repo: str, chart: str, version: str = "") -> dict[
     if version:
         portable["version"] = version
     return {"portable": portable}
+
+
+def _kubernetes_agent_validation_enabled() -> bool:
+    return True
 
 
 def _normalized_catalog_signature(path: Path) -> dict[str, object]:
@@ -269,19 +308,16 @@ def test_component_sources_shared_admin_ssh_public_key_accepts_relative_file_pat
         encoding="utf-8",
     )
     sources_file = tmp_path / "component_sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 shared={
                     "admin_ssh": {
                         "user_name": "ubuntu",
                         "public_key": "./id_rsa.pub",
                     }
                 }
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     loaded = load_component_sources(explicit=sources_file, source_profile=SourceProfile.PORTABLE)
@@ -290,18 +326,15 @@ def test_component_sources_shared_admin_ssh_public_key_accepts_relative_file_pat
 
 def test_component_sources_reject_invalid_shared_admin_ssh_user_name(tmp_path: Path) -> None:
     sources_file = tmp_path / "component_sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 shared={
                     "admin_ssh": {
                         "user_name": "BAD USER",
                     }
                 }
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     with pytest.raises(ValueError, match="shared.admin_ssh.user_name"):
@@ -326,81 +359,78 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     sources_file = tmp_path / "component-sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
-                cli={
-                    "flux": {
-                        "version": "v2.8.0",
-                    },
-                    "terraform": {
-                        "version": "1.14.1",
-                    },
+    _write_catalog_file(
+        sources_file,
+        _catalog(
+            cli={
+                "flux": {
+                    "version": "v2.8.0",
                 },
-                shared={
-                    "admin_ssh": {
-                        "user_name": "ubuntu",
-                        "public_key": _VALID_ED25519_PUBLIC_KEY,
-                    }
+                "terraform": {
+                    "version": "1.14.1",
                 },
-                infra={
-                    "wireguard-jumphost": {
-                        "source": {
-                            "portable": (
-                                "git::https://github.com/example/infra.git//modules/"
-                                "wireguard-jumphost?ref=v1.2.3"
-                            ),
-                            "local": "platform-infra/modules/wireguard-jumphost",
-                        },
-                        "ui": {
-                            "title": "WireGuard jump host",
-                            "group": "Network",
-                            "enabled": True,
-                        },
-                        "wizard": {
-                            "inputs.subnet_id": {
-                                "options": {
-                                    "from": "project_subnets",
-                                }
+            },
+            shared={
+                "admin_ssh": {
+                    "user_name": "ubuntu",
+                    "public_key": _VALID_ED25519_PUBLIC_KEY,
+                },
+            },
+            infra={
+                "wireguard-jumphost": {
+                    "source": {
+                        "portable": (
+                            "git::https://github.com/example/infra.git//modules/"
+                            "wireguard-jumphost?ref=v1.2.3"
+                        ),
+                        "local": "platform-infra/modules/wireguard-jumphost",
+                    },
+                    "ui": {
+                        "title": "WireGuard jump host",
+                        "group": "Network",
+                        "enabled": True,
+                    },
+                    "wizard": {
+                        "inputs.subnet_id": {
+                            "options": {
+                                "from": "project_subnets",
                             }
                         },
-                        "defaults": {
-                            "inputs.instance_count": 1,
-                            "inputs.ssh_user_name": "shared.admin_ssh.user_name",
-                        },
-                        "status": {
-                            "kind": "nebius.compute.instance",
-                            "parent_input": "parent_id",
-                            "name_input": "name",
-                        },
-                    }
+                    },
+                    "defaults": {
+                        "inputs.instance_count": 1,
+                        "inputs.ssh_user_name": "shared.admin_ssh.user_name",
+                    },
+                    "status": {
+                        "kind": "nebius.compute.instance",
+                        "parent_input": "parent_id",
+                        "name_input": "name",
+                    },
                 },
-                apps={
-                    "gateway-helm": {
-                        "source": _portable_chart_source(
-                            repo="oci://docker.io/envoyproxy",
-                            chart="gateway-helm",
-                            version="1.4.2",
-                        ),
-                        "release": {
-                            "namespace": "envoy-gateway-system",
-                            "name": "envoy-gateway",
-                            "timeout": "10m",
-                        },
-                        "ui": {
-                            "title": "Envoy Gateway",
-                            "group": "Platform",
-                            "enabled": True,
-                        },
-                        "defaults": {
-                            "values.replicaCount": 2,
-                        },
-                    }
-                },
-            ),
-            sort_keys=False,
+            },
+            apps={
+                "gateway-helm": {
+                    "source": _portable_chart_source(
+                        repo="oci://docker.io/envoyproxy",
+                        chart="gateway-helm",
+                        version="1.4.2",
+                    ),
+                    "release": {
+                        "namespace": "envoy-gateway-system",
+                        "name": "envoy-gateway",
+                        "timeout": "10m",
+                    },
+                    "ui": {
+                        "title": "Envoy Gateway",
+                        "group": "Platform",
+                        "enabled": True,
+                    },
+                    "defaults": {
+                        "values.replicaCount": 2,
+                    },
+                }
+            },
         ),
-        encoding="utf-8",
     )
 
     monkeypatch.setenv("NEBIUS_CXCLI_COMPONENT_SOURCES_FILE", str(sources_file))
@@ -465,9 +495,9 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(
 
 def test_app_release_timeout_inherits_global_flux_default(tmp_path: Path) -> None:
     sources_file = tmp_path / "component-sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 cli={
                     "flux": {
                         "version": "v2.8.0",
@@ -488,10 +518,7 @@ def test_app_release_timeout_inherits_global_flux_default(tmp_path: Path) -> Non
                         },
                     }
                 },
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     loaded = load_component_sources(explicit=sources_file)
@@ -502,9 +529,9 @@ def test_app_release_timeout_inherits_global_flux_default(tmp_path: Path) -> Non
 
 def test_load_component_sources_adds_builtin_mk8s_handoff(tmp_path: Path) -> None:
     sources_file = tmp_path / "component-sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 infra={
                     "mk8s": {
                         "source": {
@@ -516,10 +543,7 @@ def test_load_component_sources_adds_builtin_mk8s_handoff(tmp_path: Path) -> Non
                         },
                     }
                 }
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     loaded = load_component_sources(explicit=sources_file)
@@ -536,9 +560,9 @@ def test_load_component_sources_adds_builtin_mk8s_handoff(tmp_path: Path) -> Non
 
 def test_load_component_sources_rejects_public_validation_field(tmp_path: Path) -> None:
     sources_file = tmp_path / "component-sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 infra={
                     "mk8s": {
                         "source": {
@@ -547,10 +571,7 @@ def test_load_component_sources_rejects_public_validation_field(tmp_path: Path) 
                         "validation": "mk8s_cluster",
                     }
                 }
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     with pytest.raises(
@@ -560,11 +581,120 @@ def test_load_component_sources_rejects_public_validation_field(tmp_path: Path) 
         load_component_sources(explicit=sources_file)
 
 
-def test_load_component_sources_rejects_release_name_alias_for_helm_chart(tmp_path: Path) -> None:
+def test_load_component_sources_rejects_cli_settings_inside_source_catalog(
+    tmp_path: Path,
+) -> None:
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
-            _catalog(
+            {
+                "cli": {
+                    "flux": {
+                        "version": "v2.8.0",
+                    }
+                },
+                "observability": {
+                    "endpoints": {
+                        "read": {},
+                        "write": {},
+                    }
+                },
+                "components": {
+                    "infra": {
+                        "mk8s": {
+                            "source": {
+                                "portable": "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3",
+                            },
+                            "cli": {
+                                "boot_disk_defaults": {},
+                            },
+                        }
+                    },
+                    "apps": {},
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"component_sources root has unsupported field\(s\): cli, observability",
+    ):
+        load_component_sources(explicit=sources_file)
+
+
+def test_load_component_sources_rejects_cli_settings_for_unknown_component(
+    tmp_path: Path,
+) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    sources_file.write_text(
+        yaml.safe_dump(
+            {
+                "components": {
+                    "infra": {},
+                    "apps": {},
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    sources_file.with_name("component_cli_settings.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "components": {
+                    "infra": {
+                        "mk8s": {
+                            "cli": {
+                                "boot_disk_defaults": {},
+                            }
+                        }
+                    }
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"component_cli_settings\.components\.infra references unknown component\(s\): mk8s",
+    ):
+        load_component_sources(explicit=sources_file)
+
+
+def test_load_bundled_cli_settings_missing_file_names_cli_settings(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    prefix_dir = tmp_path / "prefix"
+    prefix_dir.mkdir()
+    missing_default = tmp_path / "missing-component_cli_settings.yaml"
+    monkeypatch.setattr(
+        component_sources.importlib_resources,
+        "files",
+        lambda _name: package_dir,
+    )
+    monkeypatch.setattr(component_sources.sys, "prefix", str(prefix_dir))
+    monkeypatch.setattr(component_sources, "DEFAULT_COMPONENT_CLI_SETTINGS_FILE", missing_default)
+
+    with pytest.raises(
+        FileNotFoundError,
+        match="Bundled component CLI settings file is missing",
+    ):
+        component_sources._load_bundled_cli_settings()
+
+
+def test_load_component_sources_rejects_release_name_alias_for_helm_chart(tmp_path: Path) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 apps={
                     "gateway-helm": {
                         "source": _portable_chart_source(
@@ -578,10 +708,7 @@ def test_load_component_sources_rejects_release_name_alias_for_helm_chart(tmp_pa
                         },
                     }
                 }
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     with pytest.raises(
@@ -593,9 +720,9 @@ def test_load_component_sources_rejects_release_name_alias_for_helm_chart(tmp_pa
 
 def test_load_component_sources_parses_instance_qualified_input_binding(tmp_path: Path) -> None:
     sources_file = tmp_path / "component_sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 infra={
                     "mk8s": {
                         "source": {
@@ -619,10 +746,7 @@ def test_load_component_sources_parses_instance_qualified_input_binding(tmp_path
                         },
                     }
                 },
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     loaded = load_component_sources(explicit=sources_file)
@@ -636,9 +760,9 @@ def test_load_component_sources_parses_instance_qualified_input_binding(tmp_path
 
 def test_load_component_sources_rejects_invalid_status_watcher_block(tmp_path: Path) -> None:
     sources_file = tmp_path / "component_sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 infra={
                     "managed-postgresql": {
                         "source": {
@@ -649,10 +773,7 @@ def test_load_component_sources_rejects_invalid_status_watcher_block(tmp_path: P
                         },
                     }
                 }
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     with pytest.raises(ValueError, match="status.kind is required"):
@@ -661,9 +782,9 @@ def test_load_component_sources_rejects_invalid_status_watcher_block(tmp_path: P
 
 def test_load_component_sources_rejects_legacy_resource_kind_field(tmp_path: Path) -> None:
     sources_file = tmp_path / "component_sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 infra={
                     "managed-postgresql": {
                         "source": {
@@ -672,10 +793,7 @@ def test_load_component_sources_rejects_legacy_resource_kind_field(tmp_path: Pat
                         "resource_kind": "nebius.msp.postgresql.cluster",
                     }
                 }
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     with pytest.raises(
@@ -687,9 +805,9 @@ def test_load_component_sources_rejects_legacy_resource_kind_field(tmp_path: Pat
 
 def test_load_component_sources_expands_builtin_wizard_profile(tmp_path: Path) -> None:
     sources_file = tmp_path / "component_sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 infra={
                     "managed-postgresql": {
                         "source": {
@@ -698,10 +816,7 @@ def test_load_component_sources_expands_builtin_wizard_profile(tmp_path: Path) -
                         "wizard_profile": "managed-postgresql",
                     }
                 }
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     loaded = load_component_sources(explicit=sources_file)
@@ -726,9 +841,9 @@ def test_load_component_sources_expands_builtin_wizard_profile(tmp_path: Path) -
 
 def test_load_component_sources_merges_profile_and_explicit_wizard_override(tmp_path: Path) -> None:
     sources_file = tmp_path / "component_sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 infra={
                     "managed-postgresql": {
                         "source": {
@@ -745,10 +860,7 @@ def test_load_component_sources_merges_profile_and_explicit_wizard_override(tmp_
                         },
                     }
                 }
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     loaded = load_component_sources(explicit=sources_file)
@@ -776,9 +888,9 @@ def test_load_component_sources_rejects_profile_name_that_does_not_match_compone
     tmp_path: Path,
 ) -> None:
     sources_file = tmp_path / "component_sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 infra={
                     "managed-postgresql": {
                         "source": {
@@ -787,10 +899,7 @@ def test_load_component_sources_rejects_profile_name_that_does_not_match_compone
                         "wizard_profile": "mk8s",
                     }
                 }
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     with pytest.raises(
@@ -802,9 +911,9 @@ def test_load_component_sources_rejects_profile_name_that_does_not_match_compone
 
 def test_load_component_sources_rejects_unknown_wizard_profile(tmp_path: Path) -> None:
     sources_file = tmp_path / "component_sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 infra={
                     "managed-postgresql": {
                         "source": {
@@ -813,10 +922,7 @@ def test_load_component_sources_rejects_unknown_wizard_profile(tmp_path: Path) -
                         "wizard_profile": "unknown-profile",
                     }
                 }
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     with pytest.raises(ValueError, match="wizard_profile 'unknown-profile' is unknown"):
@@ -856,9 +962,9 @@ def test_load_component_sources_falls_back_to_bundled_default(monkeypatch, tmp_p
 
 def test_load_component_sources_rejects_runtime_block(tmp_path: Path) -> None:
     sources_file = tmp_path / "component-sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 infra={
                     "mk8s": {
                         "source": {
@@ -871,10 +977,7 @@ def test_load_component_sources_rejects_runtime_block(tmp_path: Path) -> None:
                         },
                     }
                 }
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     with pytest.raises(
@@ -883,13 +986,13 @@ def test_load_component_sources_rejects_runtime_block(tmp_path: Path) -> None:
         load_component_sources(explicit=sources_file)
 
 
-def test_load_component_sources_rejects_grafana_report_dashboard_missing_gnet_id(
+def test_load_component_sources_rejects_grafana_report_dashboard_missing_locator(
     tmp_path: Path,
 ) -> None:
     sources_file = tmp_path / "component-sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 apps={
                     "grafana": {
                         "source": _portable_chart_source(
@@ -902,32 +1005,443 @@ def test_load_component_sources_rejects_grafana_report_dashboard_missing_gnet_id
                             "name": "grafana",
                         },
                         "defaults": {
-                            "values.dashboards.nebius.kubernetes-logs-from-loki": {
+                            "values.dashboards.nebius-kubernetes.kubernetes-logs-from-loki": {
                                 "revision": 1,
                                 "datasource": "Nebius Logs",
                             }
                         },
                         "cli": {
-                            "grafana": {
-                                "report_dashboards": {
-                                    "logs": "nebius/kubernetes-logs-from-loki",
-                                }
+                            "report_dashboards": {
+                                "logs": "nebius-kubernetes/kubernetes-logs-from-loki",
                             }
                         },
                     }
                 }
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     with pytest.raises(
         ValueError,
         match=(
-            r"components\.apps\.grafana\.cli\.grafana\.report_dashboards\.logs"
-            r" references values\.dashboards\.nebius\.kubernetes-logs-from-loki, "
-            r"but that dashboard does not declare gnetId"
+            r"components\.apps\.grafana\.defaults\.values\.dashboards\.nebius-kubernetes"
+            r"\.kubernetes-logs-from-loki must declare gnetId plus uid or "
+            r"dashboard JSON with a top-level uid"
+        ),
+    ):
+        load_component_sources(explicit=sources_file)
+
+
+def test_load_component_sources_rejects_grafana_report_dashboard_invalid_json(
+    tmp_path: Path,
+) -> None:
+    sources_file = tmp_path / "component-sources.yaml"
+    _write_catalog_file(
+        sources_file,
+        _catalog(
+                apps={
+                    "grafana": {
+                        "source": _portable_chart_source(
+                            repo="https://example.invalid/charts",
+                            chart="grafana",
+                            version="1.0.0",
+                        ),
+                        "release": {
+                            "namespace": "observability",
+                            "name": "grafana",
+                        },
+                        "defaults": {
+                            "values.dashboards.nebius-kubernetes.kubernetes-logs-from-loki": {
+                                "json": "{",
+                                "datasource": "Nebius Logs",
+                            }
+                        },
+                        "cli": {
+                            "report_dashboards": {
+                                "logs": "nebius-kubernetes/kubernetes-logs-from-loki",
+                            }
+                        },
+                    }
+                }
+            )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"values\.dashboards\.nebius-kubernetes\.kubernetes-logs-from-loki\.json "
+        r"must be valid dashboard JSON",
+    ):
+        load_component_sources(explicit=sources_file)
+
+
+def test_load_component_sources_materializes_grafana_report_dashboard_json_file(
+    tmp_path: Path,
+) -> None:
+    dashboard_file = tmp_path / "kubernetes-logs.json"
+    dashboard_file.write_text(
+        json.dumps({"uid": "cxcli-test-logs", "title": "Logs", "panels": []}),
+        encoding="utf-8",
+    )
+    sources_file = tmp_path / "component-sources.yaml"
+    _write_catalog_file(
+        sources_file,
+        _catalog(
+                observability={
+                    "endpoints": {
+                        "read": {
+                            "logs_loki_read": {
+                                "label": "Logs read",
+                                "template": "https://example.invalid/projects/{project_id}",
+                            }
+                        },
+                        "write": {},
+                    }
+                },
+                apps={
+                    "grafana": {
+                        "source": _portable_chart_source(
+                            repo="https://example.invalid/charts",
+                            chart="grafana",
+                            version="1.0.0",
+                        ),
+                        "release": {
+                            "namespace": "observability",
+                            "name": "grafana",
+                        },
+                        "defaults": {
+                            "values.dashboards.nebius-kubernetes.kubernetes-logs-from-loki": {
+                                "json_file": "kubernetes-logs.json",
+                                "datasource": "Nebius Logs",
+                            }
+                        },
+                        "cli": {
+                            "datasources": {
+                                "logs": {
+                                    "name": "Nebius Logs",
+                                    "uid": "nebius-logs",
+                                    "type": "loki",
+                                    "read_endpoint": "logs_loki_read",
+                                }
+                            },
+                            "report_dashboards": {
+                                "logs": "nebius-kubernetes/kubernetes-logs-from-loki",
+                            },
+                        },
+                    }
+                },
+            )
+    )
+
+    loaded = load_component_sources(explicit=sources_file)
+    chart = next(item for item in loaded.helm_charts if item.name == "grafana")
+    dashboard = next(
+        item
+        for item in chart.defaults
+        if item.target_path == "values.dashboards.nebius-kubernetes.kubernetes-logs-from-loki"
+    ).value
+    binding = chart.grafana.report_dashboards[0]
+
+    assert dashboard["datasource"] == "Nebius Logs"
+    assert "json_file" not in dashboard
+    assert json.loads(dashboard["json"])["uid"] == "cxcli-test-logs"
+    assert binding.dashboard_uid == "cxcli-test-logs"
+    assert binding.read_endpoint == "logs_loki_read"
+
+
+def test_load_component_sources_materializes_custom_grafana_dashboard_json_file_paths(
+    tmp_path: Path,
+) -> None:
+    relative_dashboard_file = tmp_path / "dashboards" / "myk8slogs-dash.json"
+    relative_dashboard_file.parent.mkdir()
+    relative_dashboard_file.write_text(
+        json.dumps({"uid": "custom-relative-logs", "title": "Logs", "panels": []}),
+        encoding="utf-8",
+    )
+    absolute_dashboard_file = tmp_path / "absolute-metrics.json"
+    absolute_dashboard_file.write_text(
+        json.dumps({"uid": "custom-absolute-metrics", "title": "Metrics", "panels": []}),
+        encoding="utf-8",
+    )
+    sources_file = tmp_path / "component-sources.yaml"
+    _write_catalog_file(
+        sources_file,
+        _catalog(
+                observability={
+                    "endpoints": {
+                        "read": {
+                            "logs_loki_read": {
+                                "label": "Logs read",
+                                "template": "https://example.invalid/logs/{project_id}",
+                            },
+                            "metrics_user_read": {
+                                "label": "Metrics read",
+                                "template": "https://example.invalid/metrics/{project_id}",
+                            },
+                        },
+                        "write": {},
+                    }
+                },
+                apps={
+                    "grafana": {
+                        "source": _portable_chart_source(
+                            repo="https://example.invalid/charts",
+                            chart="grafana",
+                            version="1.0.0",
+                        ),
+                        "release": {
+                            "namespace": "observability",
+                            "name": "grafana",
+                        },
+                        "defaults": {
+                            "values.dashboards": {
+                                "myfolder": {
+                                    "kubernetes-mylogs": {
+                                        "datasource": "Nebius Logs",
+                                        "json_file": "./dashboards/myk8slogs-dash.json",
+                                    },
+                                    "kubernetes-mymetrics": {
+                                        "datasource": "Nebius User Metrics",
+                                        "json_file": str(absolute_dashboard_file),
+                                    },
+                                }
+                            }
+                        },
+                        "cli": {
+                            "datasources": {
+                                "logs": {
+                                    "name": "Nebius Logs",
+                                    "uid": "nebius-logs",
+                                    "type": "loki",
+                                    "read_endpoint": "logs_loki_read",
+                                },
+                                "user-metrics": {
+                                    "name": "Nebius User Metrics",
+                                    "uid": "nebius-user-metrics",
+                                    "type": "prometheus",
+                                    "read_endpoint": "metrics_user_read",
+                                },
+                            },
+                        },
+                    }
+                },
+            )
+    )
+
+    loaded = load_component_sources(explicit=sources_file)
+    chart = next(item for item in loaded.helm_charts if item.name == "grafana")
+    dashboards = next(
+        item for item in chart.defaults if item.target_path == "values.dashboards"
+    ).value["myfolder"]
+
+    assert json.loads(dashboards["kubernetes-mylogs"]["json"])["uid"] == ("custom-relative-logs")
+    assert json.loads(dashboards["kubernetes-mymetrics"]["json"])["uid"] == (
+        "custom-absolute-metrics"
+    )
+    assert "json_file" not in dashboards["kubernetes-mylogs"]
+    assert "json_file" not in dashboards["kubernetes-mymetrics"]
+
+
+def test_load_component_sources_rejects_gnet_dashboard_without_uid(
+    tmp_path: Path,
+) -> None:
+    sources_file = tmp_path / "component-sources.yaml"
+    _write_catalog_file(
+        sources_file,
+        _catalog(
+                apps={
+                    "grafana": {
+                        "source": _portable_chart_source(
+                            repo="https://example.invalid/charts",
+                            chart="grafana",
+                            version="1.0.0",
+                        ),
+                        "release": {
+                            "namespace": "observability",
+                            "name": "grafana",
+                        },
+                        "defaults": {
+                            "values.dashboards.nebius.service-dashboard": {
+                                "gnetId": 123,
+                                "revision": 1,
+                                "datasource": "Nebius Services",
+                            }
+                        },
+                        "cli": {
+                            "datasources": {
+                                "service-metrics": {
+                                    "name": "Nebius Services",
+                                    "uid": "nebius-service-metrics",
+                                    "type": "prometheus",
+                                    "read_endpoint": "metrics_service_provider_read",
+                                }
+                            },
+                        },
+                    }
+                }
+            )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"components\.apps\.grafana\.defaults\.values\.dashboards\.nebius"
+            r"\.service-dashboard\.uid is required for gnetId dashboards"
+        ),
+    ):
+        load_component_sources(explicit=sources_file)
+
+
+def test_load_component_sources_rejects_any_grafana_dashboard_unknown_datasource(
+    tmp_path: Path,
+) -> None:
+    sources_file = tmp_path / "component-sources.yaml"
+    _write_catalog_file(
+        sources_file,
+        _catalog(
+                apps={
+                    "grafana": {
+                        "source": _portable_chart_source(
+                            repo="https://example.invalid/charts",
+                            chart="grafana",
+                            version="1.0.0",
+                        ),
+                        "release": {
+                            "namespace": "observability",
+                            "name": "grafana",
+                        },
+                        "defaults": {
+                            "values.dashboards.nebius.service-dashboard": {
+                                "gnetId": 123,
+                                "revision": 1,
+                                "uid": "service-dashboard",
+                                "datasource": "Missing Datasource",
+                            }
+                        },
+                        "cli": {
+                            "datasources": {
+                                "service-metrics": {
+                                    "name": "Nebius Services",
+                                    "uid": "nebius-service-metrics",
+                                    "type": "prometheus",
+                                    "read_endpoint": "metrics_service_provider_read",
+                                }
+                            },
+                        },
+                    }
+                }
+            )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"components\.apps\.grafana\.defaults\.values\.dashboards\.nebius"
+            r"\.service-dashboard\.datasource references 'Missing Datasource'"
+        ),
+    ):
+        load_component_sources(explicit=sources_file)
+
+
+def test_load_component_sources_rejects_mixed_grafana_dashboard_provider_modes(
+    tmp_path: Path,
+) -> None:
+    sources_file = tmp_path / "component-sources.yaml"
+    _write_catalog_file(
+        sources_file,
+        _catalog(
+                apps={
+                    "grafana": {
+                        "source": _portable_chart_source(
+                            repo="https://example.invalid/charts",
+                            chart="grafana",
+                            version="1.0.0",
+                        ),
+                        "release": {
+                            "namespace": "observability",
+                            "name": "grafana",
+                        },
+                        "defaults": {
+                            "values.dashboards.nebius.service-dashboard": {
+                                "gnetId": 123,
+                                "revision": 1,
+                                "uid": "service-dashboard",
+                                "datasource": "Nebius Services",
+                            },
+                            "values.dashboards.nebius.kubernetes-logs-from-loki": {
+                                "json": json.dumps(
+                                    {
+                                        "uid": "cxcli-test-logs",
+                                        "title": "Logs",
+                                        "panels": [],
+                                    }
+                                ),
+                                "datasource": "Nebius Services",
+                            },
+                        },
+                        "cli": {
+                            "datasources": {
+                                "service-metrics": {
+                                    "name": "Nebius Services",
+                                    "uid": "nebius-service-metrics",
+                                    "type": "prometheus",
+                                    "read_endpoint": "metrics_service_provider_read",
+                                }
+                            },
+                        },
+                    }
+                }
+            )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"components\.apps\.grafana\.defaults\.values\.dashboards\.nebius "
+            r"must not mix Grafana\.com gnetId dashboards with dashboard JSON"
+        ),
+    ):
+        load_component_sources(explicit=sources_file)
+
+
+def test_load_component_sources_rejects_grafana_dashboard_json_and_json_file(
+    tmp_path: Path,
+) -> None:
+    dashboard_file = tmp_path / "kubernetes-logs.json"
+    dashboard_file.write_text(
+        json.dumps({"uid": "cxcli-test-logs", "title": "Logs", "panels": []}),
+        encoding="utf-8",
+    )
+    sources_file = tmp_path / "component-sources.yaml"
+    _write_catalog_file(
+        sources_file,
+        _catalog(
+                apps={
+                    "grafana": {
+                        "source": _portable_chart_source(
+                            repo="https://example.invalid/charts",
+                            chart="grafana",
+                            version="1.0.0",
+                        ),
+                        "release": {
+                            "namespace": "observability",
+                            "name": "grafana",
+                        },
+                        "defaults": {
+                            "values.dashboards.nebius-kubernetes.kubernetes-logs-from-loki": {
+                                "json": json.dumps({"uid": "inline"}),
+                                "json_file": "kubernetes-logs.json",
+                                "datasource": "Nebius Logs",
+                            }
+                        },
+                    }
+                }
+            )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"components\.apps\.grafana\.defaults\.values\.dashboards\.nebius-kubernetes"
+            r"\.kubernetes-logs-from-loki must not declare both json and json_file"
         ),
     ):
         load_component_sources(explicit=sources_file)
@@ -935,9 +1449,43 @@ def test_load_component_sources_rejects_grafana_report_dashboard_missing_gnet_id
 
 def test_load_component_sources_rejects_grafana_logout_timeout_never(tmp_path: Path) -> None:
     sources_file = tmp_path / "component-sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
+                apps={
+                    "grafana": {
+                        "source": _portable_chart_source(
+                            repo="https://example.invalid/charts",
+                            chart="grafana",
+                            version="1.0.0",
+                        ),
+                        "release": {
+                            "namespace": "observability",
+                            "name": "grafana",
+                        },
+                        "cli": {
+                            "logout-timeout": "never",
+                        },
+                    }
+                }
+            )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"components\.apps\.grafana\.cli\.logout-timeout must be "
+            r"a Grafana duration"
+        ),
+    ):
+        load_component_sources(explicit=sources_file)
+
+
+def test_load_component_sources_rejects_nested_grafana_cli_namespace(tmp_path: Path) -> None:
+    sources_file = tmp_path / "component-sources.yaml"
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 apps={
                     "grafana": {
                         "source": _portable_chart_source(
@@ -951,23 +1499,17 @@ def test_load_component_sources_rejects_grafana_logout_timeout_never(tmp_path: P
                         },
                         "cli": {
                             "grafana": {
-                                "logout-timeout": "never",
+                                "logout-timeout": "20m",
                             }
                         },
                     }
                 }
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     with pytest.raises(
         ValueError,
-        match=(
-            r"components\.apps\.grafana\.cli\.grafana\.logout-timeout must be "
-            r"a Grafana duration"
-        ),
+        match=r"components\.apps\.grafana\.cli has unsupported field\(s\): grafana",
     ):
         load_component_sources(explicit=sources_file)
 
@@ -976,9 +1518,9 @@ def test_load_component_sources_rejects_grafana_datasource_unknown_read_endpoint
     tmp_path: Path,
 ) -> None:
     sources_file = tmp_path / "component-sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 apps={
                     "grafana": {
                         "source": _portable_chart_source(
@@ -991,29 +1533,24 @@ def test_load_component_sources_rejects_grafana_datasource_unknown_read_endpoint
                             "name": "grafana",
                         },
                         "cli": {
-                            "grafana": {
-                                "datasources": {
-                                    "future": {
-                                        "name": "Future Read API",
-                                        "uid": "future-read-api",
-                                        "type": "prometheus",
-                                        "read_endpoint": "future_read",
-                                    }
+                            "datasources": {
+                                "future": {
+                                    "name": "Future Read API",
+                                    "uid": "future-read-api",
+                                    "type": "prometheus",
+                                    "read_endpoint": "future_read",
                                 }
                             }
                         },
                     }
                 }
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     with pytest.raises(
         ValueError,
         match=(
-            r"components\.apps\.grafana\.cli\.grafana\.datasources\.future"
+            r"components\.apps\.grafana\.cli\.datasources\.future"
             r"\.read_endpoint references 'future_read', but that read endpoint "
             r"is not declared under observability\.endpoints\.read"
         ),
@@ -1025,9 +1562,9 @@ def test_load_component_sources_allows_grafana_datasource_bound_to_catalog_read_
     tmp_path: Path,
 ) -> None:
     sources_file = tmp_path / "component-sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 observability={
                     "endpoints": {
                         "read": {
@@ -1052,6 +1589,7 @@ def test_load_component_sources_allows_grafana_datasource_bound_to_catalog_read_
                                 "primary_agent": {
                                     "kind": "kubernetes_agent",
                                     "chart_component_id": "nebius-observability-agent",
+                                    "validation": _kubernetes_agent_validation_enabled(),
                                 },
                             }
                         },
@@ -1069,23 +1607,18 @@ def test_load_component_sources_allows_grafana_datasource_bound_to_catalog_read_
                             "name": "grafana",
                         },
                         "cli": {
-                            "grafana": {
-                                "datasources": {
-                                    "future": {
-                                        "name": "Future Read API",
-                                        "uid": "future-read-api",
-                                        "type": "prometheus",
-                                        "read_endpoint": "future_read",
-                                    }
+                            "datasources": {
+                                "future": {
+                                    "name": "Future Read API",
+                                    "uid": "future-read-api",
+                                    "type": "prometheus",
+                                    "read_endpoint": "future_read",
                                 }
                             }
                         },
                     }
                 },
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     loaded = load_component_sources(explicit=sources_file)
@@ -1094,13 +1627,13 @@ def test_load_component_sources_allows_grafana_datasource_bound_to_catalog_read_
     assert grafana.grafana.datasources[0].read_endpoint == "future_read"
 
 
-def test_load_component_sources_rejects_component_local_observability_endpoints(
+def test_load_component_sources_parses_mk8s_observability_validation_switch(
     tmp_path: Path,
 ) -> None:
     sources_file = tmp_path / "component-sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 infra={
                     "mk8s": {
                         "source": {
@@ -1114,6 +1647,44 @@ def test_load_component_sources_rejects_component_local_observability_endpoints(
                                 "primary_agent": {
                                     "kind": "kubernetes_agent",
                                     "chart_component_id": "nebius-observability-agent",
+                                    "validation": False,
+                                },
+                            }
+                        },
+                    }
+                },
+            )
+    )
+
+    loaded = load_component_sources(explicit=sources_file)
+
+    mk8s = next(module for module in loaded.tf_modules if module.module == "mk8s")
+    assert mk8s.observability.validation.enabled is False
+    assert mk8s.observability.validation.helmrelease_ready_condition == "Ready"
+    assert mk8s.observability.validation.pod_failure_sample_limit == 5
+
+
+def test_load_component_sources_rejects_component_local_observability_endpoints(
+    tmp_path: Path,
+) -> None:
+    sources_file = tmp_path / "component-sources.yaml"
+    _write_catalog_file(
+        sources_file,
+        _catalog(
+                infra={
+                    "mk8s": {
+                        "source": {
+                            "portable": (
+                                "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3"
+                            )
+                        },
+                        "ui": {"enabled": True},
+                        "cli": {
+                            "observability": {
+                                "primary_agent": {
+                                    "kind": "kubernetes_agent",
+                                    "chart_component_id": "nebius-observability-agent",
+                                    "validation": _kubernetes_agent_validation_enabled(),
                                 },
                                 "endpoints": {
                                     "read": {
@@ -1129,10 +1700,7 @@ def test_load_component_sources_rejects_component_local_observability_endpoints(
                         },
                     }
                 },
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     with pytest.raises(
@@ -1149,9 +1717,9 @@ def test_load_component_sources_allows_service_observability_for_non_agent_infra
     tmp_path: Path,
 ) -> None:
     sources_file = tmp_path / "component-sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 infra={
                     "object-storage": {
                         "source": {
@@ -1181,10 +1749,7 @@ def test_load_component_sources_allows_service_observability_for_non_agent_infra
                         },
                     }
                 },
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     loaded = load_component_sources(explicit=sources_file)
@@ -1193,9 +1758,7 @@ def test_load_component_sources_allows_service_observability_for_non_agent_infra
     assert [bucket.name for bucket in object_storage.observability.service_metrics] == [
         "future_storage"
     ]
-    assert object_storage.observability.service_logs[0].include_when == (
-        "inputs.audit_enabled",
-    )
+    assert object_storage.observability.service_logs[0].include_when == ("inputs.audit_enabled",)
 
 
 def test_load_component_sources_falls_back_to_repo_default_catalog_when_bundled_missing(
@@ -1370,7 +1933,7 @@ def test_bundled_gpu_operator_observability_declares_dcgm_node_policy() -> None:
     target = gpu_operator.observability.metric_targets[0]
 
     assert target.job_name == "cxcli-nvidia-dcgm-exporter"
-    assert target.discovery == "additional_target"
+    assert target.discovery == "prometheus_annotations"
     assert dict(target.required_gpu_node_labels) == {
         "nvidia.com/gpu.deploy.operands": "true",
         "nvidia.com/gpu.deploy.dcgm-exporter": "true",
@@ -1380,15 +1943,88 @@ def test_bundled_gpu_operator_observability_declares_dcgm_node_policy() -> None:
     }
     assert dict(target.required_gpu_node_selector) == {"nebius.com/gpu": "true"}
     assert target.required_gpu_node_label_stack_sources == ("nebius_image",)
+    assert [item.name for item in gpu_operator.mk8s_gpu.default_sets] == [
+        "nebius_image_gpu_nfd",
+    ]
+    gpu_nfd_default_set = gpu_operator.mk8s_gpu.default_sets[0]
+    defaults = {item.target_path: item.value for item in gpu_nfd_default_set.defaults}
+    assert defaults["values.node-feature-discovery.worker.affinity"]["nodeAffinity"][
+        "requiredDuringSchedulingIgnoredDuringExecution"
+    ]["nodeSelectorTerms"][0]["matchExpressions"][0] == {
+        "key": "nebius.com/gpu",
+        "operator": "In",
+        "values": ["true"],
+    }
+    gpu_nfd_rule = next(
+        rule
+        for rule in gpu_operator.mk8s_gpu.rules
+        if rule.gpu_stack_source == "nebius_image" and rule.gpu_cluster_enabled is False
+    )
+    assert gpu_nfd_rule.defaults_from == ("nebius_image_gpu_nfd",)
+
+
+def test_bundled_network_operator_declares_single_nfd_owner_policy() -> None:
+    loaded = load_component_sources(
+        explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml"
+    )
+    network_operator = next(
+        item for item in loaded.helm_charts if item.name == "nvidia-network-operator"
+    )
+
+    assert [item.name for item in network_operator.mk8s_gpu.default_sets] == [
+        "network_operator_nfd",
+        "driverful_infiniband_node_selection",
+    ]
+    default_sets = {
+        item.name: {default.target_path: default.value for default in item.defaults}
+        for item in network_operator.mk8s_gpu.default_sets
+    }
+    assert default_sets["network_operator_nfd"] == {
+        "values.nfd.enabled": True,
+        "values.nfd.deployNodeFeatureRules": True,
+    }
+    assert default_sets["driverful_infiniband_node_selection"][
+        "values.node-feature-discovery.worker.affinity"
+    ]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"][0][
+        "matchExpressions"
+    ][0] == {
+        "key": "nebius.com/driverful",
+        "operator": "In",
+        "values": ["true"],
+    }
+
+    gpu_cluster_rule = next(
+        rule
+        for rule in network_operator.mk8s_gpu.rules
+        if rule.gpu_cluster_enabled is True and rule.gpu_stack_source == ""
+    )
+    assert gpu_cluster_rule.auto_enable is True
+    assert gpu_cluster_rule.defaults_from == ("network_operator_nfd",)
+
+    b200_rule = next(
+        rule
+        for rule in network_operator.mk8s_gpu.rules
+        if rule.gpu_stack_source == "operator_managed"
+        and rule.match_platforms == ("gpu-b200-sxm", "gpu-b200-sxm-a")
+    )
+    assert b200_rule.auto_enable is True
+    assert b200_rule.defaults_from == ("network_operator_nfd",)
+
+    driverful_cluster_rule = next(
+        rule
+        for rule in network_operator.mk8s_gpu.rules
+        if rule.gpu_stack_source == "nebius_image" and rule.gpu_cluster_enabled is True
+    )
+    assert driverful_cluster_rule.defaults_from == ("driverful_infiniband_node_selection",)
 
 
 def test_component_sources_rejects_invalid_observability_gpu_node_label_stack_source(
     tmp_path: Path,
 ) -> None:
     sources_file = tmp_path / "component_sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 apps={
                     "gpu-operator": {
                         "source": _portable_chart_source(
@@ -1421,10 +2057,7 @@ def test_component_sources_rejects_invalid_observability_gpu_node_label_stack_so
                         },
                     }
                 }
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     with pytest.raises(
@@ -1444,6 +2077,10 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
     )
     mk8s = next(item for item in loaded.tf_modules if item.module == "mk8s")
 
+    assert mk8s.mk8s_gpu.validations.nccl.rdma_mpi_extra_args == (
+        "-x",
+        "NCCL_DMABUF_ENABLE=1",
+    )
     assert mk8s.wizard_fields == {
         "inputs.subnet_id": {
             "options": {
@@ -1578,7 +2215,7 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
             "default": True,
         },
         "deploy.targets[].observability.kubernetes.metrics.excluded_namespaces": {
-            "default": [],
+            "default": ["kube-system"],
             "prompt": False,
         },
         "deploy.targets[].observability.kubernetes.traces.enabled": {
@@ -1631,6 +2268,9 @@ def test_bundled_cpu_only_charts_avoid_nebius_gpu_nodes_by_default() -> None:
     n8n_defaults = {item.target_path: item.value for item in charts["n8n"].defaults}
 
     assert grafana_defaults["values.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
+    assert "values.image.registry" not in grafana_defaults
+    assert "values.image.repository" not in grafana_defaults
+    assert "values.image.tag" not in grafana_defaults
     grafana_settings = charts["grafana"].grafana
     assert grafana_settings.org_id == 1
     assert grafana_settings.logout_timeout == "20m"
@@ -1653,6 +2293,7 @@ def test_bundled_cpu_only_charts_avoid_nebius_gpu_nodes_by_default() -> None:
             "type": datasource.datasource_type,
             "read_endpoint": datasource.read_endpoint,
             "is_default": datasource.is_default,
+            "description": datasource.description,
         }
         for key, datasource in datasources.items()
     } == {
@@ -1662,6 +2303,10 @@ def test_bundled_cpu_only_charts_avoid_nebius_gpu_nodes_by_default() -> None:
             "type": "prometheus",
             "read_endpoint": "metrics_service_provider_read",
             "is_default": True,
+            "description": (
+                "Nebius/provider service metrics for cloud resources and "
+                "Nebius service dashboards."
+            ),
         },
         "user-metrics": {
             "name": "Nebius User Metrics",
@@ -1669,6 +2314,10 @@ def test_bundled_cpu_only_charts_avoid_nebius_gpu_nodes_by_default() -> None:
             "type": "prometheus",
             "read_endpoint": "metrics_user_read",
             "is_default": False,
+            "description": (
+                "Customer/user-ingested Prometheus metrics, including Kubernetes "
+                "metrics written by the Nebius observability agent."
+            ),
         },
         "logs": {
             "name": "Nebius Logs",
@@ -1676,6 +2325,7 @@ def test_bundled_cpu_only_charts_avoid_nebius_gpu_nodes_by_default() -> None:
             "type": "loki",
             "read_endpoint": "logs_loki_read",
             "is_default": False,
+            "description": "",
         },
         "traces": {
             "name": "Nebius Traces",
@@ -1683,6 +2333,7 @@ def test_bundled_cpu_only_charts_avoid_nebius_gpu_nodes_by_default() -> None:
             "type": "tempo",
             "read_endpoint": "traces_tempo_read",
             "is_default": False,
+            "description": "",
         },
     }
     report_dashboards = {binding.signal: binding for binding in grafana_settings.report_dashboards}
@@ -1691,43 +2342,74 @@ def test_bundled_cpu_only_charts_avoid_nebius_gpu_nodes_by_default() -> None:
             "folder": binding.folder,
             "dashboard": binding.dashboard,
             "gnet_id": binding.gnet_id,
+            "dashboard_uid": binding.dashboard_uid,
             "datasource": binding.datasource,
+            "read_endpoint": binding.read_endpoint,
         }
         for signal, binding in report_dashboards.items()
     } == {
         "metrics": {
-            "folder": "nebius",
+            "folder": "nebius-kubernetes",
             "dashboard": "kubernetes-cluster-monitoring",
-            "gnet_id": 315,
+            "gnet_id": 0,
+            "dashboard_uid": "cxcli-kubernetes-metrics",
             "datasource": "Nebius User Metrics",
+            "read_endpoint": "metrics_user_read",
         },
         "logs": {
-            "folder": "nebius",
+            "folder": "nebius-kubernetes",
             "dashboard": "kubernetes-logs-from-loki",
-            "gnet_id": 18494,
+            "gnet_id": 0,
+            "dashboard_uid": "cxcli-kubernetes-logs",
             "datasource": "Nebius Logs",
+            "read_endpoint": "logs_loki_read",
         },
         "traces": {
-            "folder": "nebius",
-            "dashboard": "guardrails-starter-traces",
-            "gnet_id": 20600,
+            "folder": "nebius-kubernetes",
+            "dashboard": "kubernetes-traces",
+            "gnet_id": 0,
+            "dashboard_uid": "cxcli-kubernetes-traces",
             "datasource": "Nebius Traces",
+            "read_endpoint": "traces_tempo_read",
         },
     }
-    grafana_dashboards = grafana_defaults["values.dashboards"]["nebius"]
+    grafana_service_dashboards = grafana_defaults["values.dashboards"]["nebius"]
+    grafana_dashboards = grafana_defaults["values.dashboards"]["nebius-kubernetes"]
     for binding in report_dashboards.values():
-        assert binding.folder == "nebius"
+        assert binding.folder == "nebius-kubernetes"
         dashboard = grafana_dashboards[binding.dashboard]
-        assert dashboard["gnetId"] == binding.gnet_id
+        dashboard_json = json.loads(dashboard["json"])
+        assert dashboard_json["uid"] == binding.dashboard_uid
         assert dashboard["datasource"] == binding.datasource
-    assert grafana_dashboards["kubernetes-cluster-monitoring"]["gnetId"] == 315
-    assert grafana_dashboards["kubernetes-logs-from-loki"]["gnetId"] == 18494
-    assert grafana_dashboards["guardrails-starter-traces"]["gnetId"] == 20600
+        assert "json_file" not in dashboard
+    assert (
+        'label_values(container_cpu_usage_seconds_total{\\"k8s.cluster.id\\"=~\\"$Cluster\\"}, kubernetes_io_hostname)'
+        in grafana_dashboards["kubernetes-cluster-monitoring"]["json"]
+    )
+    assert "kube_pod_info" not in grafana_dashboards["kubernetes-cluster-monitoring"]["json"]
+    assert (
+        'label_values({__bucket__=\\"default\\", k8s_cluster_id=~\\"$Cluster\\"}, k8s_namespace_name)'
+        in grafana_dashboards["kubernetes-logs-from-loki"]["json"]
+    )
+    assert "{}" in grafana_dashboards["kubernetes-traces"]["json"]
     assert {
         dashboard["datasource"]
-        for key, dashboard in grafana_dashboards.items()
+        for key, dashboard in grafana_service_dashboards.items()
         if key.startswith("nebius-")
     } == {"Nebius Services"}
+    assert {
+        key: dashboard["uid"]
+        for key, dashboard in grafana_service_dashboards.items()
+        if key.startswith("nebius-")
+    } == {
+        "nebius-disk": "nebius-disk-user-stats",
+        "nebius-gpu": "nebius-gpu",
+        "nebius-managed-postgres": "nebius-postgresql",
+        "nebius-object-storage": "nebius-object-storage",
+        "nebius-observability-platform": "nebius-observability",
+        "nebius-shared-filesystem": "nebius-shared-filesystem",
+        "nebius-shared-filesystem-extended": "nebius-shared-filesystem-extended",
+    }
     envoy_proxy = next(
         item for item in grafana_defaults["values.extraObjects"] if item["kind"] == "EnvoyProxy"
     )
@@ -2097,9 +2779,9 @@ def test_load_component_sources_rejects_unsupported_config_bindings_field(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     sources_file = tmp_path / "component_sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 cli={
                     "flux": {
                         "version": "v2.8.0",
@@ -2119,10 +2801,7 @@ def test_load_component_sources_rejects_unsupported_config_bindings_field(
                         },
                     }
                 },
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     monkeypatch.setenv("NEBIUS_CXCLI_COMPONENT_SOURCES_FILE", str(sources_file))
@@ -2136,18 +2815,15 @@ def test_load_component_sources_rejects_unsupported_config_bindings_field(
 def test_load_component_sources_rejects_invalid_flux_version(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     sources_file = tmp_path / "component_sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 cli={
                     "flux": {
                         "version": "latest",
                     }
                 }
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     monkeypatch.setenv("NEBIUS_CXCLI_COMPONENT_SOURCES_FILE", str(sources_file))
@@ -2163,18 +2839,15 @@ def test_load_component_sources_rejects_invalid_terraform_version(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     sources_file = tmp_path / "component_sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 cli={
                     "terraform": {
                         "version": "latest",
                     }
                 }
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     monkeypatch.setenv("NEBIUS_CXCLI_COMPONENT_SOURCES_FILE", str(sources_file))
@@ -2187,9 +2860,9 @@ def test_load_component_sources_rejects_invalid_terraform_version(
 
 def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> None:
     sources_file = tmp_path / "component_sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 infra={
                     "mk8s": {
                         "source": {
@@ -2230,6 +2903,7 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                                 "primary_agent": {
                                     "kind": "kubernetes_agent",
                                     "chart_component_id": "nebius-observability-agent",
+                                    "validation": _kubernetes_agent_validation_enabled(),
                                     "logs": {
                                         "default_enabled": True,
                                         "collect_agent_logs": False,
@@ -2239,6 +2913,7 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                                         "default_enabled": True,
                                         "collect_agent_metrics": False,
                                         "collect_k8s_cluster_metrics": True,
+                                        "excluded_namespaces": ["kube-system"],
                                     },
                                     "traces": {
                                         "default_enabled": True,
@@ -2343,9 +3018,26 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                             "mk8s_gpu_policy": {
                                 "role": "network_operator",
                                 "default_sets": {
-                                    "driverful_infiniband_nfd": {
+                                    "network_operator_nfd": {
                                         "values.nfd.enabled": True,
                                         "values.nfd.deployNodeFeatureRules": True,
+                                    },
+                                    "driverful_infiniband_node_selection": {
+                                        "values.nodeAffinity": {
+                                            "requiredDuringSchedulingIgnoredDuringExecution": {
+                                                "nodeSelectorTerms": [
+                                                    {
+                                                        "matchExpressions": [
+                                                            {
+                                                                "key": "feature.node.kubernetes.io/pci-15b3.present",
+                                                                "operator": "In",
+                                                                "values": ["true"],
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        }
                                     }
                                 },
                                 "post_render_patch_sets": {
@@ -2365,7 +3057,7 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                                                     "rdmaSharedDevicePlugin": {
                                                         "image": "k8s-rdma-shared-dev-plugin",
                                                         "repository": "nvcr.io/nvidia/mellanox",
-                                                        "version": "network-operator-v25.7.0",
+                                                        "version": "network-operator-v{chart_version}",
                                                         "config": '{"configList":[]}',
                                                     }
                                                 },
@@ -2375,14 +3067,20 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                                 },
                                 "rules": [
                                     {
+                                        "gpu_cluster_enabled": True,
+                                        "auto_enable": True,
+                                        "defaults_from": ["network_operator_nfd"],
+                                    },
+                                    {
                                         "gpu_stack_source": "operator_managed",
                                         "match_platforms": ["gpu-b200-sxm"],
                                         "auto_enable": True,
+                                        "defaults_from": ["network_operator_nfd"],
                                     },
                                     {
                                         "gpu_stack_source": "nebius_image",
                                         "gpu_cluster_enabled": True,
-                                        "defaults_from": ["driverful_infiniband_nfd"],
+                                        "defaults_from": ["driverful_infiniband_node_selection"],
                                         "post_render_patches_from": ["rdma_shared_device_plugin"],
                                     },
                                 ],
@@ -2418,10 +3116,7 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                         },
                     },
                 },
-            ),
-            sort_keys=False,
         ),
-        encoding="utf-8",
     )
 
     loaded = load_component_sources(explicit=sources_file)
@@ -2435,22 +3130,32 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
     )
     assert network_operator.mk8s_gpu.role == "network_operator"
     assert [item.name for item in network_operator.mk8s_gpu.default_sets] == [
-        "driverful_infiniband_nfd",
+        "network_operator_nfd",
+        "driverful_infiniband_node_selection",
     ]
     assert [item.target_path for item in network_operator.mk8s_gpu.default_sets[0].defaults] == [
         "values.nfd.enabled",
         "values.nfd.deployNodeFeatureRules",
     ]
+    assert [item.target_path for item in network_operator.mk8s_gpu.default_sets[1].defaults] == [
+        "values.nodeAffinity",
+    ]
     assert [item.name for item in network_operator.mk8s_gpu.post_render_patch_sets] == [
         "rdma_shared_device_plugin",
     ]
-    assert network_operator.mk8s_gpu.rules[0].gpu_stack_source == "operator_managed"
-    assert network_operator.mk8s_gpu.rules[0].match_platforms == ("gpu-b200-sxm",)
+    assert network_operator.mk8s_gpu.rules[0].gpu_cluster_enabled is True
     assert network_operator.mk8s_gpu.rules[0].auto_enable is True
-    assert network_operator.mk8s_gpu.rules[1].gpu_stack_source == "nebius_image"
-    assert network_operator.mk8s_gpu.rules[1].gpu_cluster_enabled is True
-    assert network_operator.mk8s_gpu.rules[1].defaults_from == ("driverful_infiniband_nfd",)
-    assert network_operator.mk8s_gpu.rules[1].post_render_patches_from == (
+    assert network_operator.mk8s_gpu.rules[0].defaults_from == ("network_operator_nfd",)
+    assert network_operator.mk8s_gpu.rules[1].gpu_stack_source == "operator_managed"
+    assert network_operator.mk8s_gpu.rules[1].match_platforms == ("gpu-b200-sxm",)
+    assert network_operator.mk8s_gpu.rules[1].auto_enable is True
+    assert network_operator.mk8s_gpu.rules[1].defaults_from == ("network_operator_nfd",)
+    assert network_operator.mk8s_gpu.rules[2].gpu_stack_source == "nebius_image"
+    assert network_operator.mk8s_gpu.rules[2].gpu_cluster_enabled is True
+    assert network_operator.mk8s_gpu.rules[2].defaults_from == (
+        "driverful_infiniband_node_selection",
+    )
+    assert network_operator.mk8s_gpu.rules[2].post_render_patches_from == (
         "rdma_shared_device_plugin",
     )
     assert (
@@ -2460,7 +3165,7 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
     patch_text = network_operator.mk8s_gpu.post_render_patch_sets[0].patches[0].patch
     assert "kind: NicClusterPolicy" in patch_text
     assert "image: k8s-rdma-shared-dev-plugin" in patch_text
-    assert "version: network-operator-v25.7.0" in patch_text
+    assert "version: network-operator-v1.0.0" in patch_text
     gpu_defaults_rule = next(
         rule
         for rule in gpu_operator.mk8s_gpu.rules
@@ -2514,6 +3219,19 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
     assert mk8s.observability.mode == "kubernetes_agent"
     assert mk8s.observability.chart_component_id == "nebius-observability-agent"
     assert mk8s.observability.logs.excluded_namespaces == ("kube-system",)
+    assert mk8s.observability.metrics.excluded_namespaces == ("kube-system",)
+    assert mk8s.observability.validation.enabled is True
+    assert mk8s.observability.validation.helmrelease_ready_condition == "Ready"
+    assert mk8s.observability.validation.signal_value_paths["metrics"] == (
+        "spec.values.config.metrics.enabled"
+    )
+    assert mk8s.observability.validation.cluster_metric_targets_path == (
+        "spec.values.config.metrics.additionalTargets"
+    )
+    assert mk8s.observability.validation.daemonset_name == "o11y-agent"
+    assert mk8s.observability.validation.pod_failure_sample_limit == 5
+    assert mk8s.observability.validation.trace_otlp_service.port == 4317
+    assert mk8s.observability.validation.trace_otlp_service.endpoint_slice_check_limit == 5
     assert gpu_operator.observability.metric_targets[0].job_name == "cxcli-nvidia-dcgm-exporter"
     assert gpu_operator.observability.metric_targets[0].discovery == "prometheus_annotations"
     assert dict(gpu_operator.observability.metric_targets[0].required_gpu_node_labels) == {
@@ -2530,9 +3248,9 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
 
 def test_load_component_sources_parses_vm_cli_settings(tmp_path: Path) -> None:
     sources_file = tmp_path / "component_sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 infra={
                     "vm": {
                         "source": {
@@ -2566,10 +3284,7 @@ def test_load_component_sources_parses_vm_cli_settings(tmp_path: Path) -> None:
                         },
                     }
                 },
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     loaded = load_component_sources(explicit=sources_file)
@@ -2593,9 +3308,9 @@ def test_load_component_sources_parses_vm_public_ingest_package_source(
     tmp_path: Path,
 ) -> None:
     sources_file = tmp_path / "component_sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 infra={
                     "vm": {
                         "source": {
@@ -2630,10 +3345,7 @@ def test_load_component_sources_parses_vm_public_ingest_package_source(
                         },
                     }
                 },
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     loaded = load_component_sources(explicit=sources_file)
@@ -2694,9 +3406,9 @@ def test_load_component_sources_rejects_incomplete_vm_public_ingest(
     message: str,
 ) -> None:
     sources_file = tmp_path / "component_sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 infra={
                     "vm": {
                         "source": {
@@ -2714,10 +3426,7 @@ def test_load_component_sources_rejects_incomplete_vm_public_ingest(
                         },
                     }
                 },
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     with pytest.raises(ValueError, match=message):
@@ -2728,9 +3437,9 @@ def test_load_component_sources_rejects_top_level_infra_observability_signals(
     tmp_path: Path,
 ) -> None:
     sources_file = tmp_path / "component_sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 infra={
                     "vm": {
                         "source": {
@@ -2750,10 +3459,7 @@ def test_load_component_sources_rejects_top_level_infra_observability_signals(
                         },
                     }
                 },
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     with pytest.raises(
@@ -2773,9 +3479,9 @@ def test_load_component_sources_resolves_local_nccl_chart_source(tmp_path: Path)
     (chart_dir / "values.yaml").write_text("image: {}\n", encoding="utf-8")
     (chart_dir / "templates").mkdir()
     sources_file = tmp_path / "component_sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 infra={
                     "mk8s": {
                         "source": {
@@ -2815,10 +3521,7 @@ def test_load_component_sources_resolves_local_nccl_chart_source(tmp_path: Path)
                         },
                     }
                 },
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     loaded = load_component_sources(explicit=sources_file, source_profile=SourceProfile.LOCAL)
@@ -2831,9 +3534,9 @@ def test_load_component_sources_resolves_local_nccl_chart_source(tmp_path: Path)
 
 def test_load_component_sources_rejects_invalid_mk8s_gpu_app_role_value(tmp_path: Path) -> None:
     sources_file = tmp_path / "component_sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 apps={
                     "gpu-operator": {
                         "source": _portable_chart_source(
@@ -2853,10 +3556,7 @@ def test_load_component_sources_rejects_invalid_mk8s_gpu_app_role_value(tmp_path
                         },
                     }
                 },
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     with pytest.raises(
@@ -2868,9 +3568,9 @@ def test_load_component_sources_rejects_invalid_mk8s_gpu_app_role_value(tmp_path
 
 def test_load_component_sources_rejects_legacy_mk8s_gpu_app_cli_key(tmp_path: Path) -> None:
     sources_file = tmp_path / "component_sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 apps={
                     "gpu-operator": {
                         "source": _portable_chart_source(
@@ -2890,10 +3590,7 @@ def test_load_component_sources_rejects_legacy_mk8s_gpu_app_cli_key(tmp_path: Pa
                         },
                     }
                 },
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     with pytest.raises(
@@ -2905,9 +3602,9 @@ def test_load_component_sources_rejects_legacy_mk8s_gpu_app_cli_key(tmp_path: Pa
 
 def test_load_component_sources_rejects_empty_mk8s_gpu_rule(tmp_path: Path) -> None:
     sources_file = tmp_path / "component_sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 apps={
                     "gpu-operator": {
                         "source": _portable_chart_source(
@@ -2932,10 +3629,7 @@ def test_load_component_sources_rejects_empty_mk8s_gpu_rule(tmp_path: Path) -> N
                         },
                     }
                 },
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     with pytest.raises(
@@ -2949,9 +3643,9 @@ def test_load_component_sources_rejects_unknown_mk8s_gpu_default_set_reference(
     tmp_path: Path,
 ) -> None:
     sources_file = tmp_path / "component_sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 apps={
                     "network-op": {
                         "source": _portable_chart_source(
@@ -2977,10 +3671,7 @@ def test_load_component_sources_rejects_unknown_mk8s_gpu_default_set_reference(
                         },
                     }
                 },
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     with pytest.raises(
@@ -2994,9 +3685,9 @@ def test_load_component_sources_rejects_unknown_mk8s_gpu_post_render_patch_set_r
     tmp_path: Path,
 ) -> None:
     sources_file = tmp_path / "component_sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 apps={
                     "network-op": {
                         "source": _portable_chart_source(
@@ -3022,15 +3713,80 @@ def test_load_component_sources_rejects_unknown_mk8s_gpu_post_render_patch_set_r
                         },
                     }
                 },
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     with pytest.raises(
         ValueError,
         match="components\\.apps\\.network-op\\.cli\\.mk8s_gpu_policy\\.rules\\[0\\]\\.post_render_patches_from references unknown post_render_patch_set\\(s\\): missing-patch-set",
+    ):
+        load_component_sources(explicit=sources_file)
+
+
+def test_load_component_sources_rejects_chart_version_template_without_chart_version(
+    tmp_path: Path,
+) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    _write_catalog_file(
+        sources_file,
+        _catalog(
+                apps={
+                    "network-op": {
+                        "source": _portable_chart_source(
+                            repo="https://example.invalid/charts",
+                            chart="network-operator",
+                        ),
+                        "release": {
+                            "namespace": "network-system",
+                            "name": "network-operator",
+                        },
+                        "ui": {"enabled": False},
+                        "cli": {
+                            "mk8s_gpu_policy": {
+                                "role": "network_operator",
+                                "post_render_patch_sets": {
+                                    "rdma": [
+                                        {
+                                            "target": {
+                                                "group": "mellanox.com",
+                                                "version": "v1alpha1",
+                                                "kind": "NicClusterPolicy",
+                                                "name": "nic-cluster-policy",
+                                            },
+                                            "patch": {
+                                                "apiVersion": "mellanox.com/v1alpha1",
+                                                "kind": "NicClusterPolicy",
+                                                "spec": {
+                                                    "rdmaSharedDevicePlugin": {
+                                                        "version": (
+                                                            "network-operator-v{chart_version}"
+                                                        )
+                                                    }
+                                                },
+                                            },
+                                        }
+                                    ]
+                                },
+                                "rules": [
+                                    {
+                                        "gpu_stack_source": "nebius_image",
+                                        "post_render_patches_from": ["rdma"],
+                                    }
+                                ],
+                            }
+                        },
+                    }
+                },
+            )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"components\.apps\.network-op\.cli\.mk8s_gpu_policy"
+            r"\.post_render_patch_sets\.rdma\[0\]\.patch references "
+            r"\{chart_version\} but source\.portable\.version is empty"
+        ),
     ):
         load_component_sources(explicit=sources_file)
 
@@ -3079,9 +3835,9 @@ def test_validate_sources_resolves_relative_local_module_path_from_component_sou
     (example_dir / "main.tf").write_text('module "demo" {}\n', encoding="utf-8")
 
     sources_file = catalog_dir / "component_sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 infra={
                     "demo-module": {
                         "source": {
@@ -3093,10 +3849,7 @@ def test_validate_sources_resolves_relative_local_module_path_from_component_sou
                         },
                     }
                 }
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     elsewhere = tmp_path / "elsewhere"
@@ -3154,9 +3907,9 @@ def test_validate_sources_accepts_absolute_local_module_path(monkeypatch, tmp_pa
     (example_dir / "main.tf").write_text('module "demo" {}\n', encoding="utf-8")
 
     sources_file = tmp_path / "component_sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 infra={
                     "demo-module": {
                         "source": {
@@ -3168,10 +3921,7 @@ def test_validate_sources_accepts_absolute_local_module_path(monkeypatch, tmp_pa
                         },
                     }
                 }
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     monkeypatch.chdir(tmp_path)
@@ -3208,9 +3958,9 @@ def test_validate_sources_reports_module_contract_issues_for_missing_versions_an
     )
 
     sources_file = tmp_path / "component_sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 infra={
                     "demo-module": {
                         "source": {
@@ -3222,10 +3972,7 @@ def test_validate_sources_reports_module_contract_issues_for_missing_versions_an
                         },
                     }
                 }
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     monkeypatch.chdir(tmp_path)
@@ -3245,9 +3992,9 @@ def test_validate_sources_reports_chart_contract_findings(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     sources_file = tmp_path / "component_sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 apps={
                     "gateway-helm": {
                         "source": _portable_chart_source(
@@ -3260,10 +4007,7 @@ def test_validate_sources_reports_chart_contract_findings(
                         },
                     }
                 }
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     monkeypatch.setattr(
@@ -3291,9 +4035,9 @@ def test_validate_sources_rejects_https_git_repo_module_source_without_git_prefi
     monkeypatch, tmp_path: Path
 ) -> None:
     sources_file = tmp_path / "component_sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 infra={
                     "demo-module": {
                         "source": {
@@ -3304,10 +4048,7 @@ def test_validate_sources_rejects_https_git_repo_module_source_without_git_prefi
                         },
                     }
                 }
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     monkeypatch.chdir(tmp_path)
@@ -3329,9 +4070,9 @@ def test_validate_sources_rejects_registry_style_module_source(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     sources_file = tmp_path / "component_sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 infra={
                     "demo-module": {
                         "source": {
@@ -3342,10 +4083,7 @@ def test_validate_sources_rejects_registry_style_module_source(
                         },
                     }
                 }
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     monkeypatch.chdir(tmp_path)
@@ -3365,9 +4103,9 @@ def test_validate_sources_accepts_github_tree_chart_repo(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     sources_file = tmp_path / "component_sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 apps={
                     "n8n": {
                         "source": _portable_chart_source(
@@ -3380,10 +4118,7 @@ def test_validate_sources_accepts_github_tree_chart_repo(
                         },
                     }
                 }
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     class _FakeHelmClient:
@@ -3412,9 +4147,9 @@ def test_validate_sources_fails_when_helm_is_required_but_unavailable(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     sources_file = tmp_path / "component_sources.yaml"
-    sources_file.write_text(
-        yaml.safe_dump(
-            _catalog(
+    _write_catalog_file(
+        sources_file,
+        _catalog(
                 apps={
                     "gateway-helm": {
                         "source": _portable_chart_source(
@@ -3427,10 +4162,7 @@ def test_validate_sources_fails_when_helm_is_required_but_unavailable(
                         },
                     }
                 }
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+            )
     )
 
     class _FailingHelmClient:

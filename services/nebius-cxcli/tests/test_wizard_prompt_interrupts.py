@@ -181,6 +181,76 @@ def test_prompt_component_with_checkboxes_tty_cancel_quits_wizard(monkeypatch) -
         )
 
 
+def test_questionary_wizard_navigation_registers_q_and_qq_keys() -> None:
+    class _FakeKeyBindings:
+        def __init__(self) -> None:
+            self.calls: list[tuple[tuple[str, ...], bool]] = []
+
+        def add(self, *keys: str, eager: bool = False):
+            self.calls.append((keys, eager))
+
+            def _decorator(fn):
+                return fn
+
+            return _decorator
+
+    class _FakePrompt:
+        def __init__(self) -> None:
+            self.application = SimpleNamespace(key_bindings=_FakeKeyBindings())
+
+        def ask(self):
+            return "selected"
+
+    prompt = _FakePrompt()
+
+    assert cli._ask_questionary_with_wizard_navigation(prompt) == "selected"
+    assert (("q", "q"), True) in prompt.application.key_bindings.calls
+    assert (("q",), False) in prompt.application.key_bindings.calls
+
+
+def test_prompt_component_with_checkboxes_tty_uses_key_navigation_without_control_rows(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
+    captured: dict[str, object] = {}
+
+    class _FakePrompt:
+        def ask(self):
+            return ["mk8s"]
+
+    def _fake_checkbox(*_args, **kwargs):
+        captured["choices"] = kwargs["choices"]
+        captured["instruction"] = kwargs["instruction"]
+        return _FakePrompt()
+
+    fake_questionary = SimpleNamespace(
+        Choice=lambda **kwargs: kwargs,
+        checkbox=_fake_checkbox,
+    )
+    monkeypatch.setitem(sys.modules, "questionary", fake_questionary)
+    entries = (
+        ComponentEntry(
+            id="mk8s",
+            scope="infra",
+            config_path="infra.mk8s",
+            description="mk8s",
+        ),
+    )
+
+    selected = cli._prompt_component_with_checkboxes(
+        scope="infra",
+        entries=entries,
+        defaults={"mk8s"},
+    )
+
+    titles = [choice["title"] for choice in captured["choices"]]
+    assert selected == ["mk8s"]
+    assert titles == ["mk8s  (mk8s)"]
+    assert "< Back" not in titles
+    assert "< Quit wizard" not in titles
+    assert "q=back; qq=quit" in str(captured["instruction"])
+
+
 def test_wizard_continue_phase_q_backs_when_enabled(monkeypatch) -> None:
     monkeypatch.setattr(cli.typer, "prompt", lambda *_args, **_kwargs: "q")
 
@@ -417,6 +487,7 @@ def test_prompt_choice_override_tty_keeps_skip_for_optional_recommended_default(
     def _fake_select(*args, **kwargs):
         captured["default"] = kwargs.get("default")
         captured["choices"] = kwargs.get("choices")
+        captured["instruction"] = kwargs.get("instruction")
         return _FakePrompt()
 
     fake_questionary = SimpleNamespace(
@@ -446,7 +517,11 @@ def test_prompt_choice_override_tty_keeps_skip_for_optional_recommended_default(
     assert should_stop is False
     assert value == ""
     assert captured["default"] == "fabric-2"
-    assert captured["choices"][0]["title"] == "<skip / keep unset>"
+    titles = [choice["title"] for choice in captured["choices"]]
+    assert titles[0] == "<skip / keep unset>"
+    assert "< Back" not in titles
+    assert "< Quit wizard" not in titles
+    assert "q=back; qq=quit" in str(captured["instruction"])
 
 
 def test_maybe_print_gpu_preset_prompt_guidance_for_gpu_shape(monkeypatch) -> None:

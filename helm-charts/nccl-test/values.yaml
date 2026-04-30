@@ -4,7 +4,9 @@
 # count, runtime CPU/memory sizing, and platform-specific MPI extras. Nebius
 # docs add `-mca coll ^hcoll` only in the B200 example while the H100/H200
 # example omits it, so the shared chart keeps `benchmark.mpiExtraArgs: []` and
-# leaves that overlay to the caller.
+# leaves platform/path overlays to the caller. nebius-cxcli appends its
+# settings-owned RDMA overlay, including `NCCL_DMABUF_ENABLE=1`, when it renders
+# the chart for GPU-cluster / InfiniBand validation.
 # Ref: https://docs.nebius.com/kubernetes/gpu/nccl-test
 
 nameOverride: ""

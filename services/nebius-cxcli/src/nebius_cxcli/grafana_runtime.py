@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urljoin, urlparse
+from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlparse, urlunparse
 from urllib.request import Request, urlopen
 
 import yaml
@@ -34,6 +34,8 @@ from .observability import observability_endpoint_summary
 from .runtime_config import to_plain_data
 
 GRAFANA_STATUS_FILENAME = "grafana-status.json"
+GRAFANA_TARGET_CLUSTER_ID_ENV = "NEBIUS_CXCLI_TARGET_CLUSTER_ID"
+GRAFANA_TARGET_KUBE_CONTEXT_ENV = "NEBIUS_CXCLI_TARGET_KUBE_CONTEXT"
 
 
 @dataclass(frozen=True)
@@ -171,6 +173,33 @@ def _kubectl_env(extra_env: Mapping[str, str] | None) -> dict[str, str]:
     return env
 
 
+def _target_kube_context(extra_env: Mapping[str, str] | None) -> str:
+    return str((extra_env or {}).get(GRAFANA_TARGET_KUBE_CONTEXT_ENV) or "").strip() or (
+        _current_kube_context(extra_env)
+    )
+
+
+def _kubectl_command(
+    args: Sequence[str],
+    *,
+    extra_env: Mapping[str, str] | None,
+) -> list[str]:
+    command = ["kubectl"]
+    context_name = _target_kube_context(extra_env)
+    if context_name:
+        command.extend(["--context", context_name])
+    command.extend(str(arg) for arg in args)
+    return command
+
+
+def _kubectl_command_text(
+    args: Sequence[str],
+    *,
+    extra_env: Mapping[str, str] | None,
+) -> str:
+    return " ".join(_kubectl_command(args, extra_env=extra_env))
+
+
 def _first_non_empty_line(text: str) -> str:
     for line in text.splitlines():
         line = line.strip()
@@ -186,8 +215,9 @@ def _run_kubectl(
     input_text: str | None = None,
     timeout: int = 120,
 ) -> subprocess.CompletedProcess[str]:
+    command = _kubectl_command(args, extra_env=extra_env)
     completed = subprocess.run(
-        ["kubectl", *args],
+        command,
         env=_kubectl_env(extra_env),
         input=input_text,
         capture_output=True,
@@ -196,7 +226,7 @@ def _run_kubectl(
     )
     if completed.returncode != 0:
         detail = _first_non_empty_line(completed.stderr or completed.stdout or "")
-        raise RuntimeError(f"kubectl {' '.join(args)} failed: {detail or completed.returncode}")
+        raise RuntimeError(f"{' '.join(command)} failed: {detail or completed.returncode}")
     return completed
 
 
@@ -210,9 +240,13 @@ def _kubectl_json(
     try:
         payload = json.loads(completed.stdout or "{}")
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"kubectl {' '.join(args)} returned invalid JSON") from exc
+        raise RuntimeError(
+            f"{_kubectl_command_text(args, extra_env=extra_env)} returned invalid JSON"
+        ) from exc
     if not isinstance(payload, dict):
-        raise RuntimeError(f"kubectl {' '.join(args)} did not return a JSON object")
+        raise RuntimeError(
+            f"{_kubectl_command_text(args, extra_env=extra_env)} did not return a JSON object"
+        )
     return payload
 
 
@@ -232,8 +266,12 @@ def _secret_has_keys(
     keys: Sequence[str],
     extra_env: Mapping[str, str] | None,
 ) -> bool:
+    command = _kubectl_command(
+        ["-n", namespace, "get", "secret", name, "-o", "json"],
+        extra_env=extra_env,
+    )
     completed = subprocess.run(
-        ["kubectl", "-n", namespace, "get", "secret", name, "-o", "json"],
+        command,
         env=_kubectl_env(extra_env),
         capture_output=True,
         text=True,
@@ -245,13 +283,13 @@ def _secret_has_keys(
             return False
         message = _first_non_empty_line(completed.stderr or completed.stdout or "")
         raise RuntimeError(
-            f"kubectl -n {namespace} get secret {name} failed: {message or completed.returncode}"
+            f"{' '.join(command)} failed: {message or completed.returncode}"
         )
     try:
         payload = json.loads(completed.stdout or "{}")
     except json.JSONDecodeError as exc:
         raise RuntimeError(
-            f"kubectl -n {namespace} get secret {name} returned invalid JSON"
+            f"{' '.join(command)} returned invalid JSON"
         ) from exc
     data = payload.get("data")
     if not isinstance(data, Mapping):
@@ -562,6 +600,9 @@ def _grafana_base_url(
 
 
 def _current_kube_context(extra_env: Mapping[str, str] | None) -> str:
+    explicit_context = str((extra_env or {}).get(GRAFANA_TARGET_KUBE_CONTEXT_ENV) or "").strip()
+    if explicit_context:
+        return explicit_context
     kubeconfig_value = str(
         (extra_env or {}).get("KUBECONFIG") or os.environ.get("KUBECONFIG") or ""
     )
@@ -712,6 +753,30 @@ def _public_grafana_url(base_url: str, grafana_url: str) -> str:
     return urljoin(base_url, path)
 
 
+def _url_with_query_params(url: str, params: Mapping[str, str]) -> str:
+    clean_params = {key: value for key, value in params.items() if key and value}
+    if not clean_params:
+        return url
+    parsed = urlparse(url)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query.update(clean_params)
+    return urlunparse(parsed._replace(query=urlencode(query)))
+
+
+def _dashboard_url_with_target_variables(
+    url: str,
+    *,
+    signal: str,
+    extra_env: Mapping[str, str] | None,
+) -> str:
+    if signal not in {"metrics", "logs"}:
+        return url
+    cluster_id = str((extra_env or {}).get(GRAFANA_TARGET_CLUSTER_ID_ENV) or "").strip()
+    if not cluster_id:
+        return url
+    return _url_with_query_params(url, {"var-Cluster": cluster_id})
+
+
 def _grafana_dashboard_gnet_id(
     base_url: str,
     uid: str,
@@ -736,6 +801,30 @@ def _grafana_dashboard_gnet_id(
     except (TypeError, ValueError):
         return None
     return gnet_id if gnet_id > 0 else None
+
+
+def _grafana_dashboard_url_by_uid(
+    base_url: str,
+    dashboard_uid: str,
+    *,
+    username: str,
+    password: str,
+) -> str:
+    payload = _get_grafana_json(
+        base_url,
+        f"api/dashboards/uid/{quote(dashboard_uid, safe='')}",
+        username=username,
+        password=password,
+    )
+    if not isinstance(payload, Mapping):
+        raise RuntimeError("Grafana dashboard detail API did not return a JSON object")
+    meta_url = str(_mapping(payload.get("meta")).get("url") or "").strip()
+    if meta_url:
+        return _public_grafana_url(base_url, meta_url)
+    dashboard = payload.get("dashboard")
+    if isinstance(dashboard, Mapping) and str(dashboard.get("uid") or "").strip():
+        return urljoin(base_url, f"d/{quote(str(dashboard.get('uid')), safe='')}")
+    return ""
 
 
 def _grafana_dashboard_url(
@@ -793,6 +882,7 @@ def _grafana_dashboard_url_for_spec(
     gnet_id: int,
     spec: GrafanaReleaseSpec,
     *,
+    dashboard_uid: str = "",
     extra_env: Mapping[str, str] | None,
 ) -> str:
     try:
@@ -803,6 +893,15 @@ def _grafana_dashboard_url_for_spec(
         return ""
     username, password = credentials
     try:
+        if dashboard_uid:
+            return _grafana_dashboard_url_by_uid(
+                base_url,
+                dashboard_uid,
+                username=username,
+                password=password,
+            )
+        if gnet_id <= 0:
+            return ""
         return _grafana_dashboard_url(
             base_url,
             dashboard_key,
@@ -1060,6 +1159,7 @@ def collect_grafana_runtime_status(
 ) -> tuple[dict[str, Any], ...]:
     statuses: list[dict[str, Any]] = []
     kube_context = _current_kube_context(extra_env)
+    target_cluster_id = str((extra_env or {}).get(GRAFANA_TARGET_CLUSTER_ID_ENV) or "").strip()
     grafana_settings = _grafana_cli_settings()
     explore_queries = {item.signal: item.query for item in grafana_settings.explore_queries}
     for spec in grafana_release_specs(payload_or_config, target_ref=target_ref):
@@ -1080,6 +1180,8 @@ def collect_grafana_runtime_status(
         }
         if kube_context:
             status["kube_context"] = kube_context
+        if target_cluster_id:
+            status["cluster_id"] = target_cluster_id
         if base_url:
             report_bindings = _grafana_report_dashboard_bindings()
             datasources_by_name = _grafana_datasources_by_name()
@@ -1100,12 +1202,21 @@ def collect_grafana_runtime_status(
                         binding.dashboard,
                         binding.gnet_id,
                         spec,
+                        dashboard_uid=binding.dashboard_uid,
                         extra_env=extra_env,
                     )
                     if dashboard_url:
+                        dashboard_url = _dashboard_url_with_target_variables(
+                            dashboard_url,
+                            signal=signal,
+                            extra_env=extra_env,
+                        )
                         explore_urls[url_key] = dashboard_url
                         status[f"{signal}_url_kind"] = "dashboard"
-                        status[f"{signal}_url_gnet_id"] = binding.gnet_id
+                        if binding.gnet_id:
+                            status[f"{signal}_url_gnet_id"] = binding.gnet_id
+                        if binding.dashboard_uid:
+                            status[f"{signal}_url_dashboard_uid"] = binding.dashboard_uid
                         status[f"{signal}_url_dashboard"] = f"{binding.folder}/{binding.dashboard}"
                     else:
                         status[f"{signal}_url_kind"] = "explore"
@@ -1172,6 +1283,8 @@ def read_grafana_status(paths: Any) -> tuple[dict[str, Any], ...]:
 
 __all__ = [
     "GRAFANA_STATUS_FILENAME",
+    "GRAFANA_TARGET_CLUSTER_ID_ENV",
+    "GRAFANA_TARGET_KUBE_CONTEXT_ENV",
     "collect_grafana_runtime_status",
     "ensure_grafana_runtime_secrets",
     "grafana_enabled_for_target",

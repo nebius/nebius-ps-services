@@ -17,6 +17,7 @@ from .mk8s_gpu import materialize_mk8s_gpu_app_values, mk8s_gpu_validation_specs
 from .observability import (
     materialize_observability_app_values,
     materialize_observability_infra_values,
+    observability_validation_specs,
 )
 from .paths import ProjectPaths
 
@@ -93,7 +94,14 @@ def _render_project_to_paths(
     written: list[Path] = []
     written.extend(render_terraform_artifacts(config, paths, source_profile=source_profile))
     written.extend(render_flux(config, paths, component_output_values=component_output_values))
-    write_inventory(config, paths, validations=mk8s_gpu_validation_specs(config))
+    write_inventory(
+        config,
+        paths,
+        validations=[
+            *mk8s_gpu_validation_specs(config),
+            *observability_validation_specs(config),
+        ],
+    )
     return RenderResult(files_written=sorted(written))
 
 

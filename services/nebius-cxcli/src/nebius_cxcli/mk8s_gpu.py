@@ -51,6 +51,7 @@ _AVG_BUS_BANDWIDTH_RE = re.compile(r"Avg bus bandwidth\s*:\s*([0-9]+(?:\.[0-9]+)
 _OUT_OF_BOUNDS_OK_RE = re.compile(r"Out of bounds values\s*:\s*0 OK")
 _NCCL_JSON_BEGIN_MARKER = "__NCCL_JSON_BEGIN__"
 _NCCL_JSON_END_MARKER = "__NCCL_JSON_END__"
+_NCCL_DMABUF_ENV_NAME = "NCCL_DMABUF_ENABLE"
 _VALIDATION_POLL_INTERVAL_SECONDS = 5.0
 _VALIDATION_REPEAT_INTERVAL_SECONDS = 20.0
 _GPU_STACK_VALIDATION_NAME = "GPU stack readiness"
@@ -752,12 +753,26 @@ def _contexts_for_app_chart(
     *,
     contexts: tuple[Mk8sGpuClusterContext, ...],
 ) -> tuple[Mk8sGpuClusterContext, ...]:
-    target_ref = app_chart_target_ref(chart)
+    target_ref = _app_chart_effective_target_ref(chart, contexts=contexts)
     if target_ref:
         return tuple(context for context in contexts if context.instance_id == target_ref)
     if len(contexts) == 1:
         return contexts
     return contexts
+
+
+def _app_chart_effective_target_ref(
+    chart: Mapping[str, Any],
+    *,
+    contexts: tuple[Mk8sGpuClusterContext, ...],
+) -> str:
+    target_ref = app_chart_target_ref(chart)
+    if target_ref:
+        return target_ref
+    instance_id = component_instance_id(chart)
+    if instance_id in {context.instance_id for context in contexts}:
+        return instance_id
+    return ""
 
 
 def _selected_app_target_refs(
@@ -770,7 +785,7 @@ def _selected_app_target_refs(
     for row in _app_chart_rows_for_id(payload, app_id):
         if not bool(row.get("enabled", False)):
             continue
-        row_target_ref = app_chart_target_ref(row)
+        row_target_ref = _app_chart_effective_target_ref(row, contexts=contexts)
         if row_target_ref:
             target_refs.add(row_target_ref)
         elif len(contexts) == 1:
@@ -851,35 +866,6 @@ def _mk8s_gpu_shape_resource_profile(
     if gpu_count is None:
         gpu_count = hinted_gpu_count
     return vcpu_count, memory_gibibytes, gpu_count, allow_gpu_clustering
-
-
-def _select_nccl_validation_context(
-    payload: dict[str, Any],
-    *,
-    contexts: tuple[Mk8sGpuClusterContext, ...],
-) -> Mk8sNcclValidationContext | None:
-    if not contexts:
-        return None
-    for context in contexts:
-        if not context.gpu_cluster_enabled:
-            continue
-        gpu_count, allow_gpu_clustering = _mk8s_gpu_shape_capabilities(payload, context=context)
-        return Mk8sNcclValidationContext(
-            context=context,
-            gpu_count=gpu_count,
-            allow_gpu_clustering=allow_gpu_clustering,
-            transport_mode="rdma",
-            threshold_enforced=True,
-        )
-    context = contexts[0]
-    gpu_count, allow_gpu_clustering = _mk8s_gpu_shape_capabilities(payload, context=context)
-    return Mk8sNcclValidationContext(
-        context=context,
-        gpu_count=gpu_count,
-        allow_gpu_clustering=allow_gpu_clustering,
-        transport_mode="socket",
-        threshold_enforced=False,
-    )
 
 
 def _nccl_transport_label(mode: str) -> str:
@@ -1086,7 +1072,15 @@ def ensure_mk8s_gpu_app_rows(
                 continue
             rows_for_app = _app_chart_rows_for_id(payload, app_id)
             existing = next(
-                (row for row in rows_for_app if app_chart_target_ref(row) == context.instance_id),
+                (
+                    row
+                    for row in rows_for_app
+                    if _app_chart_effective_target_ref(
+                        row,
+                        contexts=contexts,
+                    )
+                    == context.instance_id
+                ),
                 None,
             )
             if existing is None:
@@ -1175,7 +1169,7 @@ def mk8s_gpu_dependency_issues(
                 if context.instance_id not in target_refs:
                     issues.append(
                         f"GPU-enabled MK8s target '{context.instance_id}' requires "
-                        f"'apps:{app_id}' to be enabled with target_ref '{context.instance_id}'"
+                        f"'apps:{app_id}' to be enabled with instance_id '{context.instance_id}'"
                     )
     return issues
 
@@ -1244,7 +1238,9 @@ def mk8s_gpu_validation_specs(
         )
         if not gpu_operator_namespace:
             raise ValueError(
-                "component_sources.yaml must declare one apps component with cli.mk8s_gpu_policy.role: gpu_operator and a release namespace"
+                "component_cli_settings.yaml must declare one apps component with "
+                "cli.mk8s_gpu_policy.role: gpu_operator, and component_sources.yaml "
+                "must declare that app release namespace"
             )
         for context in contexts:
             validation_overrides = validation_overrides_by_target[context.instance_id]
@@ -1259,7 +1255,9 @@ def mk8s_gpu_validation_specs(
             )
             if network_operator_id in required_app_ids and not network_operator_namespace:
                 raise ValueError(
-                    "component_sources.yaml must declare one apps component with cli.mk8s_gpu_policy.role: network_operator and a release namespace"
+                    "component_cli_settings.yaml must declare one apps component with "
+                    "cli.mk8s_gpu_policy.role: network_operator, and component_sources.yaml "
+                    "must declare that app release namespace"
                 )
             validations.append(
                 {
@@ -1370,6 +1368,11 @@ def mk8s_gpu_validation_specs(
                 scoped_chart_values,
                 _nccl_chart_transport_defaults(nccl_context.transport_mode),
             )
+            if nccl_context.transport_mode == "rdma" and nccl.rdma_mpi_extra_args:
+                _append_nccl_benchmark_mpi_extra_args(
+                    scoped_chart_values,
+                    nccl.rdma_mpi_extra_args,
+                )
             (
                 _worker_vcpu_count,
                 _worker_memory_gibibytes,
@@ -1640,6 +1643,24 @@ def _nccl_chart_transport_defaults(transport_mode: str) -> dict[str, Any]:
             }
         }
     return {}
+
+
+def _append_nccl_benchmark_mpi_extra_args(
+    chart_values: dict[str, Any],
+    extra_args: tuple[str, ...],
+) -> None:
+    if not extra_args:
+        return
+    benchmark = chart_values.setdefault("benchmark", {})
+    if not isinstance(benchmark, dict):
+        benchmark = {}
+        chart_values["benchmark"] = benchmark
+    existing = benchmark.get("mpiExtraArgs")
+    merged: list[Any] = []
+    if isinstance(existing, list):
+        merged.extend(existing)
+    merged.extend(extra_args)
+    benchmark["mpiExtraArgs"] = merged
 
 
 def _resolved_app_post_render_patches(
@@ -2630,13 +2651,21 @@ def _run_gpu_visibility_validation(
         deadline = time.monotonic() + timeout_seconds
         last_summary = ""
         last_emit_at = 0.0
+        last_poll_error = ""
         while True:
-            phases, all_terminal, any_failed, summary = _pod_phase_snapshot(
-                namespace=namespace,
-                label_selector=label_selector,
-                pod_names=pod_names,
-                extra_env=extra_env,
-            )
+            try:
+                phases, all_terminal, any_failed, summary = _pod_phase_snapshot(
+                    namespace=namespace,
+                    label_selector=label_selector,
+                    pod_names=pod_names,
+                    extra_env=extra_env,
+                )
+                last_poll_error = ""
+            except RuntimeError as exc:
+                all_terminal = False
+                any_failed = False
+                last_poll_error = str(exc)
+                summary = f"waiting for pod status; last kubectl poll failed: {last_poll_error}"
             now = time.monotonic()
             if emit and (
                 summary != last_summary
@@ -2653,8 +2682,13 @@ def _run_gpu_visibility_validation(
             if any_failed or all_terminal:
                 break
             if now >= deadline:
+                detail = (
+                    f" Last pod poll error: {last_poll_error}"
+                    if last_poll_error
+                    else ""
+                )
                 raise RuntimeError(
-                    f"Timed out waiting for GPU Visibility pods in namespace '{namespace}' to finish"
+                    f"Timed out waiting for GPU Visibility pods in namespace '{namespace}' to finish.{detail}"
                 )
             time.sleep(_VALIDATION_POLL_INTERVAL_SECONDS)
         results: list[dict[str, Any]] = []
@@ -2941,6 +2975,71 @@ def _nccl_json_report_summary(payload: dict[str, Any] | None) -> dict[str, Any]:
     return summary
 
 
+def _nccl_mpi_export_value(
+    args: list[Any],
+    *,
+    env_name: str,
+) -> tuple[str, str]:
+    previous = ""
+    found_value = ""
+    found_source = "unset"
+    for raw in args:
+        token = _as_text(raw)
+        if not token:
+            previous = ""
+            continue
+        candidate = ""
+        if previous == "-x":
+            candidate = token
+        elif token.startswith("-x") and token != "-x":
+            candidate = token[2:].strip()
+        previous = token
+        if not candidate:
+            continue
+        if candidate == env_name:
+            found_value = ""
+            found_source = "inherited MPI environment"
+            continue
+        prefix = f"{env_name}="
+        if candidate.startswith(prefix):
+            found_value = candidate[len(prefix) :]
+            found_source = "explicit MPI environment"
+    return found_value, found_source
+
+
+def _nccl_dmabuf_metadata(
+    *,
+    transport_mode: str,
+    benchmark_map: Mapping[str, Any],
+) -> dict[str, str]:
+    mpi_env_args = []
+    for key in ("mpiBaseArgs", "mpiExtraArgs"):
+        value = benchmark_map.get(key)
+        if isinstance(value, list):
+            mpi_env_args.extend(value)
+    env_value, env_source = _nccl_mpi_export_value(
+        mpi_env_args,
+        env_name=_NCCL_DMABUF_ENV_NAME,
+    )
+    normalized_transport = _as_text(transport_mode).lower()
+    if normalized_transport != "rdma":
+        gpudirect_mode = ""
+    elif env_value == "0":
+        gpudirect_mode = "legacy nvidia-peermem"
+    elif env_value == "1":
+        gpudirect_mode = "dma-buf"
+    elif env_source == "unset":
+        gpudirect_mode = "dma-buf default when supported"
+    else:
+        gpudirect_mode = "unknown"
+    return {
+        "gpudirect_mode": gpudirect_mode,
+        "nccl_dmabuf_env_name": _NCCL_DMABUF_ENV_NAME,
+        "nccl_dmabuf_enable": env_value if env_value else "unset",
+        "nccl_dmabuf_enable_source": env_source,
+    }
+
+
 def _nccl_chart_documents(
     *,
     spec: dict[str, Any],
@@ -3103,6 +3202,10 @@ def _run_nccl_validation(
         benchmark_map = (
             values_map.get("benchmark") if isinstance(values_map.get("benchmark"), dict) else {}
         )
+        dmabuf_metadata = _nccl_dmabuf_metadata(
+            transport_mode=transport_mode,
+            benchmark_map=benchmark_map,
+        )
         bandwidth_observed = avg_bus_bandwidth > 0
         passed = (
             launcher_phase == "Succeeded"
@@ -3130,6 +3233,7 @@ def _run_nccl_validation(
             "launcher_non_gpu_node_names": runtime_metadata.get("launcher_non_gpu_node_names", []),
             "transport_mode": transport_mode,
             "transport_label": transport_label,
+            **dmabuf_metadata,
             "avg_bus_bandwidth_gbps": avg_bus_bandwidth,
             "threshold_gbps": threshold_gbps,
             "threshold_enforced": threshold_enforced,
@@ -3321,11 +3425,20 @@ def _write_validation_error_report(
     }
     if kind == "mk8s_nccl":
         transport_mode = _as_text(spec.get("transport_mode")).lower() or "auto"
+        chart_values = spec.get("chart_values")
+        values_map = dict(chart_values) if isinstance(chart_values, Mapping) else {}
+        benchmark_map = (
+            values_map.get("benchmark") if isinstance(values_map.get("benchmark"), Mapping) else {}
+        )
         report.update(
             {
                 "launcher_phase": "error",
                 "transport_mode": transport_mode,
                 "transport_label": _nccl_transport_label(transport_mode),
+                **_nccl_dmabuf_metadata(
+                    transport_mode=transport_mode,
+                    benchmark_map=benchmark_map,
+                ),
                 "avg_bus_bandwidth_gbps": 0.0,
                 "threshold_gbps": float(spec.get("average_bus_bandwidth_threshold_gbps", 0) or 0),
                 "threshold_enforced": bool(spec.get("threshold_enforced", True)),

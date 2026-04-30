@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+import shlex
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -182,6 +184,11 @@ def _project_config_path(deployments_root: Path) -> Path:
     return _project_dir(deployments_root) / "config.yaml"
 
 
+def _normalized_cli_output(text: str) -> str:
+    without_soft_hyphen_wraps = re.sub(r"-\s*\n\s*", "-", text)
+    return " ".join(without_soft_hyphen_wraps.split())
+
+
 def _project_dir(
     deployments_root: Path,
     *,
@@ -210,6 +217,32 @@ def _write_mk8s_boot_disk_sources_file(path: Path, *, module_dir: Path) -> None:
     (module_dir / "variables.tf").write_text(
         'variable "cpu_nodes_count" { type = number }\n', encoding="utf-8"
     )
+    boot_disk_defaults = {
+        "cpu": {
+            "default_type": "NETWORK_SSD",
+            "rules": [
+                {
+                    "max_vcpu": 8,
+                    "max_memory_gib": 32,
+                    "size_gib": 64,
+                },
+                {
+                    "max_vcpu": 32,
+                    "max_memory_gib": 128,
+                    "size_gib": 93,
+                },
+                {
+                    "max_vcpu": 64,
+                    "max_memory_gib": 256,
+                    "size_gib": 128,
+                },
+                {
+                    "min_vcpu": 65,
+                    "size_gib": 186,
+                },
+            ],
+        }
+    }
     path.write_text(
         yaml.safe_dump(
             _catalog(
@@ -227,37 +260,26 @@ def _write_mk8s_boot_disk_sources_file(path: Path, *, module_dir: Path) -> None:
                             "inputs.cpu_nodes_platform": "cpu-any",
                             "inputs.cpu_nodes_preset": "32vcpu-128gb",
                         },
-                        "cli": {
-                            "boot_disk_defaults": {
-                                "cpu": {
-                                    "default_type": "NETWORK_SSD",
-                                    "rules": [
-                                        {
-                                            "max_vcpu": 8,
-                                            "max_memory_gib": 32,
-                                            "size_gib": 64,
-                                        },
-                                        {
-                                            "max_vcpu": 32,
-                                            "max_memory_gib": 128,
-                                            "size_gib": 93,
-                                        },
-                                        {
-                                            "max_vcpu": 64,
-                                            "max_memory_gib": 256,
-                                            "size_gib": 128,
-                                        },
-                                        {
-                                            "min_vcpu": 65,
-                                            "size_gib": 186,
-                                        },
-                                    ],
-                                }
-                            }
-                        },
                     }
                 }
             ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    path.with_name("component_cli_settings.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "components": {
+                    "infra": {
+                        "mk8s": {
+                            "cli": {
+                                "boot_disk_defaults": boot_disk_defaults,
+                            }
+                        }
+                    }
+                }
+            },
             sort_keys=False,
         ),
         encoding="utf-8",
@@ -930,6 +952,31 @@ def test_create_skips_deployments_gitignore_when_target_not_in_git_repo(tmp_path
     assert not (deployments_root / ".gitignore").exists()
 
 
+def test_create_rejects_nested_deployments_root_with_managed_parent_gitignore(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    _git_init(repo_root)
+
+    deployments_root = repo_root / "deployment-examples"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    create_root = _create_non_interactive(deployments_root)
+    assert create_root.exit_code == 0, create_root.output
+
+    nested_root = deployments_root / "post-sales"
+    nested_root.mkdir(parents=True, exist_ok=True)
+    result = _create_non_interactive(nested_root)
+
+    assert result.exit_code == 1, result.output
+    normalized = _normalized_cli_output(result.output)
+    assert "nested under existing cxcli-managed deployments root" in normalized
+    assert "Use '" in normalized
+    assert "deployment-examples' as the deployments root" in normalized
+    assert not (nested_root / ".gitignore").exists()
+    assert not _project_config_path(nested_root).exists()
+
+
 def test_render_recreates_deployments_gitignore_in_git_repo(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir(parents=True, exist_ok=True)
@@ -961,6 +1008,32 @@ def test_render_recreates_deployments_gitignore_in_git_repo(tmp_path: Path) -> N
     assert "*/*/generated/infra/terraform.auto.tfvars.json" in content
     assert ".coverage" not in content
     assert "*.tgz" not in content
+
+
+def test_render_rejects_config_under_nested_deployments_root_with_managed_parent_gitignore(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    _git_init(repo_root)
+
+    deployments_root = repo_root / "deployment-examples"
+    nested_root = deployments_root / "post-sales"
+    nested_root.mkdir(parents=True, exist_ok=True)
+    create_nested = _create_non_interactive(nested_root)
+    assert create_nested.exit_code == 0, create_nested.output
+
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    create_root = _create_non_interactive(deployments_root)
+    assert create_root.exit_code == 0, create_root.output
+
+    config_path = _project_config_path(nested_root)
+    result = runner.invoke(app, ["render", "--force", str(config_path)])
+
+    assert result.exit_code == 1, result.output
+    assert "nested under existing cxcli-managed deployments root" in " ".join(
+        result.output.split()
+    )
 
 
 def test_render_normalizes_ssh_public_key_file_path_into_config(
@@ -1470,10 +1543,10 @@ def test_create_names_new_mk8s_target_from_cluster_name_and_retargets_apps(
         for row in payload["apps"]["charts"]
         if isinstance(row, dict) and bool(row.get("enabled"))
     }
-    assert charts["nvidia-gpu-operator"]["target_ref"] == "cluster1"
     assert charts["nvidia-gpu-operator"]["instance_id"] == "cluster1"
-    assert charts["nvidia-network-operator"]["target_ref"] == "cluster1"
     assert charts["nvidia-network-operator"]["instance_id"] == "cluster1"
+    assert "target_ref" not in charts["nvidia-gpu-operator"]
+    assert "target_ref" not in charts["nvidia-network-operator"]
 
 
 def test_create_auto_enables_observability_agent_when_wizard_turns_on_observability(
@@ -1603,9 +1676,10 @@ def test_create_prunes_redundant_live_chart_default_values_from_existing_config(
         item for item in cleaned["apps"]["charts"] if item.get("id") == "gateway-helm"
     )
     assert "securityContext" not in cleaned_gateway["values"]["certgen"]["job"]
-    assert cleaned_gateway["values"]["certgen"]["job"]["affinity"] == cleaned_gateway["values"][
-        "deployment"
-    ]["pod"]["affinity"]
+    assert (
+        cleaned_gateway["values"]["certgen"]["job"]["affinity"]
+        == cleaned_gateway["values"]["deployment"]["pod"]["affinity"]
+    )
     assert cleaned_gateway["values"]["config"]["envoyGateway"]["provider"]["type"] == "Kubernetes"
 
 
@@ -1734,24 +1808,24 @@ def test_load_context_uses_component_sources_override_file(tmp_path: Path) -> No
 
     external_sources = tmp_path / "external-component-sources.yaml"
     external_sources.write_text(
-            yaml.safe_dump(
-                _catalog(
-                    infra={
-                        "mk8s": {
-                            "source": {
-                                "portable": (
-                                    "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3"
-                                ),
-                            },
-                            "status": {
-                                "kind": "nebius.mk8s.cluster",
-                                "name_input": "cluster_name",
-                            },
-                        }
-                    },
-                    apps={
-                        "nginx": {
-                            "source": _portable_chart_source(
+        yaml.safe_dump(
+            _catalog(
+                infra={
+                    "mk8s": {
+                        "source": {
+                            "portable": (
+                                "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3"
+                            ),
+                        },
+                        "status": {
+                            "kind": "nebius.mk8s.cluster",
+                            "name_input": "cluster_name",
+                        },
+                    }
+                },
+                apps={
+                    "nginx": {
+                        "source": _portable_chart_source(
                             repo="https://charts.bitnami.com/bitnami",
                             chart="nginx",
                         ),
@@ -1764,7 +1838,7 @@ def test_load_context_uses_component_sources_override_file(tmp_path: Path) -> No
                             "enabled": False,
                         },
                     }
-                }
+                },
             ),
             sort_keys=False,
         ),
@@ -1797,6 +1871,22 @@ def test_load_context_materializes_mk8s_boot_disk_defaults_for_existing_config(
         sources_file,
         module_dir=tmp_path / "modules" / "mk8s",
     )
+    source_payload = yaml.safe_load(sources_file.read_text(encoding="utf-8"))
+    source_payload["components"]["apps"]["demo-app"] = {
+        "source": _portable_chart_source(
+            repo="https://example.invalid/charts",
+            chart="demo-app",
+            version="1.0.0",
+        ),
+        "ui": {
+            "group": "Workloads",
+        },
+        "release": {
+            "namespace": "demo",
+            "name": "demo-app",
+        },
+    }
+    sources_file.write_text(yaml.safe_dump(source_payload, sort_keys=False), encoding="utf-8")
     deployments_root = tmp_path / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)
     created = runner.invoke(
@@ -1829,6 +1919,19 @@ def test_load_context_materializes_mk8s_boot_disk_defaults_for_existing_config(
     )
     mk8s["inputs"].pop("cpu_nodes_boot_disk_size_gib", None)
     mk8s["inputs"].pop("cpu_nodes_boot_disk_type", None)
+    persisted["apps"]["charts"] = [
+        {
+            "id": "demo-app",
+            "instance_id": "mk8s",
+            "group": "workloads",
+            "enabled": True,
+            "repo": "https://example.invalid/charts",
+            "version": "1.0.0",
+            "namespace": "demo",
+            "release-name": "demo-app",
+            "values": {},
+        }
+    ]
     config_path.write_text(yaml.safe_dump(persisted, sort_keys=False), encoding="utf-8")
 
     set_component_sources_file_override(sources_file)
@@ -1843,6 +1946,8 @@ def test_load_context_materializes_mk8s_boot_disk_defaults_for_existing_config(
     )
     assert loaded_mk8s["inputs"]["cpu_nodes_boot_disk_size_gib"] == 93
     assert loaded_mk8s["inputs"]["cpu_nodes_boot_disk_type"] == "NETWORK_SSD"
+    loaded_app = loaded["apps"]["charts"][0]
+    assert loaded_app["target_ref"] == "mk8s"
 
     reloaded_from_disk = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     persisted_mk8s = next(
@@ -1852,6 +1957,7 @@ def test_load_context_materializes_mk8s_boot_disk_defaults_for_existing_config(
     )
     assert "cpu_nodes_boot_disk_size_gib" not in persisted_mk8s["inputs"]
     assert "cpu_nodes_boot_disk_type" not in persisted_mk8s["inputs"]
+    assert "target_ref" not in reloaded_from_disk["apps"]["charts"][0]
 
 
 def test_load_context_rejects_missing_materialized_shared_app_defaults(tmp_path: Path) -> None:
@@ -2575,8 +2681,10 @@ def test_component_list_reports_enabled_and_available_components(tmp_path: Path)
     assert created.exit_code == 0, created.output
 
     config_path = _project_config_path(deployments_root)
+    before_list = config_path.read_text(encoding="utf-8")
     result = runner.invoke(app, ["component", "list", str(config_path)])
     assert result.exit_code == 0, result.output
+    assert config_path.read_text(encoding="utf-8") == before_list
     assert "Enabled infra component instances:" in result.output
     assert "mk8s" in result.output
     assert "Enabled apps component instances:" in result.output
@@ -2587,6 +2695,9 @@ def test_component_list_reports_enabled_and_available_components(tmp_path: Path)
     assert "n8n" in result.output
     assert "Available infra components:" in result.output
     assert "mk8s" in result.output
+    repeat = runner.invoke(app, ["component", "list", str(config_path)])
+    assert repeat.exit_code == 0, repeat.output
+    assert config_path.read_text(encoding="utf-8") == before_list
 
 
 def test_component_add_noninteractive_preserves_existing_values(tmp_path: Path) -> None:
@@ -2614,8 +2725,13 @@ def test_component_add_noninteractive_preserves_existing_values(tmp_path: Path) 
     assert result.exit_code == 0, result.output
     assert "Added infra components: managed-postgresql" in result.output
     normalized_output = " ".join(result.output.split())
-    assert "Next steps: run `nebius-cxcli validate <config.yaml>`, then " in normalized_output
-    assert "`nebius-cxcli render <config.yaml>`." in normalized_output
+    assert (
+        "Only config.yaml was updated. Existing generated/ artifacts and live resources are "
+        "unchanged until you run render and then deploy/destroy as needed."
+    ) in normalized_output
+    config_arg = shlex.quote(str(config_path.resolve()))
+    assert f"Next steps: run `nebius-cxcli validate {config_arg}`, then " in normalized_output
+    assert f"`nebius-cxcli render {config_arg}`." in normalized_output
 
     refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     refreshed_components = refreshed.get("infra", {}).get("components", [])
@@ -2634,7 +2750,9 @@ def test_component_add_noninteractive_preserves_existing_values(tmp_path: Path) 
     assert managed_pg["enabled"] is True
 
 
-def test_component_add_allows_multiple_instances_of_same_component_type(tmp_path: Path) -> None:
+def test_component_add_is_idempotent_and_explicit_instances_create_more_rows(
+    tmp_path: Path,
+) -> None:
     deployments_root = tmp_path / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)
 
@@ -2643,11 +2761,28 @@ def test_component_add_allows_multiple_instances_of_same_component_type(tmp_path
 
     config_path = _project_config_path(deployments_root)
     first = _component_add(config_path, "managed-postgresql", "--no-interactive")
-    second = _component_add(config_path, "managed-postgresql", "--no-interactive")
+    repeat = _component_add(config_path, "managed-postgresql", "--no-interactive")
+    explicit = _component_add(
+        config_path,
+        "managed-postgresql@managed-postgresql-2",
+        "--no-interactive",
+    )
+    repeat_explicit = _component_add(
+        config_path,
+        "managed-postgresql@managed-postgresql-2",
+        "--no-interactive",
+    )
 
     assert first.exit_code == 0, first.output
-    assert second.exit_code == 0, second.output
-    assert "managed-postgresql@managed-postgresql-2" in second.output
+    assert repeat.exit_code == 0, repeat.output
+    assert explicit.exit_code == 0, explicit.output
+    assert repeat_explicit.exit_code == 0, repeat_explicit.output
+    assert "Skipped already-enabled components: managed-postgresql" in repeat.output
+    assert "Added infra components: managed-postgresql@managed-postgresql-2" in explicit.output
+    assert (
+        "Skipped already-enabled components: managed-postgresql@managed-postgresql-2"
+        in repeat_explicit.output
+    )
 
     refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     components = refreshed.get("infra", {}).get("components", [])
@@ -2671,10 +2806,13 @@ def test_component_add_allows_multiple_mk8s_instances(tmp_path: Path) -> None:
     assert created.exit_code == 0, created.output
 
     config_path = _project_config_path(deployments_root)
-    result = _component_add(config_path, "mk8s", "--no-interactive")
+    result = _component_add(config_path, "mk8s@mk8s-2", "--no-interactive")
+    repeat = _component_add(config_path, "mk8s@mk8s-2", "--no-interactive")
 
     assert result.exit_code == 0, result.output
     assert "Added infra components: mk8s@mk8s-2" in result.output
+    assert repeat.exit_code == 0, repeat.output
+    assert "Skipped already-enabled components: mk8s@mk8s-2" in repeat.output
 
     refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     components = refreshed.get("infra", {}).get("components", [])
@@ -2697,7 +2835,7 @@ def test_component_add_list_remove_bind_app_instance_to_explicit_mk8s_target(
     assert created.exit_code == 0, created.output
 
     config_path = _project_config_path(deployments_root)
-    add_cluster = _component_add(config_path, "mk8s", "--no-interactive")
+    add_cluster = _component_add(config_path, "mk8s@mk8s-2", "--no-interactive")
     assert add_cluster.exit_code == 0, add_cluster.output
 
     missing_target = _component_add(config_path, "n8n", "--no-interactive")
@@ -2710,15 +2848,17 @@ def test_component_add_list_remove_bind_app_instance_to_explicit_mk8s_target(
     assert "Added apps components: n8n@mk8s-2" in add_app.output
 
     duplicate_app = _component_add(config_path, "n8n@mk8s-2", "--no-interactive")
-    assert duplicate_app.exit_code != 0
-    assert "already enabled for cluster target 'mk8s-2'" in duplicate_app.output
+    assert duplicate_app.exit_code == 0, duplicate_app.output
+    assert "Skipped already-enabled components: n8n@mk8s-2" in duplicate_app.output
 
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     charts = payload.get("apps", {}).get("charts", [])
     assert isinstance(charts, list)
-    n8n_row = next(row for row in charts if isinstance(row, dict) and row.get("id") == "n8n")
+    n8n_rows = [row for row in charts if isinstance(row, dict) and row.get("id") == "n8n"]
+    assert len(n8n_rows) == 1
+    n8n_row = n8n_rows[0]
     assert n8n_row["instance_id"] == "mk8s-2"
-    assert n8n_row["target_ref"] == "mk8s-2"
+    assert "target_ref" not in n8n_row
     assert n8n_row["release-name"] == "n8n"
 
     listed = runner.invoke(app, ["component", "list", str(config_path)])
@@ -2748,12 +2888,12 @@ def test_component_add_first_cluster_target_rebinds_existing_app_only_rows(
     assert isinstance(charts, list)
     n8n_row = next(row for row in charts if isinstance(row, dict) and row.get("id") == "n8n")
     assert n8n_row["instance_id"] == "mk8s"
-    assert n8n_row["target_ref"] == "mk8s"
+    assert "target_ref" not in n8n_row
     assert n8n_row["release-name"] == "n8n"
     _load_context(config_path)
 
 
-def test_component_remove_blocks_cluster_target_removal_with_target_bound_apps(
+def test_component_remove_cluster_target_cascades_target_bound_apps(
     tmp_path: Path,
 ) -> None:
     deployments_root = tmp_path / "deployments"
@@ -2763,16 +2903,60 @@ def test_component_remove_blocks_cluster_target_removal_with_target_bound_apps(
     assert created.exit_code == 0, created.output
 
     config_path = _project_config_path(deployments_root)
-    before = config_path.read_text(encoding="utf-8")
     result = _component_remove(config_path, "mk8s", "--no-interactive")
-    assert result.exit_code == 1, result.output
-    assert "Component remove would leave config.yaml with unresolved dependencies" in result.output
-    normalized_output = " ".join(result.output.split())
-    assert (
-        "apps.charts[n8n@mk8s].target_ref 'mk8s' no longer has an enabled cluster target"
-        in normalized_output
+    assert result.exit_code == 0, result.output
+    assert "Removed infra components: mk8s" in result.output
+    assert "Removed apps components: n8n@mk8s" in result.output
+
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert payload["infra"]["components"] == []
+    assert payload["apps"]["charts"] == []
+    assert payload.get("deploy", {}).get("targets", []) == []
+    _load_context(config_path)
+
+
+def test_component_remove_cluster_instance_cascades_only_that_target(
+    tmp_path: Path,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    created = _create_non_interactive(deployments_root, "--infra", "mk8s", "--app", "none")
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    add_cluster = _component_add(config_path, "mk8s@mk8s-2", "--no-interactive")
+    assert add_cluster.exit_code == 0, add_cluster.output
+    add_app = _component_add(config_path, "n8n@mk8s-2", "--no-interactive")
+    assert add_app.exit_code == 0, add_app.output
+
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    payload["deploy"] = {
+        "targets": [
+            {"instance_id": "mk8s"},
+            {"instance_id": "mk8s-2"},
+        ]
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    result = _component_remove(config_path, "infra:mk8s-2", "--no-interactive")
+    assert result.exit_code == 0, result.output
+    assert "Removed infra components: mk8s@mk8s-2" in result.output
+    assert "Removed apps components: n8n@mk8s-2" in result.output
+
+    refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    mk8s_rows = [
+        row
+        for row in refreshed["infra"]["components"]
+        if isinstance(row, dict) and row.get("id") == "mk8s"
+    ]
+    assert [row["instance_id"] for row in mk8s_rows] == ["mk8s"]
+    assert all(
+        not (isinstance(row, dict) and row.get("instance_id") == "mk8s-2")
+        for row in refreshed["apps"]["charts"]
     )
-    assert config_path.read_text(encoding="utf-8") == before
+    assert [row["instance_id"] for row in refreshed["deploy"]["targets"]] == ["mk8s"]
+    _load_context(config_path)
 
 
 def test_component_add_wizard_tracks_target_bound_app_by_chart_and_target(
@@ -2983,8 +3167,13 @@ def test_component_remove_noninteractive_removes_app_chart_when_no_dependency_br
     assert result.exit_code == 0, result.output
     assert "Removed apps components: gateway-helm" in result.output
     normalized_output = " ".join(result.output.split())
-    assert "Next steps: run `nebius-cxcli validate <config.yaml>`, then " in normalized_output
-    assert "`nebius-cxcli render <config.yaml>`." in normalized_output
+    assert (
+        "Only config.yaml was updated. Existing generated/ artifacts and live resources are "
+        "unchanged until you run render and then deploy/destroy as needed."
+    ) in normalized_output
+    config_arg = shlex.quote(str(config_path.resolve()))
+    assert f"Next steps: run `nebius-cxcli validate {config_arg}`, then " in normalized_output
+    assert f"`nebius-cxcli render {config_arg}`." in normalized_output
 
     refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     charts = refreshed.get("apps", {}).get("charts", [])
@@ -2993,6 +3182,13 @@ def test_component_remove_noninteractive_removes_app_chart_when_no_dependency_br
         not (isinstance(row, dict) and str(row.get("id", "")).strip().lower() == "gateway-helm")
         for row in charts
     )
+
+    repeat = _component_remove(config_path, "gateway-helm", "--no-interactive")
+    assert repeat.exit_code == 0, repeat.output
+    assert "Skipped already-absent component: gateway-helm" in repeat.output
+    assert "No components selected for remove." in repeat.output
+    repeat_output = " ".join(repeat.output.split())
+    assert f"Next steps: run `nebius-cxcli validate {config_arg}`, then " in repeat_output
 
 
 def test_component_remove_requires_instance_id_when_multiple_instances_match(
@@ -3006,7 +3202,14 @@ def test_component_remove_requires_instance_id_when_multiple_instances_match(
 
     config_path = _project_config_path(deployments_root)
     assert _component_add(config_path, "managed-postgresql", "--no-interactive").exit_code == 0
-    assert _component_add(config_path, "managed-postgresql", "--no-interactive").exit_code == 0
+    assert (
+        _component_add(
+            config_path,
+            "managed-postgresql@managed-postgresql-2",
+            "--no-interactive",
+        ).exit_code
+        == 0
+    )
 
     ambiguous = _component_remove(config_path, "managed-postgresql", "--no-interactive")
     assert ambiguous.exit_code == 1, ambiguous.output
@@ -3243,6 +3446,34 @@ def test_bootstrap_ci_recreates_deployments_gitignore_in_git_repo(
     assert "*/*/generated/infra/terraform.auto.tfvars.json" in content
     assert ".coverage" not in content
     assert "*.tgz" not in content
+
+
+def test_bootstrap_ci_rejects_config_under_nested_deployments_root_with_managed_parent_gitignore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path / "customer-repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    _git_init(repo_root)
+
+    deployments_root = repo_root / "deployment-examples"
+    nested_root = deployments_root / "post-sales"
+    nested_root.mkdir(parents=True, exist_ok=True)
+    create_nested = _create_non_interactive(nested_root)
+    assert create_nested.exit_code == 0, create_nested.output
+
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    create_root = _create_non_interactive(deployments_root)
+    assert create_root.exit_code == 0, create_root.output
+    _mock_bootstrap_ci_github_sync(monkeypatch)
+
+    config_path = _project_config_path(nested_root)
+    result = runner.invoke(app, ["bootstrap-ci", str(config_path), "--no-auth-bootstrap"])
+
+    assert result.exit_code == 1, result.output
+    assert "nested under existing cxcli-managed deployments root" in " ".join(
+        result.output.split()
+    )
+    assert not (repo_root / ".github" / "workflows" / "nebius-deployments.yml").exists()
 
 
 def test_bootstrap_ci_cli_ref_overrides_generated_workflow_pin(

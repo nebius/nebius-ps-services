@@ -204,6 +204,8 @@ def _validation_summary(kind: str, payload: Mapping[str, Any]) -> str:
         return _gpu_visibility_summary(payload)
     if kind == "mk8s_nccl":
         return _nccl_summary(payload)
+    if kind == "mk8s_observability_ingestion":
+        return _observability_ingestion_summary(payload)
     validation_name = str(payload.get("validation", "") or "").strip() or "Validation"
     return f"{validation_name} completed with passed={bool(payload.get('passed'))}."
 
@@ -274,15 +276,59 @@ def _nccl_summary(payload: Mapping[str, Any]) -> str:
     threshold = float(payload.get("threshold_gbps", 0.0) or 0.0)
     worker_count = int(payload.get("selected_worker_node_count", 0) or 0)
     transport = str(payload.get("transport_label", "") or "").strip() or "auto"
+    dmabuf = _nccl_dmabuf_summary(payload)
     if not bool(payload.get("threshold_enforced", True)):
+        dmabuf_text = f"; {dmabuf}" if dmabuf else ""
         return (
             f"Launcher phase {phase}; {transport} average bus bandwidth {avg:.1f} Gbps "
-            f"across {worker_count} worker node(s); RDMA threshold not enforced for this run."
+            f"across {worker_count} worker node(s){dmabuf_text}; "
+            "RDMA threshold not enforced for this run."
         )
+    dmabuf_text = f"; {dmabuf}" if dmabuf else ""
     return (
         f"Launcher phase {phase}; {transport} average bus bandwidth {avg:.1f} Gbps "
-        f"vs threshold {threshold:.1f} Gbps across {worker_count} worker node(s)."
+        f"vs threshold {threshold:.1f} Gbps across {worker_count} worker node(s)"
+        f"{dmabuf_text}."
     )
+
+
+def _nccl_dmabuf_summary(payload: Mapping[str, Any]) -> str:
+    env_name = str(payload.get("nccl_dmabuf_env_name", "") or "").strip()
+    env_value = str(payload.get("nccl_dmabuf_enable", "") or "").strip()
+    if not env_name or not env_value:
+        return ""
+    source = str(payload.get("nccl_dmabuf_enable_source", "") or "").strip()
+    gpudirect_mode = str(payload.get("gpudirect_mode", "") or "").strip()
+    notes = []
+    if source and source != "unset":
+        notes.append(source)
+    if gpudirect_mode:
+        notes.append(f"GPUDirect mode {gpudirect_mode}")
+    suffix = f" ({'; '.join(notes)})" if notes else ""
+    return f"{env_name}={env_value}{suffix}"
+
+
+def _observability_ingestion_summary(payload: Mapping[str, Any]) -> str:
+    checks = [
+        item
+        for item in _list(payload.get("checks"))
+        if isinstance(item, Mapping) and str(item.get("name") or "").strip()
+    ]
+    passed = sum(1 for item in checks if bool(item.get("passed")))
+    total = len(checks)
+    parts = [f"{passed}/{total} check(s) passed"] if total else ["No checks recorded"]
+    for check_name in ("Agent DaemonSet Ready", "Trace OTLP Service Ready"):
+        summary = next(
+            (
+                str(item.get("summary") or "").strip()
+                for item in checks
+                if str(item.get("name") or "").strip() == check_name
+            ),
+            "",
+        )
+        if summary:
+            parts.append(summary)
+    return "; ".join(parts) + "."
 
 
 __all__ = [

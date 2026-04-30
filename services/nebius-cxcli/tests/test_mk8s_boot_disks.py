@@ -25,6 +25,20 @@ def _write_sources_file(path: Path) -> None:
                             "source": {
                                 "portable": "../../platform-infra/modules/mk8s",
                             },
+                        }
+                    }
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    path.with_name("component_cli_settings.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "components": {
+                    "infra": {
+                        "mk8s": {
                             "cli": {
                                 "boot_disk_defaults": {
                                     "cpu": {

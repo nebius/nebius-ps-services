@@ -19,6 +19,7 @@ from nebius_cxcli.config_loader import load_config
 from nebius_cxcli.config_model import to_dynamic_payload
 from nebius_cxcli.config_template import starter_config_yaml
 from nebius_cxcli.deploy_targets import flux_target_dir
+from nebius_cxcli.flux_render import render_flux
 from nebius_cxcli.mk8s_gpu import materialize_mk8s_gpu_app_values
 from nebius_cxcli.paths import resolve_project_paths, validate_path_alignment
 from nebius_cxcli.render import render_project
@@ -360,9 +361,7 @@ def test_render_passes_mk8s_preemptible_node_group_inputs(
             ModuleVariable(name="subnet_id", required=False, type_hint="string"),
             ModuleVariable(name="gpu_enabled", required=False, type_hint="bool"),
             ModuleVariable(name="gpu_node_groups", required=False, type_hint="number"),
-            ModuleVariable(
-                name="gpu_nodes_count_per_group", required=False, type_hint="number"
-            ),
+            ModuleVariable(name="gpu_nodes_count_per_group", required=False, type_hint="number"),
             ModuleVariable(name="gpu_nodes_platform", required=False, type_hint="string"),
             ModuleVariable(name="gpu_nodes_preset", required=False, type_hint="string"),
             ModuleVariable(name="gpu_nodes_preemptible", required=False, type_hint="bool"),
@@ -575,7 +574,6 @@ def test_render_uses_cluster_instance_ids_for_multi_target_artifacts(
             "enabled": True,
             "repo": "https://example.invalid/charts",
             "version": "1.0.0",
-            "target_ref": "cluster1",
             "namespace": "demo",
             "release-name": "demo",
             "values": {},
@@ -587,7 +585,6 @@ def test_render_uses_cluster_instance_ids_for_multi_target_artifacts(
             "enabled": True,
             "repo": "https://example.invalid/charts",
             "version": "1.0.0",
-            "target_ref": "cluster2",
             "namespace": "demo",
             "release-name": "demo",
             "values": {},
@@ -846,6 +843,76 @@ def test_render_dynamic_oci_chart_writes_flux_oci_repository(tmp_path: Path) -> 
     ) < kustomization_doc["resources"].index("./helmrelease-platform-envoy-gateway.yaml")
 
 
+def test_render_externalizes_grafana_dashboard_json_to_generated_bundle(
+    tmp_path: Path,
+) -> None:
+    reset_component_entry_cache()
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
+    payload["deploy"]["targets"][0]["observability"]["enabled"] = True
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+    paths.flux_dir.mkdir(parents=True, exist_ok=True)
+
+    written = render_flux(config, paths)
+
+    dashboard_dir = paths.generated_dir / "grafana_dashboards" / "mk8s" / "nebius-kubernetes"
+    dashboard_files = {
+        item.name
+        for item in dashboard_dir.iterdir()
+        if item.is_file() and item.suffix == ".json"
+    }
+    assert dashboard_files == {
+        "kubernetes-cluster-monitoring.json",
+        "kubernetes-logs-from-loki.json",
+        "kubernetes-traces.json",
+    }
+    assert dashboard_dir / "kubernetes-cluster-monitoring.json" in written
+
+    flux_dir = _target_flux_dir(paths)
+    configmap = flux_dir / "configmap-grafana-nebius-kubernetes-dashboards.yaml"
+    release = flux_dir / "helmrelease-observability-grafana.yaml"
+    kustomization = flux_dir / "kustomization.yaml"
+    assert configmap.exists()
+    assert release.exists()
+
+    configmap_doc = yaml.safe_load(configmap.read_text(encoding="utf-8"))
+    assert configmap_doc["metadata"] == {
+        "name": "grafana-nebius-kubernetes-dashboards",
+        "namespace": "observability",
+    }
+    assert set(configmap_doc["data"]) == dashboard_files
+
+    release_doc = yaml.safe_load(release.read_text(encoding="utf-8"))
+    values = release_doc["spec"]["values"]
+    assert values["dashboardsConfigMaps"] == {
+        "nebius-kubernetes": "grafana-nebius-kubernetes-dashboards"
+    }
+    assert set(values["dashboards"]["nebius"]) == {
+        "nebius-disk",
+        "nebius-gpu",
+        "nebius-managed-postgres",
+        "nebius-object-storage",
+        "nebius-observability-platform",
+        "nebius-shared-filesystem",
+        "nebius-shared-filesystem-extended",
+    }
+    assert "json:" not in yaml.safe_dump(values["dashboards"], sort_keys=False)
+
+    kustomization_doc = yaml.safe_load(kustomization.read_text(encoding="utf-8"))
+    assert "./configmap-grafana-nebius-kubernetes-dashboards.yaml" in kustomization_doc[
+        "resources"
+    ]
+    assert kustomization_doc["resources"].index(
+        "./configmap-grafana-nebius-kubernetes-dashboards.yaml"
+    ) < kustomization_doc["resources"].index("./helmrelease-observability-grafana.yaml")
+
+
 def test_render_dynamic_oci_chart_uses_catalog_chart_name_when_id_differs(tmp_path: Path) -> None:
     reset_component_entry_cache()
     config_path = _project_config_path(tmp_path)
@@ -953,12 +1020,6 @@ def test_render_uses_global_flux_release_timeout_when_chart_omits_override(
     sources_file.write_text(
         yaml.safe_dump(
             _catalog(
-                cli={
-                    "flux": {
-                        "version": "v2.8.0",
-                        "release_timeout": "15m",
-                    }
-                },
                 apps={
                     "demo-app": {
                         "source": _portable_chart_source(
@@ -973,6 +1034,20 @@ def test_render_uses_global_flux_release_timeout_when_chart_omits_override(
                     }
                 },
             ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    sources_file.with_name("component_cli_settings.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "cli": {
+                    "flux": {
+                        "version": "v2.8.0",
+                        "release_timeout": "15m",
+                    }
+                },
+            },
             sort_keys=False,
         ),
         encoding="utf-8",
@@ -1064,6 +1139,15 @@ def test_render_materializes_nebius_gpu_operator_driver_crd_override_for_nebius_
     assert release_doc["spec"]["values"]["driver"]["enabled"] is False
     assert release_doc["spec"]["values"]["toolkit"]["enabled"] is False
     assert release_doc["spec"]["values"]["driver"]["nvidiaDriverCRD"]["enabled"] is False
+    assert release_doc["spec"]["values"]["node-feature-discovery"]["worker"]["affinity"][
+        "nodeAffinity"
+    ]["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"][0][
+        "matchExpressions"
+    ][0] == {
+        "key": "nebius.com/gpu",
+        "operator": "In",
+        "values": ["true"],
+    }
 
 
 def test_render_materializes_driverful_rdma_policy_for_nebius_gpu_clusters(
@@ -1181,6 +1265,7 @@ def test_render_materializes_driverful_rdma_policy_for_nebius_gpu_clusters(
     assert gpu_values["driver"]["enabled"] is False
     assert gpu_values["toolkit"]["enabled"] is False
     assert gpu_values["nfd"]["enabled"] is False
+    assert "node-feature-discovery" not in gpu_values
     assert gpu_release_doc["spec"]["dependsOn"] == [
         {"name": "network-operator", "namespace": "nvidia-network-operator"}
     ]
@@ -1248,11 +1333,19 @@ def test_render_disables_gpu_operator_nfd_for_operator_managed_b200_network_oper
 
     render_project(config, paths, source_profile=SourceProfile.LOCAL)
 
-    gpu_release_doc = yaml.safe_load(
-        (_target_flux_dir(paths) / "helmrelease-platform-gpu-operator.yaml").read_text(
+    target_flux_dir = _target_flux_dir(paths)
+    network_release_doc = yaml.safe_load(
+        (target_flux_dir / "helmrelease-platform-network-operator.yaml").read_text(
             encoding="utf-8"
         )
     )
+    gpu_release_doc = yaml.safe_load(
+        (target_flux_dir / "helmrelease-platform-gpu-operator.yaml").read_text(encoding="utf-8")
+    )
+    network_values = network_release_doc["spec"]["values"]
+    assert network_values["operator"]["ofedDriver"]["deploy"] is True
+    assert network_values["nfd"]["enabled"] is True
+    assert network_values["nfd"]["deployNodeFeatureRules"] is True
     assert gpu_release_doc["spec"]["values"]["nfd"]["enabled"] is False
 
 
@@ -1330,6 +1423,8 @@ def test_render_materializes_operator_managed_rdma_policy_for_gpu_cluster_shapes
 
     network_values = network_release_doc["spec"]["values"]
     assert network_values["operator"]["ofedDriver"]["deploy"] is True
+    assert network_values["nfd"]["enabled"] is True
+    assert network_values["nfd"]["deployNodeFeatureRules"] is True
     network_patches = network_release_doc["spec"]["postRenderers"][0]["kustomize"]["patches"]
     assert network_patches[0]["target"]["kind"] == "NicClusterPolicy"
     assert '"resourceName": "shared_device"' in network_patches[0]["patch"]
@@ -1785,7 +1880,6 @@ def test_render_supports_app_input_binding_from_component_output(
                     "instance_id": "mk8s-blue",
                     "group": "workloads",
                     "enabled": True,
-                    "target_ref": "mk8s-blue",
                     "repo": "https://example.invalid/charts",
                     "version": "1.0.0",
                     "namespace": "demo",

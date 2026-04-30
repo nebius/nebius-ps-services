@@ -36,6 +36,7 @@ from .deploy_targets import (
     is_auto_target_scoped_app_instance_id,
     target_scoped_app_instance_id,
 )
+from .observability_validation import OBSERVABILITY_INGESTION_VALIDATION_KIND
 from .runtime_config import to_plain_data
 
 
@@ -348,6 +349,7 @@ def _apply_observability_app_entry_defaults(
         )
         row.clear()
         row.update(resolved)
+    _strip_grafana_source_dashboard_values(row)
 
 
 def _new_observability_app_row(entry: ComponentEntry) -> dict[str, Any]:
@@ -368,6 +370,19 @@ def _new_observability_app_row(entry: ComponentEntry) -> dict[str, Any]:
 
 def _observability_instance_id(app_id: str, *, target_ref: str = "") -> str:
     return target_scoped_app_instance_id(app_id, target_ref=target_ref)
+
+
+def _target_scoped_validation_name(base_name: str, *, target_ref: str) -> str:
+    normalized_target_ref = normalize_component_token(target_ref)
+    return f"{base_name} ({normalized_target_ref})" if normalized_target_ref else base_name
+
+
+def _target_scoped_report_file(base_name: str, *, target_ref: str) -> str:
+    normalized_target_ref = normalize_component_token(target_ref)
+    if not normalized_target_ref:
+        return base_name
+    stem, suffix = base_name.rsplit(".", maxsplit=1) if "." in base_name else (base_name, "json")
+    return f"{stem}-{normalized_target_ref}.{suffix}"
 
 
 def _normalize_target_scoped_observability_instance_id(
@@ -1754,10 +1769,15 @@ _COLLECTOR_MANAGED_VALUE_PATHS = (
     "values.config.metrics.excludedNamespaces",
     "values.config.traces.enabled",
 )
+_CXCLI_CLUSTER_METRIC_JOB_NAMES = {
+    "cxcli-kubernetes-apiservers",
+    "cxcli-kubernetes-nodes",
+    "cxcli-kubernetes-nodes-cadvisor",
+    "cxcli-hubble",
+}
 _GRAFANA_MANAGED_VALUE_PATHS = (
     "values.admin",
     "values.dashboardProviders",
-    "values.dashboards",
     "values.datasources",
     "values.envValueFrom",
     "values.grafana\\.ini.auth",
@@ -1765,6 +1785,20 @@ _GRAFANA_MANAGED_VALUE_PATHS = (
     "values.route.main",
     "values.extraObjects",
 )
+
+
+def _strip_grafana_source_dashboard_values(row: dict[str, Any]) -> bool:
+    if _as_text(row.get("id")) != _grafana_app_id():
+        return False
+    values = row.get("values")
+    if not isinstance(values, dict):
+        return False
+    changed = False
+    for key in ("dashboards", "dashboardsConfigMaps"):
+        if key in values:
+            values.pop(key, None)
+            changed = True
+    return changed
 
 
 def _grafana_catalog_managed_values() -> dict[str, Any]:
@@ -1791,13 +1825,18 @@ def _collector_managed_values(
     target_ref: str = "",
 ) -> dict[str, Any]:
     settings = _effective_kubernetes_observability_config(payload, target_ref=target_ref)
+    # cxcli renders its own cluster-metrics scrape jobs below. The upstream chart
+    # maps every node label into metric labels for kubelet/cAdvisor jobs, which
+    # is fragile on NFD-labeled GPU clusters and can make the read endpoint reject
+    # otherwise valid container metrics.
+    chart_collect_k8s_cluster_metrics = False
     return {
         "values.config.logs.enabled": settings.logs_enabled,
         "values.config.logs.collectAgentLogs": settings.logs_collect_agent_logs,
         "values.config.logs.excludedNamespaces": list(settings.logs_excluded_namespaces),
         "values.config.metrics.enabled": settings.metrics_enabled,
         "values.config.metrics.collectAgentMetrics": settings.metrics_collect_agent_metrics,
-        "values.config.metrics.collectK8sClusterMetrics": settings.metrics_collect_k8s_cluster_metrics,
+        "values.config.metrics.collectK8sClusterMetrics": chart_collect_k8s_cluster_metrics,
         "values.config.metrics.excludedNamespaces": list(settings.metrics_excluded_namespaces),
         "values.config.traces.enabled": settings.traces_enabled,
     }
@@ -1912,6 +1951,155 @@ def _additional_target_config(
     }
 
 
+def _safe_node_label_relabel_configs() -> list[dict[str, Any]]:
+    return [
+        {
+            "source_labels": ["__meta_kubernetes_node_name"],
+            "target_label": "node",
+        },
+        {
+            "source_labels": ["__meta_kubernetes_node_label_kubernetes_io_hostname"],
+            "target_label": "kubernetes_io_hostname",
+        },
+        {
+            "source_labels": ["__meta_kubernetes_node_label_kubernetes_io_arch"],
+            "target_label": "kubernetes_io_arch",
+        },
+        {
+            "source_labels": ["__meta_kubernetes_node_label_kubernetes_io_os"],
+            "target_label": "kubernetes_io_os",
+        },
+        {
+            "source_labels": ["__meta_kubernetes_node_label_node_kubernetes_io_instance_type"],
+            "target_label": "node_kubernetes_io_instance_type",
+        },
+        {
+            "source_labels": ["__meta_kubernetes_node_label_topology_kubernetes_io_region"],
+            "target_label": "topology_kubernetes_io_region",
+        },
+        {
+            "source_labels": ["__meta_kubernetes_node_label_nebius_com_node_group_id"],
+            "target_label": "nebius_com_node_group_id",
+        },
+        {
+            "source_labels": ["__meta_kubernetes_node_label_nebius_com_resource_preset"],
+            "target_label": "nebius_com_resource_preset",
+        },
+    ]
+
+
+def _kubelet_proxy_target(
+    *,
+    job_name: str,
+    metrics_path: str,
+) -> dict[str, Any]:
+    return {
+        "job_name": job_name,
+        "bearer_token_file": "/var/run/secrets/kubernetes.io/serviceaccount/token",
+        "kubernetes_sd_configs": [{"role": "node"}],
+        "relabel_configs": [
+            {
+                "source_labels": ["__meta_kubernetes_node_name"],
+                "action": "keep",
+                "regex": "${env:K8S_NODE_NAME}",
+            },
+            *_safe_node_label_relabel_configs(),
+            {
+                "replacement": "kubernetes.default.svc:443",
+                "target_label": "__address__",
+            },
+            {
+                "source_labels": ["__meta_kubernetes_node_name"],
+                "regex": "(.+)",
+                "replacement": f"/api/v1/nodes/$$$1/proxy/{metrics_path}",
+                "target_label": "__metrics_path__",
+            },
+        ],
+        "scheme": "https",
+        "tls_config": {
+            "ca_file": "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+        },
+    }
+
+
+def _cluster_metric_targets() -> tuple[dict[str, Any], ...]:
+    return (
+        {
+            "job_name": "cxcli-kubernetes-apiservers",
+            "bearer_token_file": "/var/run/secrets/kubernetes.io/serviceaccount/token",
+            "kubernetes_sd_configs": [{"role": "endpoints"}],
+            "relabel_configs": [
+                {
+                    "source_labels": [
+                        "__meta_kubernetes_namespace",
+                        "__meta_kubernetes_service_name",
+                        "__meta_kubernetes_endpoint_port_name",
+                    ],
+                    "action": "keep",
+                    "regex": "default;kubernetes;https",
+                }
+            ],
+            "scheme": "https",
+            "tls_config": {
+                "ca_file": "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+                "server_name": "kubernetes.default.svc",
+            },
+        },
+        _kubelet_proxy_target(
+            job_name="cxcli-kubernetes-nodes",
+            metrics_path="metrics",
+        ),
+        _kubelet_proxy_target(
+            job_name="cxcli-kubernetes-nodes-cadvisor",
+            metrics_path="metrics/cadvisor",
+        ),
+        {
+            "job_name": "cxcli-hubble",
+            "kubernetes_sd_configs": [
+                {
+                    "role": "endpoints",
+                    "namespaces": {"names": ["kube-system"]},
+                }
+            ],
+            "relabel_configs": [
+                {
+                    "source_labels": ["__meta_kubernetes_service_label_k8s_app"],
+                    "regex": "hubble",
+                    "action": "keep",
+                },
+                {
+                    "source_labels": ["__meta_kubernetes_endpoint_port_name"],
+                    "regex": "hubble-metrics",
+                    "action": "keep",
+                },
+                {
+                    "source_labels": ["__meta_kubernetes_pod_node_name"],
+                    "action": "keep",
+                    "regex": "${env:K8S_NODE_NAME}",
+                },
+                {
+                    "source_labels": ["__meta_kubernetes_pod_node_name"],
+                    "regex": "(.+)",
+                    "replacement": "$$$1",
+                    "target_label": "node",
+                },
+                {
+                    "source_labels": ["__meta_kubernetes_service_name"],
+                    "target_label": "service",
+                },
+                {
+                    "source_labels": ["__meta_kubernetes_namespace"],
+                    "target_label": "namespace",
+                },
+            ],
+            "metrics_path": "/metrics",
+            "scheme": "http",
+            "honor_labels": True,
+            "scrape_interval": "15s",
+        },
+    )
+
+
 def _collector_additional_targets(
     payload: dict[str, Any],
     *,
@@ -1919,6 +2107,9 @@ def _collector_additional_targets(
 ) -> tuple[dict[str, Any], ...]:
     resolved: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
+    settings = _effective_kubernetes_observability_config(payload, target_ref=target_ref)
+    if settings.metrics_enabled and settings.metrics_collect_k8s_cluster_metrics:
+        resolved.extend(copy.deepcopy(item) for item in _cluster_metric_targets())
     for app_row, target in _selected_app_metric_targets(payload):
         if target.discovery != "additional_target":
             continue
@@ -1938,13 +2129,15 @@ def _collector_additional_targets(
     return tuple(resolved)
 
 
-def _catalog_additional_target_job_names() -> set[str]:
-    return {
+def _catalog_metric_target_job_names() -> set[str]:
+    names = {
         target.job_name
         for settings in _app_observability_settings().values()
         for target in settings.metric_targets
-        if target.discovery == "additional_target" and target.job_name
+        if target.job_name
     }
+    names.update(_CXCLI_CLUSTER_METRIC_JOB_NAMES)
+    return names
 
 
 def _merge_managed_additional_targets(
@@ -2120,7 +2313,7 @@ def materialize_observability_app_values(payload_or_config: Any) -> bool:
         return False
 
     changed = False
-    catalog_additional_target_job_names = _catalog_additional_target_job_names()
+    catalog_metric_target_job_names = _catalog_metric_target_job_names()
     for chart_row in collector_rows:
         before = copy.deepcopy(chart_row)
         target_ref = app_chart_target_ref(chart_row)
@@ -2145,7 +2338,7 @@ def materialize_observability_app_values(payload_or_config: Any) -> bool:
             _merge_managed_additional_targets(
                 chart_row=chart_row,
                 managed_targets=managed_targets,
-                managed_job_names=catalog_additional_target_job_names,
+                managed_job_names=catalog_metric_target_job_names,
             )
             if chart_row != before:
                 changed = True
@@ -2158,7 +2351,7 @@ def materialize_observability_app_values(payload_or_config: Any) -> bool:
         _merge_managed_additional_targets(
             chart_row=chart_row,
             managed_targets=(),
-            managed_job_names=catalog_additional_target_job_names,
+            managed_job_names=catalog_metric_target_job_names,
         )
         if chart_row != before:
             changed = True
@@ -2168,6 +2361,7 @@ def materialize_observability_app_values(payload_or_config: Any) -> bool:
         if _grafana_required(payload, target_ref=target_ref):
             for target_path, target_value in _grafana_managed_values(payload).items():
                 _set_path_value(chart_row, target_path, copy.deepcopy(target_value))
+            _strip_grafana_source_dashboard_values(chart_row)
             if chart_row != before:
                 changed = True
             continue
@@ -2396,6 +2590,103 @@ def observability_status_summary(
     }
 
 
+def observability_validation_specs(payload_or_config: Any) -> list[dict[str, Any]]:
+    """Build source-enabled deploy validations for observability-enabled MK8s targets."""
+    payload = _as_payload(payload_or_config)
+    mk8s_observability = _mk8s_observability_settings()
+    collector_app_id = (
+        mk8s_observability.chart_component_id
+        if mk8s_observability.mode == "kubernetes_agent"
+        else ""
+    )
+    if not payload or not collector_app_id:
+        return []
+    validation = mk8s_observability.validation
+    if not validation.enabled:
+        return []
+    target_refs = enabled_cluster_target_refs(payload)
+    if not target_refs:
+        return []
+    collector_source = helm_chart_source_by_id(collector_app_id, sources=_catalog_sources())
+    if collector_source is None:
+        raise ValueError(
+            "components.infra.mk8s.cli.observability.primary_agent.chart_component_id "
+            f"references unknown apps component '{collector_app_id}'"
+        )
+    collector_rows = [
+        row
+        for row in _app_chart_rows_for_id(payload, collector_app_id)
+        if isinstance(row, dict) and bool(row.get("enabled", False))
+    ]
+    validations: list[dict[str, Any]] = []
+    for target_ref in target_refs:
+        if not _kubernetes_agent_required(payload, target_ref=target_ref):
+            continue
+        matching_row = next(
+            (
+                row
+                for row in collector_rows
+                if app_chart_target_ref(row) == target_ref
+                or (not app_chart_target_ref(row) and len(target_refs) == 1)
+            ),
+            {},
+        )
+        namespace = _as_text(matching_row.get("namespace"))
+        release_name = _as_text(matching_row.get("release-name"))
+        namespace = namespace or _as_text(collector_source.namespace)
+        release_name = release_name or _as_text(collector_source.release_name) or _as_text(
+            collector_source.name
+        )
+        if not namespace:
+            raise ValueError(
+                f"apps:{collector_app_id} must declare release.namespace in component_sources.yaml "
+                "for observability validation"
+            )
+        if not release_name:
+            raise ValueError(
+                f"apps:{collector_app_id} must declare a chart name in component_sources.yaml "
+                "for observability validation"
+            )
+        settings = _effective_kubernetes_observability_config(payload, target_ref=target_ref)
+        validations.append(
+            {
+                "kind": OBSERVABILITY_INGESTION_VALIDATION_KIND,
+                "target_ref": target_ref,
+                "name": _target_scoped_validation_name(
+                    "Observability ingestion",
+                    target_ref=target_ref,
+                ),
+                "namespace": namespace,
+                "helmrelease_name": release_name,
+                "helmrelease_ready_condition": validation.helmrelease_ready_condition,
+                "signal_value_paths": dict(validation.signal_value_paths),
+                "cluster_metric_targets_path": validation.cluster_metric_targets_path,
+                "daemonset_name": validation.daemonset_name,
+                "pod_selector": validation.pod_selector,
+                "pod_failure_sample_limit": validation.pod_failure_sample_limit,
+                "trace_otlp_service": {
+                    "name": validation.trace_otlp_service.name,
+                    "port": validation.trace_otlp_service.port,
+                    "endpoint_slice_selector": validation.trace_otlp_service.endpoint_slice_selector,
+                    "endpoint_slice_check_limit": (
+                        validation.trace_otlp_service.endpoint_slice_check_limit
+                    ),
+                },
+                "signals": {
+                    "logs": settings.logs_enabled,
+                    "metrics": settings.metrics_enabled,
+                    "traces": settings.traces_enabled,
+                    "collect_k8s_cluster_metrics": settings.metrics_collect_k8s_cluster_metrics,
+                },
+                "report_file": _target_scoped_report_file(
+                    "observability-ingestion-report.json",
+                    target_ref=target_ref,
+                ),
+            }
+        )
+    return validations
+
+
 __all__ = [
     "KubernetesObservabilityConfig",
     "VmObservabilityConfig",
@@ -2411,5 +2702,6 @@ __all__ = [
     "observability_dependency_issues",
     "observability_project_defaults",
     "observability_status_summary",
+    "observability_validation_specs",
     "resolve_observability_app_selection",
 ]

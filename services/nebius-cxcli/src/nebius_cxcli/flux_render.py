@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+import json
 import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -25,7 +27,6 @@ from .component_wiring import (
 )
 from .components import component_entries, component_entry_chart_name
 from .deploy_targets import (
-    TARGET_REF_FIELD,
     app_chart_target_ref,
     enabled_cluster_target_refs,
     flux_target_dir,
@@ -73,6 +74,20 @@ def _namespace_doc(name: str) -> dict[str, Any]:
         "apiVersion": "v1",
         "kind": "Namespace",
         "metadata": {"name": name},
+    }
+
+
+def _configmap_doc(
+    *,
+    name: str,
+    namespace: str,
+    data: dict[str, str],
+) -> dict[str, Any]:
+    return {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": {"name": name, "namespace": namespace},
+        "data": data,
     }
 
 
@@ -202,14 +217,16 @@ def _configured_app_release_specs(
                 instance_id = str(chart_node.get("instance_id", entry_id)).strip() or entry_id
                 target_ref = app_chart_target_ref(chart_node)
                 if cluster_target_refs:
+                    if not target_ref and instance_id in cluster_target_refs:
+                        target_ref = instance_id
                     if not target_ref:
                         raise ValueError(
-                            f"apps.charts[{instance_id}].{TARGET_REF_FIELD} is required when cluster targets are enabled"
+                            f"apps.charts[{instance_id}].instance_id must reference one of the enabled cluster targets"
                         )
                     if target_ref not in cluster_target_refs:
                         available = ", ".join(sorted(cluster_target_refs))
                         raise ValueError(
-                            f"apps.charts[{instance_id}].{TARGET_REF_FIELD} must reference one of the enabled cluster targets: {available}"
+                            f"apps.charts[{instance_id}].instance_id must reference one of the enabled cluster targets: {available}"
                         )
                 else:
                     target_ref = ""
@@ -459,6 +476,94 @@ def _helm_release_doc(
     }
 
 
+def _pretty_dashboard_json(raw_json: str) -> str:
+    try:
+        payload = json.loads(raw_json)
+    except json.JSONDecodeError:
+        return raw_json.rstrip() + "\n"
+    return json.dumps(payload, indent=2, sort_keys=False) + "\n"
+
+
+def _dashboard_file_name(dashboard_name: str) -> str:
+    return f"{_file_slug(dashboard_name)}.json"
+
+
+def _target_dashboard_dir_name(target_ref: str) -> str:
+    return _file_slug(target_ref) if target_ref else "current-cluster"
+
+
+def _externalize_dashboard_json_values(
+    state: _FluxRenderState,
+    *,
+    release: dict[str, Any],
+) -> None:
+    values = release.get("values")
+    if not isinstance(values, dict):
+        return
+    dashboards = values.get("dashboards")
+    if not isinstance(dashboards, dict):
+        return
+
+    release_name = str(release["release_name"])
+    namespace = str(release["namespace"])
+    target_ref = str(release.get("target_ref", "")).strip()
+    target_dir = _target_dashboard_dir_name(target_ref)
+    next_dashboards = copy.deepcopy(dashboards)
+    dashboards_config_maps = copy.deepcopy(values.get("dashboardsConfigMaps") or {})
+    if not isinstance(dashboards_config_maps, dict):
+        dashboards_config_maps = {}
+
+    for folder, folder_dashboards in list(dashboards.items()):
+        if not isinstance(folder_dashboards, dict):
+            continue
+        folder_key = str(folder)
+        configmap_data: dict[str, str] = {}
+        next_folder = copy.deepcopy(next_dashboards.get(folder, {}))
+        if not isinstance(next_folder, dict):
+            next_folder = {}
+        for dashboard_name, dashboard_spec in list(folder_dashboards.items()):
+            if not isinstance(dashboard_spec, dict) or "json" not in dashboard_spec:
+                continue
+            dashboard_json = _pretty_dashboard_json(str(dashboard_spec.get("json") or ""))
+            file_name = _dashboard_file_name(str(dashboard_name))
+            dashboard_path = (
+                state.paths.generated_dir
+                / "grafana_dashboards"
+                / target_dir
+                / folder_key
+                / file_name
+            )
+            _write_text(dashboard_path, dashboard_json)
+            state.files.append(dashboard_path)
+            configmap_data[file_name] = dashboard_json
+            next_folder.pop(dashboard_name, None)
+
+        if not configmap_data:
+            continue
+        configmap_name = _file_slug(f"{release_name}-{folder_key}-dashboards")
+        dashboards_config_maps[folder_key] = configmap_name
+        configmap_file = Path(f"configmap-{_file_slug(release_name)}-{_file_slug(folder_key)}-dashboards.yaml")
+        state.write_doc(
+            configmap_file,
+            _configmap_doc(
+                name=configmap_name,
+                namespace=namespace,
+                data=configmap_data,
+            ),
+        )
+        if next_folder:
+            next_dashboards[folder] = next_folder
+        else:
+            next_dashboards.pop(folder, None)
+
+    if dashboards_config_maps:
+        values["dashboardsConfigMaps"] = dashboards_config_maps
+    if next_dashboards:
+        values["dashboards"] = next_dashboards
+    else:
+        values.pop("dashboards", None)
+
+
 @dataclass
 class _FluxRenderState:
     paths: ProjectPaths
@@ -543,6 +648,7 @@ def _render_flux_app_helm_releases(
             )
             flux_source_kind = "GitRepository"
         state.ensure_namespace(namespace)
+        _externalize_dashboard_json_values(state, release=release)
         release_file_name = f"helmrelease-{_file_slug(scope)}-{_file_slug(release_name)}.yaml"
         state.write_doc(
             Path(release_file_name),

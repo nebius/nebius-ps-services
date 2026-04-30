@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from .deploy_targets import normalize_generated_deploy_target
 from .paths import ProjectPaths
 from .runtime_config import AttrDict, to_plain_data, wrap_runtime_config
 
@@ -45,8 +46,8 @@ def build_generated_manifest(
     nebius_map = nebius if isinstance(nebius, Mapping) else {}
 
     rendered_targets: list[dict[str, Any]] = []
-    for item in targets:
-        target_item = dict(item)
+    for index, item in enumerate(targets):
+        target_item = normalize_generated_deploy_target(item, index=index)
         flux_dir = str(target_item.get("flux_dir", "") or "").strip()
         if flux_dir:
             target_item["flux_dir"] = _repo_relative_path(Path(flux_dir), root=paths.repo_root)

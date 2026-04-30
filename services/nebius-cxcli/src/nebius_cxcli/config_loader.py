@@ -8,6 +8,7 @@ from typing import Any
 import yaml
 
 from .config_model import is_dynamic_payload, to_runtime_payload
+from .deploy_targets import materialize_app_chart_target_refs, strip_app_chart_target_refs
 from .mk8s_gpu import (
     ensure_mk8s_gpu_app_rows,
     materialize_mk8s_gpu_app_values,
@@ -30,6 +31,8 @@ def normalize_runtime_config_payload(
     base_dir: Path | None = None,
 ) -> bool:
     changed = normalize_runtime_ssh_public_key_inputs(payload, base_dir=base_dir)
+    if materialize_app_chart_target_refs(payload):
+        changed = True
     if normalize_mk8s_gpu_project_validation_settings(payload):
         changed = True
     if ensure_mk8s_gpu_app_rows(payload):
@@ -43,6 +46,8 @@ def normalize_runtime_config_payload(
     if materialize_observability_infra_values(payload):
         changed = True
     if materialize_observability_app_values(payload):
+        changed = True
+    if strip_app_chart_target_refs(payload):
         changed = True
     return changed
 
