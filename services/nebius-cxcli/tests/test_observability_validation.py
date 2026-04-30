@@ -44,7 +44,16 @@ def test_run_observability_validation_writes_pass_report(
 
     def _fake_kubectl_json(args: list[str], *, extra_env: dict[str, str] | None) -> dict[str, Any]:
         assert extra_env == {"KUBECONFIG": "/tmp/kubeconfig"}
-        if "helmrelease.helm.toolkit.fluxcd.io" in args:
+        command = tuple(args)
+        if command == (
+            "-n",
+            "observability",
+            "get",
+            "helmrelease.helm.toolkit.fluxcd.io",
+            "nebius-observability-agent",
+            "-o",
+            "json",
+        ):
             return {
                 "spec": {
                     "values": {
@@ -69,16 +78,15 @@ def test_run_observability_validation_writes_pass_report(
                     ]
                 },
             }
-        if "daemonset.apps" in args:
-            assert args == [
-                "-n",
-                "observability",
-                "get",
-                "daemonset.apps",
-                "o11y-agent",
-                "-o",
-                "json",
-            ]
+        if command == (
+            "-n",
+            "observability",
+            "get",
+            "daemonset.apps",
+            "o11y-agent",
+            "-o",
+            "json",
+        ):
             return {
                 "metadata": {"name": "o11y-agent"},
                 "status": {
@@ -89,9 +97,15 @@ def test_run_observability_validation_writes_pass_report(
                     "numberMisscheduled": 0,
                 },
             }
-        if "pods" in args:
-            raise AssertionError("passing validation must not list all agent pods")
-        if "service" in args:
+        if command == (
+            "-n",
+            "observability",
+            "get",
+            "service",
+            "nebius-observability-agent",
+            "-o",
+            "json",
+        ):
             return {"spec": {"ports": [{"name": "grpc", "port": 4317}]}}
         raise AssertionError(f"unexpected kubectl args: {args}")
 

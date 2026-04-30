@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import subprocess
 from pathlib import Path
@@ -181,6 +182,11 @@ def _mock_bootstrap_ci_github_sync(
 
 def _project_config_path(deployments_root: Path) -> Path:
     return _project_dir(deployments_root) / "config.yaml"
+
+
+def _normalized_cli_output(text: str) -> str:
+    without_soft_hyphen_wraps = re.sub(r"-\s*\n\s*", "-", text)
+    return " ".join(without_soft_hyphen_wraps.split())
 
 
 def _project_dir(
@@ -963,7 +969,7 @@ def test_create_rejects_nested_deployments_root_with_managed_parent_gitignore(
     result = _create_non_interactive(nested_root)
 
     assert result.exit_code == 1, result.output
-    normalized = " ".join(result.output.split())
+    normalized = _normalized_cli_output(result.output)
     assert "nested under existing cxcli-managed deployments root" in normalized
     assert "Use '" in normalized
     assert "deployment-examples' as the deployments root" in normalized
