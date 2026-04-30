@@ -144,6 +144,43 @@ def _target_paths(paths: ProjectPaths, *, target_ref: str = "mk8s") -> ProjectPa
     return replace(paths, flux_dir=flux_target_dir(paths, target_ref))
 
 
+def test_manifest_deploy_targets_require_internal_target_ref_to_match_instance_id(
+    tmp_path: Path,
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    target = _mk8s_target(fake_paths, target_ref="cluster1")
+    target["target_ref"] = "cluster2"
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"Generated manifest deploy\.targets\[0\]\.target_ref "
+            r"must equal instance_id 'cluster1'"
+        ),
+    ):
+        cli._manifest_deploy_targets({"deploy": {"targets": [target]}})
+
+
+def test_manifest_deploy_targets_reject_legacy_target_shape(tmp_path: Path) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    target = _mk8s_target(fake_paths, target_ref="cluster1")
+    target.pop("target_ref")
+
+    with pytest.raises(
+        ValueError,
+        match=r"Generated manifest deploy\.targets\[0\]\.target_ref is required",
+    ):
+        cli._manifest_deploy_targets({"deploy": {"targets": [target]}})
+
+
+def test_manifest_deploy_targets_reject_malformed_target_rows() -> None:
+    with pytest.raises(
+        ValueError,
+        match=r"Generated manifest deploy\.targets\[0\] must be a mapping",
+    ):
+        cli._manifest_deploy_targets({"deploy": {"targets": ["cluster1"]}})
+
+
 def test_render_overwrite_warning_never_mentions_flux_system(tmp_path: Path) -> None:
     fake_paths = _fake_paths(tmp_path)
     fake_paths.generated_dir.mkdir(parents=True, exist_ok=True)
@@ -186,10 +223,11 @@ def test_render_overwrite_warning_treats_removed_inventory_scaffold_as_meaningfu
 def test_validate_command_runs_strict_checks_by_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    fake_paths = _fake_paths(tmp_path)
     strict_called: dict[str, bool] = {"called": False}
     quota_called: dict[str, object] = {}
     captured: dict[str, object] = {}
-    monkeypatch.setattr(cli, "_load_context", lambda _path: (object(), object()))
+    monkeypatch.setattr(cli, "_load_context", lambda _path: ("cfg", fake_paths))
     monkeypatch.setattr(
         cli,
         "_validate_active_component_sources",
@@ -221,9 +259,10 @@ def test_validate_command_runs_strict_checks_by_default(
     monkeypatch.setattr(cli, "validate_mk8s_network_preflight", lambda _cfg: None)
     monkeypatch.setattr(
         cli,
-        "_raise_on_live_quota_issues",
-        lambda config, *, phase: (
-            quota_called.update({"config": config, "phase": phase}) or _empty_quota_report()
+        "_raise_on_config_live_quota_issues",
+        lambda config, paths, *, phase: (
+            quota_called.update({"config": config, "paths": paths, "phase": phase})
+            or _empty_quota_report()
         ),
     )
     monkeypatch.setattr(
@@ -244,7 +283,7 @@ def test_validate_command_runs_strict_checks_by_default(
     output = _plain_output(result.output)
     assert "Runtime validation:" in output
     assert "Load config and component catalog" in output
-    assert "Validate active component sources" in output
+    assert "Validate active component catalog/settings" in output
     assert "Validate component dependencies" in output
     assert "Validate Terraform module inputs" in output
     assert "Validate strict deployment readiness" in output
@@ -259,6 +298,7 @@ def test_validate_command_runs_strict_checks_by_default(
     assert strict_called["called"] is True
     assert captured["source_profile"] == SourceProfile.PORTABLE
     assert quota_called["config"] is captured["config"]
+    assert quota_called["paths"] == fake_paths
     assert quota_called["phase"] == "validate"
 
 
@@ -336,7 +376,7 @@ def test_validation_scope_summary_lines_group_enabled_components_concisely(
 def test_validate_command_fails_on_confirmed_live_quota_insufficiency(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(cli, "_load_context", lambda _path: (object(), object()))
+    monkeypatch.setattr(cli, "_load_context", lambda _path: (object(), _fake_paths(tmp_path)))
     monkeypatch.setattr(
         cli,
         "_validate_active_component_sources",
@@ -352,7 +392,7 @@ def test_validate_command_fails_on_confirmed_live_quota_insufficiency(
     monkeypatch.setattr(cli, "rendered_module_sources", lambda *_args, **_kwargs: ())
     monkeypatch.setattr(
         cli,
-        "_raise_on_live_quota_issues",
+        "_raise_on_config_live_quota_issues",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             RuntimeError("Nebius quota/capacity is insufficient for validate.")
         ),
@@ -441,7 +481,9 @@ def test_validate_command_prints_mk8s_gpu_validation_warning(
     monkeypatch.setattr(cli, "_validate_strict_config", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "validate_mk8s_network_preflight", lambda _cfg: None)
     monkeypatch.setattr(
-        cli, "_raise_on_live_quota_issues", lambda *_args, **_kwargs: _empty_quota_report()
+        cli,
+        "_raise_on_config_live_quota_issues",
+        lambda *_args, **_kwargs: _empty_quota_report(),
     )
     monkeypatch.setattr(cli, "_validation_scope_summary_lines", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
@@ -486,7 +528,9 @@ def test_validate_command_accepts_local_source_profile(
     monkeypatch.setattr(cli, "_validate_strict_config", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "validate_mk8s_network_preflight", lambda _cfg: None)
     monkeypatch.setattr(
-        cli, "_raise_on_live_quota_issues", lambda *_args, **_kwargs: _empty_quota_report()
+        cli,
+        "_raise_on_config_live_quota_issues",
+        lambda *_args, **_kwargs: _empty_quota_report(),
     )
 
     result = runner.invoke(
@@ -836,8 +880,7 @@ def test_quota_check_capacity_only_shortage_does_not_suggest_quota_request(
     output = " ".join(_plain_output(result.output).split())
     assert "nebius-cxcli quota-request" not in output
     assert (
-        "choose a GPU platform/preset/fabric or region with available "
-        "Capacity Dashboard capacity"
+        "choose a GPU platform/preset/fabric or region with available Capacity Dashboard capacity"
     ) in output
     assert "nebius-cxcli quota-check --all-regions" in output
 
@@ -894,6 +937,8 @@ def test_quota_request_discounts_existing_mk8s_state_for_day2_scale(
         "load_generated_manifest",
         lambda _generated_dir: {"render": {"module_sources": []}},
     )
+    monkeypatch.setattr(cli, "_ensure_runtime_auth_material", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_ensure_backend_s3_env_aliases", lambda: None)
     monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _config: {"TF_VAR_demo": "1"})
     monkeypatch.setattr(cli, "terraform_init", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
@@ -932,6 +977,83 @@ def test_quota_request_discounts_existing_mk8s_state_for_day2_scale(
     assert planned_changes[0].requested_limit == 6
     output = " ".join(_plain_output(result.output).split())
     assert "target 6 (current limit 5, current usage 4)" in output
+
+
+def test_validate_config_quota_gate_discounts_existing_mk8s_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = cli.manifest_path_for_generated_dir(fake_paths.generated_dir)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text("{}", encoding="utf-8")
+    live_report = QuotaReport(
+        tenant_id="tenant-123",
+        project_id="project-456",
+        region_id="eu-north1",
+        checked_at="2026-04-28T00:00:00+00:00",
+        checks=(
+            QuotaCheck(
+                component_id="mk8s",
+                instance_id="cluster1",
+                component_label="mk8s@cluster1",
+                quota_name="compute.instance.gpu.h100",
+                region="eu-north1",
+                required=16,
+                reason="mk8s@cluster1: 2 GPU node(s) at gpu-h100-sxm/8gpu-128vcpu-1600gb",
+                unit="count",
+                available=0,
+                sufficient=False,
+                tenant_limit=16,
+                tenant_usage=16,
+                project_limit=None,
+                project_usage=0,
+                source_scope="capacity-dashboard/on-demand",
+                description="Capacity Dashboard GPU availability",
+                contributors=(
+                    cli.QuotaContributor(
+                        component_id="mk8s",
+                        instance_id="cluster1",
+                        component_label="mk8s@cluster1",
+                        required=16,
+                        reason="2 GPU node(s) at gpu-h100-sxm/8gpu-128vcpu-1600gb",
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    monkeypatch.setattr(cli, "assess_live_quotas", lambda *_args, **_kwargs: live_report)
+    monkeypatch.setattr(cli, "load_generated_manifest", lambda _generated_dir: {})
+    monkeypatch.setattr(cli, "_ensure_runtime_auth_material", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_ensure_backend_s3_env_aliases", lambda: None)
+    monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _config: {"TF_VAR_demo": "1"})
+    monkeypatch.setattr(cli, "terraform_init", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        cli,
+        "_managed_mk8s_quota_requirements_from_terraform_state",
+        lambda *_args, **_kwargs: (
+            SimpleNamespace(
+                component_id="mk8s",
+                instance_id="cluster1",
+                quota_name="compute.instance.gpu.h100",
+                region="eu-north1",
+                required=16,
+            ),
+        ),
+    )
+
+    with cli.console.capture() as capture:
+        adjusted = cli._raise_on_config_live_quota_issues(
+            "cfg",
+            fake_paths,
+            phase="validate",
+        )
+
+    assert adjusted.checks == ()
+    assert adjusted.has_confirmed_insufficiency is False
+    output = " ".join(_plain_output(capture.get()).split())
+    assert "compute.instance.gpu.h100 requires 16, available 0" not in output
 
 
 def test_quota_request_command_submits_confirmed_shortages(
@@ -1489,7 +1611,33 @@ def test_render_command_persists_quota_report_and_warns(
     monkeypatch.setattr(cli, "render_flux", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(cli, "write_inventory", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "_try_generate_terraform_lock_file", lambda *_args, **_kwargs: False)
-    monkeypatch.setattr(cli, "assess_live_quotas", lambda *_args, **_kwargs: report)
+
+    def fake_warn_on_config_live_quota_issues(
+        config: object,
+        paths: ProjectPaths,
+        *,
+        phase: str,
+        all_regions: bool = False,
+    ) -> QuotaReport:
+        captured["quota_config"] = config
+        captured["quota_paths"] = paths
+        captured["quota_phase"] = phase
+        captured["quota_all_regions"] = all_regions
+        cli._print_live_quota_report(report, phase=phase)
+        return report
+
+    monkeypatch.setattr(
+        cli,
+        "_warn_on_config_live_quota_issues",
+        fake_warn_on_config_live_quota_issues,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_warn_on_live_quota_issues",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("render must use config-aware quota assessment")
+        ),
+    )
     monkeypatch.setattr(
         cli,
         "_write_generated_runtime_manifest",
@@ -1510,6 +1658,10 @@ def test_render_command_persists_quota_report_and_warns(
     result = runner.invoke(cli.app, ["render", str(tmp_path / "config.yaml")])
 
     assert result.exit_code == 0, result.output
+    assert captured["quota_config"] == "cfg"
+    assert captured["quota_paths"] == fake_paths
+    assert captured["quota_phase"] == "render"
+    assert captured["quota_all_regions"] is False
     assert captured["quota_report"] is report
     assert "Render completed with quota warnings." in _plain_output(result.output)
     assert "compute.instance.count requires 1, available 0" in _plain_output(result.output)
@@ -1686,7 +1838,7 @@ def test_validate_sources_command_reports_success(
     assert result.exit_code == 0, result.output
     output = _plain_output(result.output)
     normalized_output = output.replace("\n", "")
-    assert "Component sources valid:" in output
+    assert "Component catalog/settings valid:" in output
     assert str(sources_file) in normalized_output
 
 
@@ -1713,7 +1865,7 @@ def test_validate_sources_command_reports_warnings_and_fails_on_issues(
 
     assert result.exit_code == 1, result.output
     assert "Warning: missing variables.tf" in output
-    assert "Component sources validation failed for" in output
+    assert "Component catalog/settings validation failed for" in output
     assert str(sources_file) in normalized_output
     assert "module source './broken-module' does not resolve to an existing directory" in output
 
@@ -1753,6 +1905,259 @@ def test_validate_sources_command_accepts_positional_component_sources_path(
     assert result.exit_code == 0, result.output
     assert captured["load_explicit"] == sources_file
     assert captured["validate_explicit"] == sources_file
+
+
+def test_validate_dashboards_command_reports_live_fit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("version: v1\n", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    class Result(SimpleNamespace):
+        @property
+        def ok(self) -> bool:
+            return not self.errors
+
+    monkeypatch.setattr(
+        cli,
+        "_load_context_readonly",
+        lambda path: (
+            captured.__setitem__("config_path", path),
+            (
+                "config",
+                SimpleNamespace(
+                    config_path=path,
+                    generated_dir=tmp_path / "generated",
+                    inventory_dir=tmp_path / "generated" / "inventory",
+                ),
+            ),
+        )[1],
+    )
+
+    def fake_validate_grafana_dashboard_fits(
+        config: object,
+        *,
+        target_ref: str = "",
+        target_extra_envs: object = None,
+        progress_callback: object = None,
+    ) -> tuple[Result, ...]:
+        captured["target_ref"] = target_ref
+        captured["target_extra_envs"] = target_extra_envs
+        if callable(progress_callback):
+            progress_callback("init", 0, 1)
+            progress_callback("cluster1: nebius-kubernetes/kubernetes-cluster-monitoring", 0, 1)
+            progress_callback("cluster1: nebius-kubernetes/kubernetes-cluster-monitoring", 1, 1)
+            progress_callback("done", 1, 1)
+        return (
+            Result(
+                target_ref="cluster1",
+                signal="metrics",
+                dashboard_ref="nebius-kubernetes/kubernetes-cluster-monitoring",
+                dashboard_uid="cxcli-kubernetes-metrics",
+                datasource="Nebius User Metrics",
+                datasource_uid="nebius-user-metrics",
+                datasource_type="prometheus",
+                read_endpoint="metrics_user_read",
+                source="cxcli-owned JSON",
+                checks=("Metric/label names matched; PromQL checked",),
+                errors=(),
+                warnings=("Tempo query returned no traces: {}",),
+            ),
+        )
+
+    monkeypatch.setattr(
+        cli,
+        "validate_grafana_dashboard_fits",
+        fake_validate_grafana_dashboard_fits,
+    )
+
+    result = runner.invoke(
+        cli.app,
+        ["validate-dashboards", str(config_path), "--target", "cluster1"],
+    )
+
+    assert result.exit_code == 0, result.output
+    output = _plain_output(result.output)
+    normalized_output = " ".join(output.split())
+    assert captured["config_path"] == config_path
+    assert captured["target_ref"] == "cluster1"
+    assert captured["target_extra_envs"] == {}
+    assert "Grafana dashboards: validating 1 dashboard binding(s)" in normalized_output
+    assert (
+        "Grafana dashboards: cluster1: nebius-kubernetes/kubernetes-cluster-monitoring (1/1)"
+        in normalized_output
+    )
+    assert (
+        normalized_output.count(
+            "Grafana dashboards: cluster1: nebius-kubernetes/kubernetes-cluster-monitoring (1/1)"
+        )
+        == 1
+    )
+    assert "OK: metrics@cluster1" in normalized_output
+    assert "Nebius User Metrics (prometheus, metrics_user_read)" in normalized_output
+    assert "Source: cxcli-owned JSON" in normalized_output
+    assert "Checks: - Metric/label names matched; PromQL checked" in normalized_output
+    assert "Warnings: - Tempo query returned no traces: {}" in normalized_output
+    assert f"Grafana dashboards fit live datasources: {config_path}" in output.replace("\n", "")
+
+
+def test_validate_dashboards_reads_target_contexts_from_deploy_report(tmp_path: Path) -> None:
+    inventory_dir = tmp_path / "inventory"
+    inventory_dir.mkdir()
+    (inventory_dir / cli.DEPLOY_REPORT_FILENAME).write_text(
+        "\n".join(
+            [
+                "### Target `cluster1`",
+                "",
+                "- MK8s: cluster ID `mk8scluster-111`; "
+                "kube context `nebius-cluster1-mk8scluster-111-external`",
+                "",
+                "### Target `cluster2`",
+                "",
+                "- MK8s: cluster ID `mk8scluster-222`; "
+                "kube context `nebius-cluster2-mk8scluster-222-external`",
+                "",
+                "## Infra",
+                "",
+                "### MK8s Clusters",
+                "",
+                "- `cluster3` (`cluster-three`)",
+                "  - CPU nodes: `2` at `cpu-d3/32vcpu-128gb`",
+                "  - Cluster ID: `mk8scluster-333`",
+                "  - Kube context: `nebius-cluster3-mk8scluster-333-external`",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    metadata = cli._deploy_report_target_contexts(SimpleNamespace(inventory_dir=inventory_dir))
+
+    assert metadata == {
+        "cluster1": {
+            "cluster_id": "mk8scluster-111",
+            "kube_context": "nebius-cluster1-mk8scluster-111-external",
+        },
+        "cluster2": {
+            "cluster_id": "mk8scluster-222",
+            "kube_context": "nebius-cluster2-mk8scluster-222-external",
+        },
+        "cluster3": {
+            "cluster_id": "mk8scluster-333",
+            "kube_context": "nebius-cluster3-mk8scluster-333-external",
+        },
+    }
+
+
+def test_kubeconfig_target_env_requires_context_in_kubeconfig(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kubeconfig = tmp_path / "config"
+    kubeconfig.write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "v1",
+                "kind": "Config",
+                "contexts": [
+                    {
+                        "name": "nebius-cluster2-mk8scluster-222-external",
+                        "context": {"cluster": "cluster2", "user": "user2"},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KUBECONFIG", str(kubeconfig))
+
+    with ExitStack() as stack:
+        env = cli._kubeconfig_target_env(
+            "cluster2",
+            stack=stack,
+            preferred_context="nebius-cluster2-mk8scluster-222-external",
+            preferred_cluster_id="mk8scluster-222",
+        )
+        assert env["KUBECONFIG"]
+        assert env[cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV] == (
+            "nebius-cluster2-mk8scluster-222-external"
+        )
+        assert env[cli.GRAFANA_TARGET_CLUSTER_ID_ENV] == "mk8scluster-222"
+
+    with ExitStack() as stack:
+        assert (
+            cli._kubeconfig_target_env(
+                "cluster1",
+                stack=stack,
+                preferred_context="nebius-cluster1-mk8scluster-111-external",
+                preferred_cluster_id="mk8scluster-111",
+            )
+            == {}
+        )
+
+
+def test_kube_context_name_for_target_does_not_guess_ambiguous_history(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kubeconfig = tmp_path / "config"
+    kubeconfig.write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "v1",
+                "kind": "Config",
+                "contexts": [
+                    {
+                        "name": "nebius-cluster1-mk8scluster-old-external",
+                        "context": {"cluster": "old", "user": "old"},
+                    },
+                    {
+                        "name": "nebius-cluster1-mk8scluster-new-external",
+                        "context": {"cluster": "new", "user": "new"},
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KUBECONFIG", str(kubeconfig))
+
+    assert cli._kube_context_name_for_target("cluster1") == ""
+
+
+def test_validate_dashboards_refuses_current_context_fallback_for_targeted_grafana(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kubeconfig = tmp_path / "config"
+    kubeconfig.write_text(
+        yaml.safe_dump({"apiVersion": "v1", "kind": "Config", "contexts": []}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KUBECONFIG", str(kubeconfig))
+    monkeypatch.setattr(cli, "enabled_cluster_target_refs", lambda _config: ("cluster1", "cluster2"))
+    monkeypatch.setattr(
+        cli,
+        "grafana_enabled_for_target",
+        lambda _config, *, target_ref="": target_ref in {"cluster1", "cluster2"},
+    )
+    paths = SimpleNamespace(
+        generated_dir=tmp_path / "generated",
+        inventory_dir=tmp_path / "generated" / "inventory",
+    )
+
+    with ExitStack() as stack, pytest.raises(RuntimeError) as excinfo:
+        cli._grafana_dashboard_validation_target_envs(
+            {},
+            paths,
+            target_ref="",
+            stack=stack,
+        )
+
+    message = str(excinfo.value)
+    assert "could not resolve an explicit kube context" in message
+    assert "cluster1, cluster2" in message
 
 
 def test_render_command_requires_force_in_noninteractive_overwrite(
@@ -2011,12 +2416,18 @@ def test_deploy_command_passes_one_run_validation_skip_flags(
             "nccl",
             "--skip-validation",
             "gpu-visibility",
+            "--skip-validation",
+            "observability-ingestion",
         ],
     )
 
     assert result.exit_code == 0, result.output
     assert captured["skip_validations"] is False
-    assert captured["skip_validation_kinds"] == {"mk8s_nccl", "mk8s_gpu_visibility"}
+    assert captured["skip_validation_kinds"] == {
+        "mk8s_nccl",
+        "mk8s_gpu_visibility",
+        "mk8s_observability_ingestion",
+    }
 
 
 def test_deploy_command_rejects_unknown_one_run_validation_skip_value(
@@ -2063,10 +2474,8 @@ def test_deploy_command_accepts_config_yaml_target(
     output = _plain_output(result.output)
     unwrapped_output = output.replace("\n", "")
     assert f"Local deploy completed from {fake_paths.generated_dir}" in unwrapped_output
-    assert (
-        unwrapped_output.endswith(
-            f"Complete deploy report: {fake_paths.inventory_dir / 'deploy-report.md'}"
-        )
+    assert unwrapped_output.endswith(
+        f"Complete deploy report: {fake_paths.inventory_dir / 'deploy-report.md'}"
     )
 
 
@@ -2812,7 +3221,7 @@ def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    config = {"apps": {"charts": [{"id": "gateway-helm", "enabled": True, "target_ref": "mk8s"}]}}
+    config = {"apps": {"charts": [{"id": "gateway-helm", "enabled": True, "instance_id": "mk8s"}]}}
     manifest = {
         "deploy": {
             "targets": [_mk8s_target(fake_paths)],
@@ -3487,7 +3896,6 @@ def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
     monkeypatch.setattr(
         cli.console, "print", lambda message, *args, **kwargs: printed.append(str(message))
     )
-
     cli._deploy_generated_artifacts(
         config,
         fake_paths,
@@ -3497,7 +3905,7 @@ def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
         skip_validation_kinds=set(),
     )
 
-    assert status_start == [("[cyan]Running MK8s GPU validations for mk8s...[/cyan]", "dots")]
+    assert status_start == [("[cyan]Running deploy-time validations for mk8s...[/cyan]", "dots")]
     assert status_updates == [
         "Starting validation 1/2: GPU stack readiness.",
         "[bold white]GPU Operator[/bold white] [dim][5s][/dim] clusterpolicy state=ready",
@@ -3512,6 +3920,124 @@ def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
         f"  Combined report: {fake_paths.inventory_dir / 'deploy-report.md'}",
         f"  JSON detail: {fake_paths.inventory_dir / 'gpu-stack-readiness-report.json'}",
         f"  JSON detail: {fake_paths.inventory_dir / 'gpu-visibility-report.json'}",
+    ]
+
+
+def test_deploy_generated_artifacts_target_report_excludes_unselected_validations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    config = {
+        "apps": {"charts": []},
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-456",
+                "region_id": "eu-north1",
+            },
+        },
+    }
+    cluster1_validation = {
+        "kind": "mk8s_gpu_visibility",
+        "name": "GPU Visibility test (cluster1)",
+        "namespace": "gpu-validation",
+        "report_file": "gpu-visibility-report-cluster1.json",
+        "target_ref": "cluster1",
+    }
+    cluster2_validation = {
+        "kind": "mk8s_gpu_visibility",
+        "name": "GPU Visibility test (cluster2)",
+        "namespace": "gpu-validation",
+        "report_file": "gpu-visibility-report-cluster2.json",
+        "target_ref": "cluster2",
+    }
+    manifest = {
+        "deploy": {
+            "targets": [
+                _mk8s_target(fake_paths, target_ref="cluster1"),
+                _mk8s_target(fake_paths, target_ref="cluster2"),
+            ],
+            "validations": [cluster1_validation, cluster2_validation],
+        }
+    }
+    printed: list[str] = []
+
+    monkeypatch.setattr(cli, "_run_deploy_preflight", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_run_terraform_apply_with_status", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "write_inventory", write_inventory_artifacts)
+    monkeypatch.setattr(
+        cli,
+        "_prepare_cluster_handoff_kube_env",
+        lambda *_args, **_kwargs: {"KUBECONFIG": "/tmp/cluster2.kubeconfig"},
+    )
+    monkeypatch.setattr(cli, "_report_cluster_nodes_status", lambda *, extra_env, emit: None)
+    monkeypatch.setattr(cli, "_console_is_terminal", lambda: True)
+
+    def _fake_run_mk8s_gpu_validations(
+        validations: list[dict[str, object]],
+        *,
+        inventory_dir: Path,
+        extra_env: dict[str, str] | None,
+        emit=None,
+    ) -> list[Path]:
+        assert validations == [cluster2_validation]
+        assert extra_env == {"KUBECONFIG": "/tmp/cluster2.kubeconfig"}
+        inventory_dir.mkdir(parents=True, exist_ok=True)
+        report_path = inventory_dir / "gpu-visibility-report-cluster2.json"
+        report_path.write_text(
+            json.dumps(
+                {
+                    "passed": True,
+                    "selected_node_count": 4,
+                    "total_gpu_node_count": 4,
+                    "passed_node_count": 4,
+                    "skipped_node_count": 0,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return [report_path]
+
+    monkeypatch.setattr(cli, "run_mk8s_gpu_validations", _fake_run_mk8s_gpu_validations)
+
+    class _FakeStatus:
+        def update(self, message: str, **_kwargs: object) -> None:
+            pass
+
+    @contextmanager
+    def _fake_status(message: str, **kwargs: object):
+        yield _FakeStatus()
+
+    monkeypatch.setattr(cli.console, "status", _fake_status)
+    monkeypatch.setattr(
+        cli.console, "print", lambda message, *args, **kwargs: printed.append(str(message))
+    )
+    fake_paths.inventory_dir.mkdir(parents=True, exist_ok=True)
+    stale_cluster1_report = fake_paths.inventory_dir / "gpu-visibility-report-cluster1.json"
+    stale_cluster1_report.write_text("{}\n", encoding="utf-8")
+
+    cli._deploy_generated_artifacts(
+        config,
+        fake_paths,
+        manifest,
+        auto_auth_bootstrap=True,
+        skip_validations=False,
+        skip_validation_kinds=set(),
+        requested_target_ref="cluster2",
+    )
+
+    markdown = (fake_paths.inventory_dir / "deploy-report.md").read_text(encoding="utf-8")
+    assert "GPU Visibility test (cluster2)" in markdown
+    assert "GPU Visibility test (cluster1)" not in markdown
+    assert not stale_cluster1_report.exists()
+    assert printed == [
+        "Deploy validation summary:",
+        "  Overall: PASS (1/1 completed, 0 not run)",
+        "  PASS GPU Visibility test (cluster2): 4/4 selected node(s) passed; total Ready GPU nodes 4.",
+        f"  Combined report: {fake_paths.inventory_dir / 'deploy-report.md'}",
+        f"  JSON detail: {fake_paths.inventory_dir / 'gpu-visibility-report-cluster2.json'}",
     ]
 
 
@@ -4907,14 +5433,22 @@ def test_flux_install_manifest_url_uses_default_pinned_release(
     sources_file.write_text(
         yaml.safe_dump(
             {
+                "components": {
+                    "infra": {},
+                    "apps": {},
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    sources_file.with_name("component_cli_settings.yaml").write_text(
+        yaml.safe_dump(
+            {
                 "cli": {
                     "flux": {
                         "version": "v2.8.0",
                     }
-                },
-                "components": {
-                    "infra": {},
-                    "apps": {},
                 },
             },
             sort_keys=False,
@@ -5321,7 +5855,9 @@ def test_terraform_plan_command_invokes_runtime_auth_and_plan(
     captured: dict[str, object] = {}
     manifest = {"schema": "nebius-cxcli-generated/v1"}
 
-    monkeypatch.setattr(cli, "_load_generated_infra_context", lambda _path: ("cfg", fake_paths, manifest))
+    monkeypatch.setattr(
+        cli, "_load_generated_infra_context", lambda _path: ("cfg", fake_paths, manifest)
+    )
 
     def _fake_ensure_terraform_backend_ready(config: object, *, auto_auth_bootstrap: bool) -> None:
         captured["backend"] = {
@@ -5412,7 +5948,9 @@ def test_terraform_apply_command_invokes_runtime_auth_and_apply(
     captured: dict[str, object] = {}
     manifest = {"schema": "nebius-cxcli-generated/v1"}
 
-    monkeypatch.setattr(cli, "_load_generated_infra_context", lambda _path: ("cfg", fake_paths, manifest))
+    monkeypatch.setattr(
+        cli, "_load_generated_infra_context", lambda _path: ("cfg", fake_paths, manifest)
+    )
 
     def _fake_ensure_terraform_backend_ready(config: object, *, auto_auth_bootstrap: bool) -> None:
         captured["backend"] = {
@@ -5491,7 +6029,9 @@ def test_terraform_destroy_command_invokes_runtime_auth_and_destroy(
     captured: dict[str, object] = {}
     manifest = {"schema": "nebius-cxcli-generated/v1"}
 
-    monkeypatch.setattr(cli, "_load_generated_infra_context", lambda _path: ("cfg", fake_paths, manifest))
+    monkeypatch.setattr(
+        cli, "_load_generated_infra_context", lambda _path: ("cfg", fake_paths, manifest)
+    )
     monkeypatch.setattr(cli, "_confirm_generated_destroy", lambda *args, **kwargs: True)
 
     def _fake_ensure_terraform_backend_ready(config: object, *, auto_auth_bootstrap: bool) -> None:
@@ -5549,7 +6089,9 @@ def test_terraform_destroy_command_confirmation_targets_infra_dir(
     captured: dict[str, object] = {}
     manifest = {"schema": "nebius-cxcli-generated/v1"}
 
-    monkeypatch.setattr(cli, "_load_generated_infra_context", lambda _path: ("cfg", fake_paths, manifest))
+    monkeypatch.setattr(
+        cli, "_load_generated_infra_context", lambda _path: ("cfg", fake_paths, manifest)
+    )
     monkeypatch.setattr(
         cli,
         "_confirm_generated_destroy",
@@ -5699,7 +6241,9 @@ def test_terraform_unlock_command_reports_when_no_lock_is_present(
     fake_paths = _fake_paths(tmp_path)
     manifest = {"schema": "nebius-cxcli-generated/v1"}
 
-    monkeypatch.setattr(cli, "_load_generated_infra_context", lambda _path: ("cfg", fake_paths, manifest))
+    monkeypatch.setattr(
+        cli, "_load_generated_infra_context", lambda _path: ("cfg", fake_paths, manifest)
+    )
     monkeypatch.setattr(
         cli,
         "_unlock_terraform_state_lock",
@@ -5732,7 +6276,9 @@ def test_terraform_unlock_command_reports_cleared_lock_metadata(
         object_key="terraform.tfstate.tflock",
     )
 
-    monkeypatch.setattr(cli, "_load_generated_infra_context", lambda _path: ("cfg", fake_paths, manifest))
+    monkeypatch.setattr(
+        cli, "_load_generated_infra_context", lambda _path: ("cfg", fake_paths, manifest)
+    )
     monkeypatch.setattr(
         cli,
         "_unlock_terraform_state_lock",
@@ -5758,7 +6304,9 @@ def test_flux_bootstrap_command_invokes_flux_ops(
     captured: dict[str, object] = {}
     manifest = {"schema": "nebius-cxcli-generated/v1", "deploy": {}}
 
-    monkeypatch.setattr(cli, "_load_generated_flux_context", lambda _path: ("cfg", fake_paths, manifest))
+    monkeypatch.setattr(
+        cli, "_load_generated_flux_context", lambda _path: ("cfg", fake_paths, manifest)
+    )
 
     def _fake_ensure_runtime_auth_material(
         config: object,
@@ -6197,6 +6745,8 @@ def test_prepare_cluster_handoff_kube_env_writes_exec_kubeconfig_and_persists_lo
     assert captured["handoff_spec"] == (fake_config, "cluster-123", "external")
     assert captured["persist"] == (spec, True)
     assert env[flux_ops.CLUSTER_HANDOFF_ACCESS_ENV] == "external"
+    assert env[cli.GRAFANA_TARGET_CLUSTER_ID_ENV] == "cluster-123"
+    assert env[cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV] == "context-entry"
     assert kubeconfig["clusters"][0]["cluster"]["server"] == "https://mk8s.example.invalid"
     assert kubeconfig["users"][0]["user"]["exec"]["command"] == "/usr/local/bin/nebius-cxcli"
     assert kubeconfig["users"][0]["user"]["exec"]["args"] == [
@@ -6281,6 +6831,8 @@ def test_prepare_cluster_handoff_kube_env_loads_runtime_auth_cache_when_env_miss
     assert captured["handoff_spec"] == (fake_config, "cluster-123", "external")
     assert captured["persist"] == (spec, True)
     assert env[flux_ops.CLUSTER_HANDOFF_ACCESS_ENV] == "external"
+    assert env[cli.GRAFANA_TARGET_CLUSTER_ID_ENV] == "cluster-123"
+    assert env[cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV] == "context-entry"
 
 
 def test_prepare_cluster_handoff_kube_env_skips_local_persist_when_disabled(
@@ -6345,6 +6897,8 @@ def test_prepare_cluster_handoff_kube_env_skips_local_persist_when_disabled(
     assert env is not None
     assert captured["handoff_spec"] == (fake_config, "cluster-123", "external")
     assert env[flux_ops.CLUSTER_HANDOFF_ACCESS_ENV] == "external"
+    assert env[cli.GRAFANA_TARGET_CLUSTER_ID_ENV] == "cluster-123"
+    assert env[cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV] == "context-entry"
 
 
 def test_enabled_cluster_handoffs_normalizes_boolean_access_outputs(
@@ -6942,8 +7496,8 @@ def test_flux_apply_command_all_targets_persists_contexts_without_switching_curr
         "infra": {"components": [{"id": "mk8s", "enabled": True, "inputs": {}}]},
         "apps": {
             "charts": [
-                {"id": "gateway-helm", "enabled": True, "target_ref": "mk8s"},
-                {"id": "gateway-helm", "enabled": True, "target_ref": "mk8s-2"},
+                {"id": "gateway-helm", "enabled": True, "instance_id": "mk8s"},
+                {"id": "gateway-helm", "enabled": True, "instance_id": "mk8s-2"},
             ]
         },
     }
@@ -7192,6 +7746,7 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     quota_check_result = runner.invoke(cli.app, ["quota-check", "--help"])
     quota_request_result = runner.invoke(cli.app, ["quota-request", "--help"])
     render_result = runner.invoke(cli.app, ["render", "--help"])
+    validate_dashboards_result = runner.invoke(cli.app, ["validate-dashboards", "--help"])
     deploy_result = runner.invoke(cli.app, ["deploy", "--help"])
     destroy_result = runner.invoke(cli.app, ["destroy", "--help"])
     tf_apply_result = runner.invoke(cli.app, ["terraform", "apply", "--help"])
@@ -7204,6 +7759,7 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert quota_check_result.exit_code == 0, quota_check_result.output
     assert quota_request_result.exit_code == 0, quota_request_result.output
     assert render_result.exit_code == 0, render_result.output
+    assert validate_dashboards_result.exit_code == 0, validate_dashboards_result.output
     assert deploy_result.exit_code == 0, deploy_result.output
     assert destroy_result.exit_code == 0, destroy_result.output
     assert tf_apply_result.exit_code == 0, tf_apply_result.output
@@ -7213,6 +7769,9 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert flux_bootstrap_result.exit_code == 0, flux_bootstrap_result.output
 
     render_help = " ".join(_plain_output(render_result.output).split()).lower()
+    validate_dashboards_help = " ".join(
+        _plain_output(validate_dashboards_result.output).split()
+    ).lower()
     deploy_help = " ".join(_plain_output(deploy_result.output).split()).lower()
     destroy_help = " ".join(_plain_output(destroy_result.output).split()).lower()
     tf_apply_help = " ".join(_plain_output(tf_apply_result.output).split()).lower()
@@ -7231,9 +7790,14 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert "selected config region still" in quota_check_help
     assert "quota-only" in quota_check_help
     assert "prompting before overwrite unless --force is provided" in render_help
+    assert "target cluster instance_id" in validate_dashboards_help
+    assert "explicit kube context" in validate_dashboards_help
+    assert "target_ref" not in validate_dashboards_help
     assert "generated artifact bundle" in deploy_help
     assert "does not run `flux bootstrap`" in deploy_help
     assert "does not create or update github workflows" in deploy_help
+    assert "for a single-target run, the refreshed validation summary" in deploy_help
+    assert "include only validations for that selected target" in deploy_help
     assert "destroy all rendered project resources" in destroy_help
     assert "destructive inverse of `deploy`" in destroy_help
     assert "whole rendered project" in destroy_help
@@ -7263,7 +7827,10 @@ def test_help_text_maps_commands_to_target_types() -> None:
     assert "overwrites existing resolved project folders only with confirmation" in output
     assert "component list/add/remove are the day-2 config.yaml editing surface" in output
     assert "discover uses a deployment-scope directory" in output
-    assert "validate/quota-check/quota-request/render/bootstrap-ci/deploy use config.yaml" in output
+    assert (
+        "validate, validate-dashboards, quota-check, quota-request, render, "
+        "bootstrap-ci, and deploy use config.yaml"
+    ) in output
     assert (
         "destroy uses config.yaml to tear down all rendered project resources from sibling generated/"
         in output
@@ -7278,6 +7845,7 @@ def test_help_text_maps_commands_to_target_types() -> None:
     assert "bootstrap-ci Use CONFIG_YAML" in output
     assert "component" in output
     assert "validate Use CONFIG_YAML" in output
+    assert "validate-dashboards Use CONFIG_YAML" in output
     assert "source config" in output
     assert "deployment" in output
     assert "live quota/capacity" in output
@@ -7297,6 +7865,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     component_remove_result = runner.invoke(cli.app, ["component", "remove", "--help"])
     discover_result = runner.invoke(cli.app, ["discover", "--help"])
     validate_result = runner.invoke(cli.app, ["validate", "--help"])
+    validate_dashboards_result = runner.invoke(cli.app, ["validate-dashboards", "--help"])
     validate_sources_result = runner.invoke(cli.app, ["validate-sources", "--help"])
     validate_generated_result = runner.invoke(cli.app, ["validate-generated", "--help"])
     quota_request_result = runner.invoke(cli.app, ["quota-request", "--help"])
@@ -7312,6 +7881,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert component_remove_result.exit_code == 0, component_remove_result.output
     assert discover_result.exit_code == 0, discover_result.output
     assert validate_result.exit_code == 0, validate_result.output
+    assert validate_dashboards_result.exit_code == 0, validate_dashboards_result.output
     assert validate_sources_result.exit_code == 0, validate_sources_result.output
     assert validate_generated_result.exit_code == 0, validate_generated_result.output
     assert quota_request_result.exit_code == 0, quota_request_result.output
@@ -7327,6 +7897,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     component_remove_help = _plain_output(component_remove_result.output)
     discover_help = _plain_output(discover_result.output)
     validate_help = _plain_output(validate_result.output)
+    validate_dashboards_help = _plain_output(validate_dashboards_result.output)
     validate_sources_help = _plain_output(validate_sources_result.output)
     validate_generated_help = _plain_output(validate_generated_result.output)
     quota_request_help = _plain_output(quota_request_result.output)
@@ -7365,14 +7936,16 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "infra-only" in normalized_component_add_help
     assert "interactive adds" in normalized_component_add_help
     assert "valid" in normalized_component_add_help
-    assert "Repeat reusable" in normalized_component_add_help
-    assert "another instance" in normalized_component_add_help
+    assert "Repeat selectors" in normalized_component_add_help
+    assert "no-ops" in normalized_component_add_help
+    assert "<id>@<new-instance-id>" in normalized_component_add_help
+    assert "create another instance" in normalized_component_add_help
     assert "<id>@<instance-id>" in normalized_component_add_help
     assert "infra:<id>" in normalized_component_add_help
     assert "apps:<id>" in normalized_component_add_help
     assert "all" in normalized_component_add_help
     assert "none" in normalized_component_add_help
-    assert "apps.charts[].target_ref" in normalized_component_add_help
+    assert "instance_id" in normalized_component_add_help
     assert "--validate-sources --no-validate-sources" in " ".join(component_add_help.split())
     assert "day-2 additive" in normalized_component_add_help
     assert "remove [OPTIONS] CONFIG_YAML [COMPONENT_SELECTOR]..." in component_remove_help
@@ -7384,21 +7957,31 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "prompt" in normalized_component_remove_help
     assert "interactively" in normalized_component_remove_help
     assert "config.yaml row" in normalized_component_remove_help
+    assert "Already-absent selectors" in normalized_component_remove_help
+    assert "are skipped" in normalized_component_remove_help
+    assert "Removing a" in normalized_component_remove_help
+    assert "cluster target also removes" in normalized_component_remove_help
+    assert "app rows" in normalized_component_remove_help
+    assert "deploy.targets[] settings" in normalized_component_remove_help
     assert "day-2 infra/app component removal" in normalized_component_remove_help
     assert "discover [OPTIONS] DEPLOYMENT_SCOPE" in discover_help
     assert "generated/" in discover_help
     assert "narrower directory under it" in discover_help
     assert "validate [OPTIONS] CONFIG_YAML" in validate_help
+    assert "validate-dashboards [OPTIONS] CONFIG_YAML" in validate_dashboards_help
+    normalized_validate_dashboards_help = " ".join(validate_dashboards_help.split()).lower()
+    assert "grafana dashboard datasource/read-endpoint fit" in normalized_validate_dashboards_help
+    assert "explicit kube context" in normalized_validate_dashboards_help
+    assert "--target" in validate_dashboards_help
     normalized_validate_help = " ".join(validate_help.split()).lower()
     normalized_validate_generated_help = " ".join(validate_generated_help.split()).lower()
     assert "--strict" not in validate_help
     assert (
-        "source config, deployment readiness, and live quota/capacity"
-        in normalized_validate_help
+        "source config, deployment readiness, and live quota/capacity" in normalized_validate_help
     )
     normalized_validate_sources_help = " ".join(validate_sources_help.split()).lower()
     assert "validate-sources [OPTIONS] [COMPONENT_SOURCES_YAML]" in validate_sources_help
-    assert "active component_sources.yaml catalog" in normalized_validate_sources_help
+    assert "component_sources.yaml, sibling component_cli_settings.yaml" in normalized_validate_sources_help
     assert "global flags" in normalized_validate_sources_help
     assert "environment" in normalized_validate_sources_help
     assert "bundled defaults" in normalized_validate_sources_help
@@ -7412,6 +7995,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     normalized_deploy_help = " ".join(deploy_help.split()).lower()
     assert "--skip-validations" in deploy_help
     assert "--skip-validation" in deploy_help
+    assert "observability agent ingestion guardrail" in normalized_deploy_help
     assert "one-run override" in normalized_deploy_help
     assert "quota-request [OPTIONS] CONFIG_YAML" in quota_request_help
     normalized_quota_request_help = " ".join(quota_request_help.split()).lower()

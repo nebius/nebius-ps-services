@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 import shlex
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -9,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .component_instances import component_instance_id, component_type_id
-from .component_sources import load_component_sources
+from .component_sources import component_output_root_name, load_component_sources
 from .component_wiring import resolved_component_row
 from .deploy_targets import enabled_cluster_target_refs
 from .deploy_validation_report import (
@@ -17,10 +19,12 @@ from .deploy_validation_report import (
     build_deploy_validation_report,
     validation_section_lines,
 )
+from .generated_manifest import manifest_path_for_generated_dir
 from .grafana_runtime import grafana_release_specs, read_grafana_status
 from .observability import observability_endpoint_summary, observability_status_summary
 from .paths import ProjectPaths
 from .runtime_config import to_plain_data
+from .terraform_ops import terraform_output_json
 
 
 @dataclass(frozen=True)
@@ -52,8 +56,17 @@ def _coalesce(*values: Any) -> Any:
     return None
 
 
-def _grafana_prometheus_datasource_note(read_metadata: Mapping[str, Any]) -> str:
-    parts: list[str] = []
+def _sentence(text: str) -> str:
+    value = text.strip()
+    if not value:
+        return ""
+    if value.endswith((".", "!", "?")):
+        return value
+    return f"{value}."
+
+
+def _grafana_prometheus_datasource_notes(read_metadata: Mapping[str, Any]) -> list[str]:
+    lines: list[str] = []
     for chart in load_component_sources().helm_charts:
         for datasource in chart.grafana.datasources:
             if str(datasource.datasource_type).lower() != "prometheus":
@@ -62,10 +75,13 @@ def _grafana_prometheus_datasource_note(read_metadata: Mapping[str, Any]) -> str
             endpoint_label = str(
                 _lookup(endpoint_metadata, "label") or datasource.read_endpoint
             ).strip()
-            parts.append(f"`{datasource.name}` uses `{endpoint_label}`")
-    if not parts:
-        return ""
-    return "- Prometheus datasources are catalog-bound: " + "; ".join(parts) + "."
+            note = f"`{datasource.name}` reads `{endpoint_label}`"
+            description = _sentence(datasource.description)
+            note = f"{note}: {description}" if description else _sentence(note)
+            lines.append(f"  - {note}")
+    if not lines:
+        return []
+    return ["- Prometheus datasource split:", *lines]
 
 
 def _normalize_component_id(raw_value: Any) -> str:
@@ -157,6 +173,21 @@ def _markdown_link(label: str, url: Any) -> str:
     return f"[{label}]({value})" if value else "`pending`"
 
 
+def _enabled_label(value: Any) -> str:
+    if isinstance(value, bool):
+        return "enabled" if value else "disabled"
+    text = str(value or "").strip().lower()
+    if text in {"true", "yes", "y", "1", "enabled"}:
+        return "enabled"
+    if text in {"false", "no", "n", "0", "disabled"}:
+        return "disabled"
+    return text or "unknown"
+
+
+def _status_line(label: str, value: Any) -> str:
+    return f"- {label}: `{_enabled_label(value)}`"
+
+
 def _grafana_status_key(status: Mapping[str, Any]) -> tuple[str, str, str]:
     target_label = str(_lookup(status, "target_ref") or "current-cluster").strip()
     namespace = str(_lookup(status, "namespace") or "observability").strip()
@@ -166,30 +197,40 @@ def _grafana_status_key(status: Mapping[str, Any]) -> tuple[str, str, str]:
     return target_label, namespace, release_name
 
 
-def _configured_grafana_statuses(config: Any) -> tuple[dict[str, Any], ...]:
+def _configured_grafana_statuses(
+    config: Any,
+    *,
+    target_metadata: Mapping[str, Mapping[str, Any]] | None = None,
+) -> tuple[dict[str, Any], ...]:
     target_refs = enabled_cluster_target_refs(config)
     scoped_refs = target_refs or ("",)
     statuses: list[dict[str, Any]] = []
     for target_ref in scoped_refs:
         for spec in grafana_release_specs(config, target_ref=target_ref):
-            statuses.append(
-                {
-                    "target_ref": spec.target_ref,
-                    "namespace": spec.namespace,
-                    "release_name": spec.release_name,
-                    "service_name": spec.service_name,
-                    "admin_secret_name": spec.admin_secret_name,
-                    "admin_user": spec.admin_user,
-                    "admin_password_key": spec.admin_password_key,
-                    "gateway_name": spec.gateway_name,
-                    "gateway_namespace": spec.gateway_namespace,
-                    "base_url": "",
-                    "metrics_url": "",
-                    "logs_url": "",
-                    "traces_url": "",
-                    "dashboards_url": "",
-                }
-            )
+            status = {
+                "target_ref": spec.target_ref,
+                "namespace": spec.namespace,
+                "release_name": spec.release_name,
+                "service_name": spec.service_name,
+                "admin_secret_name": spec.admin_secret_name,
+                "admin_user": spec.admin_user,
+                "admin_password_key": spec.admin_password_key,
+                "gateway_name": spec.gateway_name,
+                "gateway_namespace": spec.gateway_namespace,
+                "base_url": "",
+                "metrics_url": "",
+                "logs_url": "",
+                "traces_url": "",
+                "dashboards_url": "",
+            }
+            metadata = _mapping((target_metadata or {}).get(str(spec.target_ref).strip()))
+            cluster_id = str(_lookup(metadata, "cluster_id") or "").strip()
+            kube_context = str(_lookup(metadata, "kube_context") or "").strip()
+            if cluster_id:
+                status["cluster_id"] = cluster_id
+            if kube_context:
+                status["kube_context"] = kube_context
+            statuses.append(status)
     return tuple(statuses)
 
 
@@ -204,8 +245,130 @@ def _merge_grafana_statuses(
         key = _grafana_status_key(status)
         if merged and key not in merged:
             continue
-        merged[key] = dict(status)
+        existing = merged.get(key, {})
+        merged_status = dict(existing)
+        merged_status.update(dict(status))
+        merged[key] = merged_status
     return tuple(merged.values())
+
+
+def _kube_context_segment(value: str, *, fallback: str) -> str:
+    token = re.sub(r"[^A-Za-z0-9._-]", "-", value.strip().lower()).strip("-._")
+    return token or fallback
+
+
+def _derived_kube_context(*, cluster_name: str, cluster_id: str, access: str) -> str:
+    if not cluster_id:
+        return ""
+    cluster_name_token = _kube_context_segment(cluster_name or cluster_id, fallback="cluster")
+    cluster_id_token = _kube_context_segment(cluster_id, fallback="cluster-id")
+    access_token = _kube_context_segment(access or "external", fallback="access")
+    return f"nebius-{cluster_name_token}-{cluster_id_token}-{access_token}"
+
+
+def _output_value_text(outputs: Mapping[str, Any], output_name: str) -> str:
+    payload = outputs.get(output_name)
+    if isinstance(payload, Mapping) and "value" in payload:
+        return str(to_plain_data(payload["value"]) or "").strip()
+    return ""
+
+
+def _terraform_outputs_if_available(paths: ProjectPaths) -> dict[str, Any]:
+    candidate_dirs = [paths.infra_dir]
+    canonical_infra_dir = paths.project_dir / "generated" / "infra"
+    if canonical_infra_dir != paths.infra_dir:
+        candidate_dirs.append(canonical_infra_dir)
+    for infra_dir in candidate_dirs:
+        if not (infra_dir / ".terraform").exists():
+            continue
+        try:
+            return terraform_output_json(infra_dir, initialize=False)
+        except Exception:
+            continue
+    return {}
+
+
+def _manifest_target_metadata(paths: ProjectPaths) -> dict[str, dict[str, Any]]:
+    manifest_path = manifest_path_for_generated_dir(paths.generated_dir)
+    if not manifest_path.exists():
+        return {}
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    deploy = _mapping(_lookup(_mapping(manifest), "deploy"))
+    targets = _lookup(deploy, "targets")
+    if not isinstance(targets, list):
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for item in targets:
+        if not isinstance(item, Mapping):
+            continue
+        target_ref = str(
+            _coalesce(_lookup(item, "target_ref"), _lookup(item, "instance_id"), "")
+        ).strip()
+        if not target_ref:
+            continue
+        result[target_ref] = {
+            "target_ref": target_ref,
+            "cluster_id_output_name": str(_lookup(item, "cluster_id_output_name") or "").strip(),
+            "access": str(_lookup(item, "access") or "external").strip().lower() or "external",
+        }
+    return result
+
+
+def _target_metadata_by_ref(
+    *,
+    paths: ProjectPaths,
+    mk8s_rows: Sequence[Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    metadata = _manifest_target_metadata(paths)
+    outputs = _terraform_outputs_if_available(paths)
+
+    for row in mk8s_rows:
+        instance_id = component_instance_id(row) or component_type_id(row)
+        if not instance_id:
+            continue
+        row_metadata = metadata.setdefault(instance_id, {"target_ref": instance_id})
+        row_metadata.setdefault(
+            "cluster_id_output_name",
+            component_output_root_name(instance_id, "cluster_id"),
+        )
+        row_metadata.setdefault(
+            "cluster_name_output_name",
+            component_output_root_name(instance_id, "cluster_name"),
+        )
+
+        inputs = _component_inputs(dict(row))
+        api_endpoint = _mapping(_lookup(inputs, "api_endpoint"))
+        public_endpoint = _coalesce(
+            _lookup(api_endpoint, "public"),
+            _lookup(inputs, "mk8s_cluster_public_endpoint"),
+            _lookup(inputs, "api_endpoint_public"),
+        )
+        if "access" not in row_metadata:
+            row_metadata["access"] = "external" if bool(public_endpoint) else "internal"
+
+        configured_cluster_name = str(
+            _coalesce(_lookup(inputs, "cluster_name"), instance_id)
+        ).strip()
+        cluster_name_output = str(row_metadata.get("cluster_name_output_name") or "").strip()
+        cluster_name = (
+            _output_value_text(outputs, cluster_name_output) if cluster_name_output else ""
+        ) or configured_cluster_name
+        if cluster_name:
+            row_metadata["cluster_name"] = cluster_name
+
+        cluster_id_output = str(row_metadata.get("cluster_id_output_name") or "").strip()
+        cluster_id = _output_value_text(outputs, cluster_id_output) if cluster_id_output else ""
+        if cluster_id:
+            row_metadata["cluster_id"] = cluster_id
+            row_metadata["kube_context"] = _derived_kube_context(
+                cluster_name=cluster_name,
+                cluster_id=cluster_id,
+                access=str(row_metadata.get("access") or "external"),
+            )
+    return metadata
 
 
 def _shape_label(*parts: Any) -> str:
@@ -213,7 +376,7 @@ def _shape_label(*parts: Any) -> str:
     return "/".join(values) if values else "n/a"
 
 
-def _mk8s_cluster_markdown_line(cluster: Mapping[str, Any]) -> str:
+def _mk8s_cluster_markdown_lines(cluster: Mapping[str, Any]) -> list[str]:
     instance_id = str(_coalesce(_lookup(cluster, "instance_id"), "mk8s"))
     cluster_name = str(_coalesce(_lookup(cluster, "cluster_name"), instance_id))
     cpu_nodes = _mapping(_lookup(cluster, "cpu_nodes"))
@@ -229,11 +392,20 @@ def _mk8s_cluster_markdown_line(cluster: Mapping[str, Any]) -> str:
         gpu_text = "`disabled`"
     fabric = _coalesce(_lookup(cluster, "infiniband_fabric"), "none")
     public_endpoint = _coalesce(_lookup(cluster, "api_public"), "unknown")
-    return (
-        f"- MK8s cluster `{instance_id}` (`{cluster_name}`): CPU `{cpu_count}` node(s) "
-        f"at `{cpu_shape}`; GPU {gpu_text}; fabric `{fabric}`; public endpoint "
-        f"`{public_endpoint}`"
-    )
+    cluster_id = str(_lookup(cluster, "cluster_id") or "").strip()
+    kube_context = str(_lookup(cluster, "kube_context") or "").strip()
+    lines = [
+        f"- `{instance_id}` (`{cluster_name}`)",
+        f"  - CPU nodes: `{cpu_count}` at `{cpu_shape}`",
+        f"  - GPU nodes: {gpu_text}",
+        f"  - InfiniBand fabric: `{fabric}`",
+        f"  - Public endpoint: `{_enabled_label(public_endpoint)}`",
+    ]
+    if cluster_id:
+        lines.append(f"  - Cluster ID: `{cluster_id}`")
+    if kube_context:
+        lines.append(f"  - Kube context: `{kube_context}`")
+    return lines
 
 
 def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
@@ -269,6 +441,10 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
         return rows[0] if rows else None
 
     mk8s_rows = _rows_by_status_kind("nebius.mk8s.cluster")
+    target_metadata = _target_metadata_by_ref(
+        paths=paths,
+        mk8s_rows=mk8s_rows,
+    )
 
     def _mk8s_summary(row: dict[str, Any] | None) -> dict[str, Any]:
         mk8s_inputs = _component_inputs(row)
@@ -282,9 +458,13 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
                 f"{tenant_id}/{project_id}",
             )
         )
+        instance_id = component_instance_id(row or {}) or component_type_id(row or {})
+        metadata = _mapping(target_metadata.get(instance_id))
         return {
-            "instance_id": component_instance_id(row or {}) or component_type_id(row or {}),
+            "instance_id": instance_id,
             "cluster_name": cluster_name,
+            "cluster_id": _lookup(metadata, "cluster_id"),
+            "kube_context": _lookup(metadata, "kube_context"),
             "cpu_nodes": {
                 "count": _coalesce(
                     _lookup(cpu_nodes, "count"), _lookup(mk8s_inputs, "cpu_nodes_count")
@@ -360,7 +540,7 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
             "project_scope": f"{tenant_id}/{project_id}",
             "project_id": project_id,
             "region": region_id,
-            "mk8s_enabled": bool(_lookup(mk8s_row or {}, "enabled")),
+            "mk8s_enabled": any(bool(_lookup(row, "enabled")) for row in mk8s_rows),
             "wireguard_enabled": any(
                 bool(_lookup(row, "enabled"))
                 for cid, rows in infra_rows.items()
@@ -368,6 +548,7 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
                 if "wireguard" in cid
             ),
         },
+        "target_metadata": target_metadata,
         "mk8s": mk8s_summary,
         "mk8s_clusters": mk8s_cluster_summaries,
         "postgresql": {
@@ -436,41 +617,78 @@ def write_inventory(
     lines = [
         f"# Deploy Report: {payload['infra']['project_id']}",
         "",
-        "## Infra",
+        "## Client",
         "",
         f"- Client: `{_coalesce(_lookup(client_info, 'client_name'), '')}`",
         f"- Tenant: `{_coalesce(_lookup(nebius, 'tenant_id'), '')}`",
         f"- Project: `{_coalesce(_lookup(nebius, 'project_id'), '')}`",
         f"- Region: `{payload['infra']['region']}`",
-        f"- MK8s: `{payload['infra']['mk8s_enabled']}`",
-        f"- Managed PostgreSQL: `{payload['postgresql']['enabled']}`",
-        f"- SFS: `{payload['sfs']['enabled']}`",
-        f"- WireGuard Jump Host: `{payload['infra']['wireguard_enabled']}`",
+        "",
+        "## Infra",
+        "",
+        "### Component Status",
+        "",
+        _status_line("MK8s", payload["infra"]["mk8s_enabled"]),
+        _status_line("Managed PostgreSQL", payload["postgresql"]["enabled"]),
+        _status_line("SFS", payload["sfs"]["enabled"]),
+        _status_line("WireGuard Jump Host", payload["infra"]["wireguard_enabled"]),
+        "",
+        "### MK8s Clusters",
+        "",
     ]
-    for cluster in payload.get("mk8s_clusters", []):
-        if isinstance(cluster, Mapping):
-            lines.append(_mk8s_cluster_markdown_line(cluster))
+    clusters = [cluster for cluster in payload.get("mk8s_clusters", []) if isinstance(cluster, Mapping)]
+    if clusters:
+        for cluster in clusters:
+            lines.extend(_mk8s_cluster_markdown_lines(cluster))
+    else:
+        lines.append("- No MK8s clusters configured.")
     lines.extend(
         [
             "",
             "## Apps",
             "",
-            f"- Envoy Gateway: `{payload['apps']['envoy_gateway']}`",
-            f"- cert-manager: `{payload['apps']['cert_manager']}`",
-            f"- ExternalDNS: `{payload['apps']['external_dns']}`",
-            f"- Observability: `{_coalesce(_lookup(observability_summary, 'enabled'), False)}`",
-            f"- K8s o11y agent: `{_coalesce(_lookup(observability_summary, 'kubernetes_agent'), False)}`",
-            f"- Grafana: `{_coalesce(_lookup(observability_summary, 'grafana'), False)}`",
-            f"- VM monitoring agent: `{_coalesce(_lookup(observability_summary, 'vm_monitoring_agent'), False)}`",
-            f"- VM journald logs (systemd services): `{_coalesce(_lookup(observability_summary, 'vm_journald_logs'), False)}`",
-            f"- VM standalone collector: `{_coalesce(_lookup(observability_summary, 'vm_standalone_collector'), False)}`",
-            f"- VM standalone collector metrics: `{_coalesce(_lookup(observability_summary, 'vm_standalone_metrics'), False)}`",
-            f"- VM standalone collector logs: `{_coalesce(_lookup(observability_summary, 'vm_standalone_logs'), False)}`",
+            "### Platform Apps",
+            "",
+            _status_line("Envoy Gateway", payload["apps"]["envoy_gateway"]),
+            _status_line("cert-manager", payload["apps"]["cert_manager"]),
+            _status_line("ExternalDNS", payload["apps"]["external_dns"]),
+            "",
+            "### Observability Apps",
+            "",
+            _status_line("Observability", _coalesce(_lookup(observability_summary, "enabled"), False)),
+            _status_line(
+                "K8s o11y agent",
+                _coalesce(_lookup(observability_summary, "kubernetes_agent"), False),
+            ),
+            _status_line("Grafana", _coalesce(_lookup(observability_summary, "grafana"), False)),
+            _status_line(
+                "VM monitoring agent",
+                _coalesce(_lookup(observability_summary, "vm_monitoring_agent"), False),
+            ),
+            _status_line(
+                "VM journald logs (systemd services)",
+                _coalesce(_lookup(observability_summary, "vm_journald_logs"), False),
+            ),
+            _status_line(
+                "VM standalone collector",
+                _coalesce(_lookup(observability_summary, "vm_standalone_collector"), False),
+            ),
+            _status_line(
+                "VM standalone collector metrics",
+                _coalesce(_lookup(observability_summary, "vm_standalone_metrics"), False),
+            ),
+            _status_line(
+                "VM standalone collector logs",
+                _coalesce(_lookup(observability_summary, "vm_standalone_logs"), False),
+            ),
             f"- GPU DCGM metrics source: `{_coalesce(_lookup(observability_summary, 'gpu_dcgm_metric_source'), 'disabled')}`",
             f"- GPU DCGM node policy: `{_coalesce(_lookup(observability_summary, 'gpu_dcgm_node_policy'), 'not_managed')}`",
             f"- GPU DCGM live readiness: `{_coalesce(_lookup(observability_summary, 'gpu_dcgm_live_readiness'), 'not_configured')}`",
-            f"- n8n: `{_coalesce(_lookup(n8n_summary, 'enabled'), False)}` "
-            f"({_coalesce(_lookup(n8n_summary, 'hostname'), 'n/a')})",
+            "",
+            "### Workloads",
+            "",
+            f"- n8n: `{_enabled_label(_coalesce(_lookup(n8n_summary, 'enabled'), False))}`; "
+            f"hostname `{_coalesce(_lookup(n8n_summary, 'hostname'), 'n/a')}`",
             "",
         ]
     )
@@ -548,8 +766,9 @@ def write_inventory(
                     f"{_format_backtick_list(service_log_buckets)} service log buckets."
                 )
             lines.extend(["## Observability Read Endpoints", "", *read_lines, ""])
+        target_metadata = _mapping(_lookup(payload, "target_metadata"))
         grafana_statuses = _merge_grafana_statuses(
-            _configured_grafana_statuses(config),
+            _configured_grafana_statuses(config, target_metadata=target_metadata),
             read_grafana_status(paths),
         )
         grafana_lines: list[str] = []
@@ -560,6 +779,7 @@ def write_inventory(
             admin_secret = str(_lookup(status, "admin_secret_name") or "").strip()
             admin_user = str(_lookup(status, "admin_user") or "").strip()
             password_key = str(_lookup(status, "admin_password_key") or "").strip()
+            cluster_id = str(_lookup(status, "cluster_id") or "").strip()
             kube_context = str(_lookup(status, "kube_context") or "").strip()
             kube_context_arg = f" --context={shlex.quote(kube_context)}" if kube_context else ""
             if not str(_lookup(status, "base_url") or "").strip():
@@ -576,14 +796,22 @@ def write_inventory(
                 )
                 for signal in ("metrics", "logs", "traces")
             }
+            target_info: list[str] = []
+            if cluster_id:
+                target_info.append(f"cluster ID `{cluster_id}`")
+            if kube_context:
+                target_info.append(f"kube context `{kube_context}`")
             grafana_lines.extend(
                 [
-                    f"- Target `{target_label}` Grafana: {_markdown_link('Open Grafana', _lookup(status, 'base_url'))}",
-                    f"- Target `{target_label}` metrics: {_markdown_link(link_labels['metrics'], _lookup(status, 'metrics_url'))}",
-                    f"- Target `{target_label}` logs: {_markdown_link(link_labels['logs'], _lookup(status, 'logs_url'))}",
-                    f"- Target `{target_label}` traces: {_markdown_link(link_labels['traces'], _lookup(status, 'traces_url'))}",
-                    f"- Target `{target_label}` dashboards: {_markdown_link('Open dashboards', _lookup(status, 'dashboards_url'))}",
-                    f"- Target `{target_label}` credentials: user `{admin_user}`; password command:",
+                    f"### Target `{target_label}`",
+                    "",
+                    *([f"- MK8s: {'; '.join(target_info)}"] if target_info else []),
+                    f"- Grafana: {_markdown_link('Open Grafana', _lookup(status, 'base_url'))}",
+                    f"- Metrics: {_markdown_link(link_labels['metrics'], _lookup(status, 'metrics_url'))}",
+                    f"- Logs: {_markdown_link(link_labels['logs'], _lookup(status, 'logs_url'))}",
+                    f"- Traces: {_markdown_link(link_labels['traces'], _lookup(status, 'traces_url'))}",
+                    f"- Dashboards: {_markdown_link('Open dashboards', _lookup(status, 'dashboards_url'))}",
+                    f"- Credentials: user `{admin_user}`; password command:",
                     "",
                     "```bash",
                     password_command,
@@ -591,24 +819,26 @@ def write_inventory(
                     "",
                 ]
             )
+        grafana_note_lines: list[str] = []
         if pending_grafana_links:
-            grafana_lines.append(
+            grafana_note_lines.append(
                 "- Pending Grafana links are populated after `deploy` or `flux apply` can "
                 "read each target Gateway/LoadBalancer status."
             )
         elif bool(_lookup(observability_summary, "grafana")) and not grafana_lines:
-            grafana_lines.append(
+            grafana_note_lines.append(
                 "- Grafana is configured for this project. The live Gateway/LoadBalancer URL is "
                 "written after `deploy` or `flux apply` can read the Gateway status."
             )
-        if grafana_lines:
+        if grafana_lines or grafana_note_lines:
+            grafana_lines.extend(["### Notes", "", *grafana_note_lines])
             grafana_lines.append(
                 "- Datasources are provisioned in Grafana with server/proxy access and a deploy-time "
                 "Kubernetes Secret containing an Observability static token."
             )
-            datasource_note = _grafana_prometheus_datasource_note(observability_read_metadata)
-            if datasource_note:
-                grafana_lines.append(datasource_note)
+            grafana_lines.extend(
+                _grafana_prometheus_datasource_notes(observability_read_metadata)
+            )
             grafana_lines.append(
                 "- Report links open the catalog-bound dashboards for Metrics, Logs, or "
                 "Traces when Grafana has imported them; otherwise they fall back to the "

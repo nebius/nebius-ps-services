@@ -12,6 +12,7 @@ import yaml
 REPO_PREFIX = "git::https://github.com/nebius/nebius-ps-services.git//"
 TREE_PREFIX = "https://github.com/nebius/nebius-ps-services/tree/"
 BUNDLED_COMPONENT_SOURCES_SUFFIX = "nebius_cxcli/component_sources.yaml"
+BUNDLED_COMPONENT_CLI_SETTINGS_SUFFIX = "nebius_cxcli/component_cli_settings.yaml"
 
 
 def _looks_like_local_path(source: str) -> bool:
@@ -169,6 +170,7 @@ def verify_catalog(*, catalog_path: Path, release_ref: str) -> None:
 
 def verify_wheel(*, wheel_path: Path, release_ref: str) -> None:
     payload = _load_bundled_wheel_catalog(wheel_path)
+    _load_bundled_wheel_cli_settings(wheel_path)
     modules = _infra_modules(payload, subject=str(wheel_path))
     charts = _app_charts(payload, subject=str(wheel_path))
     _validate_module_sources(modules, subject=str(wheel_path), release_ref=release_ref)
@@ -177,20 +179,35 @@ def verify_wheel(*, wheel_path: Path, release_ref: str) -> None:
 
 def verify_wheel_bundle(*, wheel_path: Path) -> None:
     payload = _load_bundled_wheel_catalog(wheel_path)
+    _load_bundled_wheel_cli_settings(wheel_path)
     _infra_modules(payload, subject=str(wheel_path))
     _app_charts(payload, subject=str(wheel_path))
 
 
 def _load_bundled_wheel_catalog(wheel_path: Path) -> dict[str, Any]:
+    return _load_bundled_wheel_yaml(
+        wheel_path,
+        suffix=BUNDLED_COMPONENT_SOURCES_SUFFIX,
+        label="component sources",
+    )
+
+
+def _load_bundled_wheel_cli_settings(wheel_path: Path) -> dict[str, Any]:
+    return _load_bundled_wheel_yaml(
+        wheel_path,
+        suffix=BUNDLED_COMPONENT_CLI_SETTINGS_SUFFIX,
+        label="component CLI settings",
+    )
+
+
+def _load_bundled_wheel_yaml(wheel_path: Path, *, suffix: str, label: str) -> dict[str, Any]:
     with zipfile.ZipFile(wheel_path) as zf:
-        candidate_names = [
-            name for name in zf.namelist() if name.endswith(BUNDLED_COMPONENT_SOURCES_SUFFIX)
-        ]
+        candidate_names = [name for name in zf.namelist() if name.endswith(suffix)]
         if not candidate_names:
-            raise ValueError(f"{wheel_path} is missing bundled {BUNDLED_COMPONENT_SOURCES_SUFFIX}")
+            raise ValueError(f"{wheel_path} is missing bundled {suffix}")
         payload = yaml.safe_load(zf.read(candidate_names[0]).decode("utf-8")) or {}
     if not isinstance(payload, dict):
-        raise ValueError(f"{wheel_path} bundled component sources root must be a mapping")
+        raise ValueError(f"{wheel_path} bundled {label} root must be a mapping")
     return payload
 
 
@@ -212,14 +229,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
     verify_wheel_parser = subparsers.add_parser(
         "verify-wheel",
-        help="Verify bundled component sources inside a wheel.",
+        help="Verify bundled component sources and CLI settings inside a wheel.",
     )
     verify_wheel_parser.add_argument("--wheel", required=True, dest="wheel_path")
     verify_wheel_parser.add_argument("--release-ref", required=True)
 
     verify_wheel_bundle_parser = subparsers.add_parser(
         "verify-wheel-bundle",
-        help="Verify a wheel bundles component_sources.yaml with a valid catalog shape.",
+        help="Verify a wheel bundles component_sources.yaml and component_cli_settings.yaml.",
     )
     verify_wheel_bundle_parser.add_argument("--wheel", required=True, dest="wheel_path")
     return parser

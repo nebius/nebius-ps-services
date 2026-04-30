@@ -24,6 +24,44 @@ from nebius_cxcli.component_sources import (
 )
 
 
+def test_run_kubectl_uses_explicit_target_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **_kwargs: object) -> object:
+        calls.append(cmd)
+        return type(
+            "Completed",
+            (),
+            {"returncode": 0, "stdout": "{}", "stderr": ""},
+        )()
+
+    monkeypatch.setattr(grafana_runtime.subprocess, "run", fake_run)
+
+    grafana_runtime._run_kubectl(
+        ["-n", "observability", "get", "service", "grafana", "-o", "json"],
+        extra_env={
+            grafana_runtime.GRAFANA_TARGET_KUBE_CONTEXT_ENV: (
+                "nebius-cluster2-mk8scluster-222-external"
+            )
+        },
+    )
+
+    assert calls == [
+        [
+            "kubectl",
+            "--context",
+            "nebius-cluster2-mk8scluster-222-external",
+            "-n",
+            "observability",
+            "get",
+            "service",
+            "grafana",
+            "-o",
+            "json",
+        ]
+    ]
+
+
 def _grafana_payload() -> dict[str, object]:
     return {
         "apps": {
@@ -374,6 +412,53 @@ def test_grafana_dashboard_url_rewrites_to_public_base(
     ]
 
 
+def test_grafana_dashboard_url_by_uid_uses_dashboard_meta_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_get(
+        base_url: str,
+        path: str,
+        *,
+        username: str,
+        password: str,
+    ) -> object:
+        calls.append(
+            {
+                "base_url": base_url,
+                "path": path,
+                "username": username,
+                "password": password,
+            }
+        )
+        if path == "api/dashboards/uid/cxcli-kubernetes-logs":
+            return {
+                "dashboard": {"uid": "cxcli-kubernetes-logs"},
+                "meta": {"url": "/d/cxcli-kubernetes-logs/nebius-kubernetes-logs"},
+            }
+        raise AssertionError(f"unexpected Grafana API path: {path}")
+
+    monkeypatch.setattr(grafana_runtime, "_get_grafana_json", fake_get)
+
+    url = grafana_runtime._grafana_dashboard_url_by_uid(
+        "http://203.0.113.20/",
+        "cxcli-kubernetes-logs",
+        username="admin",
+        password="secret",
+    )
+
+    assert url == "http://203.0.113.20/d/cxcli-kubernetes-logs/nebius-kubernetes-logs"
+    assert calls == [
+        {
+            "base_url": "http://203.0.113.20/",
+            "path": "api/dashboards/uid/cxcli-kubernetes-logs",
+            "username": "admin",
+            "password": "secret",
+        }
+    ]
+
+
 def test_grafana_explore_urls_use_bound_datasources() -> None:
     bindings = {
         "metrics": GrafanaReportDashboardBinding(
@@ -439,22 +524,25 @@ def test_collect_grafana_runtime_status_records_kube_context(
                 signal="metrics",
                 folder="nebius",
                 dashboard="kubernetes-cluster-monitoring",
-                gnet_id=315,
+                gnet_id=0,
                 datasource="Nebius User Metrics",
+                dashboard_uid="cxcli-kubernetes-metrics",
             ),
             "logs": GrafanaReportDashboardBinding(
                 signal="logs",
                 folder="nebius",
                 dashboard="kubernetes-logs-from-loki",
-                gnet_id=18494,
+                gnet_id=0,
                 datasource="Nebius Logs",
+                dashboard_uid="cxcli-kubernetes-logs",
             ),
             "traces": GrafanaReportDashboardBinding(
                 signal="traces",
                 folder="nebius",
-                dashboard="guardrails-starter-traces",
-                gnet_id=20600,
+                dashboard="kubernetes-traces",
+                gnet_id=0,
                 datasource="Nebius Traces",
+                dashboard_uid="cxcli-kubernetes-traces",
             ),
         },
     )
@@ -506,17 +594,18 @@ def test_collect_grafana_runtime_status_records_kube_context(
         gnet_id: int,
         _spec: grafana_runtime.GrafanaReleaseSpec,
         *,
+        dashboard_uid: str = "",
         extra_env: dict[str, str] | None,
     ) -> str:
-        del extra_env
+        del gnet_id, extra_env
         slugs = {
-            ("kubernetes-cluster-monitoring", 315): (
-                "kubernetes-cluster-monitoring-via-prometheus"
+            ("kubernetes-cluster-monitoring", "cxcli-kubernetes-metrics"): (
+                "kubernetes-cluster-monitoring"
             ),
-            ("kubernetes-logs-from-loki", 18494): "kubernetes-logs-from-loki",
-            ("guardrails-starter-traces", 20600): "standard-guardrails-dash",
+            ("kubernetes-logs-from-loki", "cxcli-kubernetes-logs"): "kubernetes-logs",
+            ("kubernetes-traces", "cxcli-kubernetes-traces"): "kubernetes-traces",
         }
-        return f"{base_url}d/k8s/{slugs[(dashboard_key, gnet_id)]}"
+        return f"{base_url}d/{dashboard_uid}/{slugs[(dashboard_key, dashboard_uid)]}"
 
     monkeypatch.setattr(
         grafana_runtime,
@@ -545,29 +634,37 @@ def test_collect_grafana_runtime_status_records_kube_context(
 
     statuses = grafana_runtime.collect_grafana_runtime_status(
         _grafana_payload(),
-        extra_env={"KUBECONFIG": str(kubeconfig)},
+        extra_env={
+            "KUBECONFIG": str(kubeconfig),
+            grafana_runtime.GRAFANA_TARGET_CLUSTER_ID_ENV: "mk8scluster-123",
+        },
         target_ref="cluster2",
     )
 
     assert len(statuses) == 1
     status = statuses[0]
     assert status["target_ref"] == "cluster2"
+    assert status["cluster_id"] == "mk8scluster-123"
     assert status["kube_context"] == "nebius-cluster2-mk8scluster-123-external"
     assert status["metrics_url"] == "http://203.0.113.20/goto/metrics?orgId=1"
     assert status["metrics_url_kind"] == "dashboard"
-    assert status["metrics_url_gnet_id"] == 315
+    assert status["metrics_url_dashboard_uid"] == "cxcli-kubernetes-metrics"
     assert (
         shortened_input["metrics_url"]
-        == "http://203.0.113.20/d/k8s/kubernetes-cluster-monitoring-via-prometheus"
+        == "http://203.0.113.20/d/cxcli-kubernetes-metrics/kubernetes-cluster-monitoring?var-Cluster=mk8scluster-123"
     )
     assert status["logs_url"] == "http://203.0.113.20/goto/logs?orgId=1"
     assert status["logs_url_kind"] == "dashboard"
-    assert status["logs_url_gnet_id"] == 18494
-    assert shortened_input["logs_url"] == "http://203.0.113.20/d/k8s/kubernetes-logs-from-loki"
+    assert status["logs_url_dashboard_uid"] == "cxcli-kubernetes-logs"
+    assert shortened_input["logs_url"] == (
+        "http://203.0.113.20/d/cxcli-kubernetes-logs/kubernetes-logs?var-Cluster=mk8scluster-123"
+    )
     assert status["traces_url"] == "http://203.0.113.20/goto/traces?orgId=1"
     assert status["traces_url_kind"] == "dashboard"
-    assert status["traces_url_gnet_id"] == 20600
-    assert shortened_input["traces_url"] == "http://203.0.113.20/d/k8s/standard-guardrails-dash"
+    assert status["traces_url_dashboard_uid"] == "cxcli-kubernetes-traces"
+    assert shortened_input["traces_url"] == (
+        "http://203.0.113.20/d/cxcli-kubernetes-traces/kubernetes-traces"
+    )
 
 
 def test_collect_grafana_runtime_status_uses_long_urls_when_public_root_not_ready(

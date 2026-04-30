@@ -23,7 +23,6 @@ from .components import (
     component_lookup,
     parse_dependency_ref,
 )
-from .deploy_targets import TARGET_REF_FIELD, app_chart_target_ref
 from .mk8s_gpu import mk8s_gpu_dependency_issues
 from .observability import observability_dependency_issues
 from .runtime_config import read_path_with_catalog
@@ -598,7 +597,6 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
                 "enabled",
                 "repo",
                 "version",
-                TARGET_REF_FIELD,
                 "namespace",
                 "release-name",
                 "values",
@@ -650,39 +648,20 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
             value = raw_chart.get(key)
             if value is not None and not isinstance(value, str):
                 raise ValueError(f"apps.charts[{index}].{key} must be a string when set")
-        target_ref = raw_chart.get(TARGET_REF_FIELD)
-        if target_ref is not None and not isinstance(target_ref, str):
-            raise ValueError(f"apps.charts[{index}].{TARGET_REF_FIELD} must be a string when set")
-        normalized_target_ref = app_chart_target_ref(raw_chart)
-        if target_ref and not INSTANCE_ID_PATTERN.fullmatch(normalized_target_ref):
-            raise ValueError(
-                f"apps.charts[{index}].{TARGET_REF_FIELD} must use lowercase letters, digits, and hyphens"
-            )
         release_name = raw_chart.get("release-name")
         if release_name is not None and not isinstance(release_name, str):
             raise ValueError(f"apps.charts[{index}].release-name must be a string when set")
         if not isinstance(raw_chart.get("values"), Mapping):
             raise ValueError(f"apps.charts[{index}].values must be a mapping")
-        if bool(raw_chart.get("enabled", False)):
-            if cluster_target_refs:
-                if not normalized_target_ref:
-                    raise ValueError(
-                        f"apps.charts[{index}].{TARGET_REF_FIELD} is required when cluster targets are enabled"
-                    )
-                if instance_id != normalized_target_ref:
-                    raise ValueError(
-                        f"apps.charts[{index}].instance_id must match "
-                        f"apps.charts[{index}].{TARGET_REF_FIELD} for target-bound charts"
-                    )
-                if normalized_target_ref not in cluster_target_refs:
-                    available = ", ".join(sorted(cluster_target_refs))
-                    raise ValueError(
-                        f"apps.charts[{index}].{TARGET_REF_FIELD} must reference one of the enabled cluster targets: {available}"
-                    )
-            elif normalized_target_ref:
-                raise ValueError(
-                    f"apps.charts[{index}].{TARGET_REF_FIELD} is not allowed when no built-in cluster target is enabled"
-                )
+        if (
+            bool(raw_chart.get("enabled", False))
+            and cluster_target_refs
+            and instance_id not in cluster_target_refs
+        ):
+            available = ", ".join(sorted(cluster_target_refs))
+            raise ValueError(
+                f"apps.charts[{index}].instance_id must reference one of the enabled cluster targets: {available}"
+            )
 
 
 def validate_runtime_payload(payload: Mapping[str, Any]) -> None:

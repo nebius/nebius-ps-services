@@ -555,7 +555,6 @@ def test_wizard_prints_section_banners_and_selected_values(monkeypatch) -> None:
                         "id": "demo-app",
                         "instance_id": "mk8s",
                         "enabled": True,
-                        "target_ref": "mk8s",
                         "repo": "oci://docker.io/example/demo-app",
                         "version": "1.0.0",
                         "namespace": "demo",
@@ -590,9 +589,7 @@ def test_wizard_prints_section_banners_and_selected_values(monkeypatch) -> None:
     monkeypatch.setattr("nebius_cxcli.cli.module_required_variables", lambda _source: ())
     monkeypatch.setattr(
         "nebius_cxcli.cli.module_variables",
-        lambda _source: (
-            ModuleVariable(name="required_field", required=True, type_hint="string"),
-        ),
+        lambda _source: (ModuleVariable(name="required_field", required=True, type_hint="string"),),
     )
     monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
     monkeypatch.setattr("nebius_cxcli.cli.helm_chart_default_values", lambda **_kwargs: {})
@@ -2302,7 +2299,9 @@ def test_wizard_auto_enabled_mk8s_gpu_apps_are_prompted_in_same_pass(monkeypatch
 
     phase_prompts: list[tuple[str, bool]] = []
 
-    def _capture_continue_phase(label: str, *, default: bool = True, allow_back: bool = False) -> bool:
+    def _capture_continue_phase(
+        label: str, *, default: bool = True, allow_back: bool = False
+    ) -> bool:
         _ = allow_back
         phase_prompts.append((label, default))
         return True

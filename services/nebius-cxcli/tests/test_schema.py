@@ -233,7 +233,6 @@ def test_schema_rejects_legacy_mk8s_gpu_validation_overrides_input(tmp_path: Pat
             "id": "nvidia-gpu-operator",
             "instance_id": "cluster-a",
             "enabled": True,
-            "target_ref": "cluster-a",
             "values": {},
         }
     ]
@@ -286,7 +285,6 @@ def test_schema_rejects_missing_app_instance_id(tmp_path: Path) -> None:
         {
             "id": "nvidia-gpu-operator",
             "enabled": True,
-            "target_ref": "mk8s",
             "values": {},
         }
     ]
@@ -297,6 +295,35 @@ def test_schema_rejects_missing_app_instance_id(tmp_path: Path) -> None:
     with pytest.raises(ValueError) as exc_info:
         load_config(config_path)
     assert "apps.charts[0].instance_id is required" in str(exc_info.value)
+
+
+def test_schema_rejects_app_chart_target_ref(tmp_path: Path) -> None:
+    payload = _dynamic_payload()
+    payload["infra"]["components"] = [
+        {
+            "id": "mk8s",
+            "instance_id": "cluster-a",
+            "enabled": True,
+            "inputs": {},
+        }
+    ]
+    payload["deploy"] = {"targets": [{"instance_id": "cluster-a"}]}
+    payload["apps"]["charts"] = [
+        {
+            "id": "nvidia-gpu-operator",
+            "instance_id": "cluster-a",
+            "enabled": True,
+            "target_ref": "cluster-a",
+            "values": {},
+        }
+    ]
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc_info:
+        load_config(config_path)
+    assert "apps.charts[0] has unsupported field(s): target_ref" in str(exc_info.value)
 
 
 def test_schema_rejects_target_bound_app_instance_id_mismatch(tmp_path: Path) -> None:
@@ -315,7 +342,6 @@ def test_schema_rejects_target_bound_app_instance_id_mismatch(tmp_path: Path) ->
             "id": "nvidia-gpu-operator",
             "instance_id": "nvidia-gpu-operator",
             "enabled": True,
-            "target_ref": "cluster-a",
             "values": {},
         }
     ]
@@ -325,7 +351,7 @@ def test_schema_rejects_target_bound_app_instance_id_mismatch(tmp_path: Path) ->
 
     with pytest.raises(ValueError) as exc_info:
         load_config(config_path)
-    assert "apps.charts[0].instance_id must match apps.charts[0].target_ref" in str(
+    assert "apps.charts[0].instance_id must reference one of the enabled cluster targets" in str(
         exc_info.value
     )
 

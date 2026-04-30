@@ -8,6 +8,7 @@ import nebius_cxcli.component_sources as component_sources
 from nebius_cxcli.component_sources import (
     ComponentOutput,
     InfraObservabilitySettings,
+    ObservabilityAgentValidationSettings,
     SourceProfile,
     VmStandaloneCollectorSettings,
     reset_component_sources_cache,
@@ -25,6 +26,7 @@ from nebius_cxcli.observability import (
     observability_gpu_node_label_reconciliation,
     observability_project_defaults,
     observability_status_summary,
+    observability_validation_specs,
     resolve_observability_app_selection,
 )
 from nebius_cxcli.runtime_introspection import reset_runtime_introspection_cache
@@ -204,6 +206,7 @@ def test_observability_project_defaults_follow_catalog() -> None:
     assert defaults["kubernetes"]["logs"]["enabled"] is True
     assert defaults["kubernetes"]["logs"]["excluded_namespaces"] == ["kube-system"]
     assert defaults["kubernetes"]["metrics"]["collect_k8s_cluster_metrics"] is True
+    assert defaults["kubernetes"]["metrics"]["excluded_namespaces"] == ["kube-system"]
     assert defaults["kubernetes"]["traces"]["enabled"] is True
     assert defaults["vm"]["collector"]["enabled"] is False
     assert defaults["vm"]["collector"]["metrics"]["enabled"] is True
@@ -451,6 +454,77 @@ def test_observability_does_not_auto_enable_agent_when_disabled() -> None:
     assert selection.auto_enabled_app_ids == ()
 
 
+def test_observability_validation_specs_follow_enabled_targets() -> None:
+    payload = _base_payload(
+        observability_enabled=True,
+        enabled_apps=("nebius-observability-agent",),
+    )
+
+    specs = observability_validation_specs(payload)
+
+    assert specs == [
+        {
+            "kind": "mk8s_observability_ingestion",
+            "target_ref": "mk8s",
+            "name": "Observability ingestion (mk8s)",
+            "namespace": "observability",
+            "helmrelease_name": "nebius-observability-agent",
+            "helmrelease_ready_condition": "Ready",
+            "signal_value_paths": {
+                "logs": "spec.values.config.logs.enabled",
+                "metrics": "spec.values.config.metrics.enabled",
+                "traces": "spec.values.config.traces.enabled",
+            },
+            "cluster_metric_targets_path": "spec.values.config.metrics.additionalTargets",
+            "daemonset_name": "o11y-agent",
+            "pod_selector": "app.kubernetes.io/instance=nebius-observability-agent",
+            "pod_failure_sample_limit": 5,
+            "trace_otlp_service": {
+                "name": "nebius-observability-agent",
+                "port": 4317,
+                "endpoint_slice_selector": "kubernetes.io/service-name=nebius-observability-agent",
+                "endpoint_slice_check_limit": 5,
+            },
+            "signals": {
+                "logs": True,
+                "metrics": True,
+                "traces": True,
+                "collect_k8s_cluster_metrics": True,
+            },
+            "report_file": "observability-ingestion-report-mk8s.json",
+        }
+    ]
+
+
+def test_observability_validation_specs_skip_disabled_targets() -> None:
+    payload = _base_payload(
+        observability_enabled=False,
+        enabled_apps=("nebius-observability-agent",),
+    )
+
+    assert observability_validation_specs(payload) == []
+
+
+def test_observability_validation_specs_skip_catalog_disabled_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _base_payload(
+        observability_enabled=True,
+        enabled_apps=("nebius-observability-agent",),
+    )
+    disabled_settings = InfraObservabilitySettings(
+        mode="kubernetes_agent",
+        chart_component_id="nebius-observability-agent",
+        validation=ObservabilityAgentValidationSettings(enabled=False),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.observability._mk8s_observability_settings",
+        lambda: disabled_settings,
+    )
+
+    assert observability_validation_specs(payload) == []
+
+
 def test_observability_dependency_issues_require_target_toggle_for_agent() -> None:
     payload = _base_payload(
         observability_enabled=False,
@@ -540,12 +614,32 @@ def test_materialize_observability_agent_values_from_target_contract() -> None:
     assert chart["values"]["config"]["logs"]["excludedNamespaces"] == ["kube-system"]
     assert chart["values"]["config"]["metrics"]["enabled"] is True
     assert chart["values"]["config"]["metrics"]["collectAgentMetrics"] is False
-    assert chart["values"]["config"]["metrics"]["collectK8sClusterMetrics"] is True
+    assert chart["values"]["config"]["metrics"]["collectK8sClusterMetrics"] is False
+    assert chart["values"]["config"]["metrics"]["excludedNamespaces"] == ["kube-system"]
     assert chart["values"]["config"]["traces"]["enabled"] is True
-    assert "additionalTargets" not in chart["values"]["config"]["metrics"]
+    additional_targets = chart["values"]["config"]["metrics"]["additionalTargets"]
+    assert [item["job_name"] for item in additional_targets] == [
+        "cxcli-kubernetes-apiservers",
+        "cxcli-kubernetes-nodes",
+        "cxcli-kubernetes-nodes-cadvisor",
+        "cxcli-hubble",
+    ]
+    node_targets = {
+        item["job_name"]: item
+        for item in additional_targets
+        if item["job_name"] in {"cxcli-kubernetes-nodes", "cxcli-kubernetes-nodes-cadvisor"}
+    }
+    for target in node_targets.values():
+        relabel_configs = target["relabel_configs"]
+        assert not any(item.get("action") == "labelmap" for item in relabel_configs)
+        assert {
+            item.get("target_label")
+            for item in relabel_configs
+            if isinstance(item, dict)
+        }.issuperset({"node", "kubernetes_io_hostname", "__address__", "__metrics_path__"})
 
 
-def test_materialize_observability_agent_values_adds_catalog_metric_targets() -> None:
+def test_materialize_observability_agent_values_preserves_customer_metric_targets() -> None:
     payload = _base_payload(
         observability_enabled=True,
         enabled_apps=("nebius-observability-agent", "nvidia-gpu-operator"),
@@ -558,6 +652,10 @@ def test_materialize_observability_agent_values_adds_catalog_metric_targets() ->
                     {
                         "job_name": "customer-target",
                         "static_configs": [{"targets": ["customer:9090"]}],
+                    },
+                    {
+                        "job_name": "cxcli-nvidia-dcgm-exporter",
+                        "kubernetes_sd_configs": [{"role": "endpoints"}],
                     }
                 ]
             }
@@ -569,38 +667,28 @@ def test_materialize_observability_agent_values_adds_catalog_metric_targets() ->
     additional_targets = chart["values"]["config"]["metrics"]["additionalTargets"]
     assert [item["job_name"] for item in additional_targets] == [
         "customer-target",
-        "cxcli-nvidia-dcgm-exporter",
-    ]
-    dcgm_target = additional_targets[1]
-    assert dcgm_target["kubernetes_sd_configs"] == [{"role": "endpoints"}]
-    assert dcgm_target["relabel_configs"] == [
-        {
-            "source_labels": ["__meta_kubernetes_namespace"],
-            "action": "keep",
-            "regex": "nvidia-gpu-operator",
-        },
-        {
-            "source_labels": ["__meta_kubernetes_service_name"],
-            "action": "keep",
-            "regex": "nvidia-dcgm-exporter",
-        },
-        {
-            "source_labels": ["__meta_kubernetes_endpoint_port_number"],
-            "action": "keep",
-            "regex": "9400",
-        },
+        "cxcli-kubernetes-apiservers",
+        "cxcli-kubernetes-nodes",
+        "cxcli-kubernetes-nodes-cadvisor",
+        "cxcli-hubble",
     ]
 
     payload["apps"]["charts"] = [
         item for item in payload["apps"]["charts"] if item["id"] != "nvidia-gpu-operator"
     ]
     materialize_observability_app_values(payload)
-    assert chart["values"]["config"]["metrics"]["additionalTargets"] == [
-        {
-            "job_name": "customer-target",
-            "static_configs": [{"targets": ["customer:9090"]}],
-        }
+    additional_targets = chart["values"]["config"]["metrics"]["additionalTargets"]
+    assert [item["job_name"] for item in additional_targets] == [
+        "customer-target",
+        "cxcli-kubernetes-apiservers",
+        "cxcli-kubernetes-nodes",
+        "cxcli-kubernetes-nodes-cadvisor",
+        "cxcli-hubble",
     ]
+    assert additional_targets[0] == {
+        "job_name": "customer-target",
+        "static_configs": [{"targets": ["customer:9090"]}],
+    }
 
 
 def test_materialize_grafana_datasources_from_observability_read_endpoints() -> None:
@@ -616,6 +704,16 @@ def test_materialize_grafana_datasources_from_observability_read_endpoints() -> 
             "region_id": "eu-north1",
         },
     }
+    grafana_row = _chart_row(payload, "grafana")
+    grafana_row["values"]["dashboards"] = {
+        "nebius": {
+            "stale-inline-dashboard": {
+                "datasource": "Nebius User Metrics",
+                "json": "{}",
+            }
+        }
+    }
+    grafana_row["values"]["dashboardsConfigMaps"] = {"nebius": "stale-dashboard-config"}
 
     materialize_observability_app_values(payload)
 
@@ -656,6 +754,8 @@ def test_materialize_grafana_datasources_from_observability_read_endpoints() -> 
         for item in datasources
     )
     assert values["grafana.ini"]["auth"]["login_maximum_inactive_lifetime_duration"] == "20m"
+    assert "dashboards" not in values
+    assert "dashboardsConfigMaps" not in values
 
 
 def test_materialize_observability_agent_values_for_each_target_row() -> None:
@@ -720,7 +820,16 @@ def test_materialize_observability_agent_values_for_each_target_row() -> None:
     for chart in charts:
         assert chart["values"]["config"]["logs"]["enabled"] is True
         assert chart["values"]["config"]["metrics"]["enabled"] is True
-        assert chart["values"]["config"]["metrics"]["collectK8sClusterMetrics"] is True
+        assert chart["values"]["config"]["metrics"]["collectK8sClusterMetrics"] is False
+        assert [
+            item["job_name"]
+            for item in chart["values"]["config"]["metrics"]["additionalTargets"]
+        ] == [
+            "cxcli-kubernetes-apiservers",
+            "cxcli-kubernetes-nodes",
+            "cxcli-kubernetes-nodes-cadvisor",
+            "cxcli-hubble",
+        ]
         assert chart["values"]["config"]["traces"]["enabled"] is True
 
 
@@ -974,7 +1083,7 @@ def test_observability_status_summary_reports_vm_agent_and_gpu_metrics() -> None
         "vm_standalone_logs": False,
         "service_provider_metric_buckets": ["compute", "nbs", "gpu"],
         "service_log_buckets": ["sp_mk8s_control_plane", "sp_mk8s_audit_logs", "sp_serial"],
-        "gpu_dcgm_metric_source": "additional_target",
+        "gpu_dcgm_metric_source": "prometheus_annotations",
         "gpu_dcgm_node_policy": "managed_gpu_operator_dcgm_labels",
         "gpu_dcgm_live_readiness": "verify_live_nvidia_dcgm_exporter_endpoints_after_deploy",
     }

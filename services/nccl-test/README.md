@@ -45,7 +45,7 @@ installs the Ubuntu Open MPI packages instead of bundling NVIDIA HPC-X.
   tag `0.2.0` and the practical deploy-time benchmark defaults directly in the
   source chart.
 - `services/nebius-cxcli/component_sources.yaml` now points portable consumers
-  at chart version `0.2.7`, and the NCCL validation path reads the shared
+  at chart version `0.2.8`, and the NCCL validation path reads the shared
   image/tag plus benchmark defaults directly from the chart instead of
   duplicating them in the catalog.
 - The shared chart now owns a structured NCCL transport contract
@@ -57,7 +57,8 @@ installs the Ubuntu Open MPI packages instead of bundling NVIDIA HPC-X.
   GPU count from the resolved MK8s shape and sizes worker CPU/memory from live
   scheduler headroom at validation runtime.
 - The only NCCL chart behavior that remains catalog-owned is the
-  platform-specific B200 `-mca coll ^hcoll` overlay.
+  platform-specific B200 `-mca coll ^hcoll` overlay plus the cxcli-managed RDMA
+  `NCCL_DMABUF_ENABLE=1` MPI environment export.
 - That B200 overlay reflects the Nebius benchmark recipe, not an HCOLL toggle
   baked into this image: the local runtime currently ships Ubuntu Open MPI with
   UCX-capable components, but not the HPC-X `coll:hcoll` / `coll:ucc`

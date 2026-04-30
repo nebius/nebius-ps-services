@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from .component_instances import component_instance_id, ensure_component_instance_id
-from .deploy_targets import TARGET_REF_FIELD
+from .deploy_targets import TARGET_REF_FIELD, enabled_cluster_target_refs
 
 
 def _deep_copy(value: Any) -> Any:
@@ -114,6 +114,7 @@ def to_runtime_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(apps_source, Mapping):
         runtime_apps = runtime["apps"]
         if isinstance(runtime_apps, dict):
+            cluster_target_refs = set(enabled_cluster_target_refs(dynamic_payload))
             raw_charts = apps_source.get("charts")
             if isinstance(raw_charts, list):
                 normalized_charts: list[dict[str, Any]] = []
@@ -126,6 +127,9 @@ def to_runtime_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
                     chart_id = str(copied_item.get("id", "")).strip().lower()
                     if chart_id:
                         ensure_component_instance_id(copied_item, default_component_id=chart_id)
+                        instance_id = component_instance_id(copied_item)
+                        if instance_id in cluster_target_refs:
+                            copied_item[TARGET_REF_FIELD] = instance_id
                     normalized_charts.append(copied_item)
                 runtime_apps["charts"] = normalized_charts
             for item in apps_source.get("charts", []):  # type: ignore[union-attr]
@@ -138,6 +142,8 @@ def to_runtime_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
                 if not chart_id:
                     continue
                 ensure_component_instance_id(copied_item, default_component_id=chart_id)
+                instance_id = component_instance_id(copied_item)
+                target_ref = instance_id if instance_id in cluster_target_refs else ""
                 group = _normalize_group(copied_item.get("group"))
                 enabled = bool(copied_item.get("enabled", False))
                 values = copied_item.get("values", {})
@@ -147,12 +153,11 @@ def to_runtime_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
                 if not isinstance(group_node, dict):
                     group_node = {}
                     runtime_apps[group] = group_node
-                instance_id = component_instance_id(copied_item)
                 group_node[_runtime_component_key(chart_id, instance_id)] = {
                     "enabled": enabled,
                     "repo": str(copied_item.get("repo", "")).strip(),
                     "version": str(copied_item.get("version", "")).strip(),
-                    TARGET_REF_FIELD: str(copied_item.get(TARGET_REF_FIELD, "")).strip(),
+                    TARGET_REF_FIELD: target_ref,
                     "namespace": str(copied_item.get("namespace", "")).strip(),
                     "release_name": str(copied_item.get("release-name", instance_id)).strip()
                     or instance_id,

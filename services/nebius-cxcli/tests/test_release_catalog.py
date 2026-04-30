@@ -7,6 +7,7 @@ import pytest
 import yaml
 
 from nebius_cxcli.release_catalog import (
+    _build_parser,
     render_release_catalog,
     verify_catalog,
     verify_wheel,
@@ -180,12 +181,16 @@ def test_verify_catalog_rejects_missing_portable_app_source(tmp_path: Path) -> N
 def test_verify_wheel_reads_bundled_sources_while_archive_is_open(tmp_path: Path) -> None:
     wheel_path = tmp_path / "nebius_cxcli-0.1.1-py3-none-any.whl"
     bundled_name = "nebius_cxcli-0.1.1.data/data/nebius_cxcli/component_sources.yaml"
+    bundled_settings_name = (
+        "nebius_cxcli-0.1.1.data/data/nebius_cxcli/component_cli_settings.yaml"
+    )
     payload = _catalog_payload(
         "git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mk8s?ref=nebius-cxcli-v0.1.1",
         local_source=None,
     )
     with zipfile.ZipFile(wheel_path, "w") as zf:
         zf.writestr(bundled_name, yaml.safe_dump(payload, sort_keys=False))
+        zf.writestr(bundled_settings_name, yaml.safe_dump({}, sort_keys=False))
 
     verify_wheel(wheel_path=wheel_path, release_ref="nebius-cxcli-v0.1.1")
 
@@ -193,11 +198,19 @@ def test_verify_wheel_reads_bundled_sources_while_archive_is_open(tmp_path: Path
 def test_verify_wheel_bundle_allows_local_only_chart_sources(tmp_path: Path) -> None:
     wheel_path = tmp_path / "nebius_cxcli-0.1.1-py3-none-any.whl"
     bundled_name = "nebius_cxcli-0.1.1.data/data/nebius_cxcli/component_sources.yaml"
+    bundled_settings_name = (
+        "nebius_cxcli-0.1.1.data/data/nebius_cxcli/component_cli_settings.yaml"
+    )
     payload = _catalog_payload(
         "git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mk8s?ref=main",
         chart_local_path="../../helm-charts/nccl-test",
     )
     with zipfile.ZipFile(wheel_path, "w") as zf:
         zf.writestr(bundled_name, yaml.safe_dump(payload, sort_keys=False))
+        zf.writestr(bundled_settings_name, yaml.safe_dump({}, sort_keys=False))
 
     verify_wheel_bundle(wheel_path=wheel_path)
+
+
+def test_release_catalog_help_mentions_settings_bundle() -> None:
+    assert "component sources and CLI settings" in _build_parser().format_help()

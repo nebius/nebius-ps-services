@@ -1,4 +1,9 @@
-"""Helpers for explicit cluster targets and target-scoped Flux layout."""
+"""Helpers for explicit cluster targets and target-scoped Flux layout.
+
+User-authored config binds target-scoped app rows with ``instance_id`` only.
+Generated/runtime metadata may carry ``target_ref``, but it is always a derived
+copy of the same target identity.
+"""
 
 from __future__ import annotations
 
@@ -21,6 +26,66 @@ def app_chart_target_ref(row: Mapping[str, Any]) -> str:
 
 def deploy_target_instance_id(row: Mapping[str, Any]) -> str:
     return normalize_component_token(row.get(DEPLOY_TARGET_INSTANCE_ID_FIELD))
+
+
+def _required_generated_target_field(
+    row: Mapping[str, Any],
+    *,
+    index: int,
+    field_name: str,
+    normalize_token: bool = False,
+) -> str:
+    value = row.get(field_name)
+    normalized = normalize_component_token(value) if normalize_token else str(value or "").strip()
+    if not normalized:
+        raise ValueError(f"Generated manifest deploy.targets[{index}].{field_name} is required")
+    return normalized
+
+
+def normalize_generated_deploy_target(row: Any, *, index: int) -> dict[str, str]:
+    """Return a validated generated deploy target row.
+
+    The generated manifest keeps ``target_ref`` for internal Flux/deploy routing,
+    but the concrete contract is that it must exactly match the target
+    ``instance_id`` from authored config.
+    """
+    if not isinstance(row, Mapping):
+        raise ValueError(f"Generated manifest deploy.targets[{index}] must be a mapping")
+
+    component_id = _required_generated_target_field(
+        row, index=index, field_name="component_id", normalize_token=True
+    )
+    instance_id = _required_generated_target_field(
+        row, index=index, field_name=DEPLOY_TARGET_INSTANCE_ID_FIELD, normalize_token=True
+    )
+    target_ref = _required_generated_target_field(
+        row, index=index, field_name=TARGET_REF_FIELD, normalize_token=True
+    )
+    if target_ref != instance_id:
+        raise ValueError(
+            f"Generated manifest deploy.targets[{index}].{TARGET_REF_FIELD} must equal "
+            f"{DEPLOY_TARGET_INSTANCE_ID_FIELD} '{instance_id}'"
+        )
+
+    access = _required_generated_target_field(row, index=index, field_name="access").lower()
+    if access not in {"external", "internal"}:
+        raise ValueError(
+            f"Generated manifest deploy.targets[{index}].access must be external or internal"
+        )
+
+    return {
+        "component_id": component_id,
+        DEPLOY_TARGET_INSTANCE_ID_FIELD: instance_id,
+        TARGET_REF_FIELD: target_ref,
+        "cluster_id_output_name": _required_generated_target_field(
+            row, index=index, field_name="cluster_id_output_name"
+        ),
+        "component_output_ref": _required_generated_target_field(
+            row, index=index, field_name="component_output_ref"
+        ),
+        "access": access,
+        "flux_dir": _required_generated_target_field(row, index=index, field_name="flux_dir"),
+    }
 
 
 def target_scoped_app_instance_id(app_id: Any, *, target_ref: Any) -> str:
@@ -75,6 +140,50 @@ def enabled_cluster_target_refs(payload_or_config: Any) -> tuple[str, ...]:
     return tuple(refs)
 
 
+def _app_charts_node(payload: dict[str, Any]) -> list[Any] | None:
+    apps = payload.get("apps")
+    if not isinstance(apps, dict):
+        return None
+    charts = apps.get("charts")
+    if not isinstance(charts, list):
+        return None
+    return charts
+
+
+def materialize_app_chart_target_refs(payload: dict[str, Any]) -> bool:
+    """Derive internal app chart target refs from target-scoped instance ids."""
+    target_refs = set(enabled_cluster_target_refs(payload))
+    charts = _app_charts_node(payload)
+    if not target_refs or charts is None:
+        return False
+
+    changed = False
+    for row in charts:
+        if not isinstance(row, dict):
+            continue
+        instance_id = component_instance_id(row)
+        if not instance_id or instance_id not in target_refs:
+            continue
+        if app_chart_target_ref(row) != instance_id:
+            row[TARGET_REF_FIELD] = instance_id
+            changed = True
+    return changed
+
+
+def strip_app_chart_target_refs(payload: dict[str, Any]) -> bool:
+    """Remove derived app chart target refs from user-authored config payloads."""
+    charts = _app_charts_node(payload)
+    if charts is None:
+        return False
+
+    changed = False
+    for row in charts:
+        if isinstance(row, dict) and TARGET_REF_FIELD in row:
+            row.pop(TARGET_REF_FIELD, None)
+            changed = True
+    return changed
+
+
 def flux_targets_dir(paths: ProjectPaths) -> Path:
     return paths.flux_dir / "targets"
 
@@ -95,5 +204,8 @@ __all__ = [
     "flux_target_dir",
     "flux_targets_dir",
     "is_auto_target_scoped_app_instance_id",
+    "materialize_app_chart_target_refs",
+    "normalize_generated_deploy_target",
+    "strip_app_chart_target_refs",
     "target_scoped_app_instance_id",
 ]

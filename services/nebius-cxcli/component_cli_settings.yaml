@@ -1,0 +1,600 @@
+cli:
+  terraform:
+    version: 1.14.1
+  flux:
+    version: v2.8.0
+    release_timeout: 5m
+
+observability:
+  # Project-scoped Nebius Observability endpoint templates. These Read/Write
+  # APIs are not owned by a single component; all Nebius resources in the
+  # tenant/project can use the matching read or ingest surface.
+  endpoints:
+    write:
+      metrics_platform_managed_write:
+        label: Metrics write (VM monitoring agent)
+        template: Nebius-managed Monitoring agent metrics ingest is automatic for Compute VMs and uses platform-managed regional endpoints; cxcli does not configure a public customer write endpoint for this path.
+        include_when:
+          - vm_service_metrics
+      metrics_otlp_write:
+        label: Metrics write (OTLP HTTP/protobuf)
+        template: https://write.monitoring.{region}.nebius.cloud/projects/{project_id}/opentelemetry/v1/metrics
+        include_when:
+          - kubernetes_metrics
+      metrics_prometheus_remote_write:
+        label: Metrics write (Prometheus Remote Write)
+        template: https://write.monitoring.{region}.nebius.cloud/projects/{project_id}/prometheus/api/v1/write
+        include_when:
+          - kubernetes_metrics
+          - vm_standalone_metrics
+      logs_platform_managed_write:
+        label: Logs write (VM monitoring agent)
+        template: When journald collection is enabled, the Nebius-managed Monitoring agent forwards VM logs through the platform-managed Logging ingest path; cxcli does not configure a public customer write endpoint for this path.
+        include_when:
+          - vm_logs
+      logs_otlp_write:
+        label: Logs write (direct/self-managed)
+        template: https://write.logging.{region}.nebius.cloud
+        include_when:
+          - kubernetes_logs
+      logs_agent_grpc_write:
+        label: Logs write (Nebius agent gRPC)
+        template: dns:///write.logging.{region}.nebius.cloud:443
+        include_when:
+          - kubernetes_logs
+          - vm_standalone_logs
+      traces_otlp_grpc_write:
+        label: Traces write (OTLP gRPC)
+        template: dns:///write.tracing.{region}.nebius.cloud:443
+        include_when:
+          - kubernetes_traces
+    read:
+      metrics_service_provider_read:
+        label: Metrics read (Prometheus, Nebius service metrics)
+        template: https://read.monitoring.api.nebius.cloud/projects/{project_id}/service-provider/prometheus
+        include_when:
+          - metrics
+      metrics_user_read:
+        label: Metrics read (Prometheus, user-ingested metrics)
+        template: https://read.monitoring.api.nebius.cloud/projects/{project_id}/prometheus
+        include_when:
+          - kubernetes_metrics
+          - vm_standalone_metrics
+      metrics_federate_read:
+        label: Metrics read (federate)
+        template: https://read.monitoring.api.nebius.cloud/projects/{project_id}/buckets/<service-provider>/prometheus/federate
+        include_when:
+          - metrics
+        bucket_placeholder: <service-provider>
+      logs_loki_read:
+        label: Logs read (Loki)
+        template: https://read.logging.api.nebius.cloud/projects/{project_id}
+        include_when:
+          - logs
+      traces_tempo_read:
+        label: Traces read (Tempo)
+        template: https://read.tracing.api.nebius.cloud/projects/{project_id}/tempo
+        include_when:
+          - traces
+# cxcli-owned behavior for component types declared in component_sources.yaml.
+# Entries are linked by the same components.<infra|apps>.<component-id> path.
+components:
+  infra:
+    mk8s:
+      cli:
+        gpu:
+          # Preference order only. cxcli still resolves the live Nebius
+          # compatibility matrix first. Nebius calls the provider field
+          # `drivers_preset`, but these values select the bundled GPU software
+          # stack/image family, not only a kernel driver.
+          image_preferences:
+            preferred_gpu_stack_presets:
+              - cuda13.0
+              - cuda12.8
+              - cuda12.4
+              - cuda12
+            preferred_os:
+              - ubuntu24.04
+              - ubuntu22.04
+          validations:
+            operator_readiness:
+              # Fast control-plane gate only: operator policy objects plus
+              # allocatable GPUs on Ready nodes. This should fail before any
+              # workload pod/job validation starts.
+              enabled_by_default: true
+              timeout: 10m
+            gpu_visibility:
+              # Single-node CUDA workload smoke test. This intentionally checks
+              # a real GPU pod instead of only scheduler-visible allocatable
+              # resources, but stays bounded to a small sample so it remains
+              # cheap enough for routine deploys.
+              # Keep the dedicated namespace for isolation and easy reruns, but
+              # delete the transient validation pods after each run.
+              enabled_by_default: true
+              namespace: gpu-validation
+              image: nvcr.io/nvidia/k8s/cuda-sample:vectoradd-cuda11.7.1-ubuntu20.04
+              timeout: 5m
+              max_nodes: 3
+              cleanup: true
+            nccl:
+              # Multi-node communication validation. This is intentionally
+              # separate from GPU visibility because it validates distributed
+              # communication correctness and bandwidth, not just single-node
+              # CUDA execution. cxcli schedules it for GPU-enabled MK8s
+              # clusters, auto-selects Socket/TCPIP on Ethernet-only shapes,
+              # and switches to RDMA transport on GPU-cluster / InfiniBand
+              # shapes. The RDMA bandwidth threshold is enforced only on the
+              # RDMA path so Ethernet-only runs stay informative instead of
+              # failing against an InfiniBand expectation.
+              # Keep the dedicated namespace, but delete the transient MPIJob
+              # and transient Training Operator install after each run.
+              enabled_by_default: true
+              chart_component_id: nccl-test
+              timeout: 20m
+              max_nodes: 8
+              # MPIJob v1 still lives on the Training Operator v1.x line.
+              # Keep the transient prerequisite pinned instead of following a
+              # floating latest manifest.
+              training_operator_manifest: github.com/kubeflow/training-operator/manifests/overlays/standalone?ref=v1.9.3
+              training_operator_namespace: kubeflow
+              average_bus_bandwidth_threshold_gbps: 300
+              # Keep NCCL on the Linux DMA-BUF GPUDirect RDMA path for
+              # InfiniBand validation. NVIDIA documents DMA-BUF as the
+              # recommended path and `nvidia-peermem` as the legacy path.
+              rdma_mpi_extra_args:
+                - -x
+                - NCCL_DMABUF_ENABLE=1
+        boot_disk_defaults:
+          # Materialize cxcli-owned explicit MK8s boot disks into config and
+          # rendered Terraform so quota checks and deploys do not depend on
+          # hidden service defaults.
+          # cxcli resolves live preset resources (vCPU, RAM, GPU count), then
+          # prefers these explicit ordered size rules before falling back to a
+          # heuristic for shapes we do not model yet.
+          cpu:
+            default_type: NETWORK_SSD
+            rules:
+              - max_vcpu: 8
+                max_memory_gib: 32
+                size_gib: 64
+              - max_vcpu: 32
+                max_memory_gib: 128
+                size_gib: 93
+              - max_vcpu: 64
+                max_memory_gib: 256
+                size_gib: 128
+              - min_vcpu: 65
+                size_gib: 186
+          gpu:
+            default_type: NETWORK_SSD
+            rules:
+              - max_gpu: 1
+                max_vcpu: 32
+                max_memory_gib: 384
+                size_gib: 256
+              - min_gpu: 2
+                max_gpu: 4
+                max_vcpu: 96
+                max_memory_gib: 768
+                size_gib: 512
+              - min_gpu: 8
+                max_gpu: 8
+                size_gib: 1023
+        observability:
+          # Settings-owned MK8s observability contract. The `config.yaml`
+          # `deploy.targets[].observability` rows decide whether cxcli deploys
+          # it per cluster; this block keeps agent choice, signal defaults, and
+          # component-specific service buckets.
+          primary_agent:
+            kind: kubernetes_agent
+            chart_component_id: nebius-observability-agent
+            logs:
+              default_enabled: true
+              collect_agent_logs: false
+              # Exclude list; all other namespaces remain eligible.
+              excluded_namespaces:
+                - kube-system
+            metrics:
+              default_enabled: true
+              collect_agent_metrics: false
+              # Include cluster/node/control-plane metrics when this
+              # cxcli-managed MK8s path is enabled.
+              collect_k8s_cluster_metrics: true
+              # Exclude ordinary service/pod annotation scrapes from system
+              # namespaces. Chart-owned infrastructure targets such as Hubble
+              # remain controlled by the agent chart.
+              excluded_namespaces:
+                - kube-system
+            traces:
+              default_enabled: true
+            validation: true
+          grafana:
+            chart_component_id: grafana
+            gateway_chart_component_id: gateway-helm
+            enabled_by_default: true
+          service_metrics:
+            buckets:
+              compute:
+                label: Compute metrics for MK8s node VMs
+              nbs:
+                label: Compute volume metrics for MK8s node disks
+              gpu:
+                label: GPU service metrics for GPU-backed MK8s nodes
+                include_when:
+                  - inputs.gpu_enabled
+          service_logs:
+            buckets:
+              sp_mk8s_control_plane:
+                label: Managed Kubernetes control plane logs
+              sp_mk8s_audit_logs:
+                label: Managed Kubernetes audit logs
+    managed-postgresql:
+      cli:
+        observability:
+          service_metrics:
+            buckets:
+              msp:
+                label: Managed Service for PostgreSQL metrics
+          service_logs:
+            buckets:
+              sp_postgres:
+                label: Managed Service for PostgreSQL logs
+    sfs:
+      cli:
+        observability:
+          service_metrics:
+            buckets:
+              nbs:
+                label: Compute storage metrics for shared filesystem backing resources
+    object-storage:
+      cli:
+        observability:
+          service_metrics:
+            buckets:
+              sp_storage:
+                label: Object Storage service metrics
+          # Object Storage request logs are exposed through Audit Logs, not
+          # through the Loki-compatible Logging read endpoint.
+    vm:
+      cli:
+        image_preferences:
+          # Preference order only. cxcli resolves the live Nebius public image
+          # inventory through the SDK and keeps only families compatible with
+          # the selected VM platform and region.
+          preferred_cpu_image_families:
+            - ubuntu24.04-driverless
+            - ubuntu22.04-driverless
+          # GPU VMs prefer Nebius GPU images first. Driverless families remain
+          # compatible for operator-managed stacks, but they sort after the recommended
+          # GPU image families returned by the live Nebius inventory.
+          preferred_gpu_image_families:
+            - ubuntu24.04-cuda13.0
+            - ubuntu24.04-cuda12
+        observability:
+          # VM observability has two paths: the built-in Monitoring agent and
+          # an optional cxcli-managed public-ingest collector.
+          primary_agent:
+            kind: monitoring_agent
+            metrics:
+              default_enabled: true
+            logs:
+              default_enabled: true
+              systemd_units: []
+          public_ingest:
+            # Default-off public-ingest collector. It installs the public
+            # `nebius-o11y-agent` package plus a Prometheus agent companion.
+            default_enabled: false
+            package:
+              name: nebius-o11y-agent
+              version: 0.2.130
+              apt_repository: https://artifactory.nebius.dev/artifactory/nebius-o11y-agent
+              apt_key_url: https://artifactory.nebius.dev/artifactory/nebius-o11y-agent/key.gpg
+              apt_suite: stable
+              apt_component: main
+              apt_origin: artifactory.nebius.dev
+            prometheus:
+              package_name: prometheus
+            # Metadata token for the VM-attached service account.
+            metadata_token_file: /mnt/cloud-metadata/token
+            metrics_export_port: 19090
+            prometheus_agent_port: 19091
+            logs:
+              default_enabled: true
+              systemd_units: []
+            metrics:
+              default_enabled: true
+          service_metrics:
+            buckets:
+              compute:
+                label: Compute VM metrics
+              nbs:
+                label: Compute volume metrics for VM disks
+          service_logs:
+            buckets:
+              sp_serial:
+                label: Compute VM serial logs
+  apps:
+    nvidia-network-operator:
+      cli:
+        mk8s_gpu_policy:
+          role: network_operator
+          default_sets:
+            network_operator_nfd:
+              values.nfd.enabled: true
+              values.nfd.deployNodeFeatureRules: true
+            driverful_infiniband_node_selection:
+              # Use the Nebius driverful label only as the seed selector for
+              # the NFD worker. The standard Mellanox PCI feature label is not
+              # available until NFD has already run once.
+              values.node-feature-discovery.worker.affinity:
+                nodeAffinity:
+                  requiredDuringSchedulingIgnoredDuringExecution:
+                    nodeSelectorTerms:
+                      - matchExpressions:
+                          - key: nebius.com/driverful
+                            operator: In
+                            values:
+                              - "true"
+              values.nodeAffinity:
+                requiredDuringSchedulingIgnoredDuringExecution:
+                  nodeSelectorTerms:
+                    - matchExpressions:
+                        - key: feature.node.kubernetes.io/pci-15b3.present
+                          operator: In
+                          values:
+                            - "true"
+          post_render_patch_sets:
+            rdma_shared_device_plugin:
+              - target:
+                  group: mellanox.com
+                  version: v1alpha1
+                  kind: NicClusterPolicy
+                  name: nic-cluster-policy
+                patch:
+                  apiVersion: mellanox.com/v1alpha1
+                  kind: NicClusterPolicy
+                  metadata:
+                    name: nic-cluster-policy
+                  spec:
+                    rdmaSharedDevicePlugin:
+                      image: k8s-rdma-shared-dev-plugin
+                      repository: nvcr.io/nvidia/mellanox
+                      # NVIDIA publishes the RDMA shared-device plugin on the
+                      # same Network Operator release line, but with the
+                      # `network-operator-v*` image tag format.
+                      version: network-operator-v{chart_version}
+                      # Expose a scheduler-visible `rdma/shared_device`
+                      # resource on InfiniBand-capable Mellanox HCAs.
+                      config: |
+                        {
+                          "configList": [
+                            {
+                              "resourceName": "shared_device",
+                              "rdmaHcaMax": 63,
+                              "selectors": {
+                                "vendors": ["15b3"],
+                                "linkTypes": ["infiniband"]
+                              }
+                            }
+                          ]
+                        }
+          # Top-level app defaults above are unconditional. These rules are
+          # conditional: each one can auto-enable the app and/or add chart
+          # defaults only when the selected MK8s GPU context matches.
+          rules:
+            - gpu_cluster_enabled: true
+              auto_enable: true
+              defaults_from:
+                - network_operator_nfd
+            - gpu_stack_source: operator_managed
+              auto_enable: true
+              # Separate Nebius platform ids and regions; both are NVIDIA B200.
+              match_platforms:
+                - gpu-b200-sxm
+                - gpu-b200-sxm-a
+              defaults_from:
+                - network_operator_nfd
+            - gpu_stack_source: nebius_image
+              # Nebius-managed GPU images already contain the matching OFED
+              # stack, so keep host OFED installs disabled.
+              defaults:
+                values.operator.ofedDriver.deploy: false
+            - gpu_stack_source: nebius_image
+              gpu_cluster_enabled: true
+              # Driverful InfiniBand nodes need Nebius driverful node selection
+              # plus an RDMA shared-device policy so pods can request
+              # `rdma/shared_device` without a containerized OFED install.
+              defaults_from:
+                - driverful_infiniband_node_selection
+              post_render_patches_from:
+                - rdma_shared_device_plugin
+            - gpu_stack_source: operator_managed
+              gpu_cluster_enabled: true
+              # The driverless InfiniBand path still needs an explicit RDMA
+              # shared-device policy; the Network Operator chart default CR
+              # installs OFED but does not expose `rdma/shared_device` by
+              # itself.
+              post_render_patches_from:
+                - rdma_shared_device_plugin
+            - gpu_stack_source: operator_managed
+              # Operator-managed GPU stacks still need the Network Operator to lay down
+              # host OFED/RDMA bits for GPUDirect and NCCL validation.
+              defaults:
+                values.operator.ofedDriver.deploy: true
+    nvidia-gpu-operator:
+      cli:
+        mk8s_gpu_policy:
+          role: gpu_operator
+          default_sets:
+            nebius_image_gpu_nfd:
+              # Use the Nebius GPU node label only as the seed selector for
+              # GPU Operator's NFD worker when GPU Operator owns NFD. The
+              # standard NVIDIA discovery labels are NFD-owned output labels.
+              values.node-feature-discovery.worker.affinity:
+                nodeAffinity:
+                  requiredDuringSchedulingIgnoredDuringExecution:
+                    nodeSelectorTerms:
+                      - matchExpressions:
+                          - key: nebius.com/gpu
+                            operator: In
+                            values:
+                              - "true"
+          # GPU Operator is the default GPU software controller for GPU-enabled
+          # MK8s clusters. Rules can both auto-enable the app and add
+          # conditional chart defaults.
+          rules:
+            - auto_enable: true
+            - gpu_stack_source: nebius_image
+              # Nebius-managed GPU images already ship the host GPU driver and
+              # NVIDIA Container Toolkit runtime, so GPU Operator should leave
+              # both host-side paths untouched.
+              defaults:
+                values.driver.enabled: false
+                values.toolkit.enabled: false
+                values.driver.nvidiaDriverCRD.enabled: false
+            - gpu_stack_source: nebius_image
+              gpu_cluster_enabled: false
+              # When Network Operator is not part of the target, GPU Operator
+              # owns NFD. Keep its NFD worker on Nebius GPU nodes so NFD, not
+              # cxcli, owns standard NVIDIA discovery labels such as
+              # nvidia.com/gpu.present.
+              defaults_from:
+                - nebius_image_gpu_nfd
+            - gpu_cluster_enabled: true
+              # Whenever Network Operator is part of the GPU-cluster /
+              # InfiniBand path, let it own the single NFD instance.
+              defaults:
+                values.nfd.enabled: false
+            - gpu_stack_source: operator_managed
+              # Operator-managed B200/B200A stacks also auto-enable Network Operator for
+              # RDMA plumbing, so keep NFD single-owned there too.
+              match_platforms:
+                - gpu-b200-sxm
+                - gpu-b200-sxm-a
+              defaults:
+                values.nfd.enabled: false
+            - gpu_stack_source: operator_managed
+              # Operator-managed GPU stacks keep the host driver/toolkit path in
+              # GPU Operator, but still avoid the broken Nebius NVIDIADriver
+              # CRD template path in the bundled GPU Operator chart.
+              defaults:
+                values.driver.enabled: true
+                values.toolkit.enabled: true
+                values.driver.nvidiaDriverCRD.enabled: false
+            - gpu_stack_source: operator_managed
+              match_platforms:
+                - gpu-b300-sxm
+              defaults:
+                # Ref: https://docs.nebius.com/kubernetes/gpu/set-up
+                # Nebius docs pin the B300 operator-managed install path to
+                # --set driver.version=580.95.05. Keep it catalog-owned rather
+                # than hardcoded in Python.
+                values.driver.version: 580.95.05
+          # App-only Flux release ordering: when both operators are present,
+          # wait for Network Operator first.
+          install_after:
+            - nvidia-network-operator
+        observability:
+          metric_targets:
+            - job_name: cxcli-nvidia-dcgm-exporter
+              # The Nebius Observability Agent discovers service endpoints that
+              # carry prometheus.io/scrape=true. GPU Operator creates the
+              # nvidia-dcgm-exporter service with that annotation, so cxcli does
+              # not add a duplicate agent additionalTarget for DCGM.
+              # On `nebius_image` stacks cxcli also owns the Nebius-specific GPU
+              # node-label policy required to schedule DCGM Exporter plus the
+              # validator without turning on GPU Operator device-plugin or GFD.
+              # Keep this as `nebius_image` only. In the operator-managed stack,
+              # GPU Operator owns the full driver/toolkit/device-plugin/DCGM
+              # lifecycle and should not be short-circuited by cxcli-managed
+              # operand labels.
+              discovery:
+                kind: prometheus_annotations
+                service_name: nvidia-dcgm-exporter
+                port: 9400
+              managed_gpu_node_policy:
+                stack_sources:
+                  - nebius_image
+                selector:
+                  nebius.com/gpu: "true"
+                labels:
+                  nvidia.com/gpu.deploy.operands: "true"
+                  nvidia.com/gpu.deploy.dcgm-exporter: "true"
+                  nvidia.com/gpu.deploy.operator-validator: "true"
+                  nvidia.com/gpu.deploy.device-plugin: "false"
+                  nvidia.com/gpu.deploy.gpu-feature-discovery: "false"
+    nccl-test:
+      cli:
+        mk8s_gpu_policy:
+          # Shared NCCL image and benchmark defaults come from the chart's own
+          # values.yaml. Keep only platform-specific MPI overlays here. Nebius
+          # docs add `-mca coll ^hcoll` only for the B200 MPIJob example while
+          # the H100/H200 example omits it, so this stays catalog-owned rather
+          # than becoming a shared chart default.
+          # Ref: https://docs.nebius.com/kubernetes/gpu/nccl-test
+          rules:
+            - match_platforms:
+                - gpu-b200-sxm
+                - gpu-b200-sxm-a
+              defaults:
+                # B200 keeps the `-mca coll ^hcoll` overlay on top of the
+                # shared first-party NCCL image release because the official
+                # Nebius B200 NCCL example includes it while the H100/H200
+                # example does not.
+                values.benchmark.mpiExtraArgs:
+                  - -mca
+                  - coll
+                  - ^hcoll
+    grafana:
+      cli:
+        orgId: 1
+        logout-timeout: 20m
+        admin:
+          secret: nebius-cxcli-grafana-admin
+          user: admin
+          user_key: admin-user
+          password_key: admin-password
+        read_token:
+          env: NEBIUS_OBSERVABILITY_STATIC_TOKEN
+          secret: nebius-cxcli-grafana-observability-read
+          key: token
+        datasources:
+          # Keep both Prometheus datasources. The service-provider endpoint
+          # reads Nebius/provider service metrics; the user endpoint reads
+          # customer/user-ingested Prometheus metrics.
+          service-metrics:
+            name: Nebius Services
+            uid: nebius-service-metrics
+            type: prometheus
+            read_endpoint: metrics_service_provider_read
+            isDefault: true
+            description: Nebius/provider service metrics for cloud resources and Nebius service dashboards.
+          user-metrics:
+            name: Nebius User Metrics
+            uid: nebius-user-metrics
+            type: prometheus
+            read_endpoint: metrics_user_read
+            isDefault: false
+            description: Customer/user-ingested Prometheus metrics, including Kubernetes metrics written by the Nebius observability agent.
+          logs:
+            name: Nebius Logs
+            uid: nebius-logs
+            type: loki
+            read_endpoint: logs_loki_read
+            isDefault: false
+          traces:
+            name: Nebius Traces
+            uid: nebius-traces
+            type: tempo
+            read_endpoint: traces_tempo_read
+            isDefault: false
+        explore_queries:
+          metrics: count({__name__=~".+"})
+          logs: '{__bucket__="default"}'
+        # Report bindings are source metadata, not Helm chart values. Keep
+        # them next to the chart so report links can point at dashboards
+        # without hardcoding dashboard selection in Python.
+        report_dashboards:
+          metrics: nebius-kubernetes/kubernetes-cluster-monitoring
+          logs: nebius-kubernetes/kubernetes-logs-from-loki
+          traces: nebius-kubernetes/kubernetes-traces

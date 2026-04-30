@@ -1,0 +1,61 @@
+{
+  "uid": "cxcli-kubernetes-traces",
+  "title": "Nebius Kubernetes Traces",
+  "tags": [
+    "nebius",
+    "cxcli",
+    "kubernetes",
+    "traces"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 41,
+  "version": 1,
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "Trace Ingestion",
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Trace data appears here after workloads send OTLP traces to the Nebius Observability Agent in the target cluster."
+      }
+    },
+    {
+      "id": 2,
+      "type": "table",
+      "title": "Recent Traces",
+      "datasource": {
+        "type": "tempo",
+        "uid": "nebius-traces"
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "traceql",
+          "query": "{}",
+          "limit": 20,
+          "datasource": {
+            "type": "tempo",
+            "uid": "nebius-traces"
+          }
+        }
+      ]
+    }
+  ]
+}

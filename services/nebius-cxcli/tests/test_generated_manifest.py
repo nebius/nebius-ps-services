@@ -153,6 +153,47 @@ def test_build_generated_manifest_uses_repo_relative_paths(tmp_path: Path) -> No
     assert manifest["quota"] == {}
 
 
+def test_build_generated_manifest_rejects_target_ref_that_differs_from_instance_id(
+    tmp_path: Path,
+) -> None:
+    paths = _project_paths(tmp_path)
+    target = _mk8s_target(paths, target_ref="cluster1")
+    target["target_ref"] = "cluster2"
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"Generated manifest deploy\.targets\[0\]\.target_ref "
+            r"must equal instance_id 'cluster1'"
+        ),
+    ):
+        build_generated_manifest(
+            config=_runtime_payload(),
+            paths=paths,
+            targets=[target],
+            required_component_outputs=[],
+        )
+
+
+def test_build_generated_manifest_rejects_target_missing_target_ref(
+    tmp_path: Path,
+) -> None:
+    paths = _project_paths(tmp_path)
+    target = _mk8s_target(paths, target_ref="cluster1")
+    target.pop("target_ref")
+
+    with pytest.raises(
+        ValueError,
+        match=r"Generated manifest deploy\.targets\[0\]\.target_ref is required",
+    ):
+        build_generated_manifest(
+            config=_runtime_payload(),
+            paths=paths,
+            targets=[target],
+            required_component_outputs=[],
+        )
+
+
 def test_write_load_and_runtime_config_round_trip(tmp_path: Path) -> None:
     paths = _project_paths(tmp_path)
 

@@ -1,0 +1,204 @@
+{
+  "uid": "cxcli-kubernetes-metrics",
+  "title": "Nebius Kubernetes Metrics",
+  "tags": [
+    "nebius",
+    "cxcli",
+    "kubernetes"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 41,
+  "version": 1,
+  "refresh": "10s",
+  "time": {
+    "from": "now-5m",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "Cluster",
+        "label": "Cluster",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "nebius-user-metrics"
+        },
+        "query": "query_result(count by (\"k8s.cluster.id\") (up))",
+        "definition": "query_result(count by (\"k8s.cluster.id\") (up))",
+        "regex": "/k8s\\.cluster\\.id=\"([^\"]+)\"/",
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".+",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "Node",
+        "label": "Node",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "nebius-user-metrics"
+        },
+        "query": "label_values(container_cpu_usage_seconds_total{\"k8s.cluster.id\"=~\"$Cluster\"}, kubernetes_io_hostname)",
+        "definition": "label_values(container_cpu_usage_seconds_total{\"k8s.cluster.id\"=~\"$Cluster\"}, kubernetes_io_hostname)",
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".+",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "GpuNode",
+        "label": "GPU Node",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "nebius-user-metrics"
+        },
+        "query": "label_values(up{\"k8s.cluster.id\"=~\"$Cluster\",service=\"nvidia-dcgm-exporter\"}, node)",
+        "definition": "label_values(up{\"k8s.cluster.id\"=~\"$Cluster\",service=\"nvidia-dcgm-exporter\"}, node)",
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".+",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Scrape Targets Up",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nebius-user-metrics"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (service, pod, node) (up{\"k8s.cluster.id\"=~\"$Cluster\"})",
+          "legendFormat": "{{service}} {{pod}} {{node}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "CPU Usage",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nebius-user-metrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cores"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (kubernetes_io_hostname) (rate(container_cpu_usage_seconds_total{\"k8s.cluster.id\"=~\"$Cluster\",kubernetes_io_hostname=~\"$Node\",container!=\"\",container!=\"POD\"}[$__rate_interval]))",
+          "legendFormat": "{{kubernetes_io_hostname}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Memory Working Set",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nebius-user-metrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (kubernetes_io_hostname) (container_memory_working_set_bytes{\"k8s.cluster.id\"=~\"$Cluster\",kubernetes_io_hostname=~\"$Node\",container!=\"\",container!=\"POD\"})",
+          "legendFormat": "{{kubernetes_io_hostname}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Container Count",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nebius-user-metrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count by (kubernetes_io_hostname) (container_memory_working_set_bytes{\"k8s.cluster.id\"=~\"$Cluster\",kubernetes_io_hostname=~\"$Node\",container!=\"\",container!=\"POD\"})",
+          "legendFormat": "{{kubernetes_io_hostname}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "DCGM Exporter Up",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nebius-user-metrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (node) (up{\"k8s.cluster.id\"=~\"$Cluster\",service=\"nvidia-dcgm-exporter\",node=~\"$GpuNode\"})",
+          "legendFormat": "{{node}}"
+        }
+      ]
+    }
+  ]
+}

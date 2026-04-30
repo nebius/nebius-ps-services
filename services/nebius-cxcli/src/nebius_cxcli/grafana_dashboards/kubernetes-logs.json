@@ -1,0 +1,123 @@
+{
+  "uid": "cxcli-kubernetes-logs",
+  "title": "Nebius Kubernetes Logs",
+  "tags": [
+    "nebius",
+    "cxcli",
+    "kubernetes",
+    "logs"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 41,
+  "version": 1,
+  "refresh": "10s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "Cluster",
+        "label": "Cluster",
+        "type": "query",
+        "datasource": {
+          "type": "loki",
+          "uid": "nebius-logs"
+        },
+        "query": "label_values({__bucket__=\"default\"}, k8s_cluster_id)",
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".+",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "namespace",
+        "label": "Namespace",
+        "type": "query",
+        "datasource": {
+          "type": "loki",
+          "uid": "nebius-logs"
+        },
+        "query": "label_values({__bucket__=\"default\", k8s_cluster_id=~\"$Cluster\"}, k8s_namespace_name)",
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".+",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "pod",
+        "label": "Pod",
+        "type": "query",
+        "datasource": {
+          "type": "loki",
+          "uid": "nebius-logs"
+        },
+        "query": "label_values({__bucket__=\"default\", k8s_cluster_id=~\"$Cluster\", k8s_namespace_name=~\"$namespace\"}, k8s_pod_name)",
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".+",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "search",
+        "label": "Search",
+        "type": "textbox",
+        "query": ".*",
+        "current": {
+          "selected": false,
+          "text": ".*",
+          "value": ".*"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "logs",
+      "title": "Pod Logs",
+      "datasource": {
+        "type": "loki",
+        "uid": "nebius-logs"
+      },
+      "gridPos": {
+        "h": 18,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{__bucket__=\"default\", k8s_cluster_id=~\"$Cluster\", k8s_namespace_name=~\"$namespace\", k8s_pod_name=~\"$pod\"} |~ \"$search\"",
+          "queryType": "range"
+        }
+      ]
+    }
+  ]
+}

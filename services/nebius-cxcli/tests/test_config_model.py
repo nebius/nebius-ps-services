@@ -168,7 +168,6 @@ def test_load_config_accepts_dynamic_payload_with_extra_chart(tmp_path: Path) ->
             "instance_id": "mk8s",
             "group": "workloads",
             "enabled": True,
-            "target_ref": "mk8s",
             "repo": "https://example.invalid/charts",
             "version": "1.0.0",
             "namespace": "runtime-app",
@@ -206,8 +205,8 @@ def test_starter_payload_names_target_bound_app_instances() -> None:
         if isinstance(item, dict) and bool(item.get("enabled"))
     }
 
-    assert charts["n8n"]["target_ref"] == "mk8s"
     assert charts["n8n"]["instance_id"] == "mk8s"
+    assert "target_ref" not in charts["n8n"]
 
 
 def test_create_writes_runtime_shape_with_selected_components(tmp_path: Path) -> None:
