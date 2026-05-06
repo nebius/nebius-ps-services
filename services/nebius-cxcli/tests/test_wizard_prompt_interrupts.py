@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from types import SimpleNamespace
 
@@ -82,6 +83,80 @@ def test_prompt_choice_override_text_prompt_qq_stops_wizard(monkeypatch) -> None
     assert should_stop is True
 
 
+def test_mk8s_gpu_stack_source_static_choices_resolve_without_provider_lookup() -> None:
+    entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="Managed Kubernetes",
+        wizard_fields={
+            "inputs.gpu_stack_source": {
+                "sources": [
+                    {
+                        "source": "static",
+                        "values": ["nebius_image", "operator_managed"],
+                    }
+                ]
+            }
+        },
+    )
+
+    choices = cli._resolve_dynamic_field_choices(
+        payload={},
+        entry=entry,
+        full_path_label="infra.components[0].inputs.gpu_stack_source",
+        provider_lookup=None,
+    )
+
+    assert [choice.value for choice in choices] == ["nebius_image", "operator_managed"]
+
+
+def test_static_wizard_choices_can_carry_operator_facing_labels() -> None:
+    entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="Managed Kubernetes",
+        wizard_fields={
+            "inputs.gpu_stack_source": {
+                "sources": [
+                    {
+                        "source": "static",
+                        "values": [
+                            {
+                                "value": "nebius_image",
+                                "label": (
+                                    "nebius_image  (Nebius GPU image includes the host "
+                                    "NVIDIA driver/toolkit; GPU Operator does not "
+                                    "install them)"
+                                ),
+                            },
+                            {
+                                "value": "operator_managed",
+                                "label": (
+                                    "operator_managed  (base OS image; GPU Operator "
+                                    "installs and manages the NVIDIA driver/toolkit)"
+                                ),
+                            },
+                        ],
+                    }
+                ]
+            }
+        },
+    )
+
+    choices = cli._resolve_dynamic_field_choices(
+        payload={},
+        entry=entry,
+        full_path_label="infra.components[0].inputs.gpu_stack_source",
+        provider_lookup=None,
+    )
+
+    assert [choice.value for choice in choices] == ["nebius_image", "operator_managed"]
+    assert choices[0].label.startswith("nebius_image  (Nebius GPU image includes")
+    assert choices[1].label.startswith("operator_managed  (base OS image")
+
+
 def test_prompt_scalar_override_abort_stops_wizard(monkeypatch) -> None:
     monkeypatch.setattr(
         cli.typer, "prompt", lambda *_args, **_kwargs: (_ for _ in ()).throw(cli.typer.Abort())
@@ -120,36 +195,245 @@ def test_prompt_scalar_override_qq_stops_wizard(monkeypatch) -> None:
     assert should_stop is True
 
 
-def test_prompt_scalar_override_parses_yaml_list(monkeypatch) -> None:
-    monkeypatch.setattr(cli.typer, "prompt", lambda *_args, **_kwargs: '["203.0.113.10/32"]')
+def test_prompt_scalar_override_parses_mysterybox_secret_list(monkeypatch) -> None:
+    secret_list = [
+        {
+            "name": "app-runtime",
+            "version_id": "n/a",
+            "payload": {"API_KEY": {"type": "text"}},
+        }
+    ]
+    monkeypatch.setattr(cli.typer, "prompt", lambda *_args, **_kwargs: json.dumps(secret_list))
 
     value, should_stop = cli._prompt_scalar_override(
-        "infra.components[0].inputs.allowed_cidrs",
+        "infra.components[0].inputs.secrets",
         [],
-        type_hint="list(string)",
+        type_hint="list(object({ name = string }))",
         required=True,
     )
 
     assert should_stop is False
-    assert value == ["203.0.113.10/32"]
+    assert value == secret_list
 
 
-def test_prompt_scalar_override_parses_yaml_mapping(monkeypatch) -> None:
+def test_prompt_scalar_override_guides_mysterybox_secret_payload_pairs(monkeypatch) -> None:
+    responses = iter(
+        [
+            "db-uname-pass",
+            "",
+            "username",
+            "",
+            "password",
+            "text",
+            "",
+            "",
+        ]
+    )
+    prompts: list[str] = []
+
+    def _prompt(message: str, **_kwargs):
+        prompts.append(message)
+        return next(responses)
+
+    monkeypatch.setattr(cli.typer, "prompt", _prompt)
+    captured: list[str] = []
+    monkeypatch.setattr(cli.console, "print", lambda message: captured.append(str(message)))
+
+    value, should_stop = cli._prompt_scalar_override(
+        "infra.components[0].inputs.secrets",
+        [],
+        type_hint='list(object({ name = string payload = map(object({ type = optional(string, "text") })) }))',
+        required=True,
+    )
+
+    assert should_stop is False
+    assert value == [
+        {
+            "name": "db-uname-pass",
+            "version_id": "n/a",
+            "kubernetes_secret_name": "db-uname-pass",
+            "payload": {
+                "USERNAME": {"type": "text"},
+                "PASSWORD": {"type": "text"},
+            },
+        }
+    ]
+    assert prompts[0] == "MysteryBox Secret name (required, q=back, qq=quit wizard)"
+    assert prompts[1] == (
+        "Kubernetes Secret name for db-uname-pass (q=back, qq=quit wizard)"
+    )
+    assert prompts[2] == "Payload key for db-uname-pass (required, q=back, qq=quit wizard)"
+    assert (
+        prompts[4]
+        == "Payload key for db-uname-pass (blank=finish Secret, q=back, qq=quit wizard)"
+    )
+    assert prompts[-1] == "MysteryBox Secret name (blank=done, q=back, qq=quit wizard)"
+    assert any("Entered USERNAME as the key." in item for item in captured)
+    assert any("Entered PASSWORD as the key." in item for item in captured)
+    assert any(
+        "Added MysteryBox Secret db-uname-pass with 2 payload key(s), syncing to Kubernetes Secret db-uname-pass."
+        in item
+        for item in captured
+    )
+
+
+def test_prompt_scalar_override_accepts_custom_mysterybox_kubernetes_secret_name(
+    monkeypatch,
+) -> None:
+    responses = iter(["db-uname-pass", "app-db-creds", "username", "", "", ""])
+
+    monkeypatch.setattr(cli.typer, "prompt", lambda *_args, **_kwargs: next(responses))
+    monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
+
+    value, should_stop = cli._prompt_scalar_override(
+        "infra.components[0].inputs.secrets",
+        [],
+        type_hint='list(object({ name = string payload = map(object({ type = optional(string, "text") })) }))',
+        required=True,
+    )
+
+    assert should_stop is False
+    assert value == [
+        {
+            "name": "db-uname-pass",
+            "version_id": "n/a",
+            "kubernetes_secret_name": "app-db-creds",
+            "payload": {
+                "USERNAME": {"type": "text"},
+            },
+        }
+    ]
+
+
+def test_mysterybox_guided_prompt_q_at_first_payload_key_returns_to_secret_name(
+    monkeypatch,
+) -> None:
+    responses = iter(
+        [
+            "db-username-password",
+            "",
+            "username",
+            "",
+            "password",
+            "",
+            "",
+            "apikey",
+            "",
+            "q",
+            "api-key-fixed",
+            "",
+            "apikey",
+            "",
+            "",
+            "",
+        ]
+    )
+    prompts: list[str] = []
+
+    def _prompt(message: str, **_kwargs):
+        prompts.append(message)
+        return next(responses)
+
+    monkeypatch.setattr(cli.typer, "prompt", _prompt)
+    monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
+
+    value, should_stop = cli._prompt_scalar_override(
+        "infra.components[0].inputs.secrets",
+        [],
+        type_hint='list(object({ name = string payload = map(object({ type = optional(string, "text") })) }))',
+        required=True,
+    )
+
+    assert should_stop is False
+    assert value == [
+        {
+            "name": "db-username-password",
+            "version_id": "n/a",
+            "kubernetes_secret_name": "db-username-password",
+            "payload": {
+                "USERNAME": {"type": "text"},
+                "PASSWORD": {"type": "text"},
+            },
+        },
+        {
+            "name": "api-key-fixed",
+            "version_id": "n/a",
+            "kubernetes_secret_name": "api-key-fixed",
+            "payload": {
+                "APIKEY": {"type": "text"},
+            },
+        },
+    ]
+    apikey_prompt_index = prompts.index(
+        "Payload key for apikey (required, q=back, qq=quit wizard)"
+    )
+    assert prompts[apikey_prompt_index + 1] == (
+        "MysteryBox Secret name (blank=done, q=back, qq=quit wizard)"
+    )
+
+
+def test_mysterybox_guided_prompt_q_at_payload_type_returns_to_payload_key(
+    monkeypatch,
+) -> None:
+    responses = iter(["runtime", "", "token", "q", "api_token", "", "", ""])
+    prompts: list[str] = []
+
+    def _prompt(message: str, **_kwargs):
+        prompts.append(message)
+        return next(responses)
+
+    monkeypatch.setattr(cli.typer, "prompt", _prompt)
+    monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
+
+    value, should_stop = cli._prompt_scalar_override(
+        "infra.components[0].inputs.secrets",
+        [],
+        type_hint='list(object({ name = string payload = map(object({ type = optional(string, "text") })) }))',
+        required=True,
+    )
+
+    assert should_stop is False
+    assert value == [
+        {
+            "name": "runtime",
+            "version_id": "n/a",
+            "kubernetes_secret_name": "runtime",
+            "payload": {
+                "API_TOKEN": {"type": "text"},
+            },
+        }
+    ]
+    assert prompts.count("Payload key for runtime (required, q=back, qq=quit wizard)") == 2
+
+
+def test_prompt_scalar_override_parses_yaml_list(monkeypatch) -> None:
     monkeypatch.setattr(
         cli.typer,
         "prompt",
-        lambda *_args, **_kwargs: '{"app":{"name":"app-runtime","payload_keys":["API_KEY"]}}',
+        lambda *_args, **_kwargs: (
+            '[{"name":"app-runtime","version_id":"n/a","payload":{"API_KEY":{"type":"text"}}}]'
+        ),
     )
 
     value, should_stop = cli._prompt_scalar_override(
         "infra.components[0].inputs.secrets",
         {},
-        type_hint="map(object({}))",
+        type_hint="list(object({}))",
         required=True,
     )
 
     assert should_stop is False
-    assert value == {"app": {"name": "app-runtime", "payload_keys": ["API_KEY"]}}
+    assert value == [
+        {
+            "name": "app-runtime",
+            "version_id": "n/a",
+            "payload": {
+                "API_KEY": {
+                    "type": "text",
+                },
+            },
+        },
+    ]
 
 
 def test_prompt_component_with_checkboxes_tty_cancel_quits_wizard(monkeypatch) -> None:
@@ -249,6 +533,34 @@ def test_prompt_component_with_checkboxes_tty_uses_key_navigation_without_contro
     assert "< Back" not in titles
     assert "< Quit wizard" not in titles
     assert "q=back; qq=quit" in str(captured["instruction"])
+
+
+def test_resolve_component_ids_prints_interactive_selection_summary(monkeypatch) -> None:
+    rendered_messages: list[str] = []
+    monkeypatch.setattr(cli, "_prompt_component_with_checkboxes", lambda **_kwargs: ["mk8s"])
+    monkeypatch.setattr(
+        cli.console,
+        "print",
+        lambda *args, **_kwargs: rendered_messages.append(" ".join(str(arg) for arg in args)),
+    )
+    entries = (
+        ComponentEntry(
+            id="mk8s",
+            scope="infra",
+            config_path="infra.mk8s",
+            description="mk8s",
+        ),
+    )
+
+    selected = cli._resolve_component_ids(
+        scope="infra",
+        raw_values=None,
+        interactive=True,
+        entries=entries,
+    )
+
+    assert selected == {"mk8s"}
+    assert any("Selected infra components: mk8s" in message for message in rendered_messages)
 
 
 def test_wizard_continue_phase_q_backs_when_enabled(monkeypatch) -> None:
@@ -635,6 +947,53 @@ def test_maybe_print_selected_gpu_preset_guidance_for_vm_single_gpu_shape(monkey
     assert any("not production distributed training" in message for message in captured)
 
 
+def test_maybe_print_mysterybox_secrets_prompt_guidance_marks_values_runtime_only(
+    monkeypatch,
+) -> None:
+    captured: list[str] = []
+    monkeypatch.setattr(
+        cli.console,
+        "print",
+        lambda *args, **_kwargs: captured.append(" ".join(str(arg) for arg in args)),
+    )
+    entry = ComponentEntry(
+        id="mysterybox",
+        scope="infra",
+        config_path="infra.components.mysterybox",
+        description="MysteryBox",
+    )
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mysterybox",
+                    "instance_id": "secretstore-alpha",
+                    "enabled": True,
+                    "inputs": {},
+                }
+            ]
+        }
+    }
+    emitted: set[str] = set()
+
+    cli._maybe_print_mysterybox_secrets_prompt_guidance(
+        payload=payload,
+        entry=entry,
+        full_path_label="infra.components[0].inputs.secrets",
+        emitted_guidance=emitted,
+    )
+    cli._maybe_print_mysterybox_secrets_prompt_guidance(
+        payload=payload,
+        entry=entry,
+        full_path_label="infra.components[0].inputs.secrets",
+        emitted_guidance=emitted,
+    )
+
+    assert len(captured) == 1
+    assert "enter Secret names and payload keys only" in captured[0]
+    assert "TF_VAR_secretstore_alpha_payload_values" in captured[0]
+
+
 def test_maybe_clear_gpu_cluster_fabric_after_shape_change_for_vm(monkeypatch) -> None:
     captured: list[str] = []
     monkeypatch.setattr(cli.console, "print", lambda message: captured.append(str(message)))
@@ -709,6 +1068,62 @@ def test_prompt_scalar_override_uses_blank_default_for_empty_optional_map(monkey
     assert captured["default"] == ""
     assert "enter a single-line YAML/JSON value" in str(captured["text"])
     assert "blank keeps current empty map {}" in str(captured["text"])
+
+
+def test_prompt_scalar_override_accepts_comma_list_for_string_sequences(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_prompt(text: str, default=None):
+        captured["text"] = text
+        captured["default"] = default
+        return "ns1, ns2"
+
+    monkeypatch.setattr(cli.typer, "prompt", _fake_prompt)
+
+    value, should_stop = cli._prompt_scalar_override(
+        "deploy.targets[0].secrets.mysterybox.sync_namespaces",
+        [],
+        type_hint="list(string)",
+        required=False,
+    )
+
+    assert should_stop is False
+    assert value == ["ns1", "ns2"]
+    assert captured["default"] == ""
+    assert "enter a comma-separated list" in str(captured["text"])
+    assert "enter a single-line YAML/JSON value" not in str(captured["text"])
+
+
+def test_prompt_scalar_override_accepts_comma_list_for_string_sets(monkeypatch) -> None:
+    monkeypatch.setattr(cli.typer, "prompt", lambda *_args, **_kwargs: "zone-a,zone-b")
+
+    value, should_stop = cli._prompt_scalar_override(
+        "infra.components[0].inputs.zones",
+        [],
+        type_hint="set(string)",
+        required=False,
+    )
+
+    assert should_stop is False
+    assert value == ["zone-a", "zone-b"]
+
+
+def test_prompt_scalar_override_reprompts_invalid_string_sequence(monkeypatch) -> None:
+    prompts = iter(["ns1,,ns2", "ns1,ns2"])
+    messages: list[str] = []
+    monkeypatch.setattr(cli.typer, "prompt", lambda *_args, **_kwargs: next(prompts))
+    monkeypatch.setattr(cli.console, "print", lambda message: messages.append(str(message)))
+
+    value, should_stop = cli._prompt_scalar_override(
+        "deploy.targets[0].secrets.mysterybox.sync_namespaces",
+        [],
+        type_hint="list(string)",
+        required=False,
+    )
+
+    assert should_stop is False
+    assert value == ["ns1", "ns2"]
+    assert any("Expected a comma-separated list of strings." in message for message in messages)
 
 
 def test_provider_fallback_warning_for_optional_field_mentions_blank_is_allowed() -> None:

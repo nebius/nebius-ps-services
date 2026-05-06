@@ -11,6 +11,8 @@ from collections.abc import Callable, Mapping
 from re import Pattern
 from typing import Any
 
+from .component_instances import component_instance_id, component_type_id
+
 _LINUX_USER_PATTERN = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 
 
@@ -62,7 +64,21 @@ def validate_component_runtime_rules(
 
     for entry in component_entries("infra"):
         if getattr(entry, "validation_profile", "") == "mysterybox":
-            _validate_mysterybox(payload, get_path, as_text, entry.config_path, env_var_pattern)
+            _validate_mysterybox(
+                payload,
+                get_path,
+                as_text,
+                entry.config_path,
+                id_pattern,
+                component_id=entry.id,
+            )
+
+    grafana_component_ids = {
+        entry.id
+        for entry in component_entries("apps")
+        if entry.id == "grafana" or str(entry.chart_name or "").strip().lower() == "grafana"
+    }
+    _validate_grafana_replicas(payload, grafana_component_ids)
 
 
 def _validate_postgresql(
@@ -480,52 +496,171 @@ def _validate_mysterybox(
     get_path: Callable,
     as_text: Callable,
     base: str,
-    env_var_pattern: Pattern[str],
+    id_pattern: Pattern[str],
+    component_id: str,
 ) -> None:
-    mysterybox_enabled = bool(get_path(payload, f"{base}.enabled", False))
-    mysterybox_secrets = get_path(payload, f"{base}.secrets", [])
-    if mysterybox_enabled and (not isinstance(mysterybox_secrets, list) or not mysterybox_secrets):
-        raise ValueError(f"{base}.enabled=true requires {base}.secrets")
-
-    if isinstance(mysterybox_secrets, list):
-        for secret in mysterybox_secrets:
-            if not isinstance(secret, Mapping):
+    infra = payload.get("infra")
+    components = infra.get("components") if isinstance(infra, Mapping) else None
+    rows: list[tuple[str, Mapping[str, Any]]] = []
+    if isinstance(components, list):
+        for row in components:
+            if not isinstance(row, Mapping) or component_type_id(row) != component_id:
                 continue
-            scope = as_text(secret.get("scope"))
-            k8s_sync_enabled = bool(get_path(secret, "k8s_sync.enabled", False))
-            if k8s_sync_enabled and scope != "apps":
-                raise ValueError(
-                    f"{base}.secrets[].k8s_sync.enabled=true requires {base}.secrets[].scope='apps'"
-                )
-            entries = secret.get("entries", [])
-            if not isinstance(entries, list):
-                continue
-            for entry in entries:
-                if not isinstance(entry, Mapping):
-                    continue
-                env_name = as_text(entry.get("value_from_env"))
-                if env_name and not env_var_pattern.fullmatch(env_name):
-                    raise ValueError(
-                        f"{base}.secrets[].entries[].value_from_env must be an environment variable name"
-                    )
+            instance_id = component_instance_id(row)
+            label = f"infra.components[{instance_id or component_id}]"
+            rows.append((label, row))
+    if not rows:
+        infra = payload.get("infra")
+        flat_row = infra.get(component_id) if isinstance(infra, Mapping) else None
+        rows.append((base, flat_row if isinstance(flat_row, Mapping) else {}))
 
-    external_secrets_enabled = bool(
-        get_path(payload, "apps.platform.external_secrets.enabled", False)
-    )
-    external_secrets_mysterybox_enabled = bool(
-        get_path(payload, "apps.platform.external_secrets.mysterybox.enabled", False)
-    )
-    if external_secrets_enabled and external_secrets_mysterybox_enabled:
-        if not mysterybox_enabled:
-            raise ValueError(
-                f"apps.platform.external_secrets.mysterybox.enabled=true requires {base}.enabled=true"
-            )
-        has_k8s_sync = any(
-            bool(get_path(secret, "k8s_sync.enabled", False))
-            for secret in mysterybox_secrets
-            if isinstance(secret, Mapping)
+    for row_label, row in rows:
+        mysterybox_enabled = bool(row.get("enabled", False)) or bool(
+            get_path(payload, f"{base}.enabled", False)
         )
-        if not has_k8s_sync:
-            raise ValueError(
-                f"apps.platform.external_secrets.mysterybox.enabled=true requires at least one {base}.secrets[].k8s_sync.enabled=true entry"
+        inputs = row.get("inputs") if isinstance(row, Mapping) else None
+        if isinstance(inputs, Mapping):
+            secrets_path = f"{row_label}.inputs.secrets"
+            mysterybox_secrets = inputs.get(
+                "secrets",
+                get_path(payload, f"{base}.inputs.secrets", []),
             )
+        else:
+            secrets_path = f"{row_label}.secrets"
+            mysterybox_secrets = row.get("secrets", get_path(payload, f"{base}.secrets", []))
+        _validate_mysterybox_secrets(
+            mysterybox_secrets,
+            enabled=mysterybox_enabled,
+            secrets_path=secrets_path,
+            enabled_label=f"{row_label}.enabled",
+            as_text=as_text,
+            id_pattern=id_pattern,
+        )
+
+
+def _validate_mysterybox_secrets(
+    mysterybox_secrets: Any,
+    *,
+    enabled: bool,
+    secrets_path: str,
+    enabled_label: str,
+    as_text: Callable,
+    id_pattern: Pattern[str],
+) -> None:
+    if isinstance(mysterybox_secrets, Mapping):
+        raise ValueError(f"{secrets_path} must be a list of secret objects")
+    if enabled and (not isinstance(mysterybox_secrets, list) or not mysterybox_secrets):
+        raise ValueError(f"{enabled_label}=true requires {secrets_path} to be a non-empty list")
+
+    if not isinstance(mysterybox_secrets, list):
+        return
+
+    seen_names: set[str] = set()
+    for secret_index, secret in enumerate(mysterybox_secrets):
+        secret_label = f"{secrets_path}[{secret_index}]"
+        if not isinstance(secret, Mapping):
+            raise ValueError(f"{secret_label} must be a mapping")
+        supported_keys = {
+            "name",
+            "description",
+            "labels",
+            "version_id",
+            "kubernetes_secret_name",
+            "payload",
+        }
+        unknown_keys = sorted(str(key) for key in secret if str(key) not in supported_keys)
+        if unknown_keys:
+            raise ValueError(
+                f"{secret_label} has unsupported field(s): " + ", ".join(unknown_keys)
+            )
+        secret_name = as_text(secret.get("name"))
+        if not secret_name:
+            raise ValueError(f"{secret_label}.name is required")
+        if secret_name in seen_names:
+            raise ValueError(f"{secrets_path} names must be unique")
+        seen_names.add(secret_name)
+        kubernetes_secret_name = as_text(secret.get("kubernetes_secret_name"))
+        if kubernetes_secret_name and not id_pattern.fullmatch(kubernetes_secret_name):
+            raise ValueError(
+                f"{secret_label}.kubernetes_secret_name must be a Kubernetes Secret name"
+            )
+        version_id = as_text(secret.get("version_id"))
+        if (
+            version_id
+            and version_id.lower() != "n/a"
+            and not re.fullmatch(r"mbsecver-[a-z0-9]+", version_id)
+        ):
+            raise ValueError(
+                f"{secret_label}.version_id must be empty, n/a, or a MysteryBox "
+                "version ID starting with mbsecver-"
+            )
+        payload = secret.get("payload")
+        if not isinstance(payload, Mapping) or not payload:
+            raise ValueError(f"{secret_label}.payload must be a non-empty mapping")
+        for payload_key, payload_entry in payload.items():
+            entry_label = f"{secret_label}.payload.{payload_key}"
+            if not as_text(payload_key):
+                raise ValueError(f"{secret_label}.payload keys must be non-empty")
+            if not isinstance(payload_entry, Mapping):
+                raise ValueError(f"{entry_label} must be a mapping")
+            unknown_payload_keys = sorted(str(key) for key in payload_entry if str(key) != "type")
+            if unknown_payload_keys:
+                raise ValueError(
+                    f"{entry_label} has unsupported field(s): " + ", ".join(unknown_payload_keys)
+                )
+            payload_type = (as_text(payload_entry.get("type")) or "text").lower()
+            if payload_type not in {"text", "file"}:
+                raise ValueError(f"{entry_label}.type must be one of: text, file")
+
+
+def _validate_grafana_replicas(
+    payload: Mapping[str, Any],
+    grafana_component_ids: set[str],
+) -> None:
+    if not grafana_component_ids:
+        return
+    apps = payload.get("apps")
+    charts = apps.get("charts") if isinstance(apps, Mapping) else None
+    if not isinstance(charts, list):
+        return
+
+    for index, row in enumerate(charts):
+        if not isinstance(row, Mapping):
+            continue
+        component_id = component_type_id(row)
+        if component_id not in grafana_component_ids or not bool(row.get("enabled", False)):
+            continue
+        values = row.get("values")
+        if not isinstance(values, Mapping):
+            continue
+        replicas = _coerce_int(values.get("replicas"), default=1)
+        if replicas <= 1 or _grafana_uses_shared_database(values):
+            continue
+        instance_id = component_instance_id(row)
+        label = component_id
+        if instance_id and instance_id != component_id:
+            label = f"{component_id}@{instance_id}"
+        raise ValueError(
+            f"apps.charts[{label or index}].values.replicas > 1 requires a shared "
+            "Grafana database configured with grafana.ini.database.type set to "
+            "mysql, postgres, or postgresql. The bundled default uses per-pod "
+            "SQLite/emptyDir storage, so Grafana must stay at one replica."
+        )
+
+
+def _grafana_uses_shared_database(values: Mapping[str, Any]) -> bool:
+    allowed_types = {"mysql", "postgres", "postgresql"}
+    grafana_ini = values.get("grafana.ini")
+    if isinstance(grafana_ini, Mapping):
+        database = grafana_ini.get("database")
+        if isinstance(database, Mapping):
+            database_type = str(database.get("type") or "").strip().lower()
+            if database_type in allowed_types:
+                return True
+
+    env = values.get("env")
+    if isinstance(env, Mapping):
+        database_type = str(env.get("GF_DATABASE_TYPE") or "").strip().lower()
+        if database_type in allowed_types:
+            return True
+    return False

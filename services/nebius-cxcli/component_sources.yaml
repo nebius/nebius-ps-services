@@ -70,6 +70,7 @@ components:
       status:
         kind: nebius.mysterybox.secret
         name_input: secrets
+      wizard_profile: mysterybox
     vm:
       source:
         portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/vm?ref=main
@@ -189,9 +190,10 @@ components:
       defaults: {}
     grafana:
       # Official Grafana community Helm chart and Docker image. cxcli renders
-      # chart references, deploy-time Kubernetes Secrets, and small
-      # cxcli-owned Kubernetes dashboards; Nebius service dashboards stay
-      # Grafana.com imports.
+      # chart references, deploy-time Kubernetes Secrets, and cxcli-owned
+      # Kubernetes dashboards. Keep only a small Nebius service-dashboard import
+      # as an example; cluster-scoped MK8s dashboards must use cxcli-owned JSON
+      # so their variables can be filtered by the exact MK8s cluster ID.
       # Ref: https://github.com/grafana-community/helm-charts/tree/main/charts/grafana
       source:
         portable:
@@ -246,6 +248,7 @@ components:
                 type: Kubernetes
                 kubernetes:
                   envoyDeployment:
+                    replicas: 2
                     pod:
                       affinity: *nebius_cpu_only_node_affinity
                   envoyService:
@@ -294,47 +297,21 @@ components:
                   path: /var/lib/grafana/dashboards/nebius-kubernetes
         values.dashboards:
           # Nebius service dashboards use the service-provider Monitoring
-          # service-metrics datasource name.
+          # service-metrics datasource name. Keep one imported example here;
+          # cxcli-owned cluster-scoped dashboards live under nebius-kubernetes.
           nebius:
             nebius-disk:
               gnetId: 23425
               revision: 2
               uid: nebius-disk-user-stats
               datasource: Nebius Services
-            nebius-gpu:
-              gnetId: 23423
-              revision: 2
-              uid: nebius-gpu
-              datasource: Nebius Services
-            nebius-managed-postgres:
-              gnetId: 23525
-              revision: 1
-              uid: nebius-postgresql
-              datasource: Nebius Services
-            nebius-object-storage:
-              gnetId: 23392
-              revision: 6
-              uid: nebius-object-storage
-              datasource: Nebius Services
-            nebius-observability-platform:
-              gnetId: 24246
-              revision: 2
-              uid: nebius-observability
-              datasource: Nebius Services
-            nebius-shared-filesystem:
-              gnetId: 23313
-              revision: 5
-              uid: nebius-shared-filesystem
-              datasource: Nebius Services
-            nebius-shared-filesystem-extended:
-              gnetId: 25123
-              revision: 1
-              uid: nebius-shared-filesystem-extended
-              datasource: Nebius Services
           nebius-kubernetes:
             kubernetes-cluster-monitoring:
               datasource: Nebius User Metrics
               json_file: grafana_dashboards/kubernetes-metrics.json
+            kubernetes-gpu:
+              datasource: Nebius Services
+              json_file: grafana_dashboards/kubernetes-gpu.json
             kubernetes-logs-from-loki:
               datasource: Nebius Logs
               json_file: grafana_dashboards/kubernetes-logs.json
@@ -361,6 +338,7 @@ components:
       # values.deployment.replicas: 2
       defaults:
         values.config.envoyGateway.provider.type: Kubernetes
+        values.deployment.replicas: 2
         values.deployment.pod.affinity: *nebius_cpu_only_node_affinity
         values.certgen.job.affinity: *nebius_cpu_only_node_affinity
     cert-manager:
@@ -378,8 +356,11 @@ components:
         name: cert-manager
       defaults:
         values.crds.enabled: true
+        values.replicaCount: 2
         values.affinity: *nebius_cpu_only_node_affinity
+        values.webhook.replicaCount: 2
         values.webhook.affinity: *nebius_cpu_only_node_affinity
+        values.cainjector.replicaCount: 2
         values.cainjector.affinity: *nebius_cpu_only_node_affinity
         values.startupapicheck.affinity: *nebius_cpu_only_node_affinity
     external-dns:
@@ -402,7 +383,7 @@ components:
         portable:
           repo: https://charts.external-secrets.io
           chart: external-secrets
-          version: 2.0.1
+          version: 2.4.1
       ui:
         title: External Secrets Operator
         group: Platform
@@ -411,7 +392,11 @@ components:
         namespace: external-secrets
         name: external-secrets
       defaults:
+        values.replicaCount: 2
+        values.leaderElect: true
         values.global.affinity: *nebius_cpu_only_node_affinity
+        values.webhook.replicaCount: 2
+        values.certController.replicaCount: 2
     n8n:
       source:
         portable:

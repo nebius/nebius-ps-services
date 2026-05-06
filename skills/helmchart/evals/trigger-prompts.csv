@@ -1,0 +1,8 @@
+id,should_trigger,prompt
+helm-01,true,"Review this Helm chart for production readiness"
+helm-02,true,"Harden the templates and values.yaml for this chart"
+helm-03,true,"Add values.schema.json and chart linting"
+helm-04,true,"Fix this Chart.yaml and templates/_helpers.tpl"
+helm-05,false,"Review this raw Kubernetes Deployment YAML"
+helm-06,false,"Optimize this Dockerfile"
+helm-07,false,"Refactor this Kustomize overlay"

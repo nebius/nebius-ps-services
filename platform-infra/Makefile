@@ -1,4 +1,5 @@
 MODULES := $(sort $(wildcard modules/*))
+EXAMPLE_ROOTS := $(sort $(dir $(wildcard modules/*/examples/*/versions.tf)))
 
 .PHONY: fmt validate test test-all
 
@@ -13,6 +14,11 @@ validate:
 			terraform -chdir=$$m validate; \
 			find $$m -maxdepth 1 -name '.terraform.lock.hcl' -delete; \
 		fi; \
+	done
+	@for root in $(EXAMPLE_ROOTS); do \
+		echo "==> validate $$root"; \
+		terraform -chdir=$$root init -backend=false -upgrade=false -lockfile=readonly >/dev/null; \
+		terraform -chdir=$$root validate; \
 	done
 
 test:

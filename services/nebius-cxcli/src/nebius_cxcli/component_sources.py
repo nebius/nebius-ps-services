@@ -51,7 +51,7 @@ GRAFANA_CLI_SETTING_KEYS = frozenset(
         "logout-timeout",
         "orgId",
         "read_token",
-        "report_dashboards",
+        "dashboard_signals",
     }
 )
 LINUX_USER_NAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
@@ -425,7 +425,7 @@ class AppObservabilitySettings:
 
 
 @dataclass(frozen=True)
-class GrafanaReportDashboardBinding:
+class GrafanaDashboardSignalBinding:
     signal: str
     folder: str
     dashboard: str
@@ -485,7 +485,7 @@ class GrafanaCliSettings:
     logout_timeout: str = "20m"
     org_id: int = 1
     read_token: GrafanaReadTokenSecretSpec = GrafanaReadTokenSecretSpec()
-    report_dashboards: tuple[GrafanaReportDashboardBinding, ...] = ()
+    dashboard_signals: tuple[GrafanaDashboardSignalBinding, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -2450,11 +2450,11 @@ def _parse_app_observability_settings(
     return AppObservabilitySettings(metric_targets=metric_targets)
 
 
-def _parse_grafana_report_dashboard_bindings(
+def _parse_grafana_dashboard_signal_bindings(
     raw: Any,
     *,
     field_label: str,
-) -> tuple[GrafanaReportDashboardBinding, ...]:
+) -> tuple[GrafanaDashboardSignalBinding, ...]:
     if raw is None:
         return ()
     if not isinstance(raw, dict):
@@ -2463,7 +2463,7 @@ def _parse_grafana_report_dashboard_bindings(
     unknown_signals = sorted(str(key) for key in raw if str(key) not in valid_signals)
     if unknown_signals:
         raise ValueError(f"{field_label} has unsupported signal(s): " + ", ".join(unknown_signals))
-    bindings: list[GrafanaReportDashboardBinding] = []
+    bindings: list[GrafanaDashboardSignalBinding] = []
     for signal, item in raw.items():
         item_label = f"{field_label}.{signal}"
         ref = _as_text(item)
@@ -2475,7 +2475,7 @@ def _parse_grafana_report_dashboard_bindings(
         if not folder or not dashboard or "/" in dashboard:
             raise ValueError(f"{item_label} must use '<folder>/<dashboard>'")
         bindings.append(
-            GrafanaReportDashboardBinding(
+            GrafanaDashboardSignalBinding(
                 signal=str(signal),
                 folder=folder,
                 dashboard=dashboard,
@@ -2690,9 +2690,9 @@ def _parse_grafana_cli_settings(
             raw.get("read_token"),
             field_label=f"{field_label}.read_token",
         ),
-        report_dashboards=_parse_grafana_report_dashboard_bindings(
-            raw.get("report_dashboards"),
-            field_label=f"{field_label}.report_dashboards",
+        dashboard_signals=_parse_grafana_dashboard_signal_bindings(
+            raw.get("dashboard_signals"),
+            field_label=f"{field_label}.dashboard_signals",
         ),
     )
 
@@ -2866,7 +2866,7 @@ def _validate_grafana_dashboard_sources(
     defaults: tuple[ComponentDefault, ...],
     grafana: GrafanaCliSettings,
 ) -> dict[tuple[str, str], _GrafanaDashboardSource]:
-    if not grafana.datasources and not grafana.report_dashboards:
+    if not grafana.datasources and not grafana.dashboard_signals:
         return {}
 
     resolved: dict[tuple[str, str], _GrafanaDashboardSource] = {}
@@ -2935,20 +2935,20 @@ def _validate_grafana_dashboard_sources(
     return resolved
 
 
-def _validate_grafana_report_dashboard_bindings(
+def _validate_grafana_dashboard_signal_bindings(
     *,
     component_id: str,
     defaults: tuple[ComponentDefault, ...],
     grafana: GrafanaCliSettings,
 ) -> GrafanaCliSettings:
-    resolved_bindings: list[GrafanaReportDashboardBinding] = []
+    resolved_bindings: list[GrafanaDashboardSignalBinding] = []
     dashboard_sources = _validate_grafana_dashboard_sources(
         component_id=component_id,
         defaults=defaults,
         grafana=grafana,
     )
-    for binding in grafana.report_dashboards:
-        field_label = f"components.apps.{component_id}.cli.report_dashboards.{binding.signal}"
+    for binding in grafana.dashboard_signals:
+        field_label = f"components.apps.{component_id}.cli.dashboard_signals.{binding.signal}"
         source = dashboard_sources.get((binding.folder, binding.dashboard))
         if source is None:
             raise ValueError(
@@ -2956,7 +2956,7 @@ def _validate_grafana_report_dashboard_bindings(
                 f"{binding.dashboard}, but that dashboard is not declared in defaults"
             )
         resolved_bindings.append(
-            GrafanaReportDashboardBinding(
+            GrafanaDashboardSignalBinding(
                 signal=binding.signal,
                 folder=binding.folder,
                 dashboard=binding.dashboard,
@@ -2973,7 +2973,7 @@ def _validate_grafana_report_dashboard_bindings(
         logout_timeout=grafana.logout_timeout,
         org_id=grafana.org_id,
         read_token=grafana.read_token,
-        report_dashboards=tuple(resolved_bindings),
+        dashboard_signals=tuple(resolved_bindings),
     )
 
 
@@ -4034,7 +4034,7 @@ def _parse_sources_payload(
             chart_version=_as_text(portable_source.version),
             field_label=f"components.apps.{component_id}.cli.mk8s_gpu_policy",
         )
-        grafana = _validate_grafana_report_dashboard_bindings(
+        grafana = _validate_grafana_dashboard_signal_bindings(
             component_id=component_id,
             defaults=defaults,
             grafana=grafana,

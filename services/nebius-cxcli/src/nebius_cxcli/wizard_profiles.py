@@ -36,12 +36,19 @@ def _compute_platform_and_preset_fields(
     }
 
 
-def _static_sources(*values: str) -> dict[str, Any]:
+def _static_sources(*values: str | tuple[str, str]) -> dict[str, Any]:
+    normalized: list[str | dict[str, str]] = []
+    for item in values:
+        if isinstance(item, tuple):
+            value, label = item
+            normalized.append({"value": value, "label": label})
+        else:
+            normalized.append(item)
     return {
         "sources": [
             {
                 "source": "static",
-                "values": list(values),
+                "values": normalized,
             }
         ]
     }
@@ -86,6 +93,22 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
                 "auto_select_single": True,
             }
         },
+        "inputs.gpu_stack_source": _static_sources(
+            (
+                "nebius_image",
+                (
+                    "nebius_image  (Nebius GPU image includes the host "
+                    "NVIDIA driver/toolkit; GPU Operator does not install them)"
+                ),
+            ),
+            (
+                "operator_managed",
+                (
+                    "operator_managed  (base OS image; GPU Operator installs "
+                    "and manages the NVIDIA driver/toolkit)"
+                ),
+            ),
+        ),
         "inputs.cpu_nodes_os": {
             "options": {
                 "from": "mk8s_node_group_os_values",
@@ -129,6 +152,41 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
                 "from": "mk8s_boot_disk_types",
                 "auto_select_first": True,
             }
+        },
+        "deploy.targets[].secrets.mysterybox.enabled": {
+            "default": True,
+            "materialize_default": True,
+        },
+        "deploy.targets[].secrets.mysterybox.store_name": {
+            "default": "nebius-mysterybox-shared",
+            "prompt": False,
+        },
+        "deploy.targets[].secrets.mysterybox.api_domain": {
+            "default": "api.nebius.cloud:443",
+            "prompt": False,
+        },
+        "deploy.targets[].secrets.mysterybox.credentials_secret.name": {
+            "default": "nebius-mysterybox-shared-creds",
+            "prompt": False,
+        },
+        "deploy.targets[].secrets.mysterybox.credentials_secret.namespace": {
+            "default": "external-secrets",
+            "prompt": False,
+        },
+        "deploy.targets[].secrets.mysterybox.credentials_secret.key": {
+            "default": "credentials.json",
+            "prompt": False,
+        },
+        "deploy.targets[].secrets.mysterybox.allow_all_namespaces": {
+            "default": True,
+            "materialize_default": True,
+        },
+        "deploy.targets[].secrets.mysterybox.sync_namespaces": {
+            "default": ["default"],
+            "type_hint": "list(string)",
+            "prompt_complex": True,
+            "materialize_default": True,
+            "required": True,
         },
         **_suppressed_prompt_fields(
             "inputs.mk8s_cluster_overrides",
@@ -222,6 +280,14 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
     "object-storage": {
         "inputs.versioning_policy": _static_sources("DISABLED", "ENABLED", "SUSPENDED"),
         "inputs.object_audit_logging": _static_sources("NONE", "MUTATE_ONLY", "ALL"),
+    },
+    "mysterybox": {
+        "inputs.secrets": {
+            "type_hint": "list(object({}))",
+            "prompt_complex": True,
+            "required": True,
+        },
+        **_suppressed_prompt_fields("inputs.payload_values"),
     },
 }
 

@@ -17,18 +17,75 @@ def test_bundled_metrics_dashboard_contract_matches_nebius_user_metrics_labels()
     contract = dashboard_validation._prometheus_contract(_dashboard("kubernetes-metrics.json"))
 
     assert contract.labels_by_metric["container_cpu_usage_seconds_total"] == {
-        "container",
+        "id",
         "k8s.cluster.id",
         "kubernetes_io_hostname",
+        "pod",
     }
     assert contract.labels_by_metric["container_memory_working_set_bytes"] == {
-        "container",
+        "k8s.cluster.id",
+        "kubernetes_io_hostname",
+        "pod",
+    }
+    assert contract.labels_by_metric["container_network_receive_bytes_total"] == {
+        "interface",
         "k8s.cluster.id",
         "kubernetes_io_hostname",
     }
-    assert {"k8s.cluster.id", "node", "service"}.issubset(contract.labels_by_metric["up"])
-    assert 'query_result(count by ("k8s.cluster.id") (up))' in contract.queries
+    assert contract.labels_by_metric["container_network_transmit_bytes_total"] == {
+        "interface",
+        "k8s.cluster.id",
+        "kubernetes_io_hostname",
+    }
+    assert 'query_result(count by ("k8s.cluster.id") (container_cpu_usage_seconds_total))' in (
+        contract.queries
+    )
     assert any("$__rate_interval" in query for query in contract.queries)
+
+
+def test_bundled_gpu_dashboard_contract_matches_nebius_service_metrics_labels() -> None:
+    dashboard = _dashboard("kubernetes-gpu.json")
+    contract = dashboard_validation._prometheus_contract(dashboard)
+
+    for metric in (
+        "DCGM_FI_DEV_FB_FREE",
+        "DCGM_FI_DEV_FB_USED",
+        "DCGM_FI_DEV_GPU_TEMP",
+        "DCGM_FI_DEV_GPU_UTIL",
+        "DCGM_FI_DEV_MEM_CLOCK",
+        "DCGM_FI_DEV_POWER_USAGE",
+        "DCGM_FI_DEV_SM_CLOCK",
+    ):
+        assert contract.labels_by_metric[metric] == {
+            "instance_id",
+            "job",
+            "mk8s_cluster_id",
+            "uuid",
+        }
+    assert (
+        'query_result(count by (mk8s_cluster_id) '
+        '(DCGM_FI_DEV_GPU_UTIL{job="nebius-observability-agent"}))'
+    ) in contract.queries
+    assert any(
+        "avg by (instance_id, uuid) (DCGM_FI_DEV_GPU_UTIL" in query
+        for query in contract.queries
+    )
+    assert any(
+        "avg by (instance_id, uuid) (DCGM_FI_DEV_POWER_USAGE" in query
+        for query in contract.queries
+    )
+    assert any(
+        "avg by (instance_id, uuid) (DCGM_FI_DEV_GPU_TEMP" in query
+        for query in contract.queries
+    )
+    timeseries_legends = [
+        target.get("legendFormat", "")
+        for panel in dashboard["panels"]
+        if panel.get("type") == "timeseries"
+        for target in panel.get("targets", [])
+    ]
+    assert timeseries_legends
+    assert set(timeseries_legends) == {"{{uuid}} {{instance_id}}"}
 
 
 def test_bundled_logs_dashboard_contract_matches_nebius_loki_labels() -> None:
@@ -58,13 +115,8 @@ def test_bundled_grafana_contracts_cover_all_catalog_dashboards() -> None:
 
     assert set(contracts) == {
         "nebius/nebius-disk",
-        "nebius/nebius-gpu",
-        "nebius/nebius-managed-postgres",
-        "nebius/nebius-object-storage",
-        "nebius/nebius-observability-platform",
-        "nebius/nebius-shared-filesystem",
-        "nebius/nebius-shared-filesystem-extended",
         "nebius-kubernetes/kubernetes-cluster-monitoring",
+        "nebius-kubernetes/kubernetes-gpu",
         "nebius-kubernetes/kubernetes-logs-from-loki",
         "nebius-kubernetes/kubernetes-traces",
     }
@@ -74,6 +126,9 @@ def test_bundled_grafana_contracts_cover_all_catalog_dashboards() -> None:
     assert contracts["nebius/nebius-disk"].signal == "dashboard"
     assert contracts["nebius/nebius-disk"].dashboard_uid == "nebius-disk-user-stats"
     assert contracts["nebius/nebius-disk"].gnet_id == 23425
+    assert contracts["nebius-kubernetes/kubernetes-gpu"].signal == "dashboard"
+    assert contracts["nebius-kubernetes/kubernetes-gpu"].dashboard_uid == "cxcli-kubernetes-gpu"
+    assert contracts["nebius-kubernetes/kubernetes-gpu"].datasource.name == "Nebius Services"
 
 
 def test_dashboard_import_warning_reports_missing_live_uid(
@@ -91,7 +146,7 @@ def test_dashboard_import_warning_reports_missing_live_uid(
         dashboard_uid="cxcli-kubernetes-metrics",
     ) == [
         "Grafana dashboard UID cxcli-kubernetes-metrics is not imported yet; "
-        "run deploy or flux apply, then wait for Grafana to import the dashboard ConfigMap"
+        "run deploy or flux apply the generated bundle, then wait for Grafana to import the dashboard ConfigMap"
     ]
 
 
@@ -215,7 +270,7 @@ def test_non_report_prometheus_validation_reports_check_not_warning(monkeypatch)
 
     assert errors == []
     assert warnings == []
-    assert checks == ["Metric/label names matched; PromQL not run for non-report dashboard"]
+    assert checks == ["Metric/label names matched"]
 
 
 def test_prometheus_validation_scopes_cluster_metrics_to_target_cluster(monkeypatch) -> None:
@@ -274,6 +329,54 @@ def test_prometheus_validation_scopes_cluster_metrics_to_target_cluster(monkeypa
     ) in errors
     assert warnings == []
     assert checks == []
+
+
+def test_prometheus_validation_scopes_service_metrics_to_target_cluster(monkeypatch) -> None:
+    dashboard = _dashboard("kubernetes-gpu.json")
+    captured_series_matchers: list[str] = []
+
+    def fake_proxy_get_json(*args, **kwargs):
+        path = args[2]
+        params = kwargs["params"]
+        if path == "/api/v1/series":
+            matcher = params["match[]"][0]
+            captured_series_matchers.append(matcher)
+            return {
+                "data": [
+                    {
+                        "__name__": matcher.split("{", 1)[0],
+                        "instance_id": "computeinstance-1",
+                        "job": "nebius-observability-agent",
+                        "mk8s_cluster_id": "mk8scluster-222",
+                        "uuid": "GPU-1",
+                    }
+                ]
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr(dashboard_validation, "_proxy_get_json", fake_proxy_get_json)
+
+    errors, warnings, checks = dashboard_validation._validate_prometheus(
+        base_url="http://grafana.example",
+        datasource_uid="nebius-service-metrics",
+        datasource_name="Nebius Services",
+        username="admin",
+        password="secret",
+        dashboard=dashboard,
+        now=1000,
+        start=0,
+        missing_metric_is_error=False,
+        run_query_checks=False,
+        target_cluster_id="mk8scluster-222",
+    )
+
+    assert any(
+        matcher == 'DCGM_FI_DEV_GPU_UTIL{mk8s_cluster_id=~"mk8scluster-222"}'
+        for matcher in captured_series_matchers
+    )
+    assert errors == []
+    assert warnings == []
+    assert checks == ["Metric/label names matched"]
 
 
 def test_loki_validation_scopes_label_discovery_to_target_cluster(monkeypatch) -> None:

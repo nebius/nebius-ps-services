@@ -154,6 +154,59 @@ def test_bootstrap_ci_service_account_closes_key_sdk(monkeypatch: pytest.MonkeyP
     assert sdk.closed
 
 
+def test_bootstrap_service_account_auth_key_closes_sdk_without_s3(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeAuthPublicKeyServiceClient:
+        def __init__(self, sdk: object) -> None:
+            self.sdk = sdk
+
+    iam_v1_module = ModuleType("nebius.api.nebius.iam.v1")
+    iam_v1_module.AuthPublicKeyServiceClient = _FakeAuthPublicKeyServiceClient  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "nebius.api.nebius.iam.v1", iam_v1_module)
+
+    sdk = _CloseTrackingSDK()
+    monkeypatch.setattr(iam_bootstrap, "_init_sdk", lambda **_kwargs: sdk)
+    monkeypatch.setattr(
+        iam_bootstrap,
+        "ensure_ci_service_account_identity",
+        lambda **_kwargs: iam_bootstrap.CIIdentityEnsureResult(
+            project_id="project-123",
+            service_account_name="mysterybox-sa",
+            service_account_id="serviceaccount-mysterybox",
+            service_account_created=False,
+            roles_created=[],
+            roles_already_present=["mysterybox.payload-viewer"],
+        ),
+    )
+    monkeypatch.setattr(
+        iam_bootstrap,
+        "_create_auth_public_key",
+        lambda **_kwargs: ("publickey-mysterybox", "PRIVATE-KEY"),
+    )
+    monkeypatch.setattr(
+        iam_bootstrap,
+        "_create_object_storage_access_key",
+        lambda **_kwargs: pytest.fail("MysteryBox ESO auth must not create S3 access keys"),
+    )
+
+    result = iam_bootstrap.bootstrap_service_account_auth_key(
+        project_id="project-123",
+        service_account_name="mysterybox-sa",
+        service_account_description="runtime",
+        role_ids=["mysterybox.payload-viewer"],
+        auth_key_description="auth",
+        profile=None,
+        endpoint=None,
+        config_file=None,
+    )
+
+    assert result.service_account_name == "mysterybox-sa"
+    assert result.auth_public_key_id == "publickey-mysterybox"
+    assert result.roles_already_present == ["mysterybox.payload-viewer"]
+    assert sdk.closed
+
+
 def test_access_permits_use_group_as_parent(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_fake_access_permit_modules(monkeypatch)
     access_permits = _FakeAccessPermits()

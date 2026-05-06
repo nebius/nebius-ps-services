@@ -154,6 +154,29 @@ def test_translate_terraform_failure_explains_remote_state_lockfile_issue() -> N
     assert "Terraform diagnostics:" in message
 
 
+def test_translate_terraform_failure_explains_nebius_operation_poll_conflict() -> None:
+    stderr = """
+╷
+│ Error: resource creation failed
+│
+│   on .terraform/modules/cluster1/main.tf line 89, in resource "nebius_mk8s_v1_node_group" "gpu":
+│   89: resource "nebius_mk8s_v1_node_group" "gpu" {
+│
+│ resource creation failed: operation wait: can't get operation: rpc error: code = Unknown desc = unexpected HTTP status code received from server: 409 (Conflict); transport: received unexpected content-type "text/plain; charset=UTF-8"
+╵
+""".strip()
+
+    message = _translate_terraform_failure(
+        cmd=["terraform", "apply", "-input=false"],
+        cwd=Path("/tmp/demo"),
+        stderr=stderr,
+    )
+
+    assert "provider lost the operation polling request with a 409 Conflict" in message
+    assert "rerun deploy" in message
+    assert "Terraform diagnostics:" in message
+
+
 def test_terraform_failure_text_from_json_events_formats_location_and_detail() -> None:
     events = [
         {

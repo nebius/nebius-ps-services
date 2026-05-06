@@ -79,3 +79,4 @@ terraform.rc
 *.tfplan
 plan.out
 crash.log
+.claude

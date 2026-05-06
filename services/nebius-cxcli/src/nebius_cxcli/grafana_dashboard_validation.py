@@ -436,6 +436,8 @@ def _prometheus_series_matcher(
 ) -> str:
     if target_cluster_id and "k8s.cluster.id" in labels:
         return f'{metric}{{"k8s.cluster.id"=~"{_regex_literal(target_cluster_id)}"}}'
+    if target_cluster_id and "mk8s_cluster_id" in labels:
+        return f'{metric}{{mk8s_cluster_id=~"{_regex_literal(target_cluster_id)}"}}'
     return metric
 
 
@@ -571,11 +573,9 @@ def _validate_prometheus(
                     no_series_queries.append(query)
     elif contract.queries:
         if errors or no_series_metrics:
-            checks.append(
-                "Metric/label names not fully matched; PromQL not run for non-report dashboard"
-            )
+            checks.append("Metric/label names not fully matched")
         else:
-            checks.append("Metric/label names matched; PromQL not run for non-report dashboard")
+            checks.append("Metric/label names matched")
     if no_series_metrics:
         warnings.append(
             "Prometheus datasource has no series for "
@@ -618,7 +618,7 @@ def _dashboard_import_warnings(
         if "HTTP 404" in message:
             return [
                 f"Grafana dashboard UID {dashboard_uid} is not imported yet; "
-                "run deploy or flux apply, then wait for Grafana to import the dashboard ConfigMap"
+                "run deploy or flux apply the generated bundle, then wait for Grafana to import the dashboard ConfigMap"
             ]
         return [f"Grafana dashboard UID {dashboard_uid} lookup failed: {message}"]
     return []
@@ -645,7 +645,7 @@ def _dashboard_import_payload(
         if "HTTP 404" in message:
             return None, [
                 f"Grafana dashboard UID {dashboard_uid} is not imported yet; "
-                "run deploy or flux apply, then wait for Grafana to import the dashboard source"
+                "run deploy or flux apply the generated bundle, then wait for Grafana to import the dashboard source"
             ]
         return None, [f"Grafana dashboard UID {dashboard_uid} lookup failed: {message}"]
     dashboard = _mapping(_mapping(payload).get("dashboard"))
@@ -854,7 +854,7 @@ def _grafana_chart_contracts() -> tuple[_GrafanaDashboardContract, ...]:
         }
         signal_by_dashboard = {
             (binding.folder, binding.dashboard): binding.signal
-            for binding in chart.grafana.report_dashboards
+            for binding in chart.grafana.dashboard_signals
         }
         contracts: list[_GrafanaDashboardContract] = []
         for (folder, dashboard), dashboard_spec in _dashboard_defaults(chart.defaults).items():

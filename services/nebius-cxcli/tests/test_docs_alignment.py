@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from nebius_cxcli.wizard_profiles import builtin_wizard_profile_names
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -11,7 +13,7 @@ def _section(text: str, start: str, end: str) -> str:
 
 def test_readme_quick_start_uses_current_create_target_contract() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    quick_start = _section(readme, "## Quick Start Guide", "## Table of Contents")
+    quick_start = _section(readme, "## Quick Start Guide", "## Core Concepts")
 
     assert "nebius-cxcli create <deployments-root>" in quick_start
     assert "nebius-cxcli create <target-path>" not in quick_start
@@ -163,6 +165,7 @@ def test_docs_define_validation_command_boundaries() -> None:
     assert "project config contract and deployment-readiness shape" in readme
     assert "Use `--target <instance-id>` to validate one target-scoped Grafana row" in readme
     assert "each target must resolve an explicit kube context" in readme
+    assert "accepted only when its generated Nebius name matches that target" in readme
     assert "Use `--target <target_ref>`" not in readme
     assert "- `validate-generated <generated-dir>`" in readme
     assert "existing generated bundle without rerendering it" in readme
@@ -174,6 +177,9 @@ def test_docs_define_validation_command_boundaries() -> None:
     assert "### `validate <config.yaml>`" in design
     assert "Supports `--target <instance-id>` for multi-target configs." in design
     assert "Target-scoped rows must resolve an explicit kube context" in design
+    assert "current kubeconfig context is accepted only when its generated Nebius name" in (
+        " ".join(design.split())
+    )
     assert "### `validate-generated <generated-path>`" in design
     assert (
         "strict readiness, MK8s preflight, backend auth preparation, "
@@ -198,6 +204,49 @@ def test_docs_define_target_scoped_deploy_validation_report_filtering() -> None:
     ) in design
 
 
+def test_docs_define_mysterybox_eso_name_resolution_contract() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
+
+    for text in (readme, design):
+        assert "Secret names are rejected" not in text
+        assert "secret names are rejected" not in text
+        assert "`secret_name`" in text
+        assert "Terraform-created `mbsec-...` ID" in text or "Terraform `secret_ids` output" in text
+        assert "`mysterybox_instance_id`" in text
+        assert "externally managed MysteryBox Secrets" in text
+
+
+def test_docs_define_wizard_string_lists_as_comma_separated() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
+
+    assert "`list(string)` / `set(string)`" in readme
+    assert "`ns1,ns2`" in readme
+    assert "simple string lists prompt for comma-separated values" in design
+    assert "simple `list(string)` prompts use comma-separated input" in design
+
+
+def test_docs_list_all_builtin_wizard_profiles_and_static_sources() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
+    design_profile_list = _section(
+        design,
+        "Built-in infra `wizard_profile` names currently include:",
+        "Component output and handoff contract:",
+    )
+
+    for profile_name in builtin_wizard_profile_names():
+        assert f"`{profile_name}`" in readme
+        assert f"`{profile_name}`" in design_profile_list
+
+    for text in (readme, design):
+        assert "`wizard.<field>.options`" in text
+        assert "`wizard.<field>.sources`" in text
+        assert "`source: static`" in text
+        assert "`{value, label}`" in text
+
+
 def test_design_documents_grafana_dashboard_binding_workflow() -> None:
     design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
     normalized_design = " ".join(design.split())
@@ -211,7 +260,7 @@ def test_design_documents_grafana_dashboard_binding_workflow() -> None:
         "`components.apps.grafana.defaults.values.dashboards.<folder>.<dashboard>`"
         in design
     )
-    assert "`components.apps.grafana.cli.report_dashboards.<signal>` is not" in design
+    assert "`components.apps.grafana.cli.dashboard_signals.<signal>` is not" in design
     assert "components.apps.grafana.cli.grafana" not in design
     assert "Dashboard source materialization workflow:" in design
     assert "does not dynamically generate or rewrite dashboards" in design
@@ -219,7 +268,8 @@ def test_design_documents_grafana_dashboard_binding_workflow() -> None:
     assert "Dashboard generation and materialization workflow:" not in design
     assert "`load_component_sources()` resolves the `json_file` relative" in design
     assert "`validate-dashboards <config.yaml>` checks the live post-deploy state" in design
-    assert "Current bundled report dashboards:" in design
+    assert "Current bundled package dashboards:" in design
+    assert "generated `deploy-report.md` bundled-dashboard list" in design
     assert "`kubernetes_io_hostname`" in design
     assert "`k8s_namespace_name` plus `k8s_pod_name`" in design
     assert "Live fit validation rules:" in design

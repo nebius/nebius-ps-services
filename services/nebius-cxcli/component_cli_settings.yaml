@@ -367,6 +367,7 @@ components:
                       # resource on InfiniBand-capable Mellanox HCAs.
                       config: |
                         {
+                          "periodicUpdateInterval": 0,
                           "configList": [
                             {
                               "resourceName": "shared_device",
@@ -568,7 +569,7 @@ components:
             type: prometheus
             read_endpoint: metrics_service_provider_read
             isDefault: true
-            description: Nebius/provider service metrics for cloud resources and Nebius service dashboards.
+            description: Nebius/provider service metrics for cloud resources, the cxcli GPU dashboard, and service dashboard examples.
           user-metrics:
             name: Nebius User Metrics
             uid: nebius-user-metrics
@@ -591,10 +592,10 @@ components:
         explore_queries:
           metrics: count({__name__=~".+"})
           logs: '{__bucket__="default"}'
-        # Report bindings are source metadata, not Helm chart values. Keep
-        # them next to the chart so report links can point at dashboards
-        # without hardcoding dashboard selection in Python.
-        report_dashboards:
+        # Dashboard signal bindings are source metadata, not Helm chart values.
+        # Keep them next to the chart so signal-specific status URLs can point
+        # at dashboards without hardcoding dashboard selection.
+        dashboard_signals:
           metrics: nebius-kubernetes/kubernetes-cluster-monitoring
           logs: nebius-kubernetes/kubernetes-logs-from-loki
           traces: nebius-kubernetes/kubernetes-traces

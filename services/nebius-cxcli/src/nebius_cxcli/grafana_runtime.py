@@ -24,8 +24,8 @@ import yaml
 from .component_instances import component_type_id
 from .component_sources import (
     GrafanaCliSettings,
+    GrafanaDashboardSignalBinding,
     GrafanaDatasourceSpec,
-    GrafanaReportDashboardBinding,
     load_component_sources,
 )
 from .deploy_targets import app_chart_target_ref
@@ -927,9 +927,9 @@ def _grafana_cli_settings() -> GrafanaCliSettings:
     return GrafanaCliSettings()
 
 
-def _grafana_report_dashboard_bindings() -> dict[str, GrafanaReportDashboardBinding]:
+def _grafana_dashboard_signal_bindings() -> dict[str, GrafanaDashboardSignalBinding]:
     settings = _grafana_cli_settings()
-    return {item.signal: item for item in settings.report_dashboards}
+    return {item.signal: item for item in settings.dashboard_signals}
 
 
 def _grafana_datasources_by_name() -> dict[str, GrafanaDatasourceSpec]:
@@ -939,7 +939,7 @@ def _grafana_datasources_by_name() -> dict[str, GrafanaDatasourceSpec]:
 
 def _grafana_explore_urls(
     base_url: str,
-    bindings: Mapping[str, GrafanaReportDashboardBinding],
+    bindings: Mapping[str, GrafanaDashboardSignalBinding],
     datasources_by_name: Mapping[str, GrafanaDatasourceSpec],
     *,
     explore_queries: Mapping[str, str],
@@ -1183,17 +1183,17 @@ def collect_grafana_runtime_status(
         if target_cluster_id:
             status["cluster_id"] = target_cluster_id
         if base_url:
-            report_bindings = _grafana_report_dashboard_bindings()
+            dashboard_signal_bindings = _grafana_dashboard_signal_bindings()
             datasources_by_name = _grafana_datasources_by_name()
             explore_urls = _grafana_explore_urls(
                 base_url,
-                report_bindings,
+                dashboard_signal_bindings,
                 datasources_by_name,
                 explore_queries=explore_queries,
                 org_id=grafana_settings.org_id,
             )
             if _ensure_grafana_public_root_url(spec, base_url, extra_env=extra_env):
-                for signal, binding in report_bindings.items():
+                for signal, binding in dashboard_signal_bindings.items():
                     url_key = f"{signal}_url"
                     if url_key not in explore_urls:
                         continue

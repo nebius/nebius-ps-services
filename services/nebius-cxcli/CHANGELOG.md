@@ -6,6 +6,229 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Reorganized the README opening sections so core render/deploy concepts live in
+  a dedicated `Core Concepts` section and `Features` is a concise capability
+  summary instead of a long command-contract reference.
+- Clarified the post-`deploy`/`flux apply` GitOps bootstrap warning so the
+  printed `flux bootstrap <generated-dir>` command explains that the path is the
+  local generated bundle and the GitHub repository is inferred from
+  `GITHUB_REPOSITORY` or the local git `origin`.
+- Added HA-oriented bundled Helm defaults for platform charts with documented
+  safe replica knobs. Grafana's Envoy data plane, Envoy Gateway, cert-manager
+  controller/webhook/cainjector, and External Secrets
+  controller/webhook/cert-controller now default to two replicas, with External
+  Secrets leader election enabled. Grafana itself stays at one replica unless
+  the chart values configure a shared MySQL or Postgres database, and runtime
+  validation now rejects unsafe multi-replica Grafana values on the bundled
+  SQLite/emptyDir path.
+- Added `periodicUpdateInterval: 0` to the cxcli-owned Network Operator
+  `NicClusterPolicy` RDMA shared-device patch so static KVM passthrough GPU
+  nodes avoid noisy periodic full PCI rescans while keeping startup discovery
+  and `rdma/shared_device` advertisement intact.
+- Replaced the imported Nebius GPU Grafana.com dashboard with a cxcli-owned
+  Kubernetes GPU dashboard that reads DCGM metrics from `Nebius Services`,
+  filters by `mk8s_cluster_id`, and uses `query_result(...)` variables so stale
+  project-wide label metadata cannot list deleted GPU nodes. The bundled
+  Kubernetes metrics dashboard now focuses on current CPU, memory, pod,
+  container, and network metrics from `Nebius User Metrics`, while the catalog
+  keeps only `nebius-disk` as a service-dashboard import example.
+- Extended `validate-dashboards` Prometheus scoping so target cluster IDs narrow
+  both `k8s.cluster.id` user-metrics selectors and `mk8s_cluster_id` Nebius
+  service-metrics selectors.
+- Fixed `validate-dashboards` kube-context resolution so a current local
+  kubeconfig context such as `nebius-cluster1-mk8scluster-...-external` is used
+  for its matching target even when older contexts for the same target also
+  exist in kubeconfig.
+- Changed the cxcli-owned Kubernetes GPU Grafana dashboard time-series legends
+  to start with GPU UUID before `instance_id`, so per-GPU series are easier to
+  distinguish while node context remains visible.
+- Made cxcli-owned Nebius Observability Agent scrape jobs render-only. Source
+  `config.yaml` now keeps the target observability intent and any custom
+  operator scrape jobs, while generated Flux HelmReleases still receive the
+  managed API server, kubelet, cAdvisor, and Hubble `additionalTargets`.
+- Added bundled Grafana dashboard links to `deploy-report.md` for every active
+  catalog dashboard whose JSON is shipped under
+  `src/nebius_cxcli/grafana_dashboards`, while leaving operator-owned external
+  dashboard JSON imported into Grafana but out of the report shortcut list.
+- Removed the separate dashboard-index, Metrics, Logs, and Traces shortcut rows
+  from the Grafana section of `deploy-report.md`; the bundled dashboard list is
+  now the single dashboard handoff surface.
+- Fixed ESO MysteryBox IAM bootstrap during `flux apply` after Terraform state
+  handoff. The service-account and authorized-key step now ignores Terraform
+  runtime service-account env vars and allows the operator Nebius CLI token
+  fallback, so local federation profiles do not accidentally use the Terraform
+  automation identity to manage `mysterybox-sa`.
+- Suppressed expected Nebius API root HTTP status lines from the ESO MysteryBox
+  TLS validation output while still requiring an HTTP response internally, so
+  successful checks no longer show confusing `404` lines.
+- Added cxcli preflight validation for first-deploy MysteryBox payload values.
+  Interactive local deploy/plan/apply runs now prompt with hidden input for
+  missing runtime-only values before Terraform starts, while non-interactive
+  runs report the exact missing `TF_VAR_*_payload_values` Secret/key names
+  before Terraform apply reaches the module precondition.
+- Moved the interactive MysteryBox payload-value prompts before the Rich
+  preflight progress bar starts, so hidden-input prompts remain visible instead
+  of appearing to hang inside the progress spinner.
+- Made deploy persist first-deploy MysteryBox `version_id` values into both
+  `config.yaml` and the generated manifest/tfvars, including after Terraform
+  exits because the Nebius provider lost an already-accepted operation poll.
+  Retried deploys can now continue from the refreshed generated bundle without
+  asking again for runtime-only payload values.
+- Added explanatory labels to the MK8s `gpu_stack_source` wizard choices so
+  `nebius_image` is shown as the Nebius GPU image with host NVIDIA
+  driver/toolkit already present, while `operator_managed` is shown as the path
+  where GPU Operator installs and manages those host components.
+- Fixed `q` handling inside the guided MysteryBox `inputs.secrets` wizard loop
+  so it backs up to the previous Secret/key/type prompt before returning to the
+  outer component field wizard.
+- Aligned built-in wizard-profile documentation and regression coverage with
+  the current profile registry, including the `mysterybox` profile and static
+  `wizard.<field>.sources` choice labels.
+- Split the `create` command's final next-step commands onto separate lines for
+  validate, render, optional bootstrap-ci, and deploy.
+- Stopped rendering cxcli-managed `Namespace` extraObjects for built-in
+  Kubernetes namespaces such as `default` in the MysteryBox ESO sync path while
+  still allowing `ExternalSecret` resources to target those namespaces.
+- Kept cxcli-managed MysteryBox ESO `Namespace`, `ClusterSecretStore`, and
+  `ExternalSecret` objects out of source `config.yaml`; they now render into a
+  generated post-Flux manifest that local deploy/Flux apply applies after the
+  external-secrets HelmRelease is Ready, and normalization strips stale managed
+  ESO objects while preserving operator-authored chart objects.
+- Expanded the generated `deploy-report.md` component summary so selected
+  MysteryBox, External Secrets Operator, NVIDIA GPU Operator, and NVIDIA Network
+  Operator components are visible in the human handoff artifact.
+- Made the generated `deploy-report.md` infra component summary catalog-driven,
+  so every Terraform component declared in `component_sources.yaml` appears as
+  enabled or disabled, including `vm`. MK8s cluster rows now report CPU and GPU
+  nodes with the same total-node wording, and validation sections expand JSON
+  `checks[]` arrays into numbered Markdown check lists instead of only showing
+  `N/N check(s) passed` prose.
+- Replaced the custom MysteryBox ESO webhook path with External Secrets
+  Operator's native `nebiusmysterybox` provider.
+  `deploy.targets[].secrets.mysterybox.*` now auto-enables `external-secrets`
+  for the target, renders
+  `ClusterSecretStore`/`ExternalSecret` objects into a post-Flux manifest,
+  requires `mbsec-...` MysteryBox secret IDs, validates optional
+  `mbsecver-...` version IDs, creates a dedicated `mysterybox-sa` Nebius
+  service account with only `mysterybox.payload-viewer`, creates the runtime
+  Subject Credentials Secret used by ESO to exchange for Nebius IAM tokens,
+  disables Nebius CLI token fallback for that service-account bootstrap path,
+  removes the old shared runtime-auth branch for ESO MysteryBox, and keeps the
+  Nebius credential Secret runtime-only for `deploy`/Flux commands.
+  The cxcli config contract is snake_case only; Kubernetes camelCase is emitted
+  only in rendered ESO manifests.
+- Bumped the bundled `external-secrets` chart source from `2.0.1` to `2.4.1`
+  for the native MysteryBox provider path.
+- Added explicit coverage and documentation for full-secret ESO MysteryBox sync
+  with declared Secret `version_id` values, rendering real `mbsecver-...`
+  values to `ExternalSecret.spec.dataFrom[].extract.version`.
+- Added optional `inputs.secrets[].kubernetes_secret_name` metadata for
+  MysteryBox ESO sync. The guided MysteryBox wizard now asks for the target
+  Kubernetes Secret name with the MysteryBox Secret name as the default, cxcli
+  render uses that value for generated `ExternalSecret.spec.target.name`, and
+  Terraform rendering strips the cxcli-only metadata before calling the
+  MysteryBox module.
+- Clarified and regression-guarded the native MysteryBox ESO trust path:
+  cxcli renders `api.nebius.cloud:443` without `caProvider`, stores ESO
+  Subject Credentials only as a runtime Kubernetes Secret, documents the
+  in-cluster TLS/egress validation command, and now runs that configured
+  endpoint probe before local deploy/Flux apply paths use the ESO store.
+- Enabled the bundled `external-secrets` app by default when the Terraform
+  `mysterybox` component and an MK8s target are selected together. In that same
+  selected-backend wizard context, native MysteryBox-to-Kubernetes sync now
+  defaults to `deploy.targets[].secrets.mysterybox.enabled=true` and persists the
+  accepted default instead of treating it as a virtual prompt value. Configured
+  native sync targets now also get a required `mysterybox_eso_connectivity`
+  deploy validation in
+  `deploy-report.md`; it checks in-cluster API TLS, `ClusterSecretStore`
+  readiness, configured `ExternalSecret` readiness, and ESO controller
+  TLS/auth/permission log errors since the current validation started, and it
+  is not skipped by optional validation skip flags. cxcli applies managed ESO
+  `ClusterSecretStore` and `ExternalSecret` resources only after the ESO
+  HelmRelease is Ready so CRDs are discoverable before those CRs are submitted.
+- Moved the MysteryBox `external-secrets` auto-selection into the early
+  `create` / `component add` dependency flow, so the resolved component summary
+  and field wizard show the required ESO controller app alongside other
+  dependency-driven app selections.
+- Added a required `sync_namespaces` list for native MysteryBox ESO sync. The
+  default store access mode remains `allow_all_namespaces: true`, which omits
+  `ClusterSecretStore.conditions`; set `allow_all_namespaces: false` to render
+  `conditions.namespaces` from the same `sync_namespaces` list.
+- Removed the local ESO MysteryBox auth cache model. The Kubernetes Subject
+  Credentials Secret is now the persisted ESO auth source of truth; deploy/Flux
+  commands reuse a valid Secret and create a fresh Nebius authorized key only
+  when the Secret is missing, invalid, or stale.
+- Switched runtime-auth metadata writes to atomic same-directory replacement so
+  Terraform runtime auth cache updates do not leave a partially written
+  `runtime-auth.json`.
+- Changed `prefer_operator_auth=True` Nebius SDK auth ordering so CLI token auth
+  is tried last after SDK config and service-account credentials.
+- Made app `release.install_after` prerequisites participate in component
+  auto-selection before Flux `dependsOn` ordering is rendered.
+- Aligned bundled MysteryBox runtime validation with the Terraform module's
+  initial-primary-version contract. `inputs.secrets` is now a required list of
+  secret objects keyed by each secret `name`; each secret carries one non-empty
+  `payload` mapping with `text`/`file` payload entries and an optional
+  `version_id` metadata field for the current primary MysteryBox version. Use
+  `version_id: n/a` before first deploy; cxcli now writes created
+  `mbsecver-...` primary version IDs back to `config.yaml` after Terraform
+  apply. Old mapping, singular `version`, and multi-version `versions` shapes
+  are rejected instead of translated.
+- Rendered MysteryBox Terraform roots now expose `payload_values` as a
+  sensitive runtime root variable, pass it into the child module, omit it from
+  generated tfvars/manifests, require the runtime `TF_VAR_*` value to use the
+  two-level `{secret_name={payload_key=value}}` shape, and reject
+  `inputs.payload_values` in `config.yaml` so payload cleartext stays out of
+  source and generated artifacts. After cxcli records the created `version_id`,
+  later plan/apply/destroy runs no longer require the original payload values.
+- Changed destroy status polling for live API misses to report watched
+  resources as already absent instead of "not visible yet", while still leaving
+  Terraform state/provider reconciliation as the authority for actual deletes.
+- Improved create wizard selection visibility: interactive component selectors
+  now print the resolved infra/apps choices once after dependency resolution,
+  while field prompts show only a one-line Rich-colored
+  `Wizard context: Current: <scope> / <component-or-target-feature>` marker
+  instead of repeating the full component list before every input. Deploy-target
+  fields such as native MysteryBox ESO sync are labeled as deploy-target
+  context, not as MK8s Terraform inputs.
+- Hid the MK8s native MysteryBox ESO sync wizard prompts unless the Terraform
+  `mysterybox` component is also selected and enabled, aligning that
+  dependency-backed prompt with the rest of the wizard gating model.
+- Stopped redacting boolean wizard selections just because their field path
+  contains `secret`, so toggles such as
+  `deploy.targets[].secrets.mysterybox.enabled` are echoed as `true`/`false`
+  while actual sensitive string values remain redacted.
+- Added MysteryBox `inputs.secrets` wizard guidance that explicitly tells
+  operators to enter only metadata plus payload key/type schema during `create`
+  and to provide actual payload values later through runtime
+  `TF_VAR_*_payload_values` input.
+- Replaced the raw YAML/JSON prompt for MysteryBox `inputs.secrets` with a
+  concise guided loop for Secret names plus payload keys/types, while keeping the
+  same Terraform-native list/map contract and runtime-only payload values.
+- Clarified the guided MysteryBox prompt so the first Secret name is shown as
+  required; blank only finishes the loop after at least one Secret has been
+  added.
+- Clarified the guided MysteryBox payload-key prompt so the first key in each
+  Secret is shown as required; blank only finishes a Secret after at least one
+  key has been added.
+- Normalized guided MysteryBox payload keys to uppercase and echoed the stored
+  key after entry, so `username` is persisted as `USERNAME`.
+- Made MK8s `inputs.gpu_stack_source` a guided wizard choice between
+  `nebius_image` and `operator_managed` instead of a free string prompt that
+  only displayed the default value.
+- Simplified native MysteryBox ESO source config to one generated full-sync
+  model: cxcli now derives one `ExternalSecret` per declared MysteryBox Secret
+  per `sync_namespaces` entry, rejects source-authored `external_secrets` and
+  old `allowed_namespaces`, resolves MysteryBox IDs from Terraform `secret_ids`
+  output after apply, and refreshes Flux manifests before applying ESO
+  resources.
+- Persisted the native MysteryBox ESO `allow_all_namespaces: true` wizard default
+  alongside the sync toggle and `sync_namespaces: [default]`, so accepted create
+  defaults show both the cluster-wide store policy and sync target explicitly in
+  `config.yaml`.
+- Changed interactive `list(string)` wizard prompts, including MysteryBox
+  `sync_namespaces`, to accept comma-separated input such as `ns1,ns2`
+  instead of requiring a YAML/JSON list literal.
 - Improved interactive wizard navigation in TTY list and checkbox prompts.
   Back/Quit are no longer rendered as selectable rows, so component
   multi-select prompts show checkboxes only for real components; `q` backs up
@@ -34,7 +257,7 @@ All notable changes to this project are tracked here. This changelog follows
 - Split cxcli-owned settings out of `component_sources.yaml` into the paired
   `component_cli_settings.yaml` file. `component_sources.yaml` now owns reusable
   infra/app source metadata, while `component_cli_settings.yaml` owns managed
-  tool versions, observability endpoints, Grafana datasource/report bindings,
+  tool versions, observability endpoints, Grafana datasource and dashboard signal bindings,
   MK8s GPU policy, boot-disk policy, and observability guardrails linked by the
   same component ids. The loader rejects top-level `cli`, top-level
   `observability`, and component-local `cli` fields in `component_sources.yaml`;
@@ -76,7 +299,7 @@ All notable changes to this project are tracked here. This changelog follows
   bundled catalog. The pinned Grafana chart version now owns the chart
   `appVersion` and default image tag instead of repeating that derived value in
   `component_sources.yaml`.
-- Replaced the bundled Metrics, Logs, and Traces report dashboards with
+- Replaced the bundled Metrics, Logs, and Traces dashboard shortcuts with
   cxcli-owned Grafana dashboard JSON that matches Nebius Observability read
   labels: the metrics cluster selector uses `up` with `k8s.cluster.id`,
   cAdvisor/container panels use `kubernetes_io_hostname`, and DCGM exporter
@@ -85,7 +308,7 @@ All notable changes to this project are tracked here. This changelog follows
   Tempo dashboard instead of the workload-specific Guardrails starter
   dashboard. Bundled dashboard JSON moved to package `json_file` assets so
   `component_sources.yaml` keeps only stable dashboard source bindings, while
-  `component_cli_settings.yaml` keeps datasource/report bindings and custom
+  `component_cli_settings.yaml` keeps datasource and dashboard signal bindings plus custom
   active component-sources files can reference operator-owned dashboard
   JSON with relative or absolute `json_file` paths.
 - Changed Grafana render output so project `config.yaml` no longer carries
@@ -114,12 +337,12 @@ All notable changes to this project are tracked here. This changelog follows
   warning. It supports `--target <instance-id>` for target-scoped Grafana rows
   in multi-target configs, resolves the target MK8s cluster ID from generated
   Grafana status, generated inventory, or the persisted kube context, and
-  scopes Metrics/Logs report-dashboard checks to that cluster so another
+  scopes Metrics/Logs dashboard checks to that cluster so another
   cluster's data cannot mask a broken target dashboard.
 - Simplified bundled Grafana catalog metadata by removing the redundant nested
   `components.apps.grafana.cli.grafana` namespace. Grafana app settings now live
   directly under `components.apps.grafana.cli`, for example `cli.datasources`
-  and `cli.report_dashboards`.
+  and `cli.dashboard_signals`.
 - Aligned the bundled MK8s observability defaults with the Nebius
   Observability Agent service-discovery contract: Kubernetes metrics now
   exclude ordinary `kube-system` service/pod annotation scrapes by default,
@@ -179,8 +402,8 @@ All notable changes to this project are tracked here. This changelog follows
   catalog-bound Prometheus read endpoint clearly rejects the existing token,
   validate every Grafana dashboard source as a declared dashboard with
   datasource metadata plus either `gnetId` with pinned `revision` and imported
-  `uid` or dashboard JSON with a top-level `uid`, validate that report
-  dashboard bindings are single `<folder>/<dashboard>` references to declared
+  `uid` or dashboard JSON with a top-level `uid`, validate that dashboard signal
+  bindings are single `<folder>/<dashboard>` references to declared
   dashboard sources, include
   target-specific `kubectl --context=...` password commands, and avoid
   collapsing target-scoped Grafana installs into one generic fallback sentence.
@@ -347,7 +570,7 @@ All notable changes to this project are tracked here. This changelog follows
   provisions Prometheus/Loki/Tempo datasources from the Nebius public read
   endpoints, and seeds Nebius service dashboard imports plus cxcli-owned
   Kubernetes dashboard JSON from `component_sources.yaml`. Grafana datasource definitions, read-endpoint
-  bindings, report-dashboard bindings, and the default `20m` idle session
+  bindings, dashboard signal bindings, and the default `20m` idle session
   timeout are now catalog-owned. Local deploy/Flux paths create the runtime-only
   Kubernetes Secrets for Grafana admin credentials and the Observability read
   static token, issuing a `viewer` service-account static key only when the
@@ -968,7 +1191,7 @@ All notable changes to this project are tracked here. This changelog follows
 - Fixed the bundled `cert-manager` app catalog defaults to enable chart CRD installation (`values.crds.enabled: true`), preventing fresh-cluster installs from hanging on the startup API check job while cert-manager CRDs are still absent.
 - Fixed `render` overwrite prompting so the first render after `create` no longer warns just because the project already has the empty generated scaffold and placeholder `generated/inventory/inventory.md`; the warning now targets meaningful existing rendered artifacts.
 - Improved config-path error handling for config-driven commands such as `render`: passing a directory like `generated/` now fails with a targeted “expected project config.yaml file path” message instead of leaking a raw `Is a directory` exception.
-- Improved complex wizard prompt wording to ask for a single-line YAML/JSON value, and stopped app components with an empty top-level `values: {}` block from showing a confusing whole-map prompt when no concrete Helm value leaves are known yet.
+- Improved complex wizard prompt wording to ask for single-line YAML/JSON values for maps, objects, and object lists, and stopped app components with an empty top-level `values: {}` block from showing a confusing whole-map prompt when no concrete Helm value leaves are known yet.
 - Added `wizard.<field>.prompt: false` support so bundled profiles can suppress optional advanced fields from the interactive wizard; the MK8s profile now hides the raw `mk8s_*_overrides` passthrough maps while keeping them available for manual `config.yaml` edits.
 - Hardened `create --force` guard rails for existing projects: the CLI now emits a force-specific overwrite warning, requires an extra interactive confirmation before overwriting an existing resolved project folder, and documents that `create --force` does not delete the deployments root or unrelated projects.
 - Wired MK8s `inputs.infiniband_fabric` into the built-in wizard profile with a guided, optional fabric selector keyed by the chosen GPU platform and `client_info.nebius.region_id`, using the Nebius GPU-cluster fabric matrix instead of a raw free-text prompt.

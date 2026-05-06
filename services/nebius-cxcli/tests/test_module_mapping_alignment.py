@@ -92,6 +92,44 @@ def _payload_with_mk8s() -> dict:
     raise AssertionError("mk8s component missing from starter payload")
 
 
+def _payload_with_mysterybox() -> dict:
+    payload = yaml.safe_load(
+        starter_config_yaml(
+            client_name="client-a",
+            tenant_id="tenant-123",
+            project_id="project-456",
+            region_id="eu-north1",
+            email=None,
+            selected_infra={"mysterybox"},
+            selected_apps=set(),
+            infra_entries=component_entries("infra"),
+            app_entries=component_entries("apps"),
+        )
+    )
+    assert isinstance(payload, dict)
+    components = payload.get("infra", {}).get("components", [])
+    assert isinstance(components, list)
+    for row in components:
+        if isinstance(row, dict) and str(row.get("id", "")).strip().lower() == "mysterybox":
+            inputs = row.setdefault("inputs", {})
+            assert isinstance(inputs, dict)
+            inputs["parent_id"] = "project-456"
+            inputs["secrets"] = [
+                {
+                    "name": "app-runtime",
+                    "version_id": "n/a",
+                    "kubernetes_secret_name": "app-runtime",
+                    "payload": {
+                        "API_KEY": {
+                            "type": "text",
+                        },
+                    },
+                },
+            ]
+            return payload
+    raise AssertionError("mysterybox component missing from starter payload")
+
+
 def test_render_tfvars_are_backed_by_declared_variables(tmp_path: Path) -> None:
     _set_catalog_profile(SourceProfile.LOCAL)
     reset_component_entry_cache()
@@ -117,6 +155,56 @@ def test_render_tfvars_are_backed_by_declared_variables(tmp_path: Path) -> None:
     for key in tfvars_payload:
         assert f'variable "{key}"' in variables_tf
         assert f"var.{key}" in main_tf or f"var.{key}" in providers_tf
+
+
+def test_render_mysterybox_payload_values_as_runtime_only_root_variable(
+    tmp_path: Path,
+) -> None:
+    _set_catalog_profile(SourceProfile.LOCAL)
+    reset_component_entry_cache()
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = _payload_with_mysterybox()
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+    render_project(config, paths, source_profile=SourceProfile.LOCAL)
+
+    main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
+    variables_tf = (paths.infra_dir / "variables.tf").read_text(encoding="utf-8")
+    tfvars_payload = json.loads(
+        (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
+    )
+
+    assert "payload_values = var.mysterybox_payload_values" in main_tf
+    assert 'variable "mysterybox_secrets" {' in variables_tf
+    assert "type = list(object({" in variables_tf
+    assert 'variable "mysterybox_payload_values" {' in variables_tf
+    assert "type = map(map(string))" in variables_tf
+    assert "default = {}" in variables_tf
+    assert "sensitive = true" in variables_tf
+    assert "mysterybox_payload_values" not in tfvars_payload
+    assert "kubernetes_secret_name" not in json.dumps(tfvars_payload)
+
+
+def test_render_rejects_mysterybox_payload_values_in_config(tmp_path: Path) -> None:
+    _set_catalog_profile(SourceProfile.LOCAL)
+    reset_component_entry_cache()
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = _payload_with_mysterybox()
+    components = payload["infra"]["components"]
+    mysterybox = next(row for row in components if row["id"] == "mysterybox")
+    mysterybox["inputs"]["payload_values"] = {"app": {"API_KEY": "do-not-store"}}
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+    with pytest.raises(ValueError, match="input 'payload_values' is runtime-only"):
+        render_project(config, paths, source_profile=SourceProfile.LOCAL)
 
 
 def test_render_uses_resolved_local_path_for_local_module_sources(

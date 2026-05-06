@@ -11,7 +11,7 @@ Use these defaults unless the repository already has a stronger constraint.
   - `.github/workflows/nebius-cxcli-release.yml`
   - `.github/workflows/vpngw-release.yml`
 - Container image publish:
-  - `.github/workflows/mysterybox-bridge-image.yml`
+  - `.github/workflows/sample-service-image.yml`
 - Bot-only merge automation:
   - `.github/workflows/dependabot-auto-merge.yml`
 

@@ -4,6 +4,10 @@ All notable changes to this repository will be documented in this file.
 
 ## [Unreleased]
 
+- nebius-cxcli: replaced the old MysteryBox webhook bridge path with native
+  External Secrets Operator `nebiusmysterybox` resources, including runtime
+  Subject Credentials Secret creation and `mysterybox.payload-viewer`
+  role-aligned auth handling.
 - nebius-cxcli: made the bundled `mk8s` baseline CPU node count explicit in
   `component_sources.yaml` and generated `config.yaml` files via
   `inputs.cpu_nodes_count: 2`, instead of relying on a hidden Terraform module
@@ -11,6 +15,9 @@ All notable changes to this repository will be documented in this file.
 - platform-infra/mk8s: removed the internal `cpu_nodes_count = 2` module
   default so direct consumers must choose the baseline CPU node-group size
   explicitly.
+- platform-infra/mysterybox: changed the greenfield module contract from one
+  optional `version` per secret to a `versions` map, with runtime payload
+  values keyed by secret id, version id, and payload key.
 
 ### Added
 
@@ -49,10 +56,22 @@ All notable changes to this repository will be documented in this file.
 
 ### Changed
 
+- Tightened the `helmchart` Codex skill with more accurate `appVersion`
+  guidance, dependency-aware strict validation, safer securityContext and RBAC
+  mutation rules, trigger-scope metadata, a reusable chart validation helper,
+  and lightweight trigger eval prompts.
+- Removed the custom MysteryBox ESO bridge service, bridge Helm chart, chart
+  snapshots, and bridge image/chart workflows. `nebius-cxcli` now uses External
+  Secrets Operator's native `nebiusmysterybox` provider, renders managed
+  `ClusterSecretStore`/`ExternalSecret` objects through the `external-secrets`
+  HelmRelease, requires `mbsec-...` MysteryBox secret IDs, and keeps Nebius
+  service-account credentials as runtime-only Kubernetes Secrets.
 - Clarified the `align` Codex skill guidance and metadata so alignment passes
-  stay audit-first, evidence-driven, wiring-aware, and safe from speculative
-  rewrites while still fixing verified gaps across code, tests, docs,
-  workflows, CLI/help output, config, and applicable project skills.
+  operate as cautious senior code-review style sweeps: audit-first,
+  evidence-driven, wiring-aware, conservative around public contracts and
+  business logic, and still focused on fixing verified low-risk gaps across
+  code, tests, docs, workflows, CLI/help output, config, and applicable
+  project skills.
 - Updated the `skills/create-pr` guidance and metadata so Codex now treats any
   explicit user-supplied PR title as authoritative instead of inferring a
   generic preparation-style title from the branch name, and expanded

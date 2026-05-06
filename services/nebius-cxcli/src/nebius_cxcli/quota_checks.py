@@ -1811,12 +1811,12 @@ def _estimate_mysterybox_requirements(
     gaps: list[QuotaCoverageGap],
 ) -> None:
     secrets = inputs.get("secrets")
-    if not isinstance(secrets, dict):
+    if not isinstance(secrets, list):
         _append_gap(
             gaps,
             component_id=component_id,
             instance_id=instance_id,
-            message="`inputs.secrets` is missing or not a mapping; secret-count quota was not checked",
+            message="`inputs.secrets` is missing or not a list; secret-count quota was not checked",
         )
         return
     _append_requirement(

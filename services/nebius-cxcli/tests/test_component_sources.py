@@ -986,7 +986,7 @@ def test_load_component_sources_rejects_runtime_block(tmp_path: Path) -> None:
         load_component_sources(explicit=sources_file)
 
 
-def test_load_component_sources_rejects_grafana_report_dashboard_missing_locator(
+def test_load_component_sources_rejects_grafana_dashboard_signal_missing_locator(
     tmp_path: Path,
 ) -> None:
     sources_file = tmp_path / "component-sources.yaml"
@@ -1011,7 +1011,7 @@ def test_load_component_sources_rejects_grafana_report_dashboard_missing_locator
                             }
                         },
                         "cli": {
-                            "report_dashboards": {
+                            "dashboard_signals": {
                                 "logs": "nebius-kubernetes/kubernetes-logs-from-loki",
                             }
                         },
@@ -1031,7 +1031,7 @@ def test_load_component_sources_rejects_grafana_report_dashboard_missing_locator
         load_component_sources(explicit=sources_file)
 
 
-def test_load_component_sources_rejects_grafana_report_dashboard_invalid_json(
+def test_load_component_sources_rejects_grafana_dashboard_signal_invalid_json(
     tmp_path: Path,
 ) -> None:
     sources_file = tmp_path / "component-sources.yaml"
@@ -1056,7 +1056,7 @@ def test_load_component_sources_rejects_grafana_report_dashboard_invalid_json(
                             }
                         },
                         "cli": {
-                            "report_dashboards": {
+                            "dashboard_signals": {
                                 "logs": "nebius-kubernetes/kubernetes-logs-from-loki",
                             }
                         },
@@ -1073,7 +1073,7 @@ def test_load_component_sources_rejects_grafana_report_dashboard_invalid_json(
         load_component_sources(explicit=sources_file)
 
 
-def test_load_component_sources_materializes_grafana_report_dashboard_json_file(
+def test_load_component_sources_materializes_grafana_dashboard_signal_json_file(
     tmp_path: Path,
 ) -> None:
     dashboard_file = tmp_path / "kubernetes-logs.json"
@@ -1122,7 +1122,7 @@ def test_load_component_sources_materializes_grafana_report_dashboard_json_file(
                                     "read_endpoint": "logs_loki_read",
                                 }
                             },
-                            "report_dashboards": {
+                            "dashboard_signals": {
                                 "logs": "nebius-kubernetes/kubernetes-logs-from-loki",
                             },
                         },
@@ -1138,7 +1138,7 @@ def test_load_component_sources_materializes_grafana_report_dashboard_json_file(
         for item in chart.defaults
         if item.target_path == "values.dashboards.nebius-kubernetes.kubernetes-logs-from-loki"
     ).value
-    binding = chart.grafana.report_dashboards[0]
+    binding = chart.grafana.dashboard_signals[0]
 
     assert dashboard["datasource"] == "Nebius Logs"
     assert "json_file" not in dashboard
@@ -2129,6 +2129,30 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
                 "auto_select_single": True,
             }
         },
+        "inputs.gpu_stack_source": {
+            "sources": [
+                {
+                    "source": "static",
+                    "values": [
+                        {
+                            "value": "nebius_image",
+                            "label": (
+                                "nebius_image  (Nebius GPU image includes the host "
+                                "NVIDIA driver/toolkit; GPU Operator does not "
+                                "install them)"
+                            ),
+                        },
+                        {
+                            "value": "operator_managed",
+                            "label": (
+                                "operator_managed  (base OS image; GPU Operator "
+                                "installs and manages the NVIDIA driver/toolkit)"
+                            ),
+                        },
+                    ],
+                }
+            ]
+        },
         "inputs.infiniband_fabric": {
             "options": {
                 "from": "mk8s_infiniband_fabrics",
@@ -2221,6 +2245,41 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         "deploy.targets[].observability.kubernetes.traces.enabled": {
             "default": True,
         },
+        "deploy.targets[].secrets.mysterybox.enabled": {
+            "default": True,
+            "materialize_default": True,
+        },
+        "deploy.targets[].secrets.mysterybox.store_name": {
+            "default": "nebius-mysterybox-shared",
+            "prompt": False,
+        },
+        "deploy.targets[].secrets.mysterybox.api_domain": {
+            "default": "api.nebius.cloud:443",
+            "prompt": False,
+        },
+        "deploy.targets[].secrets.mysterybox.credentials_secret.name": {
+            "default": "nebius-mysterybox-shared-creds",
+            "prompt": False,
+        },
+        "deploy.targets[].secrets.mysterybox.credentials_secret.namespace": {
+            "default": "external-secrets",
+            "prompt": False,
+        },
+        "deploy.targets[].secrets.mysterybox.credentials_secret.key": {
+            "default": "credentials.json",
+            "prompt": False,
+        },
+        "deploy.targets[].secrets.mysterybox.allow_all_namespaces": {
+            "default": True,
+            "materialize_default": True,
+        },
+        "deploy.targets[].secrets.mysterybox.sync_namespaces": {
+            "default": ["default"],
+            "type_hint": "list(string)",
+            "prompt_complex": True,
+            "materialize_default": True,
+            "required": True,
+        },
         "inputs.mk8s_cluster_overrides": {
             "prompt": False,
         },
@@ -2245,10 +2304,32 @@ def test_bundled_cert_manager_enables_chart_crds_by_default() -> None:
     defaults = {item.target_path: item.value for item in cert_manager.defaults}
 
     assert defaults["values.crds.enabled"] is True
+    assert defaults["values.replicaCount"] == 2
     assert defaults["values.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
+    assert defaults["values.webhook.replicaCount"] == 2
     assert defaults["values.webhook.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
+    assert defaults["values.cainjector.replicaCount"] == 2
     assert defaults["values.cainjector.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
     assert defaults["values.startupapicheck.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
+
+
+def test_bundled_mysterybox_uses_profile_and_no_webhook_chart() -> None:
+    loaded = load_component_sources(
+        explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml"
+    )
+    mysterybox = next(item for item in loaded.tf_modules if item.module == "mysterybox")
+
+    assert not any(item.name == "mysterybox-webhook" for item in loaded.helm_charts)
+    assert mysterybox.wizard_fields == {
+        "inputs.secrets": {
+            "type_hint": "list(object({}))",
+            "prompt_complex": True,
+            "required": True,
+        },
+        "inputs.payload_values": {
+            "prompt": False,
+        },
+    }
 
 
 def test_bundled_cpu_only_charts_avoid_nebius_gpu_nodes_by_default() -> None:
@@ -2267,6 +2348,7 @@ def test_bundled_cpu_only_charts_avoid_nebius_gpu_nodes_by_default() -> None:
     }
     n8n_defaults = {item.target_path: item.value for item in charts["n8n"].defaults}
 
+    assert "values.replicas" not in grafana_defaults
     assert grafana_defaults["values.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
     assert "values.image.registry" not in grafana_defaults
     assert "values.image.repository" not in grafana_defaults
@@ -2304,8 +2386,8 @@ def test_bundled_cpu_only_charts_avoid_nebius_gpu_nodes_by_default() -> None:
             "read_endpoint": "metrics_service_provider_read",
             "is_default": True,
             "description": (
-                "Nebius/provider service metrics for cloud resources and "
-                "Nebius service dashboards."
+                "Nebius/provider service metrics for cloud resources, the cxcli GPU dashboard, "
+                "and service dashboard examples."
             ),
         },
         "user-metrics": {
@@ -2336,7 +2418,7 @@ def test_bundled_cpu_only_charts_avoid_nebius_gpu_nodes_by_default() -> None:
             "description": "",
         },
     }
-    report_dashboards = {binding.signal: binding for binding in grafana_settings.report_dashboards}
+    dashboard_signals = {binding.signal: binding for binding in grafana_settings.dashboard_signals}
     assert {
         signal: {
             "folder": binding.folder,
@@ -2346,7 +2428,7 @@ def test_bundled_cpu_only_charts_avoid_nebius_gpu_nodes_by_default() -> None:
             "datasource": binding.datasource,
             "read_endpoint": binding.read_endpoint,
         }
-        for signal, binding in report_dashboards.items()
+        for signal, binding in dashboard_signals.items()
     } == {
         "metrics": {
             "folder": "nebius-kubernetes",
@@ -2375,7 +2457,7 @@ def test_bundled_cpu_only_charts_avoid_nebius_gpu_nodes_by_default() -> None:
     }
     grafana_service_dashboards = grafana_defaults["values.dashboards"]["nebius"]
     grafana_dashboards = grafana_defaults["values.dashboards"]["nebius-kubernetes"]
-    for binding in report_dashboards.values():
+    for binding in dashboard_signals.values():
         assert binding.folder == "nebius-kubernetes"
         dashboard = grafana_dashboards[binding.dashboard]
         dashboard_json = json.loads(dashboard["json"])
@@ -2383,9 +2465,15 @@ def test_bundled_cpu_only_charts_avoid_nebius_gpu_nodes_by_default() -> None:
         assert dashboard["datasource"] == binding.datasource
         assert "json_file" not in dashboard
     assert (
-        'label_values(container_cpu_usage_seconds_total{\\"k8s.cluster.id\\"=~\\"$Cluster\\"}, kubernetes_io_hostname)'
+        'query_result(count by (kubernetes_io_hostname) '
+        '(container_cpu_usage_seconds_total{\\"k8s.cluster.id\\"=~\\"$Cluster\\",pod!=\\"\\"}))'
         in grafana_dashboards["kubernetes-cluster-monitoring"]["json"]
     )
+    assert (
+        'DCGM_FI_DEV_GPU_UTIL{mk8s_cluster_id=~\\"$Cluster\\",instance_id=~\\"$GpuNode\\"'
+        in grafana_dashboards["kubernetes-gpu"]["json"]
+    )
+    assert grafana_dashboards["kubernetes-gpu"]["datasource"] == "Nebius Services"
     assert "kube_pod_info" not in grafana_dashboards["kubernetes-cluster-monitoring"]["json"]
     assert (
         'label_values({__bucket__=\\"default\\", k8s_cluster_id=~\\"$Cluster\\"}, k8s_namespace_name)'
@@ -2401,26 +2489,24 @@ def test_bundled_cpu_only_charts_avoid_nebius_gpu_nodes_by_default() -> None:
         key: dashboard["uid"]
         for key, dashboard in grafana_service_dashboards.items()
         if key.startswith("nebius-")
-    } == {
-        "nebius-disk": "nebius-disk-user-stats",
-        "nebius-gpu": "nebius-gpu",
-        "nebius-managed-postgres": "nebius-postgresql",
-        "nebius-object-storage": "nebius-object-storage",
-        "nebius-observability-platform": "nebius-observability",
-        "nebius-shared-filesystem": "nebius-shared-filesystem",
-        "nebius-shared-filesystem-extended": "nebius-shared-filesystem-extended",
-    }
+    } == {"nebius-disk": "nebius-disk-user-stats"}
     envoy_proxy = next(
         item for item in grafana_defaults["values.extraObjects"] if item["kind"] == "EnvoyProxy"
     )
+    assert envoy_proxy["spec"]["provider"]["kubernetes"]["envoyDeployment"]["replicas"] == 2
     assert (
         envoy_proxy["spec"]["provider"]["kubernetes"]["envoyDeployment"]["pod"]["affinity"]
         == _NEBIUS_CPU_ONLY_AFFINITY
     )
     assert gateway_defaults["values.deployment.pod.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
+    assert gateway_defaults["values.deployment.replicas"] == 2
     assert gateway_defaults["values.certgen.job.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
     assert external_dns_defaults["values.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
+    assert external_secrets_defaults["values.replicaCount"] == 2
+    assert external_secrets_defaults["values.leaderElect"] is True
     assert external_secrets_defaults["values.global.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
+    assert external_secrets_defaults["values.webhook.replicaCount"] == 2
+    assert external_secrets_defaults["values.certController.replicaCount"] == 2
     assert n8n_defaults["values.main.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
     assert n8n_defaults["values.worker.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
     assert n8n_defaults["values.webhook.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
@@ -3058,7 +3144,10 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                                                         "image": "k8s-rdma-shared-dev-plugin",
                                                         "repository": "nvcr.io/nvidia/mellanox",
                                                         "version": "network-operator-v{chart_version}",
-                                                        "config": '{"configList":[]}',
+                                                        "config": (
+                                                            '{"periodicUpdateInterval": 0, '
+                                                            '"configList":[]}'
+                                                        ),
                                                     }
                                                 },
                                             },
@@ -3166,6 +3255,7 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
     assert "kind: NicClusterPolicy" in patch_text
     assert "image: k8s-rdma-shared-dev-plugin" in patch_text
     assert "version: network-operator-v1.0.0" in patch_text
+    assert '"periodicUpdateInterval": 0' in patch_text
     gpu_defaults_rule = next(
         rule
         for rule in gpu_operator.mk8s_gpu.rules

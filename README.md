@@ -17,9 +17,10 @@ Notable examples include the `attach-ubuntu` Codex skill for launching an
 Ubuntu test container, bootstrapping project build dependencies into a
 container-specific virtual environment, preserving Git metadata for
 subprojects, and attaching VS Code to it on macOS with Docker Desktop, plus
-the `align` Codex skill for end-to-end project review and fix passes that
-reconcile code, module wiring, tests, CI workflows, CLI/help output, config,
-README/design docs, and documentation without speculative rewrites. The same
+the `align` Codex skill for cautious senior code-review style alignment passes
+that reconcile code, module wiring, tests, CI workflows, CLI/help output,
+config, README/design docs, and documentation while leaving unclear business
+logic unchanged and documented. The same
 `skills/` set also includes `create-pr` and `review-pr` for branch-safe GitHub
 pull request creation and merge-readiness review/fix flows with safer
 default-branch handling and conservative branch-update guidance.

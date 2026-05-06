@@ -20,7 +20,7 @@ import urllib.error
 import urllib.request
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import ExitStack, suppress
+from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from functools import lru_cache
@@ -167,6 +167,8 @@ from .helm_client import HelmChartReference, HelmClient, chart_cli_contract_find
 from .iam_bootstrap import (
     auth_public_key_exists,
     bootstrap_ci_service_account,
+    bootstrap_service_account_auth_key,
+    ensure_ci_service_account_identity,
 )
 from .infra_render import (
     is_portable_module_source,
@@ -202,6 +204,18 @@ from .mk8s_preflight import (
     has_mk8s_resource_name_preflight_targets,
     validate_mk8s_network_preflight,
     validate_mk8s_resource_name_preflight,
+)
+from .mysterybox_eso import (
+    EXTERNAL_SECRETS_APP_ID,
+    MYSTERYBOX_ESO_CONNECTIVITY_VALIDATION_KIND,
+    MYSTERYBOX_INFRA_COMPONENT_ID,
+    ensure_mysterybox_eso_app_rows,
+    materialize_mysterybox_eso_app_values,
+    mysterybox_eso_api_domains,
+    mysterybox_eso_enabled,
+    mysterybox_eso_runtime_secret_specs,
+    mysterybox_eso_terraform_output_specs,
+    mysterybox_eso_validation_specs,
 )
 from .notify_ops import DeployReportEmailResult, send_deploy_report_email
 from .observability import (
@@ -399,7 +413,6 @@ def _adjust_quota_report_for_existing_generated_state(
         _ensure_runtime_auth_material(
             config,
             need_terraform=True,
-            need_eso_mysterybox=False,
             auto_bootstrap=False,
         )
         _ensure_backend_s3_env_aliases()
@@ -888,12 +901,15 @@ _WIZARD_QUIT_CHOICE = "__wizard_quit__"
 PayloadPath = tuple[str | int, ...]
 _TEMP_PRIVATE_KEY_FILES: list[Path] = []
 _RUNTIME_TF_SERVICE_ACCOUNT_NAME = "nebius-cxcli-tf-sa"
+_MYSTERYBOX_ESO_SERVICE_ACCOUNT_NAME = "mysterybox-sa"
 _RUNTIME_AUTH_CACHE_ENV = "NEBIUS_CXCLI_RUNTIME_AUTH_DIR"
 _RUNTIME_AUTH_CACHE_FILE = "runtime-auth.json"
+_MYSTERYBOX_ESO_TLS_CHECK_IMAGE = "curlimages/curl:8.7.1"
 _RUNTIME_AUTH_TOKEN_READY_TIMEOUT_ENV = "NEBIUS_CXCLI_RUNTIME_AUTH_TOKEN_READY_TIMEOUT_SECONDS"
 _RUNTIME_AUTH_TOKEN_READY_POLL_ENV = "NEBIUS_CXCLI_RUNTIME_AUTH_TOKEN_READY_POLL_SECONDS"
 _RUNTIME_AUTH_TOKEN_READY_TIMEOUT_SECONDS = 60.0
 _RUNTIME_AUTH_TOKEN_READY_POLL_SECONDS = 2.0
+_MYSTERYBOX_ESO_ROLE_IDS = ("mysterybox.payload-viewer",)
 _BENIGN_KUBECTL_OUTPUT_MARKERS = (
     "token from NEBIUS_IAM_TOKEN env is used",
     "missing the kubectl.kubernetes.io/last-applied-configuration annotation",
@@ -1683,6 +1699,7 @@ def _ask_questionary_with_wizard_navigation(question: Any) -> Any:
     bindings = getattr(application, "key_bindings", None)
     if bindings is not None:
         try:
+
             @bindings.add(*tuple(WIZARD_ABORT_TOKEN), eager=True)
             def _wizard_quit(event: Any) -> None:
                 event.app.exit(result=_WIZARD_QUIT_CHOICE)
@@ -1729,6 +1746,18 @@ def _print_component_edit_next_steps(config_path: Path) -> None:
         f"`nebius-cxcli render {config_arg}`.",
         soft_wrap=True,
     )
+
+
+def _print_create_next_steps(config_path: Path) -> None:
+    config_arg = _config_cli_arg(config_path)
+    console.print("Next steps:")
+    for command, suffix in (
+        (f"nebius-cxcli validate {config_arg}", ""),
+        (f"nebius-cxcli render {config_arg}", ""),
+        (f"nebius-cxcli bootstrap-ci {config_arg}", " (optional)"),
+        (f"nebius-cxcli deploy {config_arg}", ""),
+    ):
+        console.print(f"  `{command}`{suffix}", soft_wrap=True)
 
 
 def _print_component_edit_config_only_note() -> None:
@@ -1984,7 +2013,13 @@ def _prompt_component_scope_selection(
         entries=entries,
         defaults=set(),
     )
-    return {token for token in selected if token}
+    selected_ids = {token for token in selected if token}
+    _print_component_scope_selection_summary(
+        scope=scope,
+        selected=selected_ids,
+        entries=entries,
+    )
+    return selected_ids
 
 
 def _prompt_component_instance_selection(
@@ -2473,6 +2508,175 @@ def _component_instance_selector_label(
     if instance_id == entry.id:
         return base
     return f"{base} @ {instance_id}"
+
+
+def _component_selection_summary(
+    *,
+    selected: set[str],
+    entries: tuple[ComponentEntry, ...],
+) -> str:
+    labels = _component_selection_labels(selected=selected, entries=entries)
+    return ", ".join(labels) if labels else "(none)"
+
+
+def _component_selection_labels(
+    *,
+    selected: set[str],
+    entries: tuple[ComponentEntry, ...],
+) -> list[str]:
+    if not selected:
+        return []
+    entry_by_id = {entry.id: entry for entry in entries}
+    labels: list[str] = []
+    for component_id in sorted(selected):
+        entry = entry_by_id.get(component_id)
+        labels.append(entry.id if entry is not None else component_id)
+    return labels
+
+
+def _component_selection_block(
+    *,
+    infra_labels: Sequence[str],
+    app_labels: Sequence[str],
+    current_label: str = "",
+    current_scope: ComponentScope | str | None = None,
+) -> str:
+    if current_label:
+        scope_label = str(current_scope).title() if current_scope is not None else "Component"
+        return (
+            "[bold cyan]Wizard context:[/bold cyan] "
+            "[dim]Current:[/dim] "
+            f"[bold magenta]{escape(scope_label)}[/bold magenta] "
+            "[dim]/[/dim] "
+            f"[bold green]{escape(current_label)}[/bold green]"
+        )
+
+    lines = ["Current component selections:"]
+
+    def _append_section(
+        title: str,
+        labels: Sequence[str],
+        *,
+        current: str = "",
+    ) -> None:
+        lines.append(f"  {title}:")
+        if not labels:
+            lines.append("    - (none)")
+            return
+        for label in labels:
+            if current and label == current:
+                lines.append(f"    * {escape(label)} (current)")
+                continue
+            lines.append(f"    - {escape(label)}")
+
+    _append_section(
+        "Infra",
+        infra_labels,
+        current=current_label if current_scope == "infra" else "",
+    )
+    _append_section(
+        "Apps",
+        app_labels,
+        current=current_label if current_scope == "apps" else "",
+    )
+    return "\n".join(lines)
+
+
+def _print_component_scope_selection_summary(
+    *,
+    scope: ComponentScope,
+    selected: set[str],
+    entries: tuple[ComponentEntry, ...],
+) -> None:
+    summary = _component_selection_summary(selected=selected, entries=entries)
+    console.print(f"[dim]Selected {scope} components: {escape(summary)}[/dim]")
+
+
+def _print_component_selection_summary(
+    *,
+    selected_infra: set[str],
+    selected_apps: set[str],
+    infra_entries: tuple[ComponentEntry, ...],
+    app_entries: tuple[ComponentEntry, ...],
+) -> None:
+    infra_labels = _component_selection_labels(
+        selected=selected_infra,
+        entries=infra_entries,
+    )
+    app_labels = _component_selection_labels(
+        selected=selected_apps,
+        entries=app_entries,
+    )
+    console.print(_component_selection_block(infra_labels=infra_labels, app_labels=app_labels))
+
+
+def _enabled_app_instance_labels(
+    payload: dict[str, Any],
+    *,
+    app_id: str = "",
+) -> tuple[str, ...]:
+    apps = payload.get("apps")
+    if not isinstance(apps, Mapping):
+        return ()
+    charts = apps.get("charts")
+    if not isinstance(charts, list):
+        return ()
+
+    normalized_app_id = normalize_component_token(app_id)
+    labels: list[str] = []
+    seen: set[str] = set()
+    for row in charts:
+        if not isinstance(row, Mapping) or not bool(row.get("enabled", False)):
+            continue
+        chart_id = component_type_id(row)
+        if normalized_app_id and chart_id != normalized_app_id:
+            continue
+        instance_id = component_instance_id(row)
+        label = component_instance_label(chart_id, instance_id)
+        if not label or label in seen:
+            continue
+        labels.append(label)
+        seen.add(label)
+    return tuple(labels)
+
+
+def _ensure_mysterybox_eso_app_dependency_selection(
+    payload: dict[str, Any],
+    *,
+    selected_apps: set[str],
+    app_entries: tuple[ComponentEntry, ...],
+) -> tuple[set[str], tuple[str, ...]]:
+    before_selected_apps = set(selected_apps)
+    before_labels = set(
+        _enabled_app_instance_labels(payload, app_id=EXTERNAL_SECRETS_APP_ID)
+    )
+    changed = ensure_mysterybox_eso_app_rows(payload, app_entries=app_entries)
+    after_selected_apps = _enabled_ids_from_runtime_payload(payload=payload, entries=app_entries)
+    external_secrets_was_auto_selected = (
+        EXTERNAL_SECRETS_APP_ID in after_selected_apps
+        and EXTERNAL_SECRETS_APP_ID not in before_selected_apps
+    )
+    if not changed and not external_secrets_was_auto_selected:
+        return selected_apps, ()
+    after_labels = set(_enabled_app_instance_labels(payload, app_id=EXTERNAL_SECRETS_APP_ID))
+    auto_enabled_labels = after_labels - before_labels
+    if external_secrets_was_auto_selected and not auto_enabled_labels:
+        auto_enabled_labels = after_labels
+    return (
+        after_selected_apps,
+        tuple(sorted(auto_enabled_labels)),
+    )
+
+
+def _print_mysterybox_eso_app_dependency_adjustment(app_labels: tuple[str, ...]) -> None:
+    if not app_labels:
+        return
+    console.print(
+        f"{warning_markup('Adjusted component selection:')} enabling "
+        + ", ".join(f"'apps:{label}'" for label in app_labels)
+        + " because selected MysteryBox with MK8s requires the External Secrets "
+        "Operator controller."
+    )
 
 
 def _scope_rows(payload: dict[str, Any], *, scope: ComponentScope) -> list[dict[str, Any]]:
@@ -2971,8 +3175,7 @@ def _prompt_component_with_checkboxes(
             rendered_choices = [
                 questionary.Choice(
                     title=(
-                        f"{_component_selector_label(entry, scope=scope)}  "
-                        f"({entry.description})"
+                        f"{_component_selector_label(entry, scope=scope)}  ({entry.description})"
                     ),
                     value=entry.id,
                     checked=entry.id in default_selectable,
@@ -2983,10 +3186,7 @@ def _prompt_component_with_checkboxes(
                 questionary.checkbox(
                     f"Select {scope} components",
                     choices=rendered_choices,
-                    instruction=(
-                        "Use arrows and space to toggle; q=back; qq=quit; "
-                        "Enter=confirm."
-                    ),
+                    instruction=("Use arrows and space to toggle; q=back; qq=quit; Enter=confirm."),
                     qmark="",
                 )
             )
@@ -3040,14 +3240,22 @@ def _resolve_component_ids(
     if not tokens and interactive:
         tokens = _prompt_component_with_checkboxes(scope=scope, entries=entries, defaults=defaults)
     if not tokens:
-        return defaults
-    resolved = _resolve_component_ids_from_tokens(
-        scope=scope,
-        tokens=tokens,
-        entries=entries,
-        defaults=defaults,
-    )
-    return resolved | required_ids
+        resolved = set(defaults)
+    else:
+        resolved = _resolve_component_ids_from_tokens(
+            scope=scope,
+            tokens=tokens,
+            entries=entries,
+            defaults=defaults,
+        )
+    resolved |= required_ids
+    if interactive:
+        _print_component_scope_selection_summary(
+            scope=scope,
+            selected=resolved,
+            entries=entries,
+        )
+    return resolved
 
 
 @dataclass(frozen=True)
@@ -3645,6 +3853,15 @@ def _wizard_field_default_value(
     return copy.deepcopy(spec.get("default"))
 
 
+def _wizard_field_materialize_default(
+    *,
+    entry: ComponentEntry,
+    full_path_label: str,
+) -> bool:
+    spec = _resolve_wizard_field_spec(entry=entry, full_path_label=full_path_label)
+    return bool(isinstance(spec, dict) and spec.get("materialize_default") is True)
+
+
 def _resolve_dynamic_field_choices(
     *,
     payload: dict[str, Any],
@@ -3739,10 +3956,16 @@ def _resolve_dynamic_field_choices(
             if not isinstance(values, list):
                 continue
             for raw in values:
-                value = str(raw).strip()
+                label = ""
+                if isinstance(raw, Mapping):
+                    value = str(raw.get("value", "")).strip()
+                    label = str(raw.get("label", "")).strip() or value
+                else:
+                    value = str(raw).strip()
+                    label = value
                 if not value or value in seen:
                     continue
-                choices.append(OptionChoice(value=value, label=value))
+                choices.append(OptionChoice(value=value, label=label))
                 seen.add(value)
             continue
     return choices
@@ -4026,6 +4249,11 @@ def _complex_type_kind(type_hint: str | None) -> str | None:
     return None
 
 
+def _is_string_sequence_type_hint(type_hint: str | None) -> bool:
+    hint = _short_type_hint(type_hint)
+    return hint in {"list(string)", "set(string)"}
+
+
 def _is_complex_type_hint(type_hint: str | None) -> bool:
     return _complex_type_kind(type_hint) is not None
 
@@ -4060,9 +4288,21 @@ def _parse_complex_prompt_value(raw: str, *, type_hint: str | None) -> object:
     kind = _complex_type_kind(type_hint)
     parsed = yaml.safe_load(raw)
     if kind == "sequence":
-        if not isinstance(parsed, list):
+        if isinstance(parsed, list):
+            if _is_string_sequence_type_hint(type_hint) and not all(
+                isinstance(item, str) for item in parsed
+            ):
+                raise ValueError("Expected a comma-separated list of strings.")
+            return parsed
+        if _is_string_sequence_type_hint(type_hint) and isinstance(parsed, str):
+            values = [item.strip() for item in parsed.split(",")]
+            if not values or any(not item for item in values):
+                raise ValueError("Expected a comma-separated list of strings.")
+            return values
+        if _is_string_sequence_type_hint(type_hint):
+            raise ValueError("Expected a comma-separated list of strings.")
+        else:
             raise ValueError("Expected a YAML/JSON list value.")
-        return parsed
     if kind == "mapping":
         if not isinstance(parsed, dict):
             raise ValueError("Expected a YAML/JSON mapping value.")
@@ -4189,17 +4429,22 @@ def _prompt_path_sort_key(
         "deploy.targets[].validations.mk8s_gpu.nccl.max_nodes": 34,
         "deploy.targets[].validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps": 35,
         "deploy.targets[].validations.mk8s_gpu.health_checker.enabled": 36,
+        "deploy.targets[].secrets.mysterybox.enabled": 40,
+        "deploy.targets[].secrets.mysterybox.allow_all_namespaces": 41,
+        "deploy.targets[].secrets.mysterybox.sync_namespaces": 42,
     }
     leaf = path[-1] if path else ""
     leaf_name = _normalize_leaf_name(str(leaf)) if isinstance(leaf, str) else ""
+    normalized_full_label = re.sub(r"deploy\.targets\[[0-9]+\]", "deploy.targets[]", full_label)
     required_rank = (
         0
         if (required_prompt_labels and full_label in required_prompt_labels)
         or (leaf_name and leaf_name in required_leaf_names)
         else 1
     )
+    if normalized_full_label.startswith("deploy.targets[].secrets.mysterybox."):
+        required_rank = 1
     toggle_rank = 0 if leaf_name.endswith("_enabled") else 1
-    normalized_full_label = re.sub(r"deploy\.targets\[[0-9]+\]", "deploy.targets[]", full_label)
     leaf_rank = next(
         (rank for suffix, rank in nested_order_hints.items() if normalized_full_label == suffix),
         leaf_order_hints.get(leaf_name, 100),
@@ -4298,6 +4543,15 @@ def _is_mk8s_gpu_validation_field(full_path_label: str) -> bool:
 def _is_observability_field(full_path_label: str) -> bool:
     return full_path_label.startswith("deploy.observability.") or bool(
         re.match(r"^deploy\.targets(?:\[[0-9]+\]|\[\])\.observability\.", full_path_label)
+    )
+
+
+def _is_mysterybox_eso_field(full_path_label: str) -> bool:
+    return bool(
+        re.match(
+            r"^deploy\.targets(?:\[[0-9]+\]|\[\])\.secrets\.mysterybox(?:\.|$)",
+            full_path_label,
+        )
     )
 
 
@@ -4466,6 +4720,19 @@ def _payload_has_enabled_mk8s(payload: dict[str, Any]) -> bool:
     )
 
 
+def _payload_has_enabled_mysterybox(payload: dict[str, Any]) -> bool:
+    infra = payload.get("infra")
+    components = infra.get("components") if isinstance(infra, dict) else None
+    if not isinstance(components, list):
+        return False
+    return any(
+        isinstance(item, dict)
+        and bool(item.get("enabled", False))
+        and component_type_id(item) == MYSTERYBOX_INFRA_COMPONENT_ID
+        for item in components
+    )
+
+
 def _payload_has_enabled_vm(payload: dict[str, Any]) -> bool:
     infra = payload.get("infra")
     components = infra.get("components") if isinstance(infra, dict) else None
@@ -4548,6 +4815,44 @@ def _maybe_print_observability_prompt_guidance(
     emitted_guidance.add("observability")
 
 
+def _terraform_identifier_hint(value: str, *, fallback_prefix: str = "module") -> str:
+    token = re.sub(r"[^A-Za-z0-9_]", "_", value.strip())
+    if not token:
+        token = fallback_prefix
+    if not re.match(r"^[A-Za-z_]", token):
+        token = f"{fallback_prefix}_{token}"
+    return token
+
+
+def _maybe_print_mysterybox_secrets_prompt_guidance(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+    emitted_guidance: set[str],
+) -> None:
+    if entry.scope != "infra" or entry.id != "mysterybox":
+        return
+    if not full_path_label.endswith(".inputs.secrets"):
+        return
+    component_prefix = _dynamic_component_prefix(entry=entry, full_path_label=full_path_label)
+    guidance_key = f"mysterybox_secrets:{component_prefix or full_path_label}"
+    if guidance_key in emitted_guidance:
+        return
+    env_var = "TF_VAR_<rendered_module_name>_payload_values"
+    if component_prefix:
+        module_name = _non_empty_text(
+            _read_payload_field(payload, f"{component_prefix}.inputs.module_name")
+        ) or _non_empty_text(_read_payload_field(payload, f"{component_prefix}.instance_id"))
+        if module_name:
+            env_var = f"TF_VAR_{_terraform_identifier_hint(module_name)}_payload_values"
+    console.print(
+        "[dim]MysteryBox: enter Secret names and payload keys only. "
+        f"Values are supplied at deploy with {env_var}.[/dim]"
+    )
+    emitted_guidance.add(guidance_key)
+
+
 def _skip_observability_prompt(
     *,
     payload: dict[str, Any],
@@ -4624,6 +4929,30 @@ def _skip_observability_prompt(
                 )
             )
     return False
+
+
+def _skip_mysterybox_eso_prompt(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+) -> bool:
+    if entry.scope != "infra" or not _is_mysterybox_eso_field(full_path_label):
+        return False
+    if entry.id != "mk8s" or not _payload_has_enabled_mk8s(payload):
+        return True
+    if not _payload_has_enabled_mysterybox(payload):
+        return True
+    target_match = re.match(
+        r"^(deploy\.targets\[[0-9]+\]\.secrets\.mysterybox)(?:\.|$)",
+        full_path_label,
+    )
+    if not target_match:
+        return False
+    target_prefix = target_match.group(1)
+    if full_path_label == f"{target_prefix}.enabled":
+        return False
+    return not bool(_read_payload_field(payload, f"{target_prefix}.enabled"))
 
 
 def _skip_vm_observability_dependent_prompt(
@@ -4931,17 +5260,65 @@ _WIZARD_REDACTED_FIELD_TOKENS = (
 
 
 def _wizard_field_is_sensitive(path_label: str) -> bool:
+    normalized_label = re.sub(
+        r"deploy\.targets\[[0-9]+\]",
+        "deploy.targets[]",
+        path_label.lower(),
+    )
+    public_mysterybox_sync_fields = {
+        "deploy.targets[].secrets.mysterybox.enabled",
+        "deploy.targets[].secrets.mysterybox.store_name",
+        "deploy.targets[].secrets.mysterybox.api_domain",
+        "deploy.targets[].secrets.mysterybox.allow_all_namespaces",
+        "deploy.targets[].secrets.mysterybox.sync_namespaces",
+    }
+    if normalized_label in public_mysterybox_sync_fields:
+        return False
     normalized = re.sub(r"[^a-z0-9]+", "_", path_label.lower())
     return any(token in normalized for token in _WIZARD_REDACTED_FIELD_TOKENS)
 
 
+def _is_mysterybox_secrets_path(path_label: str) -> bool:
+    return bool(re.search(r"\.inputs\.secrets$", path_label))
+
+
+def _mysterybox_secrets_summary(value: object) -> str:
+    if not isinstance(value, list):
+        return ""
+    parts: list[str] = []
+    for item in value[:3]:
+        if not isinstance(item, Mapping):
+            continue
+        name = _non_empty_text(item.get("name")) or "<unnamed>"
+        kubernetes_secret_name = _non_empty_text(item.get("kubernetes_secret_name"))
+        if kubernetes_secret_name and kubernetes_secret_name != name:
+            name = f"{name}->{kubernetes_secret_name}"
+        payload = item.get("payload")
+        payload_keys = (
+            sorted(str(key).strip() for key in payload if str(key).strip())
+            if isinstance(payload, Mapping)
+            else []
+        )
+        if payload_keys:
+            parts.append(f"{name} ({', '.join(payload_keys[:5])})")
+        else:
+            parts.append(name)
+    if len(value) > 3:
+        parts.append(f"+{len(value) - 3} more")
+    return "; ".join(parts) if parts else "[]"
+
+
 def _wizard_visible_value(value: object, *, path_label: str) -> str:
-    if _wizard_field_is_sensitive(path_label):
-        return "<redacted>"
     if value is None:
         return "null"
     if isinstance(value, bool):
         return "true" if value else "false"
+    if _is_mysterybox_secrets_path(path_label):
+        summary = _mysterybox_secrets_summary(value)
+        if summary:
+            return summary
+    if _wizard_field_is_sensitive(path_label):
+        return "<redacted>"
     if isinstance(value, str):
         rendered = value
     else:
@@ -5087,9 +5464,7 @@ def _prompt_choice_override(
                     0,
                     questionary.Choice(title="<skip / keep unset>", value="__skip__"),
                 )
-            rendered_choices.append(
-                questionary.Choice(title="<manual input>", value="__manual__")
-            )
+            rendered_choices.append(questionary.Choice(title="<manual input>", value="__manual__"))
             selected = _ask_questionary_with_wizard_navigation(
                 questionary.select(
                     rendered_label,
@@ -5152,6 +5527,183 @@ def _prompt_choice_override(
         return raw, False
 
 
+def _is_mysterybox_secrets_guided_prompt(path_label: str, type_hint: str | None) -> bool:
+    normalized_type = re.sub(r"\s+", " ", str(type_hint or "").strip().lower())
+    return (
+        _is_mysterybox_secrets_path(path_label)
+        and "list(object" in normalized_type
+        and "payload" in normalized_type
+    )
+
+
+def _prompt_mysterybox_payload_type(payload_key: str) -> tuple[str | object, bool]:
+    while True:
+        try:
+            raw = typer.prompt(
+                f"Payload type for {payload_key} [text/file]",
+                default="text",
+            ).strip()
+        except (KeyboardInterrupt, EOFError, typer.Abort):
+            return "text", True
+        lowered = raw.lower()
+        if lowered == WIZARD_ABORT_TOKEN:
+            return "text", True
+        if lowered == WIZARD_EXIT_TOKEN:
+            return _WIZARD_BACKTRACK, False
+        if not lowered:
+            lowered = "text"
+        if lowered in {"text", "file"}:
+            return lowered, False
+        console.print(f"{error_markup('Invalid value')}. Enter text or file.")
+
+
+def _last_mysterybox_payload_key(payload: Mapping[str, object]) -> str:
+    return next(reversed(payload), "")
+
+
+def _prompt_mysterybox_kubernetes_secret_name(secret_name: str) -> tuple[str, bool]:
+    while True:
+        try:
+            raw = typer.prompt(
+                f"Kubernetes Secret name for {secret_name} (q=back, qq=quit wizard)",
+                default=secret_name,
+            ).strip()
+        except (KeyboardInterrupt, EOFError, typer.Abort):
+            return "", True
+        if raw == WIZARD_ABORT_TOKEN:
+            return "", True
+        if raw == WIZARD_EXIT_TOKEN:
+            return _WIZARD_BACKTRACK, False
+        if not raw:
+            raw = secret_name
+        if INSTANCE_ID_PATTERN.fullmatch(raw):
+            return raw, False
+        console.print(
+            f"{error_markup('Invalid value')}. Enter a valid Kubernetes Secret name."
+        )
+
+
+def _prompt_mysterybox_secrets_override(
+    path_label: str,
+    current: object,
+    *,
+    required: bool,
+) -> tuple[object, bool]:
+    existing = copy.deepcopy(current) if isinstance(current, list) else []
+    secrets: list[dict[str, Any]] = [
+        copy.deepcopy(item) for item in existing if isinstance(item, Mapping)
+    ]
+    seen_names = {
+        _non_empty_text(item.get("name"))
+        for item in secrets
+        if isinstance(item, Mapping) and _non_empty_text(item.get("name"))
+    }
+    if secrets:
+        console.print(
+            f"[dim]Current {escape(path_label)}: "
+            f"{escape(_mysterybox_secrets_summary(secrets))}[/dim]"
+        )
+    while True:
+        secret_prompt = (
+            "MysteryBox Secret name (required, q=back, qq=quit wizard)"
+            if required and not secrets
+            else "MysteryBox Secret name (blank=done, q=back, qq=quit wizard)"
+        )
+        try:
+            secret_name = typer.prompt(
+                secret_prompt,
+                default="",
+            ).strip()
+        except (KeyboardInterrupt, EOFError, typer.Abort):
+            return current, True
+        if secret_name == WIZARD_ABORT_TOKEN:
+            return current, True
+        if secret_name == WIZARD_EXIT_TOKEN:
+            return _WIZARD_BACKTRACK, False
+        if not secret_name:
+            if secrets:
+                return secrets, False
+            if required:
+                console.print(f"{error_markup('Invalid value')}. Add at least one Secret.")
+                continue
+            return current, False
+        if secret_name in seen_names:
+            console.print(f"{error_markup('Invalid value')}. Secret names must be unique.")
+            continue
+
+        kubernetes_secret_name, should_stop = _prompt_mysterybox_kubernetes_secret_name(
+            secret_name
+        )
+        if should_stop:
+            return current, True
+        if _wizard_backtrack_requested(kubernetes_secret_name):
+            continue
+
+        payload: dict[str, dict[str, str]] = {}
+        restart_secret_prompt = False
+        while True:
+            payload_key_prompt = (
+                f"Payload key for {secret_name} (required, q=back, qq=quit wizard)"
+                if not payload
+                else f"Payload key for {secret_name} (blank=finish Secret, q=back, qq=quit wizard)"
+            )
+            try:
+                payload_key = typer.prompt(
+                    payload_key_prompt,
+                    default="",
+                ).strip()
+            except (KeyboardInterrupt, EOFError, typer.Abort):
+                return current, True
+            if payload_key == WIZARD_ABORT_TOKEN:
+                return current, True
+            if payload_key == WIZARD_EXIT_TOKEN:
+                last_payload_key = _last_mysterybox_payload_key(payload)
+                if not last_payload_key:
+                    restart_secret_prompt = True
+                    break
+                payload.pop(last_payload_key, None)
+                console.print(
+                    f"[dim]Backtracked from {escape(last_payload_key)}; "
+                    "re-enter that payload key or finish the Secret.[/dim]"
+                )
+                continue
+            if not payload_key:
+                if payload:
+                    break
+                console.print(
+                    f"{error_markup('Invalid value')}. Add at least one payload key."
+                )
+                continue
+            payload_key = payload_key.upper()
+            if payload_key in payload:
+                console.print(f"{error_markup('Invalid value')}. Payload keys must be unique.")
+                continue
+            console.print(f"[dim]Entered {escape(payload_key)} as the key.[/dim]")
+            payload_type, should_stop = _prompt_mysterybox_payload_type(payload_key)
+            if should_stop:
+                return current, True
+            if _wizard_backtrack_requested(payload_type):
+                continue
+            payload[payload_key] = {"type": str(payload_type)}
+
+        if restart_secret_prompt:
+            continue
+        secrets.append(
+            {
+                "name": secret_name,
+                "version_id": "n/a",
+                "kubernetes_secret_name": kubernetes_secret_name,
+                "payload": payload,
+            }
+        )
+        seen_names.add(secret_name)
+        console.print(
+            f"[dim]Added MysteryBox Secret {escape(secret_name)} with "
+            f"{len(payload)} payload key(s), syncing to Kubernetes Secret "
+            f"{escape(kubernetes_secret_name)}.[/dim]"
+        )
+
+
 def _prompt_scalar_override(
     path_label: str,
     current: object,
@@ -5168,6 +5720,12 @@ def _prompt_scalar_override(
             type_hint=type_hint,
             required=required,
         )
+    if _is_mysterybox_secrets_guided_prompt(path_label, type_hint):
+        return _prompt_mysterybox_secrets_override(
+            path_label,
+            current,
+            required=required,
+        )
     rendered_label = _prompt_label_with_type(
         path_label,
         type_hint=type_hint,
@@ -5176,7 +5734,10 @@ def _prompt_scalar_override(
     prompt_suffix = _wizard_field_prompt_suffix(rendered_label)
     if _is_complex_type_hint(type_hint) or isinstance(current, (dict, list)):
         default_value = _serialize_complex_prompt_default(current)
-        prompt_suffix = f"{prompt_suffix}; enter a single-line YAML/JSON value"
+        if _is_string_sequence_type_hint(type_hint):
+            prompt_suffix = f"{prompt_suffix}; enter a comma-separated list"
+        else:
+            prompt_suffix = f"{prompt_suffix}; enter a single-line YAML/JSON value"
         blank_hint = _empty_complex_value_label(current, type_hint=type_hint)
         blank_keep_text = (
             f"blank keeps current {blank_hint}"
@@ -5331,6 +5892,16 @@ def _run_component_field_wizard(
     warned_provider_fallbacks: set[str] = set()
     provider_allowed_cache: dict[str, tuple[set[str], tuple[str, ...]]] = {}
 
+    def _selected_infra_component_ids() -> set[str]:
+        selected_component_ids: set[str] = set()
+        for row in _dynamic_enabled_infra_component_rows(payload):
+            if component_instance_id(row) not in selected_infra:
+                continue
+            component_id = component_type_id(row)
+            if component_id:
+                selected_component_ids.add(component_id)
+        return selected_component_ids
+
     def _selected_components_for_scope(
         scope: ComponentScope,
     ) -> list[tuple[ComponentEntry, str]]:
@@ -5376,9 +5947,85 @@ def _run_component_field_wizard(
                 return f"{entry.id} on {target_ref}"
         return component_instance_label(entry.id, instance_id)
 
+    def _wizard_component_selection_labels() -> tuple[list[str], list[str]]:
+        return (
+            [
+                _wizard_component_label(entry, instance_id)
+                for entry, instance_id in _selected_components_for_scope("infra")
+            ],
+            [
+                _wizard_component_label(entry, instance_id)
+                for entry, instance_id in _selected_components_for_scope("apps")
+            ],
+        )
+
+    def _print_wizard_component_selection_context(
+        *,
+        current_label: str = "",
+        current_scope: ComponentScope | str | None = None,
+    ) -> None:
+        infra_labels, app_labels = _wizard_component_selection_labels()
+        console.print(
+            _component_selection_block(
+                infra_labels=infra_labels,
+                app_labels=app_labels,
+                current_label=current_label,
+                current_scope=current_scope,
+            )
+        )
+
+    def _deploy_target_context_for_prompt(
+        full_path_label: str,
+        *,
+        entry: ComponentEntry,
+        instance_id: str,
+    ) -> tuple[str, str] | None:
+        target_match = re.match(r"^deploy\.targets\[([0-9]+)\]\.(.+)$", full_path_label)
+        if not target_match:
+            return None
+        target_ref = ""
+        deploy = payload.get("deploy")
+        targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+        index = int(target_match.group(1))
+        if isinstance(targets, list) and 0 <= index < len(targets):
+            target_row = targets[index]
+            if isinstance(target_row, Mapping):
+                target_ref = normalize_component_token(target_row.get(INSTANCE_ID_FIELD))
+        if not target_ref:
+            target_ref = component_instance_id(
+                {"id": entry.id, INSTANCE_ID_FIELD: instance_id}
+            )
+
+        remainder = target_match.group(2)
+        if remainder.startswith("secrets.mysterybox."):
+            return "deploy target", f"{target_ref} / MysteryBox ESO sync"
+        if remainder.startswith("observability."):
+            return "deploy target", f"{target_ref} / observability"
+        if remainder.startswith("validations.mk8s_gpu."):
+            return "deploy target", f"{target_ref} / MK8s GPU validation"
+        return "deploy target", target_ref
+
+    def _wizard_prompt_context(
+        full_path_label: str,
+        *,
+        entry: ComponentEntry,
+        instance_id: str,
+        component_label: str,
+    ) -> tuple[ComponentScope | str, str]:
+        deploy_context = _deploy_target_context_for_prompt(
+            full_path_label,
+            entry=entry,
+            instance_id=instance_id,
+        )
+        if deploy_context is not None:
+            return deploy_context
+        return entry.scope, component_label
+
     def _materialize_wizard_auto_enabled_gpu_apps() -> None:
         nonlocal payload, active_selected_apps
         if not selected_infra or not app_entries:
+            return
+        if "mk8s" not in _selected_infra_component_ids():
             return
         gpu_app_selection = resolve_mk8s_gpu_app_selection(
             payload,
@@ -5422,6 +6069,7 @@ def _run_component_field_wizard(
             + ", ".join(f"'apps:{item}'" for item in gpu_app_selection.auto_enabled_app_ids)
             + " because the selected MK8s GPU configuration requires them."
         )
+        _print_wizard_component_selection_context()
 
     def _filter_wizard_selected_app_rows() -> None:
         nonlocal payload
@@ -5453,6 +6101,8 @@ def _run_component_field_wizard(
     def _materialize_wizard_auto_enabled_observability_apps() -> None:
         nonlocal payload, active_selected_apps
         if not selected_infra or not app_entries:
+            return
+        if "mk8s" not in _selected_infra_component_ids():
             return
         _remove_stale_wizard_observability_apps()
         observability_selection = resolve_observability_app_selection(
@@ -5493,9 +6143,14 @@ def _run_component_field_wizard(
             + " because observability is enabled for MK8s. The later app field prompt "
             "only controls chart value customization; answering 'n' keeps the selected app defaults."
         )
+        _print_wizard_component_selection_context()
 
     def _run_component(entry: ComponentEntry, instance_id: str) -> str:
         component_label = _wizard_component_label(entry, instance_id)
+        _print_wizard_component_selection_context(
+            current_label=component_label,
+            current_scope=entry.scope,
+        )
         decision = _wizard_continue_phase(
             f"Configure '{component_label}' component fields now?",
             default=entry.scope == "infra",
@@ -5541,6 +6196,8 @@ def _run_component_field_wizard(
 
         declared_prompt_paths: list[PayloadPath] = []
         declared_prompt_defaults: dict[PayloadPath, object] = {}
+        declared_prompt_type_hints: dict[PayloadPath, str | None] = {}
+        declared_required_prompt_paths: set[PayloadPath] = set()
         for full_path_label in _declared_wizard_field_labels(entry, component_path=component_path):
             resolved_declared = _declared_wizard_prompt_path(
                 payload=payload,
@@ -5554,6 +6211,15 @@ def _run_component_field_wizard(
                     + ": path not found in config payload."
                 )
                 continue
+            wizard_spec = _resolve_wizard_field_spec(
+                entry=entry,
+                full_path_label=full_path_label,
+            )
+            type_hint = (
+                str(wizard_spec.get("type_hint")).strip()
+                if isinstance(wizard_spec, dict) and wizard_spec.get("type_hint") is not None
+                else None
+            )
             default_value = _wizard_field_default_value(
                 entry=entry,
                 full_path_label=full_path_label,
@@ -5567,10 +6233,18 @@ def _run_component_field_wizard(
                 if _payload_path_exists(payload, resolved_declared)
                 else declared_prompt_defaults.get(resolved_declared)
             )
-            if isinstance(value, (dict, list)):
+            prompt_complex = bool(
+                isinstance(wizard_spec, dict) and wizard_spec.get("prompt_complex") is True
+            )
+            if isinstance(value, (dict, list)) and not (
+                prompt_complex or _is_complex_type_hint(type_hint)
+            ):
                 continue
             if resolved_declared in bound_prompt_paths:
                 continue
+            declared_prompt_type_hints[resolved_declared] = type_hint
+            if isinstance(wizard_spec, dict) and wizard_spec.get("required") is True:
+                declared_required_prompt_paths.add(resolved_declared)
             declared_prompt_paths.append(resolved_declared)
 
         prompt_paths: list[PayloadPath] = []
@@ -5830,6 +6504,10 @@ def _run_component_field_wizard(
                                     field_type_hints[label] = spec.type_hint
                                     if spec.required or leaf_name in _active_required_leaf_names():
                                         required_prompt_labels.add(label)
+                            elif full_path in declared_prompt_type_hints:
+                                field_type_hints[label] = declared_prompt_type_hints[full_path]
+                            if full_path in declared_required_prompt_paths:
+                                required_prompt_labels.add(label)
                             seen_prompt_labels.add(label)
                             prompt_paths.append(full_path)
 
@@ -5924,6 +6602,10 @@ def _run_component_field_wizard(
                         full_path_label=label,
                     ):
                         continue
+                    if full_path in declared_prompt_type_hints:
+                        field_type_hints[label] = declared_prompt_type_hints[full_path]
+                    if full_path in declared_required_prompt_paths:
+                        required_prompt_labels.add(label)
                     seen_prompt_labels.add(label)
                     prompt_paths.append(full_path)
             else:
@@ -5954,6 +6636,10 @@ def _run_component_field_wizard(
                         full_path_label=label,
                     ):
                         continue
+                    if full_path in declared_prompt_type_hints:
+                        field_type_hints[label] = declared_prompt_type_hints[full_path]
+                    if full_path in declared_required_prompt_paths:
+                        required_prompt_labels.add(label)
                     seen_prompt_labels.add(label)
                     prompt_paths.append(full_path)
 
@@ -5988,6 +6674,12 @@ def _run_component_field_wizard(
                 ):
                     continue
                 if _skip_observability_prompt(
+                    payload=payload,
+                    entry=entry,
+                    full_path_label=full_path_label,
+                ):
+                    continue
+                if _skip_mysterybox_eso_prompt(
                     payload=payload,
                     entry=entry,
                     full_path_label=full_path_label,
@@ -6111,6 +6803,22 @@ def _run_component_field_wizard(
                     full_path_label=full_path_label,
                     emitted_guidance=emitted_prompt_guidance,
                 )
+                _maybe_print_mysterybox_secrets_prompt_guidance(
+                    payload=payload,
+                    entry=entry,
+                    full_path_label=full_path_label,
+                    emitted_guidance=emitted_prompt_guidance,
+                )
+                context_scope, context_label = _wizard_prompt_context(
+                    full_path_label,
+                    entry=entry,
+                    instance_id=instance_id,
+                    component_label=component_label,
+                )
+                _print_wizard_component_selection_context(
+                    current_label=context_label,
+                    current_scope=context_scope,
+                )
                 updated, should_stop = _prompt_scalar_override(
                     full_path_label,
                     current,
@@ -6145,6 +6853,16 @@ def _run_component_field_wizard(
                         f"{error_markup('Invalid value')} for "
                         f"'{full_path_label}'. Value must exist in live provider options."
                     )
+                    context_scope, context_label = _wizard_prompt_context(
+                        full_path_label,
+                        entry=entry,
+                        instance_id=instance_id,
+                        component_label=component_label,
+                    )
+                    _print_wizard_component_selection_context(
+                        current_label=context_label,
+                        current_scope=context_scope,
+                    )
                     updated, should_stop = _prompt_scalar_override(
                         full_path_label,
                         updated,
@@ -6169,7 +6887,10 @@ def _run_component_field_wizard(
                     prompt_history.append(full_path)
                 if full_path in virtual_prompt_defaults:
                     default_value = virtual_prompt_defaults[full_path]
-                    if updated == default_value:
+                    if updated == default_value and not _wizard_field_materialize_default(
+                        entry=entry,
+                        full_path_label=full_path_label,
+                    ):
                         if _payload_path_exists(payload, full_path):
                             _delete_payload_value(payload, full_path)
                     else:
@@ -6333,6 +7054,7 @@ class _AppChartDependencyAdjustment:
     source_app_id: str
     dependency_app_id: str
     dependency_chart_name: str
+    dependency_kind: str = "chart"
 
 
 _ChartRef = tuple[str, str, str]  # (chart_name_or_ref, chart_repo, version)
@@ -6615,6 +7337,34 @@ def _resolve_apps_chart_dependencies(
         source_entry = entry_by_id.get(source_app_id)
         if source_entry is None:
             continue
+
+        for dependency_id in source_entry.default_release_install_after:
+            dependency_id = str(dependency_id).strip().lower()
+            if not dependency_id:
+                continue
+            if dependency_id not in entry_by_id:
+                if collect_warnings:
+                    warnings.append(
+                        "release install_after lookup for "
+                        f"apps:{source_app_id} references unknown apps component "
+                        f"'{dependency_id}'"
+                    )
+                continue
+            if dependency_id in selected:
+                continue
+            selected.add(dependency_id)
+            adjustments.append(
+                _AppChartDependencyAdjustment(
+                    source_app_id=source_app_id,
+                    dependency_app_id=dependency_id,
+                    dependency_chart_name=dependency_id,
+                    dependency_kind="install_after",
+                )
+            )
+            if dependency_id not in enqueued:
+                queue.append(dependency_id)
+                enqueued.add(dependency_id)
+
         chart_ref = _app_component_chart_ref_from_payload(payload, source_entry)
         if chart_ref is None:
             continue
@@ -6713,12 +7463,19 @@ def _normalize_component_dependencies(
             collect_warnings=True,
         )
         for adjustment in app_adjustments:
-            console.print(
-                f"{warning_markup('Adjusted component selection:')} "
-                f"enabling 'apps:{adjustment.dependency_app_id}' because "
-                f"'apps:{adjustment.source_app_id}' chart depends on "
-                f"'{adjustment.dependency_chart_name}'."
-            )
+            if adjustment.dependency_kind == "install_after":
+                console.print(
+                    f"{warning_markup('Adjusted component selection:')} "
+                    f"enabling 'apps:{adjustment.dependency_app_id}' because "
+                    f"'apps:{adjustment.source_app_id}' release.install_after requires it."
+                )
+            else:
+                console.print(
+                    f"{warning_markup('Adjusted component selection:')} "
+                    f"enabling 'apps:{adjustment.dependency_app_id}' because "
+                    f"'apps:{adjustment.source_app_id}' chart depends on "
+                    f"'{adjustment.dependency_chart_name}'."
+                )
         for warning in app_warnings:
             console.print(f"{warning_markup('Dependency lookup warning:')} {warning}")
 
@@ -6855,12 +7612,20 @@ def _component_dependency_issues_from_payload(
         )
         _ = resolved_apps
         for adjustment in app_adjustments:
-            issues.append(
-                "app chart dependency requires "
-                f"'apps:{adjustment.dependency_app_id}' when "
-                f"'apps:{adjustment.source_app_id}' is enabled "
-                f"(chart dependency: {adjustment.dependency_chart_name})"
-            )
+            if adjustment.dependency_kind == "install_after":
+                issues.append(
+                    "app release dependency requires "
+                    f"'apps:{adjustment.dependency_app_id}' when "
+                    f"'apps:{adjustment.source_app_id}' is enabled "
+                    "(release.install_after)"
+                )
+            else:
+                issues.append(
+                    "app chart dependency requires "
+                    f"'apps:{adjustment.dependency_app_id}' when "
+                    f"'apps:{adjustment.source_app_id}' is enabled "
+                    f"(chart dependency: {adjustment.dependency_chart_name})"
+                )
     issues.extend(mk8s_gpu_dependency_issues(payload))
     issues.extend(observability_dependency_issues(payload))
     return issues
@@ -8530,6 +9295,35 @@ def _runtime_auth_cache_root() -> Path:
     return (Path.home() / ".config" / "nebius-cxcli").resolve()
 
 
+def _runtime_auth_cache_write_metadata(
+    metadata_file: Path,
+    payload: Mapping[str, Any],
+) -> None:
+    metadata_file.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=metadata_file.parent,
+            prefix=f".{metadata_file.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as tmp_file:
+            tmp_path = Path(tmp_file.name)
+            json.dump(dict(payload), tmp_file, indent=2, sort_keys=True)
+            tmp_file.write("\n")
+            tmp_file.flush()
+            os.fsync(tmp_file.fileno())
+        tmp_path.chmod(0o600)
+        os.replace(tmp_path, metadata_file)
+        metadata_file.chmod(0o600)
+    finally:
+        if tmp_path is not None and tmp_path.exists():
+            with suppress(OSError):
+                tmp_path.unlink()
+
+
 def _runtime_auth_cache_write(
     *,
     project_id: str,
@@ -8560,8 +9354,7 @@ def _runtime_auth_cache_write(
     if s3_secret_access_key:
         payload["s3_secret_access_key"] = s3_secret_access_key
     metadata_file = cache_dir / _RUNTIME_AUTH_CACHE_FILE
-    metadata_file.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    metadata_file.chmod(0o600)
+    _runtime_auth_cache_write_metadata(metadata_file, payload)
 
 
 def _runtime_auth_cache_load(*, project_id: str, client_name: str) -> bool:
@@ -8626,6 +9419,13 @@ class RuntimeAuthCacheMaterial:
     private_key_pem: str
     s3_access_key_id: str | None
     s3_secret_access_key: str | None
+
+
+@dataclass(frozen=True)
+class MysteryBoxEsoCredentials:
+    service_account_id: str
+    auth_public_key_id: str
+    private_key_pem: str
 
 
 def _runtime_auth_float_env(name: str, default: float, *, minimum: float) -> float:
@@ -8769,8 +9569,8 @@ def _runtime_auth_cache_material(
         auth_public_key_id=auth_public_key_id,
         private_key_file=private_key_file,
         private_key_pem=private_key_pem,
-        s3_access_key_id=_non_empty_text(payload.get("s3_access_key_id")),
-        s3_secret_access_key=_non_empty_text(payload.get("s3_secret_access_key")),
+        s3_access_key_id=_non_empty_text(payload.get("s3_access_key_id")) or None,
+        s3_secret_access_key=_non_empty_text(payload.get("s3_secret_access_key")) or None,
     )
 
 
@@ -8967,21 +9767,18 @@ def _resolve_client_name_for_runtime_profile(
 def _runtime_auth_missing_envs(
     *,
     need_terraform: bool,
-    need_eso_mysterybox: bool,
 ) -> list[str]:
     required: list[str] = []
     credentials_file = os.environ.get("NEBIUS_AUTH_CREDENTIALS_FILE", "").strip()
     has_credentials_file = bool(credentials_file)
-    if (need_terraform and not has_credentials_file) or need_eso_mysterybox:
+    if need_terraform and not has_credentials_file:
         required.extend(["NEBIUS_SA_ID", "NEBIUS_AUTH_PUBLIC_KEY_ID"])
-    if need_eso_mysterybox:
-        required.append("NEBIUS_AUTH_PRIVATE_KEY_PEM")
 
     missing = [name for name in required if not os.environ.get(name)]
     has_private_key_file = bool(os.environ.get("NEBIUS_AUTH_PRIVATE_KEY_FILE"))
     has_private_key_pem = bool(os.environ.get("NEBIUS_AUTH_PRIVATE_KEY_PEM"))
     if (
-        ((need_terraform and not has_credentials_file) or need_eso_mysterybox)
+        (need_terraform and not has_credentials_file)
         and not (has_private_key_file or has_private_key_pem)
         and "NEBIUS_AUTH_PRIVATE_KEY_PEM" not in missing
     ):
@@ -9006,7 +9803,6 @@ def _ensure_runtime_auth_material(
     config: Any,
     *,
     need_terraform: bool,
-    need_eso_mysterybox: bool,
     auto_bootstrap: bool = False,
 ) -> None:
     def _export_material_to_env(material: RuntimeAuthCacheMaterial) -> None:
@@ -9023,7 +9819,6 @@ def _ensure_runtime_auth_material(
 
     missing = _runtime_auth_missing_envs(
         need_terraform=need_terraform,
-        need_eso_mysterybox=need_eso_mysterybox,
     )
     project_id = str(config.client_info.nebius.project_id).strip()
     client_name = str(config.client_info.client_name).strip()
@@ -9032,7 +9827,6 @@ def _ensure_runtime_auth_material(
         loaded_from_cache = _runtime_auth_cache_load(project_id=project_id, client_name=client_name)
         missing = _runtime_auth_missing_envs(
             need_terraform=need_terraform,
-            need_eso_mysterybox=need_eso_mysterybox,
         )
     if not missing and loaded_from_cache:
         status = _runtime_auth_profile_status(
@@ -9070,7 +9864,6 @@ def _ensure_runtime_auth_material(
             _wait_for_runtime_auth_token_ready(material)
             missing = _runtime_auth_missing_envs(
                 need_terraform=need_terraform,
-                need_eso_mysterybox=need_eso_mysterybox,
             )
     if missing:
         if not auto_bootstrap:
@@ -9095,7 +9888,6 @@ def _ensure_runtime_auth_material(
         # Handle stale runtime-auth caches created before S3 key fields existed.
         still_missing = _runtime_auth_missing_envs(
             need_terraform=need_terraform,
-            need_eso_mysterybox=need_eso_mysterybox,
         )
         if still_missing:
             material, _ = _create_or_recreate_runtime_auth_profile(
@@ -9110,7 +9902,6 @@ def _ensure_runtime_auth_material(
             _wait_for_runtime_auth_token_ready(material)
             still_missing = _runtime_auth_missing_envs(
                 need_terraform=need_terraform,
-                need_eso_mysterybox=need_eso_mysterybox,
             )
             if still_missing:
                 raise RuntimeError(
@@ -9129,10 +9920,126 @@ def _ensure_runtime_auth_material(
             else "[green]Loaded runtime auth from cache[/green] for this command run."
         )
 
-    if (
-        need_terraform and not os.environ.get("NEBIUS_AUTH_CREDENTIALS_FILE")
-    ) or need_eso_mysterybox:
+    if need_terraform and not os.environ.get("NEBIUS_AUTH_CREDENTIALS_FILE"):
         _ensure_private_key_file_env()
+
+
+def _mysterybox_eso_service_account_description() -> str:
+    return (
+        "Service account used by External Secrets Operator to read "
+        "Nebius MysteryBox payloads"
+    )
+
+
+@contextmanager
+def _mysterybox_eso_operator_auth_env():
+    """Avoid using Terraform runtime service-account env for ESO IAM bootstrap."""
+    runtime_auth_keys = (
+        "NEBIUS_SA_ID",
+        "NEBIUS_AUTH_PUBLIC_KEY_ID",
+        "NEBIUS_AUTH_PRIVATE_KEY_FILE",
+        "NEBIUS_AUTH_PRIVATE_KEY_PEM",
+    )
+    saved = {key: os.environ.get(key) for key in runtime_auth_keys}
+    for key in runtime_auth_keys:
+        os.environ.pop(key, None)
+    try:
+        yield
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def _ensure_mysterybox_eso_service_account_identity(*, project_id: str):
+    try:
+        with _mysterybox_eso_operator_auth_env():
+            return ensure_ci_service_account_identity(
+                project_id=project_id,
+                service_account_name=_MYSTERYBOX_ESO_SERVICE_ACCOUNT_NAME,
+                service_account_description=_mysterybox_eso_service_account_description(),
+                role_ids=list(_MYSTERYBOX_ESO_ROLE_IDS),
+                profile=None,
+                endpoint=None,
+                config_file=None,
+                allow_cli_token=True,
+            )
+    except Exception as exc:
+        raise RuntimeError(
+            "Failed to ensure dedicated ESO MysteryBox service account "
+            f"'{_MYSTERYBOX_ESO_SERVICE_ACCOUNT_NAME}' with only "
+            "mysterybox.payload-viewer. The operator identity must be allowed to "
+            "manage service accounts, IAM groups, and access permits in project "
+            f"'{project_id}'."
+        ) from exc
+
+
+def _create_mysterybox_eso_credentials(*, project_id: str) -> MysteryBoxEsoCredentials:
+    try:
+        with _mysterybox_eso_operator_auth_env():
+            result = bootstrap_service_account_auth_key(
+                project_id=project_id,
+                service_account_name=_MYSTERYBOX_ESO_SERVICE_ACCOUNT_NAME,
+                service_account_description=_mysterybox_eso_service_account_description(),
+                role_ids=list(_MYSTERYBOX_ESO_ROLE_IDS),
+                auth_key_description="nebius-cxcli ESO MysteryBox authorized key",
+                profile=None,
+                endpoint=None,
+                config_file=None,
+                allow_cli_token=True,
+            )
+    except Exception as exc:
+        raise RuntimeError(
+            "Failed to bootstrap dedicated ESO MysteryBox service account "
+            f"'{_MYSTERYBOX_ESO_SERVICE_ACCOUNT_NAME}' with only "
+            "mysterybox.payload-viewer and create an authorized key. The operator "
+            "identity must be allowed to manage service accounts, IAM groups, "
+            f"and access permits in project '{project_id}'."
+        ) from exc
+    credentials = MysteryBoxEsoCredentials(
+        service_account_id=result.service_account_id,
+        auth_public_key_id=result.auth_public_key_id,
+        private_key_pem=result.auth_private_key_pem,
+    )
+    _wait_for_mysterybox_eso_token_ready(project_id=project_id, credentials=credentials)
+    return credentials
+
+
+def _write_runtime_private_key_tempfile(private_key_pem: str) -> Path:
+    fd, tmp_name = tempfile.mkstemp(prefix="nebius-cxcli-mysterybox-eso-", suffix=".pem")
+    key_path = Path(tmp_name)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(private_key_pem.rstrip() + "\n")
+    key_path.chmod(0o600)
+    _TEMP_PRIVATE_KEY_FILES.append(key_path)
+    return key_path
+
+
+def _wait_for_mysterybox_eso_token_ready(
+    *,
+    project_id: str,
+    credentials: MysteryBoxEsoCredentials,
+) -> None:
+    private_key_file = _write_runtime_private_key_tempfile(credentials.private_key_pem)
+    material = RuntimeAuthCacheMaterial(
+        project_id=project_id,
+        client_name="mysterybox-eso",
+        service_account_id=credentials.service_account_id,
+        auth_public_key_id=credentials.auth_public_key_id,
+        private_key_file=private_key_file,
+        private_key_pem=credentials.private_key_pem,
+        s3_access_key_id=None,
+        s3_secret_access_key=None,
+    )
+    try:
+        _wait_for_runtime_auth_token_ready(material)
+    finally:
+        with suppress(FileNotFoundError):
+            private_key_file.unlink()
+        with suppress(ValueError):
+            _TEMP_PRIVATE_KEY_FILES.remove(private_key_file)
 
 
 def _terraform_runtime_env(config: Any) -> dict[str, str]:
@@ -9163,6 +10070,1223 @@ def _terraform_runtime_env(config: Any) -> dict[str, str]:
     return runtime_env
 
 
+def _mysterybox_version_id_unset(value: Any) -> bool:
+    text = str(value or "").strip()
+    return not text or text.lower() == "n/a"
+
+
+def _mysterybox_unset_version_targets(
+    payload: Mapping[str, Any],
+) -> list[tuple[str, str, dict[str, Any]]]:
+    infra = payload.get("infra")
+    if not isinstance(infra, Mapping):
+        return []
+    components = infra.get("components")
+    if not isinstance(components, list):
+        return []
+
+    targets: list[tuple[str, str, dict[str, Any]]] = []
+    for row in components:
+        if not isinstance(row, dict):
+            continue
+        if component_type_id(row) != "mysterybox" or not bool(row.get("enabled", False)):
+            continue
+        instance_id = component_instance_id(row)
+        inputs = row.get("inputs")
+        if not instance_id or not isinstance(inputs, Mapping):
+            continue
+        secrets = inputs.get("secrets")
+        if not isinstance(secrets, list):
+            continue
+        for secret in secrets:
+            if not isinstance(secret, dict):
+                continue
+            secret_name = str(secret.get("name") or "").strip()
+            if secret_name and _mysterybox_version_id_unset(secret.get("version_id")):
+                targets.append((instance_id, secret_name, secret))
+    flat_row = infra.get("mysterybox")
+    if isinstance(flat_row, dict) and bool(flat_row.get("enabled", False)):
+        secrets = flat_row.get("secrets")
+        if isinstance(secrets, list):
+            for secret in secrets:
+                if not isinstance(secret, dict):
+                    continue
+                secret_name = str(secret.get("name") or "").strip()
+                if secret_name and _mysterybox_version_id_unset(secret.get("version_id")):
+                    targets.append(("mysterybox", secret_name, secret))
+    return targets
+
+
+def _mysterybox_unset_version_target_keys(payload: Mapping[str, Any]) -> set[tuple[str, str]]:
+    return {
+        (instance_id, secret_name)
+        for instance_id, secret_name, _secret in _mysterybox_unset_version_targets(payload)
+    }
+
+
+def _mysterybox_module_names_by_instance(payload: Mapping[str, Any]) -> dict[str, str]:
+    infra = payload.get("infra")
+    if not isinstance(infra, Mapping):
+        return {}
+    components = infra.get("components")
+    if not isinstance(components, list):
+        return {}
+
+    used_module_names: set[str] = set()
+    names: dict[str, str] = {}
+    for row in components:
+        if not isinstance(row, Mapping):
+            continue
+        if not bool(row.get("enabled", False)):
+            continue
+        component_id = component_type_id(row)
+        instance_id = component_instance_id(row)
+        if not component_id or not instance_id:
+            continue
+        inputs = row.get("inputs")
+        raw_module_name = instance_id
+        if isinstance(inputs, Mapping):
+            raw_module_name = str(inputs.get("module_name") or instance_id).strip()
+        module_name_base = _terraform_identifier_hint(raw_module_name or instance_id)
+        module_name = module_name_base
+        counter = 2
+        while module_name in used_module_names:
+            module_name = f"{module_name_base}_{counter}"
+            counter += 1
+        used_module_names.add(module_name)
+        if component_id == "mysterybox":
+            names[instance_id] = module_name
+    return names
+
+
+def _mysterybox_payload_values_env_var(instance_id: str, module_name: str | None) -> str:
+    token = _terraform_identifier_hint(str(module_name or instance_id).strip() or instance_id)
+    return f"TF_VAR_{token}_payload_values"
+
+
+def _mysterybox_runtime_payload_requirements(
+    config: Any,
+) -> dict[str, list[tuple[str, str]]]:
+    payload = to_plain_data(config)
+    if not isinstance(payload, Mapping):
+        return {}
+
+    module_names = _mysterybox_module_names_by_instance(payload)
+    requirements: dict[str, list[tuple[str, str]]] = {}
+    for instance_id, secret_name, secret in _mysterybox_unset_version_targets(payload):
+        payload_schema = secret.get("payload")
+        if not isinstance(payload_schema, Mapping):
+            continue
+        env_var = _mysterybox_payload_values_env_var(
+            instance_id,
+            module_names.get(instance_id),
+        )
+        for raw_key in payload_schema:
+            payload_key = str(raw_key or "").strip()
+            if payload_key:
+                requirements.setdefault(env_var, []).append((secret_name, payload_key))
+
+    deduped_requirements: dict[str, list[tuple[str, str]]] = {}
+    for env_var, entries in requirements.items():
+        seen_entries: set[tuple[str, str]] = set()
+        for entry in entries:
+            if entry in seen_entries:
+                continue
+            seen_entries.add(entry)
+            deduped_requirements.setdefault(env_var, []).append(entry)
+    return deduped_requirements
+
+
+def _parse_mysterybox_payload_values_env(env_var: str, raw_value: str) -> Mapping[str, Any]:
+    try:
+        parsed = yaml.safe_load(raw_value)
+    except yaml.YAMLError as exc:
+        raise RuntimeError(
+            f"{env_var} must be a JSON/YAML object shaped as "
+            '{"secret-name":{"PAYLOAD_KEY":"value"}}.'
+        ) from exc
+    if not isinstance(parsed, Mapping):
+        raise RuntimeError(
+            f"{env_var} must be a JSON/YAML object shaped as "
+            '{"secret-name":{"PAYLOAD_KEY":"value"}}.'
+        )
+    return parsed
+
+
+def _mysterybox_payload_value_present(
+    payload_values: Mapping[str, Any],
+    *,
+    secret_name: str,
+    payload_key: str,
+) -> bool:
+    secret_values = payload_values.get(secret_name)
+    if not isinstance(secret_values, Mapping):
+        return False
+    value = secret_values.get(payload_key)
+    return isinstance(value, str) and value != ""
+
+
+def _mysterybox_payload_values_error(
+    missing_by_env: Mapping[str, Sequence[tuple[str, str]]],
+) -> RuntimeError:
+    lines = [
+        "Missing MysteryBox runtime payload values for first deploy:",
+    ]
+    for env_var, entries in sorted(missing_by_env.items()):
+        lines.append(f"  {env_var}:")
+        for secret_name, payload_key in entries:
+            lines.append(f"    - {secret_name}.{payload_key}")
+
+    lines.append("Set the runtime variable before deploy, for example:")
+    for env_var, entries in sorted(missing_by_env.items()):
+        example: dict[str, dict[str, str]] = {}
+        for secret_name, payload_key in entries:
+            example.setdefault(secret_name, {})[payload_key] = "<value>"
+        lines.append(f"  export {env_var}={shlex.quote(json.dumps(example, sort_keys=True))}")
+    lines.append(
+        "Payload values stay runtime-only and are not written to config.yaml or "
+        "generated artifacts."
+    )
+    return RuntimeError("\n".join(lines))
+
+
+def _mysterybox_prompt_runtime_payload_value(*, secret_name: str, payload_key: str) -> str:
+    while True:
+        value = typer.prompt(
+            f"MysteryBox payload value for {secret_name}.{payload_key}",
+            hide_input=True,
+            show_default=False,
+        )
+        value_text = str(value or "")
+        if value_text:
+            return value_text
+        console.print("[yellow]Value cannot be empty.[/yellow]")
+
+
+def _collect_mysterybox_runtime_payload_values(
+    config: Any,
+    *,
+    environ: Mapping[str, str] | None = None,
+    prompt: bool = False,
+) -> dict[str, str]:
+    requirements = _mysterybox_runtime_payload_requirements(config)
+    if not requirements:
+        return {}
+
+    runtime_environ = environ if environ is not None else os.environ
+    collected_env: dict[str, str] = {}
+    missing_by_env: dict[str, list[tuple[str, str]]] = {}
+    for env_var, entries in requirements.items():
+        raw_value = str(runtime_environ.get(env_var, "") or "").strip()
+        payload_values: dict[str, Any] = {}
+        if raw_value:
+            payload_values = dict(_parse_mysterybox_payload_values_env(env_var, raw_value))
+        for secret_name, payload_key in entries:
+            if not _mysterybox_payload_value_present(
+                payload_values,
+                secret_name=secret_name,
+                payload_key=payload_key,
+            ):
+                if prompt:
+                    secret_values = payload_values.setdefault(secret_name, {})
+                    if not isinstance(secret_values, dict):
+                        secret_values = {}
+                        payload_values[secret_name] = secret_values
+                    secret_values[payload_key] = _mysterybox_prompt_runtime_payload_value(
+                        secret_name=secret_name,
+                        payload_key=payload_key,
+                    )
+                    continue
+                missing_by_env.setdefault(env_var, []).append((secret_name, payload_key))
+        if prompt:
+            collected_env[env_var] = json.dumps(payload_values, sort_keys=True)
+
+    if not missing_by_env:
+        return collected_env
+
+    raise _mysterybox_payload_values_error(missing_by_env)
+
+
+def _validate_mysterybox_runtime_payload_values(
+    config: Any,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> None:
+    _collect_mysterybox_runtime_payload_values(
+        config,
+        environ=environ,
+        prompt=False,
+    )
+
+
+def _mysterybox_primary_version_ids_from_outputs(
+    terraform_outputs: Mapping[str, Any],
+    target_keys: set[tuple[str, str]],
+) -> tuple[dict[tuple[str, str], str], list[str]]:
+    version_ids: dict[tuple[str, str], str] = {}
+    missing: list[str] = []
+    for instance_id, secret_name in sorted(target_keys):
+        output_name = component_output_root_name(instance_id, "primary_secret_version_ids")
+        output = terraform_outputs.get(output_name)
+        output_value = output.get("value") if isinstance(output, Mapping) else None
+        version_id = (
+            str(output_value.get(secret_name) or "").strip()
+            if isinstance(output_value, Mapping)
+            else ""
+        )
+        if not re.fullmatch(r"mbsecver-[a-z0-9]+", version_id):
+            missing.append(f"{component_instance_label('mysterybox', instance_id)}.{secret_name}")
+            continue
+        version_ids[(instance_id, secret_name)] = version_id
+    return version_ids, missing
+
+
+def _set_mysterybox_version_ids_in_payload(
+    payload: Mapping[str, Any],
+    version_ids: Mapping[tuple[str, str], str],
+) -> bool:
+    changed = False
+    for instance_id, secret_name, secret in _mysterybox_unset_version_targets(payload):
+        version_id = version_ids.get((instance_id, secret_name))
+        if not version_id:
+            continue
+        secret["version_id"] = version_id
+        changed = True
+    return changed
+
+
+def _set_mysterybox_version_ids_in_tfvars(
+    tfvars: Mapping[str, Any],
+    *,
+    runtime_payload: Mapping[str, Any],
+    version_ids: Mapping[tuple[str, str], str],
+) -> bool:
+    module_names = _mysterybox_module_names_by_instance(runtime_payload)
+    changed = False
+    for (instance_id, secret_name), version_id in version_ids.items():
+        module_name = module_names.get(instance_id)
+        if not module_name:
+            continue
+        secrets = tfvars.get(f"{module_name}_secrets")
+        if not isinstance(secrets, list):
+            continue
+        for secret in secrets:
+            if not isinstance(secret, dict):
+                continue
+            if str(secret.get("name") or "").strip() != secret_name:
+                continue
+            if not _mysterybox_version_id_unset(secret.get("version_id")):
+                continue
+            secret["version_id"] = version_id
+            changed = True
+    return changed
+
+
+def _sync_mysterybox_primary_version_ids_to_config(
+    config: Any,
+    paths: ProjectPaths,
+    *,
+    initialize: bool = True,
+    manifest: Mapping[str, Any] | None = None,
+    require_all: bool = True,
+) -> bool:
+    """Persist first-deploy MysteryBox primary version IDs back to source and generated files."""
+    raw_payload: dict[str, Any] | None = None
+    source_target_keys: set[tuple[str, str]] = set()
+    if paths.config_path.exists():
+        loaded_payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8")) or {}
+        if isinstance(loaded_payload, dict):
+            raw_payload = loaded_payload
+            source_target_keys = _mysterybox_unset_version_target_keys(raw_payload)
+
+    manifest_payload: dict[str, Any] | None = None
+    if manifest is not None:
+        manifest_payload = copy.deepcopy(dict(manifest))
+    else:
+        manifest_path = manifest_path_for_generated_dir(paths.generated_dir)
+        if manifest_path.exists():
+            try:
+                manifest_payload = load_generated_manifest(paths.generated_dir)
+            except ValueError:
+                manifest_payload = None
+
+    manifest_runtime = None
+    manifest_target_keys: set[tuple[str, str]] = set()
+    if isinstance(manifest_payload, dict):
+        runtime_payload = manifest_payload.get("runtime_config")
+        if isinstance(runtime_payload, dict):
+            manifest_runtime = runtime_payload
+            manifest_target_keys = _mysterybox_unset_version_target_keys(manifest_runtime)
+
+    target_keys = source_target_keys | manifest_target_keys
+    if not target_keys:
+        return False
+
+    terraform_outputs = terraform_output_json(
+        paths.infra_dir,
+        extra_env=_terraform_runtime_env(config),
+        initialize=initialize,
+    )
+    version_ids, missing = _mysterybox_primary_version_ids_from_outputs(
+        terraform_outputs,
+        target_keys,
+    )
+
+    if missing:
+        if not require_all:
+            return False
+        raise RuntimeError(
+            "Terraform apply completed, but MysteryBox primary version IDs were not "
+            "available for config.yaml update: "
+            + ", ".join(missing)
+            + ". Rerender the generated Terraform bundle so it exports "
+            "primary_secret_version_ids, then rerun apply."
+        )
+
+    changed = False
+    source_changed = False
+    if raw_payload is not None:
+        source_changed = _set_mysterybox_version_ids_in_payload(raw_payload, version_ids)
+        changed = changed or source_changed
+
+    manifest_changed = False
+    if manifest_payload is not None and manifest_runtime is not None:
+        manifest_changed = _set_mysterybox_version_ids_in_payload(
+            manifest_runtime,
+            version_ids,
+        )
+        render_payload = manifest_payload.get("render")
+        tfvars = render_payload.get("terraform_tfvars") if isinstance(render_payload, dict) else None
+        if isinstance(tfvars, dict):
+            manifest_changed = (
+                _set_mysterybox_version_ids_in_tfvars(
+                    tfvars,
+                    runtime_payload=manifest_runtime,
+                    version_ids=version_ids,
+                )
+                or manifest_changed
+            )
+        changed = changed or manifest_changed
+
+    if not changed:
+        return False
+    updated_locations: list[str] = []
+    if source_changed and raw_payload is not None:
+        paths.config_path.write_text(
+            yaml.safe_dump(raw_payload, sort_keys=False),
+            encoding="utf-8",
+        )
+        updated_locations.append(str(paths.config_path))
+    if manifest_changed and manifest_payload is not None:
+        manifest_path = manifest_path_for_generated_dir(paths.generated_dir)
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(
+            json.dumps(manifest_payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        _materialize_generated_terraform_tfvars(paths, manifest_payload)
+        updated_locations.append(str(manifest_path))
+        updated_locations.append(str(paths.infra_dir / "terraform.auto.tfvars.json"))
+    console.print(
+        "Updated MysteryBox primary version_id values in " + ", ".join(updated_locations)
+    )
+    return True
+
+
+def _refresh_mysterybox_eso_flux_after_terraform(config: Any, paths: ProjectPaths) -> bool:
+    """Re-render Flux after Terraform creates MysteryBox IDs used by ESO."""
+    required_specs = list(mysterybox_eso_terraform_output_specs(config))
+    if not required_specs:
+        return False
+    component_output_values = _runtime_component_output_values(
+        config,
+        paths,
+        required_specs=required_specs,
+    )
+    materialize_mysterybox_eso_app_values(
+        config,
+        component_output_values=component_output_values,
+    )
+    render_flux(config, paths, component_output_values=component_output_values)
+    console.print("Refreshed MysteryBox ESO Flux manifests with Terraform-created secret IDs.")
+    return True
+
+
+def _mysterybox_eso_credentials_json(credentials: MysteryBoxEsoCredentials) -> str:
+    service_account_id = credentials.service_account_id
+    auth_public_key_id = credentials.auth_public_key_id
+    private_key_pem = credentials.private_key_pem
+    if not service_account_id or not auth_public_key_id or not private_key_pem:
+        raise RuntimeError("ESO MysteryBox credentials are incomplete.")
+    return json.dumps(
+        {
+            "subject-credentials": {
+                "alg": "RS256",
+                "private-key": private_key_pem,
+                "kid": auth_public_key_id,
+                "iss": service_account_id,
+                "sub": service_account_id,
+            }
+        },
+        separators=(",", ":"),
+        sort_keys=False,
+    )
+
+
+def _mysterybox_eso_credentials_from_json(value: str | None) -> MysteryBoxEsoCredentials | None:
+    if not value:
+        return None
+    try:
+        payload = json.loads(value)
+    except Exception:
+        return None
+    if not isinstance(payload, Mapping):
+        return None
+    subject_credentials = payload.get("subject-credentials")
+    if not isinstance(subject_credentials, Mapping):
+        return None
+    alg = _non_empty_text(subject_credentials.get("alg"))
+    service_account_id = _non_empty_text(subject_credentials.get("iss"))
+    subject_id = _non_empty_text(subject_credentials.get("sub"))
+    auth_public_key_id = _non_empty_text(subject_credentials.get("kid"))
+    private_key_pem = _non_empty_text(subject_credentials.get("private-key"))
+    if alg != "RS256":
+        return None
+    if not service_account_id or subject_id != service_account_id:
+        return None
+    if not auth_public_key_id or not private_key_pem:
+        return None
+    return MysteryBoxEsoCredentials(
+        service_account_id=service_account_id,
+        auth_public_key_id=auth_public_key_id,
+        private_key_pem=private_key_pem,
+    )
+
+
+def _kubectl_apply_manifest(
+    manifest: Mapping[str, Any] | Sequence[Mapping[str, Any]],
+    *,
+    extra_env: dict[str, str] | None,
+) -> None:
+    if not shutil.which("kubectl"):
+        raise RuntimeError("kubectl is required for ESO MysteryBox runtime secret creation")
+    documents = (
+        list(manifest)
+        if isinstance(manifest, Sequence) and not isinstance(manifest, Mapping)
+        else [manifest]
+    )
+    rendered = yaml.safe_dump_all(
+        [dict(document) for document in documents],
+        sort_keys=False,
+    )
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
+    completed = subprocess.run(
+        ["kubectl", "apply", "-f", "-"],
+        input=rendered,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    stdout = _filter_benign_kubectl_output(completed.stdout or "")
+    stderr = _filter_benign_kubectl_output(completed.stderr or "")
+    if completed.returncode != 0:
+        detail = _first_non_empty_line(stderr or stdout or "")
+        raise RuntimeError(f"kubectl apply failed for ESO MysteryBox runtime secret: {detail}")
+
+
+def _kubectl_read_secret_key(
+    *,
+    namespace: str,
+    name: str,
+    key: str,
+    extra_env: dict[str, str] | None,
+) -> str | None:
+    if not shutil.which("kubectl"):
+        raise RuntimeError("kubectl is required for ESO MysteryBox runtime secret inspection")
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
+    completed = subprocess.run(
+        ["kubectl", "-n", namespace, "get", "secret", name, "-o", "json"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    stdout = _filter_benign_kubectl_output(completed.stdout or "")
+    stderr = _filter_benign_kubectl_output(completed.stderr or "")
+    if completed.returncode != 0:
+        detail = _first_non_empty_line(stderr or stdout or "")
+        if "not found" in detail.lower() or "notfound" in detail.lower():
+            return None
+        raise RuntimeError(
+            f"kubectl get secret failed for ESO MysteryBox credentials {namespace}/{name}: "
+            f"{detail}"
+        )
+    try:
+        payload = json.loads(stdout)
+    except Exception as exc:
+        raise RuntimeError(
+            f"kubectl returned invalid JSON for ESO MysteryBox credentials {namespace}/{name}: {exc}"
+        ) from exc
+    if not isinstance(payload, Mapping):
+        return None
+    data = payload.get("data")
+    if not isinstance(data, Mapping):
+        return None
+    encoded = _non_empty_text(data.get(key))
+    if not encoded:
+        return None
+    try:
+        return base64.b64decode(encoded).decode("utf-8")
+    except Exception:
+        return None
+
+
+def _kubectl_validate_mysterybox_eso_tls(
+    *,
+    namespace: str,
+    api_domain: str,
+    extra_env: dict[str, str] | None,
+) -> None:
+    probe = _kubectl_mysterybox_eso_tls_probe(
+        namespace=namespace,
+        api_domain=api_domain,
+        extra_env=extra_env,
+    )
+    domain = str(probe.get("api_domain") or "").strip()
+    if not domain:
+        return
+    if not bool(probe.get("passed")):
+        detail = str(probe.get("summary") or "").strip()
+        raise RuntimeError(
+            "ESO MysteryBox Nebius API TLS validation failed from inside the cluster "
+            f"for https://{domain}: {detail}"
+        )
+    summary_lines = [str(line) for line in probe.get("summary_lines", []) if str(line).strip()]
+    console.print(
+        "[green]Validated ESO MysteryBox Nebius API DNS/egress/TLS[/green] "
+        f"from namespace '{namespace}' for https://{domain}."
+    )
+    if summary_lines:
+        console.print("\n".join(summary_lines))
+
+
+def _kubectl_mysterybox_eso_tls_probe(
+    *,
+    namespace: str,
+    api_domain: str,
+    extra_env: dict[str, str] | None,
+) -> dict[str, Any]:
+    if not shutil.which("kubectl"):
+        raise RuntimeError("kubectl is required for ESO MysteryBox Nebius API TLS validation")
+    domain = str(api_domain or "").strip()
+    if not domain:
+        return {
+            "name": "Nebius API TLS",
+            "passed": True,
+            "api_domain": "",
+            "namespace": namespace,
+            "summary": "No API domain configured.",
+            "summary_lines": [],
+        }
+    domain = domain.removeprefix("https://").removeprefix("http://").rstrip("/")
+    pod_name = f"nebius-tls-check-{time.time_ns()}-{os.getpid()}".lower()[:63].rstrip("-")
+    script = r"""
+api_domain="$1"
+host="${api_domain%%:*}"
+out="$(curl -vvI --connect-timeout 10 --max-time 30 "https://${api_domain}" 2>&1)"
+printf "%s\n" "$out" | grep -E "SSL certificate verify ok|issuer:|subjectAltName" || true
+printf "%s\n" "$out" | grep -q "SSL certificate verify ok"
+printf "%s\n" "$out" | grep -q "subjectAltName: host \"${host}\" matched"
+printf "%s\n" "$out" | grep -Eq "HTTP/[0-9.]+ [0-9]"
+"""
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
+    completed = subprocess.run(
+        [
+            "kubectl",
+            "-n",
+            namespace,
+            "run",
+            pod_name,
+            "--rm",
+            "-i",
+            "--restart=Never",
+            f"--image={_MYSTERYBOX_ESO_TLS_CHECK_IMAGE}",
+            "--command",
+            "--",
+            "sh",
+            "-ceu",
+            script,
+            "--",
+            domain,
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    stdout = _filter_benign_kubectl_output(completed.stdout or "")
+    stderr = _filter_benign_kubectl_output(completed.stderr or "")
+    summary_lines: list[str] = []
+    seen_summary_lines: set[str] = set()
+    for line in (stdout + "\n" + stderr).splitlines():
+        if line in seen_summary_lines:
+            continue
+        if any(
+            marker in line
+            for marker in (
+                "SSL certificate verify ok",
+                "issuer:",
+                "subjectAltName:",
+            )
+        ):
+            summary_lines.append(line)
+            seen_summary_lines.add(line)
+    if completed.returncode != 0:
+        detail = _first_non_empty_line(stderr or stdout or "") or (
+            f"kubectl exited with status {completed.returncode}"
+        )
+        return {
+            "name": "Nebius API TLS",
+            "passed": False,
+            "api_domain": domain,
+            "namespace": namespace,
+            "summary": detail,
+            "summary_lines": summary_lines,
+            "image": _MYSTERYBOX_ESO_TLS_CHECK_IMAGE,
+        }
+    return {
+        "name": "Nebius API TLS",
+        "passed": True,
+        "api_domain": domain,
+        "namespace": namespace,
+        "summary": "DNS, egress, public CA trust, hostname verification, and HTTP response succeeded.",
+        "summary_lines": summary_lines,
+        "image": _MYSTERYBOX_ESO_TLS_CHECK_IMAGE,
+    }
+
+
+def _mysterybox_eso_report_path(spec: Mapping[str, Any], *, inventory_dir: Path) -> Path:
+    report_file = str(spec.get("report_file", "") or "").strip()
+    if report_file:
+        return inventory_dir / report_file
+    return inventory_dir / "mysterybox-eso-connectivity-report.json"
+
+
+def _mysterybox_eso_write_report(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(dict(payload), indent=2, sort_keys=False) + "\n", encoding="utf-8")
+
+
+def _mysterybox_eso_check(
+    name: str,
+    *,
+    passed: bool,
+    summary: str,
+    details: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "name": name,
+        "passed": bool(passed),
+        "summary": summary,
+        "details": dict(details or {}),
+    }
+
+
+def _mysterybox_eso_kubectl_json(
+    args: list[str],
+    *,
+    extra_env: dict[str, str] | None,
+) -> dict[str, Any]:
+    if not shutil.which("kubectl"):
+        raise RuntimeError("kubectl is required for ESO MysteryBox connectivity validation")
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
+    result = subprocess.run(
+        ["kubectl", *args],
+        capture_output=True,
+        env=env,
+        text=True,
+        timeout=60,
+    )
+    if result.returncode != 0:
+        stderr = _filter_benign_kubectl_output(result.stderr or "").strip()
+        stdout = _filter_benign_kubectl_output(result.stdout or "").strip()
+        detail = stderr or stdout or f"kubectl exited with status {result.returncode}"
+        raise RuntimeError(f"kubectl {' '.join(args)} failed: {detail}")
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"kubectl {' '.join(args)} returned invalid JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"kubectl {' '.join(args)} returned a non-object JSON payload")
+    return payload
+
+
+def _mysterybox_eso_ready_condition(payload: Mapping[str, Any]) -> dict[str, Any]:
+    status = payload.get("status")
+    conditions = status.get("conditions") if isinstance(status, Mapping) else None
+    if not isinstance(conditions, list):
+        return {}
+    for condition in conditions:
+        if not isinstance(condition, Mapping):
+            continue
+        if str(condition.get("type") or "").strip() == "Ready":
+            return dict(condition)
+    return {}
+
+
+def _mysterybox_eso_ready_check(
+    *,
+    name: str,
+    args: list[str],
+    resource_label: str,
+    extra_env: dict[str, str] | None,
+    timeout_seconds: float = 300.0,
+    interval_seconds: float = 5.0,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + max(timeout_seconds, 0.0)
+    last_check: dict[str, Any] | None = None
+    while True:
+        try:
+            payload = _mysterybox_eso_kubectl_json(args, extra_env=extra_env)
+        except Exception as exc:
+            last_check = _mysterybox_eso_check(
+                name,
+                passed=False,
+                summary=f"{resource_label} lookup failed: {exc}",
+                details={"resource": resource_label},
+            )
+        else:
+            condition = _mysterybox_eso_ready_condition(payload)
+            status = str(condition.get("status") or "").strip()
+            reason = str(condition.get("reason") or "").strip()
+            message = str(condition.get("message") or "").strip()
+            passed = status.lower() == "true"
+            if passed:
+                summary = f"{resource_label} Ready=True ({reason or 'no reason'})"
+            else:
+                summary = (
+                    f"{resource_label} Ready={status or 'missing'} "
+                    f"({reason or 'no reason'}): {message or 'no message'}"
+                )
+            last_check = _mysterybox_eso_check(
+                name,
+                passed=passed,
+                summary=summary,
+                details={
+                    "resource": resource_label,
+                    "ready_status": status,
+                    "reason": reason,
+                    "message": message,
+                    "observed_generation": condition.get("observedGeneration"),
+                },
+            )
+        if bool(last_check.get("passed")) or time.monotonic() >= deadline:
+            break
+        time.sleep(max(interval_seconds, 0.0))
+    if last_check is None:
+        last_check = _mysterybox_eso_check(
+            name,
+            passed=False,
+            summary=f"{resource_label} readiness check did not run.",
+            details={"resource": resource_label},
+        )
+    return last_check
+
+
+_MYSTERYBOX_ESO_LOG_MATCH_RE = re.compile(
+    r"(nebius|mysterybox|x509|tls|certificate|unauthorized|permission|denied)",
+    re.IGNORECASE,
+)
+_MYSTERYBOX_ESO_LOG_FAILURE_RE = re.compile(
+    r"(x509|certificate|unauthorized|permission|denied|tls.*(?:error|fail)|(?:error|fail).*tls)",
+    re.IGNORECASE,
+)
+
+
+def _mysterybox_eso_logs_check(
+    *,
+    namespace: str,
+    extra_env: dict[str, str] | None,
+    since_time: datetime | None = None,
+) -> dict[str, Any]:
+    if not shutil.which("kubectl"):
+        raise RuntimeError("kubectl is required for ESO MysteryBox controller log validation")
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
+    since_arg = "--since=15m"
+    if since_time is not None:
+        since_arg = "--since-time=" + since_time.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    result = subprocess.run(
+        ["kubectl", "-n", namespace, "logs", "deploy/external-secrets", since_arg],
+        capture_output=True,
+        env=env,
+        text=True,
+        timeout=60,
+    )
+    if result.returncode != 0:
+        stderr = _filter_benign_kubectl_output(result.stderr or "").strip()
+        stdout = _filter_benign_kubectl_output(result.stdout or "").strip()
+        detail = stderr or stdout or f"kubectl exited with status {result.returncode}"
+        return _mysterybox_eso_check(
+            "ESO controller log scan",
+            passed=False,
+            summary=f"Could not read external-secrets controller logs: {detail}",
+            details={"namespace": namespace},
+        )
+    matches: list[str] = []
+    failures: list[str] = []
+    for line in _filter_benign_kubectl_output(result.stdout or "").splitlines():
+        if _MYSTERYBOX_ESO_LOG_MATCH_RE.search(line):
+            matches.append(line)
+        if _MYSTERYBOX_ESO_LOG_FAILURE_RE.search(line):
+            failures.append(line)
+    passed = not failures
+    window_label = "since validation start" if since_time is not None else "in the last 15 minutes"
+    summary = (
+        f"No ESO controller auth/TLS/permission errors found {window_label}."
+        if passed
+        else f"Found {len(failures)} ESO controller auth/TLS/permission error log line(s)."
+    )
+    return _mysterybox_eso_check(
+        "ESO controller log scan",
+        passed=passed,
+        summary=summary,
+        details={
+            "namespace": namespace,
+            "since_time": since_time.astimezone(UTC).isoformat().replace("+00:00", "Z")
+            if since_time is not None
+            else "",
+            "matched_lines": matches[-20:],
+            "failure_lines": failures[-20:],
+        },
+    )
+
+
+def _run_mysterybox_eso_connectivity_validation(
+    spec: Mapping[str, Any],
+    *,
+    inventory_dir: Path,
+    extra_env: dict[str, str] | None,
+    emit: Callable[[str], None] | None = None,
+) -> Path:
+    validation_name = str(spec.get("name") or "").strip() or "ESO MysteryBox connectivity"
+    store_name = str(spec.get("store_name") or "").strip()
+    api_domain = str(spec.get("api_domain") or "").strip()
+    credential_secret = spec.get("credentials_secret")
+    if not isinstance(credential_secret, Mapping):
+        credential_secret = {}
+    credential_namespace = str(credential_secret.get("namespace") or "").strip()
+    eso_namespace = str(spec.get("eso_namespace") or "").strip() or credential_namespace
+    raw_external_secrets = spec.get("external_secrets")
+    external_secrets = [
+        dict(item)
+        for item in (raw_external_secrets if isinstance(raw_external_secrets, list) else [])
+        if isinstance(item, Mapping)
+    ]
+    if not store_name or not api_domain or not credential_namespace or not eso_namespace:
+        raise RuntimeError(f"{validation_name} spec is missing required connection fields")
+    validation_started_at = datetime.now(UTC)
+    checks: list[dict[str, Any]] = []
+
+    if emit:
+        emit(f"Checking ESO MysteryBox API TLS for https://{api_domain}.")
+    tls_probe = _kubectl_mysterybox_eso_tls_probe(
+        namespace=credential_namespace,
+        api_domain=api_domain,
+        extra_env=extra_env,
+    )
+    checks.append(
+        _mysterybox_eso_check(
+            "Nebius API TLS",
+            passed=bool(tls_probe.get("passed")),
+            summary=str(tls_probe.get("summary") or "").strip(),
+            details=tls_probe,
+        )
+    )
+
+    if emit:
+        emit(f"Checking ClusterSecretStore {store_name}.")
+    checks.append(
+        _mysterybox_eso_ready_check(
+            name="ClusterSecretStore Ready",
+            args=["get", "clustersecretstore", store_name, "-o", "json"],
+            resource_label=f"ClusterSecretStore/{store_name}",
+            extra_env=extra_env,
+        )
+    )
+
+    for item in external_secrets:
+        namespace = str(item.get("namespace") or "").strip()
+        name = str(item.get("name") or "").strip()
+        if not namespace or not name:
+            checks.append(
+                _mysterybox_eso_check(
+                    "ExternalSecret Ready",
+                    passed=False,
+                    summary="ExternalSecret validation spec is missing namespace or name.",
+                    details={"external_secret": item},
+                )
+            )
+            continue
+        if emit:
+            emit(f"Checking ExternalSecret {namespace}/{name}.")
+        checks.append(
+            _mysterybox_eso_ready_check(
+                name=f"ExternalSecret Ready ({namespace}/{name})",
+                args=["-n", namespace, "get", "externalsecret", name, "-o", "json"],
+                resource_label=f"ExternalSecret/{namespace}/{name}",
+                extra_env=extra_env,
+            )
+        )
+
+    if emit:
+        emit(f"Scanning ESO controller logs in namespace {eso_namespace}.")
+    checks.append(
+        _mysterybox_eso_logs_check(
+            namespace=eso_namespace,
+            extra_env=extra_env,
+            since_time=validation_started_at,
+        )
+    )
+
+    passed = all(bool(check.get("passed")) for check in checks)
+    report_path = _mysterybox_eso_report_path(spec, inventory_dir=inventory_dir)
+    report = {
+        "validation": validation_name,
+        "kind": MYSTERYBOX_ESO_CONNECTIVITY_VALIDATION_KIND,
+        "target_ref": str(spec.get(TARGET_REF_FIELD) or "").strip(),
+        "api_domain": api_domain,
+        "store_name": store_name,
+        "credentials_secret": dict(credential_secret),
+        "eso_namespace": eso_namespace,
+        "external_secrets": external_secrets,
+        "checked_at": datetime.now(UTC).isoformat(),
+        "passed": passed,
+        "checks": checks,
+    }
+    _mysterybox_eso_write_report(report_path, report)
+    if not passed:
+        failures = [str(check.get("summary")) for check in checks if not bool(check.get("passed"))]
+        raise RuntimeError(
+            f"{validation_name} failed: " + "; ".join(failures or ["one or more checks failed"])
+        )
+    return report_path
+
+
+def run_mysterybox_eso_validations(
+    validations: list[dict[str, Any]],
+    *,
+    inventory_dir: Path,
+    extra_env: dict[str, str] | None,
+    emit: Callable[[str], None] | None = None,
+) -> list[Path]:
+    written_reports: list[Path] = []
+    total = len(validations)
+    for index, spec in enumerate(validations, start=1):
+        kind = str(spec.get("kind") or "").strip()
+        name = str(spec.get("name") or "").strip() or kind or f"validation-{index}"
+        if emit:
+            emit(f"Starting validation {index}/{total}: {name}.")
+        if kind == MYSTERYBOX_ESO_CONNECTIVITY_VALIDATION_KIND:
+            written_reports.append(
+                _run_mysterybox_eso_connectivity_validation(
+                    spec,
+                    inventory_dir=inventory_dir,
+                    extra_env=extra_env,
+                    emit=emit,
+                )
+            )
+    return written_reports
+
+
+def _mysterybox_eso_secret_label(*, namespace: str, name: str, key: str) -> str:
+    return f"{namespace}/{name}:{key}"
+
+
+def _apply_mysterybox_eso_credentials_secret(
+    *,
+    namespace: str,
+    name: str,
+    key: str,
+    credentials: MysteryBoxEsoCredentials,
+    extra_env: dict[str, str] | None,
+) -> None:
+    _kubectl_apply_manifest(
+        [
+            {
+                "apiVersion": "v1",
+                "kind": "Namespace",
+                "metadata": {"name": namespace},
+            },
+            {
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "type": "Opaque",
+                "metadata": {"name": name, "namespace": namespace},
+                "stringData": {key: _mysterybox_eso_credentials_json(credentials)},
+            },
+        ],
+        extra_env=extra_env,
+    )
+
+
+def _ensure_mysterybox_eso_credentials_secret(
+    config: Any,
+    *,
+    spec: Mapping[str, Any],
+    extra_env: dict[str, str] | None,
+    auto_auth_bootstrap: bool,
+    fresh_credentials: MysteryBoxEsoCredentials | None,
+) -> MysteryBoxEsoCredentials | None:
+    project_id = str(config.client_info.nebius.project_id).strip()
+    namespace = str(spec["namespace"]).strip()
+    name = str(spec["name"]).strip()
+    key = str(spec["key"]).strip()
+    label = _mysterybox_eso_secret_label(namespace=namespace, name=name, key=key)
+
+    raw_credentials = _kubectl_read_secret_key(
+        namespace=namespace,
+        name=name,
+        key=key,
+        extra_env=extra_env,
+    )
+    credentials = _mysterybox_eso_credentials_from_json(raw_credentials)
+    replacing_stale_credentials = False
+
+    if raw_credentials is not None and credentials is None and not auto_auth_bootstrap:
+        raise RuntimeError(
+            f"ESO MysteryBox credential Secret {label} exists but does not contain "
+            "valid Subject Credentials JSON. Rerun with --auto-auth-bootstrap so cxcli "
+            "can create a fresh authorized key and replace the runtime Secret."
+        )
+
+    if credentials is not None:
+        stale_reasons: list[str] = []
+        if auto_auth_bootstrap:
+            identity = _ensure_mysterybox_eso_service_account_identity(project_id=project_id)
+            if identity.roles_created:
+                console.print(
+                    "[green]Granted MysteryBox payload viewer role[/green] "
+                    f"to {_MYSTERYBOX_ESO_SERVICE_ACCOUNT_NAME} for ESO."
+                )
+            if credentials.service_account_id != identity.service_account_id:
+                stale_reasons.append(
+                    "the Secret references service account "
+                    f"'{credentials.service_account_id}', but "
+                    f"'{_MYSTERYBOX_ESO_SERVICE_ACCOUNT_NAME}' is "
+                    f"'{identity.service_account_id}'"
+                )
+
+        try:
+            with _mysterybox_eso_operator_auth_env():
+                public_key_exists = auth_public_key_exists(
+                    auth_public_key_id=credentials.auth_public_key_id,
+                    profile=None,
+                    endpoint=None,
+                    config_file=None,
+                )
+            if not public_key_exists:
+                stale_reasons.append(
+                    "the referenced Nebius authorized public key no longer exists "
+                    "or is not accessible"
+                )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to verify ESO MysteryBox authorized key for {label}: {exc}"
+            ) from exc
+
+        if not stale_reasons:
+            console.print(
+                f"Reused ESO MysteryBox credential Secret {namespace}/{name} "
+                "for native provider."
+            )
+            return fresh_credentials
+
+        if not auto_auth_bootstrap:
+            raise RuntimeError(
+                f"ESO MysteryBox credential Secret {label} is stale: "
+                + "; ".join(stale_reasons)
+                + ". Rerun with --auto-auth-bootstrap so cxcli can create a fresh "
+                "authorized key and replace the runtime Secret."
+            )
+        console.print(
+            f"{warning_markup('WARNING:', bold=True)} ESO MysteryBox credential Secret "
+            f"{namespace}/{name} is stale; replacing it because "
+            + "; ".join(stale_reasons)
+            + "."
+        )
+        replacing_stale_credentials = True
+        credentials = None
+
+    if credentials is None and raw_credentials is None and not auto_auth_bootstrap:
+        raise RuntimeError(
+            f"ESO MysteryBox credential Secret {label} is missing. Rerun with "
+            "--auto-auth-bootstrap so cxcli can create "
+            f"'{_MYSTERYBOX_ESO_SERVICE_ACCOUNT_NAME}', upload an authorized public key, "
+            "and store Subject Credentials in the cluster Secret."
+        )
+
+    if credentials is None:
+        if raw_credentials is not None and not replacing_stale_credentials:
+            console.print(
+                f"{warning_markup('WARNING:', bold=True)} ESO MysteryBox credential Secret "
+                f"{namespace}/{name} is invalid; replacing it with fresh Subject Credentials."
+            )
+        credentials = fresh_credentials or _create_mysterybox_eso_credentials(
+            project_id=project_id
+        )
+
+    _apply_mysterybox_eso_credentials_secret(
+        namespace=namespace,
+        name=name,
+        key=key,
+        credentials=credentials,
+        extra_env=extra_env,
+    )
+    console.print(
+        f"Ensured ESO MysteryBox credential Secret {namespace}/{name} for native provider."
+    )
+    return credentials
+
+
+def _ensure_mysterybox_eso_runtime_before_flux(
+    config: Any,
+    *,
+    extra_env: dict[str, str] | None,
+    target_ref: str | None = None,
+    auto_auth_bootstrap: bool,
+) -> None:
+    if not mysterybox_eso_enabled(config, target_ref=target_ref):
+        return
+    specs = mysterybox_eso_runtime_secret_specs(config, target_ref=target_ref)
+    fresh_credentials: MysteryBoxEsoCredentials | None = None
+    for spec in specs:
+        fresh_credentials = _ensure_mysterybox_eso_credentials_secret(
+            config,
+            spec=spec,
+            extra_env=extra_env,
+            auto_auth_bootstrap=auto_auth_bootstrap,
+            fresh_credentials=fresh_credentials,
+        )
+    probe_namespace = specs[0]["namespace"] if specs else "external-secrets"
+    for api_domain in mysterybox_eso_api_domains(config, target_ref=target_ref):
+        _kubectl_validate_mysterybox_eso_tls(
+            namespace=probe_namespace,
+            api_domain=api_domain,
+            extra_env=extra_env,
+        )
+
+
 def _ensure_backend_s3_env_aliases() -> None:
     access_key = (
         os.environ.get("AWS_ACCESS_KEY_ID", "").strip()
@@ -9185,7 +11309,6 @@ def _ensure_terraform_backend_ready(config: Any, *, auto_auth_bootstrap: bool) -
     _ensure_runtime_auth_material(
         config,
         need_terraform=True,
-        need_eso_mysterybox=False,
         auto_bootstrap=auto_auth_bootstrap,
     )
     _ensure_backend_s3_env_aliases()
@@ -9688,13 +11811,17 @@ _MK8S_GPU_VALIDATION_KINDS = {
     "mk8s_nccl",
 }
 _OBSERVABILITY_VALIDATION_KINDS = {OBSERVABILITY_INGESTION_VALIDATION_KIND}
-_DEPLOY_VALIDATION_KINDS = _MK8S_GPU_VALIDATION_KINDS | _OBSERVABILITY_VALIDATION_KINDS
+_MYSTERYBOX_ESO_VALIDATION_KINDS = {MYSTERYBOX_ESO_CONNECTIVITY_VALIDATION_KIND}
+_DEPLOY_VALIDATION_KINDS = (
+    _MK8S_GPU_VALIDATION_KINDS | _OBSERVABILITY_VALIDATION_KINDS | _MYSTERYBOX_ESO_VALIDATION_KINDS
+)
 
 
 def _deploy_validation_specs(config: Any) -> list[dict[str, Any]]:
     return [
         *mk8s_gpu_validation_specs(config),
         *observability_validation_specs(config),
+        *mysterybox_eso_validation_specs(config),
     ]
 
 
@@ -9729,6 +11856,11 @@ def _run_deploy_validations(
         for item in validations
         if str(item.get("kind", "") or "").strip() in _OBSERVABILITY_VALIDATION_KINDS
     ]
+    mysterybox_eso_validations = [
+        item
+        for item in validations
+        if str(item.get("kind", "") or "").strip() in _MYSTERYBOX_ESO_VALIDATION_KINDS
+    ]
     if gpu_validations:
         written.extend(
             run_mk8s_gpu_validations(
@@ -9742,6 +11874,15 @@ def _run_deploy_validations(
         written.extend(
             run_observability_validations(
                 observability_validations,
+                inventory_dir=inventory_dir,
+                extra_env=extra_env,
+                emit=emit,
+            )
+        )
+    if mysterybox_eso_validations:
+        written.extend(
+            run_mysterybox_eso_validations(
+                mysterybox_eso_validations,
                 inventory_dir=inventory_dir,
                 extra_env=extra_env,
                 emit=emit,
@@ -9801,10 +11942,14 @@ def _filter_deploy_validations(
     skip_kinds: set[str],
 ) -> list[dict[str, Any]]:
     if skip_validations:
-        return []
+        return [item for item in validations if bool(item.get("required"))]
     if not skip_kinds:
         return validations
-    return [item for item in validations if str(item.get("kind", "")).strip() not in skip_kinds]
+    return [
+        item
+        for item in validations
+        if bool(item.get("required")) or str(item.get("kind", "")).strip() not in skip_kinds
+    ]
 
 
 def _manifest_missing_deploy_validations(manifest: Mapping[str, Any]) -> bool:
@@ -10489,6 +12634,30 @@ def _apply_rendered_flux(paths: ProjectPaths, *, extra_env: dict[str, str] | Non
             extra_env=extra_env,
             emit=lambda message: console.print(message),
         )
+        post_flux_manifests = sorted(paths.flux_dir.glob("post-flux-*.yaml"))
+        if post_flux_manifests:
+            _set_phase("[cyan]Applying post-Flux manifests to the target cluster...[/cyan]")
+        for manifest_path in post_flux_manifests:
+            completed = subprocess.run(
+                ["kubectl", "apply", "-f", str(manifest_path)],
+                env=env,
+                timeout=300,
+                capture_output=True,
+                text=True,
+            )
+            stdout = _filter_benign_kubectl_output(completed.stdout or "")
+            stderr = _filter_benign_kubectl_output(completed.stderr or "")
+            if stdout:
+                sys.stdout.write(stdout + ("\n" if not stdout.endswith("\n") else ""))
+            if stderr:
+                sys.stderr.write(stderr + ("\n" if not stderr.endswith("\n") else ""))
+            if completed.returncode != 0:
+                raise subprocess.CalledProcessError(
+                    completed.returncode,
+                    ["kubectl", "apply", "-f", str(manifest_path)],
+                    output=stdout,
+                    stderr=stderr,
+                )
 
 
 def _node_readiness_summary(*, extra_env: dict[str, str]) -> tuple[bool, str]:
@@ -10734,7 +12903,7 @@ def _deploy_generated_artifacts(
     all_targets: bool = False,
 ) -> None:
     """Deploy an existing generated artifact bundle without rerendering it."""
-    _run_deploy_preflight(
+    mysterybox_payload_env = _run_deploy_preflight(
         config,
         paths,
         auto_auth_bootstrap=auto_auth_bootstrap,
@@ -10788,15 +12957,50 @@ def _deploy_generated_artifacts(
     if status_watchers:
         apply_kwargs["status_watchers"] = status_watchers
     apply_kwargs["run_mk8s_preflight"] = False
-    _run_terraform_apply_with_status(config, paths, **apply_kwargs)
+    if mysterybox_payload_env:
+        apply_kwargs["extra_env"] = mysterybox_payload_env
+    try:
+        _run_terraform_apply_with_status(config, paths, **apply_kwargs)
+    except RuntimeError:
+        with suppress(Exception):
+            if _sync_mysterybox_primary_version_ids_to_config(
+                config,
+                paths,
+                initialize=False,
+                manifest=manifest,
+                require_all=False,
+            ):
+                console.print(
+                    "Recovered MysteryBox primary version_id values from Terraform state; "
+                    "retry deploy to continue from the refreshed generated bundle."
+                )
+        raise
+    if _sync_mysterybox_primary_version_ids_to_config(
+        config,
+        paths,
+        initialize=False,
+        manifest=manifest,
+    ):
+        manifest = load_generated_manifest(paths.generated_dir)
+        config = runtime_config_from_manifest(manifest)
+    _refresh_mysterybox_eso_flux_after_terraform(config, paths)
     write_inventory(config, paths, validations=report_validations)
     if skip_validations and declared_validations:
-        console.print("Skipping deploy-time validations for this run (--skip-validations).")
+        if deploy_validations:
+            console.print(
+                "Skipping optional deploy-time validations for this run "
+                "(--skip-validations); required validations still run."
+            )
+        else:
+            console.print(
+                "Skipping optional deploy-time validations for this run (--skip-validations)."
+            )
     elif skip_validation_kinds:
         skipped_labels = _deploy_validation_skip_labels(skip_validation_kinds)
         if skipped_labels:
             console.print(
-                "Skipping deploy-time validations for this run: " + ", ".join(skipped_labels)
+                "Skipping optional deploy-time validations for this run: "
+                + ", ".join(skipped_labels)
             )
     if manifest_targets and not selected_targets:
         console.print(
@@ -10833,6 +13037,12 @@ def _deploy_generated_artifacts(
                         config,
                         extra_env=kube_env,
                         target_ref=target_ref,
+                    )
+                    _ensure_mysterybox_eso_runtime_before_flux(
+                        config,
+                        extra_env=kube_env,
+                        target_ref=target_ref,
+                        auto_auth_bootstrap=auto_auth_bootstrap,
                     )
                     _ensure_grafana_runtime_before_flux(
                         config,
@@ -10887,6 +13097,11 @@ def _deploy_generated_artifacts(
     elif has_enabled_app_charts or deploy_validations:
         _report_cluster_nodes_status(extra_env=None, emit=lambda message: console.print(message))
         if has_enabled_app_charts:
+            _ensure_mysterybox_eso_runtime_before_flux(
+                config,
+                extra_env=None,
+                auto_auth_bootstrap=auto_auth_bootstrap,
+            )
             _ensure_grafana_runtime_before_flux(config, extra_env=None)
             _apply_rendered_flux(paths, extra_env=None)
             grafana_statuses.extend(_collect_grafana_status_after_flux(config, extra_env=None))
@@ -10969,8 +13184,8 @@ def _run_deploy_preflight(
     *,
     auto_auth_bootstrap: bool,
     manifest: Mapping[str, Any] | None = None,
-) -> None:
-    _run_generated_bundle_validation(
+) -> dict[str, str]:
+    return _run_generated_bundle_validation(
         config,
         paths,
         auto_auth_bootstrap=auto_auth_bootstrap,
@@ -10978,6 +13193,7 @@ def _run_deploy_preflight(
         quota_phase="deploy",
         flux_command_name="deploy",
         manifest=manifest,
+        prompt_mysterybox_payload_values=_console_is_terminal(),
     )
 
 
@@ -10991,14 +13207,37 @@ def _run_generated_bundle_validation(
     flux_command_name: str,
     portable: bool = False,
     manifest: Mapping[str, Any] | None = None,
-) -> None:
+    prompt_mysterybox_payload_values: bool = False,
+) -> dict[str, str]:
+    mysterybox_payload_requirements = _mysterybox_runtime_payload_requirements(config)
+    mysterybox_payload_env: dict[str, str] = {}
+    if mysterybox_payload_requirements and prompt_mysterybox_payload_values:
+        console.print(
+            "MysteryBox payload values are required for first deploy. "
+            "Input is hidden and used only for this Terraform run."
+        )
+        mysterybox_payload_env = _collect_mysterybox_runtime_payload_values(
+            config,
+            prompt=True,
+        )
     phase_defs = [
         _ValidationPhase("strict-readiness", "Validate strict deployment readiness"),
-        _ValidationPhase("mk8s-preflight", "Validate MK8s network preflight"),
-        _ValidationPhase("backend", "Prepare Terraform backend auth"),
-        _ValidationPhase("quota-readiness", "Validate live Nebius quota/capacity"),
-        _ValidationPhase("terraform", "Validate generated Terraform bundle"),
     ]
+    if mysterybox_payload_requirements:
+        phase_defs.append(
+            _ValidationPhase(
+                "mysterybox-payload-values",
+                "Validate MysteryBox runtime payload values",
+            )
+        )
+    phase_defs.extend(
+        [
+            _ValidationPhase("mk8s-preflight", "Validate MK8s network preflight"),
+            _ValidationPhase("backend", "Prepare Terraform backend auth"),
+            _ValidationPhase("quota-readiness", "Validate live Nebius quota/capacity"),
+            _ValidationPhase("terraform", "Validate generated Terraform bundle"),
+        ]
+    )
     active_chart_count = _active_chart_count(config)
     if active_chart_count > 0:
         phase_defs.append(_ValidationPhase("flux", "Validate rendered Flux manifests"))
@@ -11012,6 +13251,23 @@ def _run_generated_bundle_validation(
             "strict-readiness",
             lambda: _validate_strict_config(config, include_common_checks=False),
         )
+        if mysterybox_payload_requirements:
+            def _prepare_mysterybox_payload_values() -> None:
+                nonlocal mysterybox_payload_env
+                validation_env = os.environ.copy()
+                validation_env.update(mysterybox_payload_env)
+                if mysterybox_payload_env:
+                    _validate_mysterybox_runtime_payload_values(
+                        config,
+                        environ=validation_env,
+                    )
+                    return
+                mysterybox_payload_env = _collect_mysterybox_runtime_payload_values(config)
+
+            progress.run(
+                "mysterybox-payload-values",
+                _prepare_mysterybox_payload_values,
+            )
         progress.run("mk8s-preflight", lambda: validate_mk8s_network_preflight(config))
         progress.run(
             "backend",
@@ -11064,6 +13320,7 @@ def _run_generated_bundle_validation(
             )
 
     _print_mk8s_gpu_validation_warnings(config)
+    return mysterybox_payload_env
 
 
 _TERRAFORM_STATE_NAME_RE = re.compile(r'^\s*name\s*=\s*"([^"]+)"\s*$', re.MULTILINE)
@@ -11246,8 +13503,14 @@ def _run_terraform_apply_with_status(
     initialize: bool = True,
     status_watchers: list[dict[str, str]] | None = None,
     run_mk8s_preflight: bool = True,
+    extra_env: Mapping[str, str] | None = None,
 ) -> None:
     runtime_env = _terraform_runtime_env(config)
+    if extra_env:
+        runtime_env.update(dict(extra_env))
+    validation_env = os.environ.copy()
+    validation_env.update(runtime_env)
+    _validate_mysterybox_runtime_payload_values(config, environ=validation_env)
     if run_mk8s_preflight:
         validate_mk8s_network_preflight(config)
     reporting_kwargs: dict[str, Any] = {
@@ -11285,6 +13548,7 @@ def _run_terraform_destroy_with_status(
     runtime_env = _terraform_runtime_env(config)
     reporting_kwargs: dict[str, Any] = {
         "emit": lambda message: console.print(message),
+        "operation": "destroy",
     }
     if status_watchers:
         reporting_kwargs["status_watchers"] = status_watchers
@@ -11398,6 +13662,13 @@ def _warn_if_flux_gitops_not_bootstrapped(
         f"{warning_markup('WARNING:', bold=True)} Flux GitOps bootstrap is not configured for this cluster yet. "
         "Local apply succeeded, but the cluster will not continuously sync from the Git repository "
         "until you bootstrap it."
+    )
+    console.print(
+        "The command below takes the local generated bundle path; the GitHub repository is inferred "
+        f"from GITHUB_REPOSITORY or the git origin under {paths.repo_root}."
+    )
+    console.print(
+        "Commit and push the rendered generated/flux path before relying on continuous GitOps sync."
     )
     console.print("Run to enable GitOps sync:")
     console.print(command, style="cyan", no_wrap=True, overflow="ignore")
@@ -12238,18 +14509,10 @@ def _target_bound_app_issues_from_payload(payload: dict[str, Any]) -> list[str]:
             continue
         seen_keys[instance_key] = label
 
-        if target_refs:
-            if instance_id not in target_refs:
-                issues.append(
-                    f"{label}.{INSTANCE_ID_FIELD} '{instance_id}' must reference one of "
-                    f"the enabled cluster targets: {available_targets}"
-                )
-            continue
-        target_ref = app_chart_target_ref(row)
-        if target_ref:
+        if target_refs and instance_id not in target_refs:
             issues.append(
-                f"{label}.{TARGET_REF_FIELD} is no longer supported in config.yaml; "
-                f"use {label}.{INSTANCE_ID_FIELD} for the cluster target"
+                f"{label}.{INSTANCE_ID_FIELD} '{instance_id}' must reference one of "
+                f"the enabled cluster targets: {available_targets}"
             )
     return issues
 
@@ -12895,6 +15158,21 @@ def create_command(
             final_payload,
             provider_lookup=provider_lookup,
         )
+        selected_apps, mysterybox_eso_app_labels = (
+            _ensure_mysterybox_eso_app_dependency_selection(
+                final_payload,
+                selected_apps=selected_apps,
+                app_entries=app_entries,
+            )
+        )
+        _print_mysterybox_eso_app_dependency_adjustment(mysterybox_eso_app_labels)
+        if interactive_mode:
+            _print_component_selection_summary(
+                selected_infra=selected_infra,
+                selected_apps=selected_apps,
+                infra_entries=infra_entries,
+                app_entries=app_entries,
+            )
 
         if interactive_mode and optional_wizard_mode:
             config_yaml_override, wizard_completed = _run_component_field_wizard(
@@ -13012,9 +15290,13 @@ def create_command(
                 + " because the selected observability configuration requires them."
             )
         _align_new_handoff_instance_ids_with_resource_names(final_payload)
+        if ensure_mysterybox_eso_app_rows(final_payload, app_entries=app_entries):
+            selected_apps = _enabled_ids_from_runtime_payload(
+                payload=final_payload,
+                entries=app_entries,
+            )
         materialize_mk8s_gpu_app_values(final_payload)
         materialize_observability_infra_values(final_payload)
-        materialize_observability_app_values(final_payload)
 
         create_required_field_issues = (
             _wizard_followup_required_field_issues(
@@ -13098,14 +15380,7 @@ def create_command(
         console.print(f"Ensured generated skeleton: {result.config_path.parent / 'generated'}")
         if interactive_mode and (not optional_wizard_mode or not wizard_completed):
             _print_wizard_required_field_warning(create_required_field_issues)
-        config_arg = _config_cli_arg(result.config_path)
-        console.print(
-            f"Next steps: run `nebius-cxcli validate {config_arg}`, "
-            f"`nebius-cxcli render {config_arg}`, "
-            f"`nebius-cxcli bootstrap-ci {config_arg}` (optional), then deploy from "
-            f"the rendered bundle with `nebius-cxcli deploy {config_arg}`.",
-            soft_wrap=True,
-        )
+        _print_create_next_steps(result.config_path)
         console.print(
             f"{warning_markup('Security warning:')} keep this customer repository private "
             "because the deployments root contains sensitive operational metadata."
@@ -13454,7 +15729,6 @@ def component_add_command(
             infra_entries=infra_entries,
             app_entries=app_entries,
         )
-        config_yaml_override = yaml.safe_dump(next_payload, sort_keys=False)
         wizard_completed = True
         _materialize_singleton_provider_defaults(
             payload=next_payload,
@@ -13478,6 +15752,21 @@ def component_add_command(
             next_payload,
             provider_lookup=provider_lookup,
         )
+        selected_apps, mysterybox_eso_app_labels = (
+            _ensure_mysterybox_eso_app_dependency_selection(
+                next_payload,
+                selected_apps=selected_apps,
+                app_entries=app_entries,
+            )
+        )
+        if mysterybox_eso_app_labels:
+            for app_label in mysterybox_eso_app_labels:
+                if app_label not in added_apps_selectors:
+                    added_apps_selectors.append(app_label)
+                if app_label not in added_apps_labels:
+                    added_apps_labels.append(app_label)
+            _print_mysterybox_eso_app_dependency_adjustment(mysterybox_eso_app_labels)
+        config_yaml_override = yaml.safe_dump(next_payload, sort_keys=False)
         if interactive_mode:
             config_yaml_override, wizard_completed = _run_component_field_wizard(
                 config_yaml=config_yaml_override,
@@ -13649,9 +15938,13 @@ def component_add_command(
                 if isinstance(row, dict) and component_instance_id(row) in added_infra_instances
             ]
         _materialize_single_target_app_bindings(next_payload)
+        if ensure_mysterybox_eso_app_rows(next_payload, app_entries=app_entries):
+            selected_apps = _enabled_ids_from_runtime_payload(
+                payload=next_payload,
+                entries=app_entries,
+            )
         materialize_mk8s_gpu_app_values(next_payload)
         materialize_observability_infra_values(next_payload)
-        materialize_observability_app_values(next_payload)
 
         add_required_field_issues = (
             _wizard_followup_required_field_issues(
@@ -14388,7 +16681,9 @@ def _kubeconfig_env_for_context(context_name: str, *, stack: ExitStack) -> dict[
             for item in contexts
         ):
             continue
-        target_root = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="nebius-cxcli-kube-")))
+        target_root = Path(
+            stack.enter_context(tempfile.TemporaryDirectory(prefix="nebius-cxcli-kube-"))
+        )
         target_path = target_root / "config"
         target_payload = copy.deepcopy(dict(payload))
         target_payload["current-context"] = normalized_context
@@ -14435,6 +16730,24 @@ def _known_kube_context_names() -> tuple[str, ...]:
     return tuple(names)
 
 
+def _current_kube_context_name() -> str:
+    known_contexts = set(_known_kube_context_names())
+    for kubeconfig_path in _candidate_kubeconfig_paths():
+        source_path = Path(kubeconfig_path).expanduser()
+        if not source_path.exists():
+            continue
+        try:
+            payload = yaml.safe_load(source_path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError):
+            continue
+        if not isinstance(payload, Mapping):
+            continue
+        context_name = str(payload.get("current-context") or "").strip()
+        if context_name and context_name in known_contexts:
+            return context_name
+    return ""
+
+
 def _cluster_id_from_kube_context_name(context_name: str) -> str:
     parts = str(context_name or "").strip().split("-")
     for index, part in enumerate(parts[:-1]):
@@ -14443,10 +16756,24 @@ def _cluster_id_from_kube_context_name(context_name: str) -> str:
     return ""
 
 
+def _kube_context_matches_target(context_name: str, target_ref: str) -> bool:
+    normalized_target_ref = normalize_component_token(target_ref)
+    normalized_context_name = str(context_name or "").strip()
+    if not normalized_target_ref or not normalized_context_name:
+        return False
+    prefix = f"nebius-{normalized_target_ref}-mk8scluster-"
+    return normalized_context_name.startswith(prefix) and bool(
+        _cluster_id_from_kube_context_name(normalized_context_name)
+    )
+
+
 def _kube_context_name_for_target(target_ref: str) -> str:
     normalized_target_ref = normalize_component_token(target_ref)
     if not normalized_target_ref:
         return ""
+    current_context = _current_kube_context_name()
+    if _kube_context_matches_target(current_context, normalized_target_ref):
+        return current_context
     prefix = f"nebius-{normalized_target_ref}-mk8scluster-"
     candidates = [
         name
@@ -14585,17 +16912,24 @@ def _raise_missing_grafana_target_contexts(
     missing_target_refs: set[str],
     *,
     config_path: Path | None = None,
+    generated_path: Path | None = None,
     details_by_target: Mapping[str, str] | None = None,
 ) -> None:
     if not missing_target_refs:
         return
     missing = ", ".join(sorted(missing_target_refs))
     config_arg = _config_cli_arg(config_path) if config_path is not None else "<config.yaml>"
+    generated_arg = (
+        shlex.quote(str(generated_path.resolve()))
+        if generated_path is not None
+        else "<generated/>"
+    )
     message = (
         "validate-dashboards could not resolve an explicit kube context for Grafana "
         f"target(s): {missing}. Run `nebius-cxcli deploy {config_arg}` or "
-        f"`nebius-cxcli flux apply {config_arg}` for those targets first, or make sure "
-        "the matching `nebius-<target>-mk8scluster-...` context exists in KUBECONFIG."
+        f"`nebius-cxcli flux apply {generated_arg}` for those targets first, or make sure "
+        "the matching `nebius-<target>-mk8scluster-...` context is current or "
+        "unambiguous in KUBECONFIG."
     )
     detail_rows = []
     for target in sorted(missing_target_refs):
@@ -14645,6 +16979,7 @@ def _grafana_dashboard_validation_target_envs(
         _raise_missing_grafana_target_contexts(
             required_target_refs - set(target_envs),
             config_path=getattr(paths, "config_path", None),
+            generated_path=getattr(paths, "generated_dir", None),
         )
         return target_envs
     manifest = load_generated_manifest(paths.generated_dir)
@@ -14653,6 +16988,7 @@ def _grafana_dashboard_validation_target_envs(
         _raise_missing_grafana_target_contexts(
             required_target_refs - set(target_envs),
             config_path=getattr(paths, "config_path", None),
+            generated_path=getattr(paths, "generated_dir", None),
         )
         return {}
     selected_targets = (
@@ -14701,6 +17037,7 @@ def _grafana_dashboard_validation_target_envs(
     _raise_missing_grafana_target_contexts(
         required_target_refs - set(target_envs),
         config_path=getattr(paths, "config_path", None),
+        generated_path=getattr(paths, "generated_dir", None),
         details_by_target=handoff_errors,
     )
     return target_envs
@@ -15073,18 +17410,18 @@ def auth_command(
                     endpoint=endpoint,
                     sdk_config_file=resolved_sdk_config,
                 )
+                profile_label = "runtime auth profile"
                 if recreate:
-                    console.print(
-                        f"Recreated runtime auth profile for project '{resolved_project_id}'."
-                    )
+                    console.print(f"Recreated {profile_label} for project '{resolved_project_id}'.")
                 else:
                     if created:
                         console.print(
-                            f"Created runtime auth profile for project '{resolved_project_id}'."
+                            f"Created {profile_label} for project '{resolved_project_id}'."
                         )
                     else:
+                        sentence_label = profile_label[:1].upper() + profile_label[1:]
                         console.print(
-                            f"{warning_markup('Runtime auth profile already exists')} for project "
+                            f"{warning_markup(f'{sentence_label} already exists')} for project "
                             f"'{resolved_project_id}'."
                         )
 
@@ -15192,6 +17529,7 @@ def render_command(
         materialize_mk8s_gpu_app_values(config)
         materialize_observability_infra_values(config)
         materialize_observability_app_values(config)
+        materialize_mysterybox_eso_app_values(config)
         resolved_source_profile = resolve_component_sources_profile()
         _assert_not_nested_deployments_root(paths.deployments_dir)
         if not _confirm_render_overwrite(paths, force=force):
@@ -15342,7 +17680,10 @@ def deploy_command(
         bool,
         typer.Option(
             "--skip-validations",
-            help="Skip all deploy-time validations from config.yaml/generated manifest for this run only.",
+            help=(
+                "Skip optional deploy-time validations from config.yaml/generated manifest "
+                "for this run only. Required platform validations still run."
+            ),
         ),
     ] = False,
     skip_validation: Annotated[
@@ -15350,7 +17691,7 @@ def deploy_command(
         typer.Option(
             "--skip-validation",
             help=(
-                "Skip one deploy-time validation for this run only. "
+                "Skip one optional deploy-time validation for this run only. "
                 "Repeatable. Supported values: operator-readiness, gpu-visibility, nccl, "
                 "observability-ingestion."
             ),
@@ -15404,10 +17745,13 @@ def deploy_command(
     update GitHub workflows, environments, or CI secrets; use `nebius-cxcli
     bootstrap-ci <config.yaml>` explicitly for that. Use
     `--skip-validations` or repeatable `--skip-validation <kind>` only when
-    you want a one-run override without changing the persisted project config.
-    Deploy-time validations include configured MK8s GPU checks plus the generated
+    you want a one-run override for optional checks without changing the
+    persisted project config. Required platform validations, including native
+    ESO MysteryBox connectivity when that sync path is configured, still run.
+    Deploy-time validations include configured MK8s GPU checks, the generated
     Observability Agent ingestion guardrail for observability-enabled MK8s
-    targets. When deploy-time validations are configured, deploy keeps the
+    targets, and required ESO MysteryBox connectivity checks for native
+    MysteryBox sync targets. When deploy-time validations are configured, deploy keeps the
     machine-readable JSON detail files under `generated/inventory/`, refreshes
     the combined `generated/inventory/deploy-report.md`, and prints the same
     validation summary in the terminal. On success, deploy prints the complete
@@ -15521,6 +17865,12 @@ def terraform_plan_command(
         config, paths, _manifest = _load_generated_infra_context(generated_path)
         _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
         runtime_env = _terraform_runtime_env(config)
+        runtime_env.update(
+            _collect_mysterybox_runtime_payload_values(
+                config,
+                prompt=_console_is_terminal(),
+            )
+        )
         terraform_init(paths.infra_dir, extra_env=runtime_env)
         _validate_generated_mk8s_resource_name_preflight(
             config,
@@ -15560,6 +17910,11 @@ def terraform_apply_command(
         paths.inventory_dir.mkdir(parents=True, exist_ok=True)
         write_inventory(config, paths, validations=_manifest_deploy_validations(manifest))
         runtime_env = _terraform_runtime_env(config)
+        mysterybox_payload_env = _collect_mysterybox_runtime_payload_values(
+            config,
+            prompt=_console_is_terminal(),
+        )
+        runtime_env.update(mysterybox_payload_env)
         terraform_init(paths.infra_dir, extra_env=runtime_env)
         _validate_generated_mk8s_resource_name_preflight(
             config,
@@ -15573,7 +17928,10 @@ def terraform_apply_command(
         apply_kwargs: dict[str, Any] = {"initialize": False}
         if status_watchers:
             apply_kwargs["status_watchers"] = status_watchers
+        if mysterybox_payload_env:
+            apply_kwargs["extra_env"] = mysterybox_payload_env
         _run_terraform_apply_with_status(config, paths, **apply_kwargs)
+        _sync_mysterybox_primary_version_ids_to_config(config, paths, initialize=False)
         write_inventory(config, paths, validations=_manifest_deploy_validations(manifest))
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
@@ -15810,7 +18168,6 @@ def flux_bootstrap_command(
             _ensure_runtime_auth_material(
                 config,
                 need_terraform=False,
-                need_eso_mysterybox=False,
                 auto_bootstrap=auto_auth_bootstrap,
             )
         paths.inventory_dir.mkdir(parents=True, exist_ok=True)
@@ -15841,6 +18198,12 @@ def flux_bootstrap_command(
                     _report_cluster_nodes_status(
                         extra_env=kube_env, emit=lambda message: console.print(message)
                     )
+                    _ensure_mysterybox_eso_runtime_before_flux(
+                        config,
+                        extra_env=kube_env,
+                        target_ref=target_ref_value,
+                        auto_auth_bootstrap=auto_auth_bootstrap,
+                    )
                     _ensure_grafana_runtime_before_flux(
                         config,
                         extra_env=kube_env,
@@ -15851,6 +18214,11 @@ def flux_bootstrap_command(
         else:
             _report_cluster_nodes_status(
                 extra_env=None, emit=lambda message: console.print(message)
+            )
+            _ensure_mysterybox_eso_runtime_before_flux(
+                config,
+                extra_env=None,
+                auto_auth_bootstrap=auto_auth_bootstrap,
             )
             _ensure_grafana_runtime_before_flux(config, extra_env=None)
             action = ensure_flux(paths, extra_env=None)
@@ -15929,6 +18297,12 @@ def flux_apply_command(
                     _report_cluster_nodes_status(
                         extra_env=kube_env, emit=lambda message: console.print(message)
                     )
+                    _ensure_mysterybox_eso_runtime_before_flux(
+                        config,
+                        extra_env=kube_env,
+                        target_ref=target_ref_value,
+                        auto_auth_bootstrap=auto_auth_bootstrap,
+                    )
                     _ensure_grafana_runtime_before_flux(
                         config,
                         extra_env=kube_env,
@@ -15952,6 +18326,11 @@ def flux_apply_command(
         else:
             _report_cluster_nodes_status(
                 extra_env=None, emit=lambda message: console.print(message)
+            )
+            _ensure_mysterybox_eso_runtime_before_flux(
+                config,
+                extra_env=None,
+                auto_auth_bootstrap=auto_auth_bootstrap,
             )
             _ensure_grafana_runtime_before_flux(config, extra_env=None)
             _apply_rendered_flux(paths, extra_env=None)

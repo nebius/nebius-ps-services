@@ -7,9 +7,12 @@ Use this checklist while reviewing or generating charts.
 - `Chart.yaml` includes:
   - `apiVersion: v2`
   - `type: application`
-  - `version` and `appVersion`
+  - SemVer 2 `version` for the chart/package version
+  - quoted informational `appVersion`
   - `kubeVersion` when API compatibility matters
   - `maintainers`, `sources`, `home`, `keywords`
+- `appVersion` stays aligned with the default app/image version when known and stable.
+- Non-SemVer app versions such as Git SHAs, build IDs, dates, and vendor release strings are not rewritten only to satisfy SemVer.
 
 ## Values and Interfaces
 
@@ -38,12 +41,27 @@ Use this checklist while reviewing or generating charts.
   - cert-manager resources
   - PDB
   - NetworkPolicy
+- Existing repository validators such as `kubeconform`, `kubeval`, `datree`, `ct`, `helm-unittest`, snapshot tests, and policy-as-code checks are reused before introducing new validators.
 
 ## Security
 
 - Pod and container security defaults are present unless incompatible.
 - `automountServiceAccountToken` is disabled unless Kubernetes API is required.
 - `readOnlyRootFilesystem` includes writable temp mount when app needs it.
+- Existing manifests, values, Dockerfile references, init containers, volume mounts, and documented runtime requirements are inspected before changing `securityContext`.
+- Configurable secure defaults are preferred over hard-coded security settings that may break workloads.
+- Writable paths such as `/tmp`, cache directories, and log directories are backed by `emptyDir` or documented external volumes when `readOnlyRootFilesystem` is enabled.
+
+## RBAC
+
+- `rbac` and `serviceAccount` values are separate.
+- Defaults prefer:
+  - `rbac.create: true`
+  - `serviceAccount.create: true`
+  - `serviceAccount.name: ""`
+  - `serviceAccount.annotations: {}`
+  - `serviceAccount.automountServiceAccountToken: false`
+- Roles and RoleBindings are least-privilege and exist only when the workload needs Kubernetes API access.
 
 ## Reliability and HA
 
@@ -59,8 +77,14 @@ Use this checklist while reviewing or generating charts.
 
 ## CI and Testing
 
-- `helm lint` enabled in CI.
-- `helm template` smoke renders for default and key toggles.
+- Dependencies are resolved before lint/render:
+  - `helm dependency build` when `Chart.lock` exists.
+  - `helm dependency update` when `Chart.yaml` declares dependencies and no lock file exists.
+  - Generated `Chart.lock` and `charts/` changes are inspected before they are kept.
+- `helm lint --strict` enabled when warnings should block the change.
+- `helm lint --with-subcharts` used when subcharts are in scope.
+- `helm template smoke --debug` renders for default and key toggles.
+- `helm template smoke --kube-version <supported-version>` runs when supported Kubernetes versions are known.
 - Optional `ct lint` for changed charts in PRs.
 - Optional golden snapshot tests for deterministic rendered manifests.
 - Prefix CI workflow job/check names with the project or chart name to keep

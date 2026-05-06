@@ -10,19 +10,24 @@ variable "parent_id" {
 
 variable "secrets" {
   description = <<-EOT
-    Map of secret definitions keyed by logical secret ID.
-    Each secret defines metadata and the payload key set; values are passed
-    separately in `secret_values` to avoid writing cleartext into config files.
+    List of MysteryBox secret definitions.
+    Each secret name is the stable identity for Terraform outputs and runtime
+    payload injection. Terraform creates one initial primary version per
+    secret from the declared payload shape. The optional version_id records the
+    current primary MysteryBox version after deployment; use "n/a" or leave it
+    unset before the first deploy. Payload entries define MysteryBox payload
+    keys and value types; values are passed separately in `payload_values` to
+    avoid writing cleartext into configuration files.
   EOT
-  type = map(object({
-    name                = string
-    description         = optional(string, null)
-    version_description = optional(string, null)
-    labels              = optional(map(string), {})
-    set_primary         = optional(bool, true)
-    payload_keys        = list(string)
+  type = list(object({
+    name        = string
+    description = optional(string, null)
+    labels      = optional(map(string), {})
+    version_id  = optional(string)
+    payload = map(object({
+      type = optional(string, "text")
+    }))
   }))
-  default  = {}
   nullable = false
 
   validation {
@@ -32,36 +37,71 @@ variable "secrets" {
 
   validation {
     condition = alltrue([
-      for item in values(var.secrets) :
+      for item in var.secrets :
       length(trimspace(item.name)) > 0
     ])
     error_message = "Every secret definition requires a non-empty name."
   }
 
   validation {
-    condition = alltrue([
-      for item in values(var.secrets) :
-      length(item.payload_keys) > 0
-    ])
-    error_message = "Every secret definition requires at least one payload key."
+    condition = length(distinct([
+      for item in var.secrets :
+      trimspace(item.name)
+    ])) == length(var.secrets)
+    error_message = "Secret names must be unique."
   }
 
   validation {
     condition = alltrue([
-      for item in values(var.secrets) :
-      length(distinct(item.payload_keys)) == length(item.payload_keys)
+      for item in var.secrets :
+      (
+        trimspace(coalesce(try(item.version_id, null), "n/a")) == "" ||
+        lower(trimspace(coalesce(try(item.version_id, null), "n/a"))) == "n/a" ||
+        can(regex("^mbsecver-[a-z0-9]+$", trimspace(coalesce(try(item.version_id, null), "n/a"))))
+      )
     ])
-    error_message = "payload_keys must be unique within each secret definition."
+    error_message = "version_id must be empty, \"n/a\", or a MysteryBox version ID starting with mbsecver-."
+  }
+
+  validation {
+    condition = alltrue([
+      for item in var.secrets :
+      length(item.payload) > 0
+    ])
+    error_message = "Every secret definition requires a non-empty payload map."
+  }
+
+  validation {
+    condition = alltrue([
+      for item in var.secrets :
+      alltrue([
+        for payload_key in keys(item.payload) :
+        length(trimspace(payload_key)) > 0
+      ])
+    ])
+    error_message = "payload keys must contain non-empty MysteryBox payload entry keys."
+  }
+
+  validation {
+    condition = alltrue([
+      for item in var.secrets :
+      alltrue([
+        for payload in values(item.payload) :
+        contains(["text", "file"], lower(coalesce(try(payload.type, null), "text")))
+      ])
+    ])
+    error_message = "payload entries must use type \"text\" or \"file\"."
   }
 }
 
-variable "secret_values" {
+variable "payload_values" {
   description = <<-EOT
-    Sensitive payload values by secret ID and payload key.
-    Provide this at runtime via TF_VAR_mysterybox_secret_values.
+    Sensitive payload values by MysteryBox secret name and payload key.
+    Provide this at runtime through a caller-root sensitive variable, for example
+    TF_VAR_mysterybox_payload_values in the minimal example.
     Example:
     {
-      app = {
+      "app-runtime" = {
         API_KEY = "..."
       }
     }

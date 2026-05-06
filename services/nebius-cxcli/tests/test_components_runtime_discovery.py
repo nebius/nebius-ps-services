@@ -142,6 +142,30 @@ def test_components_discovered_from_source_file(monkeypatch, tmp_path: Path) -> 
                 "auto_select_single": True,
             }
         },
+        "inputs.gpu_stack_source": {
+            "sources": [
+                {
+                    "source": "static",
+                    "values": [
+                        {
+                            "value": "nebius_image",
+                            "label": (
+                                "nebius_image  (Nebius GPU image includes the host "
+                                "NVIDIA driver/toolkit; GPU Operator does not "
+                                "install them)"
+                            ),
+                        },
+                        {
+                            "value": "operator_managed",
+                            "label": (
+                                "operator_managed  (base OS image; GPU Operator "
+                                "installs and manages the NVIDIA driver/toolkit)"
+                            ),
+                        },
+                    ],
+                }
+            ]
+        },
         "inputs.infiniband_fabric": {
             "options": {
                 "from": "mk8s_infiniband_fabrics",
@@ -181,6 +205,41 @@ def test_components_discovered_from_source_file(monkeypatch, tmp_path: Path) -> 
                 "from": "mk8s_boot_disk_types",
                 "auto_select_first": True,
             },
+        },
+        "deploy.targets[].secrets.mysterybox.enabled": {
+            "default": True,
+            "materialize_default": True,
+        },
+        "deploy.targets[].secrets.mysterybox.store_name": {
+            "default": "nebius-mysterybox-shared",
+            "prompt": False,
+        },
+        "deploy.targets[].secrets.mysterybox.api_domain": {
+            "default": "api.nebius.cloud:443",
+            "prompt": False,
+        },
+        "deploy.targets[].secrets.mysterybox.credentials_secret.name": {
+            "default": "nebius-mysterybox-shared-creds",
+            "prompt": False,
+        },
+        "deploy.targets[].secrets.mysterybox.credentials_secret.namespace": {
+            "default": "external-secrets",
+            "prompt": False,
+        },
+        "deploy.targets[].secrets.mysterybox.credentials_secret.key": {
+            "default": "credentials.json",
+            "prompt": False,
+        },
+        "deploy.targets[].secrets.mysterybox.allow_all_namespaces": {
+            "default": True,
+            "materialize_default": True,
+        },
+        "deploy.targets[].secrets.mysterybox.sync_namespaces": {
+            "default": ["default"],
+            "type_hint": "list(string)",
+            "prompt_complex": True,
+            "materialize_default": True,
+            "required": True,
         },
         "inputs.mk8s_cluster_overrides": {
             "prompt": False,

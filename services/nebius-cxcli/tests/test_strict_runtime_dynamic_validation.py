@@ -320,11 +320,10 @@ def test_strict_validation_ssh_jumphost_allowed_cidrs_not_required_when_has_defa
     assert "allowed_cidrs is required" not in message
 
 
-def test_strict_validation_mysterybox_secrets_not_required_when_has_default(
+def test_strict_validation_mysterybox_requires_secrets_when_enabled(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """secrets has default={} in TF, so it is not auto-detected as required."""
     payload = _starter_payload(selected_infra={"mysterybox"}, selected_apps=set())
     mysterybox = _infra_component_row(payload, "mysterybox")
     mysterybox["inputs"] = {
@@ -337,7 +336,7 @@ def test_strict_validation_mysterybox_secrets_not_required_when_has_default(
 
     monkeypatch.setattr(
         "nebius_cxcli.cli.module_required_variables",
-        lambda _source: ("parent_id",),
+        lambda _source: ("parent_id", "secrets"),
     )
     monkeypatch.setattr(
         "nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: []
@@ -348,7 +347,7 @@ def test_strict_validation_mysterybox_secrets_not_required_when_has_default(
         message = ""
     except RuntimeError as exc:
         message = str(exc)
-    assert "secrets is required" not in message
+    assert "infra.components[mysterybox].inputs.secrets is required" in message
 
 
 def test_strict_validation_allows_explicit_ssh_public_key_for_jumphost(tmp_path: Path) -> None:

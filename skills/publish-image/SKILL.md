@@ -26,7 +26,7 @@ Generate exactly these artifacts in the target project:
 ## Inputs to Collect
 
 - `project_name` (for workflow filename/name)
-- `project_tag_prefix` (for example `mysterybox-bridge`)
+- `project_tag_prefix` (for example `sample-service`)
 - `main_branch` (default `main`)
 - `app_dir` (build context path, for example `services/<project>/webhook`)
 - `image_name` (full registry path, for example `quay.io/org/app`)

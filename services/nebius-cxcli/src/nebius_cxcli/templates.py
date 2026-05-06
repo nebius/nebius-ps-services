@@ -188,8 +188,9 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                   NEBIUS_AUTH_PUBLIC_KEY_ID: ${{{{ secrets.NEBIUS_AUTH_PUBLIC_KEY_ID }}}}
                 run: |
                   set -euo pipefail
-                  # If config uses infra.mysterybox secrets, expose each
-                  # required value_from_env variable in this step.
+                  # If config uses infra.mysterybox payloads, set
+                  # TF_VAR_mysterybox_payload_values here as a
+                  # secret_name -> payload_key map.
                   nebius-cxcli terraform plan "${{{{ matrix.generated }}}}"
 
           apply:
@@ -273,8 +274,9 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                   NEBIUS_AUTH_PUBLIC_KEY_ID: ${{{{ secrets.NEBIUS_AUTH_PUBLIC_KEY_ID }}}}
                 run: |
                   set -euo pipefail
-                  # If config uses infra.mysterybox secrets, expose each
-                  # required value_from_env variable in this step.
+                  # If config uses infra.mysterybox payloads, set
+                  # TF_VAR_mysterybox_payload_values here as a
+                  # secret_name -> payload_key map.
                   nebius-cxcli terraform apply "${{{{ matrix.generated }}}}"
 
               - name: Bootstrap/reconcile Flux

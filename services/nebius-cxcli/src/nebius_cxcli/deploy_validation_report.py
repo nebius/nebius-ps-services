@@ -13,6 +13,13 @@ _LEGACY_VALIDATION_MARKDOWN_FILENAME = "deploy-validation-report.md"
 
 
 @dataclass(frozen=True)
+class DeployValidationCheck:
+    name: str
+    status: str
+    summary: str
+
+
+@dataclass(frozen=True)
 class DeployValidationResult:
     kind: str
     name: str
@@ -20,6 +27,7 @@ class DeployValidationResult:
     report_path: Path
     report_exists: bool
     summary: str
+    checks: tuple[DeployValidationCheck, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -125,9 +133,16 @@ def validation_section_lines(report: DeployValidationReport) -> list[str]:
                 f"- Status: `{status_label(item.status)}`",
                 f"- Detail report: `{detail_name}`",
                 f"- Summary: {item.summary}",
-                "",
             ]
         )
+        if item.checks:
+            lines.append(f"- Checks ({len(item.checks)}):")
+            for index, check in enumerate(item.checks, start=1):
+                suffix = f": {check.summary}" if check.summary else ""
+                lines.append(
+                    f"  {index}. `{status_label(check.status)}` {check.name}{suffix}"
+                )
+        lines.append("")
     return lines
 
 
@@ -183,6 +198,7 @@ def _build_validation_result(
         report_path=report_path,
         report_exists=True,
         summary=_validation_summary(kind, payload),
+        checks=_validation_checks(payload),
     )
 
 
@@ -192,6 +208,32 @@ def _mapping(value: Any) -> dict[str, Any]:
 
 def _list(value: Any) -> list[Any]:
     return list(value) if isinstance(value, list) else []
+
+
+def _join_summary_parts(parts: Sequence[str]) -> str:
+    cleaned = [str(part).strip().rstrip(".") for part in parts if str(part).strip()]
+    if not cleaned:
+        return ""
+    return "; ".join(cleaned) + "."
+
+
+def _validation_checks(payload: Mapping[str, Any]) -> tuple[DeployValidationCheck, ...]:
+    checks: list[DeployValidationCheck] = []
+    for item in _list(payload.get("checks")):
+        if not isinstance(item, Mapping):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        status = "passed" if bool(item.get("passed")) else "failed"
+        checks.append(
+            DeployValidationCheck(
+                name=name,
+                status=status,
+                summary=str(item.get("summary") or "").strip(),
+            )
+        )
+    return tuple(checks)
 
 
 def _validation_summary(kind: str, payload: Mapping[str, Any]) -> str:
@@ -206,6 +248,8 @@ def _validation_summary(kind: str, payload: Mapping[str, Any]) -> str:
         return _nccl_summary(payload)
     if kind == "mk8s_observability_ingestion":
         return _observability_ingestion_summary(payload)
+    if kind == "mysterybox_eso_connectivity":
+        return _mysterybox_eso_connectivity_summary(payload)
     validation_name = str(payload.get("validation", "") or "").strip() or "Validation"
     return f"{validation_name} completed with passed={bool(payload.get('passed'))}."
 
@@ -328,11 +372,43 @@ def _observability_ingestion_summary(payload: Mapping[str, Any]) -> str:
         )
         if summary:
             parts.append(summary)
-    return "; ".join(parts) + "."
+    return _join_summary_parts(parts)
+
+
+def _mysterybox_eso_connectivity_summary(payload: Mapping[str, Any]) -> str:
+    checks = [
+        item
+        for item in _list(payload.get("checks"))
+        if isinstance(item, Mapping) and str(item.get("name") or "").strip()
+    ]
+    passed = sum(1 for item in checks if bool(item.get("passed")))
+    total = len(checks)
+    parts = [f"{passed}/{total} check(s) passed"] if total else ["No checks recorded"]
+    for check_name in ("Nebius API TLS", "ClusterSecretStore Ready", "ESO controller log scan"):
+        summary = next(
+            (
+                str(item.get("summary") or "").strip()
+                for item in checks
+                if str(item.get("name") or "").strip() == check_name
+            ),
+            "",
+        )
+        if summary:
+            parts.append(summary)
+    external_secret_checks = [
+        item
+        for item in checks
+        if str(item.get("name") or "").strip().startswith("ExternalSecret Ready")
+    ]
+    if external_secret_checks:
+        ready_count = sum(1 for item in external_secret_checks if bool(item.get("passed")))
+        parts.append(f"ExternalSecrets Ready {ready_count}/{len(external_secret_checks)}")
+    return _join_summary_parts(parts)
 
 
 __all__ = [
     "DEPLOY_REPORT_FILENAME",
+    "DeployValidationCheck",
     "DeployValidationReport",
     "DeployValidationResult",
     "build_deploy_validation_report",
