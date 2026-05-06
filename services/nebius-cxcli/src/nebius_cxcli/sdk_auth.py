@@ -13,6 +13,7 @@ _DELETED_KEY_REFRESH_LOG_MARKERS = (
     "jwtkeynotexists",
     "expired or deactivated",
 )
+_LOGGER = logging.getLogger(__name__)
 
 
 def _as_text(value: object) -> str:
@@ -73,6 +74,7 @@ def init_nebius_sdk(
     parent_id: str | None = None,
     context: str = "Nebius API",
     prefer_operator_auth: bool = False,
+    allow_cli_token: bool = True,
 ):
     """Initialize Nebius SDK with robust auth fallback order."""
     try:
@@ -119,8 +121,14 @@ def init_nebius_sdk(
             )
         )
 
-    def _sdk_from_iam_token() -> object | None:
-        iam_token = _as_text(os.environ.get("NEBIUS_IAM_TOKEN")) or _ensure_iam_token_from_cli()
+    def _sdk_from_iam_token_env() -> object | None:
+        iam_token = _as_text(os.environ.get("NEBIUS_IAM_TOKEN"))
+        if not iam_token:
+            return None
+        return SDK(**_sdk_kwargs(credentials=iam_token))
+
+    def _sdk_from_cli_token() -> object | None:
+        iam_token = _ensure_iam_token_from_cli()
         if not iam_token:
             return None
         return SDK(**_sdk_kwargs(credentials=iam_token))
@@ -128,7 +136,13 @@ def init_nebius_sdk(
     def _sdk_from_config() -> object | None:
         try:
             from nebius.aio.cli_config import Config
-        except Exception:
+        except Exception as exc:
+            _LOGGER.debug(
+                "Nebius SDK config reader is unavailable for %s: %s",
+                context,
+                exc,
+                exc_info=True,
+            )
             return None
 
         config_kwargs: dict[str, object] = {}
@@ -142,33 +156,44 @@ def init_nebius_sdk(
         try:
             cfg = Config(**config_kwargs)
             return SDK(**_sdk_kwargs(config_reader=cfg))
-        except Exception:
+        except Exception as exc:
+            _LOGGER.debug(
+                "Nebius SDK config auth attempt failed for %s: %s",
+                context,
+                exc,
+                exc_info=True,
+            )
             return None
 
-    auth_attempts = (
-        (
-            _sdk_from_iam_token,
+    if prefer_operator_auth:
+        auth_attempts = [
+            _sdk_from_iam_token_env,
             _sdk_from_config,
             _sdk_from_credentials_file,
             _sdk_from_service_account_env,
-        )
-        if prefer_operator_auth
-        else (
+        ]
+    else:
+        auth_attempts = [
             _sdk_from_credentials_file,
             _sdk_from_service_account_env,
-            _sdk_from_iam_token,
+            _sdk_from_iam_token_env,
             _sdk_from_config,
-        )
-    )
+        ]
+    if allow_cli_token:
+        auth_attempts.append(_sdk_from_cli_token)
     for auth_attempt in auth_attempts:
         sdk = auth_attempt()
         if sdk is not None:
             return sdk
 
+    cli_hint = (
+        "log in with the Nebius CLI so `nebius iam get-access-token` works, or "
+        if allow_cli_token
+        else ""
+    )
     raise RuntimeError(
         f"Failed to initialize Nebius SDK credentials for {context}. "
         "Provide NEBIUS_AUTH_CREDENTIALS_FILE, runtime auth env vars "
         "(NEBIUS_SA_ID/NEBIUS_AUTH_PUBLIC_KEY_ID/NEBIUS_AUTH_PRIVATE_KEY_FILE), "
-        "set NEBIUS_IAM_TOKEN, log in with the Nebius CLI so "
-        "`nebius iam get-access-token` works, or provide a Nebius SDK config/profile."
+        f"set NEBIUS_IAM_TOKEN, {cli_hint}provide a Nebius SDK config/profile."
     )

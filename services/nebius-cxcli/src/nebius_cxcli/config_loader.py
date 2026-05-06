@@ -14,11 +14,16 @@ from .mk8s_gpu import (
     materialize_mk8s_gpu_app_values,
     normalize_mk8s_gpu_project_validation_settings,
 )
+from .mysterybox_eso import (
+    ensure_mysterybox_eso_app_rows,
+    normalize_mysterybox_eso_project_settings,
+    strip_mysterybox_eso_app_values,
+)
 from .observability import (
     ensure_observability_app_rows,
-    materialize_observability_app_values,
     materialize_observability_infra_values,
     normalize_observability_project_settings,
+    strip_observability_generated_app_values,
 )
 from .runtime_config import AttrDict, to_plain_data, wrap_runtime_config
 from .runtime_validation import validate_dynamic_payload_structure, validate_runtime_payload
@@ -45,7 +50,13 @@ def normalize_runtime_config_payload(
         changed = True
     if materialize_observability_infra_values(payload):
         changed = True
-    if materialize_observability_app_values(payload):
+    if strip_observability_generated_app_values(payload):
+        changed = True
+    if normalize_mysterybox_eso_project_settings(payload):
+        changed = True
+    if ensure_mysterybox_eso_app_rows(payload):
+        changed = True
+    if strip_mysterybox_eso_app_values(payload):
         changed = True
     if strip_app_chart_target_refs(payload):
         changed = True

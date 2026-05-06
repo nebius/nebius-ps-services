@@ -21,6 +21,7 @@ from nebius_cxcli.config_template import starter_config_yaml
 from nebius_cxcli.deploy_targets import flux_target_dir
 from nebius_cxcli.flux_render import render_flux
 from nebius_cxcli.mk8s_gpu import materialize_mk8s_gpu_app_values
+from nebius_cxcli.mysterybox_eso import materialize_mysterybox_eso_app_values
 from nebius_cxcli.paths import resolve_project_paths, validate_path_alignment
 from nebius_cxcli.render import render_project
 from nebius_cxcli.runtime_introspection import ModuleVariable, reset_runtime_introspection_cache
@@ -92,6 +93,11 @@ def _project_config_path(base: Path) -> Path:
 
 def _target_flux_dir(paths, target_ref: str = "mk8s") -> Path:
     return flux_target_dir(paths, target_ref)
+
+
+def _load_mysterybox_eso_post_flux_objects(paths, target_ref: str = "mk8s") -> list[dict]:
+    path = _target_flux_dir(paths, target_ref) / "post-flux-mysterybox-eso.yaml"
+    return [item for item in yaml.safe_load_all(path.read_text(encoding="utf-8")) if item]
 
 
 def _starter_payload(*, selected_infra: set[str], selected_apps: set[str]) -> dict:
@@ -869,6 +875,7 @@ def test_render_externalizes_grafana_dashboard_json_to_generated_bundle(
     }
     assert dashboard_files == {
         "kubernetes-cluster-monitoring.json",
+        "kubernetes-gpu.json",
         "kubernetes-logs-from-loki.json",
         "kubernetes-traces.json",
     }
@@ -893,15 +900,7 @@ def test_render_externalizes_grafana_dashboard_json_to_generated_bundle(
     assert values["dashboardsConfigMaps"] == {
         "nebius-kubernetes": "grafana-nebius-kubernetes-dashboards"
     }
-    assert set(values["dashboards"]["nebius"]) == {
-        "nebius-disk",
-        "nebius-gpu",
-        "nebius-managed-postgres",
-        "nebius-object-storage",
-        "nebius-observability-platform",
-        "nebius-shared-filesystem",
-        "nebius-shared-filesystem-extended",
-    }
+    assert set(values["dashboards"]["nebius"]) == {"nebius-disk"}
     assert "json:" not in yaml.safe_dump(values["dashboards"], sort_keys=False)
 
     kustomization_doc = yaml.safe_load(kustomization.read_text(encoding="utf-8"))
@@ -911,6 +910,251 @@ def test_render_externalizes_grafana_dashboard_json_to_generated_bundle(
     assert kustomization_doc["resources"].index(
         "./configmap-grafana-nebius-kubernetes-dashboards.yaml"
     ) < kustomization_doc["resources"].index("./helmrelease-observability-grafana.yaml")
+
+
+def test_render_project_materializes_observability_agent_scrape_config(
+    tmp_path: Path,
+) -> None:
+    reset_component_entry_cache()
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
+    payload["deploy"]["targets"][0]["observability"]["enabled"] = True
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+
+    render_project(config, paths, source_profile=SourceProfile.LOCAL)
+
+    release = (
+        _target_flux_dir(paths)
+        / "helmrelease-observability-nebius-observability-agent.yaml"
+    )
+    release_doc = yaml.safe_load(release.read_text(encoding="utf-8"))
+    metrics = release_doc["spec"]["values"]["config"]["metrics"]
+    assert metrics["collectK8sClusterMetrics"] is False
+    assert [item["job_name"] for item in metrics["additionalTargets"]] == [
+        "cxcli-kubernetes-apiservers",
+        "cxcli-kubernetes-nodes",
+        "cxcli-kubernetes-nodes-cadvisor",
+        "cxcli-hubble",
+    ]
+
+
+def test_render_native_mysterybox_eso_objects_in_external_secrets_release(
+    tmp_path: Path,
+) -> None:
+    _set_catalog_override(_local_catalog_path(), source_profile=SourceProfile.PORTABLE)
+    reset_component_entry_cache()
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(
+        selected_infra={"mk8s", "mysterybox"},
+        selected_apps=set(),
+    )
+    _infra_component_row(payload, "mysterybox")["inputs"] = {
+        "parent_id": "project-456",
+        "secrets": [
+            {
+                "name": "app-config",
+                "version_id": "mbsecver-e00app",
+                "payload": {
+                    "DB_USERNAME": {"type": "text"},
+                    "DB_PASSWORD": {"type": "text"},
+                },
+            }
+        ],
+    }
+    payload["deploy"]["targets"][0]["secrets"] = {
+        "mysterybox": {
+            "enabled": True,
+            "allow_all_namespaces": False,
+            "sync_namespaces": ["ns-1", "ns-2"],
+        }
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+    paths.flux_dir.mkdir(parents=True, exist_ok=True)
+
+    materialize_mysterybox_eso_app_values(
+        config,
+        component_output_values={"mysterybox.secret_ids": {"app-config": "mbsec-e00app"}},
+    )
+    render_flux(
+        config,
+        paths,
+        component_output_values={"mysterybox.secret_ids": {"app-config": "mbsec-e00app"}},
+    )
+
+    release_path = _target_flux_dir(paths) / "helmrelease-platform-external-secrets.yaml"
+    release_doc = yaml.safe_load(release_path.read_text(encoding="utf-8"))
+    assert release_doc["spec"]["install"] == {"createNamespace": True}
+    assert "upgrade" not in release_doc["spec"]
+
+    assert release_doc["metadata"] == {
+        "name": "external-secrets",
+        "namespace": "external-secrets",
+    }
+    values = release_doc["spec"]["values"]
+    assert values["global"]["affinity"]["nodeAffinity"][
+        "requiredDuringSchedulingIgnoredDuringExecution"
+    ]["nodeSelectorTerms"][0]["matchExpressions"][0]["key"] == "nebius.com/gpu"
+    assert "extraObjects" not in values
+    kustomization_doc = yaml.safe_load(
+        (_target_flux_dir(paths) / "kustomization.yaml").read_text(encoding="utf-8")
+    )
+    assert "./post-flux-mysterybox-eso.yaml" not in kustomization_doc["resources"]
+    extra_objects = _load_mysterybox_eso_post_flux_objects(paths)
+    assert not any(item["kind"] == "Secret" for item in extra_objects)
+    store = next(item for item in extra_objects if item["kind"] == "ClusterSecretStore")
+    assert store["metadata"]["name"] == "nebius-mysterybox-shared"
+    assert store["spec"]["conditions"] == [{"namespaces": ["ns-1", "ns-2"]}]
+    provider = store["spec"]["provider"]["nebiusmysterybox"]
+    assert provider["apiDomain"] == "api.nebius.cloud:443"
+    assert "caProvider" not in provider
+    assert provider["auth"]["serviceAccountCredsSecretRef"] == {
+        "name": "nebius-mysterybox-shared-creds",
+        "namespace": "external-secrets",
+        "key": "credentials.json",
+    }
+    app_secret = next(
+        item
+        for item in extra_objects
+        if item["kind"] == "ExternalSecret" and item["metadata"]["namespace"] == "ns-1"
+    )
+    assert app_secret["metadata"]["name"] == "app-config"
+    assert app_secret["metadata"]["namespace"] == "ns-1"
+    worker_secret = next(
+        item
+        for item in extra_objects
+        if item["kind"] == "ExternalSecret" and item["metadata"]["namespace"] == "ns-2"
+    )
+    assert worker_secret["metadata"]["namespace"] == "ns-2"
+    assert worker_secret["metadata"]["name"] == "app-config"
+    assert app_secret["spec"]["dataFrom"] == [
+        {"extract": {"key": "mbsec-e00app", "version": "mbsecver-e00app"}}
+    ]
+    assert worker_secret["spec"]["dataFrom"] == [
+        {"extract": {"key": "mbsec-e00app", "version": "mbsecver-e00app"}}
+    ]
+
+
+def test_render_native_mysterybox_eso_defaults_to_cluster_wide_store(
+    tmp_path: Path,
+) -> None:
+    _set_catalog_override(_local_catalog_path(), source_profile=SourceProfile.PORTABLE)
+    reset_component_entry_cache()
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(
+        selected_infra={"mk8s", "mysterybox"},
+        selected_apps=set(),
+    )
+    _infra_component_row(payload, "mysterybox")["inputs"] = {
+        "parent_id": "project-456",
+        "secrets": [
+            {
+                "name": "app-config",
+                "version_id": "n/a",
+                "payload": {"DB_PASSWORD": {"type": "text"}},
+            }
+        ],
+    }
+    payload["deploy"]["targets"][0]["secrets"] = {
+        "mysterybox": {
+            "enabled": True,
+            "sync_namespaces": ["default", "app"],
+        }
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+    paths.flux_dir.mkdir(parents=True, exist_ok=True)
+
+    materialize_mysterybox_eso_app_values(
+        config,
+        component_output_values={"mysterybox.secret_ids": {"app-config": "mbsec-e00app"}},
+    )
+    render_flux(
+        config,
+        paths,
+        component_output_values={"mysterybox.secret_ids": {"app-config": "mbsec-e00app"}},
+    )
+
+    release_path = _target_flux_dir(paths) / "helmrelease-platform-external-secrets.yaml"
+    release_doc = yaml.safe_load(release_path.read_text(encoding="utf-8"))
+    assert "extraObjects" not in release_doc["spec"]["values"]
+    kustomization_doc = yaml.safe_load(
+        (_target_flux_dir(paths) / "kustomization.yaml").read_text(encoding="utf-8")
+    )
+    assert "./post-flux-mysterybox-eso.yaml" not in kustomization_doc["resources"]
+    extra_objects = _load_mysterybox_eso_post_flux_objects(paths)
+    store = next(item for item in extra_objects if item["kind"] == "ClusterSecretStore")
+    namespaces = {
+        item["metadata"]["name"] for item in extra_objects if item["kind"] == "Namespace"
+    }
+
+    assert "conditions" not in store["spec"]
+    assert namespaces == {"app"}
+    external_secret_namespaces = {
+        item["metadata"]["namespace"] for item in extra_objects if item["kind"] == "ExternalSecret"
+    }
+    assert external_secret_namespaces == {"default", "app"}
+
+
+def test_render_external_secrets_without_managed_mysterybox_keeps_helm_wait(
+    tmp_path: Path,
+) -> None:
+    _set_catalog_override(_local_catalog_path(), source_profile=SourceProfile.PORTABLE)
+    reset_component_entry_cache()
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(
+        selected_infra={"mk8s"},
+        selected_apps={"external-secrets"},
+    )
+    external_secrets = next(
+        item for item in payload["apps"]["charts"] if item["id"] == "external-secrets"
+    )
+    external_secrets["values"] = {
+        "extraObjects": [
+            {
+                "apiVersion": "external-secrets.io/v1",
+                "kind": "ExternalSecret",
+                "metadata": {"name": "operator-owned", "namespace": "app"},
+                "spec": {
+                    "secretStoreRef": {"kind": "ClusterSecretStore", "name": "operator-owned"},
+                    "target": {"name": "operator-owned"},
+                    "dataFrom": [{"extract": {"key": "operator-owned"}}],
+                },
+            }
+        ]
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+    paths.flux_dir.mkdir(parents=True, exist_ok=True)
+
+    render_flux(config, paths)
+
+    release_path = _target_flux_dir(paths) / "helmrelease-platform-external-secrets.yaml"
+    release_doc = yaml.safe_load(release_path.read_text(encoding="utf-8"))
+
+    assert release_doc["spec"]["install"] == {"createNamespace": True}
+    assert "upgrade" not in release_doc["spec"]
 
 
 def test_render_dynamic_oci_chart_uses_catalog_chart_name_when_id_differs(tmp_path: Path) -> None:
@@ -1258,6 +1502,7 @@ def test_render_materializes_driverful_rdma_policy_for_nebius_gpu_clusters(
     ][0]["matchExpressions"][0]["values"] == ["true"]
     network_patches = network_release_doc["spec"]["postRenderers"][0]["kustomize"]["patches"]
     assert network_patches[0]["target"]["kind"] == "NicClusterPolicy"
+    assert '"periodicUpdateInterval": 0' in network_patches[0]["patch"]
     assert '"resourceName": "shared_device"' in network_patches[0]["patch"]
     assert '"linkTypes": ["infiniband"]' in network_patches[0]["patch"]
 
@@ -1427,6 +1672,7 @@ def test_render_materializes_operator_managed_rdma_policy_for_gpu_cluster_shapes
     assert network_values["nfd"]["deployNodeFeatureRules"] is True
     network_patches = network_release_doc["spec"]["postRenderers"][0]["kustomize"]["patches"]
     assert network_patches[0]["target"]["kind"] == "NicClusterPolicy"
+    assert '"periodicUpdateInterval": 0' in network_patches[0]["patch"]
     assert '"resourceName": "shared_device"' in network_patches[0]["patch"]
     assert '"linkTypes": ["infiniband"]' in network_patches[0]["patch"]
 

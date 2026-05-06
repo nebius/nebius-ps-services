@@ -38,7 +38,7 @@ from .terraform_backend import backend_settings_from_config, render_backend_tf
 from .terraform_provider import DEFAULT_PROVIDER_MODULE_NAME, build_provider_module_name
 
 DEFAULT_TERRAFORM_REQUIRED_VERSION = ">= 1.10.0"
-_ALLOWED_TERRAFORM_TYPE_TOKENS = re.compile(r"^[A-Za-z0-9_(),.\[\] ]+$")
+_ALLOWED_TERRAFORM_TYPE_TOKENS = re.compile(r'^[A-Za-z0-9_(),.{}\[\]="\s]+$')
 _ALLOWED_GIT_REF = re.compile(r"^[A-Za-z0-9._/\-]+$")
 _LOCAL_SOURCE_PATTERN = re.compile(r"^(?:\.\.?/|/|~/|[A-Za-z]:[\\/])")
 _PROVIDER_VAR_MODULE_NAME = "nebius_provider_module_name"
@@ -47,6 +47,9 @@ _PROVIDER_VAR_SA_ID = "nebius_service_account_id"
 _PROVIDER_VAR_AUTH_PUBLIC_KEY_ID = "nebius_auth_public_key_id"
 _PROVIDER_VAR_AUTH_PRIVATE_KEY_FILE = "nebius_auth_private_key_file"
 _PROVIDER_VAR_CREDENTIALS_FILE = "nebius_service_account_credentials_file"
+_NO_VARIABLE_DEFAULT = object()
+_RUNTIME_ONLY_MODULE_ARGUMENTS = frozenset({"payload_values"})
+_MYSTERYBOX_CXCLI_ONLY_SECRET_KEYS = frozenset({"kubernetes_secret_name"})
 
 
 @dataclass(frozen=True)
@@ -57,6 +60,9 @@ class _VariableBinding:
     value: Any | None
     description: str
     expression: str | None = None
+    default: Any = _NO_VARIABLE_DEFAULT
+    sensitive: bool = False
+    include_in_tfvars: bool = True
 
 
 @dataclass(frozen=True)
@@ -330,6 +336,56 @@ def _module_type_hints(module_source: str) -> dict[str, str]:
     return hints
 
 
+def _runtime_only_module_argument_names(declared_argument_names: set[str]) -> set[str]:
+    return {
+        name for name in _RUNTIME_ONLY_MODULE_ARGUMENTS if name in declared_argument_names
+    }
+
+
+def _module_inputs_for_terraform(component_id: str, module_inputs: dict[str, Any]) -> dict[str, Any]:
+    if component_id != "mysterybox":
+        return module_inputs
+    secrets = module_inputs.get("secrets")
+    if not isinstance(secrets, list):
+        return module_inputs
+    cleaned_secrets: list[Any] = []
+    changed = False
+    for item in secrets:
+        if not isinstance(item, dict):
+            cleaned_secrets.append(item)
+            continue
+        cleaned = {
+            key: value
+            for key, value in item.items()
+            if str(key).strip().replace("-", "_").lower()
+            not in _MYSTERYBOX_CXCLI_ONLY_SECRET_KEYS
+        }
+        if cleaned != item:
+            changed = True
+        cleaned_secrets.append(cleaned)
+    if not changed:
+        return module_inputs
+    result = dict(module_inputs)
+    result["secrets"] = cleaned_secrets
+    return result
+
+
+def _reserved_variable_name(
+    base: str,
+    *,
+    used_variable_names: set[str],
+    fallback_prefix: str,
+) -> str:
+    var_base = _safe_hcl_identifier(base, fallback_prefix=fallback_prefix)
+    variable_name = var_base
+    suffix = 2
+    while variable_name in used_variable_names:
+        variable_name = f"{var_base}_{suffix}"
+        suffix += 1
+    used_variable_names.add(variable_name)
+    return variable_name
+
+
 def _infer_variable_type_expr(value: Any) -> str:
     if isinstance(value, bool):
         return "bool"
@@ -436,16 +492,32 @@ def _build_module_plans(
             for spec in module_variables(metadata_module_source)
             if str(spec.name).strip()
         }
+        runtime_only_argument_names = _runtime_only_module_argument_names(declared_argument_names)
         wizard_input_roots = _declared_wizard_input_root_keys(entry) if entry is not None else set()
         helper_keys = {
             "module_name",
+            *runtime_only_argument_names,
             *(root for root in wizard_input_roots if root not in declared_argument_names),
         }
+        for raw_arg_name in sorted(inputs):
+            normalized_argument_name = str(raw_arg_name).strip().replace("-", "_").lower()
+            if normalized_argument_name not in runtime_only_argument_names:
+                continue
+            runtime_variable_name = _safe_hcl_identifier(
+                f"{module_name}_{normalized_argument_name}",
+                fallback_prefix=f"{module_name}_input",
+            )
+            raise ValueError(
+                f"infra component '{component_label}' input '{raw_arg_name}' is runtime-only "
+                f"and must not be stored in config.yaml. Provide it at deploy time with "
+                f"TF_VAR_{runtime_variable_name}."
+            )
         module_inputs = {
             key: value
             for key, value in inputs.items()
             if str(key).strip().replace("-", "_").lower() not in helper_keys
         }
+        module_inputs = _module_inputs_for_terraform(component_id, module_inputs)
         if declared_argument_names:
             for raw_arg_name in sorted(module_inputs.keys()):
                 argument_name = str(raw_arg_name).strip().replace("-", "_")
@@ -477,6 +549,7 @@ def _build_module_plans(
                 "module_version": module_version,
                 "module_inputs": module_inputs,
                 "type_hints": _module_type_hints(metadata_module_source),
+                "runtime_only_argument_names": runtime_only_argument_names,
             }
         )
         module_name_by_instance_id[instance_id] = module_name
@@ -492,6 +565,7 @@ def _build_module_plans(
         module_version = prepared["module_version"]
         module_inputs = dict(prepared["module_inputs"])
         type_hints = dict(prepared["type_hints"])
+        runtime_only_argument_names = set(prepared["runtime_only_argument_names"])
 
         if entry is not None and entry.input_bindings:
             conflicts = input_binding_conflicts(resolved_item, entry)
@@ -579,16 +653,11 @@ def _build_module_plans(
                     )
                 )
                 continue
-            var_base = _safe_hcl_identifier(
+            variable_name = _reserved_variable_name(
                 f"{module_name}_{arg_key}",
+                used_variable_names=used_variable_names,
                 fallback_prefix=f"{module_name}_input",
             )
-            variable_name = var_base
-            suffix = 2
-            while variable_name in used_variable_names:
-                variable_name = f"{var_base}_{suffix}"
-                suffix += 1
-            used_variable_names.add(variable_name)
             type_expr = _variable_type_expr(
                 type_hint=type_hints.get(arg_key),
                 value=value,
@@ -600,6 +669,30 @@ def _build_module_plans(
                     type_expr=type_expr,
                     value=value,
                     description=f"{component_label} module argument '{argument_name}'",
+                )
+            )
+        for argument_name in sorted(runtime_only_argument_names):
+            if not _is_hcl_identifier(argument_name):
+                continue
+            variable_name = _reserved_variable_name(
+                f"{module_name}_{argument_name}",
+                used_variable_names=used_variable_names,
+                fallback_prefix=f"{module_name}_input",
+            )
+            type_expr = _variable_type_expr(
+                type_hint=type_hints.get(argument_name),
+                value={},
+            )
+            bindings.append(
+                _VariableBinding(
+                    argument_name=argument_name,
+                    variable_name=variable_name,
+                    type_expr=type_expr,
+                    value=None,
+                    description=f"{component_label} module runtime-only argument '{argument_name}'",
+                    default={},
+                    sensitive=True,
+                    include_in_tfvars=False,
                 )
             )
 
@@ -723,8 +816,12 @@ def _render_variables_tf(plans: tuple[_ModulePlan, ...]) -> str:
                 f'variable "{binding.variable_name}" {{',
                 f"  type = {binding.type_expr}",
                 f"  description = {json.dumps(binding.description)}",
-                "}",
             ]
+            if binding.default is not _NO_VARIABLE_DEFAULT:
+                lines.append(f"  default = {_hcl_value(binding.default, indent=2)}")
+            if binding.sensitive:
+                lines.append("  sensitive = true")
+            lines.append("}")
             blocks.append("\n".join(lines))
     if not blocks:
         return "# No module input variables were generated\n"
@@ -736,6 +833,8 @@ def _render_tfvars_json(plans: tuple[_ModulePlan, ...]) -> dict[str, Any]:
     for plan in plans:
         for binding in plan.bindings:
             if binding.variable_name is None:
+                continue
+            if not binding.include_in_tfvars:
                 continue
             payload[binding.variable_name] = binding.value
     return payload

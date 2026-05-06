@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,11 @@ from .deploy_targets import (
 from .mk8s_gpu import (
     mk8s_gpu_flux_release_dependencies,
     mk8s_gpu_flux_release_post_render_patches,
+)
+from .mysterybox_eso import (
+    MYSTERYBOX_ESO_MANAGED_LABEL,
+    MYSTERYBOX_ESO_MANAGED_VALUE,
+    mysterybox_eso_extra_objects_for_target,
 )
 from .paths import ProjectPaths
 from .runtime_config import to_plain_data
@@ -67,6 +73,10 @@ def _git_repository_doc(name: str, url: str, ref: str) -> dict[str, Any]:
         "metadata": {"name": name, "namespace": "flux-system"},
         "spec": {"interval": "5m", "url": url, "ref": {"branch": ref}},
     }
+
+
+def _multi_doc_yaml(docs: list[dict[str, Any]]) -> str:
+    return "\n---\n".join(yaml.safe_dump(doc, sort_keys=False).strip() for doc in docs) + "\n"
 
 
 def _namespace_doc(name: str) -> dict[str, Any]:
@@ -430,6 +440,7 @@ def _helm_release_doc(
     values: dict[str, Any],
     depends_on: list[dict[str, str]] | None = None,
     post_render_patches: list[dict[str, Any]] | None = None,
+    disable_wait: bool = False,
 ) -> dict[str, Any]:
     chart_spec: dict[str, Any] = {
         "chart": chart_ref,
@@ -447,6 +458,9 @@ def _helm_release_doc(
         "install": {"createNamespace": True},
         "values": values,
     }
+    if disable_wait:
+        spec["install"]["disableWait"] = True
+        spec["upgrade"] = {"disableWait": True}
     if timeout:
         spec["timeout"] = timeout
     if depends_on:
@@ -474,6 +488,26 @@ def _helm_release_doc(
         "metadata": {"name": release_name, "namespace": namespace},
         "spec": spec,
     }
+
+
+def _release_has_managed_mysterybox_external_secret(values: Mapping[str, Any]) -> bool:
+    extra_objects = values.get("extraObjects")
+    if not isinstance(extra_objects, list):
+        return False
+    for item in extra_objects:
+        if not isinstance(item, dict):
+            continue
+        if item.get("kind") != "ExternalSecret":
+            continue
+        metadata = item.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        labels = metadata.get("labels")
+        if not isinstance(labels, dict):
+            continue
+        if labels.get(MYSTERYBOX_ESO_MANAGED_LABEL) == MYSTERYBOX_ESO_MANAGED_VALUE:
+            return True
+    return False
 
 
 def _pretty_dashboard_json(raw_json: str) -> str:
@@ -596,6 +630,14 @@ class _FluxRenderState:
         self.files.append(absolute_file)
         self.resources.append(f"./{relative_file.as_posix()}")
 
+    def write_post_flux_docs(self, relative_file: Path, docs: list[dict[str, Any]]) -> None:
+        absolute_file = self.paths.flux_dir / relative_file
+        if not docs:
+            absolute_file.unlink(missing_ok=True)
+            return
+        _write_text(absolute_file, _multi_doc_yaml(docs))
+        self.files.append(absolute_file)
+
 
 def _finalize_flux_render_state(state: _FluxRenderState) -> None:
     repos_path = state.paths.flux_dir / "helm-repositories.yaml"
@@ -664,8 +706,24 @@ def _render_flux_app_helm_releases(
                 values=release["values"],
                 depends_on=release.get("depends_on") or None,
                 post_render_patches=release.get("post_render_patches") or None,
+                disable_wait=_release_has_managed_mysterybox_external_secret(release["values"]),
             ),
         )
+
+
+def _render_post_flux_mysterybox_eso_resources(
+    state: _FluxRenderState,
+    *,
+    config: Any,
+    target_ref: str,
+    component_output_values: dict[str, Any] | None,
+) -> None:
+    objects = mysterybox_eso_extra_objects_for_target(
+        config,
+        target_ref=target_ref,
+        component_output_values=component_output_values or {},
+    )
+    state.write_post_flux_docs(Path("post-flux-mysterybox-eso.yaml"), objects)
 
 
 def render_flux(
@@ -708,12 +766,24 @@ def render_flux(
                 state,
                 release_specs=release_specs_by_target.get(target_ref, []),
             )
+            _render_post_flux_mysterybox_eso_resources(
+                state,
+                config=config,
+                target_ref=target_ref,
+                component_output_values=component_output_values,
+            )
             _finalize_flux_render_state(state)
             written.extend(state.files)
         return written
 
     state = _FluxRenderState(paths=paths)
     _render_flux_app_helm_releases(state, release_specs=release_specs)
+    _render_post_flux_mysterybox_eso_resources(
+        state,
+        config=config,
+        target_ref="",
+        component_output_values=component_output_values,
+    )
     _finalize_flux_render_state(state)
     return state.files
 

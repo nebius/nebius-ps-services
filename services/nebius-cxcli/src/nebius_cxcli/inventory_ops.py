@@ -7,8 +7,10 @@ import re
 import shlex
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from importlib import resources as importlib_resources
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlparse, urlunparse
 
 from .component_instances import component_instance_id, component_type_id
 from .component_sources import component_output_root_name, load_component_sources
@@ -30,6 +32,15 @@ from .terraform_ops import terraform_output_json
 @dataclass(frozen=True)
 class InventoryArtifacts:
     markdown: Path
+
+
+@dataclass(frozen=True)
+class _BundledGrafanaDashboard:
+    folder: str
+    dashboard: str
+    uid: str
+    title: str
+    datasource: str
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -164,6 +175,10 @@ def _chart_enabled(rows: dict[str, list[dict[str, Any]]], *chart_ids: str) -> bo
     return False
 
 
+def _rows_enabled(rows: Sequence[Mapping[str, Any]]) -> bool:
+    return any(bool(_lookup(row, "enabled")) for row in rows)
+
+
 def _format_backtick_list(values: Sequence[str]) -> str:
     return ", ".join(f"`{value}`" for value in values)
 
@@ -171,6 +186,11 @@ def _format_backtick_list(values: Sequence[str]) -> str:
 def _markdown_link(label: str, url: Any) -> str:
     value = str(url or "").strip()
     return f"[{label}]({value})" if value else "`pending`"
+
+
+def _dashboard_markdown_link(label: str, url: Any) -> str:
+    value = str(url or "").strip()
+    return f"[{label}]({value})" if value else f"{label}: `pending`"
 
 
 def _enabled_label(value: Any) -> str:
@@ -188,6 +208,17 @@ def _status_line(label: str, value: Any) -> str:
     return f"- {label}: `{_enabled_label(value)}`"
 
 
+def _component_status_line(item: Mapping[str, Any]) -> str:
+    component_id = str(_lookup(item, "id") or "").strip()
+    label = str(_lookup(item, "label") or "").strip()
+    enabled = _lookup(item, "enabled")
+    if component_id and label:
+        return f"- `{component_id}` ({label}): `{_enabled_label(enabled)}`"
+    if component_id:
+        return f"- `{component_id}`: `{_enabled_label(enabled)}`"
+    return _status_line(label or "Unknown component", enabled)
+
+
 def _grafana_status_key(status: Mapping[str, Any]) -> tuple[str, str, str]:
     target_label = str(_lookup(status, "target_ref") or "current-cluster").strip()
     namespace = str(_lookup(status, "namespace") or "observability").strip()
@@ -195,6 +226,145 @@ def _grafana_status_key(status: Mapping[str, Any]) -> tuple[str, str, str]:
         _lookup(status, "release_name") or _lookup(status, "service_name") or "grafana"
     ).strip()
     return target_label, namespace, release_name
+
+
+def _dashboard_payload(raw_json: Any) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(str(raw_json or ""))
+    except json.JSONDecodeError:
+        return None
+    return _mapping(payload)
+
+
+def _packaged_grafana_dashboards_by_uid() -> dict[str, dict[str, Any]]:
+    try:
+        root = importlib_resources.files("nebius_cxcli").joinpath("grafana_dashboards")
+        candidates = tuple(item for item in root.iterdir() if item.name.endswith(".json"))
+    except (FileNotFoundError, NotADirectoryError, OSError):
+        return {}
+
+    dashboards: dict[str, dict[str, Any]] = {}
+    for candidate in candidates:
+        try:
+            payload = _dashboard_payload(candidate.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError):
+            continue
+        if not payload:
+            continue
+        uid = str(payload.get("uid") or "").strip()
+        if uid:
+            dashboards[uid] = payload
+    return dashboards
+
+
+def _dashboard_defaults_from_chart(defaults: Sequence[Any]) -> list[tuple[str, str, Mapping[str, Any]]]:
+    dashboards: list[tuple[str, str, Mapping[str, Any]]] = []
+    for default in defaults:
+        if getattr(default, "kind", "") != "literal":
+            continue
+        target_path = str(getattr(default, "target_path", "") or "")
+        if not target_path.startswith("values.dashboards"):
+            continue
+        value = getattr(default, "value", None)
+        path_parts = target_path.split(".")
+        if target_path == "values.dashboards" and isinstance(value, Mapping):
+            for folder, folder_dashboards in value.items():
+                if not isinstance(folder_dashboards, Mapping):
+                    continue
+                for dashboard, dashboard_spec in folder_dashboards.items():
+                    if isinstance(dashboard_spec, Mapping):
+                        dashboards.append((str(folder), str(dashboard), dashboard_spec))
+        elif len(path_parts) == 3 and isinstance(value, Mapping):
+            folder = path_parts[2]
+            for dashboard, dashboard_spec in value.items():
+                if isinstance(dashboard_spec, Mapping):
+                    dashboards.append((folder, str(dashboard), dashboard_spec))
+        elif len(path_parts) == 4 and isinstance(value, Mapping):
+            dashboards.append((path_parts[2], path_parts[3], value))
+    return dashboards
+
+
+def _bundled_grafana_dashboards() -> tuple[_BundledGrafanaDashboard, ...]:
+    packaged_by_uid = _packaged_grafana_dashboards_by_uid()
+    if not packaged_by_uid:
+        return ()
+    try:
+        charts = load_component_sources().helm_charts
+    except (OSError, ValueError, RuntimeError):
+        return ()
+
+    result: list[_BundledGrafanaDashboard] = []
+    seen: set[tuple[str, str, str]] = set()
+    for chart in charts:
+        for folder, dashboard, spec in _dashboard_defaults_from_chart(chart.defaults):
+            payload = _dashboard_payload(spec.get("json")) if isinstance(spec, Mapping) else None
+            if not payload:
+                continue
+            uid = str(payload.get("uid") or "").strip()
+            if not uid or packaged_by_uid.get(uid) != payload:
+                continue
+            key = (folder, dashboard, uid)
+            if key in seen:
+                continue
+            seen.add(key)
+            title = str(payload.get("title") or dashboard).strip() or dashboard
+            result.append(
+                _BundledGrafanaDashboard(
+                    folder=folder,
+                    dashboard=dashboard,
+                    uid=uid,
+                    title=title,
+                    datasource=str(spec.get("datasource") or "").strip(),
+                )
+            )
+    return tuple(result)
+
+
+def _grafana_org_id() -> int:
+    try:
+        for chart in load_component_sources().helm_charts:
+            grafana = getattr(chart, "grafana", None)
+            if grafana is None:
+                continue
+            has_grafana_contract = bool(
+                _dashboard_defaults_from_chart(getattr(chart, "defaults", ()))
+                or getattr(grafana, "datasources", ())
+                or getattr(grafana, "dashboard_signals", ())
+            )
+            if not has_grafana_contract:
+                continue
+            org_id = int(getattr(grafana, "org_id", 0) or 0)
+            if org_id > 0:
+                return org_id
+    except (OSError, ValueError, RuntimeError):
+        pass
+    return 1
+
+
+def _url_with_query_params(url: str, params: Mapping[str, str]) -> str:
+    clean_params = {key: value for key, value in params.items() if key and value}
+    if not clean_params:
+        return url
+    parsed = urlparse(url)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query.update(clean_params)
+    return urlunparse(parsed._replace(query=urlencode(query)))
+
+
+def _bundled_dashboard_url(
+    *,
+    base_url: str,
+    dashboard_uid: str,
+    cluster_id: str,
+    org_id: int,
+) -> str:
+    if not base_url or not dashboard_uid:
+        return ""
+    url = urljoin(base_url.rstrip("/") + "/", f"d/{quote(dashboard_uid, safe='')}")
+    params = {"orgId": str(org_id)}
+    if cluster_id:
+        params["var-Cluster"] = cluster_id
+    return _url_with_query_params(url, params)
 
 
 def _configured_grafana_statuses(
@@ -368,12 +538,43 @@ def _target_metadata_by_ref(
                 cluster_id=cluster_id,
                 access=str(row_metadata.get("access") or "external"),
             )
+    for status in read_grafana_status(paths):
+        if not isinstance(status, Mapping):
+            continue
+        target_ref = str(_lookup(status, "target_ref") or "").strip()
+        if not target_ref:
+            continue
+        row_metadata = metadata.setdefault(target_ref, {"target_ref": target_ref})
+        cluster_id = str(_lookup(status, "cluster_id") or "").strip()
+        kube_context = str(_lookup(status, "kube_context") or "").strip()
+        if cluster_id and not str(row_metadata.get("cluster_id") or "").strip():
+            row_metadata["cluster_id"] = cluster_id
+        if kube_context and not str(row_metadata.get("kube_context") or "").strip():
+            row_metadata["kube_context"] = kube_context
     return metadata
 
 
 def _shape_label(*parts: Any) -> str:
     values = [str(item).strip() for item in parts if str(item or "").strip()]
     return "/".join(values) if values else "n/a"
+
+
+def _as_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        return None
+
+
+def _node_count_text(value: Any) -> str:
+    return f"`{_coalesce(value, 'n/a')}` node(s)"
 
 
 def _mk8s_cluster_markdown_lines(cluster: Mapping[str, Any]) -> list[str]:
@@ -387,7 +588,17 @@ def _mk8s_cluster_markdown_lines(cluster: Mapping[str, Any]) -> list[str]:
         groups = _coalesce(_lookup(gpu_nodes, "groups"), 1)
         nodes_per_group = _coalesce(_lookup(gpu_nodes, "nodes_per_group"), "n/a")
         gpu_shape = _shape_label(_lookup(gpu_nodes, "platform"), _lookup(gpu_nodes, "preset"))
-        gpu_text = f"`{groups}x{nodes_per_group}` node(s) at `{gpu_shape}`"
+        group_count = _as_int(groups)
+        nodes_per_group_count = _as_int(nodes_per_group)
+        if group_count is not None and nodes_per_group_count is not None:
+            total_nodes = group_count * nodes_per_group_count
+            gpu_text = (
+                f"`{total_nodes}` node(s) "
+                f"(`{group_count}` group(s) x `{nodes_per_group_count}` node(s)/group) "
+                f"at `{gpu_shape}`"
+            )
+        else:
+            gpu_text = f"`{groups}x{nodes_per_group}` node(s) at `{gpu_shape}`"
     else:
         gpu_text = "`disabled`"
     fabric = _coalesce(_lookup(cluster, "infiniband_fabric"), "none")
@@ -396,7 +607,7 @@ def _mk8s_cluster_markdown_lines(cluster: Mapping[str, Any]) -> list[str]:
     kube_context = str(_lookup(cluster, "kube_context") or "").strip()
     lines = [
         f"- `{instance_id}` (`{cluster_name}`)",
-        f"  - CPU nodes: `{cpu_count}` at `{cpu_shape}`",
+        f"  - CPU nodes: {_node_count_text(cpu_count)} at `{cpu_shape}`",
         f"  - GPU nodes: {gpu_text}",
         f"  - InfiniBand fabric: `{fabric}`",
         f"  - Public endpoint: `{_enabled_label(public_endpoint)}`",
@@ -405,6 +616,22 @@ def _mk8s_cluster_markdown_lines(cluster: Mapping[str, Any]) -> list[str]:
         lines.append(f"  - Cluster ID: `{cluster_id}`")
     if kube_context:
         lines.append(f"  - Kube context: `{kube_context}`")
+    return lines
+
+
+def _mysterybox_secret_markdown_lines(instances: Sequence[Mapping[str, Any]]) -> list[str]:
+    lines: list[str] = []
+    for instance in instances:
+        instance_id = str(_lookup(instance, "instance_id") or "mysterybox").strip()
+        secret_names = [
+            str(item.get("name") or "").strip()
+            for item in _lookup(instance, "secrets") or []
+            if isinstance(item, Mapping) and str(item.get("name") or "").strip()
+        ]
+        if secret_names:
+            lines.append(f"- `{instance_id}`: {_format_backtick_list(secret_names)}")
+        else:
+            lines.append(f"- `{instance_id}`: no secrets declared")
     return lines
 
 
@@ -424,9 +651,19 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
 
     # Look up infra components by their declared status kind instead of
     # hard-coded component ids.
+    from .components import component_entries as _component_entries
     from .components import component_lookup as _component_lookup
 
     entry_by_id = _component_lookup("infra")
+    infra_component_statuses = [
+        {
+            "id": entry.id,
+            "label": entry.description,
+            "enabled": _rows_enabled(infra_rows.get(entry.id, [])),
+        }
+        for entry in _component_entries("infra")
+        if entry.status is not None
+    ]
 
     def _rows_by_status_kind(kind: str) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
@@ -441,6 +678,7 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
         return rows[0] if rows else None
 
     mk8s_rows = _rows_by_status_kind("nebius.mk8s.cluster")
+    mysterybox_rows = _rows_by_status_kind("nebius.mysterybox.secret")
     target_metadata = _target_metadata_by_ref(
         paths=paths,
         mk8s_rows=mk8s_rows,
@@ -517,6 +755,14 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
     mk8s_row = mk8s_rows[0] if mk8s_rows else None
     mk8s_summary = _mk8s_summary(mk8s_row)
     mk8s_cluster_summaries = [_mk8s_summary(row) for row in mk8s_rows]
+    mysterybox_summaries = [
+        {
+            "instance_id": component_instance_id(row) or component_type_id(row),
+            "secrets": _lookup(_component_inputs(row), "secrets") or [],
+        }
+        for row in mysterybox_rows
+        if bool(_lookup(row, "enabled"))
+    ]
 
     pg_row = _row_by_status_kind("nebius.msp.postgresql.cluster")
     pg_inputs = _component_inputs(pg_row)
@@ -540,7 +786,10 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
             "project_scope": f"{tenant_id}/{project_id}",
             "project_id": project_id,
             "region": region_id,
-            "mk8s_enabled": any(bool(_lookup(row, "enabled")) for row in mk8s_rows),
+            "component_statuses": infra_component_statuses,
+            "mk8s_enabled": _rows_enabled(mk8s_rows),
+            "mysterybox_enabled": _rows_enabled(mysterybox_rows),
+            "mysterybox_secrets": mysterybox_summaries,
             "wireguard_enabled": any(
                 bool(_lookup(row, "enabled"))
                 for cid, rows in infra_rows.items()
@@ -566,6 +815,15 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
         "apps": {
             "envoy_gateway": _chart_enabled(
                 app_rows, "gateway-helm", "envoy-gateway", "envoy_gateway"
+            ),
+            "external_secrets": _chart_enabled(
+                app_rows, "external-secrets", "external_secrets"
+            ),
+            "nvidia_gpu_operator": _chart_enabled(
+                app_rows, "nvidia-gpu-operator", "nvidia_gpu_operator"
+            ),
+            "nvidia_network_operator": _chart_enabled(
+                app_rows, "nvidia-network-operator", "nvidia_network_operator"
             ),
             "cert_manager": _chart_enabled(app_rows, "cert-manager", "cert_manager"),
             "external_dns": _chart_enabled(app_rows, "external-dns", "external_dns"),
@@ -628,10 +886,11 @@ def write_inventory(
         "",
         "### Component Status",
         "",
-        _status_line("MK8s", payload["infra"]["mk8s_enabled"]),
-        _status_line("Managed PostgreSQL", payload["postgresql"]["enabled"]),
-        _status_line("SFS", payload["sfs"]["enabled"]),
-        _status_line("WireGuard Jump Host", payload["infra"]["wireguard_enabled"]),
+        *[
+            _component_status_line(item)
+            for item in payload["infra"].get("component_statuses", [])
+            if isinstance(item, Mapping)
+        ],
         "",
         "### MK8s Clusters",
         "",
@@ -642,6 +901,12 @@ def write_inventory(
             lines.extend(_mk8s_cluster_markdown_lines(cluster))
     else:
         lines.append("- No MK8s clusters configured.")
+    mysterybox_secrets = [
+        item for item in payload["infra"].get("mysterybox_secrets", []) if isinstance(item, Mapping)
+    ]
+    if mysterybox_secrets:
+        lines.extend(["", "### MysteryBox Secrets", ""])
+        lines.extend(_mysterybox_secret_markdown_lines(mysterybox_secrets))
     lines.extend(
         [
             "",
@@ -650,6 +915,12 @@ def write_inventory(
             "### Platform Apps",
             "",
             _status_line("Envoy Gateway", payload["apps"]["envoy_gateway"]),
+            _status_line("External Secrets Operator", payload["apps"]["external_secrets"]),
+            _status_line("NVIDIA GPU Operator", payload["apps"]["nvidia_gpu_operator"]),
+            _status_line(
+                "NVIDIA Network Operator",
+                payload["apps"]["nvidia_network_operator"],
+            ),
             _status_line("cert-manager", payload["apps"]["cert_manager"]),
             _status_line("ExternalDNS", payload["apps"]["external_dns"]),
             "",
@@ -771,6 +1042,8 @@ def write_inventory(
             _configured_grafana_statuses(config, target_metadata=target_metadata),
             read_grafana_status(paths),
         )
+        bundled_dashboards = _bundled_grafana_dashboards()
+        grafana_org_id = _grafana_org_id()
         grafana_lines: list[str] = []
         pending_grafana_links = False
         for status in grafana_statuses:
@@ -788,29 +1061,35 @@ def write_inventory(
                 f"printf '%s\\n' \"$(kubectl{kube_context_arg} -n {namespace} get secret {admin_secret} "
                 f"-o jsonpath='{{.data.{password_key}}}' | base64 -d)\""
             )
-            link_labels = {
-                signal: (
-                    f"Open {signal} dashboard"
-                    if str(_lookup(status, f"{signal}_url_kind") or "").strip() == "dashboard"
-                    else f"Open {signal} Explore"
-                )
-                for signal in ("metrics", "logs", "traces")
-            }
             target_info: list[str] = []
             if cluster_id:
                 target_info.append(f"cluster ID `{cluster_id}`")
             if kube_context:
                 target_info.append(f"kube context `{kube_context}`")
+            bundled_dashboard_lines: list[str] = []
+            if bundled_dashboards:
+                base_url = str(_lookup(status, "base_url") or "").strip()
+                bundled_dashboard_lines = ["- Bundled dashboards:"]
+                for dashboard in bundled_dashboards:
+                    dashboard_url = _bundled_dashboard_url(
+                        base_url=base_url,
+                        dashboard_uid=dashboard.uid,
+                        cluster_id=cluster_id,
+                        org_id=grafana_org_id,
+                    )
+                    dashboard_ref = f"`{dashboard.folder}/{dashboard.dashboard}`"
+                    bundled_dashboard_lines.append(
+                        "  - "
+                        f"{_dashboard_markdown_link(dashboard.title, dashboard_url)} "
+                        f"({dashboard_ref})"
+                    )
             grafana_lines.extend(
                 [
                     f"### Target `{target_label}`",
                     "",
                     *([f"- MK8s: {'; '.join(target_info)}"] if target_info else []),
                     f"- Grafana: {_markdown_link('Open Grafana', _lookup(status, 'base_url'))}",
-                    f"- Metrics: {_markdown_link(link_labels['metrics'], _lookup(status, 'metrics_url'))}",
-                    f"- Logs: {_markdown_link(link_labels['logs'], _lookup(status, 'logs_url'))}",
-                    f"- Traces: {_markdown_link(link_labels['traces'], _lookup(status, 'traces_url'))}",
-                    f"- Dashboards: {_markdown_link('Open dashboards', _lookup(status, 'dashboards_url'))}",
+                    *bundled_dashboard_lines,
                     f"- Credentials: user `{admin_user}`; password command:",
                     "",
                     "```bash",
@@ -839,11 +1118,12 @@ def write_inventory(
             grafana_lines.extend(
                 _grafana_prometheus_datasource_notes(observability_read_metadata)
             )
-            grafana_lines.append(
-                "- Report links open the catalog-bound dashboards for Metrics, Logs, or "
-                "Traces when Grafana has imported them; otherwise they fall back to the "
-                "matching Explore view."
-            )
+            if bundled_dashboards:
+                grafana_lines.append(
+                    "- Bundled dashboard links list cxcli-owned JSON dashboards shipped "
+                    "under `src/nebius_cxcli/grafana_dashboards`; operator-owned external "
+                    "dashboard JSON is still imported into Grafana but is not listed here."
+                )
             lines.extend(["## Grafana", "", *grafana_lines, ""])
     if validations:
         lines.extend(validation_section_lines(validation_report))

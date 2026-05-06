@@ -2024,7 +2024,7 @@ def test_validate_dashboards_reads_target_contexts_from_deploy_report(tmp_path: 
                 "### MK8s Clusters",
                 "",
                 "- `cluster3` (`cluster-three`)",
-                "  - CPU nodes: `2` at `cpu-d3/32vcpu-128gb`",
+                "  - CPU nodes: `2` node(s) at `cpu-d3/32vcpu-128gb`",
                 "  - Cluster ID: `mk8scluster-333`",
                 "  - Kube context: `nebius-cluster3-mk8scluster-333-external`",
             ]
@@ -2126,6 +2126,46 @@ def test_kube_context_name_for_target_does_not_guess_ambiguous_history(
     assert cli._kube_context_name_for_target("cluster1") == ""
 
 
+def test_kube_context_name_for_target_prefers_matching_current_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kubeconfig = tmp_path / "config"
+    kubeconfig.write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "v1",
+                "kind": "Config",
+                "current-context": "nebius-cluster1-mk8scluster-new-external",
+                "contexts": [
+                    {
+                        "name": "nebius-cluster1-mk8scluster-old-external",
+                        "context": {"cluster": "old", "user": "old"},
+                    },
+                    {
+                        "name": "nebius-cluster1-mk8scluster-new-external",
+                        "context": {"cluster": "new", "user": "new"},
+                    },
+                    {
+                        "name": "nebius-cluster2-mk8scluster-other-external",
+                        "context": {"cluster": "other", "user": "other"},
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KUBECONFIG", str(kubeconfig))
+
+    assert (
+        cli._kube_context_name_for_target("cluster1")
+        == "nebius-cluster1-mk8scluster-new-external"
+    )
+    assert cli._kube_context_name_for_target("cluster2") == (
+        "nebius-cluster2-mk8scluster-other-external"
+    )
+
+
 def test_validate_dashboards_refuses_current_context_fallback_for_targeted_grafana(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2136,7 +2176,9 @@ def test_validate_dashboards_refuses_current_context_fallback_for_targeted_grafa
         encoding="utf-8",
     )
     monkeypatch.setenv("KUBECONFIG", str(kubeconfig))
-    monkeypatch.setattr(cli, "enabled_cluster_target_refs", lambda _config: ("cluster1", "cluster2"))
+    monkeypatch.setattr(
+        cli, "enabled_cluster_target_refs", lambda _config: ("cluster1", "cluster2")
+    )
     monkeypatch.setattr(
         cli,
         "grafana_enabled_for_target",
@@ -2158,6 +2200,8 @@ def test_validate_dashboards_refuses_current_context_fallback_for_targeted_grafa
     message = str(excinfo.value)
     assert "could not resolve an explicit kube context" in message
     assert "cluster1, cluster2" in message
+    assert f"nebius-cxcli flux apply {paths.generated_dir.resolve()}" in message
+    assert "nebius-cxcli flux apply <config.yaml>" not in message
 
 
 def test_render_command_requires_force_in_noninteractive_overwrite(
@@ -2869,6 +2913,278 @@ def test_run_deploy_preflight_skips_flux_validation_when_no_apps_enabled(
     ]
 
 
+def _mysterybox_first_deploy_config(
+    *,
+    instance_id: str = "mysterybox",
+    module_name: str | None = None,
+    version_id: str = "n/a",
+) -> dict[str, object]:
+    inputs: dict[str, object] = {
+        "parent_id": "project-123",
+        "secrets": [
+            {
+                "name": "db-username-password",
+                "version_id": version_id,
+                "payload": {
+                    "USERNAME": {"type": "text"},
+                    "PASSWORD": {"type": "text"},
+                },
+            },
+            {
+                "name": "secret2",
+                "version_id": version_id,
+                "payload": {
+                    "MYKEY": {"type": "text"},
+                },
+            },
+        ],
+    }
+    if module_name is not None:
+        inputs["module_name"] = module_name
+    return {
+        "infra": {
+            "components": [
+                {
+                    "id": "mysterybox",
+                    "instance_id": instance_id,
+                    "enabled": True,
+                    "inputs": inputs,
+                }
+            ]
+        }
+    }
+
+
+def test_mysterybox_runtime_payload_requirements_use_rendered_variable_names() -> None:
+    config = _mysterybox_first_deploy_config(instance_id="secretstore-alpha")
+
+    assert cli._mysterybox_runtime_payload_requirements(config) == {
+        "TF_VAR_secretstore_alpha_payload_values": [
+            ("db-username-password", "USERNAME"),
+            ("db-username-password", "PASSWORD"),
+            ("secret2", "MYKEY"),
+        ]
+    }
+
+
+def test_mysterybox_runtime_payload_values_preflight_reports_missing_values() -> None:
+    config = _mysterybox_first_deploy_config()
+
+    with pytest.raises(RuntimeError) as exc_info:
+        cli._validate_mysterybox_runtime_payload_values(config, environ={})
+
+    message = str(exc_info.value)
+    assert "Missing MysteryBox runtime payload values for first deploy" in message
+    assert "TF_VAR_mysterybox_payload_values" in message
+    assert "db-username-password.PASSWORD" in message
+    assert "db-username-password.USERNAME" in message
+    assert "secret2.MYKEY" in message
+    assert "config.yaml or generated artifacts" in message
+    assert (
+        'export TF_VAR_mysterybox_payload_values=\'{"db-username-password": '
+        '{"PASSWORD": "<value>", "USERNAME": "<value>"}, "secret2": {"MYKEY": "<value>"}}\''
+        in message
+    )
+
+
+def test_mysterybox_runtime_payload_values_preflight_accepts_json_values() -> None:
+    config = _mysterybox_first_deploy_config()
+
+    cli._validate_mysterybox_runtime_payload_values(
+        config,
+        environ={
+            "TF_VAR_mysterybox_payload_values": json.dumps(
+                {
+                    "db-username-password": {
+                        "USERNAME": "alice",
+                        "PASSWORD": "secret",
+                    },
+                    "secret2": {
+                        "MYKEY": "token",
+                    },
+                }
+            )
+        },
+    )
+
+
+def test_mysterybox_runtime_payload_values_prompt_collects_hidden_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _mysterybox_first_deploy_config()
+    answers = iter(["db-user", "db-password", "api-token"])
+    prompts: list[tuple[str, dict[str, object]]] = []
+
+    def _fake_prompt(prompt_text: str, **kwargs: object) -> str:
+        prompts.append((prompt_text, kwargs))
+        return next(answers)
+
+    monkeypatch.setattr(cli.typer, "prompt", _fake_prompt)
+
+    collected = cli._collect_mysterybox_runtime_payload_values(
+        config,
+        environ={},
+        prompt=True,
+    )
+
+    assert json.loads(collected["TF_VAR_mysterybox_payload_values"]) == {
+        "db-username-password": {
+            "USERNAME": "db-user",
+            "PASSWORD": "db-password",
+        },
+        "secret2": {
+            "MYKEY": "api-token",
+        },
+    }
+    assert [prompt for prompt, _kwargs in prompts] == [
+        "MysteryBox payload value for db-username-password.USERNAME",
+        "MysteryBox payload value for db-username-password.PASSWORD",
+        "MysteryBox payload value for secret2.MYKEY",
+    ]
+    assert all(kwargs["hide_input"] is True for _prompt, kwargs in prompts)
+    assert all(kwargs["show_default"] is False for _prompt, kwargs in prompts)
+
+
+def test_mysterybox_runtime_payload_values_preflight_skips_recorded_versions() -> None:
+    config = _mysterybox_first_deploy_config(version_id="mbsecver-e00abc123")
+
+    cli._validate_mysterybox_runtime_payload_values(config, environ={})
+
+
+def test_run_deploy_preflight_validates_mysterybox_payloads_before_live_checks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
+    config = _mysterybox_first_deploy_config()
+    calls: list[tuple[object, ...]] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_validate_strict_config",
+        lambda config, *, include_common_checks=False: calls.append(
+            ("strict", config, include_common_checks)
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "validate_mk8s_network_preflight",
+        lambda _config: calls.append(("mk8s",)),
+    )
+    monkeypatch.delenv("TF_VAR_mysterybox_payload_values", raising=False)
+
+    with pytest.raises(RuntimeError, match="TF_VAR_mysterybox_payload_values"):
+        cli._run_deploy_preflight(
+            config,
+            fake_paths,
+            auto_auth_bootstrap=True,
+            manifest={"render": {"module_sources": []}},
+        )
+
+    assert calls == [("strict", config, False)]
+
+
+def test_run_deploy_preflight_prompts_for_mysterybox_values_before_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
+    config = _mysterybox_first_deploy_config()
+    payload_env = {"TF_VAR_mysterybox_payload_values": '{"secret2":{"MYKEY":"token"}}'}
+    events: list[object] = []
+
+    class _FakeProgress:
+        def __init__(self, *, title, phases):
+            events.append(("progress_init", title, tuple(phase.key for phase in phases)))
+
+        def __enter__(self):
+            events.append("progress_enter")
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            events.append("progress_exit")
+
+        def run(self, phase_key, fn):
+            events.append(("progress_run", phase_key))
+            return fn()
+
+    def _fake_collect(config, *, environ=None, prompt=False):
+        events.append(("collect", prompt))
+        return payload_env
+
+    def _fake_validate_payload(config, *, environ=None):
+        events.append(("validate_payload", dict(environ or {})))
+
+    monkeypatch.setattr(cli, "_console_is_terminal", lambda: True)
+    monkeypatch.setattr(cli, "_ValidationProgress", _FakeProgress)
+    monkeypatch.setattr(cli, "_collect_mysterybox_runtime_payload_values", _fake_collect)
+    monkeypatch.setattr(
+        cli,
+        "_validate_mysterybox_runtime_payload_values",
+        _fake_validate_payload,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_validate_strict_config",
+        lambda config, *, include_common_checks=False: events.append(("strict", config)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "validate_mk8s_network_preflight",
+        lambda config: events.append(("mk8s", config)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_ensure_terraform_backend_ready",
+        lambda config, *, auto_auth_bootstrap: events.append(("backend", auto_auth_bootstrap)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_terraform_runtime_env",
+        lambda config: events.append(("runtime_env", config)) or {"TF_VAR_DEMO": "1"},
+    )
+    monkeypatch.setattr(
+        cli,
+        "_raise_on_generated_bundle_live_quota_issues",
+        lambda config, paths, *, manifest, runtime_env, phase: events.append(
+            ("quota", runtime_env, phase)
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_validate_generated_mk8s_resource_name_preflight",
+        lambda config, paths, *, runtime_env: events.append(("mk8s_name", runtime_env)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "terraform_validate",
+        lambda infra_dir, *, extra_env=None, initialize=True: events.append(
+            ("terraform_validate", extra_env, initialize)
+        ),
+    )
+    monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
+
+    returned_env = cli._run_deploy_preflight(
+        config,
+        fake_paths,
+        auto_auth_bootstrap=True,
+        manifest={"render": {"module_sources": []}},
+    )
+
+    assert returned_env == payload_env
+    assert events[0] == ("collect", True)
+    assert events[1][0] == "progress_init"
+    assert ("progress_run", "mysterybox-payload-values") in events
+    assert any(
+        event[0] == "validate_payload"
+        and event[1]["TF_VAR_mysterybox_payload_values"] == payload_env[
+            "TF_VAR_mysterybox_payload_values"
+        ]
+        for event in events
+        if isinstance(event, tuple)
+    )
+
+
 def test_generated_bundle_live_quota_failure_prints_remediation_hints(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3316,6 +3632,57 @@ def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env
             _target_paths(fake_paths),
             {"KUBECONFIG": "/tmp/kubeconfig"},
             "mk8s",
+        ),
+    ]
+
+
+def test_deploy_generated_artifacts_recovers_mysterybox_versions_after_apply_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    config: dict[str, object] = {}
+    manifest = {"deploy": {"targets": [], "validations": []}}
+    calls: list[tuple[object, ...]] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_run_deploy_preflight",
+        lambda config, paths, *, auto_auth_bootstrap, manifest=None: calls.append(
+            ("preflight", auto_auth_bootstrap, manifest)
+        )
+        or {},
+    )
+
+    def _fake_apply(config, paths, **kwargs):
+        calls.append(("apply", kwargs))
+        raise RuntimeError("terraform failed")
+
+    def _fake_sync(config, paths, *, initialize=True, manifest=None, require_all=True):
+        calls.append(("sync", initialize, manifest, require_all))
+        return True
+
+    monkeypatch.setattr(cli, "_run_terraform_apply_with_status", _fake_apply)
+    monkeypatch.setattr(cli, "_sync_mysterybox_primary_version_ids_to_config", _fake_sync)
+    monkeypatch.setattr(cli.console, "print", lambda message: calls.append(("print", message)))
+
+    with pytest.raises(RuntimeError, match="terraform failed"):
+        cli._deploy_generated_artifacts(
+            config,
+            fake_paths,
+            manifest,
+            auto_auth_bootstrap=True,
+            skip_validations=False,
+            skip_validation_kinds=set(),
+        )
+
+    assert calls == [
+        ("preflight", True, manifest),
+        ("apply", {"initialize": False, "run_mk8s_preflight": False}),
+        ("sync", False, manifest, False),
+        (
+            "print",
+            "Recovered MysteryBox primary version_id values from Terraform state; "
+            "retry deploy to continue from the refreshed generated bundle.",
         ),
     ]
 
@@ -4041,6 +4408,140 @@ def test_deploy_generated_artifacts_target_report_excludes_unselected_validation
     ]
 
 
+def test_deploy_generated_artifacts_keeps_required_mysterybox_validation_when_skipping_optional(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    config = {
+        "apps": {"charts": []},
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-456",
+                "region_id": "eu-north1",
+            },
+        },
+    }
+    optional_validation = {
+        "kind": "mk8s_gpu_visibility",
+        "name": "GPU Visibility test",
+        "report_file": "gpu-visibility-report.json",
+        "target_ref": "mk8s",
+    }
+    required_validation = {
+        "kind": cli.MYSTERYBOX_ESO_CONNECTIVITY_VALIDATION_KIND,
+        "name": "ESO MysteryBox connectivity (mk8s)",
+        "target_ref": "mk8s",
+        "required": True,
+        "report_file": "mysterybox-eso-connectivity-report-mk8s.json",
+    }
+    manifest = {
+        "deploy": {
+            "targets": [_mk8s_target(fake_paths)],
+            "validations": [optional_validation, required_validation],
+        }
+    }
+    printed: list[str] = []
+
+    monkeypatch.setattr(cli, "_run_deploy_preflight", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_run_terraform_apply_with_status", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "write_inventory", write_inventory_artifacts)
+    monkeypatch.setattr(
+        cli,
+        "_prepare_cluster_handoff_kube_env",
+        lambda *_args, **_kwargs: {"KUBECONFIG": "/tmp/kubeconfig"},
+    )
+    monkeypatch.setattr(cli, "_report_cluster_nodes_status", lambda *, extra_env, emit: None)
+    monkeypatch.setattr(cli, "_console_is_terminal", lambda: True)
+    monkeypatch.setattr(
+        cli,
+        "run_mk8s_gpu_validations",
+        lambda *_args, **_kwargs: pytest.fail("optional validation should be skipped"),
+    )
+
+    def _fake_run_mysterybox_eso_validations(
+        validations: list[dict[str, object]],
+        *,
+        inventory_dir: Path,
+        extra_env: dict[str, str] | None,
+        emit=None,
+    ) -> list[Path]:
+        assert validations == [required_validation]
+        assert extra_env == {"KUBECONFIG": "/tmp/kubeconfig"}
+        inventory_dir.mkdir(parents=True, exist_ok=True)
+        report_path = inventory_dir / "mysterybox-eso-connectivity-report-mk8s.json"
+        report_path.write_text(
+            json.dumps(
+                {
+                    "validation": "ESO MysteryBox connectivity (mk8s)",
+                    "kind": cli.MYSTERYBOX_ESO_CONNECTIVITY_VALIDATION_KIND,
+                    "passed": True,
+                    "checks": [
+                        {
+                            "name": "Nebius API TLS",
+                            "passed": True,
+                            "summary": "TLS ok",
+                        },
+                        {
+                            "name": "ClusterSecretStore Ready",
+                            "passed": True,
+                            "summary": "ClusterSecretStore/nebius-mysterybox-shared Ready=True",
+                        },
+                    ],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return [report_path]
+
+    monkeypatch.setattr(
+        cli,
+        "run_mysterybox_eso_validations",
+        _fake_run_mysterybox_eso_validations,
+    )
+
+    @contextmanager
+    def _fake_status(_message: str, **_kwargs: object):
+        yield SimpleNamespace(update=lambda *_args, **_kwargs: None)
+
+    monkeypatch.setattr(cli.console, "status", _fake_status)
+    monkeypatch.setattr(
+        cli.console, "print", lambda message, *args, **kwargs: printed.append(str(message))
+    )
+
+    cli._deploy_generated_artifacts(
+        config,
+        fake_paths,
+        manifest,
+        auto_auth_bootstrap=True,
+        skip_validations=True,
+        skip_validation_kinds=set(),
+    )
+
+    assert not (fake_paths.inventory_dir / "gpu-visibility-report.json").exists()
+    assert (fake_paths.inventory_dir / "mysterybox-eso-connectivity-report-mk8s.json").exists()
+    assert printed == [
+        (
+            "Skipping optional deploy-time validations for this run (--skip-validations); "
+            "required validations still run."
+        ),
+        "Deploy validation summary:",
+        "  Overall: INCOMPLETE (1/2 completed, 1 not run)",
+        "  NOT RUN GPU Visibility test: No deploy validation results recorded yet.",
+        (
+            "  PASS ESO MysteryBox connectivity (mk8s): 2/2 check(s) passed; TLS ok; "
+            "ClusterSecretStore/nebius-mysterybox-shared Ready=True."
+        ),
+        f"  Combined report: {fake_paths.inventory_dir / 'deploy-report.md'}",
+        (
+            "  JSON detail: "
+            f"{fake_paths.inventory_dir / 'mysterybox-eso-connectivity-report-mk8s.json'}"
+        ),
+    ]
+
+
 def test_deploy_generated_artifacts_prints_validation_phase_lines_when_console_is_not_terminal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -4717,6 +5218,73 @@ def test_apply_rendered_flux_skips_flux_install_when_controllers_exist(
         "[cyan]Applying rendered Flux manifests to the target cluster...[/cyan]",
         "[cyan]Waiting for rendered Flux resources to become Ready...[/cyan]",
     ]
+
+
+def test_apply_rendered_flux_applies_post_flux_manifests_after_flux_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_paths.flux_dir.mkdir(parents=True, exist_ok=True)
+    post_flux_path = fake_paths.flux_dir / "post-flux-mysterybox-eso.yaml"
+    post_flux_path.write_text(
+        "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: ns1\n",
+        encoding="utf-8",
+    )
+    calls: list[tuple[object, ...]] = []
+    status_updates: list[str] = []
+
+    monkeypatch.setattr(cli, "flux_dir_has_rendered_resources", lambda _path: True)
+    monkeypatch.setattr(
+        cli.shutil,
+        "which",
+        lambda name: "/usr/bin/kubectl" if name == "kubectl" else None,
+    )
+    monkeypatch.setattr(cli, "flux_controllers_installed", lambda *, extra_env=None: True)
+    monkeypatch.setattr(cli, "flux_crds_installed", lambda *, extra_env=None: True)
+    monkeypatch.setattr(
+        cli,
+        "wait_for_flux_resource_apis",
+        lambda paths, *, extra_env=None, cache_dir=None: calls.append(("wait_apis", paths)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "wait_for_rendered_flux_resources",
+        lambda paths, *, extra_env=None, emit=None: calls.append(("wait_flux", paths)),
+    )
+
+    def _fake_run(
+        cmd: list[str],
+        *,
+        env: dict[str, str] | None = None,
+        capture_output: bool = False,
+        text: bool = False,
+        timeout: int | None = None,
+        check: bool = False,
+    ) -> SimpleNamespace:
+        calls.append(("run", tuple(cmd), timeout))
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+    monkeypatch.setattr(cli, "_console_is_terminal", lambda: True)
+
+    class _FakeStatus:
+        def update(self, message: str, **_kwargs: object) -> None:
+            status_updates.append(message)
+
+    @contextmanager
+    def _fake_status(_message: str, **_kwargs: object):
+        yield _FakeStatus()
+
+    monkeypatch.setattr(cli.console, "status", _fake_status)
+
+    cli._apply_rendered_flux(fake_paths, extra_env={"KUBECONFIG": "/tmp/kubeconfig"})
+
+    assert ("wait_flux", fake_paths) in calls
+    assert any(
+        call == ("run", ("kubectl", "apply", "-f", str(post_flux_path)), 300)
+        for call in calls
+    )
+    assert status_updates[-1] == "[cyan]Applying post-Flux manifests to the target cluster...[/cyan]"
 
 
 def test_apply_rendered_flux_prints_phase_lines_when_console_is_not_terminal(
@@ -5605,6 +6173,63 @@ def test_run_terraform_apply_with_status_passes_explicit_status_watchers(
     ]
 
 
+def test_run_terraform_apply_with_status_passes_prompted_mysterybox_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    config = _mysterybox_first_deploy_config()
+    calls: list[tuple[object, ...]] = []
+    reporter = SimpleNamespace(handle_terraform_event="callback")
+    payload_values = json.dumps(
+        {
+            "db-username-password": {
+                "USERNAME": "alice",
+                "PASSWORD": "secret",
+            },
+            "secret2": {
+                "MYKEY": "token",
+            },
+        }
+    )
+
+    monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _cfg: {"TF_VAR_DEMO": "1"})
+
+    @contextmanager
+    def _fake_reporting(
+        config: object, *, emit, poll_interval_seconds=15.0, repeat_interval_seconds=60.0
+    ):
+        yield reporter
+
+    monkeypatch.setattr(cli, "deployment_status_reporting", _fake_reporting)
+    monkeypatch.setattr(
+        cli,
+        "terraform_apply",
+        lambda infra_dir, *, extra_env=None, initialize=True, event_callback=None: calls.append(
+            ("apply", infra_dir, extra_env, initialize, event_callback)
+        ),
+    )
+
+    cli._run_terraform_apply_with_status(
+        config,
+        fake_paths,
+        run_mk8s_preflight=False,
+        extra_env={"TF_VAR_mysterybox_payload_values": payload_values},
+    )
+
+    assert calls == [
+        (
+            "apply",
+            fake_paths.infra_dir,
+            {
+                "TF_VAR_DEMO": "1",
+                "TF_VAR_mysterybox_payload_values": payload_values,
+            },
+            True,
+            "callback",
+        )
+    ]
+
+
 def test_run_terraform_apply_with_status_appends_last_known_status_on_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -5705,8 +6330,14 @@ def test_run_terraform_destroy_with_status_passes_abort_check_when_reporter_supp
 
     @contextmanager
     def _fake_reporting(
-        config: object, *, emit, poll_interval_seconds=15.0, repeat_interval_seconds=60.0
+        config: object,
+        *,
+        emit,
+        operation="apply",
+        poll_interval_seconds=15.0,
+        repeat_interval_seconds=60.0,
     ):
+        calls.append(("status_enter", config, operation))
         yield reporter
 
     monkeypatch.setattr(cli, "deployment_status_reporting", _fake_reporting)
@@ -5735,6 +6366,7 @@ def test_run_terraform_destroy_with_status_passes_abort_check_when_reporter_supp
     cli._run_terraform_destroy_with_status("cfg", fake_paths)
 
     assert calls == [
+        ("status_enter", "cfg", "destroy"),
         (
             "destroy",
             fake_paths.infra_dir,
@@ -5785,16 +6417,26 @@ def test_enabled_status_watcher_specs_resolve_from_enabled_component_inputs() ->
                     "enabled": True,
                     "inputs": {
                         "parent_id": "project-456",
-                        "secrets": {
-                            "app": {
+                        "secrets": [
+                            {
                                 "name": "app-runtime",
-                                "payload_keys": ["API_KEY"],
+                                "version_id": "n/a",
+                                "payload": {
+                                    "API_KEY": {
+                                        "type": "text",
+                                    },
+                                },
                             },
-                            "worker": {
+                            {
                                 "name": "worker-runtime",
-                                "payload_keys": ["TOKEN"],
+                                "version_id": "mbsecver-e00worker",
+                                "payload": {
+                                    "TOKEN": {
+                                        "type": "text",
+                                    },
+                                },
                             },
-                        },
+                        ],
                     },
                 },
                 {
@@ -5846,6 +6488,181 @@ def test_enabled_status_watcher_specs_resolve_from_enabled_component_inputs() ->
             "resource_name": "worker-runtime",
         },
     ]
+
+
+def test_sync_mysterybox_primary_version_ids_updates_unset_config_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
+    fake_paths.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "infra": {
+                    "components": [
+                        {
+                            "id": "mysterybox",
+                            "enabled": True,
+                            "inputs": {
+                                "secrets": [
+                                    {
+                                        "name": "app-runtime",
+                                        "version_id": "n/a",
+                                        "payload": {"API_KEY": {"type": "text"}},
+                                    },
+                                    {
+                                        "name": "worker-runtime",
+                                        "version_id": "mbsecver-existing",
+                                        "payload": {"TOKEN": {"type": "text"}},
+                                    },
+                                ],
+                            },
+                        }
+                    ]
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(cli, "_terraform_runtime_env", lambda config: {"TF_VAR_demo": "1"})
+
+    def _fake_terraform_output_json(infra_dir, *, extra_env=None, initialize=True):
+        captured["call"] = {
+            "infra_dir": infra_dir,
+            "extra_env": extra_env,
+            "initialize": initialize,
+        }
+        return {
+            "mysterybox_primary_secret_version_ids": {
+                "value": {
+                    "app-runtime": "mbsecver-created",
+                    "worker-runtime": "mbsecver-new-primary",
+                }
+            }
+        }
+
+    monkeypatch.setattr(cli, "terraform_output_json", _fake_terraform_output_json)
+
+    assert cli._sync_mysterybox_primary_version_ids_to_config(
+        "cfg", fake_paths, initialize=False
+    )
+
+    refreshed = yaml.safe_load(fake_paths.config_path.read_text(encoding="utf-8"))
+    secrets = refreshed["infra"]["components"][0]["inputs"]["secrets"]
+    assert secrets[0]["version_id"] == "mbsecver-created"
+    assert secrets[1]["version_id"] == "mbsecver-existing"
+    assert captured["call"] == {
+        "infra_dir": fake_paths.infra_dir,
+        "extra_env": {"TF_VAR_demo": "1"},
+        "initialize": False,
+    }
+
+
+def test_sync_mysterybox_primary_version_ids_updates_generated_manifest_and_tfvars(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
+    source_payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mysterybox",
+                    "enabled": True,
+                    "inputs": {
+                        "secrets": [
+                            {
+                                "name": "app-runtime",
+                                "version_id": "n/a",
+                                "payload": {"API_KEY": {"type": "text"}},
+                            }
+                        ]
+                    },
+                }
+            ]
+        }
+    }
+    fake_paths.config_path.write_text(
+        yaml.safe_dump(source_payload, sort_keys=False),
+        encoding="utf-8",
+    )
+    manifest = {
+        "schema": "nebius-cxcli-generated/v1",
+        "runtime_config": {
+            **json.loads(json.dumps(source_payload)),
+            "infra": {
+                **json.loads(json.dumps(source_payload["infra"])),
+                "mysterybox": {
+                    "enabled": True,
+                    "secrets": [
+                        {
+                            "name": "app-runtime",
+                            "version_id": "n/a",
+                            "payload": {"API_KEY": {"type": "text"}},
+                        }
+                    ],
+                },
+            },
+        },
+        "render": {
+            "terraform_tfvars": {
+                "mysterybox_secrets": [
+                    {
+                        "name": "app-runtime",
+                        "version_id": "n/a",
+                        "payload": {"API_KEY": {"type": "text"}},
+                    }
+                ]
+            }
+        },
+        "deploy": {"targets": [], "validations": []},
+    }
+    monkeypatch.setattr(cli, "_terraform_runtime_env", lambda config: {"TF_VAR_demo": "1"})
+    monkeypatch.setattr(
+        cli,
+        "terraform_output_json",
+        lambda *_args, **_kwargs: {
+            "mysterybox_primary_secret_version_ids": {
+                "value": {"app-runtime": "mbsecver-created"}
+            }
+        },
+    )
+
+    assert cli._sync_mysterybox_primary_version_ids_to_config(
+        "cfg",
+        fake_paths,
+        initialize=False,
+        manifest=manifest,
+    )
+
+    refreshed_config = yaml.safe_load(fake_paths.config_path.read_text(encoding="utf-8"))
+    assert (
+        refreshed_config["infra"]["components"][0]["inputs"]["secrets"][0]["version_id"]
+        == "mbsecver-created"
+    )
+    manifest_payload = json.loads(
+        (fake_paths.generated_dir / "nebius-cxcli-manifest.json").read_text(encoding="utf-8")
+    )
+    assert (
+        manifest_payload["runtime_config"]["infra"]["components"][0]["inputs"]["secrets"][0][
+            "version_id"
+        ]
+        == "mbsecver-created"
+    )
+    assert (
+        manifest_payload["runtime_config"]["infra"]["mysterybox"]["secrets"][0]["version_id"]
+        == "mbsecver-created"
+    )
+    assert (
+        manifest_payload["render"]["terraform_tfvars"]["mysterybox_secrets"][0]["version_id"]
+        == "mbsecver-created"
+    )
+    tfvars = json.loads(
+        (fake_paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
+    )
+    assert tfvars["mysterybox_secrets"][0]["version_id"] == "mbsecver-created"
 
 
 def test_terraform_plan_command_invokes_runtime_auth_and_plan(
@@ -6312,13 +7129,11 @@ def test_flux_bootstrap_command_invokes_flux_ops(
         config: object,
         *,
         need_terraform: bool,
-        need_eso_mysterybox: bool,
         auto_bootstrap: bool,
     ) -> None:
         captured["auth"] = {
             "config": config,
             "need_terraform": need_terraform,
-            "need_eso_mysterybox": need_eso_mysterybox,
             "auto_bootstrap": auto_bootstrap,
         }
 
@@ -6342,7 +7157,6 @@ def test_flux_bootstrap_command_invokes_flux_ops(
     assert captured["auth"] == {
         "config": "cfg",
         "need_terraform": False,
-        "need_eso_mysterybox": False,
         "auto_bootstrap": True,
     }
     assert captured["inventory"] == {"config": "cfg", "paths": fake_paths}
@@ -6944,6 +7758,139 @@ def test_enabled_cluster_handoffs_normalizes_boolean_access_outputs(
             "access": "internal",
         }
     ]
+
+
+def test_mysterybox_eso_wizard_hides_target_prompts_without_backend_component() -> None:
+    entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.components.mk8s",
+        description="MK8s",
+    )
+    payload = {
+        "infra": {
+            "components": [
+                {"id": "mk8s", "instance_id": "mk8s", "enabled": True},
+            ]
+        },
+        "deploy": {
+            "targets": [
+                {
+                    "secrets": {
+                        "mysterybox": {
+                            "enabled": False,
+                        }
+                    }
+                }
+            ]
+        },
+    }
+
+    assert cli._skip_mysterybox_eso_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label="deploy.targets[0].secrets.mysterybox.enabled",
+    )
+
+    payload["infra"]["components"].append(
+        {"id": "mysterybox", "instance_id": "mysterybox", "enabled": False}
+    )
+    assert cli._skip_mysterybox_eso_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label="deploy.targets[0].secrets.mysterybox.enabled",
+    )
+
+    payload["infra"]["components"][1]["enabled"] = True
+    assert not cli._skip_mysterybox_eso_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label="deploy.targets[0].secrets.mysterybox.enabled",
+    )
+
+
+def test_mysterybox_eso_wizard_prompts_sync_namespaces_for_all_store_modes() -> None:
+    entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.components.mk8s",
+        description="MK8s",
+    )
+    payload = {
+        "infra": {
+            "components": [
+                {"id": "mk8s", "instance_id": "mk8s", "enabled": True},
+                {"id": "mysterybox", "instance_id": "mysterybox", "enabled": True},
+            ]
+        },
+        "deploy": {
+            "targets": [
+                {
+                    "secrets": {
+                        "mysterybox": {
+                            "enabled": True,
+                            "allow_all_namespaces": True,
+                        }
+                    }
+                }
+            ]
+        },
+    }
+
+    assert cli._skip_mysterybox_eso_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label="deploy.targets[0].secrets.mysterybox.sync_namespaces",
+    ) is False
+    del payload["deploy"]["targets"][0]["secrets"]["mysterybox"]["allow_all_namespaces"]
+    assert cli._skip_mysterybox_eso_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label="deploy.targets[0].secrets.mysterybox.sync_namespaces",
+    ) is False
+    payload["deploy"]["targets"][0]["secrets"]["mysterybox"]["allow_all_namespaces"] = False
+    assert cli._skip_mysterybox_eso_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label="deploy.targets[0].secrets.mysterybox.sync_namespaces",
+    ) is False
+
+
+def test_wizard_selected_value_shows_boolean_secret_controls() -> None:
+    assert (
+        cli._wizard_visible_value(
+            True,
+            path_label="deploy.targets[0].secrets.mysterybox.enabled",
+        )
+        == "true"
+    )
+    assert (
+        cli._wizard_visible_value(
+            ["default"],
+            path_label="deploy.targets[0].secrets.mysterybox.sync_namespaces",
+        )
+        == '["default"]'
+    )
+    assert (
+        cli._wizard_visible_value(
+            "super-secret",
+            path_label="deploy.targets[0].secrets.mysterybox.credentials_secret.key",
+        )
+        == "<redacted>"
+    )
+    assert (
+        cli._wizard_visible_value(
+            [
+                {
+                    "name": "db-uname-pass",
+                    "kubernetes_secret_name": "app-db-creds",
+                    "payload": {"USERNAME": {"type": "text"}, "PASSWORD": {"type": "text"}},
+                }
+            ],
+            path_label="infra.components[0].inputs.secrets",
+        )
+        == "db-uname-pass->app-db-creds (PASSWORD, USERNAME)"
+    )
 
 
 def test_persist_cluster_handoff_kubeconfig_skips_in_ci(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -7737,8 +8684,11 @@ def test_warn_if_flux_gitops_not_bootstrapped_prints_guidance(
 
     assert len(messages) >= 3
     assert "Flux GitOps bootstrap is not configured" in messages[0]
-    assert "Run to enable GitOps sync:" in messages[1]
-    assert f"nebius-cxcli flux bootstrap {fake_paths.generated_dir}" == messages[2]
+    assert "local generated bundle path" in messages[1]
+    assert f"git origin under {fake_paths.repo_root}" in messages[1]
+    assert "Commit and push the rendered generated/flux path" in messages[2]
+    assert "Run to enable GitOps sync:" in messages[3]
+    assert f"nebius-cxcli flux bootstrap {fake_paths.generated_dir}" == messages[4]
 
 
 def test_help_text_aligns_render_and_apply_surfaces() -> None:
@@ -7981,7 +8931,10 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     )
     normalized_validate_sources_help = " ".join(validate_sources_help.split()).lower()
     assert "validate-sources [OPTIONS] [COMPONENT_SOURCES_YAML]" in validate_sources_help
-    assert "component_sources.yaml, sibling component_cli_settings.yaml" in normalized_validate_sources_help
+    assert (
+        "component_sources.yaml, sibling component_cli_settings.yaml"
+        in normalized_validate_sources_help
+    )
     assert "global flags" in normalized_validate_sources_help
     assert "environment" in normalized_validate_sources_help
     assert "bundled defaults" in normalized_validate_sources_help
@@ -7996,6 +8949,8 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--skip-validations" in deploy_help
     assert "--skip-validation" in deploy_help
     assert "observability agent ingestion guardrail" in normalized_deploy_help
+    assert "required platform validations" in normalized_deploy_help
+    assert "eso mysterybox connectivity" in normalized_deploy_help
     assert "one-run override" in normalized_deploy_help
     assert "quota-request [OPTIONS] CONFIG_YAML" in quota_request_help
     normalized_quota_request_help = " ".join(quota_request_help.split()).lower()
@@ -8503,6 +9458,709 @@ def test_auth_recreate_forces_profile_rotation(monkeypatch: pytest.MonkeyPatch) 
     )
 
 
+def test_runtime_auth_cache_metadata_write_keeps_previous_file_on_replace_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata_file = tmp_path / cli._RUNTIME_AUTH_CACHE_FILE
+    metadata_file.write_text('{"old": true}\n', encoding="utf-8")
+
+    def _fail_replace(_src: object, _dst: object) -> None:
+        raise RuntimeError("replace failed")
+
+    monkeypatch.setattr(cli.os, "replace", _fail_replace)
+
+    with pytest.raises(RuntimeError, match="replace failed"):
+        cli._runtime_auth_cache_write_metadata(metadata_file, {"new": True})
+
+    assert json.loads(metadata_file.read_text(encoding="utf-8")) == {"old": True}
+    assert not list(tmp_path.glob(f".{cli._RUNTIME_AUTH_CACHE_FILE}.*.tmp"))
+
+
+def test_mysterybox_eso_credentials_json_uses_subject_credentials_format() -> None:
+    credentials = cli.MysteryBoxEsoCredentials(
+        service_account_id="serviceaccount-mysterybox",
+        auth_public_key_id="publickey-mysterybox",
+        private_key_pem="MYSTERYBOX-PRIVATE-KEY",
+    )
+
+    rendered = cli._mysterybox_eso_credentials_json(credentials)
+    payload = json.loads(rendered)
+
+    assert "\n" not in rendered
+    assert ": " not in rendered
+    assert ", " not in rendered
+    assert payload == {
+        "subject-credentials": {
+            "alg": "RS256",
+            "private-key": "MYSTERYBOX-PRIVATE-KEY",
+            "kid": "publickey-mysterybox",
+            "iss": "serviceaccount-mysterybox",
+            "sub": "serviceaccount-mysterybox",
+        }
+    }
+
+
+def test_mysterybox_eso_credentials_from_json_requires_subject_credentials() -> None:
+    credentials = cli.MysteryBoxEsoCredentials(
+        service_account_id="serviceaccount-mysterybox",
+        auth_public_key_id="publickey-mysterybox",
+        private_key_pem="MYSTERYBOX-PRIVATE-KEY",
+    )
+
+    assert cli._mysterybox_eso_credentials_from_json(
+        cli._mysterybox_eso_credentials_json(credentials)
+    ) == credentials
+    assert cli._mysterybox_eso_credentials_from_json(
+        json.dumps(
+            {
+                "subject-credentials": {
+                    "alg": "RS256",
+                    "private-key": "MYSTERYBOX-PRIVATE-KEY",
+                    "kid": "publickey-mysterybox",
+                    "iss": "serviceaccount-mysterybox",
+                    "sub": "other-serviceaccount",
+                }
+            }
+        )
+    ) is None
+
+
+def test_create_mysterybox_eso_credentials_uses_dedicated_service_account(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    wait_calls: list[tuple[str, cli.MysteryBoxEsoCredentials]] = []
+    runtime_env = {
+        "NEBIUS_SA_ID": "runtime-tf-sa",
+        "NEBIUS_AUTH_PUBLIC_KEY_ID": "runtime-tf-key",
+        "NEBIUS_AUTH_PRIVATE_KEY_FILE": "/tmp/runtime-tf-key.pem",
+        "NEBIUS_AUTH_PRIVATE_KEY_PEM": "RUNTIME-TF-PRIVATE-KEY",
+    }
+    for key, value in runtime_env.items():
+        monkeypatch.setenv(key, value)
+
+    def _fake_bootstrap_service_account_auth_key(**kwargs: object) -> SimpleNamespace:
+        captured.update(kwargs)
+        captured["runtime_auth_env"] = {
+            key: os.environ.get(key) for key in runtime_env
+        }
+        return SimpleNamespace(
+            project_id="project-123",
+            service_account_name="mysterybox-sa",
+            service_account_id="serviceaccount-mysterybox",
+            service_account_created=True,
+            roles_created=["mysterybox.payload-viewer"],
+            roles_already_present=[],
+            auth_public_key_id="publickey-mysterybox",
+            auth_private_key_pem="MYSTERYBOX-PRIVATE-KEY",
+        )
+
+    monkeypatch.setattr(
+        cli,
+        "bootstrap_service_account_auth_key",
+        _fake_bootstrap_service_account_auth_key,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_wait_for_mysterybox_eso_token_ready",
+        lambda *, project_id, credentials: wait_calls.append((project_id, credentials)),
+    )
+
+    credentials = cli._create_mysterybox_eso_credentials(project_id="project-123")
+
+    assert captured["service_account_name"] == "mysterybox-sa"
+    assert captured["role_ids"] == ["mysterybox.payload-viewer"]
+    assert captured["allow_cli_token"] is True
+    assert captured["runtime_auth_env"] == {key: None for key in runtime_env}
+    assert {key: os.environ.get(key) for key in runtime_env} == runtime_env
+    assert "access_key_description" not in captured
+    assert credentials == cli.MysteryBoxEsoCredentials(
+        service_account_id="serviceaccount-mysterybox",
+        auth_public_key_id="publickey-mysterybox",
+        private_key_pem="MYSTERYBOX-PRIVATE-KEY",
+    )
+    assert wait_calls == [("project-123", credentials)]
+
+
+def test_ensure_mysterybox_eso_service_account_uses_operator_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    runtime_env = {
+        "NEBIUS_SA_ID": "runtime-tf-sa",
+        "NEBIUS_AUTH_PUBLIC_KEY_ID": "runtime-tf-key",
+        "NEBIUS_AUTH_PRIVATE_KEY_FILE": "/tmp/runtime-tf-key.pem",
+        "NEBIUS_AUTH_PRIVATE_KEY_PEM": "RUNTIME-TF-PRIVATE-KEY",
+    }
+    for key, value in runtime_env.items():
+        monkeypatch.setenv(key, value)
+
+    def _fake_ensure_ci_service_account_identity(**kwargs: object) -> SimpleNamespace:
+        captured.update(kwargs)
+        captured["runtime_auth_env"] = {
+            key: os.environ.get(key) for key in runtime_env
+        }
+        return SimpleNamespace(
+            service_account_id="serviceaccount-mysterybox",
+            service_account_created=False,
+            roles_created=[],
+            roles_already_present=["mysterybox.payload-viewer"],
+        )
+
+    monkeypatch.setattr(
+        cli,
+        "ensure_ci_service_account_identity",
+        _fake_ensure_ci_service_account_identity,
+    )
+
+    result = cli._ensure_mysterybox_eso_service_account_identity(project_id="project-123")
+
+    assert result.service_account_id == "serviceaccount-mysterybox"
+    assert captured["service_account_name"] == "mysterybox-sa"
+    assert captured["role_ids"] == ["mysterybox.payload-viewer"]
+    assert captured["allow_cli_token"] is True
+    assert captured["runtime_auth_env"] == {key: None for key in runtime_env}
+    assert {key: os.environ.get(key) for key in runtime_env} == runtime_env
+
+
+def test_ensure_mysterybox_eso_credentials_secret_reuses_valid_cluster_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credentials = cli.MysteryBoxEsoCredentials(
+        service_account_id="serviceaccount-mysterybox",
+        auth_public_key_id="publickey-mysterybox",
+        private_key_pem="MYSTERYBOX-PRIVATE-KEY",
+    )
+    fake_config = SimpleNamespace(
+        client_info=SimpleNamespace(
+            client_name="client-a",
+            nebius=SimpleNamespace(project_id="project-123"),
+        )
+    )
+    rendered_messages: list[str] = []
+    runtime_env = {
+        "NEBIUS_SA_ID": "runtime-tf-sa",
+        "NEBIUS_AUTH_PUBLIC_KEY_ID": "runtime-tf-key",
+        "NEBIUS_AUTH_PRIVATE_KEY_FILE": "/tmp/runtime-tf-key.pem",
+        "NEBIUS_AUTH_PRIVATE_KEY_PEM": "RUNTIME-TF-PRIVATE-KEY",
+    }
+    for key, value in runtime_env.items():
+        monkeypatch.setenv(key, value)
+    auth_key_checks: list[dict[str, str | None]] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_kubectl_read_secret_key",
+        lambda **_kwargs: cli._mysterybox_eso_credentials_json(credentials),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_ensure_mysterybox_eso_service_account_identity",
+        lambda **_kwargs: SimpleNamespace(
+            service_account_id="serviceaccount-mysterybox",
+            roles_created=[],
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "auth_public_key_exists",
+        lambda **_kwargs: auth_key_checks.append(
+            {key: os.environ.get(key) for key in runtime_env}
+        )
+        or True,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_create_mysterybox_eso_credentials",
+        lambda **_kwargs: pytest.fail("valid Kubernetes Secret should be reused"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_apply_mysterybox_eso_credentials_secret",
+        lambda **_kwargs: pytest.fail("valid Kubernetes Secret should not be rewritten"),
+    )
+    monkeypatch.setattr(
+        cli.console,
+        "print",
+        lambda *args, **_kwargs: rendered_messages.append(" ".join(str(arg) for arg in args)),
+    )
+
+    fresh = cli._ensure_mysterybox_eso_credentials_secret(
+        fake_config,
+        spec={
+            "namespace": "external-secrets",
+            "name": "nebius-mysterybox-shared-creds",
+            "key": "credentials.json",
+        },
+        extra_env=None,
+        auto_auth_bootstrap=True,
+        fresh_credentials=None,
+    )
+
+    assert fresh is None
+    assert auth_key_checks == [{key: None for key in runtime_env}]
+    assert {key: os.environ.get(key) for key in runtime_env} == runtime_env
+    assert rendered_messages == [
+        "Reused ESO MysteryBox credential Secret external-secrets/nebius-mysterybox-shared-creds for native provider."
+    ]
+
+
+def test_ensure_mysterybox_eso_credentials_secret_rotates_stale_cluster_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stale_credentials = cli.MysteryBoxEsoCredentials(
+        service_account_id="serviceaccount-old",
+        auth_public_key_id="publickey-old",
+        private_key_pem="OLD-KEY",
+    )
+    fresh_credentials = cli.MysteryBoxEsoCredentials(
+        service_account_id="serviceaccount-mysterybox",
+        auth_public_key_id="publickey-fresh",
+        private_key_pem="FRESH-KEY",
+    )
+    fake_config = SimpleNamespace(
+        client_info=SimpleNamespace(
+            client_name="client-a",
+            nebius=SimpleNamespace(project_id="project-123"),
+        )
+    )
+    applied: list[dict[str, object]] = []
+    rendered_messages: list[str] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_kubectl_read_secret_key",
+        lambda **_kwargs: cli._mysterybox_eso_credentials_json(stale_credentials),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_ensure_mysterybox_eso_service_account_identity",
+        lambda **_kwargs: SimpleNamespace(
+            service_account_id="serviceaccount-mysterybox",
+            roles_created=[],
+        ),
+    )
+    monkeypatch.setattr(cli, "auth_public_key_exists", lambda **_kwargs: True)
+    monkeypatch.setattr(
+        cli,
+        "_create_mysterybox_eso_credentials",
+        lambda *, project_id: fresh_credentials,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_apply_mysterybox_eso_credentials_secret",
+        lambda **kwargs: applied.append(dict(kwargs)),
+    )
+    monkeypatch.setattr(
+        cli.console,
+        "print",
+        lambda *args, **_kwargs: rendered_messages.append(" ".join(str(arg) for arg in args)),
+    )
+
+    returned = cli._ensure_mysterybox_eso_credentials_secret(
+        fake_config,
+        spec={
+            "namespace": "external-secrets",
+            "name": "nebius-mysterybox-shared-creds",
+            "key": "credentials.json",
+        },
+        extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
+        auto_auth_bootstrap=True,
+        fresh_credentials=None,
+    )
+
+    assert returned == fresh_credentials
+    assert applied == [
+        {
+            "namespace": "external-secrets",
+            "name": "nebius-mysterybox-shared-creds",
+            "key": "credentials.json",
+            "credentials": fresh_credentials,
+            "extra_env": {"KUBECONFIG": "/tmp/kubeconfig"},
+        }
+    ]
+    assert any("is stale; replacing it because" in message for message in rendered_messages)
+    assert not any("is invalid; replacing it" in message for message in rendered_messages)
+
+
+def test_ensure_mysterybox_eso_credentials_secret_requires_auto_bootstrap_when_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_config = SimpleNamespace(
+        client_info=SimpleNamespace(
+            client_name="client-a",
+            nebius=SimpleNamespace(project_id="project-123"),
+        )
+    )
+    monkeypatch.setattr(cli, "_kubectl_read_secret_key", lambda **_kwargs: None)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        cli._ensure_mysterybox_eso_credentials_secret(
+            fake_config,
+            spec={
+                "namespace": "external-secrets",
+                "name": "nebius-mysterybox-shared-creds",
+                "key": "credentials.json",
+            },
+            extra_env=None,
+            auto_auth_bootstrap=False,
+            fresh_credentials=None,
+        )
+
+    assert "credential Secret external-secrets/nebius-mysterybox-shared-creds:credentials.json is missing" in str(
+        exc_info.value
+    )
+
+
+def test_ensure_mysterybox_eso_runtime_creates_credentials_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credentials = cli.MysteryBoxEsoCredentials(
+        service_account_id="serviceaccount-mysterybox",
+        auth_public_key_id="publickey-mysterybox",
+        private_key_pem="MYSTERYBOX-PRIVATE-KEY",
+    )
+    fake_config = SimpleNamespace(
+        client_info=SimpleNamespace(
+            client_name="client-a",
+            nebius=SimpleNamespace(project_id="project-123"),
+        )
+    )
+    applied: list[tuple[object, dict[str, str] | None]] = []
+    tls_checks: list[dict[str, object]] = []
+    credential_creates: list[str] = []
+
+    monkeypatch.setattr(cli, "mysterybox_eso_enabled", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        cli,
+        "mysterybox_eso_api_domains",
+        lambda *_args, **_kwargs: ("api.eu-north1.nebius.cloud:443",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "mysterybox_eso_runtime_secret_specs",
+        lambda *_args, **_kwargs: (
+            {
+                "namespace": "external-secrets",
+                "name": "nebius-mysterybox-shared-creds",
+                "key": "credentials.json",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_kubectl_read_secret_key",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_create_mysterybox_eso_credentials",
+        lambda *, project_id: credential_creates.append(project_id) or credentials,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_kubectl_apply_manifest",
+        lambda manifest, *, extra_env: applied.append((manifest, extra_env)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_kubectl_validate_mysterybox_eso_tls",
+        lambda **kwargs: tls_checks.append(dict(kwargs)),
+    )
+    monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
+
+    cli._ensure_mysterybox_eso_runtime_before_flux(
+        fake_config,
+        extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
+        auto_auth_bootstrap=True,
+    )
+
+    assert len(applied) == 1
+    assert credential_creates == ["project-123"]
+    assert tls_checks == [
+        {
+            "namespace": "external-secrets",
+            "api_domain": "api.eu-north1.nebius.cloud:443",
+            "extra_env": {"KUBECONFIG": "/tmp/kubeconfig"},
+        }
+    ]
+    manifest, extra_env = applied[0]
+    assert extra_env == {"KUBECONFIG": "/tmp/kubeconfig"}
+    assert isinstance(manifest, list)
+    namespace_doc, secret_doc = manifest
+    assert namespace_doc == {
+        "apiVersion": "v1",
+        "kind": "Namespace",
+        "metadata": {"name": "external-secrets"},
+    }
+    assert secret_doc["apiVersion"] == "v1"
+    assert secret_doc["kind"] == "Secret"
+    assert secret_doc["type"] == "Opaque"
+    assert secret_doc["metadata"] == {
+        "name": "nebius-mysterybox-shared-creds",
+        "namespace": "external-secrets",
+    }
+    credentials = json.loads(secret_doc["stringData"]["credentials.json"])
+    assert credentials == {
+        "subject-credentials": {
+            "alg": "RS256",
+            "private-key": "MYSTERYBOX-PRIVATE-KEY",
+            "kid": "publickey-mysterybox",
+            "iss": "serviceaccount-mysterybox",
+            "sub": "serviceaccount-mysterybox",
+        }
+    }
+
+
+def test_ensure_mysterybox_eso_runtime_prints_confirmation_per_applied_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credentials = cli.MysteryBoxEsoCredentials(
+        service_account_id="serviceaccount-mysterybox",
+        auth_public_key_id="publickey-mysterybox",
+        private_key_pem="MYSTERYBOX-PRIVATE-KEY",
+    )
+    fake_config = SimpleNamespace(
+        client_info=SimpleNamespace(
+            client_name="client-a",
+            nebius=SimpleNamespace(project_id="project-123"),
+        )
+    )
+    applied: list[tuple[object, dict[str, str] | None]] = []
+    rendered_messages: list[str] = []
+    credential_creates: list[str] = []
+
+    monkeypatch.setattr(cli, "mysterybox_eso_enabled", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        cli,
+        "mysterybox_eso_api_domains",
+        lambda *_args, **_kwargs: (),
+    )
+    monkeypatch.setattr(
+        cli,
+        "mysterybox_eso_runtime_secret_specs",
+        lambda *_args, **_kwargs: (
+            {
+                "namespace": "external-secrets",
+                "name": "creds-a",
+                "key": "credentials.json",
+            },
+            {
+                "namespace": "external-secrets-other",
+                "name": "creds-b",
+                "key": "credentials.json",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_kubectl_read_secret_key",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_create_mysterybox_eso_credentials",
+        lambda *, project_id: credential_creates.append(project_id) or credentials,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_kubectl_apply_manifest",
+        lambda manifest, *, extra_env: applied.append((manifest, extra_env)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_kubectl_validate_mysterybox_eso_tls",
+        lambda **_kwargs: pytest.fail("no api domains were configured"),
+    )
+    monkeypatch.setattr(
+        cli.console,
+        "print",
+        lambda *args, **_kwargs: rendered_messages.append(" ".join(str(a) for a in args)),
+    )
+
+    cli._ensure_mysterybox_eso_runtime_before_flux(
+        fake_config,
+        extra_env=None,
+        auto_auth_bootstrap=True,
+    )
+
+    assert len(applied) == 2
+    assert credential_creates == ["project-123"]
+    confirmations = [m for m in rendered_messages if "Ensured ESO MysteryBox credential Secret" in m]
+    assert confirmations == [
+        "Ensured ESO MysteryBox credential Secret external-secrets/creds-a for native provider.",
+        "Ensured ESO MysteryBox credential Secret external-secrets-other/creds-b for native provider.",
+    ]
+
+
+def test_kubectl_validate_mysterybox_eso_tls_uses_in_cluster_curl_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    rendered_messages: list[str] = []
+
+    def _fake_run(args: list[str], **kwargs: object) -> SimpleNamespace:
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return SimpleNamespace(
+            returncode=0,
+            stdout=(
+                '*  subjectAltName: host "api.eu-north1.nebius.cloud" matched cert\'s '
+                '"api.eu-north1.nebius.cloud"\n'
+                "*  issuer: C=US; O=Let's Encrypt; CN=R13\n"
+                "*  SSL certificate verify ok.\n"
+                "< HTTP/2 404\n"
+            ),
+            stderr='pod "nebius-tls-check" deleted from external-secrets namespace\n',
+        )
+
+    monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/kubectl")
+    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+    monkeypatch.setattr(
+        cli.console,
+        "print",
+        lambda *args, **_kwargs: rendered_messages.append(" ".join(str(arg) for arg in args)),
+    )
+
+    cli._kubectl_validate_mysterybox_eso_tls(
+        namespace="external-secrets",
+        api_domain="https://api.eu-north1.nebius.cloud:443/",
+        extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
+    )
+
+    args = captured["args"]
+    assert isinstance(args, list)
+    assert args[:4] == ["kubectl", "-n", "external-secrets", "run"]
+    assert "--rm" in args
+    assert "-i" in args
+    assert f"--image={cli._MYSTERYBOX_ESO_TLS_CHECK_IMAGE}" in args
+    assert args[-1] == "api.eu-north1.nebius.cloud:443"
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["timeout"] == 120
+    env = kwargs["env"]
+    assert isinstance(env, dict)
+    assert env["KUBECONFIG"] == "/tmp/kubeconfig"
+    assert any(
+        "Validated ESO MysteryBox Nebius API DNS/egress/TLS" in message
+        for message in rendered_messages
+    )
+    assert not any("HTTP/2 404" in message for message in rendered_messages)
+
+
+def test_kubectl_validate_mysterybox_eso_tls_fails_fast_on_tls_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/kubectl")
+    monkeypatch.setattr(
+        cli.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="curl: (60) SSL certificate problem: unable to get local issuer certificate\n",
+            stderr="",
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="ESO MysteryBox Nebius API TLS validation failed"):
+        cli._kubectl_validate_mysterybox_eso_tls(
+            namespace="external-secrets",
+            api_domain="api.nebius.cloud:443",
+            extra_env=None,
+        )
+
+
+def test_run_mysterybox_eso_connectivity_validation_writes_deploy_report_detail(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def _ready_payload(reason: str = "Ready") -> str:
+        return json.dumps(
+            {"status": {"conditions": [{"type": "Ready", "status": "True", "reason": reason}]}}
+        )
+
+    def _fake_run(args: list[str], **kwargs: object) -> SimpleNamespace:
+        calls.append(args)
+        if args[:4] == ["kubectl", "-n", "external-secrets", "run"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=(
+                    '*  subjectAltName: host "api.nebius.cloud" matched cert\'s '
+                    '"api.nebius.cloud"\n'
+                    "*  issuer: C=US; O=Let's Encrypt; CN=R13\n"
+                    "*  SSL certificate verify ok.\n"
+                    "< HTTP/2 404\n"
+                ),
+                stderr="",
+            )
+        if args == [
+            "kubectl",
+            "get",
+            "clustersecretstore",
+            "nebius-mysterybox-shared",
+            "-o",
+            "json",
+        ]:
+            return SimpleNamespace(returncode=0, stdout=_ready_payload("Valid"), stderr="")
+        if args == ["kubectl", "-n", "app", "get", "externalsecret", "app-config", "-o", "json"]:
+            return SimpleNamespace(returncode=0, stdout=_ready_payload("SecretSynced"), stderr="")
+        if (
+            args[:5] == ["kubectl", "-n", "external-secrets", "logs", "deploy/external-secrets"]
+            and len(args) == 6
+            and args[5].startswith("--since-time=")
+        ):
+            return SimpleNamespace(
+                returncode=0, stdout="provider nebiusmysterybox sync ok\n", stderr=""
+            )
+        raise AssertionError(f"unexpected subprocess call: {args}")
+
+    spec = {
+        "kind": cli.MYSTERYBOX_ESO_CONNECTIVITY_VALIDATION_KIND,
+        "name": "ESO MysteryBox connectivity (mk8s)",
+        "target_ref": "mk8s",
+        "store_name": "nebius-mysterybox-shared",
+        "api_domain": "api.nebius.cloud:443",
+        "credentials_secret": {
+            "name": "nebius-mysterybox-shared-creds",
+            "namespace": "external-secrets",
+            "key": "credentials.json",
+        },
+        "eso_namespace": "external-secrets",
+        "external_secrets": [{"namespace": "app", "name": "app-config"}],
+        "report_file": "mysterybox-eso-connectivity-report-mk8s.json",
+        "required": True,
+    }
+
+    monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/kubectl")
+    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+
+    written = cli.run_mysterybox_eso_validations(
+        [spec],
+        inventory_dir=tmp_path,
+        extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
+    )
+
+    report_path = tmp_path / "mysterybox-eso-connectivity-report-mk8s.json"
+    assert written == [report_path]
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["passed"] is True
+    assert [item["name"] for item in report["checks"]] == [
+        "Nebius API TLS",
+        "ClusterSecretStore Ready",
+        "ExternalSecret Ready (app/app-config)",
+        "ESO controller log scan",
+    ]
+    assert report["checks"][0]["details"]["summary_lines"] == [
+        '*  subjectAltName: host "api.nebius.cloud" matched cert\'s "api.nebius.cloud"',
+        "*  issuer: C=US; O=Let's Encrypt; CN=R13",
+        "*  SSL certificate verify ok.",
+    ]
+    assert calls[0][-1] == "api.nebius.cloud:443"
+
+
 def test_ensure_runtime_auth_material_recreates_stale_cached_public_key(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -8577,7 +10235,6 @@ def test_ensure_runtime_auth_material_recreates_stale_cached_public_key(
         cli._ensure_runtime_auth_material(
             fake_config,
             need_terraform=True,
-            need_eso_mysterybox=False,
             auto_bootstrap=True,
         )
 
@@ -8652,7 +10309,6 @@ def test_ensure_runtime_auth_material_fails_fast_for_stale_cached_public_key_wit
             cli._ensure_runtime_auth_material(
                 fake_config,
                 need_terraform=True,
-                need_eso_mysterybox=False,
                 auto_bootstrap=False,
             )
 
@@ -8717,7 +10373,6 @@ def test_ensure_runtime_auth_material_does_not_recreate_on_cloud_verification_er
         cli._ensure_runtime_auth_material(
             fake_config,
             need_terraform=True,
-            need_eso_mysterybox=False,
             auto_bootstrap=True,
         )
     finally:
@@ -8795,7 +10450,6 @@ def test_ensure_runtime_auth_material_recreates_on_deleted_key_cloud_error(
         cli._ensure_runtime_auth_material(
             fake_config,
             need_terraform=True,
-            need_eso_mysterybox=False,
             auto_bootstrap=True,
         )
 

@@ -49,6 +49,33 @@ variable "optional_field" {
     assert specs["optional_field"].default == "demo"
 
 
+def test_module_variable_discovery_preserves_multiline_object_type(tmp_path: Path) -> None:
+    module_dir = tmp_path / "demo-module"
+    module_dir.mkdir(parents=True)
+    (module_dir / "variables.tf").write_text(
+        """
+variable "secrets" {
+  type = list(object({
+    name = string
+    payload = map(object({
+      type = optional(string, "text")
+    }))
+  }))
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    specs = {item.name: item for item in module_variables(str(module_dir))}
+    file_specs = {item.name: item for item in module_variables(module_dir.as_uri())}
+
+    assert specs["secrets"].type_hint == file_specs["secrets"].type_hint
+    assert specs["secrets"].type_hint is not None
+    assert specs["secrets"].type_hint.startswith("list(object({")
+    assert 'optional(string, "text")' in specs["secrets"].type_hint
+
+
 def test_local_managed_modules_do_not_expose_internal_enabled_switches() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     managed_pg_dir = repo_root / "platform-infra" / "modules" / "managed-postgresql"
@@ -546,7 +573,13 @@ def test_wizard_prints_section_banners_and_selected_values(monkeypatch) -> None:
                         "enabled": True,
                         "source": "../../platform-infra/modules/mk8s",
                         "inputs": {},
-                    }
+                    },
+                    {
+                        "id": "mysterybox",
+                        "instance_id": "mysterybox",
+                        "enabled": True,
+                        "inputs": {},
+                    },
                 ],
             },
             "apps": {
@@ -563,6 +596,13 @@ def test_wizard_prints_section_banners_and_selected_values(monkeypatch) -> None:
                     }
                 ]
             },
+            "deploy": {
+                "targets": [
+                    {
+                        "instance_id": "mk8s",
+                    }
+                ]
+            },
         },
         sort_keys=False,
     )
@@ -573,6 +613,29 @@ def test_wizard_prints_section_banners_and_selected_values(monkeypatch) -> None:
         config_path="infra.mk8s",
         description="Managed Kubernetes",
         source="../../platform-infra/modules/mk8s",
+        wizard_fields={
+            "deploy.targets[].secrets.mysterybox.enabled": {
+                "default": True,
+                "materialize_default": True,
+            },
+            "deploy.targets[].secrets.mysterybox.allow_all_namespaces": {
+                "default": True,
+                "materialize_default": True,
+            },
+            "deploy.targets[].secrets.mysterybox.sync_namespaces": {
+                "default": ["default"],
+                "type_hint": "list(string)",
+                "prompt_complex": True,
+                "materialize_default": True,
+                "required": True,
+            },
+        },
+    )
+    mysterybox_entry = ComponentEntry(
+        id="mysterybox",
+        scope="infra",
+        config_path="infra.mysterybox",
+        description="MysteryBox",
     )
     app_entry = ComponentEntry(
         id="demo-app",
@@ -608,20 +671,29 @@ def test_wizard_prints_section_banners_and_selected_values(monkeypatch) -> None:
         type_hint=None,
         required=False,
     ) -> tuple[object, bool]:
-        _ = current, choices, type_hint, required
+        _ = choices, type_hint, required
         if path_label == "infra.components[0].inputs.required_field":
             return "infra-value", False
+        if path_label == "deploy.targets[0].secrets.mysterybox.enabled":
+            assert current is True
+            return True, False
+        if path_label == "deploy.targets[0].secrets.mysterybox.allow_all_namespaces":
+            assert current is True
+            return True, False
+        if path_label == "deploy.targets[0].secrets.mysterybox.sync_namespaces":
+            assert current == ["default"]
+            return ["app"], False
         if path_label == "apps.charts[0].values.image.tag":
             return "1.2.3", False
         return current, False
 
     monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
 
-    _updated_yaml, completed = _run_component_field_wizard(
+    updated_yaml, completed = _run_component_field_wizard(
         config_yaml=config_yaml,
-        selected_infra={"mk8s"},
+        selected_infra={"mk8s", "mysterybox"},
         selected_apps={"demo-app@mk8s"},
-        infra_entries=(infra_entry,),
+        infra_entries=(infra_entry, mysterybox_entry),
         app_entries=(app_entry,),
         provider_lookup=None,
     )
@@ -629,6 +701,51 @@ def test_wizard_prints_section_banners_and_selected_values(monkeypatch) -> None:
     assert completed is True
     assert any("--- Infra wizard section ---" in message for message in rendered_messages)
     assert any("--- Apps wizard section ---" in message for message in rendered_messages)
+    rendered_output = "\n".join(rendered_messages)
+    assert (
+        "[bold cyan]Wizard context:[/bold cyan] [dim]Current:[/dim] "
+        "[bold magenta]Infra[/bold magenta] [dim]/[/dim] [bold green]mk8s[/bold green]"
+        in rendered_output
+    )
+    assert (
+        "[bold cyan]Wizard context:[/bold cyan] [dim]Current:[/dim] "
+        "[bold magenta]Apps[/bold magenta] [dim]/[/dim] "
+        "[bold green]demo-app on mk8s[/bold green]"
+        in rendered_output
+    )
+    assert (
+        "[bold cyan]Wizard context:[/bold cyan] [dim]Current:[/dim] "
+        "[bold magenta]Deploy Target[/bold magenta] [dim]/[/dim] "
+        "[bold green]mk8s / MysteryBox ESO sync[/bold green]"
+        in rendered_output
+    )
+    assert (
+        "Selected deploy.targets[0].secrets.mysterybox.enabled = true" in rendered_output
+    )
+    assert (
+        "Selected deploy.targets[0].secrets.mysterybox.allow_all_namespaces = true"
+        in rendered_output
+    )
+    assert (
+        'Selected deploy.targets[0].secrets.mysterybox.sync_namespaces = ["app"]'
+        in rendered_output
+    )
+    updated_payload = yaml.safe_load(updated_yaml)
+    assert (
+        updated_payload["deploy"]["targets"][0]["secrets"]["mysterybox"]["enabled"]
+        is True
+    )
+    assert (
+        updated_payload["deploy"]["targets"][0]["secrets"]["mysterybox"][
+            "allow_all_namespaces"
+        ]
+        is True
+    )
+    assert updated_payload["deploy"]["targets"][0]["secrets"]["mysterybox"][
+        "sync_namespaces"
+    ] == ["app"]
+    assert "    * mk8s (current)" not in rendered_output
+    assert "    * demo-app on mk8s (current)" not in rendered_output
     assert any(
         "Selected infra.components[0].inputs.required_field = infra-value" in message
         for message in rendered_messages

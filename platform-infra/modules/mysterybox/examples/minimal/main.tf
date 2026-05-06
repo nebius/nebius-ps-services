@@ -1,22 +1,40 @@
+variable "parent_id" {
+  description = "Nebius project ID where the example MysteryBox secret is created."
+  type        = string
+  nullable    = false
+}
+
+variable "mysterybox_payload_values" {
+  description = "Runtime payload values for the example MysteryBox secret."
+  type        = map(map(string))
+  default     = {}
+  nullable    = false
+  sensitive   = true
+}
+
+provider "nebius" {
+  parent_id = var.parent_id
+}
+
 module "mysterybox" {
   source = "../.."
 
-  parent_id = "project-xxxxxxxx"
+  parent_id = var.parent_id
 
-  secrets = {
-    app = {
-      name         = "example-app-runtime"
-      payload_keys = ["API_KEY", "API_SECRET"]
-      labels = {
-        scope = "apps"
+  secrets = [
+    {
+      name       = "example-app-runtime"
+      version_id = "n/a"
+      payload = {
+        API_KEY = {
+          type = "text"
+        }
+        API_SECRET = {
+          type = "text"
+        }
       }
     }
-  }
+  ]
 
-  secret_values = {
-    app = {
-      API_KEY    = "replace-me"
-      API_SECRET = "replace-me"
-    }
-  }
+  payload_values = var.mysterybox_payload_values
 }

@@ -2,8 +2,57 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from nebius_cxcli.cli import _resolve_apps_chart_dependencies
 from nebius_cxcli.components import ComponentEntry
+
+
+def test_apps_dependency_resolution_uses_release_install_after(monkeypatch) -> None:
+    def _unexpected_chart_metadata(**kwargs: Any) -> tuple[str | None, str | None, set[str], str | None]:
+        _ = kwargs
+        pytest.fail("release.install_after dependencies should not require Helm metadata lookup")
+
+    monkeypatch.setattr("nebius_cxcli.cli._helm_chart_metadata", _unexpected_chart_metadata)
+
+    app_entries = (
+        ComponentEntry(
+            id="cert-manager",
+            scope="apps",
+            config_path="apps.platform.cert_manager",
+            description="cert-manager",
+        ),
+        ComponentEntry(
+            id="external-secrets",
+            scope="apps",
+            config_path="apps.platform.external_secrets",
+            description="External Secrets Operator",
+        ),
+        ComponentEntry(
+            id="sample-app",
+            scope="apps",
+            config_path="apps.platform.sample_app",
+            description="Sample app",
+            default_release_install_after=("cert-manager", "external-secrets"),
+        ),
+    )
+
+    selected, adjustments, warnings = _resolve_apps_chart_dependencies(
+        payload={},
+        selected_apps={"sample-app"},
+        app_entries=app_entries,
+        cache={},
+        collect_warnings=True,
+    )
+
+    assert selected == {"cert-manager", "external-secrets", "sample-app"}
+    assert {
+        (item.dependency_app_id, item.dependency_kind) for item in adjustments
+    } == {
+        ("cert-manager", "install_after"),
+        ("external-secrets", "install_after"),
+    }
+    assert warnings == ()
 
 
 def test_apps_dependency_resolution_uses_source_chart_name_fallback(monkeypatch) -> None:

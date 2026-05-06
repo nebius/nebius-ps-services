@@ -194,6 +194,19 @@ def _translate_terraform_failure(*, cmd: list[str], cwd: Path, stderr: str) -> s
             )
             continue
 
+        if (
+            "operation wait: can't get operation" in block
+            and "409 (Conflict)" in block
+            and 'content-type "text/plain' in block
+        ):
+            issues.append(
+                "Nebius accepted the resource operation, but the Terraform provider lost the "
+                "operation polling request with a 409 Conflict. Check the live Nebius resource "
+                "status; if the resource is RUNNING/ACTIVE, rerun deploy so Terraform can "
+                "refresh state and continue."
+            )
+            continue
+
         if location and ".terraform/modules/" in location:
             issues.append(
                 f"Terraform error originated inside a source module at `{location}`. "

@@ -694,6 +694,25 @@ def test_create_runs_post_write_validation_by_default(
     assert payload["client_info"]["notifications"]["email"] is None
 
 
+def test_create_prints_next_step_commands_one_per_line(tmp_path: Path) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    result = _create_non_interactive(deployments_root, "--no-validate-config")
+
+    assert result.exit_code == 0, result.output
+    config_arg = shlex.quote(str(_project_config_path(deployments_root).resolve()))
+    lines = result.output.splitlines()
+    next_steps_index = lines.index("Next steps:")
+    assert lines[next_steps_index + 1 : next_steps_index + 5] == [
+        f"  `nebius-cxcli validate {config_arg}`",
+        f"  `nebius-cxcli render {config_arg}`",
+        f"  `nebius-cxcli bootstrap-ci {config_arg}` (optional)",
+        f"  `nebius-cxcli deploy {config_arg}`",
+    ]
+    assert "then deploy from the rendered bundle" not in result.output
+
+
 def test_create_uses_name_based_project_folders(tmp_path: Path) -> None:
     deployments_root = tmp_path / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)
@@ -1451,6 +1470,69 @@ def test_create_auto_enables_gpu_operator_when_wizard_turns_on_mk8s_gpu(
     apps_enabled = _apps_enabled_map(payload)
     assert apps_enabled["nvidia-gpu-operator"] is True
     assert "nvidia-network-operator" not in apps_enabled
+
+
+def test_create_mysterybox_with_mk8s_surfaces_external_secrets_dependency(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(cli_module, "_wizard_continue_phase", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(cli_module, "_optional_email_or_prompt", lambda *_args, **_kwargs: None)
+
+    captured_selected_apps: list[set[str]] = []
+
+    def _fake_run_component_field_wizard(
+        *,
+        config_yaml: str,
+        selected_infra: set[str],
+        selected_apps: set[str],
+        infra_entries,
+        app_entries,
+        provider_lookup=None,
+    ) -> tuple[str, bool]:
+        _ = selected_infra, infra_entries, app_entries, provider_lookup
+        captured_selected_apps.append(set(selected_apps))
+        payload = yaml.safe_load(config_yaml) or {}
+        charts = payload.get("apps", {}).get("charts", [])
+        external_secrets = next(
+            row
+            for row in charts
+            if isinstance(row, dict) and row.get("id") == "external-secrets"
+        )
+        assert external_secrets["instance_id"] == "mk8s"
+        return config_yaml, True
+
+    monkeypatch.setattr(cli_module, "_run_component_field_wizard", _fake_run_component_field_wizard)
+
+    result = runner.invoke(
+        app,
+        [
+            "create",
+            str(deployments_root),
+            "--client-name",
+            "client-a",
+            "--tenant-id",
+            "tenant-123",
+            "--project-id",
+            "project-456",
+            "--region-id",
+            "eu-north1",
+            "--no-validate-sources",
+            "--no-validate-config",
+            "--infra",
+            "mk8s",
+            "--infra",
+            "mysterybox",
+            "--app",
+            "none",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "'apps:external-secrets@mk8s'" in result.output
+    assert captured_selected_apps == [{"external-secrets"}]
 
 
 def test_create_auto_enables_network_operator_only_for_gpu_cluster_shapes(
@@ -3037,6 +3119,66 @@ def test_component_add_interactive_prompts_for_new_component_fields(
         if isinstance(row, dict) and str(row.get("id", "")).strip() == "managed-postgresql"
     )
     assert managed_pg["inputs"]["name"] == "demo-pg"
+
+
+def test_component_add_mysterybox_interactive_preserves_existing_mk8s_target(
+    tmp_path: Path,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    created = _create_non_interactive(deployments_root, "--infra", "mk8s")
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    components = payload["infra"]["components"]
+    mk8s = next(row for row in components if row["id"] == "mk8s")
+    mk8s_inputs = mk8s.setdefault("inputs", {})
+    mk8s_inputs.update(
+        {
+            "cluster_name": "cluster1",
+            "gpu_enabled": True,
+            "gpu_node_groups": 1,
+            "gpu_nodes_count_per_group": 1,
+            "gpu_nodes_platform": "gpu-h100-sxm",
+            "gpu_nodes_preset": "8gpu-128vcpu-1600gb",
+            "infiniband_fabric": "fabric-6",
+        }
+    )
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    secrets = [
+        {
+            "name": "app-runtime",
+            "version_id": "n/a",
+            "payload": {
+                "MESSAGE": {"type": "text"},
+                "COLOR": {"type": "text"},
+            },
+        }
+    ]
+    result = _component_add(
+        config_path,
+        "mysterybox",
+        input_text="y\ny\n\n" + json.dumps(secrets) + "\n\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "'apps:external-secrets@mk8s'" in result.output
+    refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    infra_ids = {
+        row["id"]
+        for row in refreshed.get("infra", {}).get("components", [])
+        if isinstance(row, dict)
+    }
+    assert {"mk8s", "mysterybox"} <= infra_ids
+    external_secrets = next(
+        row
+        for row in refreshed.get("apps", {}).get("charts", [])
+        if isinstance(row, dict) and row.get("id") == "external-secrets"
+    )
+    assert external_secrets["instance_id"] == "mk8s"
 
 
 def test_component_add_noninteractive_adds_app_chart_and_preserves_existing_values(

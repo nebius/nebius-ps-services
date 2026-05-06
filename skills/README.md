@@ -67,8 +67,9 @@ blocker instead of guessing.
 `align` is the end-to-end repair and consistency skill. Use it when a project
 needs code, module wiring, tests, CI, CLI behavior, config, examples, help
 output, README/design docs, workflows, and applicable project skills reviewed
-together so verified gaps are fixed in one safe, focused pass instead of being
-reported separately or handled as speculative rewrites.
+together as a cautious senior code-review style alignment pass, so verified
+low-risk gaps are fixed in one focused pass and unclear business logic is
+reported instead of changed silently.
 
 ### `attach-ubuntu`
 
@@ -105,8 +106,9 @@ Rust, or Terraform.
 
 `helmchart` applies Helm chart best practices across metadata, values,
 templates, schema, and validation. Use it to create or harden charts, improve
-default safety, add missing chart structure, and verify the chart renders and
-lints cleanly.
+default safety, add missing chart structure, resolve chart dependencies before
+strict lint/render checks, and keep security context plus RBAC changes aligned
+with workload runtime requirements.
 
 ### `linter`
 

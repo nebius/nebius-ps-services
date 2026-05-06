@@ -2374,6 +2374,64 @@ def materialize_observability_app_values(payload_or_config: Any) -> bool:
     return changed
 
 
+def _strip_observability_collector_generated_values(
+    chart_row: dict[str, Any],
+    *,
+    managed_job_names: set[str],
+) -> bool:
+    before = copy.deepcopy(chart_row)
+    for stale_path in sorted(
+        _COLLECTOR_MANAGED_VALUE_PATHS, key=lambda item: item.count("."), reverse=True
+    ):
+        _delete_path_value(chart_row, stale_path)
+
+    values = chart_row.get("values")
+    metrics = _nested_path_value(values, "config.metrics") if isinstance(values, dict) else None
+    additional_targets = (
+        metrics.get("additionalTargets") if isinstance(metrics, dict) else None
+    )
+    if isinstance(additional_targets, list):
+        preserved = [
+            item
+            for item in additional_targets
+            if not (
+                isinstance(item, Mapping)
+                and _as_text(item.get("job_name")) in managed_job_names
+            )
+        ]
+        if preserved:
+            metrics["additionalTargets"] = preserved
+        else:
+            _delete_path_value(chart_row, "values.config.metrics.additionalTargets")
+
+    if "values" not in chart_row:
+        chart_row["values"] = {}
+
+    return chart_row != before
+
+
+def strip_observability_generated_app_values(payload_or_config: Any) -> bool:
+    """Remove cxcli-generated observability agent values from source config."""
+    payload = (
+        payload_or_config if isinstance(payload_or_config, dict) else _as_payload(payload_or_config)
+    )
+    collector_app_id = _collector_app_id()
+    if not collector_app_id:
+        return False
+
+    changed = False
+    managed_job_names = _catalog_metric_target_job_names()
+    for chart_row in _app_chart_rows_for_id(payload, collector_app_id):
+        if not isinstance(chart_row, dict):
+            continue
+        if _strip_observability_collector_generated_values(
+            chart_row,
+            managed_job_names=managed_job_names,
+        ):
+            changed = True
+    return changed
+
+
 def observability_endpoint_summary(
     payload_or_config: Any,
     *,
@@ -2704,4 +2762,5 @@ __all__ = [
     "observability_status_summary",
     "observability_validation_specs",
     "resolve_observability_app_selection",
+    "strip_observability_generated_app_values",
 ]

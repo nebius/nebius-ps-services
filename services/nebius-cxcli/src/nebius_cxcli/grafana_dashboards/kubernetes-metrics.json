@@ -8,7 +8,7 @@
   ],
   "timezone": "browser",
   "schemaVersion": 41,
-  "version": 1,
+  "version": 2,
   "refresh": "10s",
   "time": {
     "from": "now-5m",
@@ -24,8 +24,8 @@
           "type": "prometheus",
           "uid": "nebius-user-metrics"
         },
-        "query": "query_result(count by (\"k8s.cluster.id\") (up))",
-        "definition": "query_result(count by (\"k8s.cluster.id\") (up))",
+        "query": "query_result(count by (\"k8s.cluster.id\") (container_cpu_usage_seconds_total))",
+        "definition": "query_result(count by (\"k8s.cluster.id\") (container_cpu_usage_seconds_total))",
         "regex": "/k8s\\.cluster\\.id=\"([^\"]+)\"/",
         "refresh": 1,
         "includeAll": true,
@@ -45,28 +45,9 @@
           "type": "prometheus",
           "uid": "nebius-user-metrics"
         },
-        "query": "label_values(container_cpu_usage_seconds_total{\"k8s.cluster.id\"=~\"$Cluster\"}, kubernetes_io_hostname)",
-        "definition": "label_values(container_cpu_usage_seconds_total{\"k8s.cluster.id\"=~\"$Cluster\"}, kubernetes_io_hostname)",
-        "refresh": 1,
-        "includeAll": true,
-        "multi": true,
-        "allValue": ".+",
-        "current": {
-          "selected": true,
-          "text": "All",
-          "value": "$__all"
-        }
-      },
-      {
-        "name": "GpuNode",
-        "label": "GPU Node",
-        "type": "query",
-        "datasource": {
-          "type": "prometheus",
-          "uid": "nebius-user-metrics"
-        },
-        "query": "label_values(up{\"k8s.cluster.id\"=~\"$Cluster\",service=\"nvidia-dcgm-exporter\"}, node)",
-        "definition": "label_values(up{\"k8s.cluster.id\"=~\"$Cluster\",service=\"nvidia-dcgm-exporter\"}, node)",
+        "query": "query_result(count by (kubernetes_io_hostname) (container_cpu_usage_seconds_total{\"k8s.cluster.id\"=~\"$Cluster\",pod!=\"\"}))",
+        "definition": "query_result(count by (kubernetes_io_hostname) (container_cpu_usage_seconds_total{\"k8s.cluster.id\"=~\"$Cluster\",pod!=\"\"}))",
+        "regex": "/kubernetes_io_hostname=\"([^\"]+)\"/",
         "refresh": 1,
         "includeAll": true,
         "multi": true,
@@ -83,7 +64,7 @@
     {
       "id": 1,
       "type": "stat",
-      "title": "Scrape Targets Up",
+      "title": "Nodes",
       "datasource": {
         "type": "prometheus",
         "uid": "nebius-user-metrics"
@@ -94,18 +75,104 @@
         "x": 0,
         "y": 0
       },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (service, pod, node) (up{\"k8s.cluster.id\"=~\"$Cluster\"})",
-          "legendFormat": "{{service}} {{pod}} {{node}}"
+          "expr": "count(count by (kubernetes_io_hostname) (container_cpu_usage_seconds_total{\"k8s.cluster.id\"=~\"$Cluster\",kubernetes_io_hostname=~\"$Node\",pod!=\"\"}))",
+          "legendFormat": "nodes"
         }
       ]
     },
     {
       "id": 2,
+      "type": "stat",
+      "title": "Pods",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nebius-user-metrics"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count(count by (namespace, pod) (container_memory_working_set_bytes{\"k8s.cluster.id\"=~\"$Cluster\",kubernetes_io_hostname=~\"$Node\",pod!=\"\"}))",
+          "legendFormat": "pods"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Containers",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nebius-user-metrics"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count(container_cpu_usage_seconds_total{\"k8s.cluster.id\"=~\"$Cluster\",kubernetes_io_hostname=~\"$Node\",id=~\".*cri-containerd.*\"})",
+          "legendFormat": "containers"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "CPU Cores Used",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nebius-user-metrics"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cores"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(container_cpu_usage_seconds_total{\"k8s.cluster.id\"=~\"$Cluster\",kubernetes_io_hostname=~\"$Node\",pod!=\"\"}[$__rate_interval]))",
+          "legendFormat": "cores"
+        }
+      ]
+    },
+    {
+      "id": 5,
       "type": "timeseries",
-      "title": "CPU Usage",
+      "title": "CPU Usage by Node",
       "datasource": {
         "type": "prometheus",
         "uid": "nebius-user-metrics"
@@ -124,15 +191,15 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (kubernetes_io_hostname) (rate(container_cpu_usage_seconds_total{\"k8s.cluster.id\"=~\"$Cluster\",kubernetes_io_hostname=~\"$Node\",container!=\"\",container!=\"POD\"}[$__rate_interval]))",
+          "expr": "sum by (kubernetes_io_hostname) (rate(container_cpu_usage_seconds_total{\"k8s.cluster.id\"=~\"$Cluster\",kubernetes_io_hostname=~\"$Node\",pod!=\"\"}[$__rate_interval]))",
           "legendFormat": "{{kubernetes_io_hostname}}"
         }
       ]
     },
     {
-      "id": 3,
+      "id": 6,
       "type": "timeseries",
-      "title": "Memory Working Set",
+      "title": "Memory Working Set by Node",
       "datasource": {
         "type": "prometheus",
         "uid": "nebius-user-metrics"
@@ -151,15 +218,15 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (kubernetes_io_hostname) (container_memory_working_set_bytes{\"k8s.cluster.id\"=~\"$Cluster\",kubernetes_io_hostname=~\"$Node\",container!=\"\",container!=\"POD\"})",
+          "expr": "sum by (kubernetes_io_hostname) (container_memory_working_set_bytes{\"k8s.cluster.id\"=~\"$Cluster\",kubernetes_io_hostname=~\"$Node\",pod!=\"\"})",
           "legendFormat": "{{kubernetes_io_hostname}}"
         }
       ]
     },
     {
-      "id": 4,
+      "id": 7,
       "type": "timeseries",
-      "title": "Container Count",
+      "title": "Containers by Node",
       "datasource": {
         "type": "prometheus",
         "uid": "nebius-user-metrics"
@@ -170,18 +237,23 @@
         "x": 0,
         "y": 12
       },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
       "targets": [
         {
           "refId": "A",
-          "expr": "count by (kubernetes_io_hostname) (container_memory_working_set_bytes{\"k8s.cluster.id\"=~\"$Cluster\",kubernetes_io_hostname=~\"$Node\",container!=\"\",container!=\"POD\"})",
+          "expr": "count by (kubernetes_io_hostname) (container_cpu_usage_seconds_total{\"k8s.cluster.id\"=~\"$Cluster\",kubernetes_io_hostname=~\"$Node\",id=~\".*cri-containerd.*\"})",
           "legendFormat": "{{kubernetes_io_hostname}}"
         }
       ]
     },
     {
-      "id": 5,
+      "id": 8,
       "type": "timeseries",
-      "title": "DCGM Exporter Up",
+      "title": "Pods by Namespace",
       "datasource": {
         "type": "prometheus",
         "uid": "nebius-user-metrics"
@@ -192,11 +264,70 @@
         "x": 12,
         "y": 12
       },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (node) (up{\"k8s.cluster.id\"=~\"$Cluster\",service=\"nvidia-dcgm-exporter\",node=~\"$GpuNode\"})",
-          "legendFormat": "{{node}}"
+          "expr": "count by (namespace) (count by (namespace, pod) (container_memory_working_set_bytes{\"k8s.cluster.id\"=~\"$Cluster\",kubernetes_io_hostname=~\"$Node\",pod!=\"\"}))",
+          "legendFormat": "{{namespace}}"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Network Receive by Node",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nebius-user-metrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 20
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (kubernetes_io_hostname) (rate(container_network_receive_bytes_total{\"k8s.cluster.id\"=~\"$Cluster\",kubernetes_io_hostname=~\"$Node\",interface!=\"lo\"}[$__rate_interval]))",
+          "legendFormat": "{{kubernetes_io_hostname}}"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Network Transmit by Node",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nebius-user-metrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 20
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (kubernetes_io_hostname) (rate(container_network_transmit_bytes_total{\"k8s.cluster.id\"=~\"$Cluster\",kubernetes_io_hostname=~\"$Node\",interface!=\"lo\"}[$__rate_interval]))",
+          "legendFormat": "{{kubernetes_io_hostname}}"
         }
       ]
     }

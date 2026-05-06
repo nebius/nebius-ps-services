@@ -16,6 +16,7 @@ from nebius_cxcli.component_sources import (
     set_component_sources_profile_override,
 )
 from nebius_cxcli.components import component_entries, reset_component_entry_cache
+from nebius_cxcli.config_loader import normalize_runtime_config_payload
 from nebius_cxcli.observability import (
     ensure_observability_app_rows,
     materialize_observability_app_values,
@@ -345,6 +346,7 @@ def test_ensure_observability_app_rows_seeds_collector_for_direct_config_edit() 
     assert gateway["version"] == "1.7.0"
     assert gateway["namespace"] == "envoy-gateway-system"
     assert gateway["release-name"] == "envoy-gateway"
+    assert gateway["values"]["deployment"]["replicas"] == 2
     assert gateway["values"]["deployment"]["pod"]["affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
     grafana = _chart_row(payload, "grafana")
     assert grafana["enabled"] is True
@@ -352,6 +354,7 @@ def test_ensure_observability_app_rows_seeds_collector_for_direct_config_edit() 
     assert grafana["version"] == "12.1.3"
     assert grafana["namespace"] == "observability"
     assert grafana["release-name"] == "grafana"
+    assert "replicas" not in grafana["values"]
     assert grafana["values"]["affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
 
 
@@ -689,6 +692,80 @@ def test_materialize_observability_agent_values_preserves_customer_metric_target
         "job_name": "customer-target",
         "static_configs": [{"targets": ["customer:9090"]}],
     }
+
+
+def test_normalize_runtime_config_payload_strips_generated_observability_agent_values() -> None:
+    payload = _base_payload(
+        observability_enabled=True,
+        enabled_apps=("nebius-observability-agent",),
+    )
+    chart = _chart_row(payload, "nebius-observability-agent")
+    customer_target = {
+        "job_name": "customer-target",
+        "static_configs": [{"targets": ["customer:9090"]}],
+    }
+    chart["values"] = {
+        "config": {
+            "logs": {
+                "enabled": True,
+                "collectAgentLogs": False,
+                "excludedNamespaces": ["kube-system"],
+            },
+            "metrics": {
+                "enabled": True,
+                "collectAgentMetrics": False,
+                "collectK8sClusterMetrics": False,
+                "excludedNamespaces": ["kube-system"],
+                "additionalTargets": [
+                    {"job_name": "cxcli-kubernetes-nodes"},
+                    {"job_name": "cxcli-hubble"},
+                    customer_target,
+                ],
+            },
+            "traces": {"enabled": True},
+        }
+    }
+
+    assert normalize_runtime_config_payload(payload) is True
+
+    values = _chart_row(payload, "nebius-observability-agent")["values"]
+    assert values == {"config": {"metrics": {"additionalTargets": [customer_target]}}}
+
+
+def test_normalize_runtime_config_payload_keeps_empty_observability_agent_values_mapping() -> None:
+    payload = _base_payload(
+        observability_enabled=True,
+        enabled_apps=("nebius-observability-agent",),
+    )
+    chart = _chart_row(payload, "nebius-observability-agent")
+    chart["values"] = {
+        "config": {
+            "metrics": {
+                "enabled": True,
+                "collectK8sClusterMetrics": False,
+                "additionalTargets": [{"job_name": "cxcli-kubernetes-nodes"}],
+            }
+        }
+    }
+
+    assert normalize_runtime_config_payload(payload) is True
+
+    assert _chart_row(payload, "nebius-observability-agent")["values"] == {}
+
+
+def test_materialize_observability_agent_values_omits_cluster_targets_when_disabled() -> None:
+    payload = _base_payload(
+        observability_enabled=True,
+        enabled_apps=("nebius-observability-agent",),
+    )
+    target_observability = payload["deploy"]["targets"][0]["observability"]
+    target_observability["kubernetes"]["metrics"]["collect_k8s_cluster_metrics"] = False
+
+    materialize_observability_app_values(payload)
+
+    metrics = _chart_row(payload, "nebius-observability-agent")["values"]["config"]["metrics"]
+    assert metrics["collectK8sClusterMetrics"] is False
+    assert "additionalTargets" not in metrics
 
 
 def test_materialize_grafana_datasources_from_observability_read_endpoints() -> None:

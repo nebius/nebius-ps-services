@@ -166,6 +166,7 @@ def _event_is_stale(event: Any, *, monitor_started_at: datetime | None) -> bool:
 class Mk8sDeploymentTarget:
     project_id: str
     cluster_name: str
+    operation: str = "apply"
 
 
 @dataclass(frozen=True)
@@ -175,6 +176,7 @@ class StatusWatcherTarget:
     parent_id: str
     resource_name: str
     instance_id: str = ""
+    operation: str = "apply"
 
 
 def _mk8s_deployment_target(config: Any) -> Mk8sDeploymentTarget | None:
@@ -223,6 +225,24 @@ def _resource_metadata_name(resource: Any) -> str:
 def _resource_metadata_id(resource: Any) -> str:
     metadata = getattr(resource, "metadata", None)
     return _as_text(getattr(metadata, "id", None) or getattr(resource, "id", None))
+
+
+def _missing_resource_summary(
+    *,
+    resource_label: str,
+    resource_name: str,
+    project_id: str,
+    operation: str,
+) -> str:
+    if _as_text(operation).lower() == "destroy":
+        return (
+            f"{resource_label} '{resource_name}' is already absent in "
+            f"project {project_id}."
+        )
+    return (
+        f"{resource_label} '{resource_name}' is not visible yet in "
+        f"project {project_id}."
+    )
 
 
 def _response_collection(response: Any, *field_names: str) -> list[Any]:
@@ -514,9 +534,11 @@ class _Mk8sStatusPoller:
     def summary(self) -> str:
         cluster = self._find_cluster()
         if cluster is None:
-            return (
-                f"mk8s cluster '{self._target.cluster_name}' is not visible yet in "
-                f"project {self._target.project_id}."
+            return _missing_resource_summary(
+                resource_label="mk8s cluster",
+                resource_name=self._target.cluster_name,
+                project_id=self._target.project_id,
+                operation=self._target.operation,
             )
 
         metadata = getattr(cluster, "metadata", None)
@@ -632,9 +654,11 @@ class _PostgreSQLStatusPoller:
     def summary(self) -> str:
         cluster = self._find_cluster()
         if cluster is None:
-            return (
-                f"managed-postgresql '{self._target.resource_name}' is not visible yet in "
-                f"project {self._target.parent_id}."
+            return _missing_resource_summary(
+                resource_label="managed-postgresql",
+                resource_name=self._target.resource_name,
+                project_id=self._target.parent_id,
+                operation=self._target.operation,
             )
 
         status = getattr(cluster, "status", None)
@@ -740,9 +764,11 @@ class _FilesystemStatusPoller:
     def summary(self) -> str:
         filesystem = self._find_filesystem()
         if filesystem is None:
-            return (
-                f"sfs '{self._target.resource_name}' is not visible yet in "
-                f"project {self._target.parent_id}."
+            return _missing_resource_summary(
+                resource_label="sfs",
+                resource_name=self._target.resource_name,
+                project_id=self._target.parent_id,
+                operation=self._target.operation,
             )
 
         status = getattr(filesystem, "status", None)
@@ -835,9 +861,11 @@ class _ObjectStorageBucketStatusPoller:
     def summary(self) -> str:
         bucket = self._find_bucket()
         if bucket is None:
-            return (
-                f"object-storage '{self._target.resource_name}' is not visible yet in "
-                f"project {self._target.parent_id}."
+            return _missing_resource_summary(
+                resource_label="object-storage",
+                resource_name=self._target.resource_name,
+                project_id=self._target.parent_id,
+                operation=self._target.operation,
             )
 
         status = getattr(bucket, "status", None)
@@ -912,9 +940,11 @@ class _ComputeInstanceStatusPoller:
     def summary(self) -> str:
         instance = self._find_instance()
         if instance is None:
-            return (
-                f"compute instance '{self._target.resource_name}' is not visible yet in "
-                f"project {self._target.parent_id}."
+            return _missing_resource_summary(
+                resource_label="compute instance",
+                resource_name=self._target.resource_name,
+                project_id=self._target.parent_id,
+                operation=self._target.operation,
             )
 
         status = getattr(instance, "status", None)
@@ -1006,9 +1036,11 @@ class _MysteryBoxSecretStatusPoller:
     def summary(self) -> str:
         secret = self._find_secret()
         if secret is None:
-            return (
-                f"mysterybox secret '{self._target.resource_name}' is not visible yet in "
-                f"project {self._target.parent_id}."
+            return _missing_resource_summary(
+                resource_label="mysterybox secret",
+                resource_name=self._target.resource_name,
+                project_id=self._target.parent_id,
+                operation=self._target.operation,
             )
 
         status = getattr(secret, "status", None)
@@ -1096,7 +1128,11 @@ class _CompositeStatusPoller:
 
 def _mk8s_status_poller_from_target(target: StatusWatcherTarget) -> _Mk8sStatusPoller:
     return _Mk8sStatusPoller(
-        Mk8sDeploymentTarget(project_id=target.parent_id, cluster_name=target.resource_name)
+        Mk8sDeploymentTarget(
+            project_id=target.parent_id,
+            cluster_name=target.resource_name,
+            operation=target.operation,
+        )
     )
 
 
@@ -1249,6 +1285,7 @@ class DeploymentStatusReporter:
         *,
         emit: Callable[[str], None],
         status_watchers: list[Mapping[str, Any]] | None = None,
+        operation: str = "apply",
         poll_interval_seconds: float = 15.0,
         repeat_interval_seconds: float = 60.0,
     ) -> None:
@@ -1265,6 +1302,7 @@ class DeploymentStatusReporter:
         self._startup_notices: list[str] = []
         self._terminal_failure: str | None = None
         self._terminal_failure_emitted = False
+        self._operation = _as_text(operation).lower() or "apply"
 
         explicit_watchers = tuple(status_watchers or ())
         if explicit_watchers:
@@ -1282,6 +1320,7 @@ class DeploymentStatusReporter:
                     kind=_as_text(raw.get("kind")).lower(),
                     parent_id=_as_text(raw.get("parent_id")),
                     resource_name=_as_text(raw.get("resource_name")),
+                    operation=self._operation,
                 )
                 if not all(
                     (
@@ -1460,6 +1499,7 @@ def deployment_status_reporting(
     *,
     emit: Callable[[str], None],
     status_watchers: list[Mapping[str, Any]] | None = None,
+    operation: str = "apply",
     poll_interval_seconds: float = 15.0,
     repeat_interval_seconds: float = 60.0,
 ):
@@ -1467,6 +1507,7 @@ def deployment_status_reporting(
         config,
         emit=emit,
         status_watchers=status_watchers,
+        operation=operation,
         poll_interval_seconds=poll_interval_seconds,
         repeat_interval_seconds=repeat_interval_seconds,
     ).start()

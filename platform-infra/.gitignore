@@ -47,9 +47,17 @@ __pycache__/
 .terraform/
 *.tfstate
 *.tfstate.*
+*.tfstate.backup
+.terraform.tfstate.lock.info
 crash.log
 crash.*.log
+terraform.tfvars
+*.tfvars
+*.tfvars.json
 *.tfplan
 *.tfplan.*
+plan.out
+.terraformrc
+terraform.rc
 *.auto.tfvars
 *.auto.tfvars.json

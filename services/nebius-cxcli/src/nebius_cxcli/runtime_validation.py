@@ -24,6 +24,7 @@ from .components import (
     parse_dependency_ref,
 )
 from .mk8s_gpu import mk8s_gpu_dependency_issues
+from .mysterybox_eso import mysterybox_eso_dependency_issues
 from .observability import observability_dependency_issues
 from .runtime_config import read_path_with_catalog
 from .runtime_plugin_validation import run_runtime_validation_plugins
@@ -129,7 +130,7 @@ def _validate_deploy(payload: Mapping[str, Any]) -> None:
             unknown_target_keys = sorted(
                 str(key)
                 for key in raw_target
-                if str(key) not in {INSTANCE_ID_FIELD, "observability", "validations"}
+                if str(key) not in {INSTANCE_ID_FIELD, "observability", "secrets", "validations"}
             )
             if unknown_target_keys:
                 raise ValueError(
@@ -153,6 +154,10 @@ def _validate_deploy(payload: Mapping[str, Any]) -> None:
                 field_label=f"deploy.targets[{index}].observability",
                 allow_vm=False,
             )
+            _validate_deploy_target_secrets(
+                raw_target.get("secrets"),
+                field_label=f"deploy.targets[{index}].secrets",
+            )
             target_validations = raw_target.get("validations")
             if target_validations is None:
                 continue
@@ -169,6 +174,82 @@ def _validate_deploy(payload: Mapping[str, Any]) -> None:
             mk8s_gpu = target_validations.get("mk8s_gpu")
             if mk8s_gpu is not None and not isinstance(mk8s_gpu, Mapping):
                 raise ValueError(f"deploy.targets[{index}].validations.mk8s_gpu must be a mapping")
+
+
+def _validate_deploy_target_secrets(secrets: Any, *, field_label: str) -> None:
+    if secrets is None:
+        return
+    if not isinstance(secrets, Mapping):
+        raise ValueError(f"{field_label} must be a mapping")
+    unknown_keys = sorted(str(key) for key in secrets if str(key) not in {"mysterybox"})
+    if unknown_keys:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown_keys))
+    mysterybox = secrets.get("mysterybox")
+    if mysterybox is None:
+        return
+    if not isinstance(mysterybox, Mapping):
+        raise ValueError(f"{field_label}.mysterybox must be a mapping")
+    supported_keys = {
+        "enabled",
+        "store_name",
+        "api_domain",
+        "credentials_secret",
+        "allow_all_namespaces",
+        "sync_namespaces",
+    }
+    unknown_mysterybox_keys = sorted(
+        str(key) for key in mysterybox if str(key) not in supported_keys
+    )
+    if unknown_mysterybox_keys:
+        raise ValueError(
+            f"{field_label}.mysterybox has unsupported field(s): "
+            + ", ".join(unknown_mysterybox_keys)
+        )
+    enabled = mysterybox.get("enabled")
+    if enabled is not None and not isinstance(enabled, bool):
+        raise ValueError(f"{field_label}.mysterybox.enabled must be true or false")
+    if enabled is not True:
+        return
+
+    allow_all_namespaces = mysterybox.get("allow_all_namespaces")
+    if allow_all_namespaces is not None and not isinstance(allow_all_namespaces, bool):
+        raise ValueError(f"{field_label}.mysterybox.allow_all_namespaces must be true or false")
+
+    for key in ("store_name", "api_domain"):
+        value = _as_text(mysterybox.get(key))
+        if not value:
+            raise ValueError(f"{field_label}.mysterybox.{key} is required when enabled")
+
+    _validate_mysterybox_credentials_secret(
+        mysterybox.get("credentials_secret"),
+        field_label=f"{field_label}.mysterybox.credentials_secret",
+    )
+
+    sync_namespaces = mysterybox.get("sync_namespaces")
+    if not isinstance(sync_namespaces, list) or not sync_namespaces:
+        raise ValueError(
+            f"{field_label}.mysterybox.sync_namespaces must be a non-empty list of strings"
+        )
+    for index, namespace in enumerate(sync_namespaces):
+        if not isinstance(namespace, str) or not _ID_PATTERN.fullmatch(namespace):
+            raise ValueError(
+                f"{field_label}.mysterybox.sync_namespaces[{index}] must be a Kubernetes namespace name"
+            )
+
+
+def _validate_mysterybox_credentials_secret(value: Any, *, field_label: str) -> None:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {"name", "namespace", "key"}
+    unknown_keys = sorted(str(key) for key in value if str(key) not in supported_keys)
+    if unknown_keys:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown_keys))
+    for key in ("name", "namespace", "key"):
+        current = _as_text(value.get(key))
+        if not current:
+            raise ValueError(f"{field_label}.{key} is required")
+        if key != "key" and not _ID_PATTERN.fullmatch(current):
+            raise ValueError(f"{field_label}.{key} must be a Kubernetes name")
 
 
 def _validate_observability(
@@ -718,6 +799,9 @@ def validate_runtime_payload(payload: Mapping[str, Any]) -> None:
     observability_issues = observability_dependency_issues(payload)
     if observability_issues:
         raise ValueError(observability_issues[0])
+    mysterybox_issues = mysterybox_eso_dependency_issues(payload)
+    if mysterybox_issues:
+        raise ValueError(mysterybox_issues[0])
 
     _validate_materialized_shared_defaults(payload)
 

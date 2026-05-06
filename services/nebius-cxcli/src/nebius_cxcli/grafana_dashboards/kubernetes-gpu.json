@@ -1,0 +1,357 @@
+{
+  "uid": "cxcli-kubernetes-gpu",
+  "title": "Nebius Kubernetes GPU Metrics",
+  "tags": [
+    "nebius",
+    "cxcli",
+    "kubernetes",
+    "gpu"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 41,
+  "version": 1,
+  "refresh": "10s",
+  "time": {
+    "from": "now-5m",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "Cluster",
+        "label": "Cluster",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "nebius-service-metrics"
+        },
+        "query": "query_result(count by (mk8s_cluster_id) (DCGM_FI_DEV_GPU_UTIL{job=\"nebius-observability-agent\"}))",
+        "definition": "query_result(count by (mk8s_cluster_id) (DCGM_FI_DEV_GPU_UTIL{job=\"nebius-observability-agent\"}))",
+        "regex": "/mk8s_cluster_id=\"([^\"]+)\"/",
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".+",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "GpuNode",
+        "label": "GPU Node",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "nebius-service-metrics"
+        },
+        "query": "query_result(count by (instance_id) (DCGM_FI_DEV_GPU_UTIL{mk8s_cluster_id=~\"$Cluster\",job=\"nebius-observability-agent\"}))",
+        "definition": "query_result(count by (instance_id) (DCGM_FI_DEV_GPU_UTIL{mk8s_cluster_id=~\"$Cluster\",job=\"nebius-observability-agent\"}))",
+        "regex": "/instance_id=\"([^\"]+)\"/",
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".+",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "Gpu",
+        "label": "GPU",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "nebius-service-metrics"
+        },
+        "query": "query_result(count by (uuid) (DCGM_FI_DEV_GPU_UTIL{mk8s_cluster_id=~\"$Cluster\",instance_id=~\"$GpuNode\",job=\"nebius-observability-agent\"}))",
+        "definition": "query_result(count by (uuid) (DCGM_FI_DEV_GPU_UTIL{mk8s_cluster_id=~\"$Cluster\",instance_id=~\"$GpuNode\",job=\"nebius-observability-agent\"}))",
+        "regex": "/uuid=\"([^\"]+)\"/",
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".+",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "GPU Nodes",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nebius-service-metrics"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count(count by (instance_id) (DCGM_FI_DEV_GPU_UTIL{mk8s_cluster_id=~\"$Cluster\",instance_id=~\"$GpuNode\",job=\"nebius-observability-agent\"}))",
+          "legendFormat": "nodes"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "GPUs",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nebius-service-metrics"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count(count by (instance_id, uuid) (DCGM_FI_DEV_GPU_UTIL{mk8s_cluster_id=~\"$Cluster\",instance_id=~\"$GpuNode\",uuid=~\"$Gpu\",job=\"nebius-observability-agent\"}))",
+          "legendFormat": "gpus"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Average GPU Utilization",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nebius-service-metrics"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "avg(DCGM_FI_DEV_GPU_UTIL{mk8s_cluster_id=~\"$Cluster\",instance_id=~\"$GpuNode\",uuid=~\"$Gpu\",job=\"nebius-observability-agent\"})",
+          "legendFormat": "utilization"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Average Memory Used",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nebius-service-metrics"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "avg(100 * DCGM_FI_DEV_FB_USED{mk8s_cluster_id=~\"$Cluster\",instance_id=~\"$GpuNode\",uuid=~\"$Gpu\",job=\"nebius-observability-agent\"} / (DCGM_FI_DEV_FB_USED{mk8s_cluster_id=~\"$Cluster\",instance_id=~\"$GpuNode\",uuid=~\"$Gpu\",job=\"nebius-observability-agent\"} + DCGM_FI_DEV_FB_FREE{mk8s_cluster_id=~\"$Cluster\",instance_id=~\"$GpuNode\",uuid=~\"$Gpu\",job=\"nebius-observability-agent\"}))",
+          "legendFormat": "memory"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "GPU Utilization",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nebius-service-metrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "avg by (instance_id, uuid) (DCGM_FI_DEV_GPU_UTIL{mk8s_cluster_id=~\"$Cluster\",instance_id=~\"$GpuNode\",uuid=~\"$Gpu\",job=\"nebius-observability-agent\"})",
+          "legendFormat": "{{uuid}} {{instance_id}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "GPU Memory Used",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nebius-service-metrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "avg by (instance_id, uuid) (100 * DCGM_FI_DEV_FB_USED{mk8s_cluster_id=~\"$Cluster\",instance_id=~\"$GpuNode\",uuid=~\"$Gpu\",job=\"nebius-observability-agent\"} / (DCGM_FI_DEV_FB_USED{mk8s_cluster_id=~\"$Cluster\",instance_id=~\"$GpuNode\",uuid=~\"$Gpu\",job=\"nebius-observability-agent\"} + DCGM_FI_DEV_FB_FREE{mk8s_cluster_id=~\"$Cluster\",instance_id=~\"$GpuNode\",uuid=~\"$Gpu\",job=\"nebius-observability-agent\"}))",
+          "legendFormat": "{{uuid}} {{instance_id}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "GPU Power Usage",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nebius-service-metrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "watt"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "avg by (instance_id, uuid) (DCGM_FI_DEV_POWER_USAGE{mk8s_cluster_id=~\"$Cluster\",instance_id=~\"$GpuNode\",uuid=~\"$Gpu\",job=\"nebius-observability-agent\"})",
+          "legendFormat": "{{uuid}} {{instance_id}}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "GPU Temperature",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nebius-service-metrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "avg by (instance_id, uuid) (DCGM_FI_DEV_GPU_TEMP{mk8s_cluster_id=~\"$Cluster\",instance_id=~\"$GpuNode\",uuid=~\"$Gpu\",job=\"nebius-observability-agent\"})",
+          "legendFormat": "{{uuid}} {{instance_id}}"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "SM Clock",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nebius-service-metrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 20
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "hertz"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "avg by (instance_id, uuid) (DCGM_FI_DEV_SM_CLOCK{mk8s_cluster_id=~\"$Cluster\",instance_id=~\"$GpuNode\",uuid=~\"$Gpu\",job=\"nebius-observability-agent\"}) * 1000000",
+          "legendFormat": "{{uuid}} {{instance_id}}"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Memory Clock",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nebius-service-metrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 20
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "hertz"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "avg by (instance_id, uuid) (DCGM_FI_DEV_MEM_CLOCK{mk8s_cluster_id=~\"$Cluster\",instance_id=~\"$GpuNode\",uuid=~\"$Gpu\",job=\"nebius-observability-agent\"}) * 1000000",
+          "legendFormat": "{{uuid}} {{instance_id}}"
+        }
+      ]
+    }
+  ]
+}

@@ -94,6 +94,287 @@ def test_runtime_validation_plugins_reject_invalid_component_ssh_user_name(
         )
 
 
+def test_runtime_validation_plugins_accept_mysterybox_payload_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "NEBIUS_CXCLI_RUNTIME_VALIDATION_PLUGINS",
+        "nebius_cxcli.runtime_component_validation:validate_component_runtime_rules",
+    )
+    payload = {
+        "__shared_admin_ssh_user_name__": "ubuntu",
+        "infra": {
+            "mysterybox": {
+                "enabled": True,
+                "parent_id": "project-1",
+                "secrets": [
+                    {
+                        "name": "app-runtime",
+                        "version_id": "n/a",
+                        "payload": {
+                            "API_KEY": {
+                                "type": "text",
+                            },
+                            "CERT": {
+                                "type": "file",
+                            },
+                        },
+                    },
+                ],
+            },
+        },
+    }
+
+    run_runtime_validation_plugins(
+        payload=payload,
+        get_path=_get_path,
+        as_text=_as_text,
+        id_pattern=re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
+        env_var_pattern=re.compile(r"^[A-Z_][A-Z0-9_]*$"),
+    )
+
+
+def test_runtime_validation_plugins_reject_mysterybox_secret_mapping_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "NEBIUS_CXCLI_RUNTIME_VALIDATION_PLUGINS",
+        "nebius_cxcli.runtime_component_validation:validate_component_runtime_rules",
+    )
+    payload = {
+        "__shared_admin_ssh_user_name__": "ubuntu",
+        "infra": {
+            "mysterybox": {
+                "enabled": True,
+                "parent_id": "project-1",
+                "secrets": {
+                    "app": {
+                        "name": "app-runtime",
+                    },
+                },
+            },
+        },
+    }
+
+    with pytest.raises(ValueError, match="secrets must be a list of secret objects"):
+        run_runtime_validation_plugins(
+            payload=payload,
+            get_path=_get_path,
+            as_text=_as_text,
+            id_pattern=re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
+            env_var_pattern=re.compile(r"^[A-Z_][A-Z0-9_]*$"),
+        )
+
+
+def test_runtime_validation_plugins_reject_mysterybox_singular_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "NEBIUS_CXCLI_RUNTIME_VALIDATION_PLUGINS",
+        "nebius_cxcli.runtime_component_validation:validate_component_runtime_rules",
+    )
+    payload = {
+        "__shared_admin_ssh_user_name__": "ubuntu",
+        "infra": {
+            "mysterybox": {
+                "enabled": True,
+                "parent_id": "project-1",
+                "secrets": [
+                    {
+                        "name": "app-runtime",
+                        "version": {
+                            "payload": {
+                                "API_KEY": {
+                                    "type": "text",
+                                },
+                            },
+                        },
+                    },
+                ],
+            },
+        },
+    }
+
+    with pytest.raises(ValueError, match="unsupported field\\(s\\): version"):
+        run_runtime_validation_plugins(
+            payload=payload,
+            get_path=_get_path,
+            as_text=_as_text,
+            id_pattern=re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
+            env_var_pattern=re.compile(r"^[A-Z_][A-Z0-9_]*$"),
+        )
+
+
+def test_runtime_validation_plugins_reject_mysterybox_missing_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "NEBIUS_CXCLI_RUNTIME_VALIDATION_PLUGINS",
+        "nebius_cxcli.runtime_component_validation:validate_component_runtime_rules",
+    )
+    payload = {
+        "__shared_admin_ssh_user_name__": "ubuntu",
+        "infra": {
+            "mysterybox": {
+                "enabled": True,
+                "parent_id": "project-1",
+                "secrets": [
+                    {
+                        "name": "app-runtime",
+                    },
+                ],
+            },
+        },
+    }
+
+    with pytest.raises(ValueError, match=r"secrets\[0\]\.payload must be a non-empty mapping"):
+        run_runtime_validation_plugins(
+            payload=payload,
+            get_path=_get_path,
+            as_text=_as_text,
+            id_pattern=re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
+            env_var_pattern=re.compile(r"^[A-Z_][A-Z0-9_]*$"),
+        )
+
+
+def test_runtime_validation_plugins_reject_mysterybox_invalid_version_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "NEBIUS_CXCLI_RUNTIME_VALIDATION_PLUGINS",
+        "nebius_cxcli.runtime_component_validation:validate_component_runtime_rules",
+    )
+    payload = {
+        "__shared_admin_ssh_user_name__": "ubuntu",
+        "infra": {
+            "mysterybox": {
+                "enabled": True,
+                "parent_id": "project-1",
+                "secrets": [
+                    {
+                        "name": "app-runtime",
+                        "version_id": "v2",
+                        "payload": {
+                            "API_KEY": {
+                                "type": "text",
+                            },
+                        },
+                    },
+                ],
+            },
+        },
+    }
+
+    with pytest.raises(ValueError, match="version ID starting with mbsecver-"):
+        run_runtime_validation_plugins(
+            payload=payload,
+            get_path=_get_path,
+            as_text=_as_text,
+            id_pattern=re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
+            env_var_pattern=re.compile(r"^[A-Z_][A-Z0-9_]*$"),
+        )
+
+
+def test_runtime_validation_plugins_accept_single_replica_grafana(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "NEBIUS_CXCLI_RUNTIME_VALIDATION_PLUGINS",
+        "nebius_cxcli.runtime_component_validation:validate_component_runtime_rules",
+    )
+    payload = {
+        "__shared_admin_ssh_user_name__": "ubuntu",
+        "apps": {
+            "charts": [
+                {
+                    "id": "grafana",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "values": {},
+                }
+            ]
+        },
+    }
+
+    run_runtime_validation_plugins(
+        payload=payload,
+        get_path=_get_path,
+        as_text=_as_text,
+        id_pattern=re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
+        env_var_pattern=re.compile(r"^[A-Z_][A-Z0-9_]*$"),
+    )
+
+
+def test_runtime_validation_plugins_reject_grafana_replicas_without_shared_database(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "NEBIUS_CXCLI_RUNTIME_VALIDATION_PLUGINS",
+        "nebius_cxcli.runtime_component_validation:validate_component_runtime_rules",
+    )
+    payload = {
+        "__shared_admin_ssh_user_name__": "ubuntu",
+        "apps": {
+            "charts": [
+                {
+                    "id": "grafana",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "values": {
+                        "replicas": 2,
+                    },
+                }
+            ]
+        },
+    }
+
+    with pytest.raises(ValueError, match="requires a shared Grafana database"):
+        run_runtime_validation_plugins(
+            payload=payload,
+            get_path=_get_path,
+            as_text=_as_text,
+            id_pattern=re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
+            env_var_pattern=re.compile(r"^[A-Z_][A-Z0-9_]*$"),
+        )
+
+
+def test_runtime_validation_plugins_accept_grafana_replicas_with_shared_database(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "NEBIUS_CXCLI_RUNTIME_VALIDATION_PLUGINS",
+        "nebius_cxcli.runtime_component_validation:validate_component_runtime_rules",
+    )
+    payload = {
+        "__shared_admin_ssh_user_name__": "ubuntu",
+        "apps": {
+            "charts": [
+                {
+                    "id": "grafana",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "values": {
+                        "replicas": 2,
+                        "grafana.ini": {
+                            "database": {
+                                "type": "postgres",
+                            },
+                        },
+                    },
+                }
+            ]
+        },
+    }
+
+    run_runtime_validation_plugins(
+        payload=payload,
+        get_path=_get_path,
+        as_text=_as_text,
+        id_pattern=re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
+        env_var_pattern=re.compile(r"^[A-Z_][A-Z0-9_]*$"),
+    )
+
+
 def test_runtime_validation_plugins_reject_incomplete_flat_mk8s_gpu_shape(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

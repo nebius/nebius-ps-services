@@ -28,6 +28,20 @@ class CIBootstrapResult:
 
 
 @dataclass(frozen=True)
+class ServiceAccountAuthKeyResult:
+    """Result values for a service-account auth key without Object Storage keys."""
+
+    project_id: str
+    service_account_name: str
+    service_account_id: str
+    service_account_created: bool
+    roles_created: list[str]
+    roles_already_present: list[str]
+    auth_public_key_id: str
+    auth_private_key_pem: str
+
+
+@dataclass(frozen=True)
 class CIIdentityEnsureResult:
     """Idempotent identity state for CI automation."""
 
@@ -87,6 +101,7 @@ def _init_sdk(
     endpoint: str | None,
     config_file: Path | None,
     prefer_operator_auth: bool = False,
+    allow_cli_token: bool = True,
 ):
     return init_nebius_sdk(
         profile=profile,
@@ -94,6 +109,7 @@ def _init_sdk(
         config_file=config_file,
         context="auth bootstrap",
         prefer_operator_auth=prefer_operator_auth,
+        allow_cli_token=allow_cli_token,
     )
 
 
@@ -529,6 +545,63 @@ def bootstrap_ci_service_account(
         _close_sdk(sdk)
 
 
+def bootstrap_service_account_auth_key(
+    *,
+    project_id: str,
+    service_account_name: str,
+    service_account_description: str,
+    role_ids: list[str],
+    auth_key_description: str,
+    profile: str | None,
+    endpoint: str | None,
+    config_file: Path | None,
+    allow_cli_token: bool = False,
+) -> ServiceAccountAuthKeyResult:
+    """Ensure SA + role grants and create an auth key for non-S3 runtime usage."""
+
+    identity = ensure_ci_service_account_identity(
+        project_id=project_id,
+        service_account_name=service_account_name,
+        service_account_description=service_account_description,
+        role_ids=role_ids,
+        profile=profile,
+        endpoint=endpoint,
+        config_file=config_file,
+        allow_cli_token=allow_cli_token,
+    )
+
+    sdk = _init_sdk(
+        profile=profile,
+        endpoint=endpoint,
+        config_file=config_file,
+        prefer_operator_auth=True,
+        allow_cli_token=allow_cli_token,
+    )
+    try:
+        from nebius.api.nebius.iam.v1 import AuthPublicKeyServiceClient
+
+        auth_keys = AuthPublicKeyServiceClient(sdk)
+        auth_public_key_id, auth_private_key_pem = _create_auth_public_key(
+            auth_keys=auth_keys,
+            project_id=identity.project_id,
+            service_account_id=identity.service_account_id,
+            description=auth_key_description,
+        )
+
+        return ServiceAccountAuthKeyResult(
+            project_id=identity.project_id,
+            service_account_name=identity.service_account_name,
+            service_account_id=identity.service_account_id,
+            service_account_created=identity.service_account_created,
+            roles_created=identity.roles_created,
+            roles_already_present=identity.roles_already_present,
+            auth_public_key_id=auth_public_key_id,
+            auth_private_key_pem=auth_private_key_pem,
+        )
+    finally:
+        _close_sdk(sdk)
+
+
 def issue_observability_static_key(
     *,
     project_id: str,
@@ -608,6 +681,7 @@ def ensure_ci_service_account_identity(
     profile: str | None,
     endpoint: str | None,
     config_file: Path | None,
+    allow_cli_token: bool = True,
 ) -> CIIdentityEnsureResult:
     """Ensure service-account identity + role grants without creating new keys."""
     if not role_ids:
@@ -618,6 +692,7 @@ def ensure_ci_service_account_identity(
         endpoint=endpoint,
         config_file=config_file,
         prefer_operator_auth=True,
+        allow_cli_token=allow_cli_token,
     )
     try:
         from nebius.api.nebius.iam.v1 import (

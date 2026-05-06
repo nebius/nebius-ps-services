@@ -13,10 +13,10 @@ from nebius_cxcli.component_sources import (
     ComponentSources,
     GrafanaAdminSecretSpec,
     GrafanaCliSettings,
+    GrafanaDashboardSignalBinding,
     GrafanaDatasourceSpec,
     GrafanaExploreQuerySpec,
     GrafanaReadTokenSecretSpec,
-    GrafanaReportDashboardBinding,
     HelmChartSource,
     InfraObservabilitySettings,
     ObservabilityGrafanaSettings,
@@ -461,7 +461,7 @@ def test_grafana_dashboard_url_by_uid_uses_dashboard_meta_url(
 
 def test_grafana_explore_urls_use_bound_datasources() -> None:
     bindings = {
-        "metrics": GrafanaReportDashboardBinding(
+        "metrics": GrafanaDashboardSignalBinding(
             signal="metrics",
             folder="nebius",
             dashboard="kubernetes-cluster-monitoring",
@@ -518,9 +518,9 @@ def test_collect_grafana_runtime_status_records_kube_context(
     )
     monkeypatch.setattr(
         grafana_runtime,
-        "_grafana_report_dashboard_bindings",
+        "_grafana_dashboard_signal_bindings",
         lambda: {
-            "metrics": GrafanaReportDashboardBinding(
+            "metrics": GrafanaDashboardSignalBinding(
                 signal="metrics",
                 folder="nebius",
                 dashboard="kubernetes-cluster-monitoring",
@@ -528,7 +528,7 @@ def test_collect_grafana_runtime_status_records_kube_context(
                 datasource="Nebius User Metrics",
                 dashboard_uid="cxcli-kubernetes-metrics",
             ),
-            "logs": GrafanaReportDashboardBinding(
+            "logs": GrafanaDashboardSignalBinding(
                 signal="logs",
                 folder="nebius",
                 dashboard="kubernetes-logs-from-loki",
@@ -536,7 +536,7 @@ def test_collect_grafana_runtime_status_records_kube_context(
                 datasource="Nebius Logs",
                 dashboard_uid="cxcli-kubernetes-logs",
             ),
-            "traces": GrafanaReportDashboardBinding(
+            "traces": GrafanaDashboardSignalBinding(
                 signal="traces",
                 folder="nebius",
                 dashboard="kubernetes-traces",

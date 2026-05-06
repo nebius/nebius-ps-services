@@ -30,10 +30,14 @@ def _build_config(tmp_path: Path):
     return load_config(config_path)
 
 
-def test_terraform_runtime_env_builds_mysterybox_tf_var(tmp_path: Path, monkeypatch) -> None:
+def test_terraform_runtime_env_does_not_materialize_mysterybox_payload_values(
+    tmp_path: Path, monkeypatch
+) -> None:
     cfg = _build_config(tmp_path)
-    monkeypatch.setenv("N8N_ENCRYPTION_KEY", "enc-key")
-    monkeypatch.setenv("N8N_BASIC_AUTH_PASSWORD", "pass-123")
+    monkeypatch.setenv(
+        "TF_VAR_mysterybox_payload_values",
+        '{"app-runtime":{"API_KEY":"replace-at-runtime"}}',
+    )
 
     runtime_env = _terraform_runtime_env(cfg)
 
@@ -46,12 +50,11 @@ def test_terraform_runtime_env_builds_mysterybox_tf_var(tmp_path: Path, monkeypa
     }
 
 
-def test_terraform_runtime_env_fails_when_mysterybox_env_missing(
+def test_terraform_runtime_env_does_not_require_mysterybox_payload_values(
     tmp_path: Path, monkeypatch
 ) -> None:
     cfg = _build_config(tmp_path)
-    monkeypatch.delenv("N8N_ENCRYPTION_KEY", raising=False)
-    monkeypatch.delenv("N8N_BASIC_AUTH_PASSWORD", raising=False)
+    monkeypatch.delenv("TF_VAR_mysterybox_payload_values", raising=False)
 
     assert _terraform_runtime_env(cfg) == {
         "TF_VAR_nebius_provider_module_name": build_provider_module_name(

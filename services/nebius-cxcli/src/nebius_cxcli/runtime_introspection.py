@@ -11,6 +11,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import urllib.parse
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -49,6 +50,13 @@ def resolve_module_source_path(module_source: str) -> Path | None:
     if not source:
         return None
     if source.startswith(("git::", "http://", "https://", "oci://")):
+        return None
+    if source.startswith("file://"):
+        parsed = urllib.parse.urlparse(source)
+        if parsed.scheme == "file" and parsed.path:
+            candidate = Path(urllib.parse.unquote(parsed.path))
+            if candidate.is_absolute() and candidate.exists() and candidate.is_dir():
+                return candidate
         return None
     candidate = Path(source)
     if candidate.is_absolute() and candidate.exists() and candidate.is_dir():
@@ -476,11 +484,6 @@ def _extract_hcl_attribute_expression(block: str, attribute_name: str) -> str | 
         return block[index:] if line_end == -1 else block[index:line_end]
 
     start = index
-    first = block[index]
-    if first not in "{[(":
-        line_end = block.find("\n", index)
-        return block[index:] if line_end == -1 else block[index:line_end]
-
     in_string = False
     escaped = False
     brace_depth = 0
@@ -516,8 +519,8 @@ def _extract_hcl_attribute_expression(block: str, attribute_name: str) -> str | 
             continue
         elif char == ")":
             paren_depth = max(paren_depth - 1, 0)
-        if brace_depth == 0 and bracket_depth == 0 and paren_depth == 0 and cursor >= start:
-            return block[start : cursor + 1]
+        if char == "\n" and brace_depth == 0 and bracket_depth == 0 and paren_depth == 0:
+            return block[start:cursor].rstrip()
     return block[start:]
 
 
@@ -670,7 +673,6 @@ def _extract_braced_block(text: str, open_brace_index: int) -> str | None:
 
 def _module_variables_from_tf_files(path: Path) -> tuple[ModuleVariable, ...]:
     variable_block_pattern = re.compile(r'variable\s+"([^"]+)"\s*\{', re.MULTILINE)
-    type_pattern = re.compile(r"(^|\n)\s*type\s*=\s*(.+)", re.MULTILINE)
     nullable_pattern = re.compile(r"(^|\n)\s*nullable\s*=\s*(.+)", re.MULTILINE)
     description_pattern = re.compile(r'(^|\n)\s*description\s*=\s*"([^"]*)"', re.MULTILINE)
 
@@ -700,8 +702,7 @@ def _module_variables_from_tf_files(path: Path) -> tuple[ModuleVariable, ...]:
                 if nullable_token in {"true", "false"}:
                     nullable_value = nullable_token == "true"
             required = (not has_default) and (nullable_value is not True)
-            type_match = type_pattern.search(block)
-            type_hint = _normalize_type_hint(type_match.group(2) if type_match else None)
+            type_hint = _normalize_type_hint(_extract_hcl_attribute_expression(block, "type"))
             description_match = description_pattern.search(block)
             description = _normalize_description(
                 description_match.group(2) if description_match else None

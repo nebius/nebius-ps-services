@@ -142,6 +142,10 @@ def test_build_deploy_validation_report_aggregates_results(tmp_path: Path) -> No
         "- Status: `PASS`",
         "- Detail report: `observability-ingestion-report-cluster1.json`",
         "- Summary: 3/3 check(s) passed; DaemonSet pods ready 2/2; OTLP/gRPC endpoints ready 2/2.",
+        "- Checks (3):",
+        "  1. `PASS` HelmRelease Ready: Ready=True",
+        "  2. `PASS` Agent DaemonSet Ready: DaemonSet pods ready 2/2",
+        "  3. `PASS` Trace OTLP Service Ready: OTLP/gRPC endpoints ready 2/2",
         "",
     ]
 

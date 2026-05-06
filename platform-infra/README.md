@@ -16,7 +16,7 @@ Reusable modules under `modules/`:
 - [`managed-postgresql`](modules/managed-postgresql/README.md): Nebius Managed PostgreSQL cluster.
 - [`sfs`](modules/sfs/README.md): Nebius Shared File System.
 - [`object-storage`](modules/object-storage/README.md): Nebius Object Storage buckets.
-- [`mysterybox`](modules/mysterybox/README.md): Nebius MysteryBox secrets and initial secret versions.
+- [`mysterybox`](modules/mysterybox/README.md): Nebius MysteryBox secrets and versioned payloads.
 - [`vm`](modules/vm/README.md): General Nebius Compute virtual machine provisioning.
 - [`wireguard-jumphost`](modules/wireguard-jumphost/README.md): WireGuard VPN jump host VM.
 - [`ssh-jumphost`](modules/ssh-jumphost/README.md): SSH bastion/jump host VM.
@@ -29,6 +29,8 @@ Each module has its own README and one or more runnable example roots under
 These requirements apply to direct consumers of the modules in this repo:
 
 - Terraform: `>= 1.10.0, < 2.0.0`
+- `mysterybox` requires Terraform `>= 1.11.0, < 2.0.0` because it uses
+  provider write-only payload fields
 - Nebius provider source:
   `terraform-provider.storage.eu-north1.nebius.cloud/nebius/nebius`
 - Nebius provider version: `>= 0.5.55, < 0.6.0`
@@ -191,12 +193,21 @@ to help users choose the right module quickly.
 
 ### [`mysterybox`](modules/mysterybox/README.md)
 
-- Creates Nebius MysteryBox secrets and initial versions
+- Creates Nebius MysteryBox secrets and one initial primary version per secret
+- Uses provider write-only payload fields for text and file secret values
+- Secret versions are immutable MysteryBox snapshots; rotate by creating a new
+  MysteryBox version outside Terraform, marking it primary, and recording that
+  `version_id`
 - Typical required inputs:
   - `parent_id`
   - `secrets`
 - Secret payload values should be injected at runtime through
-  `TF_VAR_mysterybox_secret_values`
+  `TF_VAR_mysterybox_payload_values` as
+  `{secret_name={payload_key=value}}`
+- After the created primary `version_id` is recorded, reruns and destroy do not
+  need the original runtime payload values.
+- Payload readers need the MysteryBox payload-viewer role; create/update
+  permissions do not automatically grant payload viewing
 - Example:
   - `modules/mysterybox/examples/minimal`
 
@@ -260,6 +271,9 @@ terraform -chdir=modules/mk8s/examples/minimal validate
 terraform -chdir=modules/managed-postgresql/examples/minimal init -backend=false
 terraform -chdir=modules/managed-postgresql/examples/minimal validate
 
+terraform -chdir=modules/mysterybox/examples/minimal init -backend=false
+terraform -chdir=modules/mysterybox/examples/minimal validate
+
 terraform -chdir=modules/vm/examples/minimal init -backend=false
 terraform -chdir=modules/vm/examples/minimal validate
 ```
@@ -274,7 +288,8 @@ make test-all
 
 `make validate` runs `terraform init -backend=false -upgrade=false` and
 `terraform validate` in each module directory, then deletes module-local lock
-files.
+files. It also validates every `modules/*/examples/*` root with
+`-lockfile=readonly` so checked-in example lock files cannot drift silently.
 
 ## Repository Structure
 

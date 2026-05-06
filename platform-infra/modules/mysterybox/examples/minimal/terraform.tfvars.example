@@ -1,0 +1,11 @@
+# Copy this file outside version control before using it.
+# Do not commit real payload values.
+
+parent_id = "project-xxxxxxxx"
+
+mysterybox_payload_values = {
+  "example-app-runtime" = {
+    API_KEY    = "replace-me"
+    API_SECRET = "replace-me"
+  }
+}

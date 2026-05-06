@@ -1092,6 +1092,25 @@ def test_mysterybox_secret_status_poller_exposes_terminal_operation_failure(
     assert "RESOURCE_EXHAUSTED" in failure
 
 
+def test_mysterybox_secret_status_poller_reports_absent_resource_for_destroy() -> None:
+    poller = deployment_status_module._MysteryBoxSecretStatusPoller.__new__(
+        deployment_status_module._MysteryBoxSecretStatusPoller
+    )
+    poller._target = StatusWatcherTarget(
+        component_id="mysterybox",
+        kind="nebius.mysterybox.secret",
+        parent_id="project-u123",
+        resource_name="app-runtime",
+        operation="destroy",
+    )
+    poller._find_secret = lambda: None
+
+    assert (
+        poller.summary()
+        == "mysterybox secret 'app-runtime' is already absent in project project-u123."
+    )
+
+
 def test_mysterybox_secret_status_watcher_kind_is_registered() -> None:
     assert (
         deployment_status_module._STATUS_POLLER_FACTORIES["nebius.mysterybox.secret"]

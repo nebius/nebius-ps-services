@@ -28,7 +28,7 @@ Recommended pattern in this repo:
 
 ## Repo example
 
-- `.github/workflows/mysterybox-bridge-image.yml`
+- `.github/workflows/sample-service-image.yml`
 
 ## Current action majors used in the skill asset
 
