@@ -1,0 +1,51 @@
+{{- $type := include "slurm-cluster-storage.volume.controller-spool.type" . }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: {{ include "slurm-cluster-storage.volume.controller-spool.mount" . }}
+spec:
+  selector:
+    matchLabels:
+      slurm: {{ include "slurm-cluster-storage.volume.controller-spool.mount" . }}
+  template:
+    metadata:
+      labels:
+        slurm: {{ include "slurm-cluster-storage.volume.controller-spool.mount" . }}
+    spec:
+      containers:
+        - name: {{ cat "mount-controller-spool" $type | include "mashedkebab" }}
+          image: {{ include "slurm-cluster-storage.mount.image" . | quote }}
+          imagePullPolicy: {{ include "slurm-cluster-storage.mount.imagePullPolicy" . }}
+          command:
+            - /bin/sh
+            - -c
+{{- if eq $type "filestore" }}
+            - /mount-scripts/ensure_mounted_filestore.sh -d {{ include "slurm-cluster-storage.volume.controller-spool.device" . }} -p /mnt/controller-spool -s 60
+{{- else }}
+            - mkdir -m 755 -p /host{{ include "slurm-cluster-storage.volume.controller-spool.path" . }} && while true; do sleep 3600; done
+{{- end }}
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: host-mount
+              mountPath: /host/mnt
+              mountPropagation: Bidirectional
+            - name: mount-scripts
+              mountPath: /mount-scripts
+      volumes:
+        - name: host-mount
+          hostPath:
+            path: /mnt
+        - name: mount-scripts
+          configMap:
+            name: mount-scripts
+            defaultMode: 0500
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+{{ .Values.storage.controllerSpool.matchExpressions | toYaml | indent 18 }}
+      tolerations:
+{{ .Values.storage.controllerSpool.tolerations | toYaml | indent 8 }}

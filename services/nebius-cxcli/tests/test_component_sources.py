@@ -221,6 +221,56 @@ def _portable_chart_source(*, repo: str, chart: str, version: str = "") -> dict[
     return {"portable": portable}
 
 
+def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
+    sources = load_component_sources(source_profile=SourceProfile.LOCAL)
+
+    nfs = next(module for module in sources.tf_modules if module.module == "nfs")
+    assert nfs.local_source is not None
+    assert nfs.local_source.endswith("platform-infra/modules/nfs")
+
+    soperator = next(chart for chart in sources.helm_charts if chart.name == "soperator")
+    assert soperator.source.path is not None
+    assert soperator.source.path.endswith("helm-charts/soperator")
+    assert soperator.namespace == "soperator"
+    assert soperator.release_name == "soperator"
+    assert soperator.release_timeout == "90m"
+    assert soperator.release_install_after == ()
+    assert soperator.wizard_fields is not None
+    assert soperator.wizard_fields["values.partitionProfile"]["default"] == "shape-default"
+    partition_profile_values = soperator.wizard_fields["values.partitionProfile"]["sources"][0][
+        "values"
+    ]
+    assert partition_profile_values == ["shape-default", "with-debug-long"]
+    assert soperator.mk8s_gpu.install_after == (
+        "cert-manager",
+        "nvidia-network-operator",
+        "nvidia-gpu-operator",
+    )
+    assert soperator.soperator_nodesets.default == "nebius-gpu-v1"
+    assert set(soperator.soperator_nodesets.profiles) >= {
+        "nebius-cpu-v1",
+        "nebius-gpu-v1",
+        "nebius-mixed-v1",
+    }
+    profile = soperator.soperator_nodesets.profiles["nebius-gpu-v1"]
+    assert profile["mk8s"]["use_generic_gpu_node_groups"] is True
+    assert profile["mk8s"]["worker_nodesets"][0]["max_nodes_per_group"] == 100
+    assert profile["mk8s"]["worker_nodesets"][0]["node_groups_input"] == "gpu_node_groups"
+    assert profile["chart"]["values"]["partitionConfiguration"]["partitions"][0]["name"] == "gpu"
+    assert "with-debug-long" in profile["chart"]["partition_profiles"]
+    mixed_profile = soperator.soperator_nodesets.profiles["nebius-mixed-v1"]
+    assert [worker["nodeset_name"] for worker in mixed_profile["mk8s"]["worker_nodesets"]] == [
+        "worker-cpu",
+        "worker-gpu",
+    ]
+    assert [node["name"] for node in mixed_profile["chart"]["values"]["nodesets"]] == [
+        "worker-cpu",
+        "worker-gpu",
+    ]
+    assert "with-debug-long" in mixed_profile["chart"]["partition_profiles"]
+    assert "nfs" not in profile["mk8s"]["node_groups"]
+
+
 def _kubernetes_agent_validation_enabled() -> bool:
     return True
 
@@ -311,13 +361,13 @@ def test_component_sources_shared_admin_ssh_public_key_accepts_relative_file_pat
     _write_catalog_file(
         sources_file,
         _catalog(
-                shared={
-                    "admin_ssh": {
-                        "user_name": "ubuntu",
-                        "public_key": "./id_rsa.pub",
-                    }
+            shared={
+                "admin_ssh": {
+                    "user_name": "ubuntu",
+                    "public_key": "./id_rsa.pub",
                 }
-            )
+            }
+        ),
     )
 
     loaded = load_component_sources(explicit=sources_file, source_profile=SourceProfile.PORTABLE)
@@ -329,12 +379,12 @@ def test_component_sources_reject_invalid_shared_admin_ssh_user_name(tmp_path: P
     _write_catalog_file(
         sources_file,
         _catalog(
-                shared={
-                    "admin_ssh": {
-                        "user_name": "BAD USER",
-                    }
+            shared={
+                "admin_ssh": {
+                    "user_name": "BAD USER",
                 }
-            )
+            }
+        ),
     )
 
     with pytest.raises(ValueError, match="shared.admin_ssh.user_name"):
@@ -498,27 +548,27 @@ def test_app_release_timeout_inherits_global_flux_default(tmp_path: Path) -> Non
     _write_catalog_file(
         sources_file,
         _catalog(
-                cli={
-                    "flux": {
-                        "version": "v2.8.0",
-                        "release_timeout": "15m",
+            cli={
+                "flux": {
+                    "version": "v2.8.0",
+                    "release_timeout": "15m",
+                },
+                "terraform": {"version": "1.14.1"},
+            },
+            apps={
+                "demo-app": {
+                    "source": _portable_chart_source(
+                        repo="https://example.invalid/charts",
+                        chart="demo-app",
+                        version="1.0.0",
+                    ),
+                    "release": {
+                        "namespace": "demo",
+                        "name": "demo-app",
                     },
-                    "terraform": {"version": "1.14.1"},
-                },
-                apps={
-                    "demo-app": {
-                        "source": _portable_chart_source(
-                            repo="https://example.invalid/charts",
-                            chart="demo-app",
-                            version="1.0.0",
-                        ),
-                        "release": {
-                            "namespace": "demo",
-                            "name": "demo-app",
-                        },
-                    }
-                },
-            )
+                }
+            },
+        ),
     )
 
     loaded = load_component_sources(explicit=sources_file)
@@ -532,18 +582,18 @@ def test_load_component_sources_adds_builtin_mk8s_handoff(tmp_path: Path) -> Non
     _write_catalog_file(
         sources_file,
         _catalog(
-                infra={
-                    "mk8s": {
-                        "source": {
-                            "portable": "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3",
-                        },
-                        "status": {
-                            "kind": "nebius.mk8s.cluster",
-                            "name_input": "cluster_name",
-                        },
-                    }
+            infra={
+                "mk8s": {
+                    "source": {
+                        "portable": "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3",
+                    },
+                    "status": {
+                        "kind": "nebius.mk8s.cluster",
+                        "name_input": "cluster_name",
+                    },
                 }
-            )
+            }
+        ),
     )
 
     loaded = load_component_sources(explicit=sources_file)
@@ -563,15 +613,15 @@ def test_load_component_sources_rejects_public_validation_field(tmp_path: Path) 
     _write_catalog_file(
         sources_file,
         _catalog(
-                infra={
-                    "mk8s": {
-                        "source": {
-                            "portable": "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3",
-                        },
-                        "validation": "mk8s_cluster",
-                    }
+            infra={
+                "mk8s": {
+                    "source": {
+                        "portable": "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3",
+                    },
+                    "validation": "mk8s_cluster",
                 }
-            )
+            }
+        ),
     )
 
     with pytest.raises(
@@ -695,20 +745,20 @@ def test_load_component_sources_rejects_release_name_alias_for_helm_chart(tmp_pa
     _write_catalog_file(
         sources_file,
         _catalog(
-                apps={
-                    "gateway-helm": {
-                        "source": _portable_chart_source(
-                            repo="oci://docker.io/envoyproxy",
-                            chart="gateway-helm",
-                            version="1.4.2",
-                        ),
-                        "release": {
-                            "namespace": "envoy-gateway-system",
-                            "release-name": "envoy-gateway",
-                        },
-                    }
+            apps={
+                "gateway-helm": {
+                    "source": _portable_chart_source(
+                        repo="oci://docker.io/envoyproxy",
+                        chart="gateway-helm",
+                        version="1.4.2",
+                    ),
+                    "release": {
+                        "namespace": "envoy-gateway-system",
+                        "release-name": "envoy-gateway",
+                    },
                 }
-            )
+            }
+        ),
     )
 
     with pytest.raises(
@@ -723,30 +773,30 @@ def test_load_component_sources_parses_instance_qualified_input_binding(tmp_path
     _write_catalog_file(
         sources_file,
         _catalog(
-                infra={
-                    "mk8s": {
-                        "source": {
-                            "portable": "git::https://example.invalid/repo.git//mk8s?ref=v1.0.0",
-                        }
+            infra={
+                "mk8s": {
+                    "source": {
+                        "portable": "git::https://example.invalid/repo.git//mk8s?ref=v1.0.0",
                     }
-                },
-                apps={
-                    "demo-app": {
-                        "source": _portable_chart_source(
-                            repo="https://example.invalid/charts",
-                            chart="demo-app",
-                            version="1.0.0",
-                        ),
-                        "release": {
-                            "namespace": "demo",
-                            "name": "demo-app",
-                        },
-                        "input": {
-                            "values.global.clusterId": "mk8s@mk8s-blue.cluster_id",
-                        },
-                    }
-                },
-            )
+                }
+            },
+            apps={
+                "demo-app": {
+                    "source": _portable_chart_source(
+                        repo="https://example.invalid/charts",
+                        chart="demo-app",
+                        version="1.0.0",
+                    ),
+                    "release": {
+                        "namespace": "demo",
+                        "name": "demo-app",
+                    },
+                    "input": {
+                        "values.global.clusterId": "mk8s@mk8s-blue.cluster_id",
+                    },
+                }
+            },
+        ),
     )
 
     loaded = load_component_sources(explicit=sources_file)
@@ -763,17 +813,17 @@ def test_load_component_sources_rejects_invalid_status_watcher_block(tmp_path: P
     _write_catalog_file(
         sources_file,
         _catalog(
-                infra={
-                    "managed-postgresql": {
-                        "source": {
-                            "portable": "git::https://example.invalid/repo.git//managed-postgresql?ref=v1.0.0",
-                        },
-                        "status": {
-                            "name_input": "name",
-                        },
-                    }
+            infra={
+                "managed-postgresql": {
+                    "source": {
+                        "portable": "git::https://example.invalid/repo.git//managed-postgresql?ref=v1.0.0",
+                    },
+                    "status": {
+                        "name_input": "name",
+                    },
                 }
-            )
+            }
+        ),
     )
 
     with pytest.raises(ValueError, match="status.kind is required"):
@@ -785,15 +835,15 @@ def test_load_component_sources_rejects_legacy_resource_kind_field(tmp_path: Pat
     _write_catalog_file(
         sources_file,
         _catalog(
-                infra={
-                    "managed-postgresql": {
-                        "source": {
-                            "portable": "git::https://example.invalid/repo.git//managed-postgresql?ref=v1.0.0",
-                        },
-                        "resource_kind": "nebius.msp.postgresql.cluster",
-                    }
+            infra={
+                "managed-postgresql": {
+                    "source": {
+                        "portable": "git::https://example.invalid/repo.git//managed-postgresql?ref=v1.0.0",
+                    },
+                    "resource_kind": "nebius.msp.postgresql.cluster",
                 }
-            )
+            }
+        ),
     )
 
     with pytest.raises(
@@ -808,15 +858,15 @@ def test_load_component_sources_expands_builtin_wizard_profile(tmp_path: Path) -
     _write_catalog_file(
         sources_file,
         _catalog(
-                infra={
-                    "managed-postgresql": {
-                        "source": {
-                            "portable": "git::https://example.invalid/repo.git//managed-postgresql?ref=v1.0.0",
-                        },
-                        "wizard_profile": "managed-postgresql",
-                    }
+            infra={
+                "managed-postgresql": {
+                    "source": {
+                        "portable": "git::https://example.invalid/repo.git//managed-postgresql?ref=v1.0.0",
+                    },
+                    "wizard_profile": "managed-postgresql",
                 }
-            )
+            }
+        ),
     )
 
     loaded = load_component_sources(explicit=sources_file)
@@ -844,23 +894,23 @@ def test_load_component_sources_merges_profile_and_explicit_wizard_override(tmp_
     _write_catalog_file(
         sources_file,
         _catalog(
-                infra={
-                    "managed-postgresql": {
-                        "source": {
-                            "portable": "git::https://example.invalid/repo.git//managed-postgresql?ref=v1.0.0",
-                        },
-                        "wizard_profile": "managed-postgresql",
-                        "wizard": {
-                            "inputs.network_id": {
-                                "options": {
-                                    "from": "project_networks",
-                                    "filter_regex": "^vpcnetwork-",
-                                }
+            infra={
+                "managed-postgresql": {
+                    "source": {
+                        "portable": "git::https://example.invalid/repo.git//managed-postgresql?ref=v1.0.0",
+                    },
+                    "wizard_profile": "managed-postgresql",
+                    "wizard": {
+                        "inputs.network_id": {
+                            "options": {
+                                "from": "project_networks",
+                                "filter_regex": "^vpcnetwork-",
                             }
-                        },
-                    }
+                        }
+                    },
                 }
-            )
+            }
+        ),
     )
 
     loaded = load_component_sources(explicit=sources_file)
@@ -891,15 +941,15 @@ def test_load_component_sources_rejects_profile_name_that_does_not_match_compone
     _write_catalog_file(
         sources_file,
         _catalog(
-                infra={
-                    "managed-postgresql": {
-                        "source": {
-                            "portable": "git::https://example.invalid/repo.git//managed-postgresql?ref=v1.0.0",
-                        },
-                        "wizard_profile": "mk8s",
-                    }
+            infra={
+                "managed-postgresql": {
+                    "source": {
+                        "portable": "git::https://example.invalid/repo.git//managed-postgresql?ref=v1.0.0",
+                    },
+                    "wizard_profile": "mk8s",
                 }
-            )
+            }
+        ),
     )
 
     with pytest.raises(
@@ -914,15 +964,15 @@ def test_load_component_sources_rejects_unknown_wizard_profile(tmp_path: Path) -
     _write_catalog_file(
         sources_file,
         _catalog(
-                infra={
-                    "managed-postgresql": {
-                        "source": {
-                            "portable": "git::https://example.invalid/repo.git//managed-postgresql?ref=v1.0.0",
-                        },
-                        "wizard_profile": "unknown-profile",
-                    }
+            infra={
+                "managed-postgresql": {
+                    "source": {
+                        "portable": "git::https://example.invalid/repo.git//managed-postgresql?ref=v1.0.0",
+                    },
+                    "wizard_profile": "unknown-profile",
                 }
-            )
+            }
+        ),
     )
 
     with pytest.raises(ValueError, match="wizard_profile 'unknown-profile' is unknown"):
@@ -965,19 +1015,19 @@ def test_load_component_sources_rejects_runtime_block(tmp_path: Path) -> None:
     _write_catalog_file(
         sources_file,
         _catalog(
-                infra={
-                    "mk8s": {
-                        "source": {
-                            "portable": "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3",
+            infra={
+                "mk8s": {
+                    "source": {
+                        "portable": "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3",
+                    },
+                    "runtime": {
+                        "values": {
+                            "access": "external",
                         },
-                        "runtime": {
-                            "values": {
-                                "access": "external",
-                            },
-                        },
-                    }
+                    },
                 }
-            )
+            }
+        ),
     )
 
     with pytest.raises(
@@ -993,31 +1043,31 @@ def test_load_component_sources_rejects_grafana_dashboard_signal_missing_locator
     _write_catalog_file(
         sources_file,
         _catalog(
-                apps={
-                    "grafana": {
-                        "source": _portable_chart_source(
-                            repo="https://example.invalid/charts",
-                            chart="grafana",
-                            version="1.0.0",
-                        ),
-                        "release": {
-                            "namespace": "observability",
-                            "name": "grafana",
-                        },
-                        "defaults": {
-                            "values.dashboards.nebius-kubernetes.kubernetes-logs-from-loki": {
-                                "revision": 1,
-                                "datasource": "Nebius Logs",
-                            }
-                        },
-                        "cli": {
-                            "dashboard_signals": {
-                                "logs": "nebius-kubernetes/kubernetes-logs-from-loki",
-                            }
-                        },
-                    }
+            apps={
+                "grafana": {
+                    "source": _portable_chart_source(
+                        repo="https://example.invalid/charts",
+                        chart="grafana",
+                        version="1.0.0",
+                    ),
+                    "release": {
+                        "namespace": "observability",
+                        "name": "grafana",
+                    },
+                    "defaults": {
+                        "values.dashboards.nebius-kubernetes.kubernetes-logs-from-loki": {
+                            "revision": 1,
+                            "datasource": "Nebius Logs",
+                        }
+                    },
+                    "cli": {
+                        "dashboard_signals": {
+                            "logs": "nebius-kubernetes/kubernetes-logs-from-loki",
+                        }
+                    },
                 }
-            )
+            }
+        ),
     )
 
     with pytest.raises(
@@ -1038,31 +1088,31 @@ def test_load_component_sources_rejects_grafana_dashboard_signal_invalid_json(
     _write_catalog_file(
         sources_file,
         _catalog(
-                apps={
-                    "grafana": {
-                        "source": _portable_chart_source(
-                            repo="https://example.invalid/charts",
-                            chart="grafana",
-                            version="1.0.0",
-                        ),
-                        "release": {
-                            "namespace": "observability",
-                            "name": "grafana",
-                        },
-                        "defaults": {
-                            "values.dashboards.nebius-kubernetes.kubernetes-logs-from-loki": {
-                                "json": "{",
-                                "datasource": "Nebius Logs",
-                            }
-                        },
-                        "cli": {
-                            "dashboard_signals": {
-                                "logs": "nebius-kubernetes/kubernetes-logs-from-loki",
-                            }
-                        },
-                    }
+            apps={
+                "grafana": {
+                    "source": _portable_chart_source(
+                        repo="https://example.invalid/charts",
+                        chart="grafana",
+                        version="1.0.0",
+                    ),
+                    "release": {
+                        "namespace": "observability",
+                        "name": "grafana",
+                    },
+                    "defaults": {
+                        "values.dashboards.nebius-kubernetes.kubernetes-logs-from-loki": {
+                            "json": "{",
+                            "datasource": "Nebius Logs",
+                        }
+                    },
+                    "cli": {
+                        "dashboard_signals": {
+                            "logs": "nebius-kubernetes/kubernetes-logs-from-loki",
+                        }
+                    },
                 }
-            )
+            }
+        ),
     )
 
     with pytest.raises(
@@ -1085,50 +1135,50 @@ def test_load_component_sources_materializes_grafana_dashboard_signal_json_file(
     _write_catalog_file(
         sources_file,
         _catalog(
-                observability={
-                    "endpoints": {
-                        "read": {
-                            "logs_loki_read": {
-                                "label": "Logs read",
-                                "template": "https://example.invalid/projects/{project_id}",
+            observability={
+                "endpoints": {
+                    "read": {
+                        "logs_loki_read": {
+                            "label": "Logs read",
+                            "template": "https://example.invalid/projects/{project_id}",
+                        }
+                    },
+                    "write": {},
+                }
+            },
+            apps={
+                "grafana": {
+                    "source": _portable_chart_source(
+                        repo="https://example.invalid/charts",
+                        chart="grafana",
+                        version="1.0.0",
+                    ),
+                    "release": {
+                        "namespace": "observability",
+                        "name": "grafana",
+                    },
+                    "defaults": {
+                        "values.dashboards.nebius-kubernetes.kubernetes-logs-from-loki": {
+                            "json_file": "kubernetes-logs.json",
+                            "datasource": "Nebius Logs",
+                        }
+                    },
+                    "cli": {
+                        "datasources": {
+                            "logs": {
+                                "name": "Nebius Logs",
+                                "uid": "nebius-logs",
+                                "type": "loki",
+                                "read_endpoint": "logs_loki_read",
                             }
                         },
-                        "write": {},
-                    }
-                },
-                apps={
-                    "grafana": {
-                        "source": _portable_chart_source(
-                            repo="https://example.invalid/charts",
-                            chart="grafana",
-                            version="1.0.0",
-                        ),
-                        "release": {
-                            "namespace": "observability",
-                            "name": "grafana",
+                        "dashboard_signals": {
+                            "logs": "nebius-kubernetes/kubernetes-logs-from-loki",
                         },
-                        "defaults": {
-                            "values.dashboards.nebius-kubernetes.kubernetes-logs-from-loki": {
-                                "json_file": "kubernetes-logs.json",
-                                "datasource": "Nebius Logs",
-                            }
-                        },
-                        "cli": {
-                            "datasources": {
-                                "logs": {
-                                    "name": "Nebius Logs",
-                                    "uid": "nebius-logs",
-                                    "type": "loki",
-                                    "read_endpoint": "logs_loki_read",
-                                }
-                            },
-                            "dashboard_signals": {
-                                "logs": "nebius-kubernetes/kubernetes-logs-from-loki",
-                            },
-                        },
-                    }
-                },
-            )
+                    },
+                }
+            },
+        ),
     )
 
     loaded = load_component_sources(explicit=sources_file)
@@ -1165,65 +1215,65 @@ def test_load_component_sources_materializes_custom_grafana_dashboard_json_file_
     _write_catalog_file(
         sources_file,
         _catalog(
-                observability={
-                    "endpoints": {
-                        "read": {
-                            "logs_loki_read": {
-                                "label": "Logs read",
-                                "template": "https://example.invalid/logs/{project_id}",
-                            },
-                            "metrics_user_read": {
-                                "label": "Metrics read",
-                                "template": "https://example.invalid/metrics/{project_id}",
-                            },
+            observability={
+                "endpoints": {
+                    "read": {
+                        "logs_loki_read": {
+                            "label": "Logs read",
+                            "template": "https://example.invalid/logs/{project_id}",
                         },
-                        "write": {},
-                    }
-                },
-                apps={
-                    "grafana": {
-                        "source": _portable_chart_source(
-                            repo="https://example.invalid/charts",
-                            chart="grafana",
-                            version="1.0.0",
-                        ),
-                        "release": {
-                            "namespace": "observability",
-                            "name": "grafana",
+                        "metrics_user_read": {
+                            "label": "Metrics read",
+                            "template": "https://example.invalid/metrics/{project_id}",
                         },
-                        "defaults": {
-                            "values.dashboards": {
-                                "myfolder": {
-                                    "kubernetes-mylogs": {
-                                        "datasource": "Nebius Logs",
-                                        "json_file": "./dashboards/myk8slogs-dash.json",
-                                    },
-                                    "kubernetes-mymetrics": {
-                                        "datasource": "Nebius User Metrics",
-                                        "json_file": str(absolute_dashboard_file),
-                                    },
-                                }
+                    },
+                    "write": {},
+                }
+            },
+            apps={
+                "grafana": {
+                    "source": _portable_chart_source(
+                        repo="https://example.invalid/charts",
+                        chart="grafana",
+                        version="1.0.0",
+                    ),
+                    "release": {
+                        "namespace": "observability",
+                        "name": "grafana",
+                    },
+                    "defaults": {
+                        "values.dashboards": {
+                            "myfolder": {
+                                "kubernetes-mylogs": {
+                                    "datasource": "Nebius Logs",
+                                    "json_file": "./dashboards/myk8slogs-dash.json",
+                                },
+                                "kubernetes-mymetrics": {
+                                    "datasource": "Nebius User Metrics",
+                                    "json_file": str(absolute_dashboard_file),
+                                },
                             }
-                        },
-                        "cli": {
-                            "datasources": {
-                                "logs": {
-                                    "name": "Nebius Logs",
-                                    "uid": "nebius-logs",
-                                    "type": "loki",
-                                    "read_endpoint": "logs_loki_read",
-                                },
-                                "user-metrics": {
-                                    "name": "Nebius User Metrics",
-                                    "uid": "nebius-user-metrics",
-                                    "type": "prometheus",
-                                    "read_endpoint": "metrics_user_read",
-                                },
+                        }
+                    },
+                    "cli": {
+                        "datasources": {
+                            "logs": {
+                                "name": "Nebius Logs",
+                                "uid": "nebius-logs",
+                                "type": "loki",
+                                "read_endpoint": "logs_loki_read",
+                            },
+                            "user-metrics": {
+                                "name": "Nebius User Metrics",
+                                "uid": "nebius-user-metrics",
+                                "type": "prometheus",
+                                "read_endpoint": "metrics_user_read",
                             },
                         },
-                    }
-                },
-            )
+                    },
+                }
+            },
+        ),
     )
 
     loaded = load_component_sources(explicit=sources_file)
@@ -1247,37 +1297,37 @@ def test_load_component_sources_rejects_gnet_dashboard_without_uid(
     _write_catalog_file(
         sources_file,
         _catalog(
-                apps={
-                    "grafana": {
-                        "source": _portable_chart_source(
-                            repo="https://example.invalid/charts",
-                            chart="grafana",
-                            version="1.0.0",
-                        ),
-                        "release": {
-                            "namespace": "observability",
-                            "name": "grafana",
-                        },
-                        "defaults": {
-                            "values.dashboards.nebius.service-dashboard": {
-                                "gnetId": 123,
-                                "revision": 1,
-                                "datasource": "Nebius Services",
+            apps={
+                "grafana": {
+                    "source": _portable_chart_source(
+                        repo="https://example.invalid/charts",
+                        chart="grafana",
+                        version="1.0.0",
+                    ),
+                    "release": {
+                        "namespace": "observability",
+                        "name": "grafana",
+                    },
+                    "defaults": {
+                        "values.dashboards.nebius.service-dashboard": {
+                            "gnetId": 123,
+                            "revision": 1,
+                            "datasource": "Nebius Services",
+                        }
+                    },
+                    "cli": {
+                        "datasources": {
+                            "service-metrics": {
+                                "name": "Nebius Services",
+                                "uid": "nebius-service-metrics",
+                                "type": "prometheus",
+                                "read_endpoint": "metrics_service_provider_read",
                             }
                         },
-                        "cli": {
-                            "datasources": {
-                                "service-metrics": {
-                                    "name": "Nebius Services",
-                                    "uid": "nebius-service-metrics",
-                                    "type": "prometheus",
-                                    "read_endpoint": "metrics_service_provider_read",
-                                }
-                            },
-                        },
-                    }
+                    },
                 }
-            )
+            }
+        ),
     )
 
     with pytest.raises(
@@ -1297,38 +1347,38 @@ def test_load_component_sources_rejects_any_grafana_dashboard_unknown_datasource
     _write_catalog_file(
         sources_file,
         _catalog(
-                apps={
-                    "grafana": {
-                        "source": _portable_chart_source(
-                            repo="https://example.invalid/charts",
-                            chart="grafana",
-                            version="1.0.0",
-                        ),
-                        "release": {
-                            "namespace": "observability",
-                            "name": "grafana",
-                        },
-                        "defaults": {
-                            "values.dashboards.nebius.service-dashboard": {
-                                "gnetId": 123,
-                                "revision": 1,
-                                "uid": "service-dashboard",
-                                "datasource": "Missing Datasource",
+            apps={
+                "grafana": {
+                    "source": _portable_chart_source(
+                        repo="https://example.invalid/charts",
+                        chart="grafana",
+                        version="1.0.0",
+                    ),
+                    "release": {
+                        "namespace": "observability",
+                        "name": "grafana",
+                    },
+                    "defaults": {
+                        "values.dashboards.nebius.service-dashboard": {
+                            "gnetId": 123,
+                            "revision": 1,
+                            "uid": "service-dashboard",
+                            "datasource": "Missing Datasource",
+                        }
+                    },
+                    "cli": {
+                        "datasources": {
+                            "service-metrics": {
+                                "name": "Nebius Services",
+                                "uid": "nebius-service-metrics",
+                                "type": "prometheus",
+                                "read_endpoint": "metrics_service_provider_read",
                             }
                         },
-                        "cli": {
-                            "datasources": {
-                                "service-metrics": {
-                                    "name": "Nebius Services",
-                                    "uid": "nebius-service-metrics",
-                                    "type": "prometheus",
-                                    "read_endpoint": "metrics_service_provider_read",
-                                }
-                            },
-                        },
-                    }
+                    },
                 }
-            )
+            }
+        ),
     )
 
     with pytest.raises(
@@ -1348,48 +1398,48 @@ def test_load_component_sources_rejects_mixed_grafana_dashboard_provider_modes(
     _write_catalog_file(
         sources_file,
         _catalog(
-                apps={
-                    "grafana": {
-                        "source": _portable_chart_source(
-                            repo="https://example.invalid/charts",
-                            chart="grafana",
-                            version="1.0.0",
-                        ),
-                        "release": {
-                            "namespace": "observability",
-                            "name": "grafana",
+            apps={
+                "grafana": {
+                    "source": _portable_chart_source(
+                        repo="https://example.invalid/charts",
+                        chart="grafana",
+                        version="1.0.0",
+                    ),
+                    "release": {
+                        "namespace": "observability",
+                        "name": "grafana",
+                    },
+                    "defaults": {
+                        "values.dashboards.nebius.service-dashboard": {
+                            "gnetId": 123,
+                            "revision": 1,
+                            "uid": "service-dashboard",
+                            "datasource": "Nebius Services",
                         },
-                        "defaults": {
-                            "values.dashboards.nebius.service-dashboard": {
-                                "gnetId": 123,
-                                "revision": 1,
-                                "uid": "service-dashboard",
-                                "datasource": "Nebius Services",
-                            },
-                            "values.dashboards.nebius.kubernetes-logs-from-loki": {
-                                "json": json.dumps(
-                                    {
-                                        "uid": "cxcli-test-logs",
-                                        "title": "Logs",
-                                        "panels": [],
-                                    }
-                                ),
-                                "datasource": "Nebius Services",
-                            },
-                        },
-                        "cli": {
-                            "datasources": {
-                                "service-metrics": {
-                                    "name": "Nebius Services",
-                                    "uid": "nebius-service-metrics",
-                                    "type": "prometheus",
-                                    "read_endpoint": "metrics_service_provider_read",
+                        "values.dashboards.nebius.kubernetes-logs-from-loki": {
+                            "json": json.dumps(
+                                {
+                                    "uid": "cxcli-test-logs",
+                                    "title": "Logs",
+                                    "panels": [],
                                 }
-                            },
+                            ),
+                            "datasource": "Nebius Services",
                         },
-                    }
+                    },
+                    "cli": {
+                        "datasources": {
+                            "service-metrics": {
+                                "name": "Nebius Services",
+                                "uid": "nebius-service-metrics",
+                                "type": "prometheus",
+                                "read_endpoint": "metrics_service_provider_read",
+                            }
+                        },
+                    },
                 }
-            )
+            }
+        ),
     )
 
     with pytest.raises(
@@ -1414,27 +1464,27 @@ def test_load_component_sources_rejects_grafana_dashboard_json_and_json_file(
     _write_catalog_file(
         sources_file,
         _catalog(
-                apps={
-                    "grafana": {
-                        "source": _portable_chart_source(
-                            repo="https://example.invalid/charts",
-                            chart="grafana",
-                            version="1.0.0",
-                        ),
-                        "release": {
-                            "namespace": "observability",
-                            "name": "grafana",
-                        },
-                        "defaults": {
-                            "values.dashboards.nebius-kubernetes.kubernetes-logs-from-loki": {
-                                "json": json.dumps({"uid": "inline"}),
-                                "json_file": "kubernetes-logs.json",
-                                "datasource": "Nebius Logs",
-                            }
-                        },
-                    }
+            apps={
+                "grafana": {
+                    "source": _portable_chart_source(
+                        repo="https://example.invalid/charts",
+                        chart="grafana",
+                        version="1.0.0",
+                    ),
+                    "release": {
+                        "namespace": "observability",
+                        "name": "grafana",
+                    },
+                    "defaults": {
+                        "values.dashboards.nebius-kubernetes.kubernetes-logs-from-loki": {
+                            "json": json.dumps({"uid": "inline"}),
+                            "json_file": "kubernetes-logs.json",
+                            "datasource": "Nebius Logs",
+                        }
+                    },
                 }
-            )
+            }
+        ),
     )
 
     with pytest.raises(
@@ -1452,23 +1502,23 @@ def test_load_component_sources_rejects_grafana_logout_timeout_never(tmp_path: P
     _write_catalog_file(
         sources_file,
         _catalog(
-                apps={
-                    "grafana": {
-                        "source": _portable_chart_source(
-                            repo="https://example.invalid/charts",
-                            chart="grafana",
-                            version="1.0.0",
-                        ),
-                        "release": {
-                            "namespace": "observability",
-                            "name": "grafana",
-                        },
-                        "cli": {
-                            "logout-timeout": "never",
-                        },
-                    }
+            apps={
+                "grafana": {
+                    "source": _portable_chart_source(
+                        repo="https://example.invalid/charts",
+                        chart="grafana",
+                        version="1.0.0",
+                    ),
+                    "release": {
+                        "namespace": "observability",
+                        "name": "grafana",
+                    },
+                    "cli": {
+                        "logout-timeout": "never",
+                    },
                 }
-            )
+            }
+        ),
     )
 
     with pytest.raises(
@@ -1486,25 +1536,25 @@ def test_load_component_sources_rejects_nested_grafana_cli_namespace(tmp_path: P
     _write_catalog_file(
         sources_file,
         _catalog(
-                apps={
-                    "grafana": {
-                        "source": _portable_chart_source(
-                            repo="https://example.invalid/charts",
-                            chart="grafana",
-                            version="1.0.0",
-                        ),
-                        "release": {
-                            "namespace": "observability",
-                            "name": "grafana",
-                        },
-                        "cli": {
-                            "grafana": {
-                                "logout-timeout": "20m",
-                            }
-                        },
-                    }
+            apps={
+                "grafana": {
+                    "source": _portable_chart_source(
+                        repo="https://example.invalid/charts",
+                        chart="grafana",
+                        version="1.0.0",
+                    ),
+                    "release": {
+                        "namespace": "observability",
+                        "name": "grafana",
+                    },
+                    "cli": {
+                        "grafana": {
+                            "logout-timeout": "20m",
+                        }
+                    },
                 }
-            )
+            }
+        ),
     )
 
     with pytest.raises(
@@ -1521,30 +1571,30 @@ def test_load_component_sources_rejects_grafana_datasource_unknown_read_endpoint
     _write_catalog_file(
         sources_file,
         _catalog(
-                apps={
-                    "grafana": {
-                        "source": _portable_chart_source(
-                            repo="https://example.invalid/charts",
-                            chart="grafana",
-                            version="1.0.0",
-                        ),
-                        "release": {
-                            "namespace": "observability",
-                            "name": "grafana",
-                        },
-                        "cli": {
-                            "datasources": {
-                                "future": {
-                                    "name": "Future Read API",
-                                    "uid": "future-read-api",
-                                    "type": "prometheus",
-                                    "read_endpoint": "future_read",
-                                }
+            apps={
+                "grafana": {
+                    "source": _portable_chart_source(
+                        repo="https://example.invalid/charts",
+                        chart="grafana",
+                        version="1.0.0",
+                    ),
+                    "release": {
+                        "namespace": "observability",
+                        "name": "grafana",
+                    },
+                    "cli": {
+                        "datasources": {
+                            "future": {
+                                "name": "Future Read API",
+                                "uid": "future-read-api",
+                                "type": "prometheus",
+                                "read_endpoint": "future_read",
                             }
-                        },
-                    }
+                        }
+                    },
                 }
-            )
+            }
+        ),
     )
 
     with pytest.raises(
@@ -1565,60 +1615,60 @@ def test_load_component_sources_allows_grafana_datasource_bound_to_catalog_read_
     _write_catalog_file(
         sources_file,
         _catalog(
-                observability={
-                    "endpoints": {
-                        "read": {
-                            "future_read": {
-                                "label": "Future read API",
-                                "template": "https://read.example.invalid/projects/{project_id}",
-                                "include_when": ["metrics"],
-                            }
+            observability={
+                "endpoints": {
+                    "read": {
+                        "future_read": {
+                            "label": "Future read API",
+                            "template": "https://read.example.invalid/projects/{project_id}",
+                            "include_when": ["metrics"],
                         }
                     }
-                },
-                infra={
-                    "mk8s": {
-                        "source": {
-                            "portable": (
-                                "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3"
-                            )
-                        },
-                        "ui": {"enabled": True},
-                        "cli": {
-                            "observability": {
-                                "primary_agent": {
-                                    "kind": "kubernetes_agent",
-                                    "chart_component_id": "nebius-observability-agent",
-                                    "validation": _kubernetes_agent_validation_enabled(),
-                                },
+                }
+            },
+            infra={
+                "mk8s": {
+                    "source": {
+                        "portable": (
+                            "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3"
+                        )
+                    },
+                    "ui": {"enabled": True},
+                    "cli": {
+                        "observability": {
+                            "primary_agent": {
+                                "kind": "kubernetes_agent",
+                                "chart_component_id": "nebius-observability-agent",
+                                "validation": _kubernetes_agent_validation_enabled(),
+                            },
+                        }
+                    },
+                }
+            },
+            apps={
+                "grafana": {
+                    "source": _portable_chart_source(
+                        repo="https://example.invalid/charts",
+                        chart="grafana",
+                        version="1.0.0",
+                    ),
+                    "release": {
+                        "namespace": "observability",
+                        "name": "grafana",
+                    },
+                    "cli": {
+                        "datasources": {
+                            "future": {
+                                "name": "Future Read API",
+                                "uid": "future-read-api",
+                                "type": "prometheus",
+                                "read_endpoint": "future_read",
                             }
-                        },
-                    }
-                },
-                apps={
-                    "grafana": {
-                        "source": _portable_chart_source(
-                            repo="https://example.invalid/charts",
-                            chart="grafana",
-                            version="1.0.0",
-                        ),
-                        "release": {
-                            "namespace": "observability",
-                            "name": "grafana",
-                        },
-                        "cli": {
-                            "datasources": {
-                                "future": {
-                                    "name": "Future Read API",
-                                    "uid": "future-read-api",
-                                    "type": "prometheus",
-                                    "read_endpoint": "future_read",
-                                }
-                            }
-                        },
-                    }
-                },
-            )
+                        }
+                    },
+                }
+            },
+        ),
     )
 
     loaded = load_component_sources(explicit=sources_file)
@@ -1634,26 +1684,26 @@ def test_load_component_sources_parses_mk8s_observability_validation_switch(
     _write_catalog_file(
         sources_file,
         _catalog(
-                infra={
-                    "mk8s": {
-                        "source": {
-                            "portable": (
-                                "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3"
-                            )
-                        },
-                        "ui": {"enabled": True},
-                        "cli": {
-                            "observability": {
-                                "primary_agent": {
-                                    "kind": "kubernetes_agent",
-                                    "chart_component_id": "nebius-observability-agent",
-                                    "validation": False,
-                                },
-                            }
-                        },
-                    }
-                },
-            )
+            infra={
+                "mk8s": {
+                    "source": {
+                        "portable": (
+                            "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3"
+                        )
+                    },
+                    "ui": {"enabled": True},
+                    "cli": {
+                        "observability": {
+                            "primary_agent": {
+                                "kind": "kubernetes_agent",
+                                "chart_component_id": "nebius-observability-agent",
+                                "validation": False,
+                            },
+                        }
+                    },
+                }
+            },
+        ),
     )
 
     loaded = load_component_sources(explicit=sources_file)
@@ -1671,36 +1721,36 @@ def test_load_component_sources_rejects_component_local_observability_endpoints(
     _write_catalog_file(
         sources_file,
         _catalog(
-                infra={
-                    "mk8s": {
-                        "source": {
-                            "portable": (
-                                "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3"
-                            )
-                        },
-                        "ui": {"enabled": True},
-                        "cli": {
-                            "observability": {
-                                "primary_agent": {
-                                    "kind": "kubernetes_agent",
-                                    "chart_component_id": "nebius-observability-agent",
-                                    "validation": _kubernetes_agent_validation_enabled(),
-                                },
-                                "endpoints": {
-                                    "read": {
-                                        "future_read": {
-                                            "label": "Future read API",
-                                            "template": (
-                                                "https://read.example.invalid/projects/{project_id}"
-                                            ),
-                                        }
+            infra={
+                "mk8s": {
+                    "source": {
+                        "portable": (
+                            "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3"
+                        )
+                    },
+                    "ui": {"enabled": True},
+                    "cli": {
+                        "observability": {
+                            "primary_agent": {
+                                "kind": "kubernetes_agent",
+                                "chart_component_id": "nebius-observability-agent",
+                                "validation": _kubernetes_agent_validation_enabled(),
+                            },
+                            "endpoints": {
+                                "read": {
+                                    "future_read": {
+                                        "label": "Future read API",
+                                        "template": (
+                                            "https://read.example.invalid/projects/{project_id}"
+                                        ),
                                     }
-                                },
-                            }
-                        },
-                    }
-                },
-            )
+                                }
+                            },
+                        }
+                    },
+                }
+            },
+        ),
     )
 
     with pytest.raises(
@@ -1720,36 +1770,36 @@ def test_load_component_sources_allows_service_observability_for_non_agent_infra
     _write_catalog_file(
         sources_file,
         _catalog(
-                infra={
-                    "object-storage": {
-                        "source": {
-                            "portable": (
-                                "git::https://github.com/example/infra.git//modules/object-storage?ref=v1.2.3"
-                            )
-                        },
-                        "ui": {"enabled": True},
-                        "cli": {
-                            "observability": {
-                                "service_metrics": {
-                                    "buckets": {
-                                        "future_storage": {
-                                            "label": "Future storage metrics",
-                                        }
+            infra={
+                "object-storage": {
+                    "source": {
+                        "portable": (
+                            "git::https://github.com/example/infra.git//modules/object-storage?ref=v1.2.3"
+                        )
+                    },
+                    "ui": {"enabled": True},
+                    "cli": {
+                        "observability": {
+                            "service_metrics": {
+                                "buckets": {
+                                    "future_storage": {
+                                        "label": "Future storage metrics",
                                     }
-                                },
-                                "service_logs": {
-                                    "buckets": {
-                                        "future_logs": {
-                                            "label": "Future service logs",
-                                            "include_when": ["inputs.audit_enabled"],
-                                        }
+                                }
+                            },
+                            "service_logs": {
+                                "buckets": {
+                                    "future_logs": {
+                                        "label": "Future service logs",
+                                        "include_when": ["inputs.audit_enabled"],
                                     }
-                                },
-                            }
-                        },
-                    }
-                },
-            )
+                                }
+                            },
+                        }
+                    },
+                }
+            },
+        ),
     )
 
     loaded = load_component_sources(explicit=sources_file)
@@ -1970,7 +2020,9 @@ def test_bundled_network_operator_declares_single_nfd_owner_policy() -> None:
     network_operator = next(
         item for item in loaded.helm_charts if item.name == "nvidia-network-operator"
     )
+    defaults = {item.target_path: item.value for item in network_operator.defaults}
 
+    assert defaults["values.operator.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
     assert [item.name for item in network_operator.mk8s_gpu.default_sets] == [
         "network_operator_nfd",
         "driverful_infiniband_node_selection",
@@ -2025,39 +2077,39 @@ def test_component_sources_rejects_invalid_observability_gpu_node_label_stack_so
     _write_catalog_file(
         sources_file,
         _catalog(
-                apps={
-                    "gpu-operator": {
-                        "source": _portable_chart_source(
-                            repo="https://example.invalid/charts",
-                            chart="gpu-operator",
-                            version="1.0.0",
-                        ),
-                        "release": {
-                            "namespace": "gpu-system",
-                            "name": "gpu-operator",
-                        },
-                        "ui": {"enabled": False},
-                        "cli": {
-                            "observability": {
-                                "metric_targets": [
-                                    {
-                                        "job_name": "cxcli-nvidia-dcgm-exporter",
-                                        "discovery": {
-                                            "kind": "prometheus_annotations",
-                                            "service_name": "nvidia-dcgm-exporter",
-                                        },
-                                        "managed_gpu_node_policy": {
-                                            "stack_sources": [
-                                                "driverful",
-                                            ]
-                                        },
-                                    }
-                                ]
-                            }
-                        },
-                    }
+            apps={
+                "gpu-operator": {
+                    "source": _portable_chart_source(
+                        repo="https://example.invalid/charts",
+                        chart="gpu-operator",
+                        version="1.0.0",
+                    ),
+                    "release": {
+                        "namespace": "gpu-system",
+                        "name": "gpu-operator",
+                    },
+                    "ui": {"enabled": False},
+                    "cli": {
+                        "observability": {
+                            "metric_targets": [
+                                {
+                                    "job_name": "cxcli-nvidia-dcgm-exporter",
+                                    "discovery": {
+                                        "kind": "prometheus_annotations",
+                                        "service_name": "nvidia-dcgm-exporter",
+                                    },
+                                    "managed_gpu_node_policy": {
+                                        "stack_sources": [
+                                            "driverful",
+                                        ]
+                                    },
+                                }
+                            ]
+                        }
+                    },
                 }
-            )
+            }
+        ),
     )
 
     with pytest.raises(
@@ -2289,6 +2341,12 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         "inputs.mk8s_gpu_node_group_overrides": {
             "prompt": False,
         },
+        "inputs.gpu_clusters": {
+            "prompt": False,
+        },
+        "inputs.node_groups": {
+            "prompt": False,
+        },
     }
     assert mk8s.mk8s_boot_disks.cpu.default_type == "NETWORK_SSD"
     assert mk8s.mk8s_boot_disks.gpu.default_type == "NETWORK_SSD"
@@ -2465,7 +2523,7 @@ def test_bundled_cpu_only_charts_avoid_nebius_gpu_nodes_by_default() -> None:
         assert dashboard["datasource"] == binding.datasource
         assert "json_file" not in dashboard
     assert (
-        'query_result(count by (kubernetes_io_hostname) '
+        "query_result(count by (kubernetes_io_hostname) "
         '(container_cpu_usage_seconds_total{\\"k8s.cluster.id\\"=~\\"$Cluster\\",pod!=\\"\\"}))'
         in grafana_dashboards["kubernetes-cluster-monitoring"]["json"]
     )
@@ -2868,26 +2926,26 @@ def test_load_component_sources_rejects_unsupported_config_bindings_field(
     _write_catalog_file(
         sources_file,
         _catalog(
-                cli={
-                    "flux": {
-                        "version": "v2.8.0",
-                    }
-                },
-                infra={
-                    "wireguard-jumphost": {
-                        "source": {
-                            "portable": (
-                                "git::https://github.com/example/infra.git//modules/"
-                                "wireguard-jumphost?ref=v1.2.3"
-                            ),
-                            "local": "platform-infra/modules/wireguard-jumphost",
-                        },
-                        "config_bindings": {
-                            "inputs.ssh_user_name": "shared.admin_ssh.user_name",
-                        },
-                    }
-                },
-            )
+            cli={
+                "flux": {
+                    "version": "v2.8.0",
+                }
+            },
+            infra={
+                "wireguard-jumphost": {
+                    "source": {
+                        "portable": (
+                            "git::https://github.com/example/infra.git//modules/"
+                            "wireguard-jumphost?ref=v1.2.3"
+                        ),
+                        "local": "platform-infra/modules/wireguard-jumphost",
+                    },
+                    "config_bindings": {
+                        "inputs.ssh_user_name": "shared.admin_ssh.user_name",
+                    },
+                }
+            },
+        ),
     )
 
     monkeypatch.setenv("NEBIUS_CXCLI_COMPONENT_SOURCES_FILE", str(sources_file))
@@ -2904,12 +2962,12 @@ def test_load_component_sources_rejects_invalid_flux_version(monkeypatch, tmp_pa
     _write_catalog_file(
         sources_file,
         _catalog(
-                cli={
-                    "flux": {
-                        "version": "latest",
-                    }
+            cli={
+                "flux": {
+                    "version": "latest",
                 }
-            )
+            }
+        ),
     )
 
     monkeypatch.setenv("NEBIUS_CXCLI_COMPONENT_SOURCES_FILE", str(sources_file))
@@ -2928,12 +2986,12 @@ def test_load_component_sources_rejects_invalid_terraform_version(
     _write_catalog_file(
         sources_file,
         _catalog(
-                cli={
-                    "terraform": {
-                        "version": "latest",
-                    }
+            cli={
+                "terraform": {
+                    "version": "latest",
                 }
-            )
+            }
+        ),
     )
 
     monkeypatch.setenv("NEBIUS_CXCLI_COMPONENT_SOURCES_FILE", str(sources_file))
@@ -2949,262 +3007,262 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
     _write_catalog_file(
         sources_file,
         _catalog(
-                infra={
-                    "mk8s": {
-                        "source": {
-                            "portable": "git::https://example.invalid/modules/mk8s?ref=main",
-                            "local": "../../platform-infra/modules/mk8s",
-                        },
-                        "ui": {"enabled": True},
-                        "cli": {
-                            "gpu": {
-                                "image_preferences": {
-                                    "preferred_gpu_stack_presets": ["cuda13.0", "cuda12.8"],
-                                    "preferred_os": ["ubuntu24.04", "ubuntu22.04"],
-                                },
-                                "validations": {
-                                    "operator_readiness": {
-                                        "enabled_by_default": True,
-                                        "timeout": "20m",
-                                    },
-                                    "gpu_visibility": {
-                                        "enabled_by_default": True,
-                                        "namespace": "gpu-validation",
-                                        "image": "nvcr.io/example/vectoradd:latest",
-                                        "timeout": "10m",
-                                        "max_nodes": 4,
-                                    },
-                                    "nccl": {
-                                        "enabled_by_default": True,
-                                        "chart_component_id": "nccl-test",
-                                        "timeout": "45m",
-                                        "training_operator_manifest": "github.com/example/training-operator?ref=v1.0.0",
-                                        "training_operator_namespace": "kubeflow",
-                                        "average_bus_bandwidth_threshold_gbps": 300,
-                                        "max_nodes": 6,
-                                    },
-                                },
+            infra={
+                "mk8s": {
+                    "source": {
+                        "portable": "git::https://example.invalid/modules/mk8s?ref=main",
+                        "local": "../../platform-infra/modules/mk8s",
+                    },
+                    "ui": {"enabled": True},
+                    "cli": {
+                        "gpu": {
+                            "image_preferences": {
+                                "preferred_gpu_stack_presets": ["cuda13.0", "cuda12.8"],
+                                "preferred_os": ["ubuntu24.04", "ubuntu22.04"],
                             },
-                            "observability": {
-                                "primary_agent": {
-                                    "kind": "kubernetes_agent",
-                                    "chart_component_id": "nebius-observability-agent",
-                                    "validation": _kubernetes_agent_validation_enabled(),
-                                    "logs": {
-                                        "default_enabled": True,
-                                        "collect_agent_logs": False,
-                                        "excluded_namespaces": ["kube-system"],
-                                    },
-                                    "metrics": {
-                                        "default_enabled": True,
-                                        "collect_agent_metrics": False,
-                                        "collect_k8s_cluster_metrics": True,
-                                        "excluded_namespaces": ["kube-system"],
-                                    },
-                                    "traces": {
-                                        "default_enabled": True,
-                                    },
+                            "validations": {
+                                "operator_readiness": {
+                                    "enabled_by_default": True,
+                                    "timeout": "20m",
+                                },
+                                "gpu_visibility": {
+                                    "enabled_by_default": True,
+                                    "namespace": "gpu-validation",
+                                    "image": "nvcr.io/example/vectoradd:latest",
+                                    "timeout": "10m",
+                                    "max_nodes": 4,
+                                },
+                                "nccl": {
+                                    "enabled_by_default": True,
+                                    "chart_component_id": "nccl-test",
+                                    "timeout": "45m",
+                                    "training_operator_manifest": "github.com/example/training-operator?ref=v1.0.0",
+                                    "training_operator_namespace": "kubeflow",
+                                    "average_bus_bandwidth_threshold_gbps": 300,
+                                    "max_nodes": 6,
                                 },
                             },
                         },
-                    }
-                },
-                apps={
-                    "gpu-operator": {
-                        "source": _portable_chart_source(
-                            repo="https://example.invalid/charts",
-                            chart="gpu-operator",
-                            version="1.0.0",
-                        ),
-                        "release": {
-                            "namespace": "gpu-system",
-                            "name": "gpu-operator",
+                        "observability": {
+                            "primary_agent": {
+                                "kind": "kubernetes_agent",
+                                "chart_component_id": "nebius-observability-agent",
+                                "validation": _kubernetes_agent_validation_enabled(),
+                                "logs": {
+                                    "default_enabled": True,
+                                    "collect_agent_logs": False,
+                                    "excluded_namespaces": ["kube-system"],
+                                },
+                                "metrics": {
+                                    "default_enabled": True,
+                                    "collect_agent_metrics": False,
+                                    "collect_k8s_cluster_metrics": True,
+                                    "excluded_namespaces": ["kube-system"],
+                                },
+                                "traces": {
+                                    "default_enabled": True,
+                                },
+                            },
                         },
-                        "ui": {"enabled": False},
-                        "cli": {
-                            "mk8s_gpu_policy": {
-                                "role": "gpu_operator",
-                                "rules": [
-                                    {
-                                        "auto_enable": True,
+                    },
+                }
+            },
+            apps={
+                "gpu-operator": {
+                    "source": _portable_chart_source(
+                        repo="https://example.invalid/charts",
+                        chart="gpu-operator",
+                        version="1.0.0",
+                    ),
+                    "release": {
+                        "namespace": "gpu-system",
+                        "name": "gpu-operator",
+                    },
+                    "ui": {"enabled": False},
+                    "cli": {
+                        "mk8s_gpu_policy": {
+                            "role": "gpu_operator",
+                            "rules": [
+                                {
+                                    "auto_enable": True,
+                                },
+                                {
+                                    "gpu_stack_source": "nebius_image",
+                                    "defaults": {
+                                        "values.driver.enabled": False,
+                                        "values.toolkit.enabled": False,
+                                        "values.driver.nvidiaDriverCRD.enabled": False,
                                     },
-                                    {
-                                        "gpu_stack_source": "nebius_image",
-                                        "defaults": {
-                                            "values.driver.enabled": False,
-                                            "values.toolkit.enabled": False,
-                                            "values.driver.nvidiaDriverCRD.enabled": False,
+                                },
+                                {
+                                    "gpu_cluster_enabled": True,
+                                    "defaults": {
+                                        "values.nfd.enabled": False,
+                                    },
+                                },
+                                {
+                                    "gpu_stack_source": "operator_managed",
+                                    "match_platforms": [
+                                        "gpu-b200-sxm",
+                                        "gpu-b200-sxm-a",
+                                    ],
+                                    "defaults": {
+                                        "values.nfd.enabled": False,
+                                    },
+                                },
+                                {
+                                    "gpu_stack_source": "operator_managed",
+                                    "defaults": {
+                                        "values.driver.enabled": True,
+                                        "values.toolkit.enabled": True,
+                                        "values.driver.nvidiaDriverCRD.enabled": False,
+                                    },
+                                },
+                            ],
+                            "install_after": ["network-op"],
+                        },
+                        "observability": {
+                            "metric_targets": [
+                                {
+                                    "job_name": "cxcli-nvidia-dcgm-exporter",
+                                    "discovery": {
+                                        "kind": "prometheus_annotations",
+                                        "service_name": "nvidia-dcgm-exporter",
+                                        "port": 9400,
+                                    },
+                                    "managed_gpu_node_policy": {
+                                        "labels": {
+                                            "nvidia.com/gpu.deploy.operands": "true",
+                                            "nvidia.com/gpu.deploy.dcgm-exporter": "true",
                                         },
-                                    },
-                                    {
-                                        "gpu_cluster_enabled": True,
-                                        "defaults": {
-                                            "values.nfd.enabled": False,
+                                        "selector": {
+                                            "nebius.com/gpu": "true",
                                         },
-                                    },
-                                    {
-                                        "gpu_stack_source": "operator_managed",
-                                        "match_platforms": [
-                                            "gpu-b200-sxm",
-                                            "gpu-b200-sxm-a",
+                                        "stack_sources": [
+                                            "nebius_image",
                                         ],
-                                        "defaults": {
-                                            "values.nfd.enabled": False,
-                                        },
                                     },
-                                    {
-                                        "gpu_stack_source": "operator_managed",
-                                        "defaults": {
-                                            "values.driver.enabled": True,
-                                            "values.toolkit.enabled": True,
-                                            "values.driver.nvidiaDriverCRD.enabled": False,
-                                        },
-                                    },
-                                ],
-                                "install_after": ["network-op"],
-                            },
-                            "observability": {
-                                "metric_targets": [
-                                    {
-                                        "job_name": "cxcli-nvidia-dcgm-exporter",
-                                        "discovery": {
-                                            "kind": "prometheus_annotations",
-                                            "service_name": "nvidia-dcgm-exporter",
-                                            "port": 9400,
-                                        },
-                                        "managed_gpu_node_policy": {
-                                            "labels": {
-                                                "nvidia.com/gpu.deploy.operands": "true",
-                                                "nvidia.com/gpu.deploy.dcgm-exporter": "true",
-                                            },
-                                            "selector": {
-                                                "nebius.com/gpu": "true",
-                                            },
-                                            "stack_sources": [
-                                                "nebius_image",
-                                            ],
-                                        },
-                                    }
-                                ]
-                            },
-                        },
-                    },
-                    "network-op": {
-                        "source": _portable_chart_source(
-                            repo="https://example.invalid/charts",
-                            chart="network-operator",
-                            version="1.0.0",
-                        ),
-                        "release": {
-                            "namespace": "network-system",
-                            "name": "network-operator",
-                        },
-                        "ui": {"enabled": False},
-                        "cli": {
-                            "mk8s_gpu_policy": {
-                                "role": "network_operator",
-                                "default_sets": {
-                                    "network_operator_nfd": {
-                                        "values.nfd.enabled": True,
-                                        "values.nfd.deployNodeFeatureRules": True,
-                                    },
-                                    "driverful_infiniband_node_selection": {
-                                        "values.nodeAffinity": {
-                                            "requiredDuringSchedulingIgnoredDuringExecution": {
-                                                "nodeSelectorTerms": [
-                                                    {
-                                                        "matchExpressions": [
-                                                            {
-                                                                "key": "feature.node.kubernetes.io/pci-15b3.present",
-                                                                "operator": "In",
-                                                                "values": ["true"],
-                                                            }
-                                                        ]
-                                                    }
-                                                ]
-                                            }
-                                        }
-                                    }
-                                },
-                                "post_render_patch_sets": {
-                                    "rdma_shared_device_plugin": [
-                                        {
-                                            "target": {
-                                                "group": "mellanox.com",
-                                                "version": "v1alpha1",
-                                                "kind": "NicClusterPolicy",
-                                                "name": "nic-cluster-policy",
-                                            },
-                                            "patch": {
-                                                "apiVersion": "mellanox.com/v1alpha1",
-                                                "kind": "NicClusterPolicy",
-                                                "metadata": {"name": "nic-cluster-policy"},
-                                                "spec": {
-                                                    "rdmaSharedDevicePlugin": {
-                                                        "image": "k8s-rdma-shared-dev-plugin",
-                                                        "repository": "nvcr.io/nvidia/mellanox",
-                                                        "version": "network-operator-v{chart_version}",
-                                                        "config": (
-                                                            '{"periodicUpdateInterval": 0, '
-                                                            '"configList":[]}'
-                                                        ),
-                                                    }
-                                                },
-                                            },
-                                        }
-                                    ]
-                                },
-                                "rules": [
-                                    {
-                                        "gpu_cluster_enabled": True,
-                                        "auto_enable": True,
-                                        "defaults_from": ["network_operator_nfd"],
-                                    },
-                                    {
-                                        "gpu_stack_source": "operator_managed",
-                                        "match_platforms": ["gpu-b200-sxm"],
-                                        "auto_enable": True,
-                                        "defaults_from": ["network_operator_nfd"],
-                                    },
-                                    {
-                                        "gpu_stack_source": "nebius_image",
-                                        "gpu_cluster_enabled": True,
-                                        "defaults_from": ["driverful_infiniband_node_selection"],
-                                        "post_render_patches_from": ["rdma_shared_device_plugin"],
-                                    },
-                                ],
-                            }
-                        },
-                    },
-                    "nccl-test": {
-                        "source": {
-                            "local": {
-                                "path": "../../helm-charts/nccl-test",
-                            }
-                        },
-                        "release": {
-                            "namespace": "nccl-test",
-                            "name": "nccl-test",
-                        },
-                        "ui": {
-                            "enabled": False,
-                            "selectable": False,
-                        },
-                        "cli": {
-                            "mk8s_gpu_policy": {
-                                "rules": [
-                                    {
-                                        "match_platforms": ["gpu-h100-sxm"],
-                                        "defaults": {
-                                            "values.image.repository": "registry.example/nccl",
-                                            "values.image.tag": "latest",
-                                        },
-                                    }
-                                ]
-                            }
+                                }
+                            ]
                         },
                     },
                 },
+                "network-op": {
+                    "source": _portable_chart_source(
+                        repo="https://example.invalid/charts",
+                        chart="network-operator",
+                        version="1.0.0",
+                    ),
+                    "release": {
+                        "namespace": "network-system",
+                        "name": "network-operator",
+                    },
+                    "ui": {"enabled": False},
+                    "cli": {
+                        "mk8s_gpu_policy": {
+                            "role": "network_operator",
+                            "default_sets": {
+                                "network_operator_nfd": {
+                                    "values.nfd.enabled": True,
+                                    "values.nfd.deployNodeFeatureRules": True,
+                                },
+                                "driverful_infiniband_node_selection": {
+                                    "values.nodeAffinity": {
+                                        "requiredDuringSchedulingIgnoredDuringExecution": {
+                                            "nodeSelectorTerms": [
+                                                {
+                                                    "matchExpressions": [
+                                                        {
+                                                            "key": "feature.node.kubernetes.io/pci-15b3.present",
+                                                            "operator": "In",
+                                                            "values": ["true"],
+                                                        }
+                                                    ]
+                                                }
+                                            ]
+                                        }
+                                    }
+                                },
+                            },
+                            "post_render_patch_sets": {
+                                "rdma_shared_device_plugin": [
+                                    {
+                                        "target": {
+                                            "group": "mellanox.com",
+                                            "version": "v1alpha1",
+                                            "kind": "NicClusterPolicy",
+                                            "name": "nic-cluster-policy",
+                                        },
+                                        "patch": {
+                                            "apiVersion": "mellanox.com/v1alpha1",
+                                            "kind": "NicClusterPolicy",
+                                            "metadata": {"name": "nic-cluster-policy"},
+                                            "spec": {
+                                                "rdmaSharedDevicePlugin": {
+                                                    "image": "k8s-rdma-shared-dev-plugin",
+                                                    "repository": "nvcr.io/nvidia/mellanox",
+                                                    "version": "network-operator-v{chart_version}",
+                                                    "config": (
+                                                        '{"periodicUpdateInterval": 0, '
+                                                        '"configList":[]}'
+                                                    ),
+                                                }
+                                            },
+                                        },
+                                    }
+                                ]
+                            },
+                            "rules": [
+                                {
+                                    "gpu_cluster_enabled": True,
+                                    "auto_enable": True,
+                                    "defaults_from": ["network_operator_nfd"],
+                                },
+                                {
+                                    "gpu_stack_source": "operator_managed",
+                                    "match_platforms": ["gpu-b200-sxm"],
+                                    "auto_enable": True,
+                                    "defaults_from": ["network_operator_nfd"],
+                                },
+                                {
+                                    "gpu_stack_source": "nebius_image",
+                                    "gpu_cluster_enabled": True,
+                                    "defaults_from": ["driverful_infiniband_node_selection"],
+                                    "post_render_patches_from": ["rdma_shared_device_plugin"],
+                                },
+                            ],
+                        }
+                    },
+                },
+                "nccl-test": {
+                    "source": {
+                        "local": {
+                            "path": "../../helm-charts/nccl-test",
+                        }
+                    },
+                    "release": {
+                        "namespace": "nccl-test",
+                        "name": "nccl-test",
+                    },
+                    "ui": {
+                        "enabled": False,
+                        "selectable": False,
+                    },
+                    "cli": {
+                        "mk8s_gpu_policy": {
+                            "rules": [
+                                {
+                                    "match_platforms": ["gpu-h100-sxm"],
+                                    "defaults": {
+                                        "values.image.repository": "registry.example/nccl",
+                                        "values.image.tag": "latest",
+                                    },
+                                }
+                            ]
+                        }
+                    },
+                },
+            },
         ),
     )
 
@@ -3341,40 +3399,40 @@ def test_load_component_sources_parses_vm_cli_settings(tmp_path: Path) -> None:
     _write_catalog_file(
         sources_file,
         _catalog(
-                infra={
-                    "vm": {
-                        "source": {
-                            "portable": "git::https://example.invalid/modules/vm?ref=main",
-                            "local": "../../platform-infra/modules/vm",
+            infra={
+                "vm": {
+                    "source": {
+                        "portable": "git::https://example.invalid/modules/vm?ref=main",
+                        "local": "../../platform-infra/modules/vm",
+                    },
+                    "ui": {"enabled": False},
+                    "cli": {
+                        "image_preferences": {
+                            "preferred_cpu_image_families": [
+                                "ubuntu24.04-driverless",
+                                "ubuntu22.04-driverless",
+                            ],
+                            "preferred_gpu_image_families": [
+                                "ubuntu24.04-cuda13.0",
+                                "ubuntu24.04-cuda12",
+                            ],
                         },
-                        "ui": {"enabled": False},
-                        "cli": {
-                            "image_preferences": {
-                                "preferred_cpu_image_families": [
-                                    "ubuntu24.04-driverless",
-                                    "ubuntu22.04-driverless",
-                                ],
-                                "preferred_gpu_image_families": [
-                                    "ubuntu24.04-cuda13.0",
-                                    "ubuntu24.04-cuda12",
-                                ],
-                            },
-                            "observability": {
-                                "primary_agent": {
-                                    "kind": "monitoring_agent",
-                                    "metrics": {
-                                        "default_enabled": True,
-                                    },
-                                    "logs": {
-                                        "default_enabled": False,
-                                        "systemd_units": ["sshd.service"],
-                                    },
+                        "observability": {
+                            "primary_agent": {
+                                "kind": "monitoring_agent",
+                                "metrics": {
+                                    "default_enabled": True,
+                                },
+                                "logs": {
+                                    "default_enabled": False,
+                                    "systemd_units": ["sshd.service"],
                                 },
                             },
                         },
-                    }
-                },
-            )
+                    },
+                }
+            },
+        ),
     )
 
     loaded = load_component_sources(explicit=sources_file)
@@ -3401,41 +3459,41 @@ def test_load_component_sources_parses_vm_public_ingest_package_source(
     _write_catalog_file(
         sources_file,
         _catalog(
-                infra={
-                    "vm": {
-                        "source": {
-                            "portable": "git::https://example.invalid/modules/vm?ref=main",
-                            "local": "../../platform-infra/modules/vm",
-                        },
-                        "ui": {"enabled": False},
-                        "cli": {
-                            "observability": {
-                                "primary_agent": {
-                                    "kind": "monitoring_agent",
+            infra={
+                "vm": {
+                    "source": {
+                        "portable": "git::https://example.invalid/modules/vm?ref=main",
+                        "local": "../../platform-infra/modules/vm",
+                    },
+                    "ui": {"enabled": False},
+                    "cli": {
+                        "observability": {
+                            "primary_agent": {
+                                "kind": "monitoring_agent",
+                            },
+                            "public_ingest": {
+                                "default_enabled": True,
+                                "package": {
+                                    "name": "custom-o11y-agent",
+                                    "version": "1.2.3",
+                                    "apt_repository": "https://repo.example.invalid/o11y",
+                                    "apt_key_url": "https://repo.example.invalid/key.gpg",
+                                    "apt_suite": "stable",
+                                    "apt_component": "main",
+                                    "apt_origin": "repo.example.invalid",
                                 },
-                                "public_ingest": {
-                                    "default_enabled": True,
-                                    "package": {
-                                        "name": "custom-o11y-agent",
-                                        "version": "1.2.3",
-                                        "apt_repository": "https://repo.example.invalid/o11y",
-                                        "apt_key_url": "https://repo.example.invalid/key.gpg",
-                                        "apt_suite": "stable",
-                                        "apt_component": "main",
-                                        "apt_origin": "repo.example.invalid",
-                                    },
-                                    "prometheus": {
-                                        "package_name": "prometheus-agent",
-                                    },
-                                    "metadata_token_file": "/metadata/token",
-                                    "metrics_export_port": 19190,
-                                    "prometheus_agent_port": 19191,
+                                "prometheus": {
+                                    "package_name": "prometheus-agent",
                                 },
+                                "metadata_token_file": "/metadata/token",
+                                "metrics_export_port": 19190,
+                                "prometheus_agent_port": 19191,
                             },
                         },
-                    }
-                },
-            )
+                    },
+                }
+            },
+        ),
     )
 
     loaded = load_component_sources(explicit=sources_file)
@@ -3499,24 +3557,24 @@ def test_load_component_sources_rejects_incomplete_vm_public_ingest(
     _write_catalog_file(
         sources_file,
         _catalog(
-                infra={
-                    "vm": {
-                        "source": {
-                            "portable": "git::https://example.invalid/modules/vm?ref=main",
-                            "local": "../../platform-infra/modules/vm",
-                        },
-                        "ui": {"enabled": False},
-                        "cli": {
-                            "observability": {
-                                "primary_agent": {
-                                    "kind": "monitoring_agent",
-                                },
-                                "public_ingest": public_ingest,
+            infra={
+                "vm": {
+                    "source": {
+                        "portable": "git::https://example.invalid/modules/vm?ref=main",
+                        "local": "../../platform-infra/modules/vm",
+                    },
+                    "ui": {"enabled": False},
+                    "cli": {
+                        "observability": {
+                            "primary_agent": {
+                                "kind": "monitoring_agent",
                             },
+                            "public_ingest": public_ingest,
                         },
-                    }
-                },
-            )
+                    },
+                }
+            },
+        ),
     )
 
     with pytest.raises(ValueError, match=message):
@@ -3530,26 +3588,26 @@ def test_load_component_sources_rejects_top_level_infra_observability_signals(
     _write_catalog_file(
         sources_file,
         _catalog(
-                infra={
-                    "vm": {
-                        "source": {
-                            "portable": "git::https://example.invalid/modules/vm?ref=main",
-                            "local": "../../platform-infra/modules/vm",
-                        },
-                        "ui": {"enabled": False},
-                        "cli": {
-                            "observability": {
-                                "primary_agent": {
-                                    "kind": "monitoring_agent",
-                                },
-                                "logs": {
-                                    "default_enabled": False,
-                                },
+            infra={
+                "vm": {
+                    "source": {
+                        "portable": "git::https://example.invalid/modules/vm?ref=main",
+                        "local": "../../platform-infra/modules/vm",
+                    },
+                    "ui": {"enabled": False},
+                    "cli": {
+                        "observability": {
+                            "primary_agent": {
+                                "kind": "monitoring_agent",
+                            },
+                            "logs": {
+                                "default_enabled": False,
                             },
                         },
-                    }
-                },
-            )
+                    },
+                }
+            },
+        ),
     )
 
     with pytest.raises(
@@ -3572,46 +3630,46 @@ def test_load_component_sources_resolves_local_nccl_chart_source(tmp_path: Path)
     _write_catalog_file(
         sources_file,
         _catalog(
-                infra={
-                    "mk8s": {
-                        "source": {
-                            "portable": "git::https://example.invalid/modules/mk8s?ref=main",
-                            "local": "../../platform-infra/modules/mk8s",
-                        },
-                        "ui": {"enabled": True},
-                        "cli": {
-                            "gpu": {
-                                "validations": {
-                                    "nccl": {
-                                        "enabled_by_default": True,
-                                        "chart_component_id": "nccl-test",
-                                        "timeout": "45m",
-                                        "training_operator_manifest": "github.com/example/training-operator?ref=v1.0.0",
-                                        "training_operator_namespace": "kubeflow",
-                                    }
+            infra={
+                "mk8s": {
+                    "source": {
+                        "portable": "git::https://example.invalid/modules/mk8s?ref=main",
+                        "local": "../../platform-infra/modules/mk8s",
+                    },
+                    "ui": {"enabled": True},
+                    "cli": {
+                        "gpu": {
+                            "validations": {
+                                "nccl": {
+                                    "enabled_by_default": True,
+                                    "chart_component_id": "nccl-test",
+                                    "timeout": "45m",
+                                    "training_operator_manifest": "github.com/example/training-operator?ref=v1.0.0",
+                                    "training_operator_namespace": "kubeflow",
                                 }
                             }
-                        },
-                    }
-                },
-                apps={
-                    "nccl-test": {
-                        "source": {
-                            "local": {
-                                "path": "./helm-charts/nccl-test",
-                            }
-                        },
-                        "release": {
-                            "namespace": "nccl-test",
-                            "name": "nccl-test",
-                        },
-                        "ui": {
-                            "enabled": False,
-                            "selectable": False,
-                        },
-                    }
-                },
-            )
+                        }
+                    },
+                }
+            },
+            apps={
+                "nccl-test": {
+                    "source": {
+                        "local": {
+                            "path": "./helm-charts/nccl-test",
+                        }
+                    },
+                    "release": {
+                        "namespace": "nccl-test",
+                        "name": "nccl-test",
+                    },
+                    "ui": {
+                        "enabled": False,
+                        "selectable": False,
+                    },
+                }
+            },
+        ),
     )
 
     loaded = load_component_sources(explicit=sources_file, source_profile=SourceProfile.LOCAL)
@@ -3627,26 +3685,26 @@ def test_load_component_sources_rejects_invalid_mk8s_gpu_app_role_value(tmp_path
     _write_catalog_file(
         sources_file,
         _catalog(
-                apps={
-                    "gpu-operator": {
-                        "source": _portable_chart_source(
-                            repo="https://example.invalid/charts",
-                            chart="gpu-operator",
-                            version="1.0.0",
-                        ),
-                        "release": {
-                            "namespace": "gpu-system",
-                            "name": "gpu-operator",
-                        },
-                        "ui": {"enabled": False},
-                        "cli": {
-                            "mk8s_gpu_policy": {
-                                "role": "device_plugin",
-                            }
-                        },
-                    }
-                },
-            )
+            apps={
+                "gpu-operator": {
+                    "source": _portable_chart_source(
+                        repo="https://example.invalid/charts",
+                        chart="gpu-operator",
+                        version="1.0.0",
+                    ),
+                    "release": {
+                        "namespace": "gpu-system",
+                        "name": "gpu-operator",
+                    },
+                    "ui": {"enabled": False},
+                    "cli": {
+                        "mk8s_gpu_policy": {
+                            "role": "device_plugin",
+                        }
+                    },
+                }
+            },
+        ),
     )
 
     with pytest.raises(
@@ -3661,26 +3719,26 @@ def test_load_component_sources_rejects_legacy_mk8s_gpu_app_cli_key(tmp_path: Pa
     _write_catalog_file(
         sources_file,
         _catalog(
-                apps={
-                    "gpu-operator": {
-                        "source": _portable_chart_source(
-                            repo="https://example.invalid/charts",
-                            chart="gpu-operator",
-                            version="1.0.0",
-                        ),
-                        "release": {
-                            "namespace": "gpu-system",
-                            "name": "gpu-operator",
-                        },
-                        "ui": {"enabled": False},
-                        "cli": {
-                            "mk8s_gpu": {
-                                "role": "gpu_operator",
-                            }
-                        },
-                    }
-                },
-            )
+            apps={
+                "gpu-operator": {
+                    "source": _portable_chart_source(
+                        repo="https://example.invalid/charts",
+                        chart="gpu-operator",
+                        version="1.0.0",
+                    ),
+                    "release": {
+                        "namespace": "gpu-system",
+                        "name": "gpu-operator",
+                    },
+                    "ui": {"enabled": False},
+                    "cli": {
+                        "mk8s_gpu": {
+                            "role": "gpu_operator",
+                        }
+                    },
+                }
+            },
+        ),
     )
 
     with pytest.raises(
@@ -3695,31 +3753,31 @@ def test_load_component_sources_rejects_empty_mk8s_gpu_rule(tmp_path: Path) -> N
     _write_catalog_file(
         sources_file,
         _catalog(
-                apps={
-                    "gpu-operator": {
-                        "source": _portable_chart_source(
-                            repo="https://example.invalid/charts",
-                            chart="gpu-operator",
-                            version="1.0.0",
-                        ),
-                        "release": {
-                            "namespace": "gpu-system",
-                            "name": "gpu-operator",
-                        },
-                        "ui": {"enabled": False},
-                        "cli": {
-                            "mk8s_gpu_policy": {
-                                "role": "gpu_operator",
-                                "rules": [
-                                    {
-                                        "gpu_stack_source": "operator_managed",
-                                    }
-                                ],
-                            }
-                        },
-                    }
-                },
-            )
+            apps={
+                "gpu-operator": {
+                    "source": _portable_chart_source(
+                        repo="https://example.invalid/charts",
+                        chart="gpu-operator",
+                        version="1.0.0",
+                    ),
+                    "release": {
+                        "namespace": "gpu-system",
+                        "name": "gpu-operator",
+                    },
+                    "ui": {"enabled": False},
+                    "cli": {
+                        "mk8s_gpu_policy": {
+                            "role": "gpu_operator",
+                            "rules": [
+                                {
+                                    "gpu_stack_source": "operator_managed",
+                                }
+                            ],
+                        }
+                    },
+                }
+            },
+        ),
     )
 
     with pytest.raises(
@@ -3736,32 +3794,32 @@ def test_load_component_sources_rejects_unknown_mk8s_gpu_default_set_reference(
     _write_catalog_file(
         sources_file,
         _catalog(
-                apps={
-                    "network-op": {
-                        "source": _portable_chart_source(
-                            repo="https://example.invalid/charts",
-                            chart="network-operator",
-                            version="1.0.0",
-                        ),
-                        "release": {
-                            "namespace": "network-system",
-                            "name": "network-operator",
-                        },
-                        "ui": {"enabled": False},
-                        "cli": {
-                            "mk8s_gpu_policy": {
-                                "role": "network_operator",
-                                "rules": [
-                                    {
-                                        "gpu_stack_source": "nebius_image",
-                                        "defaults_from": ["missing-set"],
-                                    }
-                                ],
-                            }
-                        },
-                    }
-                },
-            )
+            apps={
+                "network-op": {
+                    "source": _portable_chart_source(
+                        repo="https://example.invalid/charts",
+                        chart="network-operator",
+                        version="1.0.0",
+                    ),
+                    "release": {
+                        "namespace": "network-system",
+                        "name": "network-operator",
+                    },
+                    "ui": {"enabled": False},
+                    "cli": {
+                        "mk8s_gpu_policy": {
+                            "role": "network_operator",
+                            "rules": [
+                                {
+                                    "gpu_stack_source": "nebius_image",
+                                    "defaults_from": ["missing-set"],
+                                }
+                            ],
+                        }
+                    },
+                }
+            },
+        ),
     )
 
     with pytest.raises(
@@ -3778,32 +3836,32 @@ def test_load_component_sources_rejects_unknown_mk8s_gpu_post_render_patch_set_r
     _write_catalog_file(
         sources_file,
         _catalog(
-                apps={
-                    "network-op": {
-                        "source": _portable_chart_source(
-                            repo="https://example.invalid/charts",
-                            chart="network-operator",
-                            version="1.0.0",
-                        ),
-                        "release": {
-                            "namespace": "network-system",
-                            "name": "network-operator",
-                        },
-                        "ui": {"enabled": False},
-                        "cli": {
-                            "mk8s_gpu_policy": {
-                                "role": "network_operator",
-                                "rules": [
-                                    {
-                                        "gpu_stack_source": "nebius_image",
-                                        "post_render_patches_from": ["missing-patch-set"],
-                                    }
-                                ],
-                            }
-                        },
-                    }
-                },
-            )
+            apps={
+                "network-op": {
+                    "source": _portable_chart_source(
+                        repo="https://example.invalid/charts",
+                        chart="network-operator",
+                        version="1.0.0",
+                    ),
+                    "release": {
+                        "namespace": "network-system",
+                        "name": "network-operator",
+                    },
+                    "ui": {"enabled": False},
+                    "cli": {
+                        "mk8s_gpu_policy": {
+                            "role": "network_operator",
+                            "rules": [
+                                {
+                                    "gpu_stack_source": "nebius_image",
+                                    "post_render_patches_from": ["missing-patch-set"],
+                                }
+                            ],
+                        }
+                    },
+                }
+            },
+        ),
     )
 
     with pytest.raises(
@@ -3820,54 +3878,52 @@ def test_load_component_sources_rejects_chart_version_template_without_chart_ver
     _write_catalog_file(
         sources_file,
         _catalog(
-                apps={
-                    "network-op": {
-                        "source": _portable_chart_source(
-                            repo="https://example.invalid/charts",
-                            chart="network-operator",
-                        ),
-                        "release": {
-                            "namespace": "network-system",
-                            "name": "network-operator",
-                        },
-                        "ui": {"enabled": False},
-                        "cli": {
-                            "mk8s_gpu_policy": {
-                                "role": "network_operator",
-                                "post_render_patch_sets": {
-                                    "rdma": [
-                                        {
-                                            "target": {
-                                                "group": "mellanox.com",
-                                                "version": "v1alpha1",
-                                                "kind": "NicClusterPolicy",
-                                                "name": "nic-cluster-policy",
-                                            },
-                                            "patch": {
-                                                "apiVersion": "mellanox.com/v1alpha1",
-                                                "kind": "NicClusterPolicy",
-                                                "spec": {
-                                                    "rdmaSharedDevicePlugin": {
-                                                        "version": (
-                                                            "network-operator-v{chart_version}"
-                                                        )
-                                                    }
-                                                },
-                                            },
-                                        }
-                                    ]
-                                },
-                                "rules": [
+            apps={
+                "network-op": {
+                    "source": _portable_chart_source(
+                        repo="https://example.invalid/charts",
+                        chart="network-operator",
+                    ),
+                    "release": {
+                        "namespace": "network-system",
+                        "name": "network-operator",
+                    },
+                    "ui": {"enabled": False},
+                    "cli": {
+                        "mk8s_gpu_policy": {
+                            "role": "network_operator",
+                            "post_render_patch_sets": {
+                                "rdma": [
                                     {
-                                        "gpu_stack_source": "nebius_image",
-                                        "post_render_patches_from": ["rdma"],
+                                        "target": {
+                                            "group": "mellanox.com",
+                                            "version": "v1alpha1",
+                                            "kind": "NicClusterPolicy",
+                                            "name": "nic-cluster-policy",
+                                        },
+                                        "patch": {
+                                            "apiVersion": "mellanox.com/v1alpha1",
+                                            "kind": "NicClusterPolicy",
+                                            "spec": {
+                                                "rdmaSharedDevicePlugin": {
+                                                    "version": ("network-operator-v{chart_version}")
+                                                }
+                                            },
+                                        },
                                     }
-                                ],
-                            }
-                        },
-                    }
-                },
-            )
+                                ]
+                            },
+                            "rules": [
+                                {
+                                    "gpu_stack_source": "nebius_image",
+                                    "post_render_patches_from": ["rdma"],
+                                }
+                            ],
+                        }
+                    },
+                }
+            },
+        ),
     )
 
     with pytest.raises(
@@ -3928,18 +3984,18 @@ def test_validate_sources_resolves_relative_local_module_path_from_component_sou
     _write_catalog_file(
         sources_file,
         _catalog(
-                infra={
-                    "demo-module": {
-                        "source": {
-                            "portable": "git::https://github.com/example/infra.git//modules/demo-module?ref=v1.2.3",
-                            "local": "./modules/demo-module",
-                        },
-                        "ui": {
-                            "enabled": True,
-                        },
-                    }
+            infra={
+                "demo-module": {
+                    "source": {
+                        "portable": "git::https://github.com/example/infra.git//modules/demo-module?ref=v1.2.3",
+                        "local": "./modules/demo-module",
+                    },
+                    "ui": {
+                        "enabled": True,
+                    },
                 }
-            )
+            }
+        ),
     )
 
     elsewhere = tmp_path / "elsewhere"
@@ -4000,18 +4056,18 @@ def test_validate_sources_accepts_absolute_local_module_path(monkeypatch, tmp_pa
     _write_catalog_file(
         sources_file,
         _catalog(
-                infra={
-                    "demo-module": {
-                        "source": {
-                            "portable": "git::https://github.com/example/infra.git//modules/demo-module?ref=v1.2.3",
-                            "local": str(module_dir),
-                        },
-                        "ui": {
-                            "enabled": True,
-                        },
-                    }
+            infra={
+                "demo-module": {
+                    "source": {
+                        "portable": "git::https://github.com/example/infra.git//modules/demo-module?ref=v1.2.3",
+                        "local": str(module_dir),
+                    },
+                    "ui": {
+                        "enabled": True,
+                    },
                 }
-            )
+            }
+        ),
     )
 
     monkeypatch.chdir(tmp_path)
@@ -4051,18 +4107,18 @@ def test_validate_sources_reports_module_contract_issues_for_missing_versions_an
     _write_catalog_file(
         sources_file,
         _catalog(
-                infra={
-                    "demo-module": {
-                        "source": {
-                            "portable": "git::https://github.com/example/infra.git//modules/demo-module?ref=v1.2.3",
-                            "local": str(module_dir),
-                        },
-                        "ui": {
-                            "enabled": True,
-                        },
-                    }
+            infra={
+                "demo-module": {
+                    "source": {
+                        "portable": "git::https://github.com/example/infra.git//modules/demo-module?ref=v1.2.3",
+                        "local": str(module_dir),
+                    },
+                    "ui": {
+                        "enabled": True,
+                    },
                 }
-            )
+            }
+        ),
     )
 
     monkeypatch.chdir(tmp_path)
@@ -4085,19 +4141,19 @@ def test_validate_sources_reports_chart_contract_findings(
     _write_catalog_file(
         sources_file,
         _catalog(
-                apps={
-                    "gateway-helm": {
-                        "source": _portable_chart_source(
-                            repo="oci://docker.io/envoyproxy",
-                            chart="gateway-helm",
-                            version="1.4.2",
-                        ),
-                        "ui": {
-                            "enabled": True,
-                        },
-                    }
+            apps={
+                "gateway-helm": {
+                    "source": _portable_chart_source(
+                        repo="oci://docker.io/envoyproxy",
+                        chart="gateway-helm",
+                        version="1.4.2",
+                    ),
+                    "ui": {
+                        "enabled": True,
+                    },
                 }
-            )
+            }
+        ),
     )
 
     monkeypatch.setattr(
@@ -4128,17 +4184,17 @@ def test_validate_sources_rejects_https_git_repo_module_source_without_git_prefi
     _write_catalog_file(
         sources_file,
         _catalog(
-                infra={
-                    "demo-module": {
-                        "source": {
-                            "portable": "https://github.com/example/platform-modules.git//modules/demo?ref=v1.2.3",
-                        },
-                        "ui": {
-                            "enabled": True,
-                        },
-                    }
+            infra={
+                "demo-module": {
+                    "source": {
+                        "portable": "https://github.com/example/platform-modules.git//modules/demo?ref=v1.2.3",
+                    },
+                    "ui": {
+                        "enabled": True,
+                    },
                 }
-            )
+            }
+        ),
     )
 
     monkeypatch.chdir(tmp_path)
@@ -4163,17 +4219,17 @@ def test_validate_sources_rejects_registry_style_module_source(
     _write_catalog_file(
         sources_file,
         _catalog(
-                infra={
-                    "demo-module": {
-                        "source": {
-                            "portable": "app.terraform.io/example/network/nebius",
-                        },
-                        "ui": {
-                            "enabled": True,
-                        },
-                    }
+            infra={
+                "demo-module": {
+                    "source": {
+                        "portable": "app.terraform.io/example/network/nebius",
+                    },
+                    "ui": {
+                        "enabled": True,
+                    },
                 }
-            )
+            }
+        ),
     )
 
     monkeypatch.chdir(tmp_path)
@@ -4196,19 +4252,19 @@ def test_validate_sources_accepts_github_tree_chart_repo(
     _write_catalog_file(
         sources_file,
         _catalog(
-                apps={
-                    "n8n": {
-                        "source": _portable_chart_source(
-                            repo="https://github.com/example/charts/tree/main/charts/n8n",
-                            chart="n8n",
-                            version="1.2.3",
-                        ),
-                        "ui": {
-                            "enabled": True,
-                        },
-                    }
+            apps={
+                "n8n": {
+                    "source": _portable_chart_source(
+                        repo="https://github.com/example/charts/tree/main/charts/n8n",
+                        chart="n8n",
+                        version="1.2.3",
+                    ),
+                    "ui": {
+                        "enabled": True,
+                    },
                 }
-            )
+            }
+        ),
     )
 
     class _FakeHelmClient:
@@ -4240,19 +4296,19 @@ def test_validate_sources_fails_when_helm_is_required_but_unavailable(
     _write_catalog_file(
         sources_file,
         _catalog(
-                apps={
-                    "gateway-helm": {
-                        "source": _portable_chart_source(
-                            repo="oci://docker.io/envoyproxy",
-                            chart="gateway-helm",
-                            version="1.4.2",
-                        ),
-                        "ui": {
-                            "enabled": True,
-                        },
-                    }
+            apps={
+                "gateway-helm": {
+                    "source": _portable_chart_source(
+                        repo="oci://docker.io/envoyproxy",
+                        chart="gateway-helm",
+                        version="1.4.2",
+                    ),
+                    "ui": {
+                        "enabled": True,
+                    },
                 }
-            )
+            }
+        ),
     )
 
     class _FailingHelmClient:

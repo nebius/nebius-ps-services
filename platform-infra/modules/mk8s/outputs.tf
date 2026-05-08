@@ -18,6 +18,46 @@ output "gpu_node_group_ids" {
   value       = [for item in nebius_mk8s_v1_node_group.gpu : item.id]
 }
 
+output "generic_node_group_ids" {
+  description = "Generic named node group IDs keyed by node_groups key."
+  value       = { for key, item in nebius_mk8s_v1_node_group.generic : key => item.id }
+}
+
+output "node_group_ids" {
+  description = "All node group IDs keyed by logical node group name."
+  value = merge(
+    length(nebius_mk8s_v1_node_group.cpu) > 0 ? {
+      cpu = nebius_mk8s_v1_node_group.cpu[0].id
+    } : {},
+    {
+      for index, item in nebius_mk8s_v1_node_group.gpu :
+      "gpu-${index}" => item.id
+    },
+    {
+      for key, item in nebius_mk8s_v1_node_group.generic :
+      key => item.id
+    }
+  )
+}
+
+output "generic_gpu_cluster_ids" {
+  description = "Generic GPU cluster IDs keyed by gpu_clusters key."
+  value       = { for key, item in nebius_compute_v1_gpu_cluster.generic : key => item.id }
+}
+
+output "gpu_cluster_ids" {
+  description = "All GPU cluster IDs keyed by logical source."
+  value = merge(
+    length(nebius_compute_v1_gpu_cluster.this) > 0 ? {
+      default = nebius_compute_v1_gpu_cluster.this[0].id
+    } : {},
+    {
+      for key, item in nebius_compute_v1_gpu_cluster.generic :
+      key => item.id
+    }
+  )
+}
+
 output "control_plane_private_endpoint" {
   description = "Private MK8s control-plane endpoint."
   value = try(

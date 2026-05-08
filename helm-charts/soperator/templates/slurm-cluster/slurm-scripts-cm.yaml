@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: slurm-scripts
+  labels:
+    app: {{ .Chart.Name }}
+    release: {{ .Release.Name }}
+data:
+  # base scripts
+{{- range $name := list "check_runner.py" "prolog.sh" "epilog.sh" "hc_program.sh" }}
+{{- $content := index $.Values.slurmScripts $name }}
+  {{ $name }}: |-
+  {{- if $content }}
+{{ tpl ($content) $ | indent 4 }}
+  {{- else }}
+{{ tpl (printf "slurm_scripts/%s" $name | $.Files.Get) $ | indent 4 }}
+  {{- end }}
+{{- end }}
+  # built-in scripts
+{{- range $name, $conf := .Values.slurmScripts.builtIn }}
+{{- if $conf.enabled }}
+  {{ $name }}: |-
+  {{- if $conf.customContent }}
+{{ tpl ($conf.customContent) $ | indent 4 }}
+  {{- else }}
+{{ tpl (printf "slurm_scripts/%s" $name | $.Files.Get) $ | indent 4 }}
+  {{- end }}
+{{- end }}
+{{- end }}
+  # extra scripts
+{{- range $name, $params := .Values.slurmScripts.extra }}
+  {{ $name }}: |-
+{{ tpl (get $params "content") $ | indent 4 }}
+{{- end }}
+  # checks config
+  checks.json: |-
+{{- $checks := list }}
+{{- range $name, $conf := .Values.slurmScripts.builtIn }}
+  {{- if $conf.enabled }}
+    {{- if $conf.customConfig }}
+      {{- $checks = append $checks (fromJson (tpl ($conf.customConfig) $)) }}
+    {{- else }}
+      {{- $checks = append $checks (fromJson (tpl (printf "slurm_scripts/%s.json" $name | $.Files.Get) $)) }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+{{- range $name, $params := .Values.slurmScripts.extra }}
+  {{- $checks = append $checks (fromJson (tpl (get $params "config") $)) }}
+{{- end }}
+{{ toPrettyJson $checks | indent 4 }}

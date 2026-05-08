@@ -317,13 +317,16 @@ def _kubectl_get_target(
     if target.namespace:
         cmd.extend(["-n", target.namespace])
     cmd.extend(["-o", "json"])
-    result = subprocess.run(
-        cmd,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=timeout_seconds,
-    )
+    try:
+        result = subprocess.run(
+            cmd,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired:
+        return None, f"kubectl status read timed out after {timeout_seconds}s"
     if result.returncode != 0:
         detail = _first_non_empty_line(result.stderr or result.stdout or "") or "not visible yet"
         return None, detail

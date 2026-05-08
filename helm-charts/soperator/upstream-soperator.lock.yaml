@@ -1,0 +1,24 @@
+repository: "https://github.com/nebius/soperator"
+release: "3.0.3"
+tag: "3.0.3"
+commit: "6ab9a812c91461ffe68299ad3ce6060f177c35a3"
+chart_version: "3.0.3-ps.1"
+
+scripts:
+  upstream_path: "helm/slurm-cluster/slurm_scripts"
+  local_path: "slurm_scripts"
+  mode: "exact"
+
+local_owned_paths:
+  - ".helmignore"
+  - "CHANGELOG.md"
+  - "Chart.yaml"
+  - "Chart.lock"
+  - "README.md"
+  - "charts/"
+  - "values.yaml"
+  - "values.schema.json"
+  - "scripts/"
+  - "templates/"
+  - "examples/"
+  - "docs/"

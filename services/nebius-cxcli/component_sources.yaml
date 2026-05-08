@@ -48,6 +48,18 @@ components:
         enabled: false
       status:
         kind: nebius.compute.filesystem
+    nfs:
+      source:
+        portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/nfs?ref=main
+        local: ../../platform-infra/modules/nfs
+      ui:
+        title: VM-based NFS server
+        group: Storage
+        enabled: false
+      status:
+        kind: nebius.compute.instance
+      defaults:
+        inputs.ssh_user_name: shared.admin_ssh.user_name
     object-storage:
       source:
         portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/object-storage?ref=main
@@ -129,6 +141,19 @@ components:
         # Keep only Nebius-specific deltas here. The live chart already defaults
         # the operator CPU limit to 500m and disables the OFED liveness probe.
         values.operator.resources.limits.memory: 350Mi
+        # The chart reuses operator affinity for pre-install/pre-upgrade hooks.
+        # Keep those API-discovery hooks on CPU nodes; on fresh GPU-cluster
+        # creates, scheduling the hook on the first GPU worker can race service
+        # routing while Network Operator is still bootstrapping RDMA plumbing.
+        values.operator.affinity:
+          nodeAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+                - matchExpressions:
+                    - key: nebius.com/gpu
+                      operator: NotIn
+                      values:
+                        - "true"
     nvidia-gpu-operator:
       source:
         portable:
@@ -163,6 +188,38 @@ components:
       release:
         namespace: nccl-test
         name: nccl-test
+      defaults: {}
+    soperator:
+      source:
+        portable:
+          repo: https://github.com/nebius/nebius-ps-services/tree/main/helm-charts/soperator
+          chart: soperator
+        local:
+          path: ../../helm-charts/soperator
+      ui:
+        title: Nebius Soperator self-deployment
+        group: Slurm
+        enabled: false
+      release:
+        namespace: soperator
+        name: soperator
+        timeout: 90m
+      wizard:
+        profile:
+          default: nebius-gpu-v1
+          sources:
+            - source: static
+              values:
+                - nebius-cpu-v1
+                - nebius-gpu-v1
+                - nebius-mixed-v1
+        values.partitionProfile:
+          default: shape-default
+          sources:
+            - source: static
+              values:
+                - shape-default
+                - with-debug-long
       defaults: {}
     nebius-observability-agent:
       # Keep this public chart pinned here because the fixed Nebius Kubernetes

@@ -1,0 +1,15 @@
+Nebius Soperator chart rendered for release {{ .Release.Name }} in namespace {{ .Release.Namespace }}.
+
+{{- if or (eq .Values.volume.jail.type "local") (eq (default "filestore" .Values.volume.controllerSpool.type) "local") }}
+Local storage mode is enabled. This mode uses host-path backed local PVs and is
+intended only for local learning or development clusters that can pull the
+pinned Soperator images.
+The local example disables accounting, Slurm REST, SConfigController, and the
+production SPANK plug stack; use the default values for Nebius production.
+{{- else }}
+Terraform must create and attach the Nebius MK8s/SFS/NFS infrastructure before
+this release can converge.
+{{- end }}
+
+Login SSH public keys must be supplied through
+slurmNodes.login.sshRootPublicKeys for a usable login surface.

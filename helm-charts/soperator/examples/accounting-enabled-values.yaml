@@ -1,0 +1,16 @@
+clusterName: soperator-accounting
+
+slurmNodes:
+  login:
+    sshRootPublicKeys: []
+  accounting:
+    enabled: true
+    k8sNodeFilterName: accounting
+    mariadbOperator:
+      enabled: true
+
+volume:
+  accounting:
+    enabled: true
+    size: 256Gi
+    filestoreDeviceName: accounting

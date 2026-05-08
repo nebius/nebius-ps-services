@@ -546,6 +546,576 @@ components:
                   - -mca
                   - coll
                   - ^hcoll
+    soperator:
+      cli:
+        mk8s_gpu_policy:
+          # Soperator itself is selected explicitly. On GPU MK8s targets,
+          # cxcli already auto-enables GPU Operator and, for GPU fabric /
+          # InfiniBand cases, Network Operator. This policy only orders the
+          # Soperator HelmRelease after whichever GPU platform releases are
+          # present; it does not deploy the upstream Soperator DCGM chart.
+          install_after:
+            - cert-manager
+            - nvidia-network-operator
+            - nvidia-gpu-operator
+        soperator_nodesets_profile:
+          default: nebius-gpu-v1
+          profiles:
+            nebius-cpu-v1:
+              mk8s:
+                use_generic_gpu_node_groups: true
+                inputs:
+                  cpu_nodes_count: 0
+                  gpu_enabled: false
+                  gpu_node_groups: 0
+                  gpu_nodes_count_per_group: 0
+                node_groups:
+                  system:
+                    nodeset_name: system
+                    workload: system
+                    fixed_node_count: 2
+                    gpu: false
+                    jail: true
+                  controller:
+                    nodeset_name: controller
+                    workload: controller
+                    fixed_node_count: 1
+                    gpu: false
+                    jail: true
+                    taints:
+                      - key: slurm.nebius.ai/nodeset-name
+                        value: controller
+                        effect: NO_SCHEDULE
+                  login:
+                    nodeset_name: login
+                    workload: login
+                    fixed_node_count: 1
+                    gpu: false
+                    jail: true
+                  accounting:
+                    nodeset_name: accounting
+                    workload: accounting
+                    fixed_node_count: 1
+                    gpu: false
+                    jail: true
+                    taints:
+                      - key: slurm.nebius.ai/nodeset-name
+                        value: accounting
+                        effect: NO_SCHEDULE
+                worker_nodesets:
+                  - name: worker-cpu
+                    nodeset_name: worker-cpu
+                    node_group_key_prefix: worker-cpu
+                    workload: worker
+                    gpu: false
+                    jail: true
+                    default_total_nodes: 2
+                    default_nodes_per_group: 2
+                    max_nodes_per_group: 100
+              sfs:
+                filesystems:
+                  jail:
+                    name: "{target}-jail"
+                    size_gib: 1024
+                    mount_tag: jail
+                  controller-spool:
+                    name: "{target}-controller-spool"
+                    size_gib: 128
+                    mount_tag: controller-spool
+                  accounting:
+                    name: "{target}-accounting"
+                    size_gib: 128
+                    mount_tag: accounting
+              chart:
+                values:
+                  clusterType: cpu
+                  partitionConfiguration:
+                    configType: structured
+                    partitions:
+                      - name: cpu
+                        nodeSetRefs:
+                          - worker-cpu
+                        config: Default=YES MaxTime=INFINITE State=UP PriorityTier=5
+                  nodesets:
+                    - name: worker-cpu
+                      replicas: 2
+                      maxUnavailable: 1
+                      enableHostUserNamespace: true
+                      gpu:
+                        enabled: false
+                      nodeConfig:
+                        features:
+                          - cpu
+                        static: Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1
+                        dynamic: "InstanceId={{ .PodName }}"
+                      slurmd:
+                        image:
+                          repository: cr.eu-north1.nebius.cloud/soperator/worker_slurmd
+                          tag: 3.0.3-slurm25.11.3
+                          pullPolicy: IfNotPresent
+                        resources:
+                          cpu: "4"
+                          memory: 16Gi
+                          ephemeralStorage: 10Gi
+                        volumes:
+                          spool:
+                            emptyDir: {}
+                          jail:
+                            persistentVolumeClaim:
+                              claimName: jail-pvc
+                          jailSubMounts: []
+                          customVolumeMounts:
+                            - name: slurm-scripts
+                              mountPath: /opt/slurm_scripts/
+                              volumeSource:
+                                configMap:
+                                  name: slurm-scripts
+                                  defaultMode: 493
+                            - name: slurm-scripts-jail
+                              mountPath: /mnt/jail.upper/opt/slurm_scripts/
+                              volumeSource:
+                                configMap:
+                                  name: slurm-scripts
+                                  defaultMode: 493
+                          sharedMemorySize: 8Gi
+                        security:
+                          appArmorProfile: unconfined
+                          limitsConfig: ""
+                          procMount: Default
+                      munge:
+                        image:
+                          repository: cr.eu-north1.nebius.cloud/soperator/munge
+                          tag: 3.0.3-slurm25.11.3
+                          pullPolicy: IfNotPresent
+                        resources:
+                          cpu: 200m
+                          memory: 512Mi
+                          ephemeralStorage: 1Gi
+                        security:
+                          appArmorProfile: unconfined
+                          limitsConfig: ""
+                          procMount: Default
+                      sssd:
+                        enabled: false
+                      priorityClass: soperator-worker-high-priority
+                      nodeSelector:
+                        slurm.nebius.ai/nodeset-name: worker-cpu
+                      workerAnnotations: {}
+                      customInitContainers: []
+                  populateJail:
+                    k8sNodeFilterName: system
+                  slurmNodes:
+                    accounting:
+                      k8sNodeFilterName: accounting
+                      slurmConfig:
+                        accountingStorageTRES: CPU,Mem,Node,VMem
+                  volume:
+                    accounting:
+                      enabled: true
+                partition_profiles:
+                  with-debug-long:
+                    values:
+                      partitionConfiguration:
+                        configType: structured
+                        partitions:
+                          - name: cpu
+                            nodeSetRefs:
+                              - worker-cpu
+                            config: Default=YES MaxTime=INFINITE State=UP PriorityTier=5
+                          - name: debug
+                            nodeSetRefs:
+                              - worker-cpu
+                            config: Default=NO MaxTime=00:30:00 State=UP PriorityTier=100
+                          - name: long
+                            nodeSetRefs:
+                              - worker-cpu
+                            config: Default=NO MaxTime=7-00:00:00 State=UP PriorityTier=1
+            nebius-mixed-v1:
+              mk8s:
+                use_generic_gpu_node_groups: true
+                gpu_cluster_key: workers
+                inputs:
+                  cpu_nodes_count: 0
+                  gpu_enabled: true
+                  gpu_node_groups: 1
+                  gpu_nodes_count_per_group: 2
+                node_groups:
+                  system:
+                    nodeset_name: system
+                    workload: system
+                    fixed_node_count: 2
+                    gpu: false
+                    jail: true
+                  controller:
+                    nodeset_name: controller
+                    workload: controller
+                    fixed_node_count: 1
+                    gpu: false
+                    jail: true
+                    taints:
+                      - key: slurm.nebius.ai/nodeset-name
+                        value: controller
+                        effect: NO_SCHEDULE
+                  login:
+                    nodeset_name: login
+                    workload: login
+                    fixed_node_count: 1
+                    gpu: false
+                    jail: true
+                  accounting:
+                    nodeset_name: accounting
+                    workload: accounting
+                    fixed_node_count: 1
+                    gpu: false
+                    jail: true
+                    taints:
+                      - key: slurm.nebius.ai/nodeset-name
+                        value: accounting
+                        effect: NO_SCHEDULE
+                worker_nodesets:
+                  - name: worker-cpu
+                    nodeset_name: worker-cpu
+                    node_group_key_prefix: worker-cpu
+                    workload: worker
+                    gpu: false
+                    jail: true
+                    default_total_nodes: 2
+                    default_nodes_per_group: 2
+                    max_nodes_per_group: 100
+                  - name: worker-gpu
+                    nodeset_name: worker-gpu
+                    node_group_key_prefix: worker-gpu
+                    workload: worker
+                    gpu: true
+                    jail: true
+                    default_total_nodes: 2
+                    default_nodes_per_group: 2
+                    node_groups_input: gpu_node_groups
+                    nodes_per_group_input: gpu_nodes_count_per_group
+                    max_nodes_per_group: 100
+                    node_group:
+                      gpu_cluster_key: workers
+                      taints:
+                        - key: nvidia.com/gpu
+                          value: "true"
+                          effect: NO_SCHEDULE
+              sfs:
+                filesystems:
+                  jail:
+                    name: "{target}-jail"
+                    size_gib: 1024
+                    mount_tag: jail
+                  controller-spool:
+                    name: "{target}-controller-spool"
+                    size_gib: 128
+                    mount_tag: controller-spool
+                  accounting:
+                    name: "{target}-accounting"
+                    size_gib: 128
+                    mount_tag: accounting
+              chart:
+                values:
+                  clusterType: gpu
+                  partitionConfiguration:
+                    configType: structured
+                    partitions:
+                      - name: cpu
+                        nodeSetRefs:
+                          - worker-cpu
+                        config: Default=YES MaxTime=INFINITE State=UP PriorityTier=5
+                      - name: gpu
+                        nodeSetRefs:
+                          - worker-gpu
+                        config: Default=NO MaxTime=INFINITE State=UP PriorityTier=10
+                  nodesets:
+                    - name: worker-cpu
+                      replicas: 2
+                      maxUnavailable: 1
+                      enableHostUserNamespace: true
+                      gpu:
+                        enabled: false
+                      nodeConfig:
+                        features:
+                          - cpu
+                        static: Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1
+                        dynamic: "InstanceId={{ .PodName }}"
+                      slurmd:
+                        image:
+                          repository: cr.eu-north1.nebius.cloud/soperator/worker_slurmd
+                          tag: 3.0.3-slurm25.11.3
+                          pullPolicy: IfNotPresent
+                        resources:
+                          cpu: "4"
+                          memory: 16Gi
+                          ephemeralStorage: 10Gi
+                        volumes:
+                          spool:
+                            emptyDir: {}
+                          jail:
+                            persistentVolumeClaim:
+                              claimName: jail-pvc
+                          jailSubMounts: []
+                          customVolumeMounts:
+                            - name: slurm-scripts
+                              mountPath: /opt/slurm_scripts/
+                              volumeSource:
+                                configMap:
+                                  name: slurm-scripts
+                                  defaultMode: 493
+                            - name: slurm-scripts-jail
+                              mountPath: /mnt/jail.upper/opt/slurm_scripts/
+                              volumeSource:
+                                configMap:
+                                  name: slurm-scripts
+                                  defaultMode: 493
+                          sharedMemorySize: 8Gi
+                        security:
+                          appArmorProfile: unconfined
+                          limitsConfig: ""
+                          procMount: Default
+                      munge:
+                        image:
+                          repository: cr.eu-north1.nebius.cloud/soperator/munge
+                          tag: 3.0.3-slurm25.11.3
+                          pullPolicy: IfNotPresent
+                        resources:
+                          cpu: 200m
+                          memory: 512Mi
+                          ephemeralStorage: 1Gi
+                        security:
+                          appArmorProfile: unconfined
+                          limitsConfig: ""
+                          procMount: Default
+                      sssd:
+                        enabled: false
+                      priorityClass: soperator-worker-high-priority
+                      nodeSelector:
+                        slurm.nebius.ai/nodeset-name: worker-cpu
+                      workerAnnotations: {}
+                      customInitContainers: []
+                    - name: worker-gpu
+                      replicas: 2
+                      maxUnavailable: 1
+                      enableHostUserNamespace: true
+                      gpu:
+                        enabled: true
+                        nvidia:
+                          gdrCopyEnabled: true
+                      nodeConfig:
+                        features:
+                          - gpu
+                          - cuda
+                        static: Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1
+                        dynamic: "InstanceId={{ .PodName }}"
+                        gresConfig:
+                          - AutoDetect=nvidia
+                      slurmd:
+                        image:
+                          repository: cr.eu-north1.nebius.cloud/soperator/worker_slurmd
+                          tag: 3.0.3-slurm25.11.3
+                          pullPolicy: IfNotPresent
+                        customEnv:
+                          - name: NVIDIA_DRIVER_CAPABILITIES
+                            value: compute,graphics,utility,video
+                        resources:
+                          cpu: "4"
+                          memory: 16Gi
+                          ephemeralStorage: 10Gi
+                          gpu: 8
+                        volumes:
+                          spool:
+                            emptyDir: {}
+                          jail:
+                            persistentVolumeClaim:
+                              claimName: jail-pvc
+                          jailSubMounts: []
+                          customVolumeMounts:
+                            - name: slurm-scripts
+                              mountPath: /opt/slurm_scripts/
+                              volumeSource:
+                                configMap:
+                                  name: slurm-scripts
+                                  defaultMode: 493
+                            - name: slurm-scripts-jail
+                              mountPath: /mnt/jail.upper/opt/slurm_scripts/
+                              volumeSource:
+                                configMap:
+                                  name: slurm-scripts
+                                  defaultMode: 493
+                          sharedMemorySize: 8Gi
+                        security:
+                          appArmorProfile: unconfined
+                          limitsConfig: ""
+                          procMount: Default
+                      munge:
+                        image:
+                          repository: cr.eu-north1.nebius.cloud/soperator/munge
+                          tag: 3.0.3-slurm25.11.3
+                          pullPolicy: IfNotPresent
+                        resources:
+                          cpu: 200m
+                          memory: 512Mi
+                          ephemeralStorage: 1Gi
+                        security:
+                          appArmorProfile: unconfined
+                          limitsConfig: ""
+                          procMount: Default
+                      sssd:
+                        enabled: false
+                      priorityClass: soperator-worker-high-priority
+                      nodeSelector:
+                        slurm.nebius.ai/nodeset-name: worker-gpu
+                      tolerations:
+                        - key: nvidia.com/gpu
+                          operator: Exists
+                          effect: NoSchedule
+                      workerAnnotations: {}
+                      customInitContainers: []
+                  populateJail:
+                    k8sNodeFilterName: system
+                  slurmNodes:
+                    accounting:
+                      k8sNodeFilterName: accounting
+                  volume:
+                    accounting:
+                      enabled: true
+                partition_profiles:
+                  with-debug-long:
+                    values:
+                      partitionConfiguration:
+                        configType: structured
+                        partitions:
+                          - name: cpu
+                            nodeSetRefs:
+                              - worker-cpu
+                            config: Default=YES MaxTime=INFINITE State=UP PriorityTier=5
+                          - name: gpu
+                            nodeSetRefs:
+                              - worker-gpu
+                            config: Default=NO MaxTime=INFINITE State=UP PriorityTier=10
+                          - name: debug
+                            nodeSetRefs:
+                              - worker-cpu
+                              - worker-gpu
+                            config: Default=NO MaxTime=00:30:00 State=UP PriorityTier=100
+                          - name: long
+                            nodeSetRefs:
+                              - worker-cpu
+                              - worker-gpu
+                            config: Default=NO MaxTime=7-00:00:00 State=UP PriorityTier=1
+            nebius-gpu-v1:
+              mk8s:
+                # Soperator uses generic MK8s node_groups so Slurm NodeSets map
+                # to explicit host pools. Keep gpu_enabled=true so cxcli still
+                # auto-enables GPU Operator, DCGM exporter, and Network Operator
+                # when the target has GPU fabric.
+                use_generic_gpu_node_groups: true
+                gpu_cluster_key: workers
+                inputs:
+                  cpu_nodes_count: 0
+                  gpu_enabled: true
+                  gpu_node_groups: 1
+                  gpu_nodes_count_per_group: 1
+                node_groups:
+                  system:
+                    nodeset_name: system
+                    workload: system
+                    fixed_node_count: 2
+                    gpu: false
+                    jail: true
+                  controller:
+                    nodeset_name: controller
+                    workload: controller
+                    fixed_node_count: 1
+                    gpu: false
+                    jail: true
+                    taints:
+                      - key: slurm.nebius.ai/nodeset-name
+                        value: controller
+                        effect: NO_SCHEDULE
+                  login:
+                    nodeset_name: login
+                    workload: login
+                    fixed_node_count: 1
+                    gpu: false
+                    jail: true
+                  accounting:
+                    nodeset_name: accounting
+                    workload: accounting
+                    fixed_node_count: 1
+                    gpu: false
+                    jail: true
+                    taints:
+                      - key: slurm.nebius.ai/nodeset-name
+                        value: accounting
+                        effect: NO_SCHEDULE
+                worker_nodesets:
+                  - name: worker-gpu
+                    nodeset_name: worker-gpu
+                    node_group_key_prefix: worker-gpu
+                    workload: worker
+                    gpu: true
+                    jail: true
+                    default_total_nodes: 1
+                    default_nodes_per_group: 1
+                    node_groups_input: gpu_node_groups
+                    nodes_per_group_input: gpu_nodes_count_per_group
+                    max_nodes_per_group: 100
+                    node_group:
+                      gpu_cluster_key: workers
+                      taints:
+                        - key: nvidia.com/gpu
+                          value: "true"
+                          effect: NO_SCHEDULE
+              sfs:
+                filesystems:
+                  jail:
+                    name: "{target}-jail"
+                    size_gib: 1024
+                    mount_tag: jail
+                  controller-spool:
+                    name: "{target}-controller-spool"
+                    size_gib: 128
+                    mount_tag: controller-spool
+                  accounting:
+                    name: "{target}-accounting"
+                    size_gib: 128
+                    mount_tag: accounting
+              chart:
+                values:
+                  partitionConfiguration:
+                    configType: structured
+                    partitions:
+                      - name: gpu
+                        nodeSetRefs:
+                          - worker-gpu
+                        config: Default=YES MaxTime=INFINITE State=UP PriorityTier=10
+                  populateJail:
+                    k8sNodeFilterName: system
+                  slurmNodes:
+                    accounting:
+                      k8sNodeFilterName: accounting
+                  volume:
+                    accounting:
+                      enabled: true
+                partition_profiles:
+                  with-debug-long:
+                    values:
+                      partitionConfiguration:
+                        configType: structured
+                        partitions:
+                          - name: gpu
+                            nodeSetRefs:
+                              - worker-gpu
+                            config: Default=YES MaxTime=INFINITE State=UP PriorityTier=10
+                          - name: debug
+                            nodeSetRefs:
+                              - worker-gpu
+                            config: Default=NO MaxTime=00:30:00 State=UP PriorityTier=100
+                          - name: long
+                            nodeSetRefs:
+                              - worker-gpu
+                            config: Default=NO MaxTime=7-00:00:00 State=UP PriorityTier=1
     grafana:
       cli:
         orgId: 1

@@ -6,6 +6,35 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Added `nfs` and target-scoped `soperator` catalog components. Soperator uses
+  the repo-local umbrella Helm chart, keeps DCGM on the existing NVIDIA GPU
+  Operator path, and orders after GPU/Network Operator releases when those GPU
+  platform apps are enabled for the target. Selecting Soperator now also seeds
+  the required sibling MK8s/SFS infra intent, and render binds matching NFS
+  Terraform outputs into Soperator `externalNfs` values.
+- Added the catalog-owned `soperator_nodesets_profile` for Soperator. Built-in
+  `nebius-cpu-v1`, `nebius-gpu-v1`, and `nebius-mixed-v1` profiles seed generic
+  MK8s node groups, SFS filesystems, and matching chart values. The mixed
+  profile creates separate `worker-cpu` and `worker-gpu` Slurm NodeSets plus
+  CPU/GPU partitions, while NFS remains an optional VM-based sibling infra
+  component.
+- Added the Soperator `values.partitionProfile` wizard option. `shape-default`
+  keeps the selected worker-shape partitions, while `with-debug-long` overlays
+  `debug` and `long` policy partitions into the rendered `SlurmCluster`; Slurm
+  hardware features remain NodeSet `nodeConfig.features`.
+- Rendered Soperator deployments now default to structured Slurm partitions,
+  chart-managed MariaDB accounting, and Slurm REST so worker NodeSets register
+  cleanly through the Soperator SConfig reconciliation path.
+- The Soperator chart values mounted generated Slurm scripts into workers and
+  set the pinned-image Slurm plugin directory so live `srun` smoke tests can
+  load SPANK plugins and run prolog/epilog scripts.
+- Soperator GPU NodeSets now render Slurm `Gres=gpu:<count>` from
+  `slurmd.resources.gpu`, keeping cxcli profile values free of duplicated GPU
+  counts while allowing `srun --gres=gpu:*` jobs on GPU partitions.
+- The bundled Soperator GPU profile now sets
+  `NVIDIA_DRIVER_CAPABILITIES=compute,graphics,utility,video` on GPU worker
+  NodeSets, matching the chart default while keeping the value overrideable in
+  app values.
 - Reorganized the README opening sections so core render/deploy concepts live in
   a dedicated `Core Concepts` section and `Features` is a concise capability
   summary instead of a long command-contract reference.

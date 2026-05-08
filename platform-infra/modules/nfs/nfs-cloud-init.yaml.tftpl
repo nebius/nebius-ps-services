@@ -1,0 +1,99 @@
+#cloud-config
+package_update: true
+packages:
+  - nfs-kernel-server
+  - xfsprogs
+users:
+  - default
+  - name: ${ssh_user_name}
+    groups: sudo
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    ssh_authorized_keys:
+      - ${ssh_public_key}
+write_files:
+  - path: /usr/local/sbin/cxcli-configure-nfs.sh
+    owner: root:root
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      export EXPORT_PATH='${export_path}'
+      export CLIENT_CIDRS_JSON='${client_cidrs_json}'
+      export EXPORT_OPTIONS='${export_options}'
+      export FILESYSTEMS_JSON='${filesystems_json}'
+      export DATA_DISK_ENABLED='${data_disk_enabled}'
+      export DATA_DISK_DEVICE_ID='${data_disk_device_id}'
+      export DATA_DISK_FILESYSTEM='${data_disk_filesystem}'
+
+      if [ "$DATA_DISK_ENABLED" = "true" ]; then
+        device="/dev/disk/by-id/virtio-$DATA_DISK_DEVICE_ID"
+        for _ in $(seq 1 60); do
+          [ -e "$device" ] && break
+          sleep 2
+        done
+        if [ ! -e "$device" ]; then
+          echo "NFS data disk $device did not appear" >&2
+          exit 1
+        fi
+        if ! blkid "$device" >/dev/null 2>&1; then
+          mkfs."$DATA_DISK_FILESYSTEM" -F "$device"
+        fi
+        mkdir -p "$EXPORT_PATH"
+        if ! grep -q " $EXPORT_PATH " /etc/fstab; then
+          echo "$device $EXPORT_PATH $DATA_DISK_FILESYSTEM defaults,nofail 0 2" >> /etc/fstab
+        fi
+      else
+        mkdir -p "$EXPORT_PATH"
+      fi
+
+      python3 - <<'PY'
+      import json
+      import os
+      from pathlib import Path
+
+      filesystems = json.loads(os.environ["FILESYSTEMS_JSON"])
+      fstab = Path("/etc/fstab")
+      current = fstab.read_text(encoding="utf-8") if fstab.exists() else ""
+      lines = []
+      for filesystem in filesystems:
+          mount_tag = str(filesystem["mount_tag"]).strip()
+          mount_path = str(filesystem["mount_path"]).strip()
+          if not mount_tag or not mount_path.startswith("/"):
+              raise SystemExit("invalid filesystem mount_tag or mount_path")
+          Path(mount_path).mkdir(parents=True, exist_ok=True)
+          line = f"{mount_tag} {mount_path} virtiofs rw,nofail 0 0"
+          if line not in current:
+              lines.append(line)
+      if lines:
+          with fstab.open("a", encoding="utf-8") as handle:
+              for line in lines:
+                  handle.write(f"{line}\n")
+      PY
+
+      mount -a
+      mkdir -p "$EXPORT_PATH"
+      chown nobody:nogroup "$EXPORT_PATH"
+      chmod 0777 "$EXPORT_PATH"
+
+      mkdir -p /etc/exports.d
+      exports_file=/etc/exports.d/cxcli-nfs.exports
+      : > "$exports_file"
+      python3 - <<'PY'
+      import json
+      import os
+      from pathlib import Path
+
+      export_path = os.environ["EXPORT_PATH"]
+      export_options = os.environ["EXPORT_OPTIONS"]
+      client_cidrs = json.loads(os.environ["CLIENT_CIDRS_JSON"])
+      exports_file = Path("/etc/exports.d/cxcli-nfs.exports")
+      lines = [f"{export_path} {cidr}({export_options})" for cidr in client_cidrs]
+      exports_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+      PY
+
+      systemctl enable --now nfs-server
+      exportfs -ra
+runcmd:
+  - [bash, /usr/local/sbin/cxcli-configure-nfs.sh]

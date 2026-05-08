@@ -64,6 +64,7 @@ from .component_sources import (
     SourceProfile,
     component_input_binding_ref,
     component_output_root_name,
+    helm_chart_source_by_id,
     load_component_sources,
     resolve_component_sources_file,
     resolve_component_sources_profile,
@@ -910,10 +911,23 @@ _RUNTIME_AUTH_TOKEN_READY_POLL_ENV = "NEBIUS_CXCLI_RUNTIME_AUTH_TOKEN_READY_POLL
 _RUNTIME_AUTH_TOKEN_READY_TIMEOUT_SECONDS = 60.0
 _RUNTIME_AUTH_TOKEN_READY_POLL_SECONDS = 2.0
 _MYSTERYBOX_ESO_ROLE_IDS = ("mysterybox.payload-viewer",)
+_SOPERATOR_APP_ID = "soperator"
+_SOPERATOR_REQUIRED_INFRA_COMPONENT_IDS = ("mk8s", "sfs")
+_SOPERATOR_REQUIRED_APP_COMPONENT_IDS = ("cert-manager",)
 _BENIGN_KUBECTL_OUTPUT_MARKERS = (
     "token from NEBIUS_IAM_TOKEN env is used",
     "missing the kubectl.kubernetes.io/last-applied-configuration annotation",
     "The missing annotation will be patched automatically.",
+    "Warning: v1 Endpoints is deprecated",
+    "reflector.go:",
+    "context canceled",
+)
+_POST_FLUX_WEBHOOK_TRANSIENT_MARKERS = (
+    "failed calling webhook",
+    "connect: connection refused",
+    "connection reset by peer",
+    "no endpoints available",
+    "context deadline exceeded",
 )
 _WIZARD_BACKTRACK = object()
 _WIZARD_DEFAULT_MISSING = object()
@@ -2647,9 +2661,7 @@ def _ensure_mysterybox_eso_app_dependency_selection(
     app_entries: tuple[ComponentEntry, ...],
 ) -> tuple[set[str], tuple[str, ...]]:
     before_selected_apps = set(selected_apps)
-    before_labels = set(
-        _enabled_app_instance_labels(payload, app_id=EXTERNAL_SECRETS_APP_ID)
-    )
+    before_labels = set(_enabled_app_instance_labels(payload, app_id=EXTERNAL_SECRETS_APP_ID))
     changed = ensure_mysterybox_eso_app_rows(payload, app_entries=app_entries)
     after_selected_apps = _enabled_ids_from_runtime_payload(payload=payload, entries=app_entries)
     external_secrets_was_auto_selected = (
@@ -2677,6 +2689,473 @@ def _print_mysterybox_eso_app_dependency_adjustment(app_labels: tuple[str, ...])
         + " because selected MysteryBox with MK8s requires the External Secrets "
         "Operator controller."
     )
+
+
+def _expand_soperator_component_selection(
+    *,
+    selected_infra: set[str],
+    selected_apps: set[str],
+    infra_entries: tuple[ComponentEntry, ...],
+) -> set[str]:
+    if _SOPERATOR_APP_ID not in selected_apps:
+        return selected_infra
+    available_infra = {entry.id for entry in infra_entries}
+    expanded = set(selected_infra)
+    for component_id in _SOPERATOR_REQUIRED_INFRA_COMPONENT_IDS:
+        if component_id in available_infra:
+            expanded.add(component_id)
+    return expanded
+
+
+def _expand_soperator_app_selection(
+    *,
+    selected_apps: set[str],
+    app_entries: tuple[ComponentEntry, ...],
+) -> set[str]:
+    if _SOPERATOR_APP_ID not in selected_apps:
+        return selected_apps
+    available_apps = {entry.id for entry in app_entries}
+    expanded = set(selected_apps)
+    for app_id in _SOPERATOR_REQUIRED_APP_COMPONENT_IDS:
+        if app_id in available_apps:
+            expanded.add(app_id)
+    return expanded
+
+
+def _merge_missing_mapping(target: dict[str, Any], defaults: Mapping[str, Any]) -> None:
+    for key, value in defaults.items():
+        if key not in target:
+            target[key] = copy.deepcopy(value)
+            continue
+        if isinstance(target[key], dict) and isinstance(value, Mapping):
+            _merge_missing_mapping(target[key], value)
+
+
+def _merge_replace_mapping(target: dict[str, Any], values: Mapping[str, Any]) -> None:
+    for key, value in values.items():
+        if isinstance(target.get(key), dict) and isinstance(value, Mapping):
+            _merge_replace_mapping(target[key], value)
+            continue
+        target[key] = copy.deepcopy(value)
+
+
+def _soperator_app_target_refs(payload: Mapping[str, Any]) -> tuple[str, ...]:
+    target_refs = set(enabled_cluster_target_refs(payload))
+    apps_node = payload.get("apps")
+    charts = apps_node.get("charts") if isinstance(apps_node, Mapping) else None
+    if not isinstance(charts, list):
+        return ()
+    refs: list[str] = []
+    seen: set[str] = set()
+    for row in charts:
+        if not isinstance(row, Mapping) or not bool(row.get("enabled", False)):
+            continue
+        if component_type_id(row) != _SOPERATOR_APP_ID:
+            continue
+        target_ref = app_chart_target_ref(row) or component_instance_id(row)
+        if target_refs and target_ref not in target_refs:
+            continue
+        if target_ref and target_ref not in seen:
+            refs.append(target_ref)
+            seen.add(target_ref)
+    return tuple(refs)
+
+
+def _soperator_nodesets_profiles() -> tuple[str, Mapping[str, Mapping[str, Any]]]:
+    chart = helm_chart_source_by_id(_SOPERATOR_APP_ID)
+    settings = getattr(chart, "soperator_nodesets", None)
+    default = _non_empty_text(getattr(settings, "default", "")) if settings is not None else ""
+    profiles = getattr(settings, "profiles", {}) if settings is not None else {}
+    if not isinstance(profiles, Mapping):
+        profiles = {}
+    return default, profiles
+
+
+def _soperator_profile_by_target(payload: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+    default_profile, profiles = _soperator_nodesets_profiles()
+    apps_node = payload.get("apps")
+    charts = apps_node.get("charts") if isinstance(apps_node, Mapping) else None
+    if not isinstance(charts, list):
+        return {}
+
+    selected: dict[str, Mapping[str, Any]] = {}
+    for row in charts:
+        if not isinstance(row, Mapping) or not bool(row.get("enabled", False)):
+            continue
+        if component_type_id(row) != _SOPERATOR_APP_ID:
+            continue
+        target_ref = app_chart_target_ref(row) or component_instance_id(row)
+        if not target_ref:
+            continue
+        profile_name = _non_empty_text(row.get("profile")) or default_profile
+        if not profile_name:
+            selected[target_ref] = {}
+            continue
+        profile = profiles.get(profile_name)
+        if not isinstance(profile, Mapping):
+            available = ", ".join(sorted(str(name) for name in profiles)) or "(none)"
+            raise ValueError(
+                f"apps.charts[{target_ref}].profile references unknown Soperator "
+                f"nodesets profile '{profile_name}'. Available profiles: {available}"
+            )
+        selected[target_ref] = profile
+    return selected
+
+
+def _profile_mapping(profile: Mapping[str, Any], key: str) -> Mapping[str, Any]:
+    value = profile.get(key)
+    return value if isinstance(value, Mapping) else {}
+
+
+def _profile_list(profile: Mapping[str, Any], key: str) -> list[Any]:
+    value = profile.get(key)
+    return list(value) if isinstance(value, list) else []
+
+
+def _render_soperator_profile_value(value: Any, *, target_ref: str) -> Any:
+    if isinstance(value, str):
+        return value.replace("{target}", target_ref)
+    if isinstance(value, list):
+        return [_render_soperator_profile_value(item, target_ref=target_ref) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _render_soperator_profile_value(item, target_ref=target_ref)
+            for key, item in value.items()
+        }
+    return copy.deepcopy(value)
+
+
+def _positive_int(value: Any, *, default: int) -> int:
+    if isinstance(value, bool) or value is None:
+        return default
+    if isinstance(value, int):
+        return value if value > 0 else default
+    if isinstance(value, float):
+        return int(value) if value > 0 else default
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _required_profile_positive_int(value: Any, *, field: str) -> int:
+    if isinstance(value, bool) or value is None:
+        raise ValueError(f"Soperator nodesets profile field '{field}' must be a positive integer.")
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Soperator nodesets profile field '{field}' must be a positive integer."
+        ) from exc
+    if parsed <= 0:
+        raise ValueError(f"Soperator nodesets profile field '{field}' must be a positive integer.")
+    return parsed
+
+
+def _soperator_existing_nodeset_group(
+    node_groups: Mapping[str, Any],
+    *,
+    nodeset_name: str,
+    key_prefix: str,
+) -> bool:
+    for key, group in node_groups.items():
+        key_text = str(key)
+        if key_text == key_prefix or key_text.startswith(f"{key_prefix}-"):
+            return True
+        if (
+            isinstance(group, Mapping)
+            and str(group.get("nodeset_name", "")).strip() == nodeset_name
+        ):
+            return True
+    return False
+
+
+def _soperator_worker_profile_total_nodes(
+    *,
+    inputs: Mapping[str, Any],
+    raw_worker: Mapping[str, Any],
+    default_total_nodes: int,
+    default_nodes_per_group: int,
+) -> int:
+    total_nodes_input = _non_empty_text(raw_worker.get("total_nodes_input"))
+    node_groups_input = _non_empty_text(raw_worker.get("node_groups_input"))
+    nodes_per_group_input = _non_empty_text(raw_worker.get("nodes_per_group_input"))
+    if total_nodes_input:
+        return _positive_int(inputs.get(total_nodes_input), default=default_total_nodes)
+    if node_groups_input or nodes_per_group_input:
+        requested_groups = _positive_int(
+            inputs.get(node_groups_input),
+            default=1,
+        )
+        requested_nodes_per_group = _positive_int(
+            inputs.get(nodes_per_group_input),
+            default=default_nodes_per_group,
+        )
+        return requested_groups * requested_nodes_per_group
+    return default_total_nodes
+
+
+def _materialize_soperator_worker_node_groups(
+    *,
+    inputs: dict[str, Any],
+    node_groups: dict[str, Any],
+    worker_profiles: list[Any],
+) -> None:
+    for raw_worker in worker_profiles:
+        if not isinstance(raw_worker, Mapping):
+            continue
+        nodeset_name = _non_empty_text(raw_worker.get("nodeset_name")) or _non_empty_text(
+            raw_worker.get("name")
+        )
+        if not nodeset_name:
+            continue
+        key_prefix = _non_empty_text(raw_worker.get("node_group_key_prefix")) or nodeset_name
+        if _soperator_existing_nodeset_group(
+            node_groups,
+            nodeset_name=nodeset_name,
+            key_prefix=key_prefix,
+        ):
+            continue
+
+        default_total_nodes = _required_profile_positive_int(
+            raw_worker.get("default_total_nodes"),
+            field=f"worker_nodesets[{nodeset_name}].default_total_nodes",
+        )
+        default_nodes_per_group = _required_profile_positive_int(
+            raw_worker.get("default_nodes_per_group"),
+            field=f"worker_nodesets[{nodeset_name}].default_nodes_per_group",
+        )
+        total_nodes = _soperator_worker_profile_total_nodes(
+            inputs=inputs,
+            raw_worker=raw_worker,
+            default_total_nodes=default_total_nodes,
+            default_nodes_per_group=default_nodes_per_group,
+        )
+        if total_nodes <= 0:
+            total_nodes = default_total_nodes
+
+        max_nodes_per_group = _required_profile_positive_int(
+            raw_worker.get("max_nodes_per_group"),
+            field=f"worker_nodesets[{nodeset_name}].max_nodes_per_group",
+        )
+        shard_count = max(1, (total_nodes + max_nodes_per_group - 1) // max_nodes_per_group)
+        base_group = raw_worker.get("node_group")
+        base_group = copy.deepcopy(base_group) if isinstance(base_group, Mapping) else {}
+        gpu_cluster_key = _non_empty_text(base_group.get("gpu_cluster_key"))
+        gpu_clusters = inputs.get("gpu_clusters")
+        if gpu_cluster_key and not (
+            isinstance(gpu_clusters, Mapping) and gpu_cluster_key in gpu_clusters
+        ):
+            base_group.pop("gpu_cluster_key", None)
+        for index in range(shard_count):
+            remaining = total_nodes - (index * max_nodes_per_group)
+            shard_size = min(max_nodes_per_group, remaining)
+            group_key = f"{key_prefix}-{index}"
+            node_groups.setdefault(
+                group_key,
+                {
+                    **base_group,
+                    "nodeset_name": nodeset_name,
+                    "workload": _non_empty_text(raw_worker.get("workload")) or "worker",
+                    "fixed_node_count": shard_size,
+                    "gpu": bool(raw_worker.get("gpu", True)),
+                    "jail": bool(raw_worker.get("jail", True)),
+                },
+            )
+
+
+def _materialize_soperator_mk8s_profile(
+    *,
+    inputs: dict[str, Any],
+    profile: Mapping[str, Any],
+) -> None:
+    mk8s_profile = _profile_mapping(profile, "mk8s")
+    defaults = _profile_mapping(mk8s_profile, "inputs")
+    _merge_missing_mapping(inputs, defaults)
+
+    gpu_clusters = _profile_mapping(mk8s_profile, "gpu_clusters")
+    if gpu_clusters:
+        target_gpu_clusters = inputs.setdefault("gpu_clusters", {})
+        if isinstance(target_gpu_clusters, dict):
+            _merge_missing_mapping(target_gpu_clusters, gpu_clusters)
+
+    gpu_cluster_key = _non_empty_text(mk8s_profile.get("gpu_cluster_key"))
+    infiniband_fabric = _non_empty_text(inputs.get("infiniband_fabric"))
+    if gpu_cluster_key and infiniband_fabric:
+        target_gpu_clusters = inputs.setdefault("gpu_clusters", {})
+        if isinstance(target_gpu_clusters, dict):
+            cluster = target_gpu_clusters.setdefault(gpu_cluster_key, {})
+            if isinstance(cluster, dict):
+                cluster.setdefault("infiniband_fabric", infiniband_fabric)
+
+    node_groups = inputs.setdefault("node_groups", {})
+    if isinstance(node_groups, dict):
+        profile_node_groups = _profile_mapping(mk8s_profile, "node_groups")
+        _merge_missing_mapping(node_groups, profile_node_groups)
+        _materialize_soperator_worker_node_groups(
+            inputs=inputs,
+            node_groups=node_groups,
+            worker_profiles=_profile_list(mk8s_profile, "worker_nodesets"),
+        )
+
+    if bool(mk8s_profile.get("use_generic_gpu_node_groups", False)):
+        inputs["gpu_node_groups"] = 0
+        inputs["gpu_nodes_count_per_group"] = 0
+        inputs.pop("mk8s_gpu_node_group_overrides", None)
+
+
+def _materialize_soperator_sfs_profile(
+    *,
+    inputs: dict[str, Any],
+    profile: Mapping[str, Any],
+    target_ref: str,
+) -> dict[str, Any]:
+    sfs_profile = _profile_mapping(profile, "sfs")
+    profile_filesystems = _profile_mapping(sfs_profile, "filesystems")
+    rendered_filesystems = {
+        key: _render_soperator_profile_value(value, target_ref=target_ref)
+        for key, value in profile_filesystems.items()
+    }
+    filesystems = inputs.setdefault("filesystems", {})
+    if isinstance(filesystems, dict):
+        _merge_missing_mapping(filesystems, rendered_filesystems)
+        return copy.deepcopy(filesystems)
+    return {}
+
+
+def _materialize_soperator_partition_profile(
+    *,
+    values: dict[str, Any],
+    profile: Mapping[str, Any],
+) -> None:
+    profile_name = _non_empty_text(values.get("partitionProfile"))
+    if not profile_name or profile_name == "shape-default":
+        return
+    chart_profile = _profile_mapping(profile, "chart")
+    partition_profiles = _profile_mapping(chart_profile, "partition_profiles")
+    partition_profile = partition_profiles.get(profile_name)
+    if not isinstance(partition_profile, Mapping):
+        available = ", ".join(sorted(str(name) for name in partition_profiles)) or "(none)"
+        raise ValueError(
+            f"values.partitionProfile references unknown Soperator partition "
+            f"profile '{profile_name}'. Available profiles for this nodesets profile: {available}"
+        )
+    profile_values = _profile_mapping(partition_profile, "values")
+    _merge_replace_mapping(values, profile_values)
+
+
+def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
+    soperator_targets = _soperator_app_target_refs(payload)
+    if not soperator_targets:
+        return False
+    changed = False
+    primary_target = soperator_targets[0]
+    soperator_filesystems: dict[str, Any] = {}
+    profile_by_target = _soperator_profile_by_target(payload)
+
+    infra_rows = _scope_rows(payload, scope="infra")
+    for row in infra_rows:
+        if not isinstance(row, dict) or not bool(row.get("enabled", False)):
+            continue
+        component_id = component_type_id(row)
+        inputs = row.setdefault("inputs", {})
+        if not isinstance(inputs, dict):
+            continue
+        before = copy.deepcopy(row)
+        if component_id == "mk8s" and component_instance_id(row) in soperator_targets:
+            target_ref = component_instance_id(row)
+            _materialize_soperator_mk8s_profile(
+                inputs=inputs,
+                profile=profile_by_target.get(target_ref, {}),
+            )
+        elif component_id == "sfs":
+            soperator_filesystems = _materialize_soperator_sfs_profile(
+                inputs=inputs,
+                profile=profile_by_target.get(primary_target, {}),
+                target_ref=primary_target,
+            )
+        if row != before:
+            changed = True
+
+    apps_rows = _scope_rows(payload, scope="apps")
+    for row in apps_rows:
+        if not isinstance(row, dict) or not bool(row.get("enabled", False)):
+            continue
+        if component_type_id(row) != _SOPERATOR_APP_ID:
+            continue
+        target_ref = app_chart_target_ref(row) or component_instance_id(row)
+        if target_ref not in soperator_targets:
+            continue
+        before = copy.deepcopy(row)
+        values = row.setdefault("values", {})
+        if isinstance(values, dict):
+            chart_profile = _profile_mapping(
+                _profile_mapping(profile_by_target.get(target_ref, {}), "chart"),
+                "values",
+            )
+            _merge_missing_mapping(values, chart_profile)
+            _materialize_soperator_partition_profile(
+                values=values,
+                profile=profile_by_target.get(target_ref, {}),
+            )
+            current_cluster_name = str(values.get("clusterName", "") or "").strip()
+            if not current_cluster_name or (
+                current_cluster_name == "mk8s" and target_ref != "mk8s"
+            ):
+                values["clusterName"] = target_ref
+            slurm_nodes = values.setdefault("slurmNodes", {})
+            if isinstance(slurm_nodes, dict):
+                login = slurm_nodes.setdefault("login", {})
+                if isinstance(login, dict):
+                    login.setdefault("sshRootPublicKeys", [])
+            if soperator_filesystems:
+                sfs_values = values.setdefault("sfs", {})
+                if isinstance(sfs_values, dict):
+                    filesystems_values = sfs_values.setdefault("filesystems", {})
+                    if isinstance(filesystems_values, dict):
+                        _merge_missing_mapping(filesystems_values, soperator_filesystems)
+                volume_values = values.setdefault("volume", {})
+                if isinstance(volume_values, dict):
+                    jail_fs = soperator_filesystems.get("jail", {})
+                    if isinstance(jail_fs, Mapping):
+                        jail_values = volume_values.setdefault("jail", {})
+                        if isinstance(jail_values, dict):
+                            if "size_gib" in jail_fs:
+                                jail_values.setdefault("size", f"{jail_fs['size_gib']}Gi")
+                            if str(jail_fs.get("mount_tag", "") or "").strip():
+                                jail_values.setdefault("filestoreDeviceName", jail_fs["mount_tag"])
+                    controller_fs = soperator_filesystems.get("controller-spool", {})
+                    if isinstance(controller_fs, Mapping):
+                        controller_values = volume_values.setdefault("controllerSpool", {})
+                        if isinstance(controller_values, dict):
+                            if "size_gib" in controller_fs:
+                                controller_values.setdefault(
+                                    "size",
+                                    f"{controller_fs['size_gib']}Gi",
+                                )
+                            if str(controller_fs.get("mount_tag", "") or "").strip():
+                                controller_values.setdefault(
+                                    "filestoreDeviceName",
+                                    controller_fs["mount_tag"],
+                                )
+                    accounting_fs = soperator_filesystems.get("accounting", {})
+                    if isinstance(accounting_fs, Mapping):
+                        accounting_values = volume_values.setdefault("accounting", {})
+                        if isinstance(accounting_values, dict):
+                            if "size_gib" in accounting_fs:
+                                accounting_values.setdefault(
+                                    "size",
+                                    f"{accounting_fs['size_gib']}Gi",
+                                )
+                            if str(accounting_fs.get("mount_tag", "") or "").strip():
+                                accounting_values.setdefault(
+                                    "filestoreDeviceName",
+                                    accounting_fs["mount_tag"],
+                                )
+        if row != before:
+            changed = True
+    return changed
 
 
 def _scope_rows(payload: dict[str, Any], *, scope: ComponentScope) -> list[dict[str, Any]]:
@@ -3401,6 +3880,7 @@ def _declared_wizard_prompt_path(
     elif entry.scope == "apps":
         if relative not in {
             "namespace",
+            "profile",
             "release-name",
         } and not relative.startswith("values."):
             return None
@@ -3768,6 +4248,7 @@ def _normalize_provider_arg_path(
         "group",
         "enabled",
         "repo",
+        "profile",
         "version",
         "namespace",
         "release-name",
@@ -5578,9 +6059,7 @@ def _prompt_mysterybox_kubernetes_secret_name(secret_name: str) -> tuple[str, bo
             raw = secret_name
         if INSTANCE_ID_PATTERN.fullmatch(raw):
             return raw, False
-        console.print(
-            f"{error_markup('Invalid value')}. Enter a valid Kubernetes Secret name."
-        )
+        console.print(f"{error_markup('Invalid value')}. Enter a valid Kubernetes Secret name.")
 
 
 def _prompt_mysterybox_secrets_override(
@@ -5631,9 +6110,7 @@ def _prompt_mysterybox_secrets_override(
             console.print(f"{error_markup('Invalid value')}. Secret names must be unique.")
             continue
 
-        kubernetes_secret_name, should_stop = _prompt_mysterybox_kubernetes_secret_name(
-            secret_name
-        )
+        kubernetes_secret_name, should_stop = _prompt_mysterybox_kubernetes_secret_name(secret_name)
         if should_stop:
             return current, True
         if _wizard_backtrack_requested(kubernetes_secret_name):
@@ -5670,9 +6147,7 @@ def _prompt_mysterybox_secrets_override(
             if not payload_key:
                 if payload:
                     break
-                console.print(
-                    f"{error_markup('Invalid value')}. Add at least one payload key."
-                )
+                console.print(f"{error_markup('Invalid value')}. Add at least one payload key.")
                 continue
             payload_key = payload_key.upper()
             if payload_key in payload:
@@ -5992,9 +6467,7 @@ def _run_component_field_wizard(
             if isinstance(target_row, Mapping):
                 target_ref = normalize_component_token(target_row.get(INSTANCE_ID_FIELD))
         if not target_ref:
-            target_ref = component_instance_id(
-                {"id": entry.id, INSTANCE_ID_FIELD: instance_id}
-            )
+            target_ref = component_instance_id({"id": entry.id, INSTANCE_ID_FIELD: instance_id})
 
         remainder = target_match.group(2)
         if remainder.startswith("secrets.mysterybox."):
@@ -7101,6 +7574,10 @@ def _runtime_app_chart_name(
 ) -> str | None:
     configured_name = component_entry_chart_name(entry)
     repo = str(chart_node.get("repo", "")).strip().rstrip("/")
+    if not repo and entry is not None:
+        local_chart_source = str(entry.source or "").strip()
+        if _resolve_local_chart_source_path(local_chart_source) is not None:
+            return local_chart_source
     if repo.startswith("oci://") and "/" in repo:
         repo_tail = repo.rsplit("/", maxsplit=1)[-1].strip()
         if configured_name and repo_tail.lower() == configured_name.lower():
@@ -8329,6 +8806,16 @@ def _positive_number_value(value: Any) -> float | None:
         return None
 
 
+def _has_generic_gpu_node_group(inputs: Mapping[str, Any]) -> bool:
+    node_groups = _resolve_mapping_segment(inputs, "node_groups")
+    if not isinstance(node_groups, Mapping):
+        return False
+    return any(
+        isinstance(group, Mapping) and bool(_resolve_mapping_segment(group, "gpu"))
+        for group in node_groups.values()
+    )
+
+
 def _mk8s_conditionally_required_input_leaf_names(component_node: Mapping[str, Any]) -> set[str]:
     inputs = component_node.get("inputs", {})
     if not isinstance(inputs, Mapping):
@@ -8378,8 +8865,10 @@ def _mk8s_conditionally_required_input_leaf_names(component_node: Mapping[str, A
         else ""
     )
     if gpu_enabled:
-        required.add("gpu_node_groups")
-        if gpu_autoscaling is None:
+        generic_gpu_node_group = _has_generic_gpu_node_group(inputs)
+        if not generic_gpu_node_group:
+            required.add("gpu_node_groups")
+        if not generic_gpu_node_group and gpu_autoscaling is None:
             required.add("gpu_nodes_count_per_group")
         if not gpu_override_platform:
             required.add("gpu_nodes_platform")
@@ -9925,10 +10414,7 @@ def _ensure_runtime_auth_material(
 
 
 def _mysterybox_eso_service_account_description() -> str:
-    return (
-        "Service account used by External Secrets Operator to read "
-        "Nebius MysteryBox payloads"
-    )
+    return "Service account used by External Secrets Operator to read Nebius MysteryBox payloads"
 
 
 @contextmanager
@@ -10456,7 +10942,9 @@ def _sync_mysterybox_primary_version_ids_to_config(
             version_ids,
         )
         render_payload = manifest_payload.get("render")
-        tfvars = render_payload.get("terraform_tfvars") if isinstance(render_payload, dict) else None
+        tfvars = (
+            render_payload.get("terraform_tfvars") if isinstance(render_payload, dict) else None
+        )
         if isinstance(tfvars, dict):
             manifest_changed = (
                 _set_mysterybox_version_ids_in_tfvars(
@@ -10487,9 +10975,7 @@ def _sync_mysterybox_primary_version_ids_to_config(
         _materialize_generated_terraform_tfvars(paths, manifest_payload)
         updated_locations.append(str(manifest_path))
         updated_locations.append(str(paths.infra_dir / "terraform.auto.tfvars.json"))
-    console.print(
-        "Updated MysteryBox primary version_id values in " + ", ".join(updated_locations)
-    )
+    console.print("Updated MysteryBox primary version_id values in " + ", ".join(updated_locations))
     return True
 
 
@@ -10623,8 +11109,7 @@ def _kubectl_read_secret_key(
         if "not found" in detail.lower() or "notfound" in detail.lower():
             return None
         raise RuntimeError(
-            f"kubectl get secret failed for ESO MysteryBox credentials {namespace}/{name}: "
-            f"{detail}"
+            f"kubectl get secret failed for ESO MysteryBox credentials {namespace}/{name}: {detail}"
         )
     try:
         payload = json.loads(stdout)
@@ -11207,8 +11692,7 @@ def _ensure_mysterybox_eso_credentials_secret(
 
         if not stale_reasons:
             console.print(
-                f"Reused ESO MysteryBox credential Secret {namespace}/{name} "
-                "for native provider."
+                f"Reused ESO MysteryBox credential Secret {namespace}/{name} for native provider."
             )
             return fresh_credentials
 
@@ -11221,9 +11705,7 @@ def _ensure_mysterybox_eso_credentials_secret(
             )
         console.print(
             f"{warning_markup('WARNING:', bold=True)} ESO MysteryBox credential Secret "
-            f"{namespace}/{name} is stale; replacing it because "
-            + "; ".join(stale_reasons)
-            + "."
+            f"{namespace}/{name} is stale; replacing it because " + "; ".join(stale_reasons) + "."
         )
         replacing_stale_credentials = True
         credentials = None
@@ -11242,9 +11724,7 @@ def _ensure_mysterybox_eso_credentials_secret(
                 f"{warning_markup('WARNING:', bold=True)} ESO MysteryBox credential Secret "
                 f"{namespace}/{name} is invalid; replacing it with fresh Subject Credentials."
             )
-        credentials = fresh_credentials or _create_mysterybox_eso_credentials(
-            project_id=project_id
-        )
+        credentials = fresh_credentials or _create_mysterybox_eso_credentials(project_id=project_id)
 
     _apply_mysterybox_eso_credentials_secret(
         namespace=namespace,
@@ -12550,6 +13030,277 @@ def _prepare_cluster_handoff_kube_env(
     }
 
 
+def _run_post_flux_kubectl(
+    cmd: list[str],
+    *,
+    env: Mapping[str, str],
+    timeout: int = 300,
+    retries: int = 0,
+    retry_delay_seconds: float = 5.0,
+    retry_stderr_markers: Sequence[str] = (),
+) -> None:
+    max_attempts = max(1, retries + 1)
+    for attempt in range(1, max_attempts + 1):
+        completed = subprocess.run(
+            cmd,
+            env=dict(env),
+            timeout=timeout,
+            capture_output=True,
+            text=True,
+        )
+        stdout = _filter_benign_kubectl_output(completed.stdout or "")
+        stderr = _filter_benign_kubectl_output(completed.stderr or "")
+        if stdout:
+            sys.stdout.write(stdout + ("\n" if not stdout.endswith("\n") else ""))
+        if stderr:
+            sys.stderr.write(stderr + ("\n" if not stderr.endswith("\n") else ""))
+        if completed.returncode == 0:
+            return
+        failure_text = "\n".join(
+            part
+            for part in (
+                completed.stdout or "",
+                completed.stderr or "",
+                stdout,
+                stderr,
+            )
+            if part
+        ).lower()
+        should_retry = attempt < max_attempts and any(
+            marker.lower() in failure_text for marker in retry_stderr_markers
+        )
+        if should_retry:
+            time.sleep(retry_delay_seconds)
+            continue
+        raise subprocess.CalledProcessError(
+            completed.returncode,
+            cmd,
+            output=stdout,
+            stderr=stderr,
+        )
+
+
+def _write_post_flux_docs(path: Path, docs: Sequence[Mapping[str, Any]]) -> None:
+    path.write_text(
+        yaml.safe_dump_all(
+            [dict(doc) for doc in docs],
+            explicit_start=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _crd_resource_arg(doc: Mapping[str, Any]) -> str | None:
+    metadata = doc.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return None
+    name = metadata.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return None
+    return f"customresourcedefinition.apiextensions.k8s.io/{name}"
+
+
+def _metadata_name_namespace(doc: Mapping[str, Any]) -> tuple[str, str] | None:
+    metadata = doc.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return None
+    name = metadata.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return None
+    namespace = metadata.get("namespace")
+    return name.strip(), namespace.strip() if isinstance(namespace, str) else ""
+
+
+def _is_post_flux_custom_resource(doc: Mapping[str, Any]) -> bool:
+    api_version = doc.get("apiVersion")
+    if not isinstance(api_version, str) or "/" not in api_version:
+        return False
+    group, _version = api_version.split("/", maxsplit=1)
+    return group == "slurm.nebius.ai"
+
+
+def _post_flux_custom_resource_priority(doc: Mapping[str, Any]) -> int:
+    kind = str(doc.get("kind", "")).strip()
+    return {
+        "SlurmCluster": 10,
+        "NodeConfigurator": 20,
+        "NodeSet": 30,
+        "NodeSetPowerState": 40,
+        "JailedConfig": 50,
+        "ActiveCheck": 60,
+    }.get(kind, 100)
+
+
+def _post_flux_webhook_service_refs(
+    docs: Sequence[Mapping[str, Any]],
+) -> tuple[tuple[str, str], ...]:
+    refs: set[tuple[str, str]] = set()
+    for doc in docs:
+        if doc.get("apiVersion") != "admissionregistration.k8s.io/v1":
+            continue
+        if doc.get("kind") not in {
+            "MutatingWebhookConfiguration",
+            "ValidatingWebhookConfiguration",
+        }:
+            continue
+        webhooks = doc.get("webhooks")
+        if not isinstance(webhooks, list):
+            continue
+        for webhook in webhooks:
+            if not isinstance(webhook, Mapping):
+                continue
+            client_config = webhook.get("clientConfig")
+            if not isinstance(client_config, Mapping):
+                continue
+            service = client_config.get("service")
+            if not isinstance(service, Mapping):
+                continue
+            name = service.get("name")
+            namespace = service.get("namespace")
+            if not isinstance(name, str) or not name.strip():
+                continue
+            if not isinstance(namespace, str) or not namespace.strip():
+                continue
+            refs.add((namespace.strip(), name.strip()))
+    return tuple(sorted(refs))
+
+
+def _wait_for_post_flux_webhook_services(
+    docs: Sequence[Mapping[str, Any]],
+    *,
+    env: Mapping[str, str],
+) -> None:
+    for namespace, name in _post_flux_webhook_service_refs(docs):
+        _run_post_flux_kubectl(
+            [
+                "kubectl",
+                "-n",
+                namespace,
+                "wait",
+                "--for=jsonpath={.subsets[0].addresses[0].ip}",
+                "--timeout=120s",
+                f"endpoints/{name}",
+            ],
+            env=env,
+            timeout=150,
+            retries=2,
+            retry_delay_seconds=5.0,
+            retry_stderr_markers=_POST_FLUX_WEBHOOK_TRANSIENT_MARKERS,
+        )
+
+
+def _wait_for_post_flux_deployments(
+    docs: Sequence[Mapping[str, Any]],
+    *,
+    env: Mapping[str, str],
+) -> None:
+    for doc in docs:
+        if doc.get("apiVersion") != "apps/v1" or doc.get("kind") != "Deployment":
+            continue
+        name_namespace = _metadata_name_namespace(doc)
+        if name_namespace is None:
+            continue
+        name, namespace = name_namespace
+        cmd = ["kubectl"]
+        if namespace:
+            cmd.extend(["-n", namespace])
+        cmd.extend(["rollout", "status", f"deployment/{name}", "--timeout=180s"])
+        _run_post_flux_kubectl(cmd, env=env, timeout=240)
+
+
+def _apply_post_flux_manifest(manifest_path: Path, *, env: Mapping[str, str]) -> None:
+    docs = [
+        doc
+        for doc in yaml.safe_load_all(manifest_path.read_text(encoding="utf-8"))
+        if isinstance(doc, dict)
+    ]
+    if not docs:
+        return
+    crd_docs = [
+        doc
+        for doc in docs
+        if doc.get("apiVersion") == "apiextensions.k8s.io/v1"
+        and doc.get("kind") == "CustomResourceDefinition"
+    ]
+    non_crd_docs = [doc for doc in docs if doc not in crd_docs]
+    custom_resource_docs = [doc for doc in non_crd_docs if _is_post_flux_custom_resource(doc)]
+    base_resource_docs = [doc for doc in non_crd_docs if doc not in custom_resource_docs]
+    with tempfile.TemporaryDirectory(prefix="nebius-cxcli-post-flux-") as temp_dir:
+        temp_path = Path(temp_dir)
+        if crd_docs:
+            crd_path = temp_path / f"{manifest_path.stem}-crds.yaml"
+            _write_post_flux_docs(crd_path, crd_docs)
+            _run_post_flux_kubectl(
+                [
+                    "kubectl",
+                    "apply",
+                    "--server-side",
+                    "--force-conflicts",
+                    "-f",
+                    str(crd_path),
+                ],
+                env=env,
+            )
+            crd_args = [
+                resource_arg for doc in crd_docs if (resource_arg := _crd_resource_arg(doc))
+            ]
+            if crd_args:
+                _run_post_flux_kubectl(
+                    [
+                        "kubectl",
+                        "wait",
+                        "--for=condition=Established",
+                        "--timeout=120s",
+                        *crd_args,
+                    ],
+                    env=env,
+                    timeout=180,
+                )
+        if base_resource_docs:
+            resource_path = temp_path / f"{manifest_path.stem}-resources.yaml"
+            _write_post_flux_docs(resource_path, base_resource_docs)
+            _run_post_flux_kubectl(
+                [
+                    "kubectl",
+                    "apply",
+                    "--server-side",
+                    "--force-conflicts",
+                    "-f",
+                    str(resource_path),
+                ],
+                env=env,
+            )
+            _wait_for_post_flux_deployments(base_resource_docs, env=env)
+            _wait_for_post_flux_webhook_services(base_resource_docs, env=env)
+        if custom_resource_docs:
+            custom_docs_by_priority: dict[int, list[Mapping[str, Any]]] = {}
+            for doc in custom_resource_docs:
+                custom_docs_by_priority.setdefault(
+                    _post_flux_custom_resource_priority(doc),
+                    [],
+                ).append(doc)
+            for priority in sorted(custom_docs_by_priority):
+                custom_resource_path = (
+                    temp_path / f"{manifest_path.stem}-custom-resources-{priority}.yaml"
+                )
+                _write_post_flux_docs(custom_resource_path, custom_docs_by_priority[priority])
+                _run_post_flux_kubectl(
+                    [
+                        "kubectl",
+                        "apply",
+                        "--server-side",
+                        "--force-conflicts",
+                        "-f",
+                        str(custom_resource_path),
+                    ],
+                    env=env,
+                    retries=5,
+                    retry_delay_seconds=5.0,
+                    retry_stderr_markers=_POST_FLUX_WEBHOOK_TRANSIENT_MARKERS,
+                )
+
+
 def _apply_rendered_flux(paths: ProjectPaths, *, extra_env: dict[str, str] | None = None) -> None:
     """Apply rendered Flux manifests in local deploy mode."""
     if not flux_dir_has_rendered_resources(paths.flux_dir):
@@ -12638,26 +13389,7 @@ def _apply_rendered_flux(paths: ProjectPaths, *, extra_env: dict[str, str] | Non
         if post_flux_manifests:
             _set_phase("[cyan]Applying post-Flux manifests to the target cluster...[/cyan]")
         for manifest_path in post_flux_manifests:
-            completed = subprocess.run(
-                ["kubectl", "apply", "-f", str(manifest_path)],
-                env=env,
-                timeout=300,
-                capture_output=True,
-                text=True,
-            )
-            stdout = _filter_benign_kubectl_output(completed.stdout or "")
-            stderr = _filter_benign_kubectl_output(completed.stderr or "")
-            if stdout:
-                sys.stdout.write(stdout + ("\n" if not stdout.endswith("\n") else ""))
-            if stderr:
-                sys.stderr.write(stderr + ("\n" if not stderr.endswith("\n") else ""))
-            if completed.returncode != 0:
-                raise subprocess.CalledProcessError(
-                    completed.returncode,
-                    ["kubectl", "apply", "-f", str(manifest_path)],
-                    output=stdout,
-                    stderr=stderr,
-                )
+            _apply_post_flux_manifest(manifest_path, env=env)
 
 
 def _node_readiness_summary(*, extra_env: dict[str, str]) -> tuple[bool, str]:
@@ -13252,6 +13984,7 @@ def _run_generated_bundle_validation(
             lambda: _validate_strict_config(config, include_common_checks=False),
         )
         if mysterybox_payload_requirements:
+
             def _prepare_mysterybox_payload_values() -> None:
                 nonlocal mysterybox_payload_env
                 validation_env = os.environ.copy()
@@ -15081,6 +15814,15 @@ def create_command(
             raw_values=app_releasename_opt,
             option_name="--app-releasename",
         )
+        selected_infra_raw = _expand_soperator_component_selection(
+            selected_infra=selected_infra_raw,
+            selected_apps=selected_apps_raw,
+            infra_entries=infra_entries,
+        )
+        selected_apps_raw = _expand_soperator_app_selection(
+            selected_apps=selected_apps_raw,
+            app_entries=app_entries,
+        )
 
         dependency_seed_payload = _dependency_seed_payload(
             client_name=resolved_client_name,
@@ -15158,12 +15900,10 @@ def create_command(
             final_payload,
             provider_lookup=provider_lookup,
         )
-        selected_apps, mysterybox_eso_app_labels = (
-            _ensure_mysterybox_eso_app_dependency_selection(
-                final_payload,
-                selected_apps=selected_apps,
-                app_entries=app_entries,
-            )
+        selected_apps, mysterybox_eso_app_labels = _ensure_mysterybox_eso_app_dependency_selection(
+            final_payload,
+            selected_apps=selected_apps,
+            app_entries=app_entries,
         )
         _print_mysterybox_eso_app_dependency_adjustment(mysterybox_eso_app_labels)
         if interactive_mode:
@@ -15192,6 +15932,7 @@ def create_command(
                 entries=app_entries,
             )
 
+        _materialize_soperator_component_defaults(final_payload)
         _materialize_mk8s_image_defaults(
             payload=final_payload,
             selected_infra=selected_infra,
@@ -15290,6 +16031,7 @@ def create_command(
                 + " because the selected observability configuration requires them."
             )
         _align_new_handoff_instance_ids_with_resource_names(final_payload)
+        _materialize_soperator_component_defaults(final_payload)
         if ensure_mysterybox_eso_app_rows(final_payload, app_entries=app_entries):
             selected_apps = _enabled_ids_from_runtime_payload(
                 payload=final_payload,
@@ -15611,6 +16353,15 @@ def component_add_command(
         }
         selected_infra_raw = set(enabled_infra) | requested_infra_types
         selected_apps_raw = set(enabled_apps) | requested_apps_types
+        selected_infra_raw = _expand_soperator_component_selection(
+            selected_infra=selected_infra_raw,
+            selected_apps=selected_apps_raw,
+            infra_entries=infra_entries,
+        )
+        selected_apps_raw = _expand_soperator_app_selection(
+            selected_apps=selected_apps_raw,
+            app_entries=app_entries,
+        )
         dependency_seed_payload = _dependency_seed_payload(
             client_name=client_name,
             tenant_id=tenant_id,
@@ -15752,12 +16503,10 @@ def component_add_command(
             next_payload,
             provider_lookup=provider_lookup,
         )
-        selected_apps, mysterybox_eso_app_labels = (
-            _ensure_mysterybox_eso_app_dependency_selection(
-                next_payload,
-                selected_apps=selected_apps,
-                app_entries=app_entries,
-            )
+        selected_apps, mysterybox_eso_app_labels = _ensure_mysterybox_eso_app_dependency_selection(
+            next_payload,
+            selected_apps=selected_apps,
+            app_entries=app_entries,
         )
         if mysterybox_eso_app_labels:
             for app_label in mysterybox_eso_app_labels:
@@ -15785,6 +16534,7 @@ def component_add_command(
                 entries=app_entries,
             )
 
+        _materialize_soperator_component_defaults(next_payload)
         _materialize_mk8s_image_defaults(
             payload=next_payload,
             selected_infra=set(added_infra_instances),
@@ -15938,6 +16688,7 @@ def component_add_command(
                 if isinstance(row, dict) and component_instance_id(row) in added_infra_instances
             ]
         _materialize_single_target_app_bindings(next_payload)
+        _materialize_soperator_component_defaults(next_payload)
         if ensure_mysterybox_eso_app_rows(next_payload, app_entries=app_entries):
             selected_apps = _enabled_ids_from_runtime_payload(
                 payload=next_payload,
@@ -16920,9 +17671,7 @@ def _raise_missing_grafana_target_contexts(
     missing = ", ".join(sorted(missing_target_refs))
     config_arg = _config_cli_arg(config_path) if config_path is not None else "<config.yaml>"
     generated_arg = (
-        shlex.quote(str(generated_path.resolve()))
-        if generated_path is not None
-        else "<generated/>"
+        shlex.quote(str(generated_path.resolve())) if generated_path is not None else "<generated/>"
     )
     message = (
         "validate-dashboards could not resolve an explicit kube context for Grafana "

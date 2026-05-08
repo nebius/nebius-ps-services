@@ -1,0 +1,84 @@
+clusterName: soperator-cpu
+clusterType: cpu
+
+slurmNodes:
+  login:
+    sshRootPublicKeys: []
+  accounting:
+    slurmConfig:
+      accountingStorageTRES: CPU,Mem,Node,VMem
+
+partitionConfiguration:
+  configType: structured
+  partitions:
+    - name: cpu
+      nodeSetRefs:
+        - worker-cpu
+      config: Default=YES MaxTime=INFINITE State=UP PriorityTier=5
+
+nodesets:
+  - name: worker-cpu
+    replicas: 2
+    maxUnavailable: 1
+    enableHostUserNamespace: true
+    gpu:
+      enabled: false
+    nodeConfig:
+      features:
+        - cpu
+      static: Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1
+      dynamic: InstanceId={{ .PodName }}
+    slurmd:
+      image:
+        repository: cr.eu-north1.nebius.cloud/soperator/worker_slurmd
+        tag: 3.0.3-slurm25.11.3
+        pullPolicy: IfNotPresent
+      resources:
+        cpu: "4"
+        memory: 16Gi
+        ephemeralStorage: 10Gi
+      volumes:
+        spool:
+          emptyDir: {}
+        jail:
+          persistentVolumeClaim:
+            claimName: jail-pvc
+        jailSubMounts: []
+        customVolumeMounts:
+          - name: slurm-scripts
+            mountPath: /opt/slurm_scripts/
+            volumeSource:
+              configMap:
+                name: slurm-scripts
+                defaultMode: 493
+          - name: slurm-scripts-jail
+            mountPath: /mnt/jail.upper/opt/slurm_scripts/
+            volumeSource:
+              configMap:
+                name: slurm-scripts
+                defaultMode: 493
+        sharedMemorySize: 8Gi
+      security:
+        appArmorProfile: unconfined
+        limitsConfig: ""
+        procMount: Default
+    munge:
+      image:
+        repository: cr.eu-north1.nebius.cloud/soperator/munge
+        tag: 3.0.3-slurm25.11.3
+        pullPolicy: IfNotPresent
+      resources:
+        cpu: 200m
+        memory: 512Mi
+        ephemeralStorage: 1Gi
+      security:
+        appArmorProfile: unconfined
+        limitsConfig: ""
+        procMount: Default
+    sssd:
+      enabled: false
+    priorityClass: soperator-worker-high-priority
+    nodeSelector:
+      slurm.nebius.ai/nodeset-name: worker-cpu
+    workerAnnotations: {}
+    customInitContainers: []

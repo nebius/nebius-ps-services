@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "clusterName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "clusterType": {
+      "type": "string",
+      "enum": ["gpu", "cpu"]
+    },
+    "mariadb-operator": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "installOperator": {
+          "type": "boolean"
+        }
+      }
+    },
+    "slurmNodes": {
+      "type": "object",
+      "properties": {
+        "login": {
+          "type": "object",
+          "properties": {
+            "sshRootPublicKeys": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp[0-9]+)\\s+\\S+.*$"
+              }
+            }
+          }
+        }
+      }
+    },
+    "volume": {
+      "type": "object",
+      "properties": {
+        "jail": {
+          "type": "object",
+          "required": ["name", "size", "type"],
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "size": { "type": "string", "minLength": 1 },
+            "type": { "type": "string", "enum": ["filestore", "glusterfs", "local"] },
+            "filestoreDeviceName": { "type": "string" },
+            "localPath": { "type": "string" }
+          }
+        },
+        "controllerSpool": {
+          "type": "object",
+          "required": ["name", "size"],
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "size": { "type": "string", "minLength": 1 },
+            "type": { "type": "string", "enum": ["filestore", "local"] },
+            "filestoreDeviceName": { "type": "string" },
+            "localPath": { "type": "string" }
+          }
+        }
+      }
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "mountImage": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag": { "type": "string", "minLength": 1 },
+            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+          }
+        }
+      }
+    },
+    "nodesets": {
+      "type": "array",
+      "minItems": 1
+    }
+  }
+}

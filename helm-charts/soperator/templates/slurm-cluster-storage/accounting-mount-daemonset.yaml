@@ -1,0 +1,53 @@
+{{- if .Values.volume.accounting.enabled }}
+{{- $type := include "slurm-cluster-storage.volume.accounting.type" . }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: {{ include "slurm-cluster-storage.volume.accounting.mount" . }}
+spec:
+  selector:
+    matchLabels:
+      slurm: {{ include "slurm-cluster-storage.volume.accounting.mount" . }}
+  template:
+    metadata:
+      labels:
+        slurm: {{ include "slurm-cluster-storage.volume.accounting.mount" . }}
+    spec:
+      containers:
+        - name: {{ cat "mount-accounting" $type | include "mashedkebab" }}
+          image: {{ include "slurm-cluster-storage.mount.image" . | quote }}
+          imagePullPolicy: {{ include "slurm-cluster-storage.mount.imagePullPolicy" . }}
+          command:
+            - /bin/sh
+            - -c
+{{- if eq $type "filestore" }}
+            - /mount-scripts/ensure_mounted_filestore.sh -d {{ include "slurm-cluster-storage.volume.accounting.device" . }} -p /mnt/accounting -s 60
+{{- else }}
+            - mkdir -m 755 -p /host{{ include "slurm-cluster-storage.volume.accounting.path" . }} && while true; do sleep 3600; done
+{{- end }}
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: host-mount
+              mountPath: /host/mnt
+              mountPropagation: Bidirectional
+            - name: mount-scripts
+              mountPath: /mount-scripts
+      volumes:
+        - name: host-mount
+          hostPath:
+            path: /mnt
+        - name: mount-scripts
+          configMap:
+            name: mount-scripts
+            defaultMode: 0500
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+{{ .Values.storage.accounting.matchExpressions | toYaml | indent 18 }}
+      tolerations:
+{{ .Values.storage.accounting.tolerations | toYaml | indent 8 }}
+{{- end }}

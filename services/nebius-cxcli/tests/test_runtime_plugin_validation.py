@@ -391,7 +391,13 @@ def test_runtime_validation_plugins_reject_incomplete_flat_mk8s_gpu_shape(
         },
     }
 
-    with pytest.raises(ValueError, match="gpu_node_groups must be > 0 when gpu_enabled=true"):
+    with pytest.raises(
+        ValueError,
+        match=(
+            "gpu_enabled=true requires either gpu_node_groups > 0 or at least one generic "
+            "node_groups entry with gpu=true"
+        ),
+    ):
         run_runtime_validation_plugins(
             payload=payload,
             get_path=_get_path,
@@ -399,6 +405,40 @@ def test_runtime_validation_plugins_reject_incomplete_flat_mk8s_gpu_shape(
             id_pattern=re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
             env_var_pattern=re.compile(r"^[A-Z_][A-Z0-9_]*$"),
         )
+
+
+def test_runtime_validation_plugins_allow_generic_mk8s_gpu_node_groups(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "NEBIUS_CXCLI_RUNTIME_VALIDATION_PLUGINS",
+        "nebius_cxcli.runtime_component_validation:validate_component_runtime_rules",
+    )
+    payload = {
+        "__shared_admin_ssh_user_name__": "ubuntu",
+        "infra": {
+            "mk8s": {
+                "gpu_enabled": True,
+                "gpu_node_groups": 0,
+                "gpu_nodes_platform": "gpu-h100-sxm",
+                "gpu_nodes_preset": "8gpu-128vcpu-1600gb",
+                "node_groups": {
+                    "worker-gpu-0": {
+                        "gpu": True,
+                        "fixed_node_count": 1,
+                    }
+                },
+            }
+        },
+    }
+
+    run_runtime_validation_plugins(
+        payload=payload,
+        get_path=_get_path,
+        as_text=_as_text,
+        id_pattern=re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
+        env_var_pattern=re.compile(r"^[A-Z_][A-Z0-9_]*$"),
+    )
 
 
 def test_runtime_validation_plugins_reject_non_clusterable_mk8s_gpu_preset_with_infiniband(

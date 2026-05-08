@@ -29,6 +29,15 @@ def _coerce_int(value: Any, *, default: int = 0) -> int:
         return default
 
 
+def _has_generic_gpu_node_group(node_groups: Any) -> bool:
+    if not isinstance(node_groups, Mapping):
+        return False
+    return any(
+        isinstance(group, Mapping) and bool(group.get("gpu", False))
+        for group in node_groups.values()
+    )
+
+
 def validate_component_runtime_rules(
     payload: Mapping[str, Any],
     *,
@@ -116,6 +125,7 @@ def _validate_mk8s_gpu(
     gpu_enabled = bool(get_path(payload, f"{base}.gpu_enabled", False))
     gpu_node_groups = get_path(payload, f"{base}.gpu_node_groups", 0)
     gpu_nodes_count_per_group = get_path(payload, f"{base}.gpu_nodes_count_per_group", 0)
+    generic_gpu_node_group = _has_generic_gpu_node_group(get_path(payload, f"{base}.node_groups"))
     gpu_platform = as_text(get_path(payload, f"{base}.gpu_nodes_platform"))
     gpu_preset = as_text(get_path(payload, f"{base}.gpu_nodes_preset"))
     gpu_autoscaling = get_path(
@@ -154,11 +164,17 @@ def _validate_mk8s_gpu(
                 )
 
     if gpu_enabled:
-        if _coerce_int(gpu_node_groups) <= 0:
-            raise ValueError("gpu_node_groups must be > 0 when gpu_enabled=true")
-        if gpu_autoscaling is None and _coerce_int(gpu_nodes_count_per_group) <= 0:
+        if _coerce_int(gpu_node_groups) <= 0 and not generic_gpu_node_group:
             raise ValueError(
-                "gpu_nodes_count_per_group must be > 0 when gpu_enabled=true and autoscaling is not configured"
+                "gpu_enabled=true requires either gpu_node_groups > 0 or at least one generic node_groups entry with gpu=true"
+            )
+        if (
+            _coerce_int(gpu_node_groups) > 0
+            and gpu_autoscaling is None
+            and _coerce_int(gpu_nodes_count_per_group) <= 0
+        ):
+            raise ValueError(
+                "gpu_nodes_count_per_group must be > 0 when built-in GPU node-group shortcut is enabled and autoscaling is not configured"
             )
         if not gpu_platform and not gpu_override_platform:
             raise ValueError(

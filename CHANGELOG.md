@@ -4,6 +4,29 @@ All notable changes to this repository will be documented in this file.
 
 ## [Unreleased]
 
+- Added the initial `helm-charts/soperator` umbrella chart for Nebius Soperator
+  self-deployment on MK8s, plus Soperator-oriented MK8s/SFS Terraform module
+  surfaces, cxcli target-scoped app wiring, NFS output binding, and a VM-based
+  `platform-infra/modules/nfs` module.
+- Added catalog-driven Soperator nodesets profiles in `nebius-cxcli` so
+  Soperator can seed CPU-only, GPU-only, or mixed CPU/GPU Slurm worker shapes
+  through generic MK8s node groups instead of inline hardcoded defaults. The
+  mixed profile uses separate `worker-cpu` and `worker-gpu` NodeSets with
+  explicit CPU/GPU partitions. NFS remains an optional VM-based sibling infra
+  component.
+- Added direct Terraform examples and documentation clarifications that show
+  the MK8s `node_groups` and SFS `filesystems` surfaces are caller-owned maps;
+  Soperator names such as `system`, `controller`, `login`, `accounting`, and
+  `jail` are cxcli profile defaults rather than module hardcoding.
+- Soperator self-deployment defaults now use structured Slurm partitions plus
+  chart-managed MariaDB accounting and Slurm REST so static GPU NodeSets become
+  registered Slurm nodes during live cxcli deploys.
+- The Soperator chart now also mounts its generated Slurm scripts into worker
+  NodeSets and overrides the Slurm plugin directory to the pinned image path so
+  basic `srun` jobs can load SPANK plugins and run prolog/epilog scripts.
+- Soperator GPU NodeSets now derive Slurm `Gres=gpu:<count>` from
+  `slurmd.resources.gpu`, so CPU/GPU partition profiles can run GPU jobs with
+  `--gres=gpu:*` without duplicating GPU counts in profile values.
 - nebius-cxcli: replaced the old MysteryBox webhook bridge path with native
   External Secrets Operator `nebiusmysterybox` resources, including runtime
   Subject Credentials Secret creation and `mysterybox.payload-viewer`

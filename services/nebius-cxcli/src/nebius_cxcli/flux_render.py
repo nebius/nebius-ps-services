@@ -5,6 +5,8 @@ from __future__ import annotations
 import copy
 import json
 import re
+import subprocess
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -16,6 +18,7 @@ from .component_defaults import (
     resolve_component_defaults,
     set_component_path,
 )
+from .component_instances import component_instance_id, component_type_id
 from .component_sources import component_input_binding_ref
 from .component_wiring import (
     _UNRESOLVED,
@@ -43,6 +46,26 @@ from .mysterybox_eso import (
 )
 from .paths import ProjectPaths
 from .runtime_config import to_plain_data
+
+_CLUSTER_SCOPED_RENDER_KINDS = {
+    ("", "Namespace"),
+    ("", "Node"),
+    ("", "PersistentVolume"),
+    ("admissionregistration.k8s.io", "MutatingWebhookConfiguration"),
+    ("admissionregistration.k8s.io", "ValidatingWebhookConfiguration"),
+    ("apiextensions.k8s.io", "CustomResourceDefinition"),
+    ("apiregistration.k8s.io", "APIService"),
+    ("gateway.networking.k8s.io", "GatewayClass"),
+    ("networking.k8s.io", "IngressClass"),
+    ("node.k8s.io", "RuntimeClass"),
+    ("rbac.authorization.k8s.io", "ClusterRole"),
+    ("rbac.authorization.k8s.io", "ClusterRoleBinding"),
+    ("scheduling.k8s.io", "PriorityClass"),
+    ("storage.k8s.io", "CSIDriver"),
+    ("storage.k8s.io", "CSINode"),
+    ("storage.k8s.io", "StorageClass"),
+    ("storage.k8s.io", "VolumeAttachment"),
+}
 
 
 def _ensure_parent(path: Path) -> None:
@@ -77,6 +100,34 @@ def _git_repository_doc(name: str, url: str, ref: str) -> dict[str, Any]:
 
 def _multi_doc_yaml(docs: list[dict[str, Any]]) -> str:
     return "\n---\n".join(yaml.safe_dump(doc, sort_keys=False).strip() for doc in docs) + "\n"
+
+
+def _api_group(api_version: object) -> str:
+    if not isinstance(api_version, str) or "/" not in api_version:
+        return ""
+    return api_version.split("/", maxsplit=1)[0]
+
+
+def _local_chart_doc_needs_namespace(doc: dict[str, Any]) -> bool:
+    kind = str(doc.get("kind", "")).strip()
+    if not kind:
+        return False
+    return (_api_group(doc.get("apiVersion")), kind) not in _CLUSTER_SCOPED_RENDER_KINDS
+
+
+def _inject_local_chart_namespace(rendered: str, *, namespace: str) -> str:
+    docs = [doc for doc in yaml.safe_load_all(rendered) if isinstance(doc, dict)]
+    if not docs:
+        return rendered
+    for doc in docs:
+        if not _local_chart_doc_needs_namespace(doc):
+            continue
+        metadata = doc.setdefault("metadata", {})
+        if not isinstance(metadata, dict):
+            continue
+        if not str(metadata.get("namespace", "")).strip():
+            metadata["namespace"] = namespace
+    return _multi_doc_yaml(docs)
 
 
 def _namespace_doc(name: str) -> dict[str, Any]:
@@ -176,13 +227,28 @@ def _resolve_flux_chart_source(*, chart_name: str, chart_repo: str) -> dict[str,
     )
 
 
+def _local_chart_path_from_entry(entry: Any | None) -> str:
+    if entry is None:
+        return ""
+    source = str(getattr(entry, "source", "") or "").strip()
+    if not source or source.startswith(("git::", "http://", "https://", "oci://")):
+        return ""
+    chart_path = Path(source).expanduser()
+    if chart_path.is_dir() and (chart_path / "Chart.yaml").exists():
+        return str(chart_path)
+    return ""
+
+
 def _runtime_app_chart_name(
     *,
     chart_node: dict[str, Any],
     entry_id: str,
     configured_chart_name: str | None,
+    local_chart_path: str = "",
 ) -> str:
     repo = str(chart_node.get("repo", "")).strip().rstrip("/")
+    if not repo and local_chart_path:
+        return local_chart_path
     if repo.startswith("oci://") and "/" in repo:
         repo_tail = repo.rsplit("/", maxsplit=1)[-1].strip()
         if configured_chart_name and repo_tail.lower() == configured_chart_name.lower():
@@ -196,6 +262,105 @@ def _runtime_app_chart_name(
 
 def _file_slug(value: str) -> str:
     return "".join(ch if ch.isalnum() or ch in "-." else "-" for ch in value)
+
+
+def _nested_mapping(node: dict[str, Any], key: str) -> dict[str, Any]:
+    value = node.get(key)
+    if isinstance(value, dict):
+        return value
+    value = {}
+    node[key] = value
+    return value
+
+
+def _enabled_infra_instance_ids(payload: Mapping[str, Any], component_id: str) -> tuple[str, ...]:
+    infra_node = payload.get("infra")
+    components = infra_node.get("components") if isinstance(infra_node, Mapping) else None
+    if not isinstance(components, list):
+        return ()
+    ids: list[str] = []
+    for row in components:
+        if not isinstance(row, Mapping) or not bool(row.get("enabled", False)):
+            continue
+        if component_type_id(row) != component_id:
+            continue
+        instance_id = component_instance_id(row)
+        if instance_id:
+            ids.append(instance_id)
+    return tuple(ids)
+
+
+def _soperator_nfs_instance_id(
+    payload: Mapping[str, Any],
+    *,
+    target_ref: str,
+) -> str:
+    nfs_instance_ids = _enabled_infra_instance_ids(payload, "nfs")
+    if target_ref in nfs_instance_ids:
+        return target_ref
+    if len(nfs_instance_ids) == 1:
+        return nfs_instance_ids[0]
+    return ""
+
+
+def _component_output_or_missing(
+    resolved_component_outputs: Mapping[str, Any],
+    *,
+    instance_id: str,
+    output_name: str,
+) -> Any:
+    ref = component_output_ref(instance_id, output_name)
+    return resolved_component_outputs.get(ref, _UNRESOLVED)
+
+
+def _materialize_soperator_nfs_values(
+    *,
+    payload: Mapping[str, Any],
+    chart_node: dict[str, Any],
+    target_ref: str,
+    resolved_component_outputs: Mapping[str, Any],
+) -> None:
+    if not target_ref:
+        return
+    nfs_instance_id = _soperator_nfs_instance_id(payload, target_ref=target_ref)
+    if not nfs_instance_id:
+        return
+
+    values = _nested_mapping(chart_node, "values")
+    external_nfs = _nested_mapping(values, "externalNfs")
+    explicitly_disabled = external_nfs.get("enabled") is False
+    if explicitly_disabled:
+        return
+
+    existing_server = str(external_nfs.get("server", "") or "").strip()
+    existing_path = str(external_nfs.get("path", "") or "").strip()
+    server = existing_server or _component_output_or_missing(
+        resolved_component_outputs,
+        instance_id=nfs_instance_id,
+        output_name="server_ip",
+    )
+    export_path = existing_path or _component_output_or_missing(
+        resolved_component_outputs,
+        instance_id=nfs_instance_id,
+        output_name="export_path",
+    )
+
+    if server is _UNRESOLVED or export_path is _UNRESOLVED:
+        if external_nfs.get("enabled") is True:
+            missing = []
+            if server is _UNRESOLVED:
+                missing.append(component_output_ref(nfs_instance_id, "server_ip"))
+            if export_path is _UNRESOLVED:
+                missing.append(component_output_ref(nfs_instance_id, "export_path"))
+            raise ValueError(
+                "apps chart 'soperator' externalNfs binding requires Terraform output(s) "
+                f"{', '.join(missing)}. Run `deploy`, or rerun `render` after Terraform state exists."
+            )
+        return
+
+    external_nfs["enabled"] = True
+    external_nfs.setdefault("server", server)
+    external_nfs.setdefault("path", export_path)
 
 
 def _configured_app_release_specs(
@@ -308,6 +473,14 @@ def _configured_app_release_specs(
                             resolved_component_outputs[source_ref],
                         )
 
+                if entry_id == "soperator":
+                    _materialize_soperator_nfs_values(
+                        payload=payload,
+                        chart_node=chart_node,
+                        target_ref=target_ref,
+                        resolved_component_outputs=resolved_component_outputs,
+                    )
+
                 values_node = chart_node.get("values", {})
                 if values_node is None:
                     values_node = {}
@@ -317,22 +490,34 @@ def _configured_app_release_specs(
                     )
 
                 chart_repo = str(chart_node.get("repo", "")).strip()
+                local_chart_path = _local_chart_path_from_entry(entry)
                 chart_name = _runtime_app_chart_name(
                     chart_node=chart_node,
                     entry_id=entry_id,
                     configured_chart_name=component_entry_chart_name(entry),
+                    local_chart_path=local_chart_path,
                 )
                 chart_version = str(chart_node.get("version", "")).strip()
-                if not chart_repo:
+                if not chart_repo and not local_chart_path:
                     raise ValueError(
                         f"apps.charts[{entry_id}].repo is required for enabled chart '{entry_id}'"
                     )
-                source = _resolve_flux_chart_source(chart_name=chart_name, chart_repo=chart_repo)
-                source_kind = source["kind"]
-                chart_ref = source["chart_ref"]
-                source_url = source["repo_url"]
-                source_ref = source.get("repo_ref", "")
-                source_repo_type = source.get("repo_type", "default")
+                if local_chart_path and not chart_repo:
+                    source_kind = "local_chart"
+                    chart_ref = local_chart_path
+                    source_url = ""
+                    source_ref = ""
+                    source_repo_type = "local"
+                else:
+                    source = _resolve_flux_chart_source(
+                        chart_name=chart_name,
+                        chart_repo=chart_repo,
+                    )
+                    source_kind = source["kind"]
+                    chart_ref = source["chart_ref"]
+                    source_url = source["repo_url"]
+                    source_ref = source.get("repo_ref", "")
+                    source_repo_type = source.get("repo_type", "default")
                 if source_kind == "helm_repository" and not chart_version:
                     raise ValueError(
                         f"apps.charts[{entry_id}].version is required for enabled chart '{entry_id}'"
@@ -630,12 +815,26 @@ class _FluxRenderState:
         self.files.append(absolute_file)
         self.resources.append(f"./{relative_file.as_posix()}")
 
+    def write_raw_resource(self, relative_file: Path, content: str) -> None:
+        absolute_file = self.paths.flux_dir / relative_file
+        _write_text(absolute_file, content)
+        self.files.append(absolute_file)
+        self.resources.append(f"./{relative_file.as_posix()}")
+
     def write_post_flux_docs(self, relative_file: Path, docs: list[dict[str, Any]]) -> None:
         absolute_file = self.paths.flux_dir / relative_file
         if not docs:
             absolute_file.unlink(missing_ok=True)
             return
         _write_text(absolute_file, _multi_doc_yaml(docs))
+        self.files.append(absolute_file)
+
+    def write_post_flux_raw(self, relative_file: Path, content: str) -> None:
+        absolute_file = self.paths.flux_dir / relative_file
+        if not content.strip():
+            absolute_file.unlink(missing_ok=True)
+            return
+        _write_text(absolute_file, content)
         self.files.append(absolute_file)
 
 
@@ -677,6 +876,21 @@ def _render_flux_app_helm_releases(
         source_url = release["source_url"]
         source_ref = release.get("source_ref", "")
         source_repo_type = release.get("source_repo_type", "default")
+        if source_kind == "local_chart":
+            state.ensure_namespace(namespace)
+            local_chart_file_name = (
+                f"post-flux-helmrender-{_file_slug(scope)}-{_file_slug(release_name)}.yaml"
+            )
+            state.write_post_flux_raw(
+                Path(local_chart_file_name),
+                _render_local_helm_chart(
+                    release_name=release_name,
+                    namespace=namespace,
+                    chart_path=str(release["chart_ref"]),
+                    values=release["values"],
+                ),
+            )
+            continue
         if source_kind == "helm_repository":
             state.add_repository_doc(
                 repo_name=source_name,
@@ -709,6 +923,46 @@ def _render_flux_app_helm_releases(
                 disable_wait=_release_has_managed_mysterybox_external_secret(release["values"]),
             ),
         )
+
+
+def _render_local_helm_chart(
+    *,
+    release_name: str,
+    namespace: str,
+    chart_path: str,
+    values: dict[str, Any],
+) -> str:
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".yaml") as values_file:
+        yaml.safe_dump(values, values_file, sort_keys=False)
+        values_file.flush()
+        command = [
+            "helm",
+            "template",
+            release_name,
+            chart_path,
+            "--namespace",
+            namespace,
+            "--include-crds",
+            "--values",
+            values_file.name,
+        ]
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+    if result.returncode != 0:
+        stderr = result.stderr.strip() or result.stdout.strip()
+        raise ValueError(
+            "local Helm chart render failed for "
+            f"{chart_path}: {stderr or 'helm exited without diagnostic output'}"
+        )
+    rendered = result.stdout.strip()
+    if not rendered:
+        raise ValueError(f"local Helm chart render produced no manifests for {chart_path}")
+    return _inject_local_chart_namespace(rendered, namespace=namespace)
 
 
 def _render_post_flux_mysterybox_eso_resources(

@@ -30,6 +30,7 @@ from .component_wiring import (
     resolve_input_binding_source,
 )
 from .components import ComponentEntry, component_entries
+from .deploy_targets import app_chart_target_ref
 from .paths import ProjectPaths
 from .runtime_config import to_plain_data
 from .runtime_introspection import module_variables, resolve_module_source_path
@@ -403,6 +404,144 @@ def _variable_type_expr(*, type_hint: str | None, value: Any) -> str:
     return _infer_variable_type_expr(value)
 
 
+def _enabled_soperator_target_refs(payload: dict[str, Any]) -> set[str]:
+    apps = payload.get("apps")
+    charts = apps.get("charts") if isinstance(apps, dict) else None
+    if not isinstance(charts, list):
+        return set()
+    refs: set[str] = set()
+    for row in charts:
+        if not isinstance(row, dict) or not bool(row.get("enabled", False)):
+            continue
+        if component_type_id(row) != "soperator":
+            continue
+        target_ref = app_chart_target_ref(row) or component_instance_id(row)
+        if target_ref:
+            refs.add(target_ref)
+    return refs
+
+
+def _enabled_infra_instance_ids(payload: dict[str, Any], component_id: str) -> tuple[str, ...]:
+    infra = payload.get("infra")
+    components = infra.get("components") if isinstance(infra, dict) else None
+    if not isinstance(components, list):
+        return ()
+    instance_ids: list[str] = []
+    for row in components:
+        if not isinstance(row, dict) or not bool(row.get("enabled", False)):
+            continue
+        if component_type_id(row) != component_id:
+            continue
+        instance_id = component_instance_id(row)
+        if instance_id:
+            instance_ids.append(instance_id)
+    return tuple(instance_ids)
+
+
+def _soperator_sfs_module_name(
+    payload: dict[str, Any],
+    *,
+    target_ref: str,
+    module_name_by_instance_id: dict[str, str],
+) -> str:
+    sfs_instance_ids = _enabled_infra_instance_ids(payload, "sfs")
+    if target_ref in sfs_instance_ids:
+        return module_name_by_instance_id.get(target_ref, "")
+    if len(sfs_instance_ids) == 1:
+        return module_name_by_instance_id.get(sfs_instance_ids[0], "")
+    return ""
+
+
+def _sfs_filesystem_attachments_expr(module_name: str, filesystem_keys: list[str]) -> _HclExpression:
+    keys_expr = json.dumps(filesystem_keys)
+    return _HclExpression(
+        "\n".join(
+            [
+                f"[for key in {keys_expr} : {{",
+                '  attach_mode = "READ_WRITE"',
+                f"  mount_tag = module.{module_name}.filesystems[key].mount_tag",
+                "  existing_filesystem = {",
+                f"    id = module.{module_name}.filesystems[key].id",
+                "  }",
+                "}]",
+            ]
+        )
+    )
+
+
+def _soperator_node_group_filesystem_keys(group: dict[str, Any]) -> list[str]:
+    filesystem_keys: list[str] = []
+    explicit_keys = group.get("sfs_filesystem_keys", group.get("filesystem_keys"))
+    if isinstance(explicit_keys, str):
+        filesystem_keys.extend(
+            key.strip() for key in explicit_keys.split(",") if key.strip()
+        )
+    elif isinstance(explicit_keys, list):
+        filesystem_keys.extend(
+            str(key).strip() for key in explicit_keys if str(key).strip()
+        )
+    return filesystem_keys
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _materialize_soperator_sfs_attachments(
+    *,
+    payload: dict[str, Any],
+    component_id: str,
+    instance_id: str,
+    module_inputs: dict[str, Any],
+    module_name_by_instance_id: dict[str, str],
+) -> None:
+    if component_id != "mk8s":
+        return
+    if instance_id not in _enabled_soperator_target_refs(payload):
+        return
+    sfs_module_name = _soperator_sfs_module_name(
+        payload,
+        target_ref=instance_id,
+        module_name_by_instance_id=module_name_by_instance_id,
+    )
+    if not sfs_module_name:
+        return
+
+    node_groups = module_inputs.get("node_groups")
+    if isinstance(node_groups, dict):
+        for key, group in node_groups.items():
+            if not isinstance(group, dict) or "filesystems" in group:
+                continue
+            filesystem_keys: list[str] = []
+            if _truthy(group.get("jail")):
+                filesystem_keys.append("jail")
+            filesystem_keys.extend(_soperator_node_group_filesystem_keys(group))
+            workload = str(group.get("workload", "") or "").strip().lower()
+            group_key = str(key).strip().lower()
+            if group_key == "controller" or workload == "controller":
+                filesystem_keys.append("controller-spool")
+            if group_key == "accounting" or workload == "accounting":
+                filesystem_keys.append("accounting")
+            if filesystem_keys:
+                group["filesystems"] = _sfs_filesystem_attachments_expr(
+                    sfs_module_name,
+                    list(dict.fromkeys(filesystem_keys)),
+                )
+
+    gpu_overrides = module_inputs.get("mk8s_gpu_node_group_overrides")
+    if not isinstance(gpu_overrides, dict):
+        return
+    template = gpu_overrides.get("template")
+    if not isinstance(template, dict) or "filesystems" in template:
+        return
+    metadata = template.get("metadata")
+    labels = metadata.get("labels") if isinstance(metadata, dict) else None
+    if isinstance(labels, dict) and _truthy(labels.get("slurm.nebius.ai/jail")):
+        template["filesystems"] = _sfs_filesystem_attachments_expr(sfs_module_name, ["jail"])
+
+
 def _build_module_plans(
     config: Any,
     *,
@@ -631,6 +770,14 @@ def _build_module_plans(
                     binding.target_path,
                     _HclExpression(f"module.{source_module_name}.{source_output.source_path}"),
                 )
+
+        _materialize_soperator_sfs_attachments(
+            payload=payload,
+            component_id=component_id,
+            instance_id=instance_id,
+            module_inputs=module_inputs,
+            module_name_by_instance_id=module_name_by_instance_id,
+        )
 
         bindings: list[_VariableBinding] = []
         for raw_arg_name in sorted(module_inputs.keys()):

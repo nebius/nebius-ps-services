@@ -1,0 +1,12 @@
+clusterName: soperator-nfs
+
+slurmNodes:
+  login:
+    sshRootPublicKeys: []
+
+externalNfs:
+  enabled: true
+  server: 10.0.0.10
+  path: /srv/nfs/home
+  mountPath: /home
+  readOnly: false

@@ -1,0 +1,17 @@
+{{ if .Values.serviceMonitor.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "soperator.fullname" . }}-metrics
+  labels:
+    app.kubernetes.io/name: {{ include "soperator.name" . }}-metrics
+spec:
+  type: ClusterIP
+  ports:
+  - name: https-metrics
+    port: 8443
+    protocol: TCP
+    targetPort: 8443
+  selector:
+    {{- include "soperator.selectorLabels" . | nindent 4 }}
+{{ end }}
