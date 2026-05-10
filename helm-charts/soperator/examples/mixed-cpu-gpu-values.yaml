@@ -1,8 +1,11 @@
+# Mixed CPU and GPU Slurm worker profile. CPU and GPU workers are separate
+# homogeneous NodeSets and are exposed through separate Slurm partitions.
 clusterName: soperator-mixed
 clusterType: gpu
 
 slurmNodes:
   login:
+    # Keep public keys out of example files; pass them with Helm --set-file.
     sshRootPublicKeys: []
 
 partitionConfiguration:
@@ -45,19 +48,6 @@ nodesets:
           persistentVolumeClaim:
             claimName: jail-pvc
         jailSubMounts: []
-        customVolumeMounts:
-          - name: slurm-scripts
-            mountPath: /opt/slurm_scripts/
-            volumeSource:
-              configMap:
-                name: slurm-scripts
-                defaultMode: 493
-          - name: slurm-scripts-jail
-            mountPath: /mnt/jail.upper/opt/slurm_scripts/
-            volumeSource:
-              configMap:
-                name: slurm-scripts
-                defaultMode: 493
         sharedMemorySize: 8Gi
       security:
         appArmorProfile: unconfined
@@ -96,7 +86,7 @@ nodesets:
       features:
         - gpu
         - cuda
-      static: Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1
+      static: Boards=1 SocketsPerBoard=1 CoresPerSocket=64 ThreadsPerCore=1
       dynamic: InstanceId={{ .PodName }}
       gresConfig:
         - AutoDetect=nvidia
@@ -109,9 +99,9 @@ nodesets:
         - name: NVIDIA_DRIVER_CAPABILITIES
           value: compute,graphics,utility,video
       resources:
-        cpu: "4"
-        memory: 16Gi
-        ephemeralStorage: 10Gi
+        cpu: "64"
+        memory: 512Gi
+        ephemeralStorage: 50Gi
         gpu: 8
       volumes:
         spool:
@@ -120,20 +110,7 @@ nodesets:
           persistentVolumeClaim:
             claimName: jail-pvc
         jailSubMounts: []
-        customVolumeMounts:
-          - name: slurm-scripts
-            mountPath: /opt/slurm_scripts/
-            volumeSource:
-              configMap:
-                name: slurm-scripts
-                defaultMode: 493
-          - name: slurm-scripts-jail
-            mountPath: /mnt/jail.upper/opt/slurm_scripts/
-            volumeSource:
-              configMap:
-                name: slurm-scripts
-                defaultMode: 493
-        sharedMemorySize: 8Gi
+        sharedMemorySize: 64Gi
       security:
         appArmorProfile: unconfined
         limitsConfig: ""

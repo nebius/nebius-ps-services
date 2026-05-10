@@ -57,7 +57,7 @@ show_usage() {
   printf '%b\n' "                 Fails if tag ${TAG_PREFIX}-vX.Y.Z already exists locally or on origin."
   printf '%b\n' "  ${S_YELLOW}--publish${S_RESET}  Create and push tag ${TAG_PREFIX}-vX.Y.Z."
   printf '%b\n' "                 Fails if ${CHART_FILE} does not already declare version X.Y.Z."
-  printf '%b\n' "                 Tag push triggers .github/workflows/${CHART_NAME}-chart-publish.yml."
+  printf '%b\n' "                 Tag push triggers .github/workflows/helm-chart-publish.yml."
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Options:${S_RESET}"
@@ -367,18 +367,18 @@ ensure_chart_version_matches_tag() {
 }
 
 validate_chart() {
-  log_note "Running helm lint for ${CHART_DIR}..."
-  helm lint "${CHART_DIR}"
+  log_note "Running helm lint --strict for ${CHART_DIR}..."
+  helm lint --strict "${CHART_DIR}"
   log_note "Rendering smoke template for ${CHART_DIR}..."
-  helm template smoke "${CHART_DIR}" --namespace nccl-test >/dev/null
+  helm template smoke "${CHART_DIR}" --namespace "${CHART_NAME}" >/dev/null
   log_note "Rendering socket transport smoke template for ${CHART_DIR}..."
   helm template smoke "${CHART_DIR}" \
-    --namespace nccl-test \
+    --namespace "${CHART_NAME}" \
     --set worker.replicas=2 \
     --set benchmark.transport.mode=socket >/dev/null
   log_note "Rendering RDMA transport smoke template for ${CHART_DIR}..."
   helm template smoke "${CHART_DIR}" \
-    --namespace nccl-test \
+    --namespace "${CHART_NAME}" \
     --set worker.replicas=2 \
     --set benchmark.transport.mode=rdma >/dev/null
 }

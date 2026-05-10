@@ -84,6 +84,18 @@ def _stub_catalog_output_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
                 source_path="instance_id",
                 sensitive=False,
             ),
+            ComponentOutput(
+                name="bucket_name",
+                kind="terraform_output",
+                source_path="bucket_name",
+                sensitive=False,
+            ),
+            ComponentOutput(
+                name="bucket_endpoint",
+                kind="terraform_output",
+                source_path="bucket_endpoint",
+                sensitive=False,
+            ),
         ),
     )
 
@@ -739,8 +751,14 @@ def test_render_local_soperator_chart_source_writes_static_manifest(tmp_path: Pa
     assert {
         "mountPath": "/opt/slurm_scripts/",
         "name": "slurm-scripts",
-        "volumeSource": {"configMap": {"defaultMode": 493, "name": "slurm-scripts"}},
+        "volumeSource": {"configMap": {"defaultMode": 493, "name": "soperator-slurm-scripts"}},
     } in worker_mounts
+    filter_names = {item["name"] for item in slurm_cluster["spec"]["k8sNodeFilters"]}
+    assert filter_names == {"no-gpu", "system", "controller", "login", "accounting"}
+    assert (
+        slurm_cluster["spec"]["slurmNodes"]["exporter"]["podMonitorConfig"]["scrapeTimeout"]
+        == "20s"
+    )
     manager_deployment = next(
         doc
         for doc in rendered_docs
@@ -758,7 +776,8 @@ def test_render_local_soperator_chart_source_writes_static_manifest(tmp_path: Pa
     mount_scripts = next(
         doc
         for doc in rendered_docs
-        if doc.get("kind") == "ConfigMap" and doc.get("metadata", {}).get("name") == "mount-scripts"
+        if doc.get("kind") == "ConfigMap"
+        and doc.get("metadata", {}).get("name") == "soperator-mount-scripts"
     )
     assert mount_scripts["metadata"]["namespace"] == "soperator"
 
@@ -860,6 +879,111 @@ def test_render_local_soperator_partition_profile_writes_policy_partitions(
             "config": "Default=NO MaxTime=7-00:00:00 State=UP PriorityTier=1",
         },
     ]
+
+
+def test_render_local_soperator_feature_partition_profile_writes_node_features(
+    tmp_path: Path,
+) -> None:
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    paths = resolve_project_paths(config_path)
+
+    payload = _starter_payload(selected_infra={"mk8s", "sfs"}, selected_apps={"soperator"})
+    for chart in payload["apps"]["charts"]:
+        if isinstance(chart, dict) and chart.get("id") == "soperator":
+            chart["profile"] = "nebius-mixed-v1"
+            chart["values"] = {"partitionProfile": "with-h100-infiniband-debug-long"}
+    cli._materialize_soperator_component_defaults(payload)
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    render_project(load_config(config_path), paths, source_profile=SourceProfile.LOCAL)
+
+    rendered_chart = _target_flux_dir(paths, "mk8s") / "post-flux-helmrender-slurm-soperator.yaml"
+    rendered_docs = [
+        doc
+        for doc in yaml.safe_load_all(rendered_chart.read_text(encoding="utf-8"))
+        if isinstance(doc, dict)
+    ]
+    slurm_cluster = next(doc for doc in rendered_docs if doc.get("kind") == "SlurmCluster")
+    assert [
+        partition["name"]
+        for partition in slurm_cluster["spec"]["partitionConfiguration"]["partitions"]
+    ] == ["cpu", "gpu", "h100", "infiniband", "debug", "long"]
+    worker_gpu = next(
+        doc
+        for doc in rendered_docs
+        if doc.get("kind") == "NodeSet" and doc.get("metadata", {}).get("name") == "worker-gpu"
+    )
+    assert worker_gpu["spec"]["nodeConfig"]["features"] == [
+        "gpu",
+        "cuda",
+        "h100",
+        "infiniband",
+    ]
+
+
+def test_render_local_soperator_notifier_uses_only_secret_reference(tmp_path: Path) -> None:
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    paths = resolve_project_paths(config_path)
+
+    payload = _starter_payload(selected_infra=set(), selected_apps={"soperator-notifier"})
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    render_project(load_config(config_path), paths, source_profile=SourceProfile.LOCAL)
+
+    rendered_chart = paths.flux_dir / "post-flux-helmrender-slurm-soperator-notifier.yaml"
+    rendered = rendered_chart.read_text(encoding="utf-8")
+    assert "hooks.slack.com" not in rendered
+    assert "webhookUrl" not in rendered
+    rendered_docs = [doc for doc in yaml.safe_load_all(rendered) if isinstance(doc, dict)]
+    alertmanager_config = next(
+        doc for doc in rendered_docs if doc.get("kind") == "VMAlertmanagerConfig"
+    )
+    slack_config = alertmanager_config["spec"]["receivers"][0]["slack_configs"][0]
+    assert slack_config["api_url"] == {
+        "name": "soperator-notifier-slack-webhook",
+        "key": "url",
+    }
+
+
+def test_render_local_soperator_backup_uses_only_secret_reference(tmp_path: Path) -> None:
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    paths = resolve_project_paths(config_path)
+
+    payload = _starter_payload(
+        selected_infra={"object-storage"},
+        selected_apps={"soperator-backup-config"},
+    )
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    render_project(
+        load_config(config_path),
+        paths,
+        component_output_values={
+            "object-storage.bucket_name": "soperator-jail-backups",
+            "object-storage.bucket_endpoint": "https://soperator-jail-backups.example:443",
+        },
+        source_profile=SourceProfile.LOCAL,
+    )
+
+    rendered_chart = paths.flux_dir / "post-flux-helmrender-slurm-soperator-jail-backup.yaml"
+    rendered = rendered_chart.read_text(encoding="utf-8")
+    assert "aws-access-key-id:" not in rendered
+    assert "aws-secret-value" not in rendered
+    rendered_docs = [doc for doc in yaml.safe_load_all(rendered) if isinstance(doc, dict)]
+    schedule = next(doc for doc in rendered_docs if doc.get("kind") == "Schedule")
+    backend = schedule["spec"]["backend"]
+    assert backend["s3"]["bucket"] == "soperator-jail-backups"
+    assert backend["s3"]["accessKeyIDSecretRef"] == {
+        "name": "jail-backup",
+        "key": "aws-access-key-id",
+    }
+    assert backend["repoPasswordSecretRef"] == {
+        "name": "jail-backup",
+        "key": "backup-password",
+    }
 
 
 def test_render_soperator_mk8s_node_groups_attach_sibling_sfs(tmp_path: Path) -> None:

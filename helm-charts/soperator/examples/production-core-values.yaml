@@ -1,3 +1,5 @@
+# Production-oriented GPU worker profile for direct Helm review/testing. cxcli
+# should normally render target-specific values for real deployments.
 clusterName: soperator-prod
 clusterType: gpu
 
@@ -21,14 +23,14 @@ k8sNodeFilters:
         operator: Equal
         value: login
         effect: NoSchedule
-  - name: worker-gpu
+  - name: accounting
     nodeSelector:
-      slurm.nebius.ai/nodeset-name: worker-gpu
+      slurm.nebius.ai/nodeset-name: accounting
     tolerations:
-      - key: nvidia.com/gpu
-        operator: Exists
+      - key: slurm.nebius.ai/nodeset-name
+        operator: Equal
+        value: accounting
         effect: NoSchedule
-
 populateJail:
   k8sNodeFilterName: system
 
@@ -38,10 +40,19 @@ slurmNodes:
   login:
     size: 2
     k8sNodeFilterName: login
+    # Keep public keys out of example files; pass them with Helm --set-file.
     sshRootPublicKeys: []
   exporter:
     enabled: true
     k8sNodeFilterName: system
+
+partitionConfiguration:
+  configType: structured
+  partitions:
+    - name: gpu
+      nodeSetRefs:
+        - worker-gpu
+      config: Default=YES MaxTime=INFINITE State=UP PriorityTier=10
 
 volume:
   jail:
@@ -64,7 +75,7 @@ nodesets:
       features:
         - gpu
         - cuda
-      static: Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1
+      static: Boards=1 SocketsPerBoard=1 CoresPerSocket=64 ThreadsPerCore=1
       dynamic: InstanceId={{ .PodName }}
       gresConfig:
         - AutoDetect=nvidia
@@ -77,8 +88,8 @@ nodesets:
         - name: NVIDIA_DRIVER_CAPABILITIES
           value: compute,graphics,utility,video
       resources:
-        cpu: "8"
-        memory: 64Gi
+        cpu: "64"
+        memory: 512Gi
         ephemeralStorage: 50Gi
         gpu: 8
       volumes:
@@ -87,20 +98,7 @@ nodesets:
         jail:
           persistentVolumeClaim:
             claimName: jail-pvc
-        sharedMemorySize: 32Gi
-        customVolumeMounts:
-          - name: slurm-scripts
-            mountPath: /opt/slurm_scripts/
-            volumeSource:
-              configMap:
-                name: slurm-scripts
-                defaultMode: 493
-          - name: slurm-scripts-jail
-            mountPath: /mnt/jail.upper/opt/slurm_scripts/
-            volumeSource:
-              configMap:
-                name: slurm-scripts
-                defaultMode: 493
+        sharedMemorySize: 64Gi
       security:
         appArmorProfile: unconfined
         limitsConfig: ""

@@ -246,7 +246,7 @@ Bundled MK8s GPU policy is split deliberately between component source data, cxc
 - The bundled NVIDIA path intentionally does not ship a generic built-in "health checker" workload. NVIDIA's own docs separate fast install verification and sample workload validation from ongoing DCGM-based telemetry and deeper DCGM diagnostics. In cxcli, that means deploy-time checks stay focused on operator readiness, bounded CUDA visibility, and optional NCCL, while long-running telemetry/alerting remains the responsibility of DCGM Exporter / Prometheus / Grafana and deeper diagnostics remain explicit administrator workflows rather than something every `deploy` reruns. See: [About the NVIDIA GPU Operator](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/24.9/index.html), [GPU Operator Getting Started](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/23.9.0/getting-started.html), [NVIDIA GPU Telemetry](https://docs.nvidia.com/datacenter/cloud-native/gpu-telemetry/latest/index.html), [DCGM Diagnostics](https://docs.nvidia.com/datacenter/dcgm/latest/user-guide/dcgm-diagnostics.html), and [NVIDIA Network Operator readiness](https://docs.nvidia.com/networking/display/kubernetes2610/life-cycle-management.html).
 - That split still assumes DCGM Exporter itself stays enabled on the GPU Operator release. For GPU-enabled MK8s, DCGM Exporter must stay enabled in GPU Operator. Omitting `nvidia-gpu-operator.values.dcgmExporter.enabled` is valid because the bundled GPU Operator chart defaults it to enabled; explicitly setting it to `false` is rejected. Scraping and pushing those metrics to Nebius Monitoring happens only when the MK8s observability metrics path is enabled. Prometheus scrape wiring remains a chart-level concern under `values.dcgmExporter.serviceMonitor.*`, not a built-in `deploy` validation toggle, and should only be enabled when the target cluster has a Prometheus-operator-compatible observability stack. For the Nebius Observability Agent path, the settings catalog declares the DCGM exporter as an app metric target with `discovery.kind: prometheus_annotations`, so the agent discovers the GPU Operator service through its documented `prometheus.io/scrape=true` service endpoint path instead of through a duplicate `config.metrics.additionalTargets` scrape job. Live testing on the Nebius driverful-image path (`gpu_stack_source: nebius_image`) showed an important nuance: NVIDIA's `dcgmExporter.enabled=true` keeps the source configured in `ClusterPolicy`, but the chart's default NFD worker affinity can leave Nebius driverful GPU nodes without the NFD-owned `nvidia.com/gpu.present=true` label, and those same nodes can carry `nvidia.com/gpu.deploy.operands=false`. The bundled GPU Operator rule therefore pins NFD workers to Nebius GPU nodes only on `nebius_image` targets where Network Operator is not present; GPU-cluster / InfiniBand targets keep Network Operator as the single NFD owner. The DCGM metric target's `managed_gpu_node_policy.{labels,selector,stack_sources}` owns only the Nebius-specific operand labels. Those operand labels are Nebius-specific scheduling policy, not an NVIDIA chart default. When observability and Kubernetes metrics are enabled, cxcli materializes that policy into `inputs.mk8s_gpu_node_group_overrides.labels`, enabling only the DCGM exporter and validator operands while explicitly keeping GPU Operator device-plugin/GFD disabled so the Nebius-managed device-plugin path is not duplicated. During `deploy`, cxcli also reconciles the same settings-owned operand labels onto existing live GPU Node objects matching the catalog-owned selector because MK8s node-group label updates may not back-propagate to already-running nodes.
 - Observability architecture, endpoint guidance, project config shape, and onboarding workflow are documented in [Observability](#observability).
-- The three built-in validations are intentionally layered to avoid semantic overlap. `operator_readiness` is the cheapest prerequisite gate: policy objects plus scheduler-visible GPUs on Ready nodes. `gpu_visibility` is the bounded single-node data-path smoke test that proves a real CUDA workload can execute. `nccl` is the optional multi-node communication and bandwidth validation: Socket/TCPIP on Ethernet-only shapes, RDMA on GPU-cluster / InfiniBand shapes. The ordering is deliberate so common operator/runtime failures stop before the expensive NCCL phase, while NCCL remains the only bundled check that says anything about distributed GPU communication quality.
+- The three built-in validations are intentionally layered to avoid semantic overlap. `operator_readiness` is the cheapest prerequisite gate: policy objects plus scheduler-visible GPUs on Ready nodes. `gpu_visibility` is the bounded single-node data-path smoke test that proves a real CUDA workload can execute. `nccl` is the optional multi-node communication and bandwidth validation: Socket/TCPIP on Ethernet-only shapes, RDMA on GPU-cluster / InfiniBand shapes. The ordering is deliberate so common operator/runtime failures stop before the expensive NCCL phase, while NCCL remains the only bundled check that says anything about distributed GPU communication quality. Workload validations use scheduler-free GPUs and record a skipped report rather than failing when existing workloads such as Soperator workers already reserve every GPU on every Ready GPU node.
 - The first gate is intentionally broader than its config-key name suggests. In operator-facing output and the combined deploy report, cxcli labels it `GPU stack readiness` because the runtime check covers GPU Operator and, when required by the selected MK8s shape, Network Operator plus `NicClusterPolicy`.
 - `GPU stack readiness` is cluster-wide for Ready GPU nodes rather than sampled: it inspects every Ready node with allocatable GPUs, but it stays cheap because it reads operator policy/state and scheduler-visible resources only. It is therefore a control-plane/data-plane signal, not proof that every node can actually run a CUDA workload.
 - Validation cleanup is split deliberately: keep dedicated namespaces for isolation and repeatability, but delete transient validation workloads after each run. For the bounded CUDA smoke test that means deleting the sampled pods while retaining the `gpu-validation` namespace. For NCCL that means deleting the transient `MPIJob` and, if cxcli had to install Kubeflow Training Operator only for that run, deleting that transient prerequisite again while retaining the validation namespace.
@@ -367,13 +367,52 @@ render, so profile data does not duplicate the GPU count while Slurm GPU
 partitions still support `--gres=gpu:*` requests. NFS is intentionally outside
 the MK8s node-group profile and remains an optional VM-based infra component
 whose Terraform outputs are bound into chart `externalNfs` values by render.
-The Soperator app wizard also exposes `values.partitionProfile`. The default
-`shape-default` keeps the shape partitions from the selected nodesets profile,
-while `with-debug-long` overlays extra `debug` and `long` policy partitions in
-the rendered `SlurmCluster`. Slurm features stay on the rendered `NodeSet`
-`nodeConfig.features` list, so hardware labels such as `h100`, `a100`,
-`highmem`, and `infiniband` are attached to homogeneous worker NodeSets rather
-than modeled as partition fields.
+The Soperator app wizard also exposes catalog-derived
+`values.partitionProfile` choices scoped to the selected nodesets profile. The
+default `shape-default` keeps the shape partitions from that profile, while
+`with-debug-long` overlays extra `debug` and `long` policy partitions in the
+rendered `SlurmCluster`. The mixed profile also offers
+`with-h100-infiniband-debug-long`, which adds `h100` / `infiniband` partitions
+and the matching `worker-gpu` `nodeConfig.features`. Slurm features stay on
+the rendered `NodeSet` `nodeConfig.features` list, so hardware labels such as
+`h100`, `a100`, `highmem`, and `infiniband` are attached to homogeneous worker
+NodeSets rather than modeled as partition fields.
+
+The bundled `soperator-notifier` app is intentionally separate from the main
+Soperator chart. It owns only in-cluster VictoriaMetrics Alertmanager resources
+for Slurm job-state Slack messages. cxcli owns setup and runtime Secret
+materialization. The default `existing-webhook` mode accepts a Slack incoming
+webhook URL at deploy time from an environment variable, an interactive hidden
+prompt, or a precreated Kubernetes Secret. The advanced `oauth-webhook` mode
+stores only non-secret Slack app metadata in `config.yaml`, opens Slack OAuth
+with the `incoming-webhook` scope, exchanges the returned code, and writes only
+the returned `incoming_webhook.url` to the Kubernetes Secret referenced by the
+chart. cxcli does not create Slack channels in v1 because Slack channel
+creation requires additional Web API scopes and a bot or user token, while the
+Soperator notifier consumes only an Alertmanager Slack webhook URL. Because
+Slack OAuth redirect URLs must be registered HTTPS URLs, cxcli does not rely on
+a random localhost callback; operators either use an existing webhook or a
+Slack app with a registered HTTPS redirect URI.
+
+Other Soperator companion apps follow the same contract split. Active checks
+are separate `soperator-checks` and `soperator-activechecks` apps so operators
+can opt into upstream health checks without making every Soperator install run
+long Slurm jobs. cxcli derives the ActiveChecks `slurmClusterRefName` and
+`NUM_OF_LOGIN_NODES` from the matching `soperator` app row instead of keeping a
+second fixed default in the companion app. Jail backups use `k8up` plus
+`soperator-backup-config`; the Terraform `object-storage` component owns the
+bucket, the chart owns only the K8up `Schedule`, and cxcli creates or reuses
+the runtime Kubernetes Secret for S3 credentials without storing credentials in
+`config.yaml` or generated manifests. The backup runtime secret accepts
+`NEBIUS_CXCLI_SOPERATOR_BACKUP_AWS_ACCESS_KEY_ID`,
+`NEBIUS_CXCLI_SOPERATOR_BACKUP_AWS_SECRET_ACCESS_KEY`, and
+`NEBIUS_CXCLI_SOPERATOR_BACKUP_REPOSITORY_PASSWORD`, with optional
+target-specific `_<TARGET>` suffixed variants. `soperator-dcgm-exporter` is
+advanced and disabled by default
+because the normal product telemetry path is GPU Operator DCGM at node/GPU
+level; enable the Soperator DCGM app only when Slurm per-job DCGM labels are
+required. `soperator-nfs-server` is an in-cluster test/learning option, while
+production shared storage remains SFS or the Terraform-owned VM NFS module.
 
 Module outputs consumed by app bindings or built-in handoff behavior must be treated as a versioned interface.
 In practice that means names such as `cluster_id` are not just internal module details once the CLI, generated manifest, app bindings, or deploy/bootstrap flows consume them.
@@ -517,9 +556,12 @@ Wizard field/option model:
 - When a live provider-backed option lookup fails, the CLI prints a field-specific warning immediately before prompting that field manually and explains whether blank input is still acceptable.
 - Explicit CLI severity diagnostics use fixed terminal colors: warnings are amber and errors are red.
 - Optional provider-backed fields accept blank/skip answers as “leave unset” without revalidating that blank value against the live option list.
-- Built-in Nebius provider option sources include:
+- Built-in provider option sources include:
   - `mk8s_compatible_platforms`
   - `mk8s_gpu_stack_presets`
+  - `mk8s_node_group_os_values`
+  - `mk8s_infiniband_fabrics`
+  - `mk8s_boot_disk_types`
   - `compute_platforms`
   - `compute_platform_presets`
   - `compute_public_image_families`
@@ -527,6 +569,8 @@ Wizard field/option model:
   - `project_networks`
   - `tenant_projects`
   - `mk8s_control_plane_versions`
+  - `soperator_nodesets_profiles`
+  - `soperator_partition_profiles`
 - The bundled `mk8s` catalog uses that contract directly: `inputs.subnet_id` is wired to `project_subnets`, `inputs.k8s_version` uses the live MK8s control-plane version lookup with the first returned version auto-selected by default, platform fields use the MK8s compatibility lookup intersected with project compute-platform inventory, preset fields are chained to the selected live compute platform, and `inputs.cpu_nodes_os`, `inputs.gpu_stack_preset`, and `inputs.gpu_nodes_os` come from the same live MK8s compatibility matrix with catalog preference ordering.
 - The bundled `vm` profile applies the same project-scoped lookup pattern for `inputs.subnet_id`, `inputs.platform`, and `inputs.preset`, resolves `inputs.source_image_family` from the live Nebius public image inventory for the selected platform and region using catalog preference ordering, adds a guided static choice for `inputs.public_ip_mode`, and reuses the existing InfiniBand fabric provider wiring for optional GPU-cluster VM shapes. That shared compute-platform provider path is also where the interconnect guidance now lives: single-GPU GPU presets stay Ethernet-only testing/dev shapes, clusterable multi-GPU presets are the InfiniBand / GPUDirect-RDMA path, live Capacity Dashboard advice ranks the platform -> region -> preset choices when tenant context exists, and stale VM fabric selections are cleared during interactive edits when a later preset/platform change no longer supports GPU clustering.
 - This intentionally follows the public Nebius Compute contract in [Types of virtual machines and GPUs](https://docs.nebius.com/compute/virtual-machines/types#presets-compatible-with-gpu-clusters): cxcli asks the live project for supported platforms/presets first, then uses the selected preset's live `allow_gpu_clustering` metadata as the source of truth for GPU-cluster eligibility. The public doc currently lists the supported cluster-compatible 8-GPU presets, but cxcli does not freeze that list in code.

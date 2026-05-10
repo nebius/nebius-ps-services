@@ -5406,6 +5406,137 @@ def test_apply_post_flux_manifest_orders_crds_webhook_resources_before_custom_re
     ]
 
 
+def test_apply_post_flux_manifest_replaces_priority_classes_when_value_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest_path = tmp_path / "post-flux-soperator.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump_all(
+            [
+                {
+                    "apiVersion": "scheduling.k8s.io/v1",
+                    "kind": "PriorityClass",
+                    "metadata": {"name": "cluster1-slurm-worker"},
+                    "value": 100000,
+                },
+                {
+                    "apiVersion": "scheduling.k8s.io/v1",
+                    "kind": "PriorityClass",
+                    "metadata": {"name": "cluster1-slurm-login"},
+                    "value": 100002,
+                },
+            ],
+            explicit_start=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    calls: list[tuple[str, ...]] = []
+
+    def _fake_run(cmd: list[str], **_kwargs: object) -> SimpleNamespace:
+        calls.append(tuple(cmd))
+        if cmd[:3] == ["kubectl", "get", "priorityclass"]:
+            value = "1000000" if cmd[3] == "cluster1-slurm-worker" else "100002"
+            return SimpleNamespace(returncode=0, stderr="", stdout=value)
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+
+    cli._apply_post_flux_manifest(manifest_path, env={})
+
+    assert (
+        "kubectl",
+        "delete",
+        "priorityclass",
+        "cluster1-slurm-worker",
+        "--ignore-not-found=true",
+    ) in calls
+    assert (
+        "kubectl",
+        "delete",
+        "priorityclass",
+        "cluster1-slurm-login",
+        "--ignore-not-found=true",
+    ) not in calls
+    assert calls[-1][:5] == ("kubectl", "apply", "--server-side", "--force-conflicts", "-f")
+
+
+def test_apply_post_flux_manifest_deletes_stale_nodeconfigurators(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest_path = tmp_path / "post-flux-soperator.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump_all(
+            [
+                {
+                    "apiVersion": "slurm.nebius.ai/v1alpha1",
+                    "kind": "NodeConfigurator",
+                    "metadata": {
+                        "name": "cluster1",
+                        "namespace": "soperator",
+                        "labels": {"app.kubernetes.io/instance": "soperator"},
+                    },
+                    "spec": {},
+                }
+            ],
+            explicit_start=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    calls: list[tuple[str, ...]] = []
+
+    def _fake_run(cmd: list[str], **_kwargs: object) -> SimpleNamespace:
+        calls.append(tuple(cmd))
+        if cmd[:5] == [
+            "kubectl",
+            "-n",
+            "soperator",
+            "get",
+            "nodeconfigurators.slurm.nebius.ai",
+        ]:
+            return SimpleNamespace(
+                returncode=0,
+                stderr="",
+                stdout=json.dumps(
+                    {
+                        "items": [
+                            {"metadata": {"name": "cluster1", "namespace": "soperator"}},
+                            {"metadata": {"name": "soperator", "namespace": "soperator"}},
+                        ]
+                    }
+                ),
+            )
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+
+    cli._apply_post_flux_manifest(manifest_path, env={})
+
+    assert (
+        "kubectl",
+        "-n",
+        "soperator",
+        "delete",
+        "nodeconfigurators.slurm.nebius.ai",
+        "soperator",
+        "--ignore-not-found=true",
+        "--wait=false",
+    ) in calls
+    assert (
+        "kubectl",
+        "-n",
+        "soperator",
+        "delete",
+        "pod",
+        "-l",
+        "app.kubernetes.io/component=node-configurator,app.kubernetes.io/instance=cluster1",
+        "--ignore-not-found=true",
+        "--wait=false",
+    ) in calls
+    assert calls[-1][:5] == ("kubectl", "apply", "--server-side", "--force-conflicts", "-f")
+
+
 def test_run_post_flux_kubectl_retries_transient_webhook_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -11039,3 +11170,53 @@ def test_soperator_mixed_profile_materializes_cpu_and_gpu_workers() -> None:
             "config": "Default=NO MaxTime=INFINITE State=UP PriorityTier=10",
         },
     ]
+
+
+def test_soperator_mixed_feature_partition_profile_materializes_node_features() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {},
+                },
+                {
+                    "id": "sfs",
+                    "instance_id": "sfs",
+                    "enabled": True,
+                    "inputs": {},
+                },
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "profile": "nebius-mixed-v1",
+                    "values": {"partitionProfile": "with-h100-infiniband-debug-long"},
+                }
+            ]
+        },
+    }
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    soperator_values = payload["apps"]["charts"][0]["values"]
+    assert [
+        partition["name"]
+        for partition in soperator_values["partitionConfiguration"]["partitions"]
+    ] == ["cpu", "gpu", "h100", "infiniband", "debug", "long"]
+    worker_gpu = next(
+        node for node in soperator_values["nodesets"] if node["name"] == "worker-gpu"
+    )
+    assert worker_gpu["nodeConfig"]["features"] == [
+        "gpu",
+        "cuda",
+        "h100",
+        "infiniband",
+    ]
+    assert worker_gpu["slurmd"]["resources"]["gpu"] == 8

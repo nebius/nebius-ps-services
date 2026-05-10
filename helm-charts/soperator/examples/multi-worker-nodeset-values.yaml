@@ -1,7 +1,11 @@
+# Multiple GPU worker NodeSets behind one generic GPU partition. Use this shape
+# when one Slurm partition can schedule across several homogeneous GPU classes.
 clusterName: soperator-multi-worker
+clusterType: gpu
 
 slurmNodes:
   login:
+    # Keep public keys out of example files; pass them with Helm --set-file.
     sshRootPublicKeys: []
 
 partitionConfiguration:
@@ -26,7 +30,7 @@ nodesets:
       features:
         - gpu
         - h100
-      static: Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1
+      static: Boards=1 SocketsPerBoard=1 CoresPerSocket=64 ThreadsPerCore=1
       dynamic: InstanceId={{ .PodName }}
       gresConfig:
         - AutoDetect=nvidia
@@ -39,8 +43,8 @@ nodesets:
         - name: NVIDIA_DRIVER_CAPABILITIES
           value: compute,graphics,utility,video
       resources:
-        cpu: "8"
-        memory: 64Gi
+        cpu: "64"
+        memory: 512Gi
         ephemeralStorage: 50Gi
         gpu: 8
       volumes:
@@ -49,20 +53,7 @@ nodesets:
         jail:
           persistentVolumeClaim:
             claimName: jail-pvc
-        sharedMemorySize: 32Gi
-        customVolumeMounts:
-          - name: slurm-scripts
-            mountPath: /opt/slurm_scripts/
-            volumeSource:
-              configMap:
-                name: slurm-scripts
-                defaultMode: 493
-          - name: slurm-scripts-jail
-            mountPath: /mnt/jail.upper/opt/slurm_scripts/
-            volumeSource:
-              configMap:
-                name: slurm-scripts
-                defaultMode: 493
+        sharedMemorySize: 64Gi
       security:
         appArmorProfile: unconfined
         limitsConfig: ""
@@ -99,7 +90,7 @@ nodesets:
       features:
         - gpu
         - h200
-      static: Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1
+      static: Boards=1 SocketsPerBoard=1 CoresPerSocket=64 ThreadsPerCore=1
       dynamic: InstanceId={{ .PodName }}
       gresConfig:
         - AutoDetect=nvidia
@@ -112,8 +103,8 @@ nodesets:
         - name: NVIDIA_DRIVER_CAPABILITIES
           value: compute,graphics,utility,video
       resources:
-        cpu: "8"
-        memory: 64Gi
+        cpu: "64"
+        memory: 512Gi
         ephemeralStorage: 50Gi
         gpu: 8
       volumes:
@@ -122,20 +113,7 @@ nodesets:
         jail:
           persistentVolumeClaim:
             claimName: jail-pvc
-        sharedMemorySize: 32Gi
-        customVolumeMounts:
-          - name: slurm-scripts
-            mountPath: /opt/slurm_scripts/
-            volumeSource:
-              configMap:
-                name: slurm-scripts
-                defaultMode: 493
-          - name: slurm-scripts-jail
-            mountPath: /mnt/jail.upper/opt/slurm_scripts/
-            volumeSource:
-              configMap:
-                name: slurm-scripts
-                defaultMode: 493
+        sharedMemorySize: 64Gi
       security:
         appArmorProfile: unconfined
         limitsConfig: ""

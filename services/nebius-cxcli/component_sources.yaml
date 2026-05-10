@@ -207,20 +207,240 @@ components:
       wizard:
         profile:
           default: nebius-gpu-v1
-          sources:
-            - source: static
-              values:
-                - nebius-cpu-v1
-                - nebius-gpu-v1
-                - nebius-mixed-v1
+          materialize_default: true
+          options:
+            from: soperator_nodesets_profiles
         values.partitionProfile:
           default: shape-default
+          materialize_default: true
+          options:
+            from: soperator_partition_profiles
+            args:
+              default: shape-default
+      defaults: {}
+    soperator-notifier:
+      source:
+        portable:
+          repo: https://github.com/nebius/nebius-ps-services/tree/main/helm-charts/soperator-notifier
+          chart: soperator-notifier
+        local:
+          path: ../../helm-charts/soperator-notifier
+      ui:
+        title: Soperator Slack job notifier
+        group: Slurm
+        enabled: false
+      release:
+        namespace: soperator
+        name: soperator-notifier
+        timeout: 10m
+        install_after:
+          - soperator
+          - cert-manager
+      wizard:
+        values.slack.mode:
+          default: existing-webhook
+          materialize_default: true
           sources:
             - source: static
               values:
-                - shape-default
-                - with-debug-long
+                - value: existing-webhook
+                  label: Existing Slack incoming webhook (recommended)
+                - value: oauth-webhook
+                  label: Slack OAuth incoming webhook (advanced)
+        values.slack.existingSecret:
+          default: soperator-notifier-slack-webhook
+          materialize_default: true
+          type_hint: string
+        values.slack.existingSecretKey:
+          default: url
+          materialize_default: true
+          type_hint: string
+        values.slack.channelName:
+          default: ""
+          materialize_default: true
+          type_hint: string
+        values.slack.channelId:
+          default: ""
+          materialize_default: true
+          type_hint: string
+        values.slack.oauth.clientId:
+          default: ""
+          materialize_default: true
+          type_hint: string
+        values.slack.oauth.redirectUri:
+          default: ""
+          materialize_default: true
+          type_hint: string
+      defaults:
+        values.slack.mode: existing-webhook
+        values.slack.existingSecret: soperator-notifier-slack-webhook
+        values.slack.existingSecretKey: url
+    k8up:
+      source:
+        portable:
+          repo: https://k8up-io.github.io/k8up
+          chart: k8up
+          version: 4.9.0
+      ui:
+        title: K8up backup operator
+        group: Storage
+        enabled: false
+      release:
+        namespace: k8up
+        name: k8up
+        timeout: 10m
       defaults: {}
+    soperator-checks:
+      source:
+        portable:
+          repo: https://github.com/nebius/nebius-ps-services/tree/main/helm-charts/soperator-checks
+          chart: soperator-checks
+        local:
+          path: ../../helm-charts/soperator-checks
+      ui:
+        title: Soperator checks controller
+        group: Slurm
+        enabled: false
+      release:
+        namespace: soperator
+        name: soperator-checks
+        timeout: 10m
+        install_after:
+          - soperator
+      defaults:
+        values.serviceMonitor.enabled: false
+    soperator-activechecks:
+      source:
+        portable:
+          repo: https://github.com/nebius/nebius-ps-services/tree/main/helm-charts/soperator-activechecks
+          chart: soperator-activechecks
+        local:
+          path: ../../helm-charts/soperator-activechecks
+      ui:
+        title: Soperator active checks
+        group: Slurm
+        enabled: false
+      release:
+        namespace: soperator
+        name: soperator-activechecks
+        timeout: 30m
+        install_after:
+          - soperator
+          - soperator-checks
+      wizard:
+        values.cudaVersion:
+          default: "12.9.0"
+          materialize_default: true
+          type_hint: string
+        values.waitForChecks.enabled:
+          default: true
+          materialize_default: true
+          type_hint: bool
+      defaults:
+        values.waitForChecks.enabled: true
+        # Keep the companion app safe by default: install the checks and run
+        # the lightweight login/user checks, but do not launch expensive GPU,
+        # NCCL, jail-management, or prepull jobs immediately on creation.
+        values.checks.all-reduce-perf-nccl-in-docker.runAfterCreation: false
+        values.checks.all-reduce-perf-nccl-with-ib.runAfterCreation: false
+        values.checks.all-reduce-perf-nccl-without-ib.runAfterCreation: false
+        values.checks.cuda-samples.runAfterCreation: false
+        values.checks.dcgmi-diag-r2.runAfterCreation: false
+        values.checks.dcgmi-diag-r3.runAfterCreation: false
+        values.checks.gpu-fryer.runAfterCreation: false
+        values.checks.ib-gpu-perf.runAfterCreation: false
+        values.checks.manage-jail-state.runAfterCreation: false
+        values.checks.mem-perf.runAfterCreation: false
+        values.checks.prepull-container-image.runAfterCreation: false
+    soperator-backup-config:
+      source:
+        portable:
+          repo: https://github.com/nebius/nebius-ps-services/tree/main/helm-charts/soperator-backup-config
+          chart: soperator-backup-config
+        local:
+          path: ../../helm-charts/soperator-backup-config
+      ui:
+        title: Soperator jail backup schedule
+        group: Slurm
+        enabled: false
+      release:
+        namespace: soperator
+        name: soperator-jail-backup
+        timeout: 10m
+        install_after:
+          - soperator
+          - k8up
+      input:
+        values.bucket.name: object-storage.bucket_name
+        values.bucket.endpoint: object-storage.bucket_endpoint
+      wizard:
+        values.secret.name:
+          default: jail-backup
+          materialize_default: true
+          type_hint: string
+        values.secret.keys.accessKeyID:
+          default: aws-access-key-id
+          materialize_default: true
+          type_hint: string
+        values.secret.keys.secretAccessKey:
+          default: aws-access-secret-key
+          materialize_default: true
+          type_hint: string
+        values.secret.keys.backupPassword:
+          default: backup-password
+          materialize_default: true
+          type_hint: string
+        values.backup.schedule:
+          default: "@daily-random"
+          materialize_default: true
+          type_hint: string
+        values.prune.schedule:
+          default: "@daily-random"
+          materialize_default: true
+          type_hint: string
+      defaults:
+        values.enabled: true
+        values.secret.name: jail-backup
+        values.secret.keys.accessKeyID: aws-access-key-id
+        values.secret.keys.secretAccessKey: aws-access-secret-key
+        values.secret.keys.backupPassword: backup-password
+    soperator-nfs-server:
+      source:
+        portable:
+          repo: https://github.com/nebius/nebius-ps-services/tree/main/helm-charts/soperator-nfs-server
+          chart: soperator-nfs-server
+        local:
+          path: ../../helm-charts/soperator-nfs-server
+      ui:
+        title: Soperator in-cluster NFS server
+        group: Storage
+        enabled: false
+      release:
+        namespace: soperator
+        name: soperator-nfs-server
+        timeout: 10m
+      defaults:
+        values.monitoring.enabled: false
+        values.monitoring.serviceMonitor.enabled: false
+    soperator-dcgm-exporter:
+      source:
+        portable:
+          repo: https://github.com/nebius/nebius-ps-services/tree/main/helm-charts/soperator-dcgm-exporter
+          chart: soperator-dcgm-exporter
+        local:
+          path: ../../helm-charts/soperator-dcgm-exporter
+      ui:
+        title: Soperator DCGM job-mapping exporter
+        group: Observability
+        enabled: false
+      release:
+        namespace: soperator
+        name: soperator-dcgm-exporter
+        timeout: 10m
+        install_after:
+          - soperator
+      defaults:
+        values.serviceMonitor.enabled: false
     nebius-observability-agent:
       # Keep this public chart pinned here because the fixed Nebius Kubernetes
       # agent docs identify it as the supported observability-agent Helm chart,

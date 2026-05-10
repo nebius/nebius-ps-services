@@ -272,6 +272,15 @@ from .runtime_introspection import (
     module_variables,
 )
 from .sdk_auth import init_nebius_sdk, suppress_deleted_key_refresh_logs
+from .slack_notifier_runtime import (
+    ensure_soperator_notifier_runtime_secrets,
+    soperator_notifier_enabled_for_target,
+)
+from .soperator_backup_runtime import (
+    ensure_soperator_backup_runtime_secrets,
+    soperator_backup_enabled_for_target,
+)
+from .soperator_companions import materialize_soperator_companion_app_values
 from .templates import customer_workflow_yaml, default_cli_ref
 from .terminal_styles import error_markup, warning_markup
 from .terraform_backend import (
@@ -13091,6 +13100,61 @@ def _write_post_flux_docs(path: Path, docs: Sequence[Mapping[str, Any]]) -> None
     )
 
 
+def _coerce_priority_class_value(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return int(float(str(value).strip()))
+    except ValueError:
+        return None
+
+
+def _rendered_priority_class_value(doc: Mapping[str, Any]) -> int | None:
+    if doc.get("apiVersion") != "scheduling.k8s.io/v1" or doc.get("kind") != "PriorityClass":
+        return None
+    return _coerce_priority_class_value(doc.get("value"))
+
+
+def _current_priority_class_value(name: str, *, env: Mapping[str, str]) -> int | None:
+    completed = subprocess.run(
+        ["kubectl", "get", "priorityclass", name, "-o", "jsonpath={.value}"],
+        env=dict(env),
+        timeout=60,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        return None
+    return _coerce_priority_class_value(completed.stdout)
+
+
+def _replace_changed_priority_classes(
+    docs: Sequence[Mapping[str, Any]],
+    *,
+    env: Mapping[str, str],
+) -> None:
+    for doc in docs:
+        desired_value = _rendered_priority_class_value(doc)
+        if desired_value is None:
+            continue
+        name_namespace = _metadata_name_namespace(doc)
+        if name_namespace is None:
+            continue
+        name, _namespace = name_namespace
+        current_value = _current_priority_class_value(name, env=env)
+        if current_value is None or current_value == desired_value:
+            continue
+        console.print(
+            f"Replacing PriorityClass {name}: immutable value changed "
+            f"from {current_value} to {desired_value}."
+        )
+        _run_post_flux_kubectl(
+            ["kubectl", "delete", "priorityclass", name, "--ignore-not-found=true"],
+            env=env,
+            timeout=120,
+        )
+
+
 def _crd_resource_arg(doc: Mapping[str, Any]) -> str | None:
     metadata = doc.get("metadata")
     if not isinstance(metadata, Mapping):
@@ -13112,6 +13176,12 @@ def _metadata_name_namespace(doc: Mapping[str, Any]) -> tuple[str, str] | None:
     return name.strip(), namespace.strip() if isinstance(namespace, str) else ""
 
 
+def _as_nonempty_str(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip()
+
+
 def _is_post_flux_custom_resource(doc: Mapping[str, Any]) -> bool:
     api_version = doc.get("apiVersion")
     if not isinstance(api_version, str) or "/" not in api_version:
@@ -13130,6 +13200,114 @@ def _post_flux_custom_resource_priority(doc: Mapping[str, Any]) -> int:
         "JailedConfig": 50,
         "ActiveCheck": 60,
     }.get(kind, 100)
+
+
+def _metadata_labels(doc: Mapping[str, Any]) -> Mapping[str, Any]:
+    metadata = doc.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return {}
+    labels = metadata.get("labels")
+    return labels if isinstance(labels, Mapping) else {}
+
+
+def _delete_stale_nodeconfigurators(
+    docs: Sequence[Mapping[str, Any]],
+    *,
+    env: Mapping[str, str],
+) -> None:
+    desired_by_scope: dict[tuple[str, str], set[str]] = {}
+    deleted_stale = False
+    for doc in docs:
+        if doc.get("kind") != "NodeConfigurator":
+            continue
+        api_version = _as_nonempty_str(doc.get("apiVersion"))
+        if api_version not in {"slurm.nebius.ai/v1alpha1", "slurm.nebius.ai/v1"}:
+            continue
+        name_namespace = _metadata_name_namespace(doc)
+        if name_namespace is None:
+            continue
+        name, namespace = name_namespace
+        instance = _as_nonempty_str(_metadata_labels(doc).get("app.kubernetes.io/instance"))
+        if not instance:
+            continue
+        desired_by_scope.setdefault((namespace or "default", instance), set()).add(name)
+    for (namespace, instance), desired_names in sorted(desired_by_scope.items()):
+        completed = subprocess.run(
+            [
+                "kubectl",
+                "-n",
+                namespace,
+                "get",
+                "nodeconfigurators.slurm.nebius.ai",
+                "-l",
+                f"app.kubernetes.io/instance={instance}",
+                "-o",
+                "json",
+            ],
+            env=dict(env),
+            timeout=60,
+            capture_output=True,
+            text=True,
+        )
+        if completed.returncode != 0:
+            continue
+        try:
+            payload = json.loads(completed.stdout or "{}")
+        except json.JSONDecodeError:
+            continue
+        items = payload.get("items")
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, Mapping):
+                continue
+            name_namespace = _metadata_name_namespace(item)
+            if name_namespace is None:
+                continue
+            existing_name, _existing_namespace = name_namespace
+            if existing_name in desired_names:
+                continue
+            console.print(
+                f"Deleting stale NodeConfigurator {namespace}/{existing_name} "
+                f"for Helm instance {instance}."
+            )
+            _run_post_flux_kubectl(
+                [
+                    "kubectl",
+                    "-n",
+                    namespace,
+                    "delete",
+                    "nodeconfigurators.slurm.nebius.ai",
+                    existing_name,
+                    "--ignore-not-found=true",
+                    "--wait=false",
+                ],
+                env=env,
+                timeout=120,
+            )
+            deleted_stale = True
+    if not deleted_stale:
+        return
+    for (namespace, _instance), desired_names in sorted(desired_by_scope.items()):
+        for desired_name in sorted(desired_names):
+            _run_post_flux_kubectl(
+                [
+                    "kubectl",
+                    "-n",
+                    namespace,
+                    "delete",
+                    "pod",
+                    "-l",
+                    (
+                        "app.kubernetes.io/component=node-configurator,"
+                        f"app.kubernetes.io/instance={desired_name}"
+                    ),
+                    "--ignore-not-found=true",
+                    "--wait=false",
+                ],
+                env=env,
+                timeout=120,
+            )
 
 
 def _post_flux_webhook_service_refs(
@@ -13260,6 +13438,7 @@ def _apply_post_flux_manifest(manifest_path: Path, *, env: Mapping[str, str]) ->
         if base_resource_docs:
             resource_path = temp_path / f"{manifest_path.stem}-resources.yaml"
             _write_post_flux_docs(resource_path, base_resource_docs)
+            _replace_changed_priority_classes(base_resource_docs, env=env)
             _run_post_flux_kubectl(
                 [
                     "kubectl",
@@ -13274,6 +13453,7 @@ def _apply_post_flux_manifest(manifest_path: Path, *, env: Mapping[str, str]) ->
             _wait_for_post_flux_deployments(base_resource_docs, env=env)
             _wait_for_post_flux_webhook_services(base_resource_docs, env=env)
         if custom_resource_docs:
+            _delete_stale_nodeconfigurators(custom_resource_docs, env=env)
             custom_docs_by_priority: dict[int, list[Mapping[str, Any]]] = {}
             for doc in custom_resource_docs:
                 custom_docs_by_priority.setdefault(
@@ -13570,6 +13750,40 @@ def _ensure_grafana_runtime_before_flux(
     )
 
 
+def _ensure_soperator_notifier_runtime_before_flux(
+    config: Any,
+    *,
+    extra_env: dict[str, str] | None,
+    target_ref: str = "",
+) -> None:
+    if not soperator_notifier_enabled_for_target(config, target_ref=target_ref):
+        return
+    ensure_soperator_notifier_runtime_secrets(
+        config,
+        extra_env=extra_env,
+        target_ref=target_ref,
+        prompt=_console_is_terminal(),
+        emit=lambda message: console.print(message),
+    )
+
+
+def _ensure_soperator_backup_runtime_before_flux(
+    config: Any,
+    *,
+    extra_env: dict[str, str] | None,
+    target_ref: str = "",
+) -> None:
+    if not soperator_backup_enabled_for_target(config, target_ref=target_ref):
+        return
+    ensure_soperator_backup_runtime_secrets(
+        config,
+        extra_env=extra_env,
+        target_ref=target_ref,
+        prompt=_console_is_terminal(),
+        emit=lambda message: console.print(message),
+    )
+
+
 def _collect_grafana_status_after_flux(
     config: Any,
     *,
@@ -13781,6 +13995,16 @@ def _deploy_generated_artifacts(
                         extra_env=kube_env,
                         target_ref=target_ref,
                     )
+                    _ensure_soperator_notifier_runtime_before_flux(
+                        config,
+                        extra_env=kube_env,
+                        target_ref=target_ref,
+                    )
+                    _ensure_soperator_backup_runtime_before_flux(
+                        config,
+                        extra_env=kube_env,
+                        target_ref=target_ref,
+                    )
                 if needs_cluster_ready:
                     _report_cluster_nodes_status(
                         extra_env=kube_env, emit=lambda message: console.print(message)
@@ -13835,6 +14059,8 @@ def _deploy_generated_artifacts(
                 auto_auth_bootstrap=auto_auth_bootstrap,
             )
             _ensure_grafana_runtime_before_flux(config, extra_env=None)
+            _ensure_soperator_notifier_runtime_before_flux(config, extra_env=None)
+            _ensure_soperator_backup_runtime_before_flux(config, extra_env=None)
             _apply_rendered_flux(paths, extra_env=None)
             grafana_statuses.extend(_collect_grafana_status_after_flux(config, extra_env=None))
         if deploy_validations:
@@ -16038,6 +16264,7 @@ def create_command(
                 entries=app_entries,
             )
         materialize_mk8s_gpu_app_values(final_payload)
+        materialize_soperator_companion_app_values(final_payload)
         materialize_observability_infra_values(final_payload)
 
         create_required_field_issues = (
@@ -16695,6 +16922,7 @@ def component_add_command(
                 entries=app_entries,
             )
         materialize_mk8s_gpu_app_values(next_payload)
+        materialize_soperator_companion_app_values(next_payload)
         materialize_observability_infra_values(next_payload)
 
         add_required_field_issues = (
@@ -18276,6 +18504,7 @@ def render_command(
     try:
         config, paths = _load_runtime_context(config_path)
         materialize_mk8s_gpu_app_values(config)
+        materialize_soperator_companion_app_values(config)
         materialize_observability_infra_values(config)
         materialize_observability_app_values(config)
         materialize_mysterybox_eso_app_values(config)

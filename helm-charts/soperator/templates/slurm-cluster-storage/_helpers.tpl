@@ -15,6 +15,11 @@
 ---
 */}}
 
+{{/* Cluster-scoped ConfigMap name for storage mount helper scripts. */}}
+{{- define "slurm-cluster-storage.mountScriptsConfigMapName" -}}
+{{- printf "%s-mount-scripts" (include "slurm-cluster.name" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
 {{/* Local storage class */}}
 {{- define "slurm-cluster-storage.class.local.name" -}}
     {{- required "Local storage class name is required." .Values.storageClass.local.name | trim | include "mashedkebab" | quote -}}

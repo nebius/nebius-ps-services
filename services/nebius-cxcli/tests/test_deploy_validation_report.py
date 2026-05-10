@@ -206,6 +206,52 @@ def test_build_deploy_validation_report_formats_socket_mode_nccl_summary(tmp_pat
     ]
 
 
+def test_build_deploy_validation_report_formats_skipped_gpu_workload_summary(
+    tmp_path: Path,
+) -> None:
+    validations = [
+        {
+            "kind": "mk8s_gpu_visibility",
+            "name": "GPU Visibility test",
+            "report_file": "gpu-visibility-report.json",
+        },
+        {
+            "kind": "mk8s_nccl",
+            "name": "NCCL test",
+            "report_file": "nccl-test-report.json",
+        },
+    ]
+    for report_name, validation in (
+        ("gpu-visibility-report.json", "GPU Visibility test"),
+        ("nccl-test-report.json", "NCCL test"),
+    ):
+        (tmp_path / report_name).write_text(
+            json.dumps(
+                {
+                    "validation": validation,
+                    "passed": True,
+                    "skipped": True,
+                    "skip_reason": "all Ready GPU nodes already have their GPUs allocated to existing workloads",
+                    "total_gpu_node_count": 2,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    report = build_deploy_validation_report(validations, inventory_dir=tmp_path)
+
+    assert format_deploy_validation_summary_lines(report) == [
+        "Deploy validation summary:",
+        "  Overall: PASS (2/2 completed, 0 not run)",
+        "  PASS GPU Visibility test: Skipped: all Ready GPU nodes already have their GPUs allocated to existing workloads; total Ready GPU nodes 2.",
+        "  PASS NCCL test: Skipped: all Ready GPU nodes already have their GPUs allocated to existing workloads; total Ready GPU nodes 2.",
+        f"  Combined report: {tmp_path / DEPLOY_REPORT_FILENAME}",
+        f"  JSON detail: {tmp_path / 'gpu-visibility-report.json'}",
+        f"  JSON detail: {tmp_path / 'nccl-test-report.json'}",
+    ]
+
+
 def test_build_deploy_validation_report_formats_rdma_dmabuf_summary(tmp_path: Path) -> None:
     validations = [
         {

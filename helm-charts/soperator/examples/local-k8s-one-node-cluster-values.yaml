@@ -1,5 +1,9 @@
-# Local learning profile for a one-node Kind or Minikube cluster.
+# One-node local Kubernetes learning profile for clusters such as Kind,
+# Minikube, or Docker Desktop Kubernetes.
 # This profile is intentionally opt-in and does not use Nebius SFS.
+# Label the node that owns the local jail and controller-spool paths before
+# install:
+# kubectl label node <local-storage-node> slurm.nebius.ai/local-storage=true --overwrite
 clusterName: soperator-local
 clusterType: cpu
 # Keep the local learning profile CPU-only and architecture-neutral. The
@@ -36,34 +40,26 @@ k8sNodeFilters:
   - name: system
     nodeSelector:
       kubernetes.io/os: linux
+      slurm.nebius.ai/local-storage: "true"
   - name: controller
     nodeSelector:
       kubernetes.io/os: linux
+      slurm.nebius.ai/local-storage: "true"
   - name: login
     nodeSelector:
       kubernetes.io/os: linux
+      slurm.nebius.ai/local-storage: "true"
   - name: accounting
     nodeSelector:
       kubernetes.io/os: linux
+      slurm.nebius.ai/local-storage: "true"
   - name: no-gpu
     nodeSelector:
       kubernetes.io/os: linux
+      slurm.nebius.ai/local-storage: "true"
 
 populateJail:
   k8sNodeFilterName: system
-
-sConfigController:
-  node:
-    # SConfigController reconfiguration calls Slurm REST. Upstream Soperator
-    # only reconciles Slurm REST when accounting has a database enabled, so this
-    # no-accounting local profile scales SConfigController to zero.
-    size: 0
-    k8sNodeFilterName: controller
-  container:
-    resources:
-      cpu: "100m"
-      memory: 128Mi
-      ephemeralStorage: 1Gi
 
 slurmNodes:
   accounting:
@@ -106,6 +102,19 @@ slurmNodes:
     # Keep REST disabled with accounting in the local profile.
     enabled: false
 
+sConfigController:
+  node:
+    # SConfigController reconfiguration calls Slurm REST. Upstream Soperator
+    # only reconciles Slurm REST when accounting has a database enabled, so this
+    # no-accounting local profile scales SConfigController to zero.
+    size: 0
+    k8sNodeFilterName: controller
+  container:
+    resources:
+      cpu: "100m"
+      memory: 128Mi
+      ephemeralStorage: 1Gi
+
 partitionConfiguration:
   configType: structured
   partitions:
@@ -136,26 +145,26 @@ storage:
   jail:
     k8sNodeFilterName: system
     matchExpressions:
-      - key: kubernetes.io/os
+      - key: slurm.nebius.ai/local-storage
         operator: In
         values:
-          - linux
+          - "true"
     tolerations: []
   controllerSpool:
     k8sNodeFilterName: system
     matchExpressions:
-      - key: kubernetes.io/os
+      - key: slurm.nebius.ai/local-storage
         operator: In
         values:
-          - linux
+          - "true"
     tolerations: []
   accounting:
     k8sNodeFilterName: system
     matchExpressions:
-      - key: kubernetes.io/os
+      - key: slurm.nebius.ai/local-storage
         operator: In
         values:
-          - linux
+          - "true"
     tolerations: []
 
 nodesets:
@@ -186,19 +195,6 @@ nodesets:
           persistentVolumeClaim:
             claimName: jail-pvc
         jailSubMounts: []
-        customVolumeMounts:
-          - name: slurm-scripts
-            mountPath: /opt/slurm_scripts/
-            volumeSource:
-              configMap:
-                name: slurm-scripts
-                defaultMode: 493
-          - name: slurm-scripts-jail
-            mountPath: /mnt/jail.upper/opt/slurm_scripts/
-            volumeSource:
-              configMap:
-                name: slurm-scripts
-                defaultMode: 493
         sharedMemorySize: 512Mi
       security:
         appArmorProfile: unconfined
@@ -221,6 +217,7 @@ nodesets:
       enabled: false
     nodeSelector:
       kubernetes.io/os: linux
+      slurm.nebius.ai/local-storage: "true"
     tolerations: []
     workerAnnotations: {}
     customInitContainers: []

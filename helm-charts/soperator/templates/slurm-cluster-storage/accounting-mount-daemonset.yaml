@@ -40,7 +40,7 @@ spec:
             path: /mnt
         - name: mount-scripts
           configMap:
-            name: mount-scripts
+            name: {{ include "slurm-cluster-storage.mountScriptsConfigMapName" . }}
             defaultMode: 0500
       affinity:
         nodeAffinity:

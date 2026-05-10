@@ -42,7 +42,7 @@ jobs:
     name: nccl-test-image-publish
     runs-on: ubuntu-latest
     environment:
-      name: nccl-test-image-publish
+      name: nb-image-chart-publish
     defaults:
       run:
         shell: bash

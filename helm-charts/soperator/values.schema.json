@@ -5,11 +5,76 @@
   "properties": {
     "clusterName": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "maxLength": 38,
+      "pattern": "^[a-z]([-a-z0-9]*[a-z0-9])?$"
     },
     "clusterType": {
       "type": "string",
       "enum": ["gpu", "cpu"]
+    },
+    "maintenance": {
+      "type": "string",
+      "enum": [
+        "none",
+        "downscale",
+        "downscaleAndDeletePopulateJail",
+        "downscaleAndOverwritePopulateJail",
+        "skipPopulateJail"
+      ]
+    },
+    "customSlurmConfig": {
+      "type": "string",
+      "not": {
+        "pattern": "DefMemPerCPU\\s*="
+      }
+    },
+    "partitionConfiguration": {
+      "type": "object",
+      "additionalProperties": true,
+      "allOf": [
+        {
+          "if": {
+            "required": ["rawConfig"],
+            "properties": {
+              "rawConfig": { "minItems": 1 }
+            }
+          },
+          "then": {
+            "required": ["configType"],
+            "properties": {
+              "configType": { "const": "custom" }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "configType": {
+          "type": "string",
+          "enum": ["default", "custom", "structured"]
+        },
+        "rawConfig": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "partitions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["name"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "isAll": { "type": "boolean" },
+              "nodeSetRefs": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1 }
+              },
+              "config": { "type": "string" }
+            }
+          }
+        }
+      }
     },
     "mariadb-operator": {
       "type": "object",
@@ -18,6 +83,24 @@
         "installOperator": {
           "type": "boolean"
         }
+      }
+    },
+    "uninstallCleanup": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag": { "type": "string", "minLength": 1 },
+            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+          }
+        },
+        "timeoutSeconds": { "type": "integer", "minimum": 1 },
+        "pollIntervalSeconds": { "type": "integer", "minimum": 1 }
       }
     },
     "slurmNodes": {
@@ -30,7 +113,37 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp[0-9]+)\\s+\\S+.*$"
+                "pattern": "^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh.com|sk-ecdsa-sha2-nistp256@openssh.com)\\s+\\S+.*\\r?\\n?$"
+              }
+            }
+          }
+        },
+        "sssd": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "image": { "type": "string" }
+          }
+        },
+        "exporter": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "accountingJobsLookback": {
+              "type": "string",
+              "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h|d|w|y))+$"
+            },
+            "exporterContainer": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "resources": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {
+                    "ephemeralStorage": { "type": "string", "minLength": 1 }
+                  }
+                }
               }
             }
           }
@@ -81,7 +194,94 @@
     },
     "nodesets": {
       "type": "array",
-      "minItems": 1
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["name", "slurmd", "munge"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "slurmd": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["resources", "volumes"],
+            "properties": {
+              "resources": {
+                "type": "object",
+                "additionalProperties": true,
+                "required": ["cpu", "memory"],
+                "properties": {
+                  "cpu": {
+                    "oneOf": [
+                      { "type": "string", "minLength": 1 },
+                      { "type": "number" }
+                    ]
+                  },
+                  "memory": { "type": "string", "minLength": 1 }
+                }
+              },
+              "volumes": {
+                "type": "object",
+                "additionalProperties": true,
+                "required": ["spool", "jail"],
+                "properties": {
+                  "spool": { "type": "object", "minProperties": 1 },
+                  "jail": { "type": "object", "minProperties": 1 },
+                  "customVolumeMounts": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "munge": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["resources"],
+            "properties": {
+              "resources": {
+                "type": "object",
+                "additionalProperties": true,
+                "required": ["cpu", "memory"],
+                "properties": {
+                  "cpu": {
+                    "oneOf": [
+                      { "type": "string", "minLength": 1 },
+                      { "type": "number" }
+                    ]
+                  },
+                  "memory": { "type": "string", "minLength": 1 }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "priorityClasses": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "value": {
+            "type": "integer",
+            "minimum": -2147483648,
+            "maximum": 1000000000
+          },
+          "globalDefault": { "type": "boolean" },
+          "preemptionPolicy": {
+            "type": "string",
+            "enum": ["Never", "PreemptLowerPriority"]
+          }
+        }
+      }
     }
   }
 }

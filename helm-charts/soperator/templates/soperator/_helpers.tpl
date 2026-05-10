@@ -41,17 +41,6 @@ app.kubernetes.io/name: {{ include "soperator.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
-{{/*
-Create the name of the service account to use
-*/}}
-{{- define "soperator.serviceAccountName" -}}
-{{- if .Values.serviceAccount.create }}
-{{- default (include "soperator.fullname" .) .Values.serviceAccount.name }}
-{{- else }}
-{{- default "default" .Values.serviceAccount.name }}
-{{- end }}
-{{- end }}
-
 {{- define "soperator.controllersAvailable" -}}
 cluster,nodeconfigurator,nodeset,topology
 {{- end }}

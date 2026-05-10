@@ -2,16 +2,16 @@
 Expand the name of the chart.
 */}}
 {{- define "nodeconfigurator.name" -}}
-{{- default .Release.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
+{{- include "slurm-cluster.name" . }}
 {{- end }}
 
 {{/*
 Create a default fully qualified app name.
-We truncate at 63 chars because some Kubernetes name fields are limited to this (by the DNS naming spec).
-If release name contains chart name it will be used as a full name.
+NodeConfigurator cluster-scoped RBAC follows the cluster name so two releases in
+different namespaces do not fight over the same ClusterRole names.
 */}}
 {{- define "nodeconfigurator.fullname" -}}
-{{- default .Release.Name .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
+{{- include "nodeconfigurator.name" . }}
 {{- end }}
 
 {{/*
@@ -39,15 +39,4 @@ Selector labels
 {{- define "nodeconfigurator.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "nodeconfigurator.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
-{{- end }}
-
-{{/*
-Create the name of the service account to use
-*/}}
-{{- define "nodeconfigurator.serviceAccountName" -}}
-{{- if .Values.serviceAccount.create }}
-{{- default (include "nodeconfigurator.fullname" .) .Values.serviceAccount.name }}
-{{- else }}
-{{- default "default" .Values.serviceAccount.name }}
-{{- end }}
 {{- end }}

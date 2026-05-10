@@ -302,6 +302,13 @@ def _operator_readiness_summary(payload: Mapping[str, Any]) -> str:
 
 
 def _gpu_visibility_summary(payload: Mapping[str, Any]) -> str:
+    if bool(payload.get("skipped")):
+        reason = str(payload.get("skip_reason", "") or "").strip()
+        total = int(payload.get("total_gpu_node_count", 0) or 0)
+        summary = f"Skipped: {reason or 'no schedulable GPU workload slot was available'}"
+        if total:
+            summary += f"; total Ready GPU nodes {total}"
+        return summary + "."
     selected = int(payload.get("selected_node_count", 0) or 0)
     total = int(payload.get("total_gpu_node_count", 0) or 0)
     passed = int(payload.get("passed_node_count", 0) or 0)
@@ -315,6 +322,13 @@ def _gpu_visibility_summary(payload: Mapping[str, Any]) -> str:
 
 
 def _nccl_summary(payload: Mapping[str, Any]) -> str:
+    if bool(payload.get("skipped")):
+        reason = str(payload.get("skip_reason", "") or "").strip()
+        total = int(payload.get("total_gpu_node_count", 0) or 0)
+        summary = f"Skipped: {reason or 'no schedulable NCCL GPU slot was available'}"
+        if total:
+            summary += f"; total Ready GPU nodes {total}"
+        return summary + "."
     phase = str(payload.get("launcher_phase", "") or "").strip() or "unknown"
     avg = float(payload.get("avg_bus_bandwidth_gbps", 0.0) or 0.0)
     threshold = float(payload.get("threshold_gbps", 0.0) or 0.0)

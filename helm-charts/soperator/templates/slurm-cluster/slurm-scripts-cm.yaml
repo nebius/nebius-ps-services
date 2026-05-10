@@ -2,10 +2,10 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   namespace: {{ .Release.Namespace }}
-  name: slurm-scripts
+  name: {{ include "slurm-cluster.slurmScriptsConfigMapName" . }}
   labels:
-    app: {{ .Chart.Name }}
-    release: {{ .Release.Name }}
+    {{- include "slurm-cluster.labels" . | nindent 4 }}
+    app.kubernetes.io/component: slurm-scripts
 data:
   # base scripts
 {{- range $name := list "check_runner.py" "prolog.sh" "epilog.sh" "hc_program.sh" }}

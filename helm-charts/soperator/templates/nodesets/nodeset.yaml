@@ -99,15 +99,10 @@ spec:
       tag: {{ . | quote }}
       {{- end }}
 
-      {{- with .pullPolicy }}
-      pullPolicy: {{ . }}
-      {{- end }}
+      pullPolicy: {{ default "IfNotPresent" .pullPolicy }}
     {{- end }}
     {{- else }}
-      repository: {{ (required ".Values.images.slurmd.repository is required as the default image is used." $.Values.images.slurmd.repository) | quote }}
-      {{- with $.Values.images.slurmd.tag }}
-      tag: {{ . | quote }}
-      {{- end }}
+      {{- include "nodesets.imageFromFlatString" (list $.Values.images.slurmd ".Values.images.slurmd is required as the default NodeSet slurmd image.") | nindent 6 }}
     {{- end }}
 
     {{- if .customEnv }}
@@ -160,10 +155,20 @@ spec:
           readOnly: {{ $.Values.externalNfs.readOnly }}
       {{- end }}
 
-      {{- with (.customVolumeMounts | default list) }}
-      customVolumeMounts:
-        {{- toYaml . | nindent 8 }}
+      {{- $customVolumeMounts := (.customVolumeMounts | default list) }}
+      {{- range $customVolumeMounts }}
+      {{- if eq (get . "name") "slurm-scripts" }}
+      {{- fail (printf ".Values.nodesets[%s].slurmd.volumes.customVolumeMounts uses reserved name \"slurm-scripts\". The chart owns this mount; use another name for custom mounts." $ns.name) }}
+      {{- else if eq (get . "name") "slurm-scripts-jail" }}
+      {{- fail (printf ".Values.nodesets[%s].slurmd.volumes.customVolumeMounts uses reserved name \"slurm-scripts-jail\". The chart owns this mount; use another name for custom mounts." $ns.name) }}
       {{- end }}
+      {{- end }}
+      customVolumeMounts:
+        {{- include "nodesets.slurmScriptMount" (list $ "slurm-scripts") | nindent 8 }}
+        {{- include "nodesets.slurmScriptMount" (list $ "slurm-scripts-jail") | nindent 8 }}
+        {{- range $customVolumeMounts }}
+        {{- toYaml (list .) | nindent 8 }}
+        {{- end }}
 
       {{- with (.sharedMemorySize | default "") }}
       sharedMemorySize: {{ . | quote }}
@@ -189,15 +194,10 @@ spec:
       tag: {{ . | quote }}
       {{- end }}
 
-      {{- with .pullPolicy }}
-      pullPolicy: {{ . }}
-      {{- end }}
+      pullPolicy: {{ default "IfNotPresent" .pullPolicy }}
     {{- end }}
     {{- else }}
-      repository: {{ (required ".Values.images.munge.repository is required as the default image is used." $.Values.images.munge.repository) | quote }}
-      {{- with $.Values.images.munge.tag }}
-      tag: {{ . | quote }}
-      {{- end }}
+      {{- include "nodesets.imageFromFlatString" (list $.Values.images.munge ".Values.images.munge is required as the default NodeSet munge image.") | nindent 6 }}
     {{- end }}
 
     {{- with (required ".Values.nodesets[*].munge.resources is required" .resources) }}
@@ -237,15 +237,10 @@ spec:
       tag: {{ . | quote }}
       {{- end }}
 
-      {{- with .pullPolicy }}
-      pullPolicy: {{ . }}
-      {{- end }}
+      pullPolicy: {{ default "IfNotPresent" .pullPolicy }}
     {{- end }}
     {{- else }}
-      repository: {{ (required ".Values.images.sssd.repository is required as the default image is used." $.Values.images.sssd.repository) | quote }}
-      {{- with $.Values.images.sssd.tag }}
-      tag: {{ . | quote }}
-      {{- end }}
+      {{- include "nodesets.imageFromFlatString" (list $.Values.images.sssd ".Values.images.sssd is required as the default NodeSet sssd image.") | nindent 6 }}
     {{- end }}
 
     resources:

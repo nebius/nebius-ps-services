@@ -236,11 +236,17 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
     assert soperator.release_timeout == "90m"
     assert soperator.release_install_after == ()
     assert soperator.wizard_fields is not None
+    assert soperator.wizard_fields["profile"]["default"] == "nebius-gpu-v1"
+    assert soperator.wizard_fields["profile"]["materialize_default"] is True
+    assert soperator.wizard_fields["profile"]["options"] == {
+        "from": "soperator_nodesets_profiles"
+    }
     assert soperator.wizard_fields["values.partitionProfile"]["default"] == "shape-default"
-    partition_profile_values = soperator.wizard_fields["values.partitionProfile"]["sources"][0][
-        "values"
-    ]
-    assert partition_profile_values == ["shape-default", "with-debug-long"]
+    assert soperator.wizard_fields["values.partitionProfile"]["materialize_default"] is True
+    assert soperator.wizard_fields["values.partitionProfile"]["options"] == {
+        "from": "soperator_partition_profiles",
+        "args": {"default": "shape-default"},
+    }
     assert soperator.mk8s_gpu.install_after == (
         "cert-manager",
         "nvidia-network-operator",
@@ -259,6 +265,7 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
     assert profile["chart"]["values"]["partitionConfiguration"]["partitions"][0]["name"] == "gpu"
     assert "with-debug-long" in profile["chart"]["partition_profiles"]
     mixed_profile = soperator.soperator_nodesets.profiles["nebius-mixed-v1"]
+    assert "Mixed CPU+GPU workers" in mixed_profile["wizard"]["label"]
     assert [worker["nodeset_name"] for worker in mixed_profile["mk8s"]["worker_nodesets"]] == [
         "worker-cpu",
         "worker-gpu",
@@ -268,7 +275,19 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
         "worker-gpu",
     ]
     assert "with-debug-long" in mixed_profile["chart"]["partition_profiles"]
+    assert "with-h100-infiniband-debug-long" in mixed_profile["chart"]["partition_profiles"]
     assert "nfs" not in profile["mk8s"]["node_groups"]
+
+    notifier = next(chart for chart in sources.helm_charts if chart.name == "soperator-notifier")
+    assert notifier.source.path is not None
+    assert notifier.source.path.endswith("helm-charts/soperator-notifier")
+    assert notifier.namespace == "soperator"
+    assert notifier.release_name == "soperator-notifier"
+    assert notifier.release_timeout == "10m"
+    assert notifier.release_install_after == ("soperator", "cert-manager")
+    assert notifier.wizard_fields["values.slack.mode"]["default"] == "existing-webhook"
+    assert notifier.defaults[0].target_path == "values.slack.mode"
+    assert notifier.defaults[0].value == "existing-webhook"
 
 
 def _kubernetes_agent_validation_enabled() -> bool:

@@ -18,7 +18,7 @@ metadata:
     {{- end }}
 
 description: {{ .description | default "" | quote }}
-value: {{ .value | default 10000000 }}
+value: {{ int (.value | default 10000000) }}
 globalDefault: {{ .globalDefault | default false }}
 
 {{- with .preemptionPolicy }}

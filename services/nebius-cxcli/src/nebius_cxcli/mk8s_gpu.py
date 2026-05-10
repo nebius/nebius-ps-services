@@ -2325,6 +2325,7 @@ def _pod_request_totals_by_node(
             continue
         container_cpu_millicores = 0
         container_memory_bytes = 0
+        container_gpu_count = 0
         containers = spec.get("containers")
         if isinstance(containers, list):
             for container in containers:
@@ -2332,12 +2333,20 @@ def _pod_request_totals_by_node(
                     continue
                 resources = container.get("resources")
                 requests = resources.get("requests") if isinstance(resources, dict) else {}
+                limits = resources.get("limits") if isinstance(resources, dict) else {}
                 if not isinstance(requests, Mapping):
                     requests = {}
+                if not isinstance(limits, Mapping):
+                    limits = {}
                 container_cpu_millicores += _parse_cpu_millicores(requests.get("cpu"))
                 container_memory_bytes += _parse_memory_bytes(requests.get("memory"))
+                container_gpu_count += max(
+                    _parse_gpu_quantity(requests.get("nvidia.com/gpu")),
+                    _parse_gpu_quantity(limits.get("nvidia.com/gpu")),
+                )
         init_cpu_millicores = 0
         init_memory_bytes = 0
+        init_gpu_count = 0
         init_containers = spec.get("initContainers")
         if isinstance(init_containers, list):
             for container in init_containers:
@@ -2345,8 +2354,11 @@ def _pod_request_totals_by_node(
                     continue
                 resources = container.get("resources")
                 requests = resources.get("requests") if isinstance(resources, dict) else {}
+                limits = resources.get("limits") if isinstance(resources, dict) else {}
                 if not isinstance(requests, Mapping):
                     requests = {}
+                if not isinstance(limits, Mapping):
+                    limits = {}
                 init_cpu_millicores = max(
                     init_cpu_millicores,
                     _parse_cpu_millicores(requests.get("cpu")),
@@ -2355,10 +2367,41 @@ def _pod_request_totals_by_node(
                     init_memory_bytes,
                     _parse_memory_bytes(requests.get("memory")),
                 )
-        totals = usage.setdefault(node_name, {"cpu_millicores": 0, "memory_bytes": 0})
+                init_gpu_count = max(
+                    init_gpu_count,
+                    _parse_gpu_quantity(requests.get("nvidia.com/gpu")),
+                    _parse_gpu_quantity(limits.get("nvidia.com/gpu")),
+                )
+        totals = usage.setdefault(
+            node_name,
+            {"cpu_millicores": 0, "memory_bytes": 0, "gpu_count": 0},
+        )
         totals["cpu_millicores"] += max(container_cpu_millicores, init_cpu_millicores)
         totals["memory_bytes"] += max(container_memory_bytes, init_memory_bytes)
+        totals["gpu_count"] += max(container_gpu_count, init_gpu_count)
     return usage
+
+
+def _gpu_nodes_with_free_capacity(
+    nodes: list[dict[str, Any]],
+    requested_by_node: Mapping[str, Mapping[str, int]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    free_nodes: list[dict[str, Any]] = []
+    saturated_nodes: list[dict[str, Any]] = []
+    for node in nodes:
+        name = _as_text(node.get("name"))
+        gpu_count = int(node.get("gpu_count", 0) or 0)
+        used = requested_by_node.get(name, {})
+        requested_gpu_count = int(used.get("gpu_count", 0) or 0)
+        free_gpu_count = max(0, gpu_count - requested_gpu_count)
+        annotated_node = dict(node)
+        annotated_node["requested_gpu_count"] = requested_gpu_count
+        annotated_node["free_gpu_count"] = free_gpu_count
+        if free_gpu_count > 0:
+            free_nodes.append(annotated_node)
+        else:
+            saturated_nodes.append(annotated_node)
+    return free_nodes, saturated_nodes
 
 
 def _nccl_live_runtime_overrides(
@@ -2595,9 +2638,46 @@ def _run_gpu_visibility_validation(
         raise RuntimeError(
             "GPU Visibility test could not find any Ready Kubernetes node with allocatable GPUs"
         )
-    nodes, total_gpu_nodes = _select_gpu_validation_nodes(all_nodes, max_nodes=max_nodes)
-    skipped_nodes = max(0, total_gpu_nodes - len(nodes))
+    requested_by_node = _pod_request_totals_by_node(extra_env=extra_env)
+    free_nodes, saturated_nodes = _gpu_nodes_with_free_capacity(all_nodes, requested_by_node)
+    total_gpu_nodes = len(all_nodes)
     device_plugin_snapshot = _gpu_device_plugin_snapshot(all_nodes)
+    if not free_nodes:
+        skip_reason = (
+            "all Ready GPU nodes already have their GPUs allocated to existing workloads"
+        )
+        if emit:
+            emit(f"Skipping GPU Visibility test: {skip_reason}.")
+        report = {
+            "validation": "GPU Visibility test",
+            "namespace": namespace,
+            "image": image,
+            "max_nodes": max_nodes,
+            "selected_node_count": 0,
+            "total_gpu_node_count": total_gpu_nodes,
+            "skipped_node_count": total_gpu_nodes,
+            "saturated_node_count": len(saturated_nodes),
+            "device_plugin_snapshot": device_plugin_snapshot,
+            "passed": True,
+            "skipped": True,
+            "skip_reason": skip_reason,
+            "passed_node_count": 0,
+            "failed_node_count": 0,
+            "nodes": [],
+            "skipped_nodes": [
+                {
+                    "node_name": _as_text(node.get("name")),
+                    "gpu_count": int(node.get("gpu_count", 0) or 0),
+                    "requested_gpu_count": int(node.get("requested_gpu_count", 0) or 0),
+                    "free_gpu_count": int(node.get("free_gpu_count", 0) or 0),
+                }
+                for node in saturated_nodes
+            ],
+        }
+        _write_report(report_path, report)
+        return report_path
+    nodes, _free_gpu_node_count = _select_gpu_validation_nodes(free_nodes, max_nodes=max_nodes)
+    skipped_nodes = max(0, total_gpu_nodes - len(nodes))
     run_token = _validation_run_token()
     label_selector = _gpu_visibility_selector(run_token=run_token)
 
@@ -3073,27 +3153,80 @@ def _run_nccl_validation(
     transport_label = _nccl_transport_label(transport_mode)
     threshold_gbps = float(spec.get("average_bus_bandwidth_threshold_gbps", 0) or 0)
     threshold_enforced = bool(spec.get("threshold_enforced", True))
+    chart_values = spec.get("chart_values")
+    values_map = dict(chart_values) if isinstance(chart_values, dict) else {}
+    benchmark_map = (
+        values_map.get("benchmark") if isinstance(values_map.get("benchmark"), dict) else {}
+    )
     all_worker_nodes = _gpu_nodes(extra_env=extra_env)
     if not all_worker_nodes:
         raise RuntimeError(
             "NCCL test could not find any Ready Kubernetes node with allocatable GPUs"
         )
-    worker_nodes, total_gpu_nodes = _select_gpu_validation_nodes(
-        all_worker_nodes, max_nodes=max_nodes
+    requested_by_node = _pod_request_totals_by_node(extra_env=extra_env)
+    free_worker_nodes, saturated_nodes = _gpu_nodes_with_free_capacity(
+        all_worker_nodes,
+        requested_by_node,
     )
+    total_gpu_nodes = len(all_worker_nodes)
+    if not free_worker_nodes:
+        skip_reason = (
+            "all Ready GPU nodes already have their GPUs allocated to existing workloads"
+        )
+        if emit:
+            emit(f"Skipping NCCL test: {skip_reason}.")
+        report = {
+            "validation": "NCCL test",
+            "chart_component_id": _as_text(spec.get("chart_component_id")),
+            "chart_name_or_ref": _as_text(spec.get("chart_name_or_ref")),
+            "chart_repo": _as_text(spec.get("chart_repo")),
+            "namespace": namespace,
+            "gpu_platform": _as_text(spec.get("gpu_platform")),
+            "max_nodes": max_nodes,
+            "selected_worker_node_count": 0,
+            "total_gpu_node_count": total_gpu_nodes,
+            "skipped_node_count": total_gpu_nodes,
+            "saturated_node_count": len(saturated_nodes),
+            "worker_node_count": 0,
+            "worker_node_names": [],
+            "worker_gpus": 0,
+            "transport_mode": transport_mode,
+            "transport_label": transport_label,
+            **_nccl_dmabuf_metadata(transport_mode=transport_mode, benchmark_map=benchmark_map),
+            "avg_bus_bandwidth_gbps": 0.0,
+            "threshold_gbps": threshold_gbps,
+            "threshold_enforced": threshold_enforced,
+            "bandwidth_observed": False,
+            "out_of_bounds_ok": False,
+            "launcher_phase": "skipped",
+            "passed": True,
+            "skipped": True,
+            "skip_reason": skip_reason,
+            "skipped_nodes": [
+                {
+                    "node_name": _as_text(node.get("name")),
+                    "gpu_count": int(node.get("gpu_count", 0) or 0),
+                    "requested_gpu_count": int(node.get("requested_gpu_count", 0) or 0),
+                    "free_gpu_count": int(node.get("free_gpu_count", 0) or 0),
+                }
+                for node in saturated_nodes
+            ],
+        }
+        _write_report(report_path, report)
+        return report_path
+    worker_nodes, total_gpu_nodes = _select_gpu_validation_nodes(
+        free_worker_nodes, max_nodes=max_nodes
+    )
+    total_gpu_nodes = len(all_worker_nodes)
     skipped_nodes = max(0, total_gpu_nodes - len(worker_nodes))
     worker_gpu_counts = {
-        int(node.get("gpu_count", 0) or 0)
+        int(node.get("free_gpu_count", node.get("gpu_count", 0)) or 0)
         for node in worker_nodes
-        if int(node.get("gpu_count", 0) or 0) > 0
+        if int(node.get("free_gpu_count", node.get("gpu_count", 0)) or 0) > 0
     }
     if not worker_gpu_counts:
         raise RuntimeError("NCCL test could not resolve GPU count for the selected worker nodes")
-    if len(worker_gpu_counts) != 1:
-        raise RuntimeError(
-            "NCCL test requires a uniform GPU count across the selected worker nodes"
-        )
-    worker_gpu_count = next(iter(worker_gpu_counts))
+    worker_gpu_count = min(worker_gpu_counts)
 
     training_operator_namespace = _as_text(spec.get("training_operator_namespace"))
     training_operator_manifest = _as_text(spec.get("training_operator_manifest"))
@@ -3196,12 +3329,7 @@ def _run_nccl_validation(
             avg_bus_bandwidth = float(match.group(1)) if match is not None else 0.0
         if out_of_bounds_ok is None:
             out_of_bounds_ok = _OUT_OF_BOUNDS_OK_RE.search(logs) is not None
-        chart_values = spec.get("chart_values")
-        values_map = dict(chart_values) if isinstance(chart_values, dict) else {}
         image_map = values_map.get("image") if isinstance(values_map.get("image"), dict) else {}
-        benchmark_map = (
-            values_map.get("benchmark") if isinstance(values_map.get("benchmark"), dict) else {}
-        )
         dmabuf_metadata = _nccl_dmabuf_metadata(
             transport_mode=transport_mode,
             benchmark_map=benchmark_map,

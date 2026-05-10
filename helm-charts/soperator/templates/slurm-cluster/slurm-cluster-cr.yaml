@@ -1,5 +1,8 @@
 {{- include "validateAccountingConfig" . -}}
 {{- include "validateDependencyConfig" . -}}
+{{- include "validatePartitionConfig" . -}}
+{{- include "validateK8sNodeFilters" . -}}
+{{- include "validateNodeSets" . -}}
 {{- include "validateSlurmMemoryConfig" . -}}
 apiVersion: slurm.nebius.ai/v1
 kind: SlurmCluster
@@ -94,7 +97,7 @@ spec:
   volumeSources:
     - name: slurm-scripts
       configMap:
-        name: slurm-scripts
+        name: {{ include "slurm-cluster.slurmScriptsConfigMapName" . | quote }}
         defaultMode: 0755
     {{- range .Values.volumeSources }}
     - name: {{ .name | quote }}
@@ -365,8 +368,15 @@ spec:
         readinessProbe:
           {{- toYaml . | nindent 10 }}
         {{- end }}
+      {{- $sshRootPublicKeys := default list .Values.slurmNodes.login.sshRootPublicKeys }}
       sshRootPublicKeys:
-        {{- default list .Values.slurmNodes.login.sshRootPublicKeys | toYaml | nindent 8 }}
+        {{- if $sshRootPublicKeys }}
+        {{- range $key := $sshRootPublicKeys }}
+        - {{ $key | trim | quote }}
+        {{- end }}
+        {{- else }}
+        []
+        {{- end }}
       sshdServiceType: {{ default "LoadBalancer" .Values.slurmNodes.login.sshdServiceType | quote }}
       sshdServiceAnnotations:
       {{- .Values.slurmNodes.login.sshdServiceAnnotations | toYaml | nindent 8 }}
@@ -487,19 +497,26 @@ spec:
       podMonitorConfig:
         {{- toYaml .Values.slurmNodes.exporter.podMonitorConfig | nindent 8 }}
       {{- end }}
+      {{- $exporterContainer := default dict .Values.slurmNodes.exporter.exporterContainer }}
+      {{- $exporterResources := default dict $exporterContainer.resources }}
+      {{- if hasKey $exporterResources "ephemeral-storage" }}
+      {{- fail ".Values.slurmNodes.exporter.exporterContainer.resources.ephemeral-storage is not supported; use ephemeralStorage and the chart will render ephemeral-storage." }}
+      {{- end }}
       exporterContainer:
         image: {{ required "soperator exporter image" .Values.images.soperatorExporter | quote }}
-        imagePullPolicy: {{ default "IfNotPresent" .Values.slurmNodes.exporter.imagePullPolicy | quote }}
-        appArmorProfile: {{ default "unconfined" .Values.slurmNodes.exporter.appArmorProfile | quote }}
-        {{- with (default dict .Values.slurmNodes.exporter.exporterContainer) }}
-        {{- with .livenessProbe }}
-        livenessProbe:
-          {{- toYaml . | nindent 10 }}
+        imagePullPolicy: {{ default "IfNotPresent" $exporterContainer.imagePullPolicy | quote }}
+        appArmorProfile: {{ default "unconfined" $exporterContainer.appArmorProfile | quote }}
+        {{- with omit $exporterContainer "image" "imagePullPolicy" "appArmorProfile" "resources" }}
+        {{- toYaml . | nindent 8 }}
         {{- end }}
-        {{- with .readinessProbe }}
-        readinessProbe:
+        {{- if $exporterResources }}
+        resources:
+          {{- with omit $exporterResources "ephemeralStorage" }}
           {{- toYaml . | nindent 10 }}
-        {{- end }}
+          {{- end }}
+          {{- with $exporterResources.ephemeralStorage }}
+          ephemeral-storage: {{ . | quote }}
+          {{- end }}
         {{- end }}
       serviceAccountName: {{ include "slurm-cluster.exporter.serviceAccountName" . }}
     rest:

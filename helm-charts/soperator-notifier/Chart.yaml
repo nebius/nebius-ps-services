@@ -1,0 +1,21 @@
+apiVersion: v2
+name: soperator-notifier
+description: Slack job notifications for Nebius Soperator through VictoriaMetrics Alertmanager
+type: application
+version: 3.0.3-ps.1
+appVersion: "3.0.3"
+kubeVersion: ">=1.29.0-0"
+annotations:
+  soperator.nebius.com/upstream-release: "3.0.3"
+home: https://docs.nebius.com/slurm-soperator/
+sources:
+  - https://github.com/nebius/soperator
+maintainers:
+  - name: Nebius PS Services
+    url: https://github.com/nebius/nebius-ps-services
+keywords:
+  - nebius
+  - slurm
+  - soperator
+  - slack
+  - victoriametrics

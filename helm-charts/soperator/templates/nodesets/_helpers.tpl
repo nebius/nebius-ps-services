@@ -6,15 +6,6 @@ Expand the name of the chart.
 {{- end }}
 
 {{/*
-Create a default fully qualified app name.
-We truncate at 63 chars because some Kubernetes name fields are limited to this (by the DNS naming spec).
-If release name contains chart name it will be used as a full name.
-*/}}
-{{- define "nodesets.fullname" -}}
-{{- default .Release.Name .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
-{{- end }}
-
-{{/*
 Create chart name and version as used by the chart label.
 */}}
 {{- define "nodesets.chart" -}}
@@ -41,17 +32,6 @@ app.kubernetes.io/name: {{ include "nodesets.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
-{{/*
-Create the name of the service account to use
-*/}}
-{{- define "nodesets.serviceAccountName" -}}
-{{- if .Values.serviceAccount.create }}
-{{- default (include "nodesets.fullname" .) .Values.serviceAccount.name }}
-{{- else }}
-{{- default "default" .Values.serviceAccount.name }}
-{{- end }}
-{{- end }}
-
 {{/* Construct container gpu resource from GPU spec ([0]) and GPU resource spec ([1]) */}}
 {{- define "nodesets.resource.gpuFrom" -}}
   {{- $gpuSpec := (index . 0) | default dict -}}
@@ -65,4 +45,32 @@ Create the name of the service account to use
     {{- $resources := required ".Values.nodesets[*].slurmd.resources.gpu is required as .Values.nodesets[*].gpu.enabled is true" (index . 1)}}
 {{ $gpuResFQID }}: {{ get $resources "gpu" }}
   {{- end -}}
+{{- end -}}
+
+{{/* Convert a flat image string into the repository/tag object expected by the NodeSet CRD. */}}
+{{- define "nodesets.imageFromFlatString" -}}
+{{- $image := required (index . 1) (index . 0) -}}
+{{- $repository := $image -}}
+{{- $tag := "" -}}
+{{- if and (not (contains "@" $image)) (regexMatch "^.+:[^/:]+$" $image) -}}
+{{- $repository = regexReplaceAll "^(.+):([^/:]+)$" $image "${1}" -}}
+{{- $tag = regexReplaceAll "^(.+):([^/:]+)$" $image "${2}" -}}
+{{- end -}}
+repository: {{ $repository | quote }}
+{{- with $tag }}
+tag: {{ . | quote }}
+{{- end }}
+pullPolicy: "IfNotPresent"
+{{- end -}}
+
+{{/* Standard slurm-scripts mounts for NodeSet workers. */}}
+{{- define "nodesets.slurmScriptMount" -}}
+{{- $root := index . 0 -}}
+{{- $name := index . 1 -}}
+- name: {{ $name | quote }}
+  mountPath: {{ ternary "/opt/slurm_scripts/" "/mnt/jail.upper/opt/slurm_scripts/" (eq $name "slurm-scripts") | quote }}
+  volumeSource:
+    configMap:
+      name: {{ include "slurm-cluster.slurmScriptsConfigMapName" $root | quote }}
+      defaultMode: 493
 {{- end -}}

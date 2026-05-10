@@ -112,7 +112,7 @@ components:
               # delete the transient validation pods after each run.
               enabled_by_default: true
               namespace: gpu-validation
-              image: nvcr.io/nvidia/k8s/cuda-sample:vectoradd-cuda11.7.1-ubuntu20.04
+              image: nvcr.io/nvidia/k8s/cuda-sample:vectoradd-cuda12.5.0-ubuntu22.04
               timeout: 5m
               max_nodes: 3
               cleanup: true
@@ -553,7 +553,8 @@ components:
           # cxcli already auto-enables GPU Operator and, for GPU fabric /
           # InfiniBand cases, Network Operator. This policy only orders the
           # Soperator HelmRelease after whichever GPU platform releases are
-          # present; it does not deploy the upstream Soperator DCGM chart.
+          # present. The Soperator DCGM job-mapping exporter is a separate
+          # optional companion app.
           install_after:
             - cert-manager
             - nvidia-network-operator
@@ -562,6 +563,8 @@ components:
           default: nebius-gpu-v1
           profiles:
             nebius-cpu-v1:
+              wizard:
+                label: "CPU-only workers: worker-cpu NodeSet, cpu Slurm partition, cpu feature"
               mk8s:
                 use_generic_gpu_node_groups: true
                 inputs:
@@ -664,19 +667,6 @@ components:
                             persistentVolumeClaim:
                               claimName: jail-pvc
                           jailSubMounts: []
-                          customVolumeMounts:
-                            - name: slurm-scripts
-                              mountPath: /opt/slurm_scripts/
-                              volumeSource:
-                                configMap:
-                                  name: slurm-scripts
-                                  defaultMode: 493
-                            - name: slurm-scripts-jail
-                              mountPath: /mnt/jail.upper/opt/slurm_scripts/
-                              volumeSource:
-                                configMap:
-                                  name: slurm-scripts
-                                  defaultMode: 493
                           sharedMemorySize: 8Gi
                         security:
                           appArmorProfile: unconfined
@@ -713,7 +703,12 @@ components:
                     accounting:
                       enabled: true
                 partition_profiles:
+                  shape-default:
+                    wizard:
+                      label: "Shape partitions only: cpu partition from worker-cpu"
                   with-debug-long:
+                    wizard:
+                      label: "Add debug and long policy partitions on worker-cpu"
                     values:
                       partitionConfiguration:
                         configType: structured
@@ -731,6 +726,8 @@ components:
                               - worker-cpu
                             config: Default=NO MaxTime=7-00:00:00 State=UP PriorityTier=1
             nebius-mixed-v1:
+              wizard:
+                label: "Mixed CPU+GPU workers: worker-cpu and worker-gpu NodeSets with cpu/gpu Slurm partitions"
               mk8s:
                 use_generic_gpu_node_groups: true
                 gpu_cluster_key: workers
@@ -855,19 +852,6 @@ components:
                             persistentVolumeClaim:
                               claimName: jail-pvc
                           jailSubMounts: []
-                          customVolumeMounts:
-                            - name: slurm-scripts
-                              mountPath: /opt/slurm_scripts/
-                              volumeSource:
-                                configMap:
-                                  name: slurm-scripts
-                                  defaultMode: 493
-                            - name: slurm-scripts-jail
-                              mountPath: /mnt/jail.upper/opt/slurm_scripts/
-                              volumeSource:
-                                configMap:
-                                  name: slurm-scripts
-                                  defaultMode: 493
                           sharedMemorySize: 8Gi
                         security:
                           appArmorProfile: unconfined
@@ -929,19 +913,6 @@ components:
                             persistentVolumeClaim:
                               claimName: jail-pvc
                           jailSubMounts: []
-                          customVolumeMounts:
-                            - name: slurm-scripts
-                              mountPath: /opt/slurm_scripts/
-                              volumeSource:
-                                configMap:
-                                  name: slurm-scripts
-                                  defaultMode: 493
-                            - name: slurm-scripts-jail
-                              mountPath: /mnt/jail.upper/opt/slurm_scripts/
-                              volumeSource:
-                                configMap:
-                                  name: slurm-scripts
-                                  defaultMode: 493
                           sharedMemorySize: 8Gi
                         security:
                           appArmorProfile: unconfined
@@ -980,7 +951,12 @@ components:
                     accounting:
                       enabled: true
                 partition_profiles:
+                  shape-default:
+                    wizard:
+                      label: "Shape partitions only: cpu and gpu partitions from worker-cpu/worker-gpu"
                   with-debug-long:
+                    wizard:
+                      label: "Add debug and long policy partitions across worker-cpu and worker-gpu"
                     values:
                       partitionConfiguration:
                         configType: structured
@@ -1003,7 +979,162 @@ components:
                               - worker-cpu
                               - worker-gpu
                             config: Default=NO MaxTime=7-00:00:00 State=UP PriorityTier=1
+                  with-h100-infiniband-debug-long:
+                    wizard:
+                      label: "H100/InfiniBand feature partitions plus debug and long across mixed workers"
+                    values:
+                      partitionConfiguration:
+                        configType: structured
+                        partitions:
+                          - name: cpu
+                            nodeSetRefs:
+                              - worker-cpu
+                            config: Default=YES MaxTime=INFINITE State=UP PriorityTier=5
+                          - name: gpu
+                            nodeSetRefs:
+                              - worker-gpu
+                            config: Default=NO MaxTime=INFINITE State=UP PriorityTier=10
+                          - name: h100
+                            nodeSetRefs:
+                              - worker-gpu
+                            config: Default=NO MaxTime=INFINITE State=UP PriorityTier=20
+                          - name: infiniband
+                            nodeSetRefs:
+                              - worker-gpu
+                            config: Default=NO MaxTime=INFINITE State=UP PriorityTier=15
+                          - name: debug
+                            nodeSetRefs:
+                              - worker-cpu
+                              - worker-gpu
+                            config: Default=NO MaxTime=00:30:00 State=UP PriorityTier=100
+                          - name: long
+                            nodeSetRefs:
+                              - worker-cpu
+                              - worker-gpu
+                            config: Default=NO MaxTime=7-00:00:00 State=UP PriorityTier=1
+                      nodesets:
+                        - name: worker-cpu
+                          replicas: 2
+                          maxUnavailable: 1
+                          enableHostUserNamespace: true
+                          gpu:
+                            enabled: false
+                          nodeConfig:
+                            features:
+                              - cpu
+                            static: Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1
+                            dynamic: "InstanceId={{ .PodName }}"
+                          slurmd:
+                            image:
+                              repository: cr.eu-north1.nebius.cloud/soperator/worker_slurmd
+                              tag: 3.0.3-slurm25.11.3
+                              pullPolicy: IfNotPresent
+                            resources:
+                              cpu: "4"
+                              memory: 16Gi
+                              ephemeralStorage: 10Gi
+                            volumes:
+                              spool:
+                                emptyDir: {}
+                              jail:
+                                persistentVolumeClaim:
+                                  claimName: jail-pvc
+                              jailSubMounts: []
+                              sharedMemorySize: 8Gi
+                            security:
+                              appArmorProfile: unconfined
+                              limitsConfig: ""
+                              procMount: Default
+                          munge:
+                            image:
+                              repository: cr.eu-north1.nebius.cloud/soperator/munge
+                              tag: 3.0.3-slurm25.11.3
+                              pullPolicy: IfNotPresent
+                            resources:
+                              cpu: 200m
+                              memory: 512Mi
+                              ephemeralStorage: 1Gi
+                            security:
+                              appArmorProfile: unconfined
+                              limitsConfig: ""
+                              procMount: Default
+                          sssd:
+                            enabled: false
+                          priorityClass: soperator-worker-high-priority
+                          nodeSelector:
+                            slurm.nebius.ai/nodeset-name: worker-cpu
+                          workerAnnotations: {}
+                          customInitContainers: []
+                        - name: worker-gpu
+                          replicas: 2
+                          maxUnavailable: 1
+                          enableHostUserNamespace: true
+                          gpu:
+                            enabled: true
+                            nvidia:
+                              gdrCopyEnabled: true
+                          nodeConfig:
+                            features:
+                              - gpu
+                              - cuda
+                              - h100
+                              - infiniband
+                            static: Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1
+                            dynamic: "InstanceId={{ .PodName }}"
+                            gresConfig:
+                              - AutoDetect=nvidia
+                          slurmd:
+                            image:
+                              repository: cr.eu-north1.nebius.cloud/soperator/worker_slurmd
+                              tag: 3.0.3-slurm25.11.3
+                              pullPolicy: IfNotPresent
+                            customEnv:
+                              - name: NVIDIA_DRIVER_CAPABILITIES
+                                value: compute,graphics,utility,video
+                            resources:
+                              cpu: "4"
+                              memory: 16Gi
+                              ephemeralStorage: 10Gi
+                              gpu: 8
+                            volumes:
+                              spool:
+                                emptyDir: {}
+                              jail:
+                                persistentVolumeClaim:
+                                  claimName: jail-pvc
+                              jailSubMounts: []
+                              sharedMemorySize: 8Gi
+                            security:
+                              appArmorProfile: unconfined
+                              limitsConfig: ""
+                              procMount: Default
+                          munge:
+                            image:
+                              repository: cr.eu-north1.nebius.cloud/soperator/munge
+                              tag: 3.0.3-slurm25.11.3
+                              pullPolicy: IfNotPresent
+                            resources:
+                              cpu: 200m
+                              memory: 512Mi
+                              ephemeralStorage: 1Gi
+                            security:
+                              appArmorProfile: unconfined
+                              limitsConfig: ""
+                              procMount: Default
+                          sssd:
+                            enabled: false
+                          priorityClass: soperator-worker-high-priority
+                          nodeSelector:
+                            slurm.nebius.ai/nodeset-name: worker-gpu
+                          tolerations:
+                            - key: nvidia.com/gpu
+                              operator: Exists
+                              effect: NoSchedule
+                          workerAnnotations: {}
+                          customInitContainers: []
             nebius-gpu-v1:
+              wizard:
+                label: "GPU-only workers: worker-gpu NodeSet, gpu Slurm partition, gpu/cuda features"
               mk8s:
                 # Soperator uses generic MK8s node_groups so Slurm NodeSets map
                 # to explicit host pools. Keep gpu_enabled=true so cxcli still
@@ -1099,7 +1230,12 @@ components:
                     accounting:
                       enabled: true
                 partition_profiles:
+                  shape-default:
+                    wizard:
+                      label: "Shape partitions only: gpu partition from worker-gpu"
                   with-debug-long:
+                    wizard:
+                      label: "Add debug and long policy partitions on worker-gpu"
                     values:
                       partitionConfiguration:
                         configType: structured

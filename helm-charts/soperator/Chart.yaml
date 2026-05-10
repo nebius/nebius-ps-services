@@ -2,7 +2,7 @@ apiVersion: v2
 name: soperator
 description: Self-managed Nebius Soperator deployment for MK8s clusters
 type: application
-version: 3.0.3-ps.1
+version: 0.1.0
 appVersion: "3.0.3"
 kubeVersion: ">=1.29.0-0"
 annotations:

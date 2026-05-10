@@ -57,7 +57,7 @@ show_usage() {
   printf '%b\n' "                 Fails if tag ${TAG_PREFIX}-vX.Y.Z already exists locally or on origin."
   printf '%b\n' "  ${S_YELLOW}--publish${S_RESET}  Create and push tag ${TAG_PREFIX}-vX.Y.Z."
   printf '%b\n' "                 Fails if ${CHART_FILE} does not already declare version X.Y.Z."
-  printf '%b\n' "                 Tag push triggers .github/workflows/__PROJECT_NAME__-chart-publish.yml."
+  printf '%b\n' "                 Tag push triggers .github/workflows/helm-chart-publish.yml."
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Options:${S_RESET}"

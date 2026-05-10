@@ -1,31 +1,43 @@
+# ---------------------------------------------------------------------------
+# SlurmCluster identity and global behavior
+# ---------------------------------------------------------------------------
+
+# Kubernetes-safe SlurmCluster name. Keep this to 38 lowercase DNS-label
+# characters or fewer, starting with a letter, so generated suffixed resources
+# stay within 63 chars.
 clusterName: "soperator"
-# Additional annotations for the cluster
+# Additional annotations on the rendered SlurmCluster.
 annotations: {}
-# Add appArmor profile to the cluster
+# Add AppArmor profile to the cluster. The default worker security profile below
+# is intentionally unconfined for the Slurm chroot/pyxis runtime used by the
+# pinned Soperator images; tighten per component only after validating that path.
 useDefaultAppArmorProfile: false
-# Maintenance defines the maintenance window for the cluster.
+# Maintenance action applied by Soperator.
 # It can have the following values:
 # - none: No maintenance is performed. The cluster operates normally.
 # - downscale: Scales down all components to 0.
-# - downscaleAndDeletePopulateJail: Scales down all components to 0 and deletes the kubernetes Kind Jobs populateJail.
-# - downscaleAndOverwritePopulateJail: Scales down all components to 0 and overwrite populateJail (same as overwrite=true).
+# - downscaleAndDeletePopulateJail: Scales down all components to 0 and deletes the populateJail Job.
+# - downscaleAndOverwritePopulateJail: Scales down all components to 0 and overwrites populateJail.
 # - skipPopulateJail: Skips the execution of the populateJail job during maintenance.
 maintenance: "none"
-# Slurm cluster type. Can be now gpu or cpu
+# Slurm cluster type. Use gpu when any worker NodeSet requests GPUs.
 clusterType: gpu
 # CUDA version used for populate-jail image selection.
 cudaVersion: 12.9.0
-# partitionConfiguration define partition configuration of slurm worker nodes
+
+# ---------------------------------------------------------------------------
+# Slurm partition, node filter, and volume source model
+# ---------------------------------------------------------------------------
+
+# Slurm partition configuration for worker NodeSets.
 # https://slurm.schedmd.com/slurm.conf.html#SECTION_PARTITION-CONFIGURATION
 partitionConfiguration:
-  # ConfigType defines what behaviour should be used for partition generation.
+  # configType selects how Soperator generates partition lines.
   # - default: generates upstream standard partitions without explicit NodeSet registration
   # - custom: uses raw partition configuration strings from rawConfig
   # - structured: enables NodeSet references and structured partition definitions
   configType: "structured"
-  # RawConfig defines partition configuration as list of string started with PartitionName.
-  # It is used when configType == "custom".
-  # Example for custom ConfigType:
+  # Raw Slurm partition lines. Used only when configType is "custom".
   rawConfig: []
   #    - PartitionName=low_priority Nodes=low_priority Default=YES MaxTime=INFINITE State=UP PriorityTier=1
   #    - PartitionName=high_priority  Nodes=high_priority Default=NO MaxTime=INFINITE State=UP PriorityTier=2
@@ -33,8 +45,7 @@ partitionConfiguration:
   # Specifying specific nodes is not supported since Dynamic Nodes are used.
   # For more details, see https://slurm.schedmd.com/dynamic_nodes.html#partitions.
 
-  # Partitions define partition configuration as a list of structured Partition[s].
-  # It is used when configType == "structured".
+  # Structured partitions. Used only when configType is "structured".
   partitions:
     - name: "main"
       isAll: true
@@ -67,24 +78,13 @@ partitionConfiguration:
 # on the matching homogeneous NodeSet and optionally create a partition that points
 # to that NodeSet.
 
-# HealthCheckConfig defines Slurm health check configuration.
+# Optional Slurm health check override. When null and clusterType is gpu, the
+# chart renders the default GPU health check program from slurm-scripts.
 healthCheckConfig: null
-# K8s node filters used in Slurm node specifications. Define which nodes should be used to schedule pods to
+# Kubernetes node filters used by SlurmCluster roles such as controller, login,
+# accounting, exporter, REST, and populateJail. Worker NodeSets schedule through
+# nodesets[].nodeSelector and tolerations instead of this list.
 k8sNodeFilters:
-  - name: gpu
-    affinity:
-      nodeAffinity:
-        requiredDuringSchedulingIgnoredDuringExecution:
-          nodeSelectorTerms:
-            - matchExpressions:
-                - key: "slurm.nebius.ai/nodeset-name"
-                  operator: In
-                  values:
-                    - "worker-gpu"
-    tolerations:
-      - key: nvidia.com/gpu
-        operator: Exists
-        effect: NoSchedule
   - name: no-gpu
     affinity:
       nodeAffinity:
@@ -135,8 +135,10 @@ k8sNodeFilters:
                   operator: In
                   values:
                     - "accounting"
-# Sources for the volumes used in Slurm node specifications
-# You can use existing pvc or create via helm if `createPVC: true`
+# Volume sources exposed to Soperator in SlurmCluster.spec.volumeSources.
+# Defaults point at chart-managed PVC names. Set createPVC=true only for an
+# extra generic PVC created from this list; the default jail/controller-spool
+# PVCs are managed by templates/slurm-cluster-storage/.
 volumeSources:
   - name: controller-spool
     createPVC: false
@@ -167,19 +169,26 @@ volumeSources:
 #      claimName: "jail-submount-mlperf-sd-pvc"
 #      readOnly: false
 
-# Secret references needed for Slurm cluster operation
+# Secret references needed for Slurm cluster operation.
 secrets: {}
-# Secret reference required for login sshd. If secret name empty - operator generate own secret with keys
+# Example: secret reference for login sshd. If the name is empty, Soperator
+# generates its own SSH host key secret.
 # sshdKeysName: ""
-# Job performing initial jail file system population
+
+# ---------------------------------------------------------------------------
+# Slurm configuration and populate-jail
+# ---------------------------------------------------------------------------
+
+# Job that initializes the shared jail filesystem.
 populateJail:
   imagePullPolicy: "IfNotPresent"
   appArmorProfile: "unconfined"
-  # Name of the k8s node filter
+  # Name of the k8sNodeFilters entry used for the populateJail pod.
   k8sNodeFilterName: "system"
-  # Controls if the pod containers can use the host user namespace
+  # Uncomment to control whether pod containers use the host user namespace.
   # hostUsers: false
-  # Configuration of the volume containing the custom initial jail content (the default content is used if not set)
+  # Optional volume containing custom initial jail content. When null, the
+  # default populate-jail image content is used.
   jailSnapshotVolume: null
   #  jailSnapshotVolume:
   #    volumeSourceName: "jail-snapshot"
@@ -205,6 +214,7 @@ customSlurmConfig: |
   PluginDir=/usr/lib/x86_64-linux-gnu/slurm
 customCgroupConfig: ""
 mpiConfig:
+  # Override this if the primary MPI data-plane interface is not eth0.
   pmixEnv: "OMPI_MCA_btl_tcp_if_include=eth0"
 plugStackConfig:
   pyxis:
@@ -224,9 +234,15 @@ plugStackConfig:
 #      arguments:
 #        foo: bar
 
+# ---------------------------------------------------------------------------
+# SlurmCluster role configuration
+# ---------------------------------------------------------------------------
+
 slurmNodes:
   sssd:
     enabled: false
+    # Optional per-cluster SSSD image override. Defaults to images.sssd.
+    image: ""
     sssdDebugLevel: 0
     imagePullPolicy: "IfNotPresent"
     appArmorProfile: "unconfined"
@@ -261,7 +277,7 @@ slurmNodes:
   accounting:
     enabled: true
     k8sNodeFilterName: "accounting"
-    # Controls if the pod containers can use the host user namespace
+    # Uncomment to control whether pod containers use the host user namespace.
     # hostUsers: false
     slurmConfig:
       accountingStorageTRES: "CPU,Mem,Node,VMem,Gres/gpu"
@@ -420,19 +436,19 @@ slurmNodes:
   controller:
     k8sNodeFilterName: "controller"
     priorityClass: ""
-    # Controls if the pod containers can use the host user namespace
+    # Uncomment to control whether pod containers use the host user namespace.
     # hostUsers: false
-    # RBAC settings for slurm-controller (ephemeral node power state management)
-    # The power-manager binary runs inside slurmctld pod and is called by Slurm's ResumeProgram/SuspendProgram
+    # RBAC for slurm-controller ephemeral node power-state management. The
+    # power-manager binary runs inside slurmctld and is called by Slurm
+    # ResumeProgram/SuspendProgram.
     rbac:
-      # Specifies whether RBAC resources should be created
+      # Create Role and RoleBinding resources for slurm-controller.
       create: true
-    # ServiceAccount settings for slurm-controller (mounted in slurmctld pod)
+    # ServiceAccount mounted in the slurmctld pod.
     serviceAccount:
-      # Specifies whether a ServiceAccount should be created
+      # Create a ServiceAccount for slurm-controller.
       create: true
-      # The name of the ServiceAccount to use.
-      # If not set and create is true, a name is generated using the cluster name: <clusterName>-slurm-controller
+      # If empty and create=true, the chart uses <clusterName>-slurm-controller.
       name: ""
     slurmctld:
       imagePullPolicy: "IfNotPresent"
@@ -492,7 +508,7 @@ slurmNodes:
   login:
     size: 1
     k8sNodeFilterName: "login"
-    # Controls if the pod containers can use the host user namespace
+    # Uncomment to control whether pod containers use the host user namespace.
     # hostUsers: false
     sshd:
       imagePullPolicy: "IfNotPresent"
@@ -511,7 +527,9 @@ slurmNodes:
         ephemeralStorage: "30Gi"
       command: []
       args: []
-    # Authorized keys required for SSH connection to Slurm login nodes
+    # Authorized public key strings required for SSH connection to Slurm login
+    # nodes. Do not set this to a local path; use Helm --set-file to read a
+    # local public key file such as $HOME/.ssh/id_ed25519.pub.
     sshRootPublicKeys: []
     # Either `LoadBalancer` or `NodePort`
     sshdServiceType: "LoadBalancer"
@@ -523,7 +541,7 @@ slurmNodes:
     sshdServiceLoadBalancerSourceRanges: []
     # Required in case of sshdServiceType == `NodePort`
     sshdServiceNodePort: 30022
-    # Annotations to be configure on login service
+    # Annotations to configure on the login Service.
     sshdServiceAnnotations: {}
     munge:
       imagePullPolicy: "IfNotPresent"
@@ -568,57 +586,58 @@ slurmNodes:
     enabled: true
     size: 1
     k8sNodeFilterName: "no-gpu"
-    # Controls if the pod containers can use the host user namespace
+    # Uncomment to control whether pod containers use the host user namespace.
     # hostUsers: false
     podMonitorConfig:
       jobLabel: "slurm-exporter"
       interval: "30s"
-      scrapeTimeout: "28s"
-    # RBAC settings for exporter
+      scrapeTimeout: "20s"
+    # RBAC settings for the Slurm exporter.
     rbac:
-      # Specifies whether RBAC resources (Role/RoleBinding) should be created
+      # Create Role and RoleBinding resources.
       create: true
-    # ServiceAccount settings for exporter
+    # ServiceAccount used by the Slurm exporter.
     serviceAccount:
-      # Specifies whether a ServiceAccount should be created
+      # Create a ServiceAccount.
       create: true
-      # The name of the ServiceAccount to use.
-      # - If empty and create is true, a ServiceAccount named "slurm-exporter-sa" will be created and used.
-      # - If empty and create is false, the "default" ServiceAccount will be used and you must ensure it has the required RBAC.
+      # - If empty and create=true, the chart uses
+      #   <clusterName>-slurm-exporter.
+      # - If empty and create=false, the chart uses default. Ensure that
+      #   ServiceAccount already has the required RBAC.
       name: ""
     collectionInterval: "30s"
-    # EXPERIMENTAL: Slurm job source: controller (Slurm controller API) or accounting (Slurm accounting API / slurmdbd).
+    # EXPERIMENTAL: Slurm job source: controller (Slurm controller API) or
+    # accounting (Slurm accounting API / slurmdbd).
     # Use "accounting" when the controller endpoint is overloaded on large clusters.
     jobSource: "controller"
-    # EXPERIMENTAL: when jobSource=accounting, list of Slurm job-state strings forwarded verbatim to the
-    # accounting API state filter (e.g. ["RUNNING", "PENDING"]). Empty list = no state filter.
-    # Note: slurmdbd applies this filter to the *historical* states a job held during the lookback
-    # window (same as `sacct --state=...`) — not to the current state of the returned jobs. A job
-    # that was RUNNING during the window and has since completed will still be returned with its
-    # current state set to e.g. COMPLETED.
+    # EXPERIMENTAL: when jobSource=accounting, these Slurm job-state strings are
+    # forwarded verbatim to the accounting API state filter. Empty list means no
+    # state filter. slurmdbd applies this filter to historical states held
+    # during the lookback window, not only the current state.
     accountingJobStates: []
-    # EXPERIMENTAL: when jobSource=accounting, the size of the time window queried from the accounting API
-    # ([now - lookback, now + 5m]). The +5m skew tolerates clock drift between slurmrestd, slurmctld and slurmdbd.
+    # EXPERIMENTAL: when jobSource=accounting, this is the time window queried
+    # from the accounting API ([now - lookback, now + 5m]). The +5m skew
+    # tolerates clock drift between slurmrestd, slurmctld, and slurmdbd. Use a
+    # duration such as 30m, 1h, 1d, 1.5h, or 2h45m30.5s.
     accountingJobsLookback: "1h"
-    exporter:
+    exporterContainer:
       imagePullPolicy: "IfNotPresent"
       appArmorProfile: "unconfined"
-      command: []
-      args: []
-      # Deprecated legacy exporter config. Use exporterContainer below for probes/resources.
       resources:
         cpu: "250m"
         memory: "256Mi"
         ephemeralStorage: "500Mi"
-    exporterContainer:
-    # livenessProbe:
-    #   httpGet:
-    #     path: /healthz
-    #     port: 8081
-    # readinessProbe:
-    #   httpGet:
-    #     path: /readyz
-    #     port: 8081
+      # command: []
+      # args: []
+      # customEnv: []
+      # livenessProbe:
+      #   httpGet:
+      #     path: /healthz
+      #     port: 8081
+      # readinessProbe:
+      #   httpGet:
+      #     path: /readyz
+      #     port: 8081
     munge:
       imagePullPolicy: "IfNotPresent"
       appArmorProfile: "unconfined"
@@ -636,7 +655,7 @@ slurmNodes:
     enabled: true
     size: 1
     k8sNodeFilterName: "controller"
-    # Controls if the pod containers can use the host user namespace
+    # Uncomment to control whether pod containers use the host user namespace.
     # hostUsers: false
     threadCount: 3
     maxConnections: 10
@@ -659,7 +678,7 @@ slurmNodes:
         ephemeralStorage: "500Mi"
     customInitContainers: []
 sConfigController:
-  # Controls if the pod containers can use the host user namespace
+  # Uncomment to control whether pod containers use the host user namespace.
   # hostUsers: false
   node:
     k8sNodeFilterName: "controller"
@@ -681,20 +700,26 @@ sConfigController:
     enabled: false
     jobLabel: "sconfigcontroller"
     interval: "30s"
-    scrapeTimeout: "28s"
-  # RBAC settings for sconfigcontroller
+    scrapeTimeout: "20s"
+  # RBAC settings for SConfigController.
   rbac:
-    # Specifies whether RBAC resources should be created
+    # Create Role and RoleBinding resources.
     create: true
-  # ServiceAccount settings for sconfigcontroller
+  # ServiceAccount used by SConfigController.
   serviceAccount:
-    # Specifies whether a ServiceAccount should be created
+    # Create a ServiceAccount for SConfigController.
     create: true
-    # The name of the ServiceAccount to use.
-    # If not set and create is true, a name is generated using the cluster name: <clusterName>-sconfigcontroller
-    # This field is required in the SlurmCluster CR - it will be automatically populated from this value
+    # If empty and create=true, the chart uses <clusterName>-sconfigcontroller.
+    # This field is required in the SlurmCluster CR.
     name: ""
+
+# ---------------------------------------------------------------------------
+# Images and Slurm script ConfigMap content
+# ---------------------------------------------------------------------------
+
 images:
+  # Flat image references used by SlurmCluster components and as NodeSet image
+  # fallbacks when a NodeSet omits its own image.repository/image.tag.
   slurmctld: "cr.eu-north1.nebius.cloud/soperator/controller_slurmctld:3.0.3-slurm25.11.3"
   slurmrestd: "cr.eu-north1.nebius.cloud/soperator/slurmrestd:3.0.3-slurm25.11.3"
   slurmd: "cr.eu-north1.nebius.cloud/soperator/worker_slurmd:3.0.3-slurm25.11.3"
@@ -708,15 +733,16 @@ images:
   soperatorExporter: "cr.eu-north1.nebius.cloud/soperator/soperator-exporter:3.0.3-slurm25.11.3"
   sConfigController: "cr.eu-north1.nebius.cloud/soperator/sconfigcontroller:3.0.3"
   mariaDB: "docker-registry1.mariadb.com/library/mariadb:12.1.2"
-# Configuration for slurm scripts.
+
+# Slurm script ConfigMap content.
 slurmScripts:
-  # Base scripts content can be overridden here
+  # Base scripts can be overridden here. Null keeps the chart/upstream content.
   check_runner.py: null
   prolog.sh: null
   epilog.sh: null
   hc_program.sh: null
-  # Built-in scripts can be overridden or disabled here
-  # Keys must match file names in slurm_scripts/
+  # Built-in scripts can be overridden or disabled here. Keys must match file
+  # names in slurm_scripts/.
   builtIn:
     alloc_gpus_busy.drain.sh:
       enabled: true
@@ -791,7 +817,7 @@ slurmScripts:
   #   example.sh:
   #     config: |-
   #     {
-  #       "name": "exmaple",
+  #       "name": "example",
   #       "command": "./example.sh",
   #       "platforms": ["any"],
   #       "skip_for_cpu_jobs": false,
@@ -810,6 +836,10 @@ slurmScripts:
   #     content: |-
   #     #!/bin/bash
   #     echo "Cluster: {{ $.Values.clusterName }}"
+
+# ---------------------------------------------------------------------------
+# Soperator operator deployment and webhooks
+# ---------------------------------------------------------------------------
 
 # Soperator operator defaults imported from upstream 3.0.3. DCGM Exporter is
 # intentionally not deployed by this chart; nebius-cxcli manages DCGM through
@@ -866,7 +896,7 @@ controllerManager:
     image:
       repository: cr.eu-north1.nebius.cloud/soperator/slurm-operator
       tag: 3.0.3
-    imagePullPolicy: Always
+    imagePullPolicy: IfNotPresent
     resources:
       limits:
         memory: 128Mi
@@ -890,13 +920,19 @@ serviceMonitor:
   enabled: false
   jobLabel: soperator
   interval: 30s
-  scrapeTimeout: 28s
+  scrapeTimeout: 20s
   additionalLabels: {}
   metricRelabelings: []
   relabelings: []
 
 certManager:
+  # Requires cert-manager CRDs and controller to be installed before this chart.
+  # Set to false only for local/dev clusters where Soperator webhooks are not used.
   enabled: true
+
+# ---------------------------------------------------------------------------
+# Helm subchart dependencies
+# ---------------------------------------------------------------------------
 
 mariadb-operator:
   installOperator: true
@@ -930,6 +966,28 @@ kruise:
       repository: cr.eu-north1.nebius.cloud/soperator/kruise-helm-hook
   featureGates: "ImagePullJobGate=true,RecreatePodWhenChangeVCTInCloneSetGate=true,StatefulSetAutoResizePVCGate=true,StatefulSetAutoDeletePVC=true,PreDownloadImageForInPlaceUpdate=true,ResourceDistributionGate=true"
 
+# ---------------------------------------------------------------------------
+# Uninstall cleanup hook
+# ---------------------------------------------------------------------------
+
+uninstallCleanup:
+  # Deletes Soperator CRs before Helm runs the OpenKruise pre-delete finalizer.
+  # OpenKruise refuses to uninstall while Advanced StatefulSets exist, and those
+  # StatefulSets are children of the Soperator CRs rendered by this chart.
+  enabled: true
+  image:
+    # Override this with an internal kubectl-capable image in restricted-egress
+    # environments. The default is public and not mirrored by this chart.
+    repository: alpine/k8s
+    tag: 1.36.0
+    pullPolicy: IfNotPresent
+  timeoutSeconds: 600
+  pollIntervalSeconds: 5
+
+# ---------------------------------------------------------------------------
+# Storage glue
+# ---------------------------------------------------------------------------
+
 # Storage glue for Nebius SFS filesystems created and attached by Terraform.
 # The in-cluster PV/PVC and mount DaemonSet lifecycle stays Helm-owned.
 storageClass:
@@ -942,7 +1000,7 @@ volume:
     size: 2Ti
     # filestore: Nebius SFS/Filestore mounted with virtiofs.
     # glusterfs: external GlusterFS server.
-    # local: single-node/local learning clusters; creates host-path backed local PVs.
+    # local: one-node local learning clusters; creates node-local PVs.
     type: filestore
     filestoreDeviceName: jail
     glusterfsHostName: ""
@@ -1022,7 +1080,11 @@ externalNfs:
   mountPath: /home
   readOnly: false
 
-# NodeConfigurator CR defaults.
+# ---------------------------------------------------------------------------
+# NodeConfigurator CR
+# ---------------------------------------------------------------------------
+
+# NodeConfigurator prepares Kubernetes hosts for Soperator worker behavior.
 hostNetwork: true
 customContainer:
   enabled: false
@@ -1059,6 +1121,7 @@ rebooter:
   priorityClassName: ""
   serviceAccountName: ""
 initContainers:
+  # Host sysctl setup used by the default Slurm/GPU runtime path.
   - name: node-sysctl-params
     image: cr.eu-north1.nebius.cloud/soperator/busybox
     securityContext:
@@ -1077,6 +1140,10 @@ initContainers:
         sysctl -w net.ipv4.tcp_rmem="4096 131072 536870912"
         sysctl -w net.ipv4.tcp_wmem="4096 16384 536870912"
 
+# ---------------------------------------------------------------------------
+# Worker NodeSet defaults
+# ---------------------------------------------------------------------------
+
 priorityClasses:
   - name: soperator-worker-high-priority
     description: High priority class for Slurm workers
@@ -1087,6 +1154,11 @@ priorityClasses:
     preemptionPolicy: PreemptLowerPriority
 
 nodesets:
+  # Each NodeSet should represent one homogeneous worker shape. Use separate
+  # NodeSets for CPU workers, GPU workers, or different GPU models.
+  # The default GPU worker is sized for 8-GPU production nodes. It requests a
+  # conservative Slurm worker slice instead of the full VM capacity so system
+  # daemons and sidecars still have scheduling headroom.
   - name: worker-gpu
     replicas: 1
     maxUnavailable: 1
@@ -1099,7 +1171,7 @@ nodesets:
       features:
         - gpu
         - cuda
-      static: Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1
+      static: Boards=1 SocketsPerBoard=1 CoresPerSocket=64 ThreadsPerCore=1
       dynamic: InstanceId={{ .PodName }}
       gresConfig:
         - AutoDetect=nvidia
@@ -1112,9 +1184,9 @@ nodesets:
         - name: NVIDIA_DRIVER_CAPABILITIES
           value: compute,graphics,utility,video
       resources:
-        cpu: "4"
-        memory: 16Gi
-        ephemeralStorage: 10Gi
+        cpu: "64"
+        memory: 512Gi
+        ephemeralStorage: 50Gi
         gpu: 8
       volumes:
         spool:
@@ -1123,20 +1195,10 @@ nodesets:
           persistentVolumeClaim:
             claimName: jail-pvc
         jailSubMounts: []
-        customVolumeMounts:
-          - name: slurm-scripts
-            mountPath: /opt/slurm_scripts/
-            volumeSource:
-              configMap:
-                name: slurm-scripts
-                defaultMode: 493
-          - name: slurm-scripts-jail
-            mountPath: /mnt/jail.upper/opt/slurm_scripts/
-            volumeSource:
-              configMap:
-                name: slurm-scripts
-                defaultMode: 493
-        sharedMemorySize: 8Gi
+        sharedMemorySize: 64Gi
+        # Optional additional worker mounts. The chart injects and owns the
+        # slurm-scripts and slurm-scripts-jail mounts; those names are reserved.
+        customVolumeMounts: []
       security:
         appArmorProfile: unconfined
         limitsConfig: ""

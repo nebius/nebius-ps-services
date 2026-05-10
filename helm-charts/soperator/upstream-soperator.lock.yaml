@@ -2,23 +2,479 @@ repository: "https://github.com/nebius/soperator"
 release: "3.0.3"
 tag: "3.0.3"
 commit: "6ab9a812c91461ffe68299ad3ce6060f177c35a3"
-chart_version: "3.0.3-ps.1"
 
-scripts:
-  upstream_path: "helm/slurm-cluster/slurm_scripts"
-  local_path: "slurm_scripts"
-  mode: "exact"
+imports:
+  exact:
+    - name: slurm-cluster slurm_scripts
+      scope: scripts
+      upstream_path: helm/slurm-cluster/slurm_scripts
+      local_path: helm-charts/soperator/slurm_scripts
+      sync: true
+    - name: soperator-activechecks scripts
+      scope: scripts
+      upstream_path: helm/soperator-activechecks/scripts
+      local_path: helm-charts/soperator-activechecks/scripts
+      sync: true
+  images:
+    - name: operator kube-rbac-proxy image repository
+      scope: images
+      upstream_file: helm/soperator/values.yaml
+      upstream_path: [controllerManager, kubeRbacProxy, image, repository]
+      local_file: helm-charts/soperator/values.yaml
+      local_path: [controllerManager, kubeRbacProxy, image, repository]
+      yq_path: .controllerManager.kubeRbacProxy.image.repository
+      sync: true
+    - name: operator kube-rbac-proxy image tag
+      scope: images
+      upstream_file: helm/soperator/values.yaml
+      upstream_path: [controllerManager, kubeRbacProxy, image, tag]
+      local_file: helm-charts/soperator/values.yaml
+      local_path: [controllerManager, kubeRbacProxy, image, tag]
+      yq_path: .controllerManager.kubeRbacProxy.image.tag
+      sync: true
+    - name: operator manager image repository
+      scope: images
+      upstream_file: helm/soperator/values.yaml
+      upstream_path: [controllerManager, manager, image, repository]
+      local_file: helm-charts/soperator/values.yaml
+      local_path: [controllerManager, manager, image, repository]
+      yq_path: .controllerManager.manager.image.repository
+      sync: true
+    - name: operator manager image tag
+      scope: images
+      upstream_file: helm/soperator/values.yaml
+      upstream_path: [controllerManager, manager, image, tag]
+      local_file: helm-charts/soperator/values.yaml
+      local_path: [controllerManager, manager, image, tag]
+      yq_path: .controllerManager.manager.image.tag
+      sync: true
+    - name: Slurm controller image
+      scope: images
+      upstream_file: helm/slurm-cluster/values.yaml
+      upstream_path: [images, slurmctld]
+      local_file: helm-charts/soperator/values.yaml
+      local_path: [images, slurmctld]
+      yq_path: .images.slurmctld
+      sync: true
+    - name: Slurm REST image
+      scope: images
+      upstream_file: helm/slurm-cluster/values.yaml
+      upstream_path: [images, slurmrestd]
+      local_file: helm-charts/soperator/values.yaml
+      local_path: [images, slurmrestd]
+      yq_path: .images.slurmrestd
+      sync: true
+    - name: Slurm worker image
+      scope: images
+      upstream_file: helm/slurm-cluster/values.yaml
+      upstream_path: [images, slurmd]
+      local_file: helm-charts/soperator/values.yaml
+      local_path: [images, slurmd]
+      yq_path: .images.slurmd
+      sync: true
+    - name: Slurm login SSH image
+      scope: images
+      upstream_file: helm/slurm-cluster/values.yaml
+      upstream_path: [images, sshd]
+      local_file: helm-charts/soperator/values.yaml
+      local_path: [images, sshd]
+      yq_path: .images.sshd
+      sync: true
+    - name: Munge image
+      scope: images
+      upstream_file: helm/slurm-cluster/values.yaml
+      upstream_path: [images, munge]
+      local_file: helm-charts/soperator/values.yaml
+      local_path: [images, munge]
+      yq_path: .images.munge
+      sync: true
+    - name: PopulateJail image repository
+      scope: images
+      upstream_file: helm/slurm-cluster/values.yaml
+      upstream_path: [images, populateJailRepository]
+      local_file: helm-charts/soperator/values.yaml
+      local_path: [images, populateJailRepository]
+      yq_path: .images.populateJailRepository
+      sync: true
+    - name: PopulateJail image tag
+      scope: images
+      upstream_file: helm/slurm-cluster/values.yaml
+      upstream_path: [images, populateJailTag]
+      local_file: helm-charts/soperator/values.yaml
+      local_path: [images, populateJailTag]
+      yq_path: .images.populateJailTag
+      sync: true
+    - name: SlurmDBD image
+      scope: images
+      upstream_file: helm/slurm-cluster/values.yaml
+      upstream_path: [images, slurmdbd]
+      local_file: helm-charts/soperator/values.yaml
+      local_path: [images, slurmdbd]
+      yq_path: .images.slurmdbd
+      sync: true
+    - name: Soperator exporter image
+      scope: images
+      upstream_file: helm/slurm-cluster/values.yaml
+      upstream_path: [images, soperatorExporter]
+      local_file: helm-charts/soperator/values.yaml
+      local_path: [images, soperatorExporter]
+      yq_path: .images.soperatorExporter
+      sync: true
+    - name: SConfigController image
+      scope: images
+      upstream_file: helm/slurm-cluster/values.yaml
+      upstream_path: [images, sConfigController]
+      local_file: helm-charts/soperator/values.yaml
+      local_path: [images, sConfigController]
+      yq_path: .images.sConfigController
+      sync: true
+    - name: MariaDB image
+      scope: images
+      upstream_file: helm/slurm-cluster/values.yaml
+      upstream_path: [images, mariaDB]
+      local_file: helm-charts/soperator/values.yaml
+      local_path: [images, mariaDB]
+      yq_path: .images.mariaDB
+      sync: true
+    - name: NodeConfigurator custom container image repository
+      scope: images
+      upstream_file: helm/nodeconfigurator/values.yaml
+      upstream_path: [customContainer, image, repository]
+      local_file: helm-charts/soperator/values.yaml
+      local_path: [customContainer, image, repository]
+      yq_path: .customContainer.image.repository
+      sync: true
+    - name: NodeConfigurator custom container image tag
+      scope: images
+      upstream_file: helm/nodeconfigurator/values.yaml
+      upstream_path: [customContainer, image, tag]
+      local_file: helm-charts/soperator/values.yaml
+      local_path: [customContainer, image, tag]
+      yq_path: .customContainer.image.tag
+      sync: true
+    - name: NodeConfigurator rebooter image repository
+      scope: images
+      upstream_file: helm/nodeconfigurator/values.yaml
+      upstream_path: [rebooter, image, repository]
+      local_file: helm-charts/soperator/values.yaml
+      local_path: [rebooter, image, repository]
+      yq_path: .rebooter.image.repository
+      sync: true
+    - name: NodeConfigurator rebooter image tag
+      scope: images
+      upstream_file: helm/nodeconfigurator/values.yaml
+      upstream_path: [rebooter, image, tag]
+      local_file: helm-charts/soperator/values.yaml
+      local_path: [rebooter, image, tag]
+      yq_path: .rebooter.image.tag
+      sync: true
+    - name: NodeConfigurator init container image
+      scope: images
+      upstream_file: helm/nodeconfigurator/values.yaml
+      upstream_path: [initContainers, 0, image]
+      local_file: helm-charts/soperator/values.yaml
+      local_path: [initContainers, 0, image]
+      yq_path: .initContainers[0].image
+      sync: true
+    - name: default NodeSet slurmd image repository
+      scope: images
+      upstream_file: helm/nodesets/values.yaml
+      upstream_path: [nodesets, 0, slurmd, image, repository]
+      local_file: helm-charts/soperator/values.yaml
+      local_path: [nodesets, 0, slurmd, image, repository]
+      yq_path: .nodesets[0].slurmd.image.repository
+      sync: true
+    - name: default NodeSet slurmd image tag
+      scope: images
+      upstream_file: helm/nodesets/values.yaml
+      upstream_path: [nodesets, 0, slurmd, image, tag]
+      local_file: helm-charts/soperator/values.yaml
+      local_path: [nodesets, 0, slurmd, image, tag]
+      yq_path: .nodesets[0].slurmd.image.tag
+      sync: true
+    - name: default NodeSet munge image repository
+      scope: images
+      upstream_file: helm/nodesets/values.yaml
+      upstream_path: [nodesets, 0, munge, image, repository]
+      local_file: helm-charts/soperator/values.yaml
+      local_path: [nodesets, 0, munge, image, repository]
+      yq_path: .nodesets[0].munge.image.repository
+      sync: true
+    - name: default NodeSet munge image tag
+      scope: images
+      upstream_file: helm/nodesets/values.yaml
+      upstream_path: [nodesets, 0, munge, image, tag]
+      local_file: helm-charts/soperator/values.yaml
+      local_path: [nodesets, 0, munge, image, tag]
+      yq_path: .nodesets[0].munge.image.tag
+      sync: true
+    - name: ActiveChecks Slurm job image
+      scope: images
+      upstream_file: helm/soperator-activechecks/values.yaml
+      upstream_path: [images, slurmJob]
+      local_file: helm-charts/soperator-activechecks/values.yaml
+      local_path: [images, slurmJob]
+      yq_path: .images.slurmJob
+      sync: true
+    - name: ActiveChecks Kubernetes job image
+      scope: images
+      upstream_file: helm/soperator-activechecks/values.yaml
+      upstream_path: [images, k8sJob]
+      local_file: helm-charts/soperator-activechecks/values.yaml
+      local_path: [images, k8sJob]
+      yq_path: .images.k8sJob
+      sync: true
+    - name: ActiveChecks munge image
+      scope: images
+      upstream_file: helm/soperator-activechecks/values.yaml
+      upstream_path: [images, munge]
+      local_file: helm-charts/soperator-activechecks/values.yaml
+      local_path: [images, munge]
+      yq_path: .images.munge
+      sync: true
+    - name: ActiveChecks ansible image
+      scope: images
+      upstream_file: helm/soperator-activechecks/values.yaml
+      upstream_path: [images, sansible]
+      local_file: helm-charts/soperator-activechecks/values.yaml
+      local_path: [images, sansible]
+      yq_path: .images.sansible
+      sync: true
+    - name: ActiveChecks training diagnostics image repository
+      scope: images
+      upstream_file: helm/soperator-activechecks/values.yaml
+      upstream_path: [images, activeCheckImageRepository]
+      local_file: helm-charts/soperator-activechecks/values.yaml
+      local_path: [images, activeCheckImageRepository]
+      yq_path: .images.activeCheckImageRepository
+      sync: true
+    - name: ActiveChecks CUDA 12.9 diagnostics image tag
+      scope: images
+      upstream_file: helm/soperator-activechecks/values.yaml
+      upstream_path: [images, activeCheckImageTags, "12.9.0"]
+      local_file: helm-charts/soperator-activechecks/values.yaml
+      local_path: [images, activeCheckImageTags, "12.9.0"]
+      yq_path: '.images.activeCheckImageTags."12.9.0"'
+      sync: true
+    - name: ActiveChecks CUDA 13.0 diagnostics image tag
+      scope: images
+      upstream_file: helm/soperator-activechecks/values.yaml
+      upstream_path: [images, activeCheckImageTags, "13.0.2"]
+      local_file: helm-charts/soperator-activechecks/values.yaml
+      local_path: [images, activeCheckImageTags, "13.0.2"]
+      yq_path: '.images.activeCheckImageTags."13.0.2"'
+      sync: true
+    - name: SoperatorChecks kube-rbac-proxy image repository
+      scope: images
+      upstream_file: helm/soperatorchecks/values.yaml
+      upstream_path: [checks, kubeRbacProxy, image, repository]
+      local_file: helm-charts/soperator-checks/values.yaml
+      local_path: [checks, kubeRbacProxy, image, repository]
+      yq_path: .checks.kubeRbacProxy.image.repository
+      sync: true
+    - name: SoperatorChecks kube-rbac-proxy image tag
+      scope: images
+      upstream_file: helm/soperatorchecks/values.yaml
+      upstream_path: [checks, kubeRbacProxy, image, tag]
+      local_file: helm-charts/soperator-checks/values.yaml
+      local_path: [checks, kubeRbacProxy, image, tag]
+      yq_path: .checks.kubeRbacProxy.image.tag
+      sync: true
+    - name: SoperatorChecks manager image repository
+      scope: images
+      upstream_file: helm/soperatorchecks/values.yaml
+      upstream_path: [checks, manager, image, repository]
+      local_file: helm-charts/soperator-checks/values.yaml
+      local_path: [checks, manager, image, repository]
+      yq_path: .checks.manager.image.repository
+      sync: true
+    - name: SoperatorChecks manager image tag
+      scope: images
+      upstream_file: helm/soperatorchecks/values.yaml
+      upstream_path: [checks, manager, image, tag]
+      local_file: helm-charts/soperator-checks/values.yaml
+      local_path: [checks, manager, image, tag]
+      yq_path: .checks.manager.image.tag
+      sync: true
+    - name: Soperator DCGM toolkit validator image repository
+      scope: images
+      upstream_file: helm/soperator-dcgm-exporter/values.yaml
+      upstream_path: [daemonSet, toolkitValidation, image, repository]
+      local_file: helm-charts/soperator-dcgm-exporter/values.yaml
+      local_path: [daemonSet, toolkitValidation, image, repository]
+      yq_path: .daemonSet.toolkitValidation.image.repository
+      sync: true
+    - name: Soperator DCGM toolkit validator image tag
+      scope: images
+      upstream_file: helm/soperator-dcgm-exporter/values.yaml
+      upstream_path: [daemonSet, toolkitValidation, image, tag]
+      local_file: helm-charts/soperator-dcgm-exporter/values.yaml
+      local_path: [daemonSet, toolkitValidation, image, tag]
+      yq_path: .daemonSet.toolkitValidation.image.tag
+      sync: true
+    - name: Soperator DCGM exporter image repository
+      scope: images
+      upstream_file: helm/soperator-dcgm-exporter/values.yaml
+      upstream_path: [daemonSet, nvidiaDcgmExporter, image, repository]
+      local_file: helm-charts/soperator-dcgm-exporter/values.yaml
+      local_path: [daemonSet, nvidiaDcgmExporter, image, repository]
+      yq_path: .daemonSet.nvidiaDcgmExporter.image.repository
+      sync: true
+    - name: Soperator DCGM exporter image tag
+      scope: images
+      upstream_file: helm/soperator-dcgm-exporter/values.yaml
+      upstream_path: [daemonSet, nvidiaDcgmExporter, image, tag]
+      local_file: helm-charts/soperator-dcgm-exporter/values.yaml
+      local_path: [daemonSet, nvidiaDcgmExporter, image, tag]
+      yq_path: .daemonSet.nvidiaDcgmExporter.image.tag
+      sync: true
+    - name: in-cluster NFS server image repository
+      scope: images
+      upstream_file: helm/nfs-server/values.yaml
+      upstream_path: [image, repository]
+      local_file: helm-charts/soperator-nfs-server/values.yaml
+      local_path: [image, repository]
+      yq_path: .image.repository
+      sync: true
+    - name: in-cluster NFS server image tag
+      scope: images
+      upstream_file: helm/nfs-server/values.yaml
+      upstream_path: [image, tag]
+      local_file: helm-charts/soperator-nfs-server/values.yaml
+      local_path: [image, tag]
+      yq_path: .image.tag
+      sync: true
+    - name: in-cluster NFS node exporter image repository
+      scope: images
+      upstream_file: helm/nfs-server/values.yaml
+      upstream_path: [monitoring, nodeExporter, image, repository]
+      local_file: helm-charts/soperator-nfs-server/values.yaml
+      local_path: [monitoring, nodeExporter, image, repository]
+      yq_path: .monitoring.nodeExporter.image.repository
+      sync: true
+    - name: in-cluster NFS node exporter image tag
+      scope: images
+      upstream_file: helm/nfs-server/values.yaml
+      upstream_path: [monitoring, nodeExporter, image, tag]
+      local_file: helm-charts/soperator-nfs-server/values.yaml
+      local_path: [monitoring, nodeExporter, image, tag]
+      yq_path: .monitoring.nodeExporter.image.tag
+      sync: true
+  review:
+    - name: core operator templates
+      scope: logic
+      upstream_path: helm/soperator/templates
+      sha256: 78dbe08199b3d54840976b29d9142c8e28d6c98c623c0abe3b27cdc388d6d732
+    - name: core operator CRDs
+      scope: logic
+      upstream_path: helm/soperator/crds
+      sha256: f46d85a38861cdac50c66242804efbef16f9f22afb407c79ca0451ca131307db
+    - name: SlurmCluster templates
+      scope: logic
+      upstream_path: helm/slurm-cluster/templates
+      sha256: 23710a3b25b0cc0cc1afbb60bac64f4d38add55bf8b0a66995773077b3c3cbfc
+    - name: Slurm storage templates
+      scope: logic
+      upstream_path: helm/slurm-cluster-storage/templates
+      sha256: fb36062ebd7885daf28f1227fd0fd299686f5c31e9b9f9b8d0cac2b58b05efef
+    - name: NodeSet templates
+      scope: logic
+      upstream_path: helm/nodesets/templates
+      sha256: 108b6c93ce587356e7fb1dd263faa307722703f73930d98637821af3980cfbc1
+    - name: NodeConfigurator templates
+      scope: logic
+      upstream_path: helm/nodeconfigurator/templates
+      sha256: 0184c40c55b4cfea97c79c10d194e27a48db14e1e9c70db381c47245a745b31e
+    - name: ActiveChecks templates
+      scope: logic
+      upstream_path: helm/soperator-activechecks/templates
+      sha256: 4c4a1befddd644c6a35780ee60c86de47295c2924e25592a7e08a211052b99fc
+    - name: SoperatorChecks templates
+      scope: logic
+      upstream_path: helm/soperatorchecks/templates
+      sha256: cf0a22a1adaacb9a59b96d1ba445f8591158e880a53039d11cff751404028ad8
+    - name: backup schedule templates
+      scope: logic
+      upstream_path: helm/soperator-backup-config/templates
+      sha256: 1486cc5066507106dcd4f8cba371dc2f947f3f24867e2b7c5b021924a9fd63c5
+    - name: Soperator DCGM exporter templates
+      scope: logic
+      upstream_path: helm/soperator-dcgm-exporter/templates
+      sha256: fa32562160efe9ee2aa60243e24c23caec6b0900f6eb546fdbbe7b4aafa1711a
+    - name: in-cluster NFS templates
+      scope: logic
+      upstream_path: helm/nfs-server/templates
+      sha256: 16224a70323a77d19e98d6250bdd86a2579cee8dc0777b35ddd801682ce3849e
+    - name: notifier templates
+      scope: logic
+      upstream_path: helm/soperator-notifier/templates
+      sha256: ac3973fce7878c3e02e246d9c784e1c41b248c9cab595bb0cbff8b651739d152
+    - name: custom ConfigMaps chart
+      scope: logic
+      upstream_path: helm/soperator-custom-configmaps
+      sha256: 4c6ca751a34147c147edb27982720686f94e4bc49504afe8307b0d9bf568db71
+    - name: monitoring dashboards chart
+      scope: logic
+      upstream_path: helm/soperator-monitoring-dashboards
+      sha256: eafbcdba1a1f7be6d957d64935d377a2cb1fc5f85eab93322692a050f612772d
+    - name: storageclasses chart
+      scope: logic
+      upstream_path: helm/storageclasses
+      sha256: 646090c8c273fd92de645a6d270603a1ec88b9486b290566e9937a88c816fad4
 
 local_owned_paths:
-  - ".helmignore"
-  - "CHANGELOG.md"
-  - "Chart.yaml"
-  - "Chart.lock"
-  - "README.md"
-  - "charts/"
-  - "values.yaml"
-  - "values.schema.json"
-  - "scripts/"
-  - "templates/"
-  - "examples/"
-  - "docs/"
+  - helm-charts/soperator/.helmignore
+  - helm-charts/soperator/CHANGELOG.md
+  - helm-charts/soperator/Chart.yaml
+  - helm-charts/soperator/Chart.lock
+  - helm-charts/soperator/README.md
+  - helm-charts/soperator/charts/
+  - helm-charts/soperator/values.yaml
+  - helm-charts/soperator/values.schema.json
+  - helm-charts/soperator/scripts/
+  - helm-charts/soperator/templates/
+  - helm-charts/soperator/examples/
+  - helm-charts/soperator/docs/
+  - helm-charts/soperator-activechecks/.helmignore
+  - helm-charts/soperator-activechecks/CHANGELOG.md
+  - helm-charts/soperator-activechecks/Chart.yaml
+  - helm-charts/soperator-activechecks/README.md
+  - helm-charts/soperator-activechecks/templates/
+  - helm-charts/soperator-activechecks/tests/
+  - helm-charts/soperator-activechecks/values.yaml
+  - helm-charts/soperator-activechecks/values.schema.json
+  - helm-charts/soperator-backup-config/.helmignore
+  - helm-charts/soperator-backup-config/CHANGELOG.md
+  - helm-charts/soperator-backup-config/Chart.yaml
+  - helm-charts/soperator-backup-config/README.md
+  - helm-charts/soperator-backup-config/templates/
+  - helm-charts/soperator-backup-config/values.yaml
+  - helm-charts/soperator-backup-config/values.schema.json
+  - helm-charts/soperator-checks/.helmignore
+  - helm-charts/soperator-checks/CHANGELOG.md
+  - helm-charts/soperator-checks/Chart.yaml
+  - helm-charts/soperator-checks/README.md
+  - helm-charts/soperator-checks/templates/
+  - helm-charts/soperator-checks/values.yaml
+  - helm-charts/soperator-checks/values.schema.json
+  - helm-charts/soperator-dcgm-exporter/.helmignore
+  - helm-charts/soperator-dcgm-exporter/CHANGELOG.md
+  - helm-charts/soperator-dcgm-exporter/Chart.yaml
+  - helm-charts/soperator-dcgm-exporter/README.md
+  - helm-charts/soperator-dcgm-exporter/templates/
+  - helm-charts/soperator-dcgm-exporter/values.yaml
+  - helm-charts/soperator-dcgm-exporter/values.schema.json
+  - helm-charts/soperator-nfs-server/.helmignore
+  - helm-charts/soperator-nfs-server/CHANGELOG.md
+  - helm-charts/soperator-nfs-server/Chart.yaml
+  - helm-charts/soperator-nfs-server/README.md
+  - helm-charts/soperator-nfs-server/templates/
+  - helm-charts/soperator-nfs-server/values.yaml
+  - helm-charts/soperator-nfs-server/values.schema.json
+  - helm-charts/soperator-notifier/.helmignore
+  - helm-charts/soperator-notifier/CHANGELOG.md
+  - helm-charts/soperator-notifier/Chart.yaml
+  - helm-charts/soperator-notifier/README.md
+  - helm-charts/soperator-notifier/templates/
+  - helm-charts/soperator-notifier/values.yaml
+  - helm-charts/soperator-notifier/values.schema.json

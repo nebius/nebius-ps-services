@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "slurmClusterRefName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "waitForChecks": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": { "type": "string", "minLength": 1 }
+      }
+    },
+    "cudaVersion": {
+      "oneOf": [{ "type": "string" }, { "type": "number" }]
+    },
+    "activeCheckImage": { "type": "string" },
+    "checks": { "type": "object" }
+  }
+}

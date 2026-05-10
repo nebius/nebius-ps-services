@@ -53,13 +53,16 @@ show_usage() {
   printf '%b\n' "${S_BOLD}Options:${S_RESET}"
   printf '%b\n' "  ${S_YELLOW}--lock-file PATH${S_RESET}    Lock file to read"
   printf '%b\n' "  ${S_YELLOW}--check-latest${S_RESET}      Fail if GitHub latest release is newer than the lock"
-  printf '%b\n' "  ${S_YELLOW}--sync${S_RESET}              Replace local upstream-owned scripts from the locked release"
+  printf '%b\n' "  ${S_YELLOW}--sync${S_RESET}              Apply approved exact file and image-value imports"
+  printf '%b\n' "  ${S_YELLOW}--scope SCOPE${S_RESET}       Limit to scripts, images, or all (default: all)"
+  printf '%b\n' "  ${S_YELLOW}--report${S_RESET}            Print import status for every selected item"
   printf '%b\n' "  ${S_YELLOW}-h, --help${S_RESET}          Show help"
   printf '\n'
   printf '%b\n' "${S_BOLD}Examples:${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}scripts/verify-upstream-soperator-sync.sh${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}scripts/verify-upstream-soperator-sync.sh --check-latest${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}scripts/verify-upstream-soperator-sync.sh --sync${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}scripts/verify-upstream-soperator-sync.sh --report${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}scripts/verify-upstream-soperator-sync.sh --scope images --report${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}scripts/verify-upstream-soperator-sync.sh --scope scripts --sync${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}scripts/verify-upstream-soperator-sync.sh --check-latest --report${S_RESET}"
 }
 
 require_cmd() {
@@ -81,80 +84,19 @@ script_dir() {
   cd -P "$(dirname "${source}")" >/dev/null 2>&1 && pwd
 }
 
+repo_root() {
+  local dir="$1"
+  if git -C "${dir}" rev-parse --show-toplevel >/dev/null 2>&1; then
+    git -C "${dir}" rev-parse --show-toplevel
+  else
+    cd "${dir}/../../.." >/dev/null 2>&1 && pwd
+  fi
+}
+
 yaml_value() {
   local file="$1"
   local key="$2"
-  awk -F ':' -v key="${key}" '
-    $1 == key {
-      value = substr($0, index($0, ":") + 1)
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
-      gsub(/^"|"$/, "", value)
-      print value
-      exit
-    }
-  ' "${file}"
-}
-
-first_yaml_value() {
-  local file="$1"
-  local key="$2"
-  awk -F ':' -v key="${key}" '
-    $1 ~ "^[[:space:]]*" key "$" {
-      value = substr($0, index($0, ":") + 1)
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
-      gsub(/^"|"$/, "", value)
-      print value
-      exit
-    }
-  ' "${file}"
-}
-
-local_owned_paths() {
-  local file="$1"
-  awk '
-    /^[[:space:]]*local_owned_paths:[[:space:]]*$/ {
-      in_list = 1
-      next
-    }
-    in_list && /^[^[:space:]]/ {
-      exit
-    }
-    in_list && /^[[:space:]]*-[[:space:]]*/ {
-      value = $0
-      sub(/^[[:space:]]*-[[:space:]]*/, "", value)
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
-      gsub(/^"|"$/, "", value)
-      print value
-    }
-  ' "${file}"
-}
-
-normalize_rel_path() {
-  local path="$1"
-  path="${path#./}"
-  path="${path%/}"
-  printf '%s\n' "${path}"
-}
-
-validate_sync_target() {
-  local lock_file="$1"
-  local local_path="$2"
-  local target owned owned_normalized
-
-  if [[ "${local_path}" == "." || "${local_path}" == /* || "${local_path}" == *".."* ]]; then
-    log_error "Unsafe sync target in lock file: ${local_path}"
-    exit 1
-  fi
-
-  target="$(normalize_rel_path "${local_path}")"
-  while IFS= read -r owned; do
-    [[ -z "${owned}" ]] && continue
-    owned_normalized="$(normalize_rel_path "${owned}")"
-    if [[ "${target}" == "${owned_normalized}" || "${target}" == "${owned_normalized}/"* ]]; then
-      log_error "Lock file sync target '${local_path}' overlaps local-owned path '${owned}'."
-      exit 1
-    fi
-  done < <(local_owned_paths "${lock_file}")
+  ruby -ryaml -e 'data = YAML.load(File.read(ARGV[0])); value = data.fetch(ARGV[1]); puts value' "${file}" "${key}"
 }
 
 resolve_tag_commit() {
@@ -198,38 +140,227 @@ fetch_release() {
   tar -xzf "${archive}" -C "${destination}/source" --strip-components=1
 }
 
-validate_chart_versions() {
-  local chart_file="$1"
-  local release="$2"
-  local expected_chart_version="$3"
-  local chart_version app_version
+verify_imports() {
+  ruby - "${@}" <<'RUBY'
+require "digest"
+require "fileutils"
+require "json"
+require "yaml"
 
-  chart_version="$(yaml_value "${chart_file}" "version")"
-  app_version="$(yaml_value "${chart_file}" "appVersion")"
+lock_file, repo_root, upstream_root, scope, sync_flag, report_flag = ARGV
+sync = sync_flag == "1"
+report = report_flag == "1"
+lock = YAML.load(File.read(lock_file))
 
-  if [[ "${app_version}" != "${release}" ]]; then
-    log_error "Chart.yaml appVersion '${app_version}' does not match upstream release '${release}'."
-    exit 1
-  fi
+unless %w[scripts images all].include?(scope)
+  warn "ERROR: --scope must be one of scripts, images, or all."
+  exit 2
+end
 
-  if [[ "${chart_version}" != "${expected_chart_version}" ]]; then
-    log_error "Chart.yaml version '${chart_version}' does not match lock chart_version '${expected_chart_version}'."
-    exit 1
-  fi
+def chart_yaml(path)
+  YAML.load(File.read(path))
+end
 
-  if [[ "${chart_version}" != "${release}" && "${chart_version}" != "${release}-"* && "${chart_version}" != "${release}+"* ]]; then
-    log_error "Chart.yaml version '${chart_version}' must use upstream release '${release}' as its base."
-    exit 1
-  fi
-}
+def normalize_rel(path)
+  path = path.to_s.sub(%r{\A\./}, "").sub(%r{/\z}, "")
+  raise "empty path is not allowed" if path.empty?
+  raise "absolute path is not allowed: #{path}" if path.start_with?("/")
+  parts = path.split("/")
+  raise "parent directory traversal is not allowed: #{path}" if parts.include?("..")
+  path
+end
 
-sync_scripts() {
-  local source_dir="$1"
-  local target_dir="$2"
+def overlap?(left, right)
+  left = normalize_rel(left)
+  right = normalize_rel(right)
+  left == right || left.start_with?("#{right}/")
+end
 
-  rm -rf "${target_dir}"
-  mkdir -p "${target_dir}"
-  cp -R "${source_dir}/." "${target_dir}/"
+def safe_join(root, rel)
+  File.expand_path(normalize_rel(rel), root)
+end
+
+def local_owned_paths(lock)
+  Array(lock["local_owned_paths"]).map { |path| normalize_rel(path) }
+end
+
+def validate_exact_target!(lock, local_path)
+  target = normalize_rel(local_path)
+  local_owned_paths(lock).each do |owned|
+    raise "sync target '#{target}' overlaps local-owned path '#{owned}'" if overlap?(target, owned)
+  end
+end
+
+def validate_image_target!(lock, local_file)
+  target = normalize_rel(local_file)
+  owned = local_owned_paths(lock).any? { |path| overlap?(target, path) || overlap?(path, target) }
+  return if owned
+
+  raise "image sync target '#{target}' is not declared in local_owned_paths"
+end
+
+def selected?(entry, scope)
+  scope == "all" || entry.fetch("scope") == scope
+end
+
+def digest_path(path)
+  digest = Digest::SHA256.new
+  if File.file?(path)
+    digest.update(File.basename(path))
+    digest.update("\0")
+    digest.update(File.binread(path))
+    return digest.hexdigest
+  end
+  raise "path not found: #{path}" unless File.directory?(path)
+  Dir.glob(File.join(path, "**", "*"), File::FNM_DOTMATCH).select { |item| File.file?(item) }.sort.each do |file|
+    relative = file.delete_prefix("#{path}/")
+    digest.update(relative)
+    digest.update("\0")
+    digest.update(File.binread(file))
+    digest.update("\0")
+  end
+  digest.hexdigest
+end
+
+def copy_exact(source, target)
+  FileUtils.rm_rf(target)
+  FileUtils.mkdir_p(target)
+  if File.directory?(source)
+    FileUtils.cp_r(Dir.glob(File.join(source, "*"), File::FNM_DOTMATCH).reject { |p| [".", ".."].include?(File.basename(p)) }, target)
+  else
+    FileUtils.mkdir_p(File.dirname(target))
+    FileUtils.cp(source, target)
+  end
+end
+
+def dig_path(data, path)
+  Array(path).reduce(data) do |cursor, key|
+    if cursor.is_a?(Array)
+      cursor.fetch(Integer(key))
+    elsif cursor.is_a?(Hash)
+      cursor.fetch(key)
+    else
+      raise "cannot descend into #{cursor.class} with #{key.inspect}"
+    end
+  end
+end
+
+def verify_chart_versions!(repo_root, lock)
+  chart = chart_yaml(File.join(repo_root, "helm-charts/soperator/Chart.yaml"))
+  release = lock.fetch("release")
+  app_version = chart.fetch("appVersion")
+  chart_version = chart.fetch("version")
+
+  raise "Chart.yaml appVersion '#{app_version}' does not match upstream release '#{release}'." unless app_version == release
+  unless chart_version.match?(/\A\d+\.\d+\.\d+\z/)
+    raise "Chart.yaml version '#{chart_version}' must be the chart package SemVer X.Y.Z. The upstream Soperator release belongs in appVersion."
+  end
+end
+
+def report_line(status, kind, name, detail = nil)
+  suffix = detail && !detail.empty? ? " - #{detail}" : ""
+  puts format("%-7s %-7s %s%s", status, kind, name, suffix)
+end
+
+def yq_available?
+  system("yq", "--version", out: File::NULL, err: File::NULL)
+end
+
+def yq_sync!(file, yq_path, value)
+  raise "image sync requires yq v4 in PATH" unless yq_available?
+  expression = "#{yq_path} = #{JSON.generate(value)}"
+  ok = system("yq", "-i", expression, file)
+  raise "failed to update #{file} at #{yq_path}" unless ok
+end
+
+failures = []
+
+begin
+  verify_chart_versions!(repo_root, lock)
+  report_line("ok", "lock", "chart SemVer and upstream appVersion") if report
+rescue StandardError => e
+  failures << e.message
+  report_line("fail", "lock", "chart SemVer and upstream appVersion", e.message)
+end
+
+Array(lock.dig("imports", "exact")).each do |entry|
+  next unless selected?(entry, scope)
+  name = entry.fetch("name")
+  begin
+    raise "exact import #{name} is not approved for --sync" if sync && !entry["sync"]
+    validate_exact_target!(lock, entry.fetch("local_path"))
+    upstream_path = File.join(upstream_root, entry.fetch("upstream_path"))
+    local_path = safe_join(repo_root, entry.fetch("local_path"))
+    raise "upstream exact import not found: #{entry.fetch("upstream_path")}" unless File.exist?(upstream_path)
+    copy_exact(upstream_path, local_path) if sync
+    upstream_digest = digest_path(upstream_path)
+    local_digest = digest_path(local_path)
+    if upstream_digest == local_digest
+      report_line("ok", "exact", name) if report
+    else
+      if report
+        system("diff", "-ruN", "#{upstream_path}/", "#{local_path}/") if File.directory?(upstream_path) && File.directory?(local_path)
+      end
+      raise "local path #{entry.fetch("local_path")} does not match #{entry.fetch("upstream_path")}"
+    end
+  rescue StandardError => e
+    failures << "#{name}: #{e.message}"
+    report_line("fail", "exact", name, e.message)
+  end
+end
+
+Array(lock.dig("imports", "images")).each do |entry|
+  next unless selected?(entry, scope)
+  name = entry.fetch("name")
+  begin
+    raise "image import #{name} is not approved for --sync" if sync && !entry["sync"]
+    validate_image_target!(lock, entry.fetch("local_file"))
+    upstream_file = File.join(upstream_root, entry.fetch("upstream_file"))
+    local_file = safe_join(repo_root, entry.fetch("local_file"))
+    upstream_value = dig_path(chart_yaml(upstream_file), entry.fetch("upstream_path"))
+    local_value = dig_path(chart_yaml(local_file), entry.fetch("local_path"))
+    if upstream_value != local_value && sync
+      yq_sync!(local_file, entry.fetch("yq_path"), upstream_value)
+      local_value = dig_path(chart_yaml(local_file), entry.fetch("local_path"))
+    end
+    if upstream_value == local_value
+      report_line("ok", "image", name) if report
+    else
+      raise "local value #{local_value.inspect} does not match upstream #{upstream_value.inspect}"
+    end
+  rescue StandardError => e
+    failures << "#{name}: #{e.message}"
+    report_line("fail", "image", name, e.message)
+  end
+end
+
+Array(lock.dig("imports", "review")).each do |entry|
+  next unless scope == "all"
+  name = entry.fetch("name")
+  begin
+    upstream_path = File.join(upstream_root, entry.fetch("upstream_path"))
+    actual = digest_path(upstream_path)
+    expected = entry.fetch("sha256")
+    if actual == expected
+      report_line("ok", "logic", name) if report
+    else
+      raise "tracked upstream logic changed; expected #{expected}, got #{actual}"
+    end
+  rescue StandardError => e
+    failures << "#{name}: #{e.message}"
+    report_line("fail", "logic", name, e.message)
+  end
+end
+
+if failures.any?
+  warn
+  warn "Upstream import verification failed:"
+  failures.each { |failure| warn "  - #{failure}" }
+  exit 1
+end
+
+puts "Selected upstream imports are in sync."
+RUBY
 }
 
 main() {
@@ -237,8 +368,12 @@ main() {
 
   local check_latest=0
   local sync=0
+  local report=0
+  local scope="all"
   local chart_dir
   chart_dir="$(cd "$(script_dir)/.." >/dev/null 2>&1 && pwd)"
+  local root
+  root="$(repo_root "${chart_dir}")"
   local lock_file="${chart_dir}/upstream-soperator.lock.yaml"
 
   while [[ $# -gt 0 ]]; do
@@ -257,6 +392,22 @@ main() {
         ;;
       --sync)
         sync=1
+        shift
+        ;;
+      --scope)
+        if [[ $# -lt 2 ]]; then
+          log_error "--scope requires scripts, images, or all."
+          exit 1
+        fi
+        scope="$2"
+        shift 2
+        ;;
+      --scope=*)
+        scope="${1#--scope=}"
+        shift
+        ;;
+      --report)
+        report=1
         shift
         ;;
       -h|--help)
@@ -280,11 +431,20 @@ main() {
     esac
   done
 
+  case "${scope}" in
+    scripts|images|all) ;;
+    *)
+      log_error "--scope must be one of: scripts, images, all"
+      exit 1
+      ;;
+  esac
+
   require_cmd "awk"
   require_cmd "curl"
   require_cmd "diff"
   require_cmd "git"
   require_cmd "mktemp"
+  require_cmd "ruby"
   require_cmd "tar"
 
   if [[ ! -f "${lock_file}" ]]; then
@@ -292,28 +452,16 @@ main() {
     exit 1
   fi
 
-  local repo release tag commit expected_chart_version upstream_path local_path mode
+  local repo release tag commit
   repo="$(yaml_value "${lock_file}" "repository")"
   release="$(yaml_value "${lock_file}" "release")"
   tag="$(yaml_value "${lock_file}" "tag")"
   commit="$(yaml_value "${lock_file}" "commit")"
-  expected_chart_version="$(yaml_value "${lock_file}" "chart_version")"
-  upstream_path="$(first_yaml_value "${lock_file}" "upstream_path")"
-  local_path="$(first_yaml_value "${lock_file}" "local_path")"
-  mode="$(first_yaml_value "${lock_file}" "mode")"
 
-  if [[ -z "${repo}" || -z "${release}" || -z "${tag}" || -z "${commit}" || -z "${upstream_path}" || -z "${local_path}" ]]; then
-    log_error "Lock file is missing repository, release, tag, commit, upstream_path, or local_path."
+  if [[ -z "${repo}" || -z "${release}" || -z "${tag}" || -z "${commit}" ]]; then
+    log_error "Lock file is missing repository, release, tag, or commit."
     exit 1
   fi
-
-  if [[ "${mode}" != "exact" ]]; then
-    log_error "Unsupported sync mode '${mode}'. Only 'exact' is supported."
-    exit 1
-  fi
-
-  validate_sync_target "${lock_file}" "${local_path}"
-  validate_chart_versions "${chart_dir}/Chart.yaml" "${release}" "${expected_chart_version}"
 
   local resolved_commit
   resolved_commit="$(resolve_tag_commit "${repo}" "${tag}")"
@@ -330,7 +478,7 @@ main() {
       exit 1
     fi
     if [[ "${latest}" != "${release}" ]]; then
-      log_error "Latest Soperator release is '${latest}', but lock is pinned to '${release}'. Run this script after updating the lock and syncing scripts."
+      log_error "Latest Soperator release is '${latest}', but lock is pinned to '${release}'. Create a feature branch, update the lock, run this verifier with --sync for approved imports, test, and open a PR."
       exit 1
     fi
     log_success "Pinned Soperator release '${release}' is the latest GitHub release."
@@ -342,25 +490,8 @@ main() {
   log_note "Fetching ${repo} release ${tag}..."
   fetch_release "${repo}" "${tag}" "${TMP_DIR}"
 
-  local upstream_scripts="${TMP_DIR}/source/${upstream_path}"
-  local local_scripts="${chart_dir}/${local_path}"
-  if [[ ! -d "${upstream_scripts}" ]]; then
-    log_error "Upstream path not found in release archive: ${upstream_path}"
-    exit 1
-  fi
-
-  if [[ "${sync}" -eq 1 ]]; then
-    log_warn "Syncing ${local_path} from upstream release ${tag}."
-    sync_scripts "${upstream_scripts}" "${local_scripts}"
-  fi
-
-  if ! diff -ruN "${upstream_scripts}/" "${local_scripts}/"; then
-    log_error "Local ${local_path} does not exactly match ${repo} ${tag}:${upstream_path}."
-    log_error "Update the lock/release intentionally, or run with --sync after choosing the release."
-    exit 1
-  fi
-
-  log_success "Local ${local_path} matches ${repo} release ${release} (${commit})."
+  verify_imports "${lock_file}" "${root}" "${TMP_DIR}/source" "${scope}" "${sync}" "${report}"
+  log_success "Upstream import verification completed for scope '${scope}'."
 }
 
 main "$@"

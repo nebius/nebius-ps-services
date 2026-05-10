@@ -1,6 +1,6 @@
 ---
 name: publish-helm
-description: Generate a Nebius OCI Helm chart publication flow by creating a chart-local CHANGELOG.md, publish-helm.sh, and .github/workflows/<project>-chart-publish.yml with tag-driven releases and public pull verification.
+description: Generate a Nebius OCI Helm chart publication flow by creating a chart-local CHANGELOG.md and publish-helm.sh, then registering the chart in the shared .github/workflows/helm-chart-publish.yml workflow with tag-driven releases and public pull verification.
 ---
 
 # Publish Helm
@@ -19,20 +19,20 @@ Container Registry as OCI artifacts.
 
 ## Output Contract
 
-Generate exactly these artifacts for the target chart:
+Generate or update exactly these artifacts for the target chart:
 
 1. `<chart_dir>/CHANGELOG.md`
 2. `<chart_dir>/publish-helm.sh`
-3. `.github/workflows/<project-name>-chart-publish.yml`
+3. `.github/helm-chart-publish.json`
+4. `.github/workflows/helm-chart-publish.yml`
 
 ## Inputs to Collect
 
-- `project_name` (for workflow filename/name)
 - `project_tag_prefix` (for example `nccl-test-chart`)
 - `main_branch` (default `main`)
 - `chart_dir` (for example `helm-charts/nccl-test`)
 - `chart_name` (the name from `Chart.yaml`)
-- `publish_environment` (GitHub Actions environment name)
+- `publish_environment` (default `nb-image-chart-publish`)
 
 The templates assume the GitHub Actions environment exposes these Nebius
 variables and secret:
@@ -47,21 +47,24 @@ variables and secret:
 
 ## Workflow
 
-1. Copy templates from `assets/` into the target chart and workflow paths.
+1. Copy chart-local templates from `assets/` into the target chart paths.
 2. Replace placeholders:
-   - `__PROJECT_NAME__`
    - `__PROJECT_TAG_PREFIX__`
    - `__MAIN_BRANCH__`
    - `__CHART_DIR__`
    - `__CHART_NAME__`
-   - `__PUBLISH_ENVIRONMENT__`
-3. Keep `publish-helm.sh` executable.
-4. Validate:
+3. Register the chart tag pattern, chart metadata, and optional extra render
+   smoke arguments in `.github/helm-chart-publish.json`.
+4. Keep the shared
+   `.github/workflows/helm-chart-publish.yml` workflow.
+5. Keep `publish-helm.sh` executable.
+6. Validate:
    - `bash -n <chart_dir>/publish-helm.sh`
-   - YAML parse for `.github/workflows/<project-name>-chart-publish.yml`
+   - JSON parse for `.github/helm-chart-publish.json`
+   - YAML parse for `.github/workflows/helm-chart-publish.yml`
    - `helm lint <chart_dir>`
    - `helm template smoke <chart_dir> --namespace <chart_name> >/dev/null`
-5. Document runtime usage in the chart README:
+7. Document runtime usage in the chart README:
    - `./publish-helm.sh --prep X.Y.Z`
    - `./publish-helm.sh --publish X.Y.Z`
    - note that the prep step updates both the chart-local changelog and
@@ -70,8 +73,8 @@ variables and secret:
 
 ## Guardrails
 
-- Keep one canonical release path. Do not add a second manual-release flow
-  beside `publish-helm.sh` plus the tag-driven workflow.
+- Keep one canonical release path. Do not add a chart-specific publish workflow
+  beside `publish-helm.sh` plus the shared tag-driven workflow.
 - `--prep` should start from a strictly clean worktree, including untracked
   files, so the release-prep commit stays isolated.
 - `--prep` should fail before editing files if the target tag already exists
@@ -86,11 +89,10 @@ variables and secret:
   for one.
 - The workflow should verify the published chart is anonymously pullable when
   the target registry is intended to be public.
-- Workflow/job check names should include `project_name` to avoid ambiguous
-  checks across monorepos.
+- Artifact names and step summaries should include `chart_name` to avoid
+  ambiguous publish output across monorepos.
 
 ## Resources
 
 - `assets/CHANGELOG.md.template`
 - `assets/publish-helm.sh.template`
-- `assets/project-name-chart-publish.yml.template`

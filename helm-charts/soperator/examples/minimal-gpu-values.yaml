@@ -1,81 +1,14 @@
-clusterName: soperator
-clusterType: gpu
-
+# Minimal GPU Slurm profile. It uses the chart's default production 8-GPU
+# worker NodeSet and only adds an explicit GPU partition.
 slurmNodes:
   login:
+    # Keep public keys out of example files; pass them with Helm --set-file.
     sshRootPublicKeys: []
 
-nodesets:
-  - name: worker-gpu
-    replicas: 1
-    maxUnavailable: 1
-    enableHostUserNamespace: true
-    gpu:
-      enabled: true
-      nvidia:
-        gdrCopyEnabled: true
-    nodeConfig:
-      features:
-        - gpu
-        - cuda
-      static: Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1
-      dynamic: InstanceId={{ .PodName }}
-      gresConfig:
-        - AutoDetect=nvidia
-    slurmd:
-      image:
-        repository: cr.eu-north1.nebius.cloud/soperator/worker_slurmd
-        tag: 3.0.3-slurm25.11.3
-        pullPolicy: IfNotPresent
-      customEnv:
-        - name: NVIDIA_DRIVER_CAPABILITIES
-          value: compute,graphics,utility,video
-      resources:
-        cpu: "4"
-        memory: 16Gi
-        ephemeralStorage: 10Gi
-        gpu: 8
-      volumes:
-        spool:
-          emptyDir: {}
-        jail:
-          persistentVolumeClaim:
-            claimName: jail-pvc
-        sharedMemorySize: 8Gi
-        customVolumeMounts:
-          - name: slurm-scripts
-            mountPath: /opt/slurm_scripts/
-            volumeSource:
-              configMap:
-                name: slurm-scripts
-                defaultMode: 493
-          - name: slurm-scripts-jail
-            mountPath: /mnt/jail.upper/opt/slurm_scripts/
-            volumeSource:
-              configMap:
-                name: slurm-scripts
-                defaultMode: 493
-      security:
-        appArmorProfile: unconfined
-        limitsConfig: ""
-    munge:
-      image:
-        repository: cr.eu-north1.nebius.cloud/soperator/munge
-        tag: 3.0.3-slurm25.11.3
-        pullPolicy: IfNotPresent
-      resources:
-        cpu: 200m
-        memory: 512Mi
-        ephemeralStorage: 1Gi
-      security:
-        appArmorProfile: unconfined
-        limitsConfig: ""
-    sssd:
-      enabled: false
-    priorityClass: soperator-worker-high-priority
-    nodeSelector:
-      slurm.nebius.ai/nodeset-name: worker-gpu
-    tolerations:
-      - key: nvidia.com/gpu
-        operator: Exists
-        effect: NoSchedule
+partitionConfiguration:
+  configType: structured
+  partitions:
+    - name: gpu
+      nodeSetRefs:
+        - worker-gpu
+      config: Default=YES MaxTime=INFINITE State=UP PriorityTier=10

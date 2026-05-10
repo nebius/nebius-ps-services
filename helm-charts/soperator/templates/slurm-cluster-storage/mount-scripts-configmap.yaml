@@ -1,7 +1,11 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: mount-scripts
+  name: {{ include "slurm-cluster-storage.mountScriptsConfigMapName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "slurm-cluster.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mount-scripts
 data:
   ensure_mounted_filestore.sh: |
     #!/bin/sh
