@@ -13,6 +13,10 @@ _DELETED_KEY_REFRESH_LOG_MARKERS = (
     "jwtkeynotexists",
     "expired or deactivated",
 )
+_RETRYABLE_REFRESH_LOG_MARKERS = (
+    "deadline_exceeded",
+    "deadline exceeded",
+)
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -27,9 +31,21 @@ def deleted_key_refresh_log(record: logging.LogRecord) -> bool:
     )
 
 
+def retryable_refresh_log(record: logging.LogRecord) -> bool:
+    message = record.getMessage().lower()
+    return "failed refresh token" in message and any(
+        marker in message for marker in _RETRYABLE_REFRESH_LOG_MARKERS
+    )
+
+
 class _SuppressDeletedKeyRefreshLog(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         return not deleted_key_refresh_log(record)
+
+
+class _SuppressExpectedRefreshLog(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not (deleted_key_refresh_log(record) or retryable_refresh_log(record))
 
 
 @contextmanager
@@ -43,6 +59,19 @@ def suppress_deleted_key_refresh_logs():
         yield
     finally:
         refresh_logger.removeFilter(deleted_key_filter)
+
+
+@contextmanager
+def suppress_expected_refresh_logs():
+    """Suppress SDK token-refresh tracebacks that cxcli already retries or wraps."""
+
+    refresh_logger = logging.getLogger("nebius.aio.token.renewable")
+    expected_filter = _SuppressExpectedRefreshLog()
+    refresh_logger.addFilter(expected_filter)
+    try:
+        yield
+    finally:
+        refresh_logger.removeFilter(expected_filter)
 
 
 def _ensure_iam_token_from_cli(*, timeout_seconds: int = 10) -> str | None:

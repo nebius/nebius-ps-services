@@ -118,6 +118,7 @@ def _payload_with_mysterybox() -> dict:
                 {
                     "name": "app-runtime",
                     "version_id": "n/a",
+                    "eso_version_policy": "manual-version-pinning",
                     "kubernetes_secret_name": "app-runtime",
                     "payload": {
                         "API_KEY": {
@@ -187,6 +188,7 @@ def test_render_mysterybox_payload_values_as_runtime_only_root_variable(
     assert "sensitive = true" in variables_tf
     assert "mysterybox_payload_values" not in tfvars_payload
     assert "kubernetes_secret_name" not in json.dumps(tfvars_payload)
+    assert "eso_version_policy" not in json.dumps(tfvars_payload)
 
 
 def test_render_rejects_mysterybox_payload_values_in_config(tmp_path: Path) -> None:

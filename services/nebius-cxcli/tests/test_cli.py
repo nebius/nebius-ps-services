@@ -462,9 +462,10 @@ def test_create_preflights_git_for_github_tree_chart_sources_before_identity_pro
     )
 
     assert result.exit_code == 1
-    assert "git is required for component source validation" in result.output
-    assert "Git tree" in result.output
-    assert "Helm app charts: n8n" in result.output
+    normalized = _normalized_cli_output(result.output)
+    assert "git is required for component source validation" in normalized
+    assert "Git tree" in normalized
+    assert "Helm app charts: n8n" in normalized
     assert "Tenant ID" not in result.output
 
 
@@ -707,8 +708,8 @@ def test_create_prints_next_step_commands_one_per_line(tmp_path: Path) -> None:
     assert lines[next_steps_index + 1 : next_steps_index + 5] == [
         f"  `nebius-cxcli validate {config_arg}`",
         f"  `nebius-cxcli render {config_arg}`",
-        f"  `nebius-cxcli bootstrap-ci {config_arg}` (optional)",
         f"  `nebius-cxcli deploy {config_arg}`",
+        f"  `nebius-cxcli bootstrap-ci {config_arg}` (optional)",
     ]
     assert "then deploy from the rendered bundle" not in result.output
 
@@ -805,6 +806,44 @@ def test_create_interactive_existing_project_requires_confirmation(
     assert "Continue and enter project identity?" not in result.output
     assert "Client name [client-a]" not in result.output
     assert "No changes applied." in result.output
+    assert config_path.read_text(encoding="utf-8") == original
+
+
+def test_create_existing_project_validates_sources_before_overwrite_prompt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    first = _create_non_interactive(deployments_root)
+    assert first.exit_code == 0, first.output
+
+    config_path = _project_config_path(deployments_root)
+    original = config_path.read_text(encoding="utf-8")
+    monkeypatch.setattr(cli_module, "_preflight_component_source_tools_or_raise", lambda: None)
+
+    def _fail_source_validation() -> None:
+        raise RuntimeError("source validation failed")
+
+    monkeypatch.setattr(
+        cli_module,
+        "_validate_component_sources_or_raise",
+        _fail_source_validation,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "create",
+            str(deployments_root),
+        ],
+        input="tenant-123\nproject-456\n",
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "source validation failed" in result.output
+    assert "Continue and overwrite the existing project folder from scratch?" not in result.output
     assert config_path.read_text(encoding="utf-8") == original
 
 

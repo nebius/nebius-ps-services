@@ -83,6 +83,10 @@ components:
     mk8s:
       cli:
         gpu:
+          # Default only for GPU-enabled MK8s contexts. cxcli prunes this from
+          # config.yaml when GPU nodes are disabled so CPU-only clusters do not
+          # carry stale GPU tuning fields.
+          default_stack_source: nebius_image
           # Preference order only. cxcli still resolves the live Nebius
           # compatibility matrix first. Nebius calls the provider field
           # `drivers_preset`, but these values select the bundled GPU software

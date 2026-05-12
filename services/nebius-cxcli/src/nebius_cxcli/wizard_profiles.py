@@ -181,6 +181,10 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
             "default": True,
             "materialize_default": True,
         },
+        "deploy.targets[].secrets.mysterybox.refresh_interval": {
+            "default": "15m",
+            "materialize_default": True,
+        },
         "deploy.targets[].secrets.mysterybox.sync_namespaces": {
             "default": ["default"],
             "type_hint": "list(string)",

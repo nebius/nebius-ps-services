@@ -1868,6 +1868,33 @@ def test_validate_sources_command_reports_warnings_and_fails_on_issues(
     assert "Component catalog/settings validation failed for" in output
     assert str(sources_file) in normalized_output
     assert "module source './broken-module' does not resolve to an existing directory" in output
+    assert "checks the full component catalog" in output
+    assert "NEBIUS_CXCLI_HELM_TIMEOUT_SECONDS" in output
+    assert "--no-validate-sources" not in output
+
+
+def test_create_source_validation_failure_reports_skip_guidance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    monkeypatch.setattr(
+        cli,
+        "_validate_component_sources_registry",
+        lambda explicit=None, progress_callback=None: (
+            sources_file,
+            ["could not be resolved by helm: operation timed out"],
+            [],
+        ),
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        cli._validate_component_sources_or_raise()
+
+    message = str(exc_info.value)
+    assert "checks the full component catalog" in message
+    assert "NEBIUS_CXCLI_HELM_TIMEOUT_SECONDS" in message
+    assert "--no-validate-sources" in message
 
 
 def test_validate_sources_command_accepts_positional_component_sources_path(
@@ -7967,6 +7994,38 @@ def test_persist_cluster_handoff_kubeconfig_merges_exec_entries(
     assert persisted["contexts"][-1]["context"]["cluster"] == "cluster-entry"
 
 
+def test_persist_cluster_handoff_kubeconfig_creates_missing_local_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setenv("NEBIUS_CXCLI_PERSIST_LOCAL_KUBECONFIG", "true")
+    kubeconfig_path = tmp_path / ".kube" / "config"
+    assert not kubeconfig_path.exists()
+
+    spec = cli._Mk8sKubeconfigSpec(
+        cluster_entry_name="cluster-entry",
+        user_entry_name="user-entry",
+        context_name="context-entry",
+        server="https://mk8s.example.invalid",
+        ca_pem="FAKE-CA",
+        exec_command="/usr/local/bin/nebius-cxcli",
+        exec_args=("mk8s-token", "--project-id", "project-456"),
+    )
+
+    result = cli._persist_cluster_handoff_kubeconfig(spec=spec)
+
+    persisted = yaml.safe_load(kubeconfig_path.read_text(encoding="utf-8"))
+    assert result == kubeconfig_path
+    assert persisted["apiVersion"] == "v1"
+    assert persisted["kind"] == "Config"
+    assert persisted["current-context"] == "context-entry"
+    assert persisted["clusters"][0]["name"] == "cluster-entry"
+    assert persisted["users"][0]["name"] == "user-entry"
+    assert persisted["contexts"][0]["name"] == "context-entry"
+
+
 def test_persist_cluster_handoff_kubeconfig_preserves_existing_current_context_when_requested(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -8779,7 +8838,7 @@ def test_help_text_maps_commands_to_target_types() -> None:
     assert "discover uses a deployment-scope directory" in output
     assert (
         "validate, validate-dashboards, quota-check, quota-request, render, "
-        "bootstrap-ci, and deploy use config.yaml"
+        "deploy, and bootstrap-ci use config.yaml"
     ) in output
     assert (
         "destroy uses config.yaml to tear down all rendered project resources from sibling generated/"
@@ -8879,6 +8938,9 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "assessment" in normalized_create_help
     assert "not a reservation" in normalized_create_help
     assert "not a wizard-selectable deployment gate" in normalized_create_help
+    assert "Validate the full" in normalized_create_help
+    assert "component catalog" in normalized_create_help
+    assert "source settings before" in normalized_create_help
     assert "add [OPTIONS] CONFIG_YAML [COMPONENT_SELECTOR]..." in component_add_help
     assert "Omit" in normalized_component_add_help
     assert "prompt" in normalized_component_add_help
@@ -8897,6 +8959,9 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "none" in normalized_component_add_help
     assert "instance_id" in normalized_component_add_help
     assert "--validate-sources --no-validate-sources" in " ".join(component_add_help.split())
+    assert "Validate the full" in normalized_component_add_help
+    assert "catalog and source settings" in normalized_component_add_help
+    assert "before component add" in normalized_component_add_help
     assert "day-2 additive" in normalized_component_add_help
     assert "remove [OPTIONS] CONFIG_YAML [COMPONENT_SELECTOR]..." in component_remove_help
     assert "<id>@<instance-id>" in normalized_component_remove_help

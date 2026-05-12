@@ -20,9 +20,6 @@ components:
         name_input: cluster_name
       defaults:
         inputs.cpu_nodes_count: 2
-        # Default to Nebius-managed GPU images and stack presets. Advanced
-        # operator-managed stacks can switch this to `operator_managed`.
-        inputs.gpu_stack_source: nebius_image
         inputs.mk8s_cluster_public_endpoint: true
         inputs.kube_network_service_cidrs:
           - /20
