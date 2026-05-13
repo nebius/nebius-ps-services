@@ -2344,6 +2344,10 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
             "default": True,
             "materialize_default": True,
         },
+        "deploy.targets[].secrets.mysterybox.refresh_interval": {
+            "default": "15m",
+            "materialize_default": True,
+        },
         "deploy.targets[].secrets.mysterybox.sync_namespaces": {
             "default": ["default"],
             "type_hint": "list(string)",
@@ -3035,6 +3039,7 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                     "ui": {"enabled": True},
                     "cli": {
                         "gpu": {
+                            "default_stack_source": "nebius_image",
                             "image_preferences": {
                                 "preferred_gpu_stack_presets": ["cuda13.0", "cuda12.8"],
                                 "preferred_os": ["ubuntu24.04", "ubuntu22.04"],
@@ -3290,6 +3295,7 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
     gpu_operator = next(chart for chart in loaded.helm_charts if chart.name == "gpu-operator")
     network_operator = next(chart for chart in loaded.helm_charts if chart.name == "network-op")
 
+    assert mk8s.mk8s_gpu.default_stack_source == "nebius_image"
     assert mk8s.mk8s_gpu.image_preferences.preferred_gpu_stack_presets == (
         "cuda13.0",
         "cuda12.8",

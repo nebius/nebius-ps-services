@@ -111,6 +111,8 @@ def test_runtime_validation_plugins_accept_mysterybox_payload_list(
                     {
                         "name": "app-runtime",
                         "version_id": "n/a",
+                        "eso_version_policy": "manual-version-pinning",
+                        "kubernetes_secret_name": "app-runtime",
                         "payload": {
                             "API_KEY": {
                                 "type": "text",
@@ -266,6 +268,45 @@ def test_runtime_validation_plugins_reject_mysterybox_invalid_version_id(
     }
 
     with pytest.raises(ValueError, match="version ID starting with mbsecver-"):
+        run_runtime_validation_plugins(
+            payload=payload,
+            get_path=_get_path,
+            as_text=_as_text,
+            id_pattern=re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
+            env_var_pattern=re.compile(r"^[A-Z_][A-Z0-9_]*$"),
+        )
+
+
+def test_runtime_validation_plugins_reject_mysterybox_invalid_eso_version_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "NEBIUS_CXCLI_RUNTIME_VALIDATION_PLUGINS",
+        "nebius_cxcli.runtime_component_validation:validate_component_runtime_rules",
+    )
+    payload = {
+        "__shared_admin_ssh_user_name__": "ubuntu",
+        "infra": {
+            "mysterybox": {
+                "enabled": True,
+                "parent_id": "project-1",
+                "secrets": [
+                    {
+                        "name": "app-runtime",
+                        "version_id": "n/a",
+                        "eso_version_policy": "latest",
+                        "payload": {
+                            "API_KEY": {
+                                "type": "text",
+                            },
+                        },
+                    },
+                ],
+            },
+        },
+    }
+
+    with pytest.raises(ValueError, match="eso_version_policy must be one of"):
         run_runtime_validation_plugins(
             payload=payload,
             get_path=_get_path,

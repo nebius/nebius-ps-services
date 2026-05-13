@@ -635,6 +635,57 @@ def _mysterybox_secret_markdown_lines(instances: Sequence[Mapping[str, Any]]) ->
     return lines
 
 
+def _mysterybox_sync_summaries(payload_data: Mapping[str, Any]) -> list[dict[str, Any]]:
+    deploy = _mapping(_lookup(payload_data, "deploy"))
+    targets = _lookup(deploy, "targets")
+    if not isinstance(targets, list):
+        return []
+    summaries: list[dict[str, Any]] = []
+    for row in targets:
+        if not isinstance(row, Mapping):
+            continue
+        target_ref = str(_lookup(row, "instance_id") or "").strip()
+        secrets = _mapping(_lookup(row, "secrets"))
+        mysterybox = _mapping(_lookup(secrets, "mysterybox"))
+        if not bool(_lookup(mysterybox, "enabled")):
+            continue
+        namespaces = _lookup(mysterybox, "sync_namespaces")
+        if not isinstance(namespaces, list):
+            namespaces = []
+        summaries.append(
+            {
+                "target_ref": target_ref or "target",
+                "namespaces": [
+                    str(namespace).strip() for namespace in namespaces if str(namespace).strip()
+                ],
+                "refresh_interval": str(
+                    _coalesce(_lookup(mysterybox, "refresh_interval"), "15m")
+                ),
+                "store_name": str(
+                    _coalesce(_lookup(mysterybox, "store_name"), "nebius-mysterybox-shared")
+                ),
+            }
+        )
+    return summaries
+
+
+def _mysterybox_sync_markdown_lines(summaries: Sequence[Mapping[str, Any]]) -> list[str]:
+    lines: list[str] = []
+    for item in summaries:
+        namespaces = [
+            str(namespace).strip()
+            for namespace in _lookup(item, "namespaces") or []
+            if str(namespace).strip()
+        ]
+        namespace_text = _format_backtick_list(namespaces) if namespaces else "`default`"
+        lines.append(
+            f"- `{_lookup(item, 'target_ref')}`: namespaces {namespace_text}; "
+            f"refresh interval `{_lookup(item, 'refresh_interval')}`; "
+            f"store `{_lookup(item, 'store_name')}`"
+        )
+    return lines
+
+
 def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
     payload_data = to_plain_data(config)
     if not isinstance(payload_data, dict):
@@ -790,6 +841,7 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
             "mk8s_enabled": _rows_enabled(mk8s_rows),
             "mysterybox_enabled": _rows_enabled(mysterybox_rows),
             "mysterybox_secrets": mysterybox_summaries,
+            "mysterybox_sync": _mysterybox_sync_summaries(payload_data),
             "wireguard_enabled": any(
                 bool(_lookup(row, "enabled"))
                 for cid, rows in infra_rows.items()
@@ -907,6 +959,12 @@ def write_inventory(
     if mysterybox_secrets:
         lines.extend(["", "### MysteryBox Secrets", ""])
         lines.extend(_mysterybox_secret_markdown_lines(mysterybox_secrets))
+    mysterybox_sync = [
+        item for item in payload["infra"].get("mysterybox_sync", []) if isinstance(item, Mapping)
+    ]
+    if mysterybox_sync:
+        lines.extend(["", "### MysteryBox Kubernetes Sync", ""])
+        lines.extend(_mysterybox_sync_markdown_lines(mysterybox_sync))
     lines.extend(
         [
             "",

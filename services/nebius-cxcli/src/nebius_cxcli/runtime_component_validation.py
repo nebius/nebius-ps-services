@@ -581,6 +581,7 @@ def _validate_mysterybox_secrets(
             "description",
             "labels",
             "version_id",
+            "eso_version_policy",
             "kubernetes_secret_name",
             "payload",
         }
@@ -610,6 +611,15 @@ def _validate_mysterybox_secrets(
                 f"{secret_label}.version_id must be empty, n/a, or a MysteryBox "
                 "version ID starting with mbsecver-"
             )
+        eso_version_policy = as_text(secret.get("eso_version_policy"))
+        if eso_version_policy:
+            from .mysterybox_eso import MYSTERYBOX_ESO_VERSION_POLICIES
+
+            if eso_version_policy not in MYSTERYBOX_ESO_VERSION_POLICIES:
+                allowed = ", ".join(sorted(MYSTERYBOX_ESO_VERSION_POLICIES))
+                raise ValueError(
+                    f"{secret_label}.eso_version_policy must be one of: {allowed}"
+                )
         payload = secret.get("payload")
         if not isinstance(payload, Mapping) or not payload:
             raise ValueError(f"{secret_label}.payload must be a non-empty mapping")

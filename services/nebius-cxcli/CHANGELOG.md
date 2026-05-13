@@ -64,6 +64,33 @@ All notable changes to this project are tracked here. This changelog follows
   `NVIDIA_DRIVER_CAPABILITIES=compute,graphics,utility,video` on GPU worker
   NodeSets, matching the chart default while keeping the value overrideable in
   app values.
+- Suppressed retryable Nebius SDK token-refresh `DEADLINE_EXCEEDED` tracebacks
+  during runtime-auth readiness checks and Terraform state-bucket bootstrap,
+  while preserving cxcli's normal retry/error handling.
+- Clarified and covered the local MK8s handoff behavior that non-CI
+  `deploy`, `flux apply`, and `flux bootstrap` create `~/.kube/config` when it
+  does not already exist before merging the generated Nebius exec context.
+- Clarified MK8s boot-disk type labels in the guided wizard so
+  `NETWORK_SSD` is described as erasure-coded with two-hardware-failure
+  tolerance, while `NETWORK_SSD_IO_M3` is explicitly described as replicated
+  with three-drive mirroring.
+- Changed constrained TTY wizard prompts to render selectable values without a
+  `<manual input>` row, and routed the MysteryBox ESO version policy plus
+  payload type prompts through the same selector instead of typed bracket
+  prompts. The non-TTY fallback now accepts only a listed index or exact choice
+  value for constrained fields.
+- Kept CPU-only MK8s configs clean by no longer seeding
+  `inputs.gpu_stack_source` from the source catalog and by pruning stale
+  GPU-only inputs such as `inputs.gpu_nodes_boot_disk_type` whenever
+  `inputs.gpu_enabled` is not true. The active GPU default remains
+  settings-owned as `components.infra.mk8s.cli.gpu.default_stack_source`.
+- Fixed the MysteryBox guided wizard so pressing Enter at the Kubernetes Secret
+  name prompt accepts a Kubernetes-safe derived default such as `db-credentials`
+  for a MysteryBox Secret named `db_credentials`.
+- Improved `create --validate-sources` failure UX for existing projects: full
+  source validation now runs before overwrite confirmation, and source
+  validation failures include retry, `NEBIUS_CXCLI_HELM_TIMEOUT_SECONDS`, and
+  `--no-validate-sources` guidance for transient Helm/network timeouts.
 - Reorganized the README opening sections so core render/deploy concepts live in
   a dedicated `Core Concepts` section and `Features` is a concise capability
   summary instead of a long command-contract reference.
@@ -119,6 +146,16 @@ All notable changes to this project are tracked here. This changelog follows
 - Suppressed expected Nebius API root HTTP status lines from the ESO MysteryBox
   TLS validation output while still requiring an HTTP response internally, so
   successful checks no longer show confusing `404` lines.
+- Changed generated ESO MysteryBox sync to one key-mapped `ExternalSecret`
+  per declared MysteryBox Secret, defaulting `refreshInterval` to `15m` and
+  omitting `remoteRef.version` unless `inputs.secrets[].eso_version_policy` is
+  explicitly `manual-version-pinning`. The default
+  `auto-primary-version-pinning` mode now lets ESO/MysteryBox resolve the
+  current primary version automatically.
+- Added MysteryBox Kubernetes sync settings to the generated deploy report so
+  target namespaces, store name, and custom refresh intervals such as `1m`
+  remain visible before Terraform-created MysteryBox IDs are available for
+  generated `ExternalSecret` resources.
 - Added cxcli preflight validation for first-deploy MysteryBox payload values.
   Interactive local deploy/plan/apply runs now prompt with hidden input for
   missing runtime-only values before Terraform starts, while non-interactive
@@ -137,13 +174,13 @@ All notable changes to this project are tracked here. This changelog follows
   driver/toolkit already present, while `operator_managed` is shown as the path
   where GPU Operator installs and manages those host components.
 - Fixed `q` handling inside the guided MysteryBox `inputs.secrets` wizard loop
-  so it backs up to the previous Secret/key/type prompt before returning to the
-  outer component field wizard.
+  so it backs up to the previous Secret/policy/key/type prompt before returning
+  to the outer component field wizard.
 - Aligned built-in wizard-profile documentation and regression coverage with
   the current profile registry, including the `mysterybox` profile and static
   `wizard.<field>.sources` choice labels.
-- Split the `create` command's final next-step commands onto separate lines for
-  validate, render, optional bootstrap-ci, and deploy.
+- Split the `create` command's final next-step commands onto separate lines and
+  moved optional `bootstrap-ci` after the normal validate/render/deploy path.
 - Stopped rendering cxcli-managed `Namespace` extraObjects for built-in
   Kubernetes namespaces such as `default` in the MysteryBox ESO sync path while
   still allowing `ExternalSecret` resources to target those namespaces.
@@ -177,9 +214,10 @@ All notable changes to this project are tracked here. This changelog follows
   only in rendered ESO manifests.
 - Bumped the bundled `external-secrets` chart source from `2.0.1` to `2.4.1`
   for the native MysteryBox provider path.
-- Added explicit coverage and documentation for full-secret ESO MysteryBox sync
-  with declared Secret `version_id` values, rendering real `mbsecver-...`
-  values to `ExternalSecret.spec.dataFrom[].extract.version`.
+- Added explicit coverage and documentation for ESO MysteryBox sync version
+  handling. `version_id` remains the current primary MysteryBox version
+  metadata, while generated ExternalSecrets render `remoteRef.version` only
+  when `eso_version_policy` is `manual-version-pinning`.
 - Added optional `inputs.secrets[].kubernetes_secret_name` metadata for
   MysteryBox ESO sync. The guided MysteryBox wizard now asks for the target
   Kubernetes Secret name with the MysteryBox Secret name as the default, cxcli
@@ -274,16 +312,16 @@ All notable changes to this project are tracked here. This changelog follows
 - Made MK8s `inputs.gpu_stack_source` a guided wizard choice between
   `nebius_image` and `operator_managed` instead of a free string prompt that
   only displayed the default value.
-- Simplified native MysteryBox ESO source config to one generated full-sync
+- Simplified native MysteryBox ESO source config to one generated sync
   model: cxcli now derives one `ExternalSecret` per declared MysteryBox Secret
   per `sync_namespaces` entry, rejects source-authored `external_secrets` and
   old `allowed_namespaces`, resolves MysteryBox IDs from Terraform `secret_ids`
   output after apply, and refreshes Flux manifests before applying ESO
   resources.
 - Persisted the native MysteryBox ESO `allow_all_namespaces: true` wizard default
-  alongside the sync toggle and `sync_namespaces: [default]`, so accepted create
-  defaults show both the cluster-wide store policy and sync target explicitly in
-  `config.yaml`.
+  alongside the sync toggle, `refresh_interval: 15m`, and
+  `sync_namespaces: [default]`, so accepted create defaults show both the
+  cluster-wide store policy and sync target explicitly in `config.yaml`.
 - Changed interactive `list(string)` wizard prompts, including MysteryBox
   `sync_namespaces`, to accept comma-separated input such as `ns1,ns2`
   instead of requiring a YAML/JSON list literal.

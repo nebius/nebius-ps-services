@@ -17,4 +17,3 @@ srun docker run --rm \
   -e NVIDIA_DISABLE_REQUIRE=1 \
   {{ include "activecheck.image.docker" . }} \
   bash -l -c "NCCL_P2P_DISABLE=1 NCCL_SHM_DISABLE=1 NCCL_ALGO=Ring all_reduce_perf -b 512M -e 8G -f 2 -g 8"
-

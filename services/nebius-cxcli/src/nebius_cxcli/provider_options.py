@@ -852,7 +852,7 @@ class ProviderOptionLookup:
                 value="NETWORK_SSD",
                 label=(
                     "NETWORK_SSD  (1-8192 GiB, 450 MiB/s, 20k/40k IOPS, "
-                    "reliable, encryption always on)"
+                    "erasure-coded, tolerates 2 hardware failures, encryption always on)"
                 ),
             ),
             OptionChoice(
@@ -866,7 +866,7 @@ class ProviderOptionLookup:
                 value="NETWORK_SSD_IO_M3",
                 label=(
                     "NETWORK_SSD_IO_M3  (93 GiB units, 1 GiB/s, 75k/75k IOPS, "
-                    "replicated, most expensive)"
+                    "replicated, mirrored to 3 drives, most expensive)"
                 ),
             ),
         )

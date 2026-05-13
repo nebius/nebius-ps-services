@@ -50,7 +50,9 @@ _PROVIDER_VAR_AUTH_PRIVATE_KEY_FILE = "nebius_auth_private_key_file"
 _PROVIDER_VAR_CREDENTIALS_FILE = "nebius_service_account_credentials_file"
 _NO_VARIABLE_DEFAULT = object()
 _RUNTIME_ONLY_MODULE_ARGUMENTS = frozenset({"payload_values"})
-_MYSTERYBOX_CXCLI_ONLY_SECRET_KEYS = frozenset({"kubernetes_secret_name"})
+_MYSTERYBOX_CXCLI_ONLY_SECRET_KEYS = frozenset(
+    {"eso_version_policy", "kubernetes_secret_name"}
+)
 
 
 @dataclass(frozen=True)

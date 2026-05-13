@@ -34,6 +34,7 @@ from nebius_cxcli.mk8s_gpu import (
     mk8s_gpu_flux_release_dependencies,
     mk8s_gpu_project_validation_defaults,
     mk8s_gpu_validation_specs,
+    normalize_inactive_mk8s_gpu_inputs,
     normalize_mk8s_gpu_project_validation_settings,
     resolve_mk8s_gpu_app_selection,
 )
@@ -125,6 +126,87 @@ def _mk8s_payload(*, infiniband_fabric: str = "") -> dict:
         },
         "apps": {"charts": []},
     }
+
+
+def test_normalize_inactive_mk8s_gpu_inputs_prunes_cpu_only_gpu_fields() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {
+                        "cpu_nodes_count": 2,
+                        "cpu_nodes_platform": "cpu-d3",
+                        "gpu_enabled": False,
+                        "gpu_stack_source": "nebius_image",
+                        "gpu_stack_preset": "cuda13",
+                        "gpu_nodes_boot_disk_type": "NETWORK_SSD",
+                        "gpu_nodes_boot_disk_size_gib": 1023,
+                        "gpu_nodes_platform": "gpu-h100-sxm",
+                        "gpu_nodes_preset": "8gpu-128vcpu-1600gb",
+                        "gpu_nodes_public_ips": True,
+                        "infiniband_fabric": "fabric-a",
+                        "mk8s_gpu_node_group_overrides": {"fixed_node_count": 1},
+                    },
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    assert normalize_inactive_mk8s_gpu_inputs(payload) is True
+
+    inputs = payload["infra"]["components"][0]["inputs"]
+    assert inputs == {
+        "cpu_nodes_count": 2,
+        "cpu_nodes_platform": "cpu-d3",
+        "gpu_enabled": False,
+    }
+
+
+def test_normalize_inactive_mk8s_gpu_inputs_keeps_enabled_gpu_fields() -> None:
+    payload = _mk8s_payload(infiniband_fabric="fabric-a")
+    inputs = payload["infra"]["components"][0]["inputs"]
+    inputs.update(
+        {
+            "gpu_stack_source": "nebius_image",
+            "gpu_nodes_boot_disk_type": "NETWORK_SSD",
+        }
+    )
+
+    assert normalize_inactive_mk8s_gpu_inputs(payload) is False
+    assert inputs["gpu_stack_source"] == "nebius_image"
+    assert inputs["gpu_nodes_boot_disk_type"] == "NETWORK_SSD"
+
+
+def test_normalize_runtime_config_payload_prunes_inactive_gpu_inputs() -> None:
+    from nebius_cxcli.config_loader import normalize_runtime_config_payload
+
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {
+                        "gpu_enabled": False,
+                        "gpu_stack_source": "nebius_image",
+                        "gpu_nodes_boot_disk_type": "NETWORK_SSD",
+                    },
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    assert normalize_runtime_config_payload(payload) is True
+
+    inputs = payload["infra"]["components"][0]["inputs"]
+    assert "gpu_stack_source" not in inputs
+    assert "gpu_nodes_boot_disk_type" not in inputs
 
 
 def _set_mk8s_gpu_validation_config(

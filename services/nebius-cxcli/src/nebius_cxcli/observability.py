@@ -1164,10 +1164,7 @@ def _mk8s_default_gpu_stack_source() -> str:
     module = tf_module_source_by_id("mk8s", sources=_catalog_sources())
     if module is None:
         return ""
-    for default in module.defaults:
-        if default.target_path == "inputs.gpu_stack_source":
-            return _as_text(default.value).lower()
-    return ""
+    return _as_text(module.mk8s_gpu.default_stack_source).lower()
 
 
 def _mk8s_gpu_stack_source(row: Mapping[str, Any]) -> str:

@@ -8,7 +8,7 @@ json=$(scontrol show nodes --json)
 bad_nodes=$(echo "$json" | jq -r '
   .nodes[]
   | select(
-      (.reason // "") != "" 
+      (.reason // "") != ""
       or ((.state? // "") | tostring | test("DOWN|DRAIN|FAIL"))
     )
   | {name, reason: (.reason // ""), state: .state}

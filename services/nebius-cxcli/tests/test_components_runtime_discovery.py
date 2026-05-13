@@ -234,6 +234,10 @@ def test_components_discovered_from_source_file(monkeypatch, tmp_path: Path) -> 
             "default": True,
             "materialize_default": True,
         },
+        "deploy.targets[].secrets.mysterybox.refresh_interval": {
+            "default": "15m",
+            "materialize_default": True,
+        },
         "deploy.targets[].secrets.mysterybox.sync_namespaces": {
             "default": ["default"],
             "type_hint": "list(string)",
@@ -247,10 +251,16 @@ def test_components_discovered_from_source_file(monkeypatch, tmp_path: Path) -> 
         "inputs.mk8s_cpu_node_group_overrides": {
             "prompt": False,
         },
-        "inputs.mk8s_gpu_node_group_overrides": {
-            "prompt": False,
-        },
-    }
+            "inputs.mk8s_gpu_node_group_overrides": {
+                "prompt": False,
+            },
+            "inputs.gpu_clusters": {
+                "prompt": False,
+            },
+            "inputs.node_groups": {
+                "prompt": False,
+            },
+        }
 
     apps = {entry.id: entry for entry in component_entries("apps")}
     assert "n8n" in apps

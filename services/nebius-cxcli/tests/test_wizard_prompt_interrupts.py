@@ -37,6 +37,43 @@ def test_prompt_choice_override_tty_cancel_stops_wizard(
     assert should_stop is True
 
 
+def test_prompt_choice_override_tty_renders_only_selectable_values(monkeypatch) -> None:
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
+    captured: dict[str, object] = {}
+
+    class _FakePrompt:
+        def ask(self):
+            return "cpu-e2"
+
+    def _fake_select(*args, **kwargs):
+        captured["choices"] = kwargs.get("choices")
+        captured["instruction"] = kwargs.get("instruction")
+        return _FakePrompt()
+
+    fake_questionary = SimpleNamespace(
+        Choice=lambda **kwargs: kwargs,
+        select=_fake_select,
+    )
+    monkeypatch.setitem(sys.modules, "questionary", fake_questionary)
+
+    value, should_stop = cli._prompt_choice_override(
+        path_label="infra.components[0].inputs.cpu_nodes_platform",
+        current="",
+        choices=[
+            OptionChoice(value="cpu-d3", label="cpu-d3"),
+            OptionChoice(value="cpu-e2", label="cpu-e2"),
+        ],
+        required=True,
+    )
+
+    assert should_stop is False
+    assert value == "cpu-e2"
+    titles = [choice["title"] for choice in captured["choices"]]
+    assert titles == ["cpu-d3", "cpu-e2"]
+    assert "<manual input>" not in titles
+    assert captured["instruction"] == "Use arrows; q=back; qq=quit; Enter=select."
+
+
 def test_prompt_choice_override_text_prompt_abort_stops_wizard(
     monkeypatch,
 ) -> None:
@@ -81,6 +118,29 @@ def test_prompt_choice_override_text_prompt_qq_stops_wizard(monkeypatch) -> None
 
     assert value == "project-123"
     assert should_stop is True
+
+
+def test_prompt_choice_override_text_prompt_rejects_unlisted_value(monkeypatch) -> None:
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: False)
+    responses = iter(["cpu-z9", "2"])
+    printed: list[str] = []
+
+    monkeypatch.setattr(cli.typer, "prompt", lambda *_args, **_kwargs: next(responses))
+    monkeypatch.setattr(cli.console, "print", lambda message, **_kwargs: printed.append(str(message)))
+
+    value, should_stop = cli._prompt_choice_override(
+        path_label="infra.components[0].inputs.cpu_nodes_platform",
+        current="",
+        choices=[
+            OptionChoice(value="cpu-d3", label="cpu-d3"),
+            OptionChoice(value="cpu-e2", label="cpu-e2"),
+        ],
+        required=True,
+    )
+
+    assert should_stop is False
+    assert value == "cpu-e2"
+    assert any("Invalid option value" in item for item in printed)
 
 
 def test_mk8s_gpu_stack_source_static_choices_resolve_without_provider_lookup() -> None:
@@ -221,6 +281,7 @@ def test_prompt_scalar_override_guides_mysterybox_secret_payload_pairs(monkeypat
         [
             "db-uname-pass",
             "",
+            "",
             "username",
             "",
             "password",
@@ -251,6 +312,7 @@ def test_prompt_scalar_override_guides_mysterybox_secret_payload_pairs(monkeypat
         {
             "name": "db-uname-pass",
             "version_id": "n/a",
+            "eso_version_policy": "auto-primary-version-pinning",
             "kubernetes_secret_name": "db-uname-pass",
             "payload": {
                 "USERNAME": {"type": "text"},
@@ -262,9 +324,17 @@ def test_prompt_scalar_override_guides_mysterybox_secret_payload_pairs(monkeypat
     assert prompts[1] == (
         "Kubernetes Secret name for db-uname-pass (q=back, qq=quit wizard)"
     )
-    assert prompts[2] == "Payload key for db-uname-pass (required, q=back, qq=quit wizard)"
+    assert prompts[2] == (
+        "ESO version policy for db-uname-pass [required] "
+        "(enter q to go back; qq quits wizard) (index or value)"
+    )
+    assert prompts[3] == "Payload key for db-uname-pass (required, q=back, qq=quit wizard)"
+    assert prompts[4] == (
+        "Payload type for USERNAME [required] "
+        "(enter q to go back; qq quits wizard) (index or value)"
+    )
     assert (
-        prompts[4]
+        prompts[5]
         == "Payload key for db-uname-pass (blank=finish Secret, q=back, qq=quit wizard)"
     )
     assert prompts[-1] == "MysteryBox Secret name (blank=done, q=back, qq=quit wizard)"
@@ -280,7 +350,7 @@ def test_prompt_scalar_override_guides_mysterybox_secret_payload_pairs(monkeypat
 def test_prompt_scalar_override_accepts_custom_mysterybox_kubernetes_secret_name(
     monkeypatch,
 ) -> None:
-    responses = iter(["db-uname-pass", "app-db-creds", "username", "", "", ""])
+    responses = iter(["db-uname-pass", "app-db-creds", "", "username", "", "", ""])
 
     monkeypatch.setattr(cli.typer, "prompt", lambda *_args, **_kwargs: next(responses))
     monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
@@ -297,9 +367,140 @@ def test_prompt_scalar_override_accepts_custom_mysterybox_kubernetes_secret_name
         {
             "name": "db-uname-pass",
             "version_id": "n/a",
+            "eso_version_policy": "auto-primary-version-pinning",
             "kubernetes_secret_name": "app-db-creds",
             "payload": {
                 "USERNAME": {"type": "text"},
+            },
+        }
+    ]
+
+
+def test_prompt_scalar_override_defaults_mysterybox_kubernetes_secret_name_to_dns_label(
+    monkeypatch,
+) -> None:
+    responses = iter(["db_credentials", "", "", "password", "", "", ""])
+    defaults: list[object] = []
+
+    def _prompt(_message: str, **kwargs):
+        defaults.append(kwargs.get("default"))
+        return next(responses)
+
+    monkeypatch.setattr(cli.typer, "prompt", _prompt)
+    monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
+
+    value, should_stop = cli._prompt_scalar_override(
+        "infra.components[0].inputs.secrets",
+        [],
+        type_hint='list(object({ name = string payload = map(object({ type = optional(string, "text") })) }))',
+        required=True,
+    )
+
+    assert should_stop is False
+    assert defaults[1] == "db-credentials"
+    assert value == [
+        {
+            "name": "db_credentials",
+            "version_id": "n/a",
+            "eso_version_policy": "auto-primary-version-pinning",
+            "kubernetes_secret_name": "db-credentials",
+            "payload": {
+                "PASSWORD": {"type": "text"},
+            },
+        }
+    ]
+
+
+def test_mysterybox_eso_version_policy_uses_tty_select(monkeypatch) -> None:
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
+    captured: dict[str, object] = {}
+
+    class _FakePrompt:
+        def ask(self):
+            return "manual-version-pinning"
+
+    def _fake_select(*args, **kwargs):
+        captured["message"] = args[0]
+        captured["choices"] = kwargs.get("choices")
+        return _FakePrompt()
+
+    fake_questionary = SimpleNamespace(
+        Choice=lambda **kwargs: kwargs,
+        select=_fake_select,
+    )
+    monkeypatch.setitem(sys.modules, "questionary", fake_questionary)
+
+    value, should_stop = cli._prompt_mysterybox_eso_version_policy("db_credentials")
+
+    assert should_stop is False
+    assert value == "manual-version-pinning"
+    assert captured["message"] == "ESO version policy for db_credentials [required]"
+    titles = [choice["title"] for choice in captured["choices"]]
+    assert titles == ["auto-primary-version-pinning", "manual-version-pinning"]
+
+
+def test_mysterybox_payload_type_uses_tty_select(monkeypatch) -> None:
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
+    captured: dict[str, object] = {}
+
+    class _FakePrompt:
+        def ask(self):
+            return "file"
+
+    def _fake_select(*args, **kwargs):
+        captured["message"] = args[0]
+        captured["choices"] = kwargs.get("choices")
+        return _FakePrompt()
+
+    fake_questionary = SimpleNamespace(
+        Choice=lambda **kwargs: kwargs,
+        select=_fake_select,
+    )
+    monkeypatch.setitem(sys.modules, "questionary", fake_questionary)
+
+    value, should_stop = cli._prompt_mysterybox_payload_type("PASSWORD")
+
+    assert should_stop is False
+    assert value == "file"
+    assert captured["message"] == "Payload type for PASSWORD [required]"
+    titles = [choice["title"] for choice in captured["choices"]]
+    assert titles == ["text", "file"]
+
+
+def test_prompt_scalar_override_accepts_manual_mysterybox_eso_version_policy(
+    monkeypatch,
+) -> None:
+    responses = iter(
+        [
+            "app-config",
+            "",
+            "manual-version-pinning",
+            "db_password",
+            "",
+            "",
+            "",
+        ]
+    )
+
+    monkeypatch.setattr(cli.typer, "prompt", lambda *_args, **_kwargs: next(responses))
+    monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
+
+    value, should_stop = cli._prompt_scalar_override(
+        "infra.components[0].inputs.secrets",
+        [],
+        type_hint='list(object({ name = string payload = map(object({ type = optional(string, "text") })) }))',
+        required=True,
+    )
+
+    assert should_stop is False
+    assert value == [
+        {
+            "name": "app-config",
+            "version_id": "n/a",
+            "eso_version_policy": "manual-version-pinning",
+            "kubernetes_secret_name": "app-config",
+            "payload": {
+                "DB_PASSWORD": {"type": "text"},
             },
         }
     ]
@@ -312,6 +513,7 @@ def test_mysterybox_guided_prompt_q_at_first_payload_key_returns_to_secret_name(
         [
             "db-username-password",
             "",
+            "",
             "username",
             "",
             "password",
@@ -319,8 +521,10 @@ def test_mysterybox_guided_prompt_q_at_first_payload_key_returns_to_secret_name(
             "",
             "apikey",
             "",
+            "",
             "q",
             "api-key-fixed",
+            "",
             "",
             "apikey",
             "",
@@ -349,6 +553,7 @@ def test_mysterybox_guided_prompt_q_at_first_payload_key_returns_to_secret_name(
         {
             "name": "db-username-password",
             "version_id": "n/a",
+            "eso_version_policy": "auto-primary-version-pinning",
             "kubernetes_secret_name": "db-username-password",
             "payload": {
                 "USERNAME": {"type": "text"},
@@ -358,6 +563,7 @@ def test_mysterybox_guided_prompt_q_at_first_payload_key_returns_to_secret_name(
         {
             "name": "api-key-fixed",
             "version_id": "n/a",
+            "eso_version_policy": "auto-primary-version-pinning",
             "kubernetes_secret_name": "api-key-fixed",
             "payload": {
                 "APIKEY": {"type": "text"},
@@ -375,7 +581,7 @@ def test_mysterybox_guided_prompt_q_at_first_payload_key_returns_to_secret_name(
 def test_mysterybox_guided_prompt_q_at_payload_type_returns_to_payload_key(
     monkeypatch,
 ) -> None:
-    responses = iter(["runtime", "", "token", "q", "api_token", "", "", ""])
+    responses = iter(["runtime", "", "", "token", "q", "api_token", "", "", ""])
     prompts: list[str] = []
 
     def _prompt(message: str, **_kwargs):
@@ -397,6 +603,7 @@ def test_mysterybox_guided_prompt_q_at_payload_type_returns_to_payload_key(
         {
             "name": "runtime",
             "version_id": "n/a",
+            "eso_version_policy": "auto-primary-version-pinning",
             "kubernetes_secret_name": "runtime",
             "payload": {
                 "API_TOKEN": {"type": "text"},
@@ -831,6 +1038,7 @@ def test_prompt_choice_override_tty_keeps_skip_for_optional_recommended_default(
     assert captured["default"] == "fabric-2"
     titles = [choice["title"] for choice in captured["choices"]]
     assert titles[0] == "<skip / keep unset>"
+    assert "<manual input>" not in titles
     assert "< Back" not in titles
     assert "< Quit wizard" not in titles
     assert "q=back; qq=quit" in str(captured["instruction"])
