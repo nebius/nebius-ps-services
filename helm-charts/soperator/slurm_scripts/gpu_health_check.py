@@ -71,7 +71,7 @@ def get_hc_result(proc: subprocess.CompletedProcess) -> HealthCheckerResult:
         return res
     except Exception:
         return res
-
+    
 def ensure_output_dir(path_str: str):
     path = pathlib.Path(path_str)
 

@@ -96,7 +96,7 @@ repo_root() {
 yaml_value() {
   local file="$1"
   local key="$2"
-  ruby -ryaml -e 'data = YAML.load(File.read(ARGV[0])); value = data.fetch(ARGV[1]); puts value' "${file}" "${key}"
+  ruby -ryaml -e 'data = YAML.safe_load(File.read(ARGV[0]), aliases: true, permitted_classes: [Symbol]); value = data.fetch(ARGV[1]); puts value' "${file}" "${key}"
 }
 
 resolve_tag_commit() {
@@ -150,7 +150,11 @@ require "yaml"
 lock_file, repo_root, upstream_root, scope, sync_flag, report_flag = ARGV
 sync = sync_flag == "1"
 report = report_flag == "1"
-lock = YAML.load(File.read(lock_file))
+def load_yaml_file(path)
+  YAML.safe_load(File.read(path), aliases: true, permitted_classes: [Symbol])
+end
+
+lock = load_yaml_file(lock_file)
 
 unless %w[scripts images all].include?(scope)
   warn "ERROR: --scope must be one of scripts, images, or all."
@@ -158,7 +162,7 @@ unless %w[scripts images all].include?(scope)
 end
 
 def chart_yaml(path)
-  YAML.load(File.read(path))
+  load_yaml_file(path)
 end
 
 def normalize_rel(path)
