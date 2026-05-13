@@ -88,11 +88,14 @@ Implement Nebius IAM/Object Storage, VPC networking, quota-management, and MK8s 
        Observability Agent docs; the cxcli catalog pins
        `oci://cr.nebius.cloud/observability/public/nebius-observability-agent-helm`
      - when the task is specific to `services/nebius-cxcli`, treat `component_sources.yaml` and `src/nebius_cxcli/observability.py` as the contract owners for observability defaults, runtime materialization, and report endpoint summaries
-2. For live Nebius VPC inspection, run:
+2. For live Nebius inspection, use the bundled scripts only when script
+   execution is permitted by the current user and repository policy and the
+   requested operation is read-only:
    - `scripts/inspect_vpc_topology.py`
    - `scripts/inspect_vpc_routes.py`
-   For live quota inspection, run:
    - `scripts/inspect_quotas.py`
+   If script execution is not permitted, read the scripts as references and
+   report that live script execution was skipped.
 3. Load only the references needed for the task:
    - `references/cloud-patterns.md`
    - `references/observability.md`
@@ -204,7 +207,7 @@ Implement Nebius IAM/Object Storage, VPC networking, quota-management, and MK8s 
 - `scripts/inspect_quotas.py`
   - reports raw tenant/project quota allowances and effective available quota by `(name, region)`
 
-Run scripts relative to the skill directory.
+When execution is permitted, run scripts relative to the skill directory.
 
 ## References
 

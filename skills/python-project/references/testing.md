@@ -123,6 +123,8 @@ Common patch targets:
 
 Prefer explicit local targets:
 
+<!-- markdownlint-disable MD010 -->
+
 ```make
 .DEFAULT_GOAL := all
 
@@ -136,6 +138,8 @@ coverage:
 	python -m pytest --cov=<package_name> --cov-report=term-missing tests/unit
 check: lint test-unit
 ```
+
+<!-- markdownlint-enable MD010 -->
 
 ## CI Pattern
 

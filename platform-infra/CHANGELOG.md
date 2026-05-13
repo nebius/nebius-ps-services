@@ -24,6 +24,17 @@ All notable changes to this project are documented in this file.
   as `system`, `controller`, `login`, `accounting`, `jail`, and
   `controller-spool` are documented as cxcli profile conventions, not
   hardcoded Terraform module resources.
+- Removed the internal `cpu_nodes_count = 2` default from `modules/mk8s` so
+  direct Terraform consumers must choose the baseline CPU node-group size
+  explicitly.
+- Removed internal `enabled` gates from `modules/managed-postgresql` and
+  `modules/sfs` so callers control deployment by including or omitting the
+  module instance from the generated Terraform root.
+- Refactored `modules/object-storage` to manage one bucket per module instance
+  instead of multiplexing buckets through one module call.
+- Changed the greenfield `modules/mysterybox` contract from one optional
+  `version` value per secret to a `versions` map, with runtime payload values
+  keyed by secret id, version id, and payload key.
 - Tightened `modules/mysterybox` to Terraform `>= 1.11.0` to match Nebius
   provider write-only payload fields, aligned its inputs to the MysteryBox
   secret/version/payload model, documented the product contract, and made

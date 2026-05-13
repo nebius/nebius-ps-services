@@ -29,6 +29,7 @@ Generate exactly these artifacts in the target project:
 - `project_tag_prefix` (for example `sample-service`)
 - `main_branch` (default `main`)
 - `app_dir` (build context path, for example `services/<project>/webhook`)
+- `python_version` (default `3.12` for Python-based test jobs)
 - `image_name` (full registry path, for example `quay.io/org/app`)
 - `registry_host` (for example `quay.io`)
 - `publish_environment` (GitHub Actions environment name)
@@ -43,6 +44,7 @@ Generate exactly these artifacts in the target project:
    - `__PROJECT_TAG_PREFIX__`
    - `__MAIN_BRANCH__`
    - `__APP_DIR__`
+   - `__PYTHON_VERSION__`
    - `__IMAGE_NAME__`
    - `__REGISTRY_HOST__`
    - `__PUBLISH_ENVIRONMENT__`

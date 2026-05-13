@@ -1,0 +1,4 @@
+interface:
+  display_name: "Onboard Nebius CXCLI"
+  short_description: "Onboard Nebius Terraform modules and bundled UX into nebius-cxcli"
+  default_prompt: "Use $onboard-nebius-cxcli to add or review a Nebius Terraform module in nebius-cxcli, including component_sources.yaml, wizard/provider onboarding, cli.py touchpoints, runtime validation, status polling, cluster handoffs, create/render/deploy UX checks, and the focused tests/docs that must change with it."

@@ -6,6 +6,17 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Made the bundled `mk8s` baseline CPU node count explicit in
+  `component_sources.yaml` and generated `config.yaml` files via
+  `inputs.cpu_nodes_count: 2`, instead of relying on a hidden Terraform module
+  default.
+- Removed internal `enabled` gates from the bundled `managed-postgresql` and
+  `sfs` Terraform modules so `config.yaml` plus the generated Terraform root
+  remain the single source of truth for whether each component is deployed.
+- Refactored the `object-storage` integration for the one-bucket-per-module
+  contract, aligned prompting and strict validation with the required
+  `inputs.name` field, and added catalog-driven Nebius Storage bucket status
+  polling during deploy/apply.
 - Added optional Soperator companion apps for active checks, K8up-backed jail
   backups, Soperator DCGM job-mapping telemetry, and in-cluster NFS. Backup
   bucket values bind to Terraform Object Storage outputs, while access keys and
@@ -1292,7 +1303,7 @@ All notable changes to this project are tracked here. This changelog follows
 - Hardened `create --force` guard rails for existing projects: the CLI now emits a force-specific overwrite warning, requires an extra interactive confirmation before overwriting an existing resolved project folder, and documents that `create --force` does not delete the deployments root or unrelated projects.
 - Wired MK8s `inputs.infiniband_fabric` into the built-in wizard profile with a guided, optional fabric selector keyed by the chosen GPU platform and `client_info.nebius.region_id`, using the Nebius GPU-cluster fabric matrix instead of a raw free-text prompt.
 - Fixed `create` wizard prompt helper late-binding closures in `cli.py` so Ruff no longer flags `B023` on the deferred module-prompt builders, and tightened the runtime-shape unit coverage to skip post-write validation in the test that only asserts generated config structure.
-- Added a central Codex skill at `../../skills/onboard-nbs-cxcli/` for onboarding Nebius Terraform modules into `nebius-cxcli`; it documents the catalog-first onboarding flow, the code-owned layers (`wizard_profiles.py`, `provider_options.py`, `validation_profiles.py`, `runtime_component_validation.py`, `cluster_handoffs.py`, `deployment_status.py`), and the focused test/doc updates expected for each change shape.
+- Added a central Codex skill at `../../skills/onboard-nebius-cxcli/` for onboarding Nebius Terraform modules into `nebius-cxcli`; it documents the catalog-first onboarding flow, the code-owned layers (`wizard_profiles.py`, `provider_options.py`, `validation_profiles.py`, `runtime_component_validation.py`, `cluster_handoffs.py`, `deployment_status.py`), and the focused test/doc updates expected for each change shape.
 - Refined MK8s wizard platform discovery to use live Nebius platform inventory at runtime: CPU/GPU platform prompts now intersect the MK8s compatibility matrix with the selected project's compute-platform list, so the wizard only shows currently available supported platforms while preset choices remain live per selected platform.
 - Extended the built-in `ssh-jumphost` and `wireguard-jumphost` wizard profiles to use the live compute platform inventory plus preset chaining, so those VM modules no longer rely on manual `platform` / `preset` entry when project-scoped Nebius choices are available.
 - Moved bundled infra runtime validation-profile selection out of the public `component_sources.yaml` catalog and into code-owned defaults in `src/nebius_cxcli/validation_profiles.py`; bundled components now omit repeated internal `validation` markers, and the catalog loader rejects that field instead of carrying a compatibility path.
