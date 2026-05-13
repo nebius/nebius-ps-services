@@ -24,6 +24,7 @@ from .observability import (
     observability_validation_specs,
 )
 from .paths import ProjectPaths
+from .soperator_companions import materialize_soperator_companion_app_values
 
 
 @dataclass(frozen=True)
@@ -89,6 +90,7 @@ def _render_project_to_paths(
 ) -> RenderResult:
     """Render Terraform and Flux artifacts into the provided target paths."""
     materialize_mk8s_gpu_app_values(config)
+    materialize_soperator_companion_app_values(config)
     materialize_observability_infra_values(config)
     materialize_observability_app_values(config)
     materialize_mysterybox_eso_app_values(

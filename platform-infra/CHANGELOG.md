@@ -11,9 +11,19 @@ All notable changes to this project are documented in this file.
   optional GPU cluster creation/attachment, optional data disks/filesystems,
   and an optional Docker-based container bootstrap path for
   `nebius-cxcli` onboarding.
+- Added direct Terraform examples for flexible Soperator-adjacent module
+  surfaces: `modules/mk8s/examples/generic-node-groups` demonstrates an
+  arbitrary caller-owned `node_groups` map, and
+  `modules/sfs/examples/named-filesystems` and
+  `modules/nfs/examples/with-filesystems` demonstrate caller-owned filesystem
+  maps/lists.
 
 ### Changed
 
+- Clarified the `mk8s`, `sfs`, and `nfs` module docs so Soperator names such
+  as `system`, `controller`, `login`, `accounting`, `jail`, and
+  `controller-spool` are documented as cxcli profile conventions, not
+  hardcoded Terraform module resources.
 - Tightened `modules/mysterybox` to Terraform `>= 1.11.0` to match Nebius
   provider write-only payload fields, aligned its inputs to the MysteryBox
   secret/version/payload model, documented the product contract, and made
@@ -27,6 +37,10 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- Fixed `modules/mk8s` so `infiniband_fabric` only creates the built-in GPU
+  cluster when built-in `gpu_node_groups` are enabled. Generic Soperator GPU
+  worker groups now use the caller-provided `gpu_clusters` map without creating
+  an unused extra GPU cluster.
 - Fixed `modules/mysterybox` rerun and destroy behavior after `version_id` is
   recorded so callers no longer need to re-supply original runtime
   `payload_values` only to satisfy provider validation for ignored write-only

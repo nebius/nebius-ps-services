@@ -1,0 +1,31 @@
+apiVersion: v2
+name: soperator
+description: Self-managed Nebius Soperator deployment for MK8s clusters
+type: application
+version: 0.1.0
+appVersion: "3.0.3"
+kubeVersion: ">=1.29.0-0"
+annotations:
+  soperator.nebius.com/upstream-release: "3.0.3"
+  soperator.nebius.com/upstream-commit: "6ab9a812c91461ffe68299ad3ce6060f177c35a3"
+dependencies:
+  - name: kruise
+    version: 1.8.0
+    repository: https://openkruise.github.io/charts/
+    condition: kruise.installOperator
+  - name: mariadb-operator
+    version: 25.10.2
+    repository: https://helm.mariadb.com/mariadb-operator
+    condition: mariadb-operator.installOperator
+home: https://docs.nebius.com/slurm-soperator/
+sources:
+  - https://github.com/nebius/soperator
+maintainers:
+  - name: Nebius PS Services
+    url: https://github.com/nebius/nebius-ps-services
+keywords:
+  - nebius
+  - slurm
+  - soperator
+  - mk8s
+  - gpu

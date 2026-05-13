@@ -1,0 +1,11 @@
+Soperator Slack notifier rendered.
+
+Prerequisites:
+- VictoriaMetrics Operator CRDs must already exist in the target cluster.
+- The Slack incoming webhook URL must be stored in Secret
+  {{ .Release.Namespace }}/{{ .Values.slack.existingSecret }} key {{ .Values.slack.existingSecretKey }}.
+
+For direct Helm installs:
+
+  kubectl -n {{ .Release.Namespace }} create secret generic {{ .Values.slack.existingSecret }} \
+    --from-literal={{ .Values.slack.existingSecretKey }}='<slack-incoming-webhook-url>'

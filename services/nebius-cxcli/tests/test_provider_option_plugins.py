@@ -888,6 +888,64 @@ def test_mk8s_boot_disk_types_labels_match_guided_contract() -> None:
     ]
 
 
+def test_soperator_profile_choices_come_from_catalog_metadata() -> None:
+    lookup = ProviderOptionLookup()
+
+    resolved = lookup.resolve(
+        provider="soperator_nodesets_profiles",
+        args={},
+        payload={},
+        field_path="apps.charts[0].profile",
+    )
+
+    assert [(choice.value, choice.label, choice.recommended) for choice in resolved] == [
+        (
+            "nebius-cpu-v1",
+            "CPU-only workers: worker-cpu NodeSet, cpu Slurm partition, cpu feature",
+            False,
+        ),
+        (
+            "nebius-mixed-v1",
+            "Mixed CPU+GPU workers: worker-cpu and worker-gpu NodeSets with cpu/gpu Slurm partitions",
+            False,
+        ),
+        (
+            "nebius-gpu-v1",
+            "GPU-only workers: worker-gpu NodeSet, gpu Slurm partition, gpu/cuda features",
+            True,
+        ),
+    ]
+
+
+def test_soperator_partition_choices_are_selected_profile_scoped() -> None:
+    lookup = ProviderOptionLookup()
+
+    cpu_choices = lookup.resolve(
+        provider="soperator_partition_profiles",
+        args={"default": "shape-default"},
+        payload={"apps": {"charts": [{"id": "soperator", "profile": "nebius-cpu-v1"}]}},
+        field_path="apps.charts[0].values.partitionProfile",
+    )
+    mixed_choices = lookup.resolve(
+        provider="soperator_partition_profiles",
+        args={"default": "shape-default"},
+        payload={"apps": {"charts": [{"id": "soperator", "profile": "nebius-mixed-v1"}]}},
+        field_path="apps.charts[0].values.partitionProfile",
+    )
+
+    assert [choice.value for choice in cpu_choices] == ["shape-default", "with-debug-long"]
+    assert [choice.value for choice in mixed_choices] == [
+        "shape-default",
+        "with-debug-long",
+        "with-h100-infiniband-debug-long",
+    ]
+    assert mixed_choices[0].label == (
+        "Shape partitions only: cpu and gpu partitions from worker-cpu/worker-gpu"
+    )
+    assert mixed_choices[0].recommended is True
+    assert "H100/InfiniBand feature partitions" in mixed_choices[2].label
+
+
 def test_mk8s_infiniband_fabrics_skip_non_clusterable_gpu_presets(monkeypatch) -> None:
     _install_fake_compute_module(
         monkeypatch,

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: soperator-checks
+description: Soperator checks controller for ActiveCheck resources.
+type: application
+version: 3.0.3-ps.1
+appVersion: "3.0.3"

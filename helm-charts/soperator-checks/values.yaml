@@ -1,0 +1,73 @@
+checks:
+  kubeRbacProxy:
+    args:
+      - --secure-listen-address=0.0.0.0:8443
+      - --upstream=http://127.0.0.1:8080/
+      - --logtostderr=true
+      - --v=0
+    containerSecurityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+          - ALL
+    image:
+      repository: registry.k8s.io/kubebuilder/kube-rbac-proxy
+      tag: v0.15.0
+    resources:
+      limits:
+        memory: 128Mi
+      requests:
+        cpu: 50m
+        memory: 64Mi
+  manager:
+    enableNodeReplacement: false
+    enableExtensiveCheck: false
+    args:
+      - --log-format=json
+      - --log-level=info
+      - --reconcile-timeout=3m
+      - --max-concurrent-reconciles=1
+      - --cache-sync-timeout=2m
+      - --not-ready-timeout=15m
+      - --delete-not-ready-nodes=true
+      - --leader-elect
+      - --maintenance-condition-type=NebiusMaintenanceScheduled
+    controllersEnabled:
+      slurmapiclients: true
+      slurmnodes: true
+      k8snodes: true
+      activecheck: true
+      activecheckjob: true
+      serviceaccount: true
+      activecheckprolog: true
+      podephemeralstoragecheck: true
+    containerSecurityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+          - ALL
+    env:
+      slurmOperatorWatchNamespaces: '*'
+      maintenanceIgnoreNodeLabels: "slurm.nebius.ai/nodeset=nfs"
+    image:
+      repository: cr.eu-north1.nebius.cloud/soperator/soperatorchecks
+      tag: 3.0.3
+    imagePullPolicy: IfNotPresent
+    resources:
+      limits:
+        memory: 128Mi
+      requests:
+        cpu: 100m
+        memory: 64Mi
+  replicas: 1
+  serviceAccount:
+    annotations: {}
+kubernetesClusterDomain: cluster.local
+serviceMonitor:
+  enabled: false
+  jobLabel: "soperatorchecks"
+  interval: "30s"
+  scrapeTimeout: "20s"
+  additionalLabels: {}
+  metricRelabelings: []
+  relabelings: []

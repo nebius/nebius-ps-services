@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 from contextlib import ExitStack, contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -5308,10 +5309,293 @@ def test_apply_rendered_flux_applies_post_flux_manifests_after_flux_ready(
 
     assert ("wait_flux", fake_paths) in calls
     assert any(
-        call == ("run", ("kubectl", "apply", "-f", str(post_flux_path)), 300)
+        call[0] == "run"
+        and call[1][:4] == ("kubectl", "apply", "--server-side", "--force-conflicts")
+        and call[1][4] == "-f"
+        and str(call[1][5]).endswith("post-flux-mysterybox-eso-resources.yaml")
+        and call[2] == 300
         for call in calls
     )
     assert status_updates[-1] == "[cyan]Applying post-Flux manifests to the target cluster...[/cyan]"
+
+
+def test_apply_post_flux_manifest_orders_crds_webhook_resources_before_custom_resources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest_path = tmp_path / "post-flux-soperator.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump_all(
+            [
+                {
+                    "apiVersion": "apiextensions.k8s.io/v1",
+                    "kind": "CustomResourceDefinition",
+                    "metadata": {"name": "slurmclusters.slurm.nebius.ai"},
+                    "spec": {},
+                },
+                {
+                    "apiVersion": "apps/v1",
+                    "kind": "Deployment",
+                    "metadata": {"name": "soperator-manager", "namespace": "soperator"},
+                    "spec": {},
+                },
+                {
+                    "apiVersion": "admissionregistration.k8s.io/v1",
+                    "kind": "MutatingWebhookConfiguration",
+                    "metadata": {"name": "soperator-mutating-webhook-configuration"},
+                    "webhooks": [
+                        {
+                            "name": "mnodeset-v1alpha1.kb.io",
+                            "clientConfig": {
+                                "service": {
+                                    "name": "soperator-webhook-service",
+                                    "namespace": "soperator",
+                                }
+                            },
+                        }
+                    ],
+                },
+                {
+                    "apiVersion": "slurm.nebius.ai/v1",
+                    "kind": "NodeSet",
+                    "metadata": {"name": "worker-gpu", "namespace": "soperator"},
+                    "spec": {},
+                },
+                {
+                    "apiVersion": "slurm.nebius.ai/v1",
+                    "kind": "SlurmCluster",
+                    "metadata": {"name": "cluster1", "namespace": "soperator"},
+                    "spec": {},
+                },
+            ],
+            explicit_start=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    calls: list[tuple[str, ...]] = []
+    applied_kinds: list[list[str]] = []
+
+    def _fake_run(cmd: list[str], **_kwargs: object) -> SimpleNamespace:
+        calls.append(tuple(cmd))
+        if cmd[:5] == ["kubectl", "apply", "--server-side", "--force-conflicts", "-f"]:
+            applied_kinds.append(
+                [
+                    doc["kind"]
+                    for doc in yaml.safe_load_all(Path(cmd[5]).read_text(encoding="utf-8"))
+                    if isinstance(doc, dict)
+                ]
+            )
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+
+    cli._apply_post_flux_manifest(manifest_path, env={})
+
+    assert len(calls) == 7
+    assert calls[0][:5] == ("kubectl", "apply", "--server-side", "--force-conflicts", "-f")
+    assert calls[0][5].endswith("post-flux-soperator-crds.yaml")
+    assert calls[1] == (
+        "kubectl",
+        "wait",
+        "--for=condition=Established",
+        "--timeout=120s",
+        "customresourcedefinition.apiextensions.k8s.io/slurmclusters.slurm.nebius.ai",
+    )
+    assert calls[2][:5] == ("kubectl", "apply", "--server-side", "--force-conflicts", "-f")
+    assert calls[2][5].endswith("post-flux-soperator-resources.yaml")
+    assert calls[3] == (
+        "kubectl",
+        "-n",
+        "soperator",
+        "rollout",
+        "status",
+        "deployment/soperator-manager",
+        "--timeout=180s",
+    )
+    assert calls[4] == (
+        "kubectl",
+        "-n",
+        "soperator",
+        "wait",
+        "--for=jsonpath={.subsets[0].addresses[0].ip}",
+        "--timeout=120s",
+        "endpoints/soperator-webhook-service",
+    )
+    assert calls[5][:5] == ("kubectl", "apply", "--server-side", "--force-conflicts", "-f")
+    assert calls[5][5].endswith("post-flux-soperator-custom-resources-10.yaml")
+    assert calls[6][:5] == ("kubectl", "apply", "--server-side", "--force-conflicts", "-f")
+    assert calls[6][5].endswith("post-flux-soperator-custom-resources-30.yaml")
+    assert applied_kinds == [
+        ["CustomResourceDefinition"],
+        ["Deployment", "MutatingWebhookConfiguration"],
+        ["SlurmCluster"],
+        ["NodeSet"],
+    ]
+
+
+def test_apply_post_flux_manifest_replaces_priority_classes_when_value_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest_path = tmp_path / "post-flux-soperator.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump_all(
+            [
+                {
+                    "apiVersion": "scheduling.k8s.io/v1",
+                    "kind": "PriorityClass",
+                    "metadata": {"name": "cluster1-slurm-worker"},
+                    "value": 100000,
+                },
+                {
+                    "apiVersion": "scheduling.k8s.io/v1",
+                    "kind": "PriorityClass",
+                    "metadata": {"name": "cluster1-slurm-login"},
+                    "value": 100002,
+                },
+            ],
+            explicit_start=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    calls: list[tuple[str, ...]] = []
+
+    def _fake_run(cmd: list[str], **_kwargs: object) -> SimpleNamespace:
+        calls.append(tuple(cmd))
+        if cmd[:3] == ["kubectl", "get", "priorityclass"]:
+            value = "1000000" if cmd[3] == "cluster1-slurm-worker" else "100002"
+            return SimpleNamespace(returncode=0, stderr="", stdout=value)
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+
+    cli._apply_post_flux_manifest(manifest_path, env={})
+
+    assert (
+        "kubectl",
+        "delete",
+        "priorityclass",
+        "cluster1-slurm-worker",
+        "--ignore-not-found=true",
+    ) in calls
+    assert (
+        "kubectl",
+        "delete",
+        "priorityclass",
+        "cluster1-slurm-login",
+        "--ignore-not-found=true",
+    ) not in calls
+    assert calls[-1][:5] == ("kubectl", "apply", "--server-side", "--force-conflicts", "-f")
+
+
+def test_apply_post_flux_manifest_deletes_stale_nodeconfigurators(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest_path = tmp_path / "post-flux-soperator.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump_all(
+            [
+                {
+                    "apiVersion": "slurm.nebius.ai/v1alpha1",
+                    "kind": "NodeConfigurator",
+                    "metadata": {
+                        "name": "cluster1",
+                        "namespace": "soperator",
+                        "labels": {"app.kubernetes.io/instance": "soperator"},
+                    },
+                    "spec": {},
+                }
+            ],
+            explicit_start=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    calls: list[tuple[str, ...]] = []
+
+    def _fake_run(cmd: list[str], **_kwargs: object) -> SimpleNamespace:
+        calls.append(tuple(cmd))
+        if cmd[:5] == [
+            "kubectl",
+            "-n",
+            "soperator",
+            "get",
+            "nodeconfigurators.slurm.nebius.ai",
+        ]:
+            return SimpleNamespace(
+                returncode=0,
+                stderr="",
+                stdout=json.dumps(
+                    {
+                        "items": [
+                            {"metadata": {"name": "cluster1", "namespace": "soperator"}},
+                            {"metadata": {"name": "soperator", "namespace": "soperator"}},
+                        ]
+                    }
+                ),
+            )
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+
+    cli._apply_post_flux_manifest(manifest_path, env={})
+
+    assert (
+        "kubectl",
+        "-n",
+        "soperator",
+        "delete",
+        "nodeconfigurators.slurm.nebius.ai",
+        "soperator",
+        "--ignore-not-found=true",
+        "--wait=false",
+    ) in calls
+    assert (
+        "kubectl",
+        "-n",
+        "soperator",
+        "delete",
+        "pod",
+        "-l",
+        "app.kubernetes.io/component=node-configurator,app.kubernetes.io/instance=cluster1",
+        "--ignore-not-found=true",
+        "--wait=false",
+    ) in calls
+    assert calls[-1][:5] == ("kubectl", "apply", "--server-side", "--force-conflicts", "-f")
+
+
+def test_run_post_flux_kubectl_retries_transient_webhook_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def _fake_run(cmd: list[str], **_kwargs: object) -> SimpleNamespace:
+        calls.append(tuple(cmd))
+        if len(calls) == 1:
+            return SimpleNamespace(
+                returncode=1,
+                stderr='Error from server (InternalError): failed calling webhook "x": connect: connection refused',
+                stdout="",
+            )
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+    monkeypatch.setattr(cli.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    cli._run_post_flux_kubectl(
+        ["kubectl", "apply", "-f", "custom.yaml"],
+        env={},
+        retries=1,
+        retry_delay_seconds=3.0,
+        retry_stderr_markers=cli._POST_FLUX_WEBHOOK_TRANSIENT_MARKERS,
+    )
+
+    assert calls == [
+        ("kubectl", "apply", "-f", "custom.yaml"),
+        ("kubectl", "apply", "-f", "custom.yaml"),
+    ]
+    assert sleeps == [3.0]
 
 
 def test_apply_rendered_flux_prints_phase_lines_when_console_is_not_terminal(
@@ -6019,6 +6303,74 @@ def test_wait_for_rendered_flux_resources_returns_when_only_sources_remain_pendi
     assert "Skipping the remaining wait for Flux source objects" in plain
     assert "kubectl get helmreleases.helm.toolkit.fluxcd.io -A" in plain
     assert "NOTE:" in plain
+
+
+def test_wait_for_rendered_flux_resources_treats_kubectl_timeout_as_pending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    flux_dir = tmp_path / "generated" / "flux"
+    flux_dir.mkdir(parents=True, exist_ok=True)
+    (flux_dir / "kustomization.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "kustomize.config.k8s.io/v1beta1",
+                "kind": "Kustomization",
+                "resources": ["./helmrelease-demo.yaml"],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (flux_dir / "helmrelease-demo.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "helm.toolkit.fluxcd.io/v2",
+                "kind": "HelmRelease",
+                "metadata": {"name": "demo", "namespace": "demo"},
+                "spec": {"interval": "5m", "chart": {"spec": {"chart": "demo"}}},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    calls = {"count": 0}
+    emissions: list[str] = []
+
+    monkeypatch.setattr(flux_ops, "_require_binary", lambda _name: None)
+
+    def _fake_run(cmd, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout", 20))
+        return SimpleNamespace(
+            returncode=0,
+            stderr="",
+            stdout=json.dumps(
+                {
+                    "status": {
+                        "conditions": [
+                            {"type": "Ready", "status": "True", "reason": "InstallSucceeded"}
+                        ]
+                    }
+                }
+            ),
+        )
+
+    monkeypatch.setattr(flux_ops.subprocess, "run", _fake_run)
+    monkeypatch.setattr(flux_ops.time, "sleep", lambda _seconds: None)
+
+    flux_ops.wait_for_rendered_flux_resources(
+        SimpleNamespace(flux_dir=flux_dir),
+        emit=emissions.append,
+        poll_interval_seconds=0.01,
+        repeat_interval_seconds=0.01,
+    )
+
+    assert calls["count"] == 2
+    plain = "\n".join(_plain_output(item) for item in emissions)
+    assert "kubectl status read timed out after 20s" in plain
+    assert "InstallSucceeded" in plain
 
 
 def test_flux_install_manifest_url_uses_default_pinned_release(
@@ -10702,3 +11054,234 @@ def test_auth_validate_profile_fails_on_invalid_profile(monkeypatch: pytest.Monk
     assert "Runtime auth profile validation failed for project(s): project-123" in _plain_output(
         result.output
     )
+
+
+def test_soperator_selection_seeds_required_infra_and_defaults() -> None:
+    infra_entries = (
+        ComponentEntry(
+            id="mk8s",
+            scope="infra",
+            config_path="infra.mk8s",
+            description="MK8s",
+        ),
+        ComponentEntry(
+            id="sfs",
+            scope="infra",
+            config_path="infra.sfs",
+            description="SFS",
+        ),
+        ComponentEntry(
+            id="nfs",
+            scope="infra",
+            config_path="infra.nfs",
+            description="NFS",
+        ),
+    )
+
+    selected = cli._expand_soperator_component_selection(
+        selected_infra=set(),
+        selected_apps={"soperator"},
+        infra_entries=infra_entries,
+    )
+
+    assert selected == {"mk8s", "sfs"}
+    app_entries = (
+        ComponentEntry(
+            id="soperator",
+            scope="apps",
+            config_path="apps.slurm.soperator",
+            description="Soperator",
+        ),
+        ComponentEntry(
+            id="cert-manager",
+            scope="apps",
+            config_path="apps.platform.cert-manager",
+            description="cert-manager",
+        ),
+    )
+    selected_apps = cli._expand_soperator_app_selection(
+        selected_apps={"soperator"},
+        app_entries=app_entries,
+    )
+
+    assert selected_apps == {"cert-manager", "soperator"}
+
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {},
+                },
+                {
+                    "id": "sfs",
+                    "instance_id": "sfs",
+                    "enabled": True,
+                    "inputs": {},
+                },
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "values": {},
+                }
+            ]
+        },
+    }
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
+    assert mk8s_inputs["cpu_nodes_count"] == 0
+    assert mk8s_inputs["gpu_enabled"] is True
+    assert mk8s_inputs["gpu_node_groups"] == 0
+    assert "mk8s_gpu_node_group_overrides" not in mk8s_inputs
+    assert mk8s_inputs["node_groups"]["system"]["gpu"] is False
+    assert mk8s_inputs["node_groups"]["controller"]["jail"] is True
+    assert mk8s_inputs["node_groups"]["login"]["gpu"] is False
+    assert mk8s_inputs["node_groups"]["accounting"]["gpu"] is False
+    assert mk8s_inputs["node_groups"]["worker-gpu-0"]["nodeset_name"] == "worker-gpu"
+    assert mk8s_inputs["node_groups"]["worker-gpu-0"]["fixed_node_count"] == 1
+    sfs_inputs = payload["infra"]["components"][1]["inputs"]
+    assert sfs_inputs["filesystems"]["jail"]["name"] == "cluster1-jail"
+    assert sfs_inputs["filesystems"]["accounting"]["mount_tag"] == "accounting"
+    soperator_values = payload["apps"]["charts"][0]["values"]
+    assert soperator_values["clusterName"] == "cluster1"
+    assert soperator_values["populateJail"]["k8sNodeFilterName"] == "system"
+    assert soperator_values["slurmNodes"]["accounting"]["k8sNodeFilterName"] == "accounting"
+    assert soperator_values["slurmNodes"]["login"]["sshRootPublicKeys"] == []
+    assert soperator_values["sfs"]["filesystems"]["jail"]["mount_tag"] == "jail"
+    assert soperator_values["volume"]["jail"]["size"] == "1024Gi"
+    assert soperator_values["volume"]["accounting"]["enabled"] is True
+    assert soperator_values["volume"]["accounting"]["size"] == "128Gi"
+    assert soperator_values["volume"]["controllerSpool"]["filestoreDeviceName"] == (
+        "controller-spool"
+    )
+
+def test_soperator_mixed_profile_materializes_cpu_and_gpu_workers() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {},
+                },
+                {
+                    "id": "sfs",
+                    "instance_id": "sfs",
+                    "enabled": True,
+                    "inputs": {},
+                },
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "profile": "nebius-mixed-v1",
+                    "values": {},
+                }
+            ]
+        },
+    }
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
+    assert mk8s_inputs["gpu_enabled"] is True
+    assert mk8s_inputs["gpu_node_groups"] == 0
+    assert mk8s_inputs["gpu_nodes_count_per_group"] == 0
+    assert mk8s_inputs["node_groups"]["worker-cpu-0"]["nodeset_name"] == "worker-cpu"
+    assert mk8s_inputs["node_groups"]["worker-cpu-0"]["fixed_node_count"] == 2
+    assert mk8s_inputs["node_groups"]["worker-cpu-0"]["gpu"] is False
+    assert mk8s_inputs["node_groups"]["worker-cpu-0"]["jail"] is True
+    assert mk8s_inputs["node_groups"]["worker-gpu-0"]["nodeset_name"] == "worker-gpu"
+    assert mk8s_inputs["node_groups"]["worker-gpu-0"]["fixed_node_count"] == 2
+    assert mk8s_inputs["node_groups"]["worker-gpu-0"]["gpu"] is True
+    assert mk8s_inputs["node_groups"]["worker-gpu-0"]["jail"] is True
+
+    soperator_values = payload["apps"]["charts"][0]["values"]
+    assert soperator_values["clusterType"] == "gpu"
+    assert [node["name"] for node in soperator_values["nodesets"]] == [
+        "worker-cpu",
+        "worker-gpu",
+    ]
+    worker_gpu = next(
+        node for node in soperator_values["nodesets"] if node["name"] == "worker-gpu"
+    )
+    assert {
+        "name": "NVIDIA_DRIVER_CAPABILITIES",
+        "value": "compute,graphics,utility,video",
+    } in worker_gpu["slurmd"]["customEnv"]
+    assert soperator_values["partitionConfiguration"]["partitions"] == [
+        {
+            "name": "cpu",
+            "nodeSetRefs": ["worker-cpu"],
+            "config": "Default=YES MaxTime=INFINITE State=UP PriorityTier=5",
+        },
+        {
+            "name": "gpu",
+            "nodeSetRefs": ["worker-gpu"],
+            "config": "Default=NO MaxTime=INFINITE State=UP PriorityTier=10",
+        },
+    ]
+
+
+def test_soperator_mixed_feature_partition_profile_materializes_node_features() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {},
+                },
+                {
+                    "id": "sfs",
+                    "instance_id": "sfs",
+                    "enabled": True,
+                    "inputs": {},
+                },
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "profile": "nebius-mixed-v1",
+                    "values": {"partitionProfile": "with-h100-infiniband-debug-long"},
+                }
+            ]
+        },
+    }
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    soperator_values = payload["apps"]["charts"][0]["values"]
+    assert [
+        partition["name"]
+        for partition in soperator_values["partitionConfiguration"]["partitions"]
+    ] == ["cpu", "gpu", "h100", "infiniband", "debug", "long"]
+    worker_gpu = next(
+        node for node in soperator_values["nodesets"] if node["name"] == "worker-gpu"
+    )
+    assert worker_gpu["nodeConfig"]["features"] == [
+        "gpu",
+        "cuda",
+        "h100",
+        "infiniband",
+    ]
+    assert worker_gpu["slurmd"]["resources"]["gpu"] == 8

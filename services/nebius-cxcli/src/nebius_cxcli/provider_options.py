@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 import os
 import re
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -36,6 +36,8 @@ SUPPORTED_PROVIDER_OPTION_SOURCES = frozenset(
         "tenant_projects",
         "mk8s_control_plane_versions",
         "mk8s_boot_disk_types",
+        "soperator_nodesets_profiles",
+        "soperator_partition_profiles",
     }
 )
 
@@ -450,6 +452,8 @@ class ProviderOptionLookup:
                 "project_networks": self._resolve_project_networks,
                 "tenant_projects": self._resolve_tenant_projects,
                 "mk8s_control_plane_versions": self._resolve_mk8s_control_plane_versions,
+                "soperator_nodesets_profiles": self._resolve_soperator_nodesets_profiles,
+                "soperator_partition_profiles": self._resolve_soperator_partition_profiles,
             }.get(provider)
             if provider in SUPPORTED_PROVIDER_OPTION_SOURCES and resolver is not None:
                 try:
@@ -866,6 +870,101 @@ class ProviderOptionLookup:
                 ),
             ),
         )
+
+    def _soperator_nodesets_profile_catalog(
+        self,
+    ) -> tuple[str | None, Mapping[str, Mapping[str, Any]]]:
+        from .component_sources import helm_chart_source_by_id
+
+        chart = helm_chart_source_by_id("soperator")
+        settings = getattr(chart, "soperator_nodesets", None)
+        default = _as_str(getattr(settings, "default", None))
+        raw_profiles = getattr(settings, "profiles", {}) if settings is not None else {}
+        profiles = raw_profiles if isinstance(raw_profiles, Mapping) else {}
+        return default, profiles
+
+    @staticmethod
+    def _soperator_catalog_label(raw: object, *, fallback: str) -> str:
+        if isinstance(raw, Mapping):
+            wizard = raw.get("wizard")
+            if isinstance(wizard, Mapping):
+                label = _as_str(wizard.get("label"))
+                if label:
+                    return label
+            label = _as_str(raw.get("label"))
+            if label:
+                return label
+        return fallback
+
+    @staticmethod
+    def _soperator_chart_row_path(field_path: str) -> str:
+        if ".values." in field_path:
+            return field_path.split(".values.", maxsplit=1)[0]
+        if field_path.endswith(".profile"):
+            return field_path.rsplit(".", maxsplit=1)[0]
+        return field_path.rsplit(".", maxsplit=1)[0]
+
+    def _resolve_soperator_nodesets_profiles(
+        self,
+        *,
+        args: dict[str, Any],
+        payload: dict[str, Any],
+        field_path: str,
+    ) -> tuple[OptionChoice, ...]:
+        del args, payload, field_path
+        default, profiles = self._soperator_nodesets_profile_catalog()
+        choices: list[OptionChoice] = []
+        for name, profile in profiles.items():
+            profile_name = str(name).strip()
+            if not profile_name:
+                continue
+            choices.append(
+                OptionChoice(
+                    value=profile_name,
+                    label=self._soperator_catalog_label(profile, fallback=profile_name),
+                    recommended=profile_name == default,
+                )
+            )
+        return tuple(choices)
+
+    def _resolve_soperator_partition_profiles(
+        self,
+        *,
+        args: dict[str, Any],
+        payload: dict[str, Any],
+        field_path: str,
+    ) -> tuple[OptionChoice, ...]:
+        default_profile, profiles = self._soperator_nodesets_profile_catalog()
+        default_partition_profile = _as_str(args.get("default"))
+        chart_row_path = self._soperator_chart_row_path(field_path)
+        profile_name = _as_str(_payload_value(payload, f"{chart_row_path}.profile"))
+        profile_name = profile_name or default_profile
+        profile = profiles.get(profile_name or "")
+        if not isinstance(profile, Mapping):
+            return ()
+        chart = profile.get("chart")
+        if not isinstance(chart, Mapping):
+            return ()
+        raw_partition_profiles = chart.get("partition_profiles")
+        if not isinstance(raw_partition_profiles, Mapping):
+            return ()
+        choices: list[OptionChoice] = []
+        for name, partition_profile in raw_partition_profiles.items():
+            profile_value = str(name).strip()
+            if not profile_value:
+                continue
+            choices.append(
+                OptionChoice(
+                    value=profile_value,
+                    label=self._soperator_catalog_label(
+                        partition_profile,
+                        fallback=profile_value,
+                    ),
+                    recommended=bool(default_partition_profile)
+                    and profile_value == default_partition_profile,
+                )
+            )
+        return tuple(choices)
 
     def _resolve_mk8s_compatible_platforms(
         self,

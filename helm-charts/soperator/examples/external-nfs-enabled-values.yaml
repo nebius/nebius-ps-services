@@ -1,0 +1,16 @@
+# Adds a VM-backed external NFS export as /home on top of the default GPU worker
+# profile. Replace server/path with Terraform output values for direct Helm use.
+clusterName: soperator-nfs
+clusterType: gpu
+
+slurmNodes:
+  login:
+    # Keep public keys out of example files; pass them with Helm --set-file.
+    sshRootPublicKeys: []
+
+externalNfs:
+  enabled: true
+  server: 10.0.0.10
+  path: /srv/nfs/home
+  mountPath: /home
+  readOnly: false

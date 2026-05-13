@@ -99,6 +99,7 @@ module "object_storage" {
 
 - `bucket_id`
 - `bucket_name`
+- `bucket_endpoint`
 
 ## Validation commands
 

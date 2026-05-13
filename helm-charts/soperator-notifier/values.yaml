@@ -1,0 +1,55 @@
+# Slack incoming webhook setup.
+#
+# Do not put the webhook URL in this values file. nebius-cxcli creates or
+# reuses the referenced Kubernetes Secret at deploy time, and direct Helm users
+# should create the same Secret before installing this chart.
+slack:
+  # cxcli setup mode metadata. The chart renders the same Secret reference for
+  # both modes; cxcli owns collecting or creating the webhook URL.
+  mode: existing-webhook
+
+  # Kubernetes Secret containing the Slack incoming webhook URL.
+  existingSecret: soperator-notifier-slack-webhook
+  existingSecretKey: url
+
+  # Optional non-secret metadata for operators and cxcli reports.
+  channelName: ""
+  channelId: ""
+
+  # Optional OAuth metadata for cxcli advanced setup. The client secret and
+  # OAuth code are runtime inputs and must not be stored in values.
+  oauth:
+    clientId: ""
+    redirectUri: ""
+    govSlack: false
+
+  # Suppress notifications for health-check/system jobs.
+  ignoreSystemJobs: true
+
+  # Notify only jobs that expose a user_mail label.
+  requireUserMail: true
+
+  # Alertmanager Slack attachment colors by severity.
+  severityColor:
+    error: danger
+    warning: "#F28B30"
+    good: good
+    unknown: "#807F83"
+
+# VictoriaMetrics Alertmanager instance rendered by this chart.
+alertManager:
+  replicas: 1
+  port: 9093
+
+# VictoriaMetrics datasource containing Soperator Slurm exporter metrics.
+dataSourceUrl: "http://vmsingle-metrics-victoria-metrics-k8s-stack:8429"
+
+# Alert evaluation and notification grouping intervals.
+interval:
+  evaluation: 30s
+  groupWait: 30s
+  group: 5m
+  repeat: 25h
+
+nameOverride: ""
+fullnameOverride: ""

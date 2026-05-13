@@ -1282,6 +1282,7 @@ def test_gpu_visibility_retries_transient_pod_phase_timeout(
         ],
     )
     monkeypatch.setattr(mk8s_gpu, "_gpu_device_plugin_snapshot", lambda _nodes: {})
+    monkeypatch.setattr(mk8s_gpu, "_pod_request_totals_by_node", lambda **_kwargs: {})
     monkeypatch.setattr(mk8s_gpu, "_apply_docs", lambda _docs, **_kwargs: None)
     monkeypatch.setattr(mk8s_gpu, "_delete_resource", lambda _args, **_kwargs: None)
     monkeypatch.setattr(mk8s_gpu.time, "sleep", lambda _seconds: None)
@@ -1314,6 +1315,104 @@ def test_gpu_visibility_retries_transient_pod_phase_timeout(
     assert report["passed"] is True
     assert report["passed_node_count"] == 1
     assert any("last kubectl poll failed" in item for item in emits)
+
+
+def test_gpu_visibility_skips_when_all_gpus_are_already_allocated(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    spec = {
+        "namespace": "gpu-validation",
+        "image": "cuda-sample",
+        "cleanup": True,
+        "timeout": "1m",
+        "max_nodes": 1,
+        "report_file": "gpu-visibility-report.json",
+    }
+    emits: list[str] = []
+
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_gpu_nodes",
+        lambda **_kwargs: [
+            {
+                "name": "gpu-node-a",
+                "gpu_count": 8,
+                "allocatable_resources": {"nvidia.com/gpu": "8"},
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_pod_request_totals_by_node",
+        lambda **_kwargs: {"gpu-node-a": {"gpu_count": 8}},
+    )
+    monkeypatch.setattr(mk8s_gpu, "_apply_docs", lambda _docs, **_kwargs: pytest.fail())
+
+    report_path = mk8s_gpu._run_gpu_visibility_validation(
+        spec=spec,
+        inventory_dir=tmp_path,
+        extra_env=None,
+        emit=emits.append,
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["passed"] is True
+    assert report["skipped"] is True
+    assert report["selected_node_count"] == 0
+    assert report["saturated_node_count"] == 1
+    assert "already have their GPUs allocated" in report["skip_reason"]
+    assert any("Skipping GPU Visibility test" in item for item in emits)
+
+
+def test_nccl_validation_skips_when_all_gpus_are_already_allocated(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    spec = {
+        "namespace": "nccl-test",
+        "gpu_platform": "gpu-h100-sxm",
+        "transport_mode": "rdma",
+        "threshold_enforced": True,
+        "average_bus_bandwidth_threshold_gbps": 300.0,
+        "timeout": "1m",
+        "max_nodes": 2,
+        "report_file": "nccl-test-report.json",
+    }
+    emits: list[str] = []
+
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_gpu_nodes",
+        lambda **_kwargs: [
+            {
+                "name": "gpu-node-a",
+                "gpu_count": 8,
+                "allocatable_resources": {"nvidia.com/gpu": "8"},
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_pod_request_totals_by_node",
+        lambda **_kwargs: {"gpu-node-a": {"gpu_count": 8}},
+    )
+    monkeypatch.setattr(mk8s_gpu, "_training_operator_present", lambda **_kwargs: pytest.fail())
+
+    report_path = mk8s_gpu._run_nccl_validation(
+        spec=spec,
+        inventory_dir=tmp_path,
+        extra_env=None,
+        emit=emits.append,
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["passed"] is True
+    assert report["skipped"] is True
+    assert report["selected_worker_node_count"] == 0
+    assert report["saturated_node_count"] == 1
+    assert "already have their GPUs allocated" in report["skip_reason"]
+    assert any("Skipping NCCL test" in item for item in emits)
 
 
 def test_run_mk8s_gpu_validations_writes_error_report_on_nccl_exception(

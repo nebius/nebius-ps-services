@@ -688,6 +688,7 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
                 "group",
                 "enabled",
                 "repo",
+                "profile",
                 "version",
                 "namespace",
                 "release-name",
@@ -736,7 +737,7 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
 
         if not isinstance(raw_chart.get("enabled"), bool):
             raise ValueError(f"apps.charts[{index}].enabled must be true or false")
-        for key in ("repo", "version", "namespace"):
+        for key in ("repo", "profile", "version", "namespace"):
             value = raw_chart.get(key)
             if value is not None and not isinstance(value, str):
                 raise ValueError(f"apps.charts[{index}].{key} must be a string when set")

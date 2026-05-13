@@ -556,6 +556,12 @@ class HelmChartLocator:
 
 
 @dataclass(frozen=True)
+class SoperatorNodesetsProfileSettings:
+    default: str = ""
+    profiles: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class HelmChartSource:
     name: str
     source: HelmChartLocator = HelmChartLocator()
@@ -576,6 +582,9 @@ class HelmChartSource:
     mk8s_gpu: Mk8sGpuAppPolicy = Mk8sGpuAppPolicy()
     observability: AppObservabilitySettings = AppObservabilitySettings()
     grafana: GrafanaCliSettings = GrafanaCliSettings()
+    soperator_nodesets: SoperatorNodesetsProfileSettings = (
+        SoperatorNodesetsProfileSettings()
+    )
 
     @property
     def chart_name(self) -> str | None:
@@ -2702,6 +2711,44 @@ def _parse_grafana_cli_settings(
     )
 
 
+def _parse_soperator_nodesets_profile_settings(
+    raw: Any,
+    *,
+    field_label: str,
+) -> SoperatorNodesetsProfileSettings:
+    if raw is None:
+        return SoperatorNodesetsProfileSettings()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {"default", "profiles"}
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+
+    profiles_raw = raw.get("profiles")
+    if profiles_raw is None:
+        profiles_raw = {}
+    if not isinstance(profiles_raw, dict):
+        raise ValueError(f"{field_label}.profiles must be a mapping")
+
+    profiles: dict[str, dict[str, Any]] = {}
+    for raw_name, raw_profile in profiles_raw.items():
+        name = _as_text(raw_name)
+        if not name:
+            raise ValueError(f"{field_label}.profiles entries must have non-empty names")
+        if not isinstance(raw_profile, dict):
+            raise ValueError(f"{field_label}.profiles.{name} must be a mapping")
+        profiles[name] = copy.deepcopy(raw_profile)
+
+    default = _as_text(raw.get("default"))
+    if default and default not in profiles:
+        raise ValueError(f"{field_label}.default references unknown profile '{default}'")
+    if not default and len(profiles) == 1:
+        default = next(iter(profiles))
+
+    return SoperatorNodesetsProfileSettings(default=default, profiles=profiles)
+
+
 def _grafana_dashboard_defaults(
     defaults: tuple[ComponentDefault, ...],
 ) -> dict[tuple[str, str], Mapping[str, Any]]:
@@ -3085,12 +3132,26 @@ def _parse_app_component_cli(
     raw: Any,
     *,
     field_label: str,
-) -> tuple[Mk8sGpuAppPolicy, AppObservabilitySettings, GrafanaCliSettings]:
+) -> tuple[
+    Mk8sGpuAppPolicy,
+    AppObservabilitySettings,
+    GrafanaCliSettings,
+    SoperatorNodesetsProfileSettings,
+]:
     if raw is None:
-        return Mk8sGpuAppPolicy(), AppObservabilitySettings(), GrafanaCliSettings()
+        return (
+            Mk8sGpuAppPolicy(),
+            AppObservabilitySettings(),
+            GrafanaCliSettings(),
+            SoperatorNodesetsProfileSettings(),
+        )
     if not isinstance(raw, dict):
         raise ValueError(f"{field_label} must be a mapping")
-    supported_keys = {"mk8s_gpu_policy", "observability"} | GRAFANA_CLI_SETTING_KEYS
+    supported_keys = {
+        "mk8s_gpu_policy",
+        "observability",
+        "soperator_nodesets_profile",
+    } | GRAFANA_CLI_SETTING_KEYS
     unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
     if unknown:
         raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
@@ -3107,6 +3168,10 @@ def _parse_app_component_cli(
         _parse_grafana_cli_settings(
             grafana_raw or None,
             field_label=field_label,
+        ),
+        _parse_soperator_nodesets_profile_settings(
+            raw.get("soperator_nodesets_profile"),
+            field_label=f"{field_label}.soperator_nodesets_profile",
         ),
     )
 
@@ -4030,7 +4095,7 @@ def _parse_sources_payload(
             field_label=f"components.apps.{component_id}.defaults",
         )
         raw_cli = cli_settings.apps.get(component_id)
-        mk8s_gpu, observability, grafana = _parse_app_component_cli(
+        mk8s_gpu, observability, grafana, soperator_nodesets = _parse_app_component_cli(
             raw_cli,
             field_label=f"components.apps.{component_id}.cli",
         )
@@ -4069,6 +4134,7 @@ def _parse_sources_payload(
                 mk8s_gpu=mk8s_gpu,
                 observability=observability,
                 grafana=grafana,
+                soperator_nodesets=soperator_nodesets,
             )
         )
 

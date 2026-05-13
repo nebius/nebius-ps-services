@@ -37,7 +37,9 @@ installs the Ubuntu Open MPI packages instead of bundling NVIDIA HPC-X.
   environment, and exposes OCI labels that identify the Nebius source repo plus
   the upstream NVIDIA docs used by the build.
 - The runtime stays transport-agnostic: it carries the userspace needed for
-  both Socket/TCPIP NCCL runs and RDMA-capable runs, while the chart or caller decides whether to force `socket`, force `rdma`, or leave NCCL transport selection on `auto`.
+  both Socket/TCPIP NCCL runs and RDMA-capable runs, while the chart or caller
+  decides whether to force `socket`, force `rdma`, or leave NCCL transport
+  selection on `auto`.
 
 ## Chart alignment
 
@@ -162,7 +164,7 @@ artifact shape.
 The workflow uses the same registry resolution pattern as the chart publish
 flow:
 
-- GitHub environment: `nccl-test-image-publish`
+- GitHub environment: `nb-image-chart-publish`
 - Required variables:
   - `NB_TENANT_ID`
   - `NB_PROJECT_ID`

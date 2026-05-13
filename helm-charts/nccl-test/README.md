@@ -47,12 +47,14 @@ oci://cr.<region>.nebius.cloud/<registry-short-id>/charts/nccl-test
 The `<registry-short-id>` path segment is the registry ID without the leading
 `registry-` prefix.
 
-For GitHub Actions, use the environment `nccl-test-chart-publish` and set:
+For GitHub Actions, use the shared environment `nb-image-chart-publish` and set:
 
 - Variables:
   `NB_TENANT_ID`, `NB_PROJECT_ID`, `NB_REGION_ID`, `NB_REGISTRY_ID`,
   `NB_SERVICE_ACCOUNT_ID`,
   `NB_SERVICE_ACCOUNT_PUBLIC_KEY_ID`
+- Optional variables:
+  `NB_REGISTRY_NAME`
 - Secret:
   `NB_SERVICE_ACCOUNT_PRIVATE_KEY`
 
@@ -67,7 +69,9 @@ oci://cr.<region>.nebius.cloud/<registry-short-id>/charts/nccl-test
 ```
 
 The publish workflow uses the registry ID you configure in the GitHub
-environment. It does not create tenants, projects, or registries.
+environment. It does not create tenants, projects, or registries. Only the push
+path uses Nebius authentication; public pull verification runs with a fresh
+unauthenticated Helm registry config.
 
 The canonical release flow is:
 
@@ -75,12 +79,15 @@ The canonical release flow is:
 2. Run `./publish-helm.sh --prep X.Y.Z` from this chart directory.
 3. Merge the prep branch to `main`.
 4. Run `./publish-helm.sh --publish X.Y.Z` on clean synced `main`.
-5. The tag push triggers `.github/workflows/nccl-test-chart-publish.yml`.
+5. The tag push triggers `.github/workflows/helm-chart-publish.yml`.
+
+The shared publish workflow reads `.github/helm-chart-publish.json` to map the
+`nccl-test-chart` tag prefix to this chart and its extra render smoke checks.
 
 The prep step updates the chart-local changelog and `Chart.yaml`, then runs:
 
 ```bash
-helm lint ./helm-charts/nccl-test
+helm lint ./helm-charts/nccl-test --strict
 helm template smoke ./helm-charts/nccl-test --namespace nccl-test >/dev/null
 helm template smoke ./helm-charts/nccl-test \
   --namespace nccl-test \
@@ -119,7 +126,7 @@ Direct OCI publish commands for debugging only:
 if grep -q '^dependencies:' ./helm-charts/nccl-test/Chart.yaml; then
   helm dependency update ./helm-charts/nccl-test
 fi
-helm lint ./helm-charts/nccl-test
+helm lint ./helm-charts/nccl-test --strict
 helm package ./helm-charts/nccl-test -d dist
 nebius iam get-access-token | \
   helm registry login cr.eu-north1.nebius.cloud \
@@ -165,7 +172,7 @@ helm pull \
 ## Validation
 
 ```bash
-helm lint ./helm-charts/nccl-test
+helm lint ./helm-charts/nccl-test --strict
 helm template smoke ./helm-charts/nccl-test \
   --namespace nccl-test \
   --set worker.replicas=2 >/dev/null
@@ -285,5 +292,5 @@ kubectl logs -n nccl-test -f <launcher-pod-name>
 - The canonical release helper is
   [publish-helm.sh](publish-helm.sh).
   The tag-driven publish workflow lives at
-  `.github/workflows/nccl-test-chart-publish.yml` and triggers only on tags
+  `.github/workflows/helm-chart-publish.yml` and triggers only on tags
   matching `nccl-test-chart-vMAJOR.MINOR.PATCH`.

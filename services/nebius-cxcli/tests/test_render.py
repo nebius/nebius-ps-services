@@ -6,6 +6,7 @@ import pytest
 import yaml
 
 import nebius_cxcli.component_sources as component_sources
+from nebius_cxcli import cli
 from nebius_cxcli.component_sources import (
     ComponentOutput,
     SourceProfile,
@@ -81,6 +82,18 @@ def _stub_catalog_output_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
                 name="instance_id",
                 kind="terraform_output",
                 source_path="instance_id",
+                sensitive=False,
+            ),
+            ComponentOutput(
+                name="bucket_name",
+                kind="terraform_output",
+                source_path="bucket_name",
+                sensitive=False,
+            ),
+            ComponentOutput(
+                name="bucket_endpoint",
+                kind="terraform_output",
+                source_path="bucket_endpoint",
                 sensitive=False,
             ),
         ),
@@ -650,6 +663,392 @@ def test_render_uses_cluster_instance_ids_for_multi_target_artifacts(
     assert not _target_flux_dir(paths, "mk8s").exists()
 
 
+def test_render_binds_soperator_external_nfs_from_matching_nfs_output(tmp_path: Path) -> None:
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    paths = resolve_project_paths(config_path)
+
+    payload = _starter_payload(selected_infra={"mk8s", "nfs"}, selected_apps={"soperator"})
+    payload["infra"]["components"] = [
+        {
+            "id": "mk8s",
+            "instance_id": "cluster1",
+            "enabled": True,
+            "inputs": {
+                "parent_id": "project-456",
+                "cluster_name": "cluster1",
+                "gpu_enabled": True,
+                "gpu_node_groups": 1,
+                "gpu_nodes_count_per_group": 1,
+                "gpu_nodes_platform": "gpu-h100-sxm",
+                "gpu_nodes_preset": "8gpu-128vcpu-1600gb",
+            },
+        },
+        {
+            "id": "nfs",
+            "instance_id": "cluster1",
+            "enabled": True,
+            "inputs": {},
+        },
+    ]
+    payload["apps"]["charts"] = [
+        {
+            "id": "soperator",
+            "instance_id": "cluster1",
+            "group": "slurm",
+            "enabled": True,
+            "repo": "https://github.com/nebius/nebius-ps-services/tree/main/helm-charts/soperator",
+            "version": "",
+            "namespace": "soperator",
+            "release-name": "soperator",
+            "values": {},
+        }
+    ]
+
+    render_flux(
+        payload,
+        paths,
+        component_output_values={
+            "cluster1.server_ip": "10.10.0.5",
+            "cluster1.export_path": "/srv/nfs/home",
+        },
+    )
+
+    release_doc = yaml.safe_load(
+        (_target_flux_dir(paths, "cluster1") / "helmrelease-slurm-soperator.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert release_doc["spec"]["values"]["externalNfs"] == {
+        "enabled": True,
+        "server": "10.10.0.5",
+        "path": "/srv/nfs/home",
+    }
+
+
+def test_render_local_soperator_chart_source_writes_static_manifest(tmp_path: Path) -> None:
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    paths = resolve_project_paths(config_path)
+
+    payload = _starter_payload(selected_infra={"mk8s", "sfs"}, selected_apps={"soperator"})
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    render_project(load_config(config_path), paths, source_profile=SourceProfile.LOCAL)
+
+    flux_dir = _target_flux_dir(paths)
+    rendered_chart = flux_dir / "post-flux-helmrender-slurm-soperator.yaml"
+    assert rendered_chart.exists()
+    assert not (flux_dir / "helmrelease-slurm-soperator.yaml").exists()
+    kustomization = yaml.safe_load((flux_dir / "kustomization.yaml").read_text(encoding="utf-8"))
+    assert "./post-flux-helmrender-slurm-soperator.yaml" not in kustomization["resources"]
+    rendered = rendered_chart.read_text(encoding="utf-8")
+    assert "kind: SlurmCluster" in rendered
+    assert "kind: Deployment" in rendered
+    rendered_docs = [doc for doc in yaml.safe_load_all(rendered) if isinstance(doc, dict)]
+    slurm_cluster = next(doc for doc in rendered_docs if doc.get("kind") == "SlurmCluster")
+    assert slurm_cluster["spec"]["partitionConfiguration"]["configType"] == "structured"
+    assert "PluginDir=/usr/lib/x86_64-linux-gnu/slurm" in slurm_cluster["spec"]["customSlurmConfig"]
+    assert slurm_cluster["spec"]["slurmNodes"]["accounting"]["enabled"] is True
+    assert slurm_cluster["spec"]["slurmNodes"]["rest"]["enabled"] is True
+    assert slurm_cluster["spec"]["slurmNodes"]["accounting"]["mariadbOperator"]["enabled"] is True
+    nodeset = next(doc for doc in rendered_docs if doc.get("kind") == "NodeSet")
+    worker_mounts = nodeset["spec"]["slurmd"]["volumes"]["customVolumeMounts"]
+    assert {
+        "mountPath": "/opt/slurm_scripts/",
+        "name": "slurm-scripts",
+        "volumeSource": {"configMap": {"defaultMode": 493, "name": "soperator-slurm-scripts"}},
+    } in worker_mounts
+    filter_names = {item["name"] for item in slurm_cluster["spec"]["k8sNodeFilters"]}
+    assert filter_names == {"no-gpu", "system", "controller", "login", "accounting"}
+    assert (
+        slurm_cluster["spec"]["slurmNodes"]["exporter"]["podMonitorConfig"]["scrapeTimeout"]
+        == "20s"
+    )
+    manager_deployment = next(
+        doc
+        for doc in rendered_docs
+        if doc.get("kind") == "Deployment"
+        and doc.get("metadata", {}).get("name") == "soperator-manager"
+    )
+    assert manager_deployment["metadata"]["namespace"] == "soperator"
+    mariadb_operator_deployment = next(
+        doc
+        for doc in rendered_docs
+        if doc.get("kind") == "Deployment"
+        and doc.get("metadata", {}).get("name") == "soperator-mariadb-operator"
+    )
+    assert mariadb_operator_deployment["metadata"]["namespace"] == "soperator"
+    mount_scripts = next(
+        doc
+        for doc in rendered_docs
+        if doc.get("kind") == "ConfigMap"
+        and doc.get("metadata", {}).get("name") == "soperator-mount-scripts"
+    )
+    assert mount_scripts["metadata"]["namespace"] == "soperator"
+
+
+def test_render_local_soperator_mixed_profile_writes_two_nodesets(tmp_path: Path) -> None:
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    paths = resolve_project_paths(config_path)
+
+    payload = _starter_payload(selected_infra={"mk8s", "sfs"}, selected_apps={"soperator"})
+    for chart in payload["apps"]["charts"]:
+        if isinstance(chart, dict) and chart.get("id") == "soperator":
+            chart["profile"] = "nebius-mixed-v1"
+            chart["values"] = {}
+    cli._materialize_soperator_component_defaults(payload)
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    render_project(load_config(config_path), paths, source_profile=SourceProfile.LOCAL)
+
+    rendered_chart = _target_flux_dir(paths, "mk8s") / "post-flux-helmrender-slurm-soperator.yaml"
+    rendered_docs = [
+        doc
+        for doc in yaml.safe_load_all(rendered_chart.read_text(encoding="utf-8"))
+        if isinstance(doc, dict)
+    ]
+    node_sets = {
+        doc["metadata"]["name"]: doc
+        for doc in rendered_docs
+        if doc.get("apiVersion") == "slurm.nebius.ai/v1alpha1" and doc.get("kind") == "NodeSet"
+    }
+    assert set(node_sets) == {"worker-cpu", "worker-gpu"}
+    assert "nvidia.com/gpu" not in node_sets["worker-cpu"]["spec"]["slurmd"]["resources"]
+    assert node_sets["worker-gpu"]["spec"]["slurmd"]["resources"]["nvidia.com/gpu"] == 8
+    assert node_sets["worker-cpu"]["spec"]["nodeConfig"]["static"] == (
+        "Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1"
+    )
+    assert node_sets["worker-gpu"]["spec"]["nodeConfig"]["static"] == (
+        "Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1 Gres=gpu:8"
+    )
+
+    slurm_cluster = next(doc for doc in rendered_docs if doc.get("kind") == "SlurmCluster")
+    assert slurm_cluster["spec"]["partitionConfiguration"]["partitions"] == [
+        {
+            "name": "cpu",
+            "nodeSetRefs": ["worker-cpu"],
+            "config": "Default=YES MaxTime=INFINITE State=UP PriorityTier=5",
+        },
+        {
+            "name": "gpu",
+            "nodeSetRefs": ["worker-gpu"],
+            "config": "Default=NO MaxTime=INFINITE State=UP PriorityTier=10",
+        },
+    ]
+
+
+def test_render_local_soperator_partition_profile_writes_policy_partitions(
+    tmp_path: Path,
+) -> None:
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    paths = resolve_project_paths(config_path)
+
+    payload = _starter_payload(selected_infra={"mk8s", "sfs"}, selected_apps={"soperator"})
+    for chart in payload["apps"]["charts"]:
+        if isinstance(chart, dict) and chart.get("id") == "soperator":
+            chart["profile"] = "nebius-mixed-v1"
+            chart["values"] = {"partitionProfile": "with-debug-long"}
+    cli._materialize_soperator_component_defaults(payload)
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    render_project(load_config(config_path), paths, source_profile=SourceProfile.LOCAL)
+
+    rendered_chart = _target_flux_dir(paths, "mk8s") / "post-flux-helmrender-slurm-soperator.yaml"
+    rendered_docs = [
+        doc
+        for doc in yaml.safe_load_all(rendered_chart.read_text(encoding="utf-8"))
+        if isinstance(doc, dict)
+    ]
+    slurm_cluster = next(doc for doc in rendered_docs if doc.get("kind") == "SlurmCluster")
+    assert slurm_cluster["spec"]["partitionConfiguration"]["partitions"] == [
+        {
+            "name": "cpu",
+            "nodeSetRefs": ["worker-cpu"],
+            "config": "Default=YES MaxTime=INFINITE State=UP PriorityTier=5",
+        },
+        {
+            "name": "gpu",
+            "nodeSetRefs": ["worker-gpu"],
+            "config": "Default=NO MaxTime=INFINITE State=UP PriorityTier=10",
+        },
+        {
+            "name": "debug",
+            "nodeSetRefs": ["worker-cpu", "worker-gpu"],
+            "config": "Default=NO MaxTime=00:30:00 State=UP PriorityTier=100",
+        },
+        {
+            "name": "long",
+            "nodeSetRefs": ["worker-cpu", "worker-gpu"],
+            "config": "Default=NO MaxTime=7-00:00:00 State=UP PriorityTier=1",
+        },
+    ]
+
+
+def test_render_local_soperator_feature_partition_profile_writes_node_features(
+    tmp_path: Path,
+) -> None:
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    paths = resolve_project_paths(config_path)
+
+    payload = _starter_payload(selected_infra={"mk8s", "sfs"}, selected_apps={"soperator"})
+    for chart in payload["apps"]["charts"]:
+        if isinstance(chart, dict) and chart.get("id") == "soperator":
+            chart["profile"] = "nebius-mixed-v1"
+            chart["values"] = {"partitionProfile": "with-h100-infiniband-debug-long"}
+    cli._materialize_soperator_component_defaults(payload)
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    render_project(load_config(config_path), paths, source_profile=SourceProfile.LOCAL)
+
+    rendered_chart = _target_flux_dir(paths, "mk8s") / "post-flux-helmrender-slurm-soperator.yaml"
+    rendered_docs = [
+        doc
+        for doc in yaml.safe_load_all(rendered_chart.read_text(encoding="utf-8"))
+        if isinstance(doc, dict)
+    ]
+    slurm_cluster = next(doc for doc in rendered_docs if doc.get("kind") == "SlurmCluster")
+    assert [
+        partition["name"]
+        for partition in slurm_cluster["spec"]["partitionConfiguration"]["partitions"]
+    ] == ["cpu", "gpu", "h100", "infiniband", "debug", "long"]
+    worker_gpu = next(
+        doc
+        for doc in rendered_docs
+        if doc.get("kind") == "NodeSet" and doc.get("metadata", {}).get("name") == "worker-gpu"
+    )
+    assert worker_gpu["spec"]["nodeConfig"]["features"] == [
+        "gpu",
+        "cuda",
+        "h100",
+        "infiniband",
+    ]
+
+
+def test_render_local_soperator_notifier_uses_only_secret_reference(tmp_path: Path) -> None:
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    paths = resolve_project_paths(config_path)
+
+    payload = _starter_payload(selected_infra=set(), selected_apps={"soperator-notifier"})
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    render_project(load_config(config_path), paths, source_profile=SourceProfile.LOCAL)
+
+    rendered_chart = paths.flux_dir / "post-flux-helmrender-slurm-soperator-notifier.yaml"
+    rendered = rendered_chart.read_text(encoding="utf-8")
+    assert "hooks.slack.com" not in rendered
+    assert "webhookUrl" not in rendered
+    rendered_docs = [doc for doc in yaml.safe_load_all(rendered) if isinstance(doc, dict)]
+    alertmanager_config = next(
+        doc for doc in rendered_docs if doc.get("kind") == "VMAlertmanagerConfig"
+    )
+    slack_config = alertmanager_config["spec"]["receivers"][0]["slack_configs"][0]
+    assert slack_config["api_url"] == {
+        "name": "soperator-notifier-slack-webhook",
+        "key": "url",
+    }
+
+
+def test_render_local_soperator_backup_uses_only_secret_reference(tmp_path: Path) -> None:
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    paths = resolve_project_paths(config_path)
+
+    payload = _starter_payload(
+        selected_infra={"object-storage"},
+        selected_apps={"soperator-backup-config"},
+    )
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    render_project(
+        load_config(config_path),
+        paths,
+        component_output_values={
+            "object-storage.bucket_name": "soperator-jail-backups",
+            "object-storage.bucket_endpoint": "https://soperator-jail-backups.example:443",
+        },
+        source_profile=SourceProfile.LOCAL,
+    )
+
+    rendered_chart = paths.flux_dir / "post-flux-helmrender-slurm-soperator-jail-backup.yaml"
+    rendered = rendered_chart.read_text(encoding="utf-8")
+    assert "aws-access-key-id:" not in rendered
+    assert "aws-secret-value" not in rendered
+    rendered_docs = [doc for doc in yaml.safe_load_all(rendered) if isinstance(doc, dict)]
+    schedule = next(doc for doc in rendered_docs if doc.get("kind") == "Schedule")
+    backend = schedule["spec"]["backend"]
+    assert backend["s3"]["bucket"] == "soperator-jail-backups"
+    assert backend["s3"]["accessKeyIDSecretRef"] == {
+        "name": "jail-backup",
+        "key": "aws-access-key-id",
+    }
+    assert backend["repoPasswordSecretRef"] == {
+        "name": "jail-backup",
+        "key": "backup-password",
+    }
+
+
+def test_render_soperator_mk8s_node_groups_attach_sibling_sfs(tmp_path: Path) -> None:
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    paths = resolve_project_paths(config_path)
+
+    payload = _starter_payload(selected_infra={"mk8s", "sfs"}, selected_apps={"soperator"})
+    mk8s = _infra_component_row(payload, "mk8s")
+    mk8s["instance_id"] = "cluster1"
+    mk8s["inputs"] = {
+        "cluster_name": "cluster1",
+        "node_groups": {
+            "controller": {"workload": "controller", "fixed_node_count": 1, "jail": True},
+            "login": {"workload": "login", "fixed_node_count": 1, "jail": True},
+            "system": {"workload": "system", "fixed_node_count": 1},
+            "compact-cpu": {
+                "nodeset_name": "worker-cpu",
+                "workload": "worker",
+                "fixed_node_count": 2,
+                "jail": True,
+                "sfs_filesystem_keys": ["controller-spool"],
+            },
+        },
+        "mk8s_gpu_node_group_overrides": {
+            "template": {"metadata": {"labels": {"slurm.nebius.ai/jail": "true"}}}
+        },
+    }
+    sfs = _infra_component_row(payload, "sfs")
+    sfs["instance_id"] = "sfs"
+    sfs["inputs"] = {
+        "filesystems": {
+            "jail": {"name": "cluster1-jail", "size_gib": 1024, "mount_tag": "jail"},
+            "controller-spool": {
+                "name": "cluster1-controller-spool",
+                "size_gib": 128,
+                "mount_tag": "controller-spool",
+            },
+        }
+    }
+    for chart in payload["apps"]["charts"]:
+        if isinstance(chart, dict) and chart.get("instance_id") == "mk8s":
+            chart["instance_id"] = "cluster1"
+    payload["deploy"]["targets"][0]["instance_id"] = "cluster1"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    render_project(config, paths, source_profile=SourceProfile.LOCAL)
+
+    main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
+    assert 'module "cluster1" {' in main_tf
+    assert 'module "sfs" {' in main_tf
+    assert 'filesystems = [for key in ["jail", "controller-spool"] : {' in main_tf
+    assert 'filesystems = [for key in ["jail"] : {' in main_tf
+    assert main_tf.count('filesystems = [for key in ["jail", "controller-spool"] : {') == 2
+    assert "mount_tag = module.sfs.filesystems[key].mount_tag" in main_tf
+    assert "id = module.sfs.filesystems[key].id" in main_tf
+
+
 def test_render_dynamic_chart_shape_writes_flux_manifests(tmp_path: Path) -> None:
     reset_component_entry_cache()
     config_path = _project_config_path(tmp_path)
@@ -875,9 +1274,7 @@ def test_render_externalizes_grafana_dashboard_json_to_generated_bundle(
 
     dashboard_dir = paths.generated_dir / "grafana_dashboards" / "mk8s" / "nebius-kubernetes"
     dashboard_files = {
-        item.name
-        for item in dashboard_dir.iterdir()
-        if item.is_file() and item.suffix == ".json"
+        item.name for item in dashboard_dir.iterdir() if item.is_file() and item.suffix == ".json"
     }
     assert dashboard_files == {
         "kubernetes-cluster-monitoring.json",
@@ -910,9 +1307,7 @@ def test_render_externalizes_grafana_dashboard_json_to_generated_bundle(
     assert "json:" not in yaml.safe_dump(values["dashboards"], sort_keys=False)
 
     kustomization_doc = yaml.safe_load(kustomization.read_text(encoding="utf-8"))
-    assert "./configmap-grafana-nebius-kubernetes-dashboards.yaml" in kustomization_doc[
-        "resources"
-    ]
+    assert "./configmap-grafana-nebius-kubernetes-dashboards.yaml" in kustomization_doc["resources"]
     assert kustomization_doc["resources"].index(
         "./configmap-grafana-nebius-kubernetes-dashboards.yaml"
     ) < kustomization_doc["resources"].index("./helmrelease-observability-grafana.yaml")
@@ -935,10 +1330,7 @@ def test_render_project_materializes_observability_agent_scrape_config(
 
     render_project(config, paths, source_profile=SourceProfile.LOCAL)
 
-    release = (
-        _target_flux_dir(paths)
-        / "helmrelease-observability-nebius-observability-agent.yaml"
-    )
+    release = _target_flux_dir(paths) / "helmrelease-observability-nebius-observability-agent.yaml"
     release_doc = yaml.safe_load(release.read_text(encoding="utf-8"))
     metrics = release_doc["spec"]["values"]["config"]["metrics"]
     assert metrics["collectK8sClusterMetrics"] is False
@@ -1011,9 +1403,12 @@ def test_render_native_mysterybox_eso_objects_in_external_secrets_release(
         "namespace": "external-secrets",
     }
     values = release_doc["spec"]["values"]
-    assert values["global"]["affinity"]["nodeAffinity"][
-        "requiredDuringSchedulingIgnoredDuringExecution"
-    ]["nodeSelectorTerms"][0]["matchExpressions"][0]["key"] == "nebius.com/gpu"
+    assert (
+        values["global"]["affinity"]["nodeAffinity"][
+            "requiredDuringSchedulingIgnoredDuringExecution"
+        ]["nodeSelectorTerms"][0]["matchExpressions"][0]["key"]
+        == "nebius.com/gpu"
+    )
     assert "extraObjects" not in values
     kustomization_doc = yaml.safe_load(
         (_target_flux_dir(paths) / "kustomization.yaml").read_text(encoding="utf-8")
@@ -1142,9 +1537,7 @@ def test_render_native_mysterybox_eso_defaults_to_cluster_wide_store(
     assert "./post-flux-mysterybox-eso.yaml" not in kustomization_doc["resources"]
     extra_objects = _load_mysterybox_eso_post_flux_objects(paths)
     store = next(item for item in extra_objects if item["kind"] == "ClusterSecretStore")
-    namespaces = {
-        item["metadata"]["name"] for item in extra_objects if item["kind"] == "Namespace"
-    }
+    namespaces = {item["metadata"]["name"] for item in extra_objects if item["kind"] == "Namespace"}
 
     assert "conditions" not in store["spec"]
     assert namespaces == {"app"}
@@ -1427,9 +1820,9 @@ def test_render_materializes_nebius_gpu_operator_driver_crd_override_for_nebius_
     assert release_doc["spec"]["values"]["driver"]["nvidiaDriverCRD"]["enabled"] is False
     assert release_doc["spec"]["values"]["node-feature-discovery"]["worker"]["affinity"][
         "nodeAffinity"
-    ]["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"][0][
-        "matchExpressions"
-    ][0] == {
+    ]["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"][0]["matchExpressions"][
+        0
+    ] == {
         "key": "nebius.com/gpu",
         "operator": "In",
         "values": ["true"],
@@ -1509,6 +1902,13 @@ def test_render_materializes_driverful_rdma_policy_for_nebius_gpu_clusters(
     )
 
     network_values = network_release_doc["spec"]["values"]
+    assert network_values["operator"]["affinity"]["nodeAffinity"][
+        "requiredDuringSchedulingIgnoredDuringExecution"
+    ]["nodeSelectorTerms"][0]["matchExpressions"][0] == {
+        "key": "nebius.com/gpu",
+        "operator": "NotIn",
+        "values": ["true"],
+    }
     assert network_values["operator"]["ofedDriver"]["deploy"] is False
     assert network_values["nfd"]["enabled"] is True
     assert network_values["nfd"]["deployNodeFeatureRules"] is True
@@ -1622,9 +2022,7 @@ def test_render_disables_gpu_operator_nfd_for_operator_managed_b200_network_oper
 
     target_flux_dir = _target_flux_dir(paths)
     network_release_doc = yaml.safe_load(
-        (target_flux_dir / "helmrelease-platform-network-operator.yaml").read_text(
-            encoding="utf-8"
-        )
+        (target_flux_dir / "helmrelease-platform-network-operator.yaml").read_text(encoding="utf-8")
     )
     gpu_release_doc = yaml.safe_load(
         (target_flux_dir / "helmrelease-platform-gpu-operator.yaml").read_text(encoding="utf-8")

@@ -20,6 +20,11 @@ All notable changes to this chart are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Aligned the chart publish workflow and release helper with the shared
+  `nb-image-chart-publish` GitHub environment and strict Helm linting used by the
+  Soperator chart workflow, and clarified that only chart pushes require
+  authentication.
+
 ## [nccl-test-chart-v0.2.8] - 2026-04-22
 
 ### Changed

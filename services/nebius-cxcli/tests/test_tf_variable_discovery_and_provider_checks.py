@@ -91,8 +91,11 @@ def test_local_managed_modules_do_not_expose_internal_enabled_switches() -> None
     assert "enabled" not in object_storage_specs
     assert "buckets" not in object_storage_specs
     assert managed_pg_specs["name"].required is True
-    assert sfs_specs["name"].required is True
-    assert sfs_specs["size_gib"].required is True
+    assert sfs_specs["name"].required is False
+    assert sfs_specs["name"].nullable is True
+    assert sfs_specs["size_gib"].required is False
+    assert sfs_specs["size_gib"].nullable is True
+    assert sfs_specs["filesystems"].required is False
     assert object_storage_specs["name"].required is True
 
 

@@ -348,3 +348,37 @@ variable "mk8s_gpu_node_group_overrides" {
   default     = {}
   nullable    = false
 }
+
+variable "gpu_clusters" {
+  description = "Provider-aligned named GPU clusters for generic node_groups. Each value can set name, parent_id, labels, enabled, and infiniband_fabric."
+  type        = map(any)
+  default     = {}
+  nullable    = false
+  validation {
+    condition = alltrue([
+      for key, cluster in var.gpu_clusters : (
+        length(trimspace(key)) > 0 &&
+        (
+          try(cluster.enabled, true) == false ||
+          length(trimspace(try(cluster.infiniband_fabric, ""))) > 0
+        )
+      )
+    ])
+    error_message = "Each enabled gpu_clusters entry must have a non-empty key and infiniband_fabric."
+  }
+}
+
+variable "node_groups" {
+  description = "Generic provider-aligned MK8s node groups keyed by caller-owned logical name. Terraform creates only Nebius MK8s node groups; any Soperator role names come from caller or cxcli profile data."
+  type        = any
+  default     = {}
+  nullable    = false
+  validation {
+    condition = alltrue([
+      for key, group in var.node_groups : (
+        length(trimspace(key)) > 0
+      )
+    ])
+    error_message = "Each node_groups entry must have a non-empty key."
+  }
+}

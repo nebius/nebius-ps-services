@@ -1,0 +1,90 @@
+{{- if .Values.waitForChecks.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: wait-for-active-checks
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": hook-succeeded,hook-failed,before-hook-creation
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: activecheck-waiter
+      containers:
+        - name: wait-for-active-checks
+          image: {{ .Values.waitForChecks.image | quote }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+
+              echo "Waiting for ActiveChecks with spec.runAfterCreation=true using kubectl..."
+
+              NAMESPACE="{{ .Release.Namespace }}"
+              CRD_KIND="activechecks.slurm.nebius.ai"
+
+              echo "Fetching ActiveCheck list..."
+              # Only wait for checks that run on creation and ignore flappy comment-only checks.
+              active_check_names=$(kubectl get "$CRD_KIND" -n "$NAMESPACE" -o json \
+                | jq -r '.items[] | select(.spec.runAfterCreation == true and .spec.failureReactions.commentSlurmNode == null) | .metadata.name')
+
+              if [ -z "$active_check_names" ]; then
+                echo "No CRs with runAfterCreation=true found. Exiting."
+                exit 0
+              fi
+
+              pending_names="$active_check_names"
+              while [ -n "$pending_names" ]; do
+                pending_next=""
+                for name in $pending_names; do
+                  echo "Checking type of ActiveCheck $name..."
+
+                  checkType=$(kubectl get "$CRD_KIND" "$name" -n "$NAMESPACE" -o jsonpath='{.spec.checkType}')
+                  echo "ActiveCheck $name has checkType: $checkType"
+
+                  if [ "$checkType" = "k8sJob" ]; then
+                    status=$(kubectl get "$CRD_KIND" "$name" -n "$NAMESPACE" -o jsonpath='{.status.k8sJobsStatus.lastJobStatus}')
+                    status="${status:-Pending}"
+
+                    echo "[k8sJob] $name status: $status"
+
+                    if [ "$status" = "Complete" ]; then
+                      echo "$name succeeded."
+                    elif [ "$status" = "Failed" ]; then
+                      echo "$name failed. Aborting Helm release."
+                      exit 1
+                    else
+                      pending_next="$pending_next $name"
+                    fi
+
+                  elif [ "$checkType" = "slurmJob" ]; then
+                    status=$(kubectl get "$CRD_KIND" "$name" -n "$NAMESPACE" -o jsonpath='{.status.slurmJobsStatus.lastRunStatus}')
+                    status="${status:-Pending}"
+
+                    echo "[slurmJob] $name state: $status"
+
+                    if [ "$status" = "Complete" ]; then
+                      echo "$name succeeded."
+                    elif [ "$status" = "Cancelled" ]; then
+                      echo "$name cancelled."
+                    elif [ "$status" = "Failed" ] || [ "$status" = "Degraded" ]; then
+                      echo "$name failed or degraded. Aborting Helm release."
+                      exit 1
+                    else
+                      pending_next="$pending_next $name"
+                    fi
+
+                  else
+                    echo "Unknown checkType '$checkType' for $name. Skipping."
+                  fi
+
+                  sleep 5
+                done
+
+                pending_names="$pending_next"
+              done
+
+              echo "All matching CRs completed."
+{{- end }}

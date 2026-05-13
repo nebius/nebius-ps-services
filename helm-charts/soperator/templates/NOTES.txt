@@ -1,0 +1,33 @@
+Nebius Soperator chart rendered for release {{ .Release.Name }} in namespace {{ .Release.Namespace }}.
+
+Use a Helm release name that is unique across the cluster. The operator
+ClusterRoles, ClusterRoleBindings, and webhook configurations are
+cluster-scoped and include the release name.
+
+{{- if or (eq .Values.volume.jail.type "local") (eq (default "filestore" .Values.volume.controllerSpool.type) "local") }}
+Local storage mode is enabled. This mode uses Kubernetes local PVs backed by
+node-local paths and is intended only for local learning or development
+clusters that can pull the pinned Soperator images.
+For the shipped local profile, label one storage node with
+slurm.nebius.ai/local-storage=true before install. This is not a shared
+multi-node jail; use a real shared RWX backend for multi-node worker tests.
+The local example disables accounting, Slurm REST, SConfigController, and the
+production SPANK plug stack; use the default values for Nebius production.
+{{- else }}
+Terraform must create and attach the Nebius MK8s/SFS/NFS infrastructure before
+this release can converge.
+{{- end }}
+
+{{- if .Values.certManager.enabled }}
+certManager.enabled=true renders cert-manager.io Certificate and Issuer
+resources for the Soperator webhooks. Install cert-manager, including its CRDs,
+before installing this chart.
+{{- else }}
+certManager.enabled=false disables Soperator admission webhook rendering and
+starts the operator with webhooks disabled.
+{{- end }}
+
+Login SSH public keys must be supplied through
+slurmNodes.login.sshRootPublicKeys for a usable login surface.
+Use public key content, not a local filesystem path. For a local key file, use:
+helm install ... --set-file "slurmNodes.login.sshRootPublicKeys[0]=$HOME/.ssh/id_ed25519.pub"

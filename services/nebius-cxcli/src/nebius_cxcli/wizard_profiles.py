@@ -196,6 +196,8 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
             "inputs.mk8s_cluster_overrides",
             "inputs.mk8s_cpu_node_group_overrides",
             "inputs.mk8s_gpu_node_group_overrides",
+            "inputs.gpu_clusters",
+            "inputs.node_groups",
         ),
     },
     "managed-postgresql": {

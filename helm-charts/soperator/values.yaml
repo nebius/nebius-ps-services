@@ -1,0 +1,1229 @@
+# ---------------------------------------------------------------------------
+# SlurmCluster identity and global behavior
+# ---------------------------------------------------------------------------
+
+# Kubernetes-safe SlurmCluster name. Keep this to 38 lowercase DNS-label
+# characters or fewer, starting with a letter, so generated suffixed resources
+# stay within 63 chars.
+clusterName: "soperator"
+# Additional annotations on the rendered SlurmCluster.
+annotations: {}
+# Add AppArmor profile to the cluster. The default worker security profile below
+# is intentionally unconfined for the Slurm chroot/pyxis runtime used by the
+# pinned Soperator images; tighten per component only after validating that path.
+useDefaultAppArmorProfile: false
+# Maintenance action applied by Soperator.
+# It can have the following values:
+# - none: No maintenance is performed. The cluster operates normally.
+# - downscale: Scales down all components to 0.
+# - downscaleAndDeletePopulateJail: Scales down all components to 0 and deletes the populateJail Job.
+# - downscaleAndOverwritePopulateJail: Scales down all components to 0 and overwrites populateJail.
+# - skipPopulateJail: Skips the execution of the populateJail job during maintenance.
+maintenance: "none"
+# Slurm cluster type. Use gpu when any worker NodeSet requests GPUs.
+clusterType: gpu
+# CUDA version used for populate-jail image selection.
+cudaVersion: 12.9.0
+
+# ---------------------------------------------------------------------------
+# Slurm partition, node filter, and volume source model
+# ---------------------------------------------------------------------------
+
+# Slurm partition configuration for worker NodeSets.
+# https://slurm.schedmd.com/slurm.conf.html#SECTION_PARTITION-CONFIGURATION
+partitionConfiguration:
+  # configType selects how Soperator generates partition lines.
+  # - default: generates upstream standard partitions without explicit NodeSet registration
+  # - custom: uses raw partition configuration strings from rawConfig
+  # - structured: enables NodeSet references and structured partition definitions
+  configType: "structured"
+  # Raw Slurm partition lines. Used only when configType is "custom".
+  rawConfig: []
+  #    - PartitionName=low_priority Nodes=low_priority Default=YES MaxTime=INFINITE State=UP PriorityTier=1
+  #    - PartitionName=high_priority  Nodes=high_priority Default=NO MaxTime=INFINITE State=UP PriorityTier=2
+  # If Nodes present, they must not contain node names: use only nodeset values, "ALL" or "".
+  # Specifying specific nodes is not supported since Dynamic Nodes are used.
+  # For more details, see https://slurm.schedmd.com/dynamic_nodes.html#partitions.
+
+  # Structured partitions. Used only when configType is "structured".
+  partitions:
+    - name: "main"
+      isAll: true
+      config: "Default=YES MaxTime=INFINITE State=UP PriorityTier=10 OverSubscribe=YES"
+    - name: "hidden"
+      isAll: true
+      config: "Default=NO Hidden=YES MaxTime=INFINITE State=UP PriorityTier=10 PreemptMode=OFF OverSubscribe=YES"
+  # Example partitions (similar to default partitions):
+  #  - name: "main"
+  #    isAll: true
+  #    config: "Default=YES MaxTime=INFINITE State=UP PriorityTier=10"
+  #  - name: "hidden"
+  #    isAll: true
+  #    config: "Hidden=YES MaxTime=INFINITE State=UP PriorityTier=10"
+  #  - name: "background"
+  #    isAll: true
+  #    config: "Hidden=YES MaxTime=INFINITE State=UP PriorityTier=1"
+  # Example with NodeSet references:
+  #  - name: "gpu-partition"
+  #    nodeSetRefs:
+  #      - "gpu-nodesets"
+  #    config: "Default=YES MaxTime=8:00:00 State=UP PriorityTier=10"
+  #  - name: "cpu-partition"
+  #    nodeSetRefs:
+  #      - "cpu-nodesets"
+  #    config: "Default=NO MaxTime=INFINITE State=UP PriorityTier=5"
+# Slurm features are defined per worker NodeSet under nodesets[].nodeConfig.features.
+# Partitions reference NodeSet names through partitionConfiguration.partitions[].nodeSetRefs.
+# To expose hardware labels such as h100, highmem, or infiniband, put those labels
+# on the matching homogeneous NodeSet and optionally create a partition that points
+# to that NodeSet.
+
+# Optional Slurm health check override. When null and clusterType is gpu, the
+# chart renders the default GPU health check program from slurm-scripts.
+healthCheckConfig: null
+# Kubernetes node filters used by SlurmCluster roles such as controller, login,
+# accounting, exporter, REST, and populateJail. Worker NodeSets schedule through
+# nodesets[].nodeSelector and tolerations instead of this list.
+k8sNodeFilters:
+  - name: no-gpu
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: "nebius.com/gpu"
+                  operator: NotIn
+                  values:
+                    - "true"
+  - name: system
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: "slurm.nebius.ai/nodeset-name"
+                  operator: In
+                  values:
+                    - "system"
+  - name: controller
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: "slurm.nebius.ai/nodeset-name"
+                  operator: In
+                  values:
+                    - "controller"
+  - name: login
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: "slurm.nebius.ai/nodeset-name"
+                  operator: In
+                  values:
+                    - "login"
+  - name: accounting
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: "slurm.nebius.ai/nodeset-name"
+                  operator: In
+                  values:
+                    - "accounting"
+# Volume sources exposed to Soperator in SlurmCluster.spec.volumeSources.
+# Defaults point at chart-managed PVC names. Set createPVC=true only for an
+# extra generic PVC created from this list; the default jail/controller-spool
+# PVCs are managed by templates/slurm-cluster-storage/.
+volumeSources:
+  - name: controller-spool
+    createPVC: false
+    storageClassName: ""
+    size: ""
+    persistentVolumeClaim:
+      claimName: "controller-spool-pvc"
+      readOnly: false
+  - name: jail
+    createPVC: false
+    storageClassName: ""
+    size: ""
+    persistentVolumeClaim:
+      claimName: "jail-pvc"
+      readOnly: false
+#  - name: jail-snapshot
+#    createPVC: false
+#    storageClassName: ""
+#    size: ""
+#    persistentVolumeClaim:
+#      claimName: "jail-snapshot-pvc"
+#      readOnly: true
+#  - name: mlperf-sd
+#    createPVC: false
+#    storageClassName: ""
+#    size: ""
+#    persistentVolumeClaim:
+#      claimName: "jail-submount-mlperf-sd-pvc"
+#      readOnly: false
+
+# Secret references needed for Slurm cluster operation.
+secrets: {}
+# Example: secret reference for login sshd. If the name is empty, Soperator
+# generates its own SSH host key secret.
+# sshdKeysName: ""
+
+# ---------------------------------------------------------------------------
+# Slurm configuration and populate-jail
+# ---------------------------------------------------------------------------
+
+# Job that initializes the shared jail filesystem.
+populateJail:
+  imagePullPolicy: "IfNotPresent"
+  appArmorProfile: "unconfined"
+  # Name of the k8sNodeFilters entry used for the populateJail pod.
+  k8sNodeFilterName: "system"
+  # Uncomment to control whether pod containers use the host user namespace.
+  # hostUsers: false
+  # Optional volume containing custom initial jail content. When null, the
+  # default populate-jail image content is used.
+  jailSnapshotVolume: null
+  #  jailSnapshotVolume:
+  #    volumeSourceName: "jail-snapshot"
+  overwrite: false
+slurmConfig:
+  # Soperator 3.0.3 defaults defMemPerNode to 0 in the CRD. Do not add
+  # DefMemPerCPU to customSlurmConfig; Slurm treats it as mutually exclusive
+  # with DefMemPerNode. For GPU workers, prefer DefMemPerGPU with DefCpuPerGPU.
+  defMemPerNode: 0
+  defCpuPerGPU: 4
+  completeWait: 5
+  prolog: /opt/slurm_scripts/prolog.sh
+  epilog: /opt/slurm_scripts/epilog.sh
+  taskPluginParam: ""
+  maxJobCount: 20000
+  minJobAge: 3600
+  messageTimeout: 60
+  topologyPlugin: "topology/tree"
+  topologyParam: "SwitchAsNodeRank"
+# Soperator 3.0.3 renders PluginDir=/usr/lib/slurm, while the Slurm SPANK
+# plugins in the pinned images are installed under the Debian multiarch path.
+customSlurmConfig: |
+  PluginDir=/usr/lib/x86_64-linux-gnu/slurm
+customCgroupConfig: ""
+mpiConfig:
+  # Override this if the primary MPI data-plane interface is not eth0.
+  pmixEnv: "OMPI_MCA_btl_tcp_if_include=eth0"
+plugStackConfig:
+  pyxis:
+    required: true
+    containerImageSave: "/var/cache/enroot-container-images/"
+  ncclDebug:
+    required: false
+    enabled: true
+    logLevel: "INFO"
+    outputToFile: true
+    outputToStdOut: false
+    outputDirectory: "/opt/soperator-outputs/nccl_logs"
+  customPlugins: []
+#  customPlugins:
+#    - required: true
+#      path: custom.so
+#      arguments:
+#        foo: bar
+
+# ---------------------------------------------------------------------------
+# SlurmCluster role configuration
+# ---------------------------------------------------------------------------
+
+slurmNodes:
+  sssd:
+    enabled: false
+    # Optional per-cluster SSSD image override. Defaults to images.sssd.
+    image: ""
+    sssdDebugLevel: 0
+    imagePullPolicy: "IfNotPresent"
+    appArmorProfile: "unconfined"
+    command: []
+    args: []
+    livenessProbe:
+      exec:
+        command:
+          - /bin/sh
+          - -c
+          - test -S /var/lib/sss/pipes/nss && test -S /var/lib/sss/pipes/pam
+      timeoutSeconds: 1
+      periodSeconds: 10
+      successThreshold: 1
+      failureThreshold: 3
+    readinessProbe:
+      exec:
+        command:
+          - /bin/sh
+          - -c
+          - test -S /var/lib/sss/pipes/nss && test -S /var/lib/sss/pipes/pam
+      timeoutSeconds: 1
+      periodSeconds: 10
+      successThreshold: 1
+      failureThreshold: 3
+    resources:
+      cpu: "200m"
+      memory: "500Mi"
+      ephemeralStorage: "5Gi"
+    sssdConfSecretRefName: ""
+    sssdLdapCAConfigMapRefName: ""
+  accounting:
+    enabled: true
+    k8sNodeFilterName: "accounting"
+    # Uncomment to control whether pod containers use the host user namespace.
+    # hostUsers: false
+    slurmConfig:
+      accountingStorageTRES: "CPU,Mem,Node,VMem,Gres/gpu"
+      jobAcctGatherType: "jobacct_gather/cgroup"
+      jobAcctGatherFrequency: 0
+      priorityWeightAge: 0
+      priorityWeightFairshare: 0
+      priorityWeightQOS: 0
+    slurmdbdConfig:
+      archiveEvents: "yes"
+      archiveJobs: "yes"
+      archiveResvs: "yes"
+      archiveSteps: "no"
+      archiveSuspend: "no"
+      archiveTXN: "no"
+      archiveUsage: "yes"
+      debugLevel: "info"
+      tcpTimeout: 2
+      purgeEventAfter: "1month"
+      purgeJobAfter: "12month"
+      purgeResvAfter: "1month"
+      purgeStepAfter: "1month"
+      purgeSuspendAfter: "1month"
+      purgeTXNAfter: "12month"
+      purgeUsageAfter: "24month"
+    slurmdbd:
+      imagePullPolicy: "IfNotPresent"
+      appArmorProfile: "unconfined"
+      command: []
+      args: []
+      readinessProbe:
+        tcpSocket:
+          port: 6819
+        failureThreshold: 3
+        initialDelaySeconds: 1
+        periodSeconds: 10
+        successThreshold: 1
+        timeoutSeconds: 1
+      port: 6819
+      resources:
+        cpu: "1000m"
+        memory: "3Gi"
+        ephemeralStorage: "10Gi"
+    munge:
+      imagePullPolicy: "IfNotPresent"
+      appArmorProfile: "unconfined"
+      livenessProbe:
+        exec:
+          command:
+            - /bin/sh
+            - -c
+            - /usr/bin/munge -n > /dev/null && exit 0 || exit 1
+        timeoutSeconds: 1
+        periodSeconds: 10
+        successThreshold: 1
+        failureThreshold: 3
+      readinessProbe:
+        exec:
+          command:
+            - /bin/sh
+            - -c
+            - test -S /run/munge/munge.socket.2
+        timeoutSeconds: 1
+        periodSeconds: 10
+        successThreshold: 1
+        failureThreshold: 3
+      resources:
+        cpu: "1000m"
+        memory: "1Gi"
+        ephemeralStorage: "5Gi"
+    customInitContainers: []
+    externalDB:
+      enabled: false
+      # host: ""
+      port: 3306
+      # user: ""
+      # passwordSecretKeyRef:
+      #   name: ""
+      #   key: ""
+      # tls:
+      #   serverCASecretRef: ""
+      #   clientCertSecretRef: ""
+      # storageParameters:
+      #   SSL_CIPHER: ""
+    mariadbOperator:
+      enabled: true
+      protectedSecret: false
+      resources:
+        cpu: "1000m"
+        memory: "1Gi"
+        ephemeralStorage: "5Gi"
+      replicas: 1
+      replication: {}
+      # enabled: false
+      # primary: {}
+      # probesEnabled: false
+      # replica: {}
+      # syncBinlog: false
+      storage:
+        size: 10Gi
+      # ephemeral: false
+      # resizeInUseVolumes: false
+      # size: {}
+      # storageClassName: ""
+      # volumeClaimTemplate: ""
+      # waitForVolumeResize: false
+      podSecurityContext: {}
+      # fsGroup: 2000
+      # runAsUser: 1000
+      # runAsGroup: 3000
+      # runAsNonRoot: true
+      # supplementalGroups: [1000]
+      securityContext: {}
+      # runAsUser: 1000
+      # runAsGroup: 3000
+      # runAsNonRoot: true
+      # capabilities:
+      #   add: ["NET_ADMIN", "SYS_TIME"]
+      metrics:
+        enabled: true
+        # username: ""
+        # serviceMonitor: {}
+        # jobLabel: ""
+        # interval: ""
+        # scrapeTimeout: ""
+        # exporter: {}
+        # passwordSecretKeyRef: {}
+        # name: ""
+        # key: ""
+      priorityClassName: ""
+      # affinity: {}
+      # args: []
+      # env: []
+      # envFrom: []
+      # image: ""
+      # imagePullPolicy: ""
+      # imagePullSecrets: []
+      # initContainers: []
+      # livenessProbe: {}
+      # nodeSelector: {}
+      # podMetadata: {}
+      # securityContext: {}
+      # serviceAccountName: ""
+      # sidecarContainers: []
+      # tolerations: []
+      # resources: {}
+      # volumeMounts: []
+      # volumes: []
+      # resources: {}
+      #   limits:
+      #     cpu: "100m"
+      #     memory: "128Mi"
+      #   requests:
+      #     cpu: "50m"
+      #     memory: "64Mi"
+  controller:
+    k8sNodeFilterName: "controller"
+    priorityClass: ""
+    # Uncomment to control whether pod containers use the host user namespace.
+    # hostUsers: false
+    # RBAC for slurm-controller ephemeral node power-state management. The
+    # power-manager binary runs inside slurmctld and is called by Slurm
+    # ResumeProgram/SuspendProgram.
+    rbac:
+      # Create Role and RoleBinding resources for slurm-controller.
+      create: true
+    # ServiceAccount mounted in the slurmctld pod.
+    serviceAccount:
+      # Create a ServiceAccount for slurm-controller.
+      create: true
+      # If empty and create=true, the chart uses <clusterName>-slurm-controller.
+      name: ""
+    slurmctld:
+      imagePullPolicy: "IfNotPresent"
+      appArmorProfile: "unconfined"
+      command: []
+      args: []
+      livenessProbe:
+        httpGet:
+          path: /livez
+          port: 6817
+        initialDelaySeconds: 10
+        timeoutSeconds: 10
+        periodSeconds: 60
+        successThreshold: 1
+        failureThreshold: 5
+      port: 6817
+      resources:
+        cpu: "1000m"
+        memory: "3Gi"
+        ephemeralStorage: "20Gi"
+    munge:
+      imagePullPolicy: "IfNotPresent"
+      appArmorProfile: "unconfined"
+      command: []
+      args: []
+      livenessProbe:
+        exec:
+          command:
+            - /bin/sh
+            - -c
+            - /usr/bin/munge -n > /dev/null && exit 0 || exit 1
+        timeoutSeconds: 1
+        periodSeconds: 10
+        successThreshold: 1
+        failureThreshold: 3
+      readinessProbe:
+        exec:
+          command:
+            - /bin/sh
+            - -c
+            - test -S /run/munge/munge.socket.2
+        timeoutSeconds: 1
+        periodSeconds: 10
+        successThreshold: 1
+        failureThreshold: 3
+      resources:
+        cpu: "1000m"
+        memory: "1Gi"
+        ephemeralStorage: "5Gi"
+    customInitContainers: []
+    volumes:
+      spool:
+        volumeSourceName: "controller-spool"
+      jail:
+        volumeSourceName: "jail"
+      customMounts: []
+  login:
+    size: 1
+    k8sNodeFilterName: "login"
+    # Uncomment to control whether pod containers use the host user namespace.
+    # hostUsers: false
+    sshd:
+      imagePullPolicy: "IfNotPresent"
+      appArmorProfile: "unconfined"
+      readinessProbe:
+        tcpSocket:
+          port: 22
+        timeoutSeconds: 1
+        periodSeconds: 10
+        successThreshold: 1
+        failureThreshold: 3
+      port: 22
+      resources:
+        cpu: "3000m"
+        memory: "9Gi"
+        ephemeralStorage: "30Gi"
+      command: []
+      args: []
+    # Authorized public key strings required for SSH connection to Slurm login
+    # nodes. Do not set this to a local path; use Helm --set-file to read a
+    # local public key file such as $HOME/.ssh/id_ed25519.pub.
+    sshRootPublicKeys: []
+    # Either `LoadBalancer` or `NodePort`
+    sshdServiceType: "LoadBalancer"
+    # Could be needed in case of sshdServiceType == `LoadBalancer`
+    # sshdServiceLoadBalancerIP: "192.168.0.1"
+    sshdServiceLoadBalancerIP: ""
+    # Source IP ranges allowed to access LoadBalancer (CIDR format)
+    # sshdServiceLoadBalancerSourceRanges: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+    sshdServiceLoadBalancerSourceRanges: []
+    # Required in case of sshdServiceType == `NodePort`
+    sshdServiceNodePort: 30022
+    # Annotations to configure on the login Service.
+    sshdServiceAnnotations: {}
+    munge:
+      imagePullPolicy: "IfNotPresent"
+      appArmorProfile: "unconfined"
+      command: []
+      args: []
+      livenessProbe:
+        exec:
+          command:
+            - /bin/sh
+            - -c
+            - /usr/bin/munge -n > /dev/null && exit 0 || exit 1
+        timeoutSeconds: 1
+        periodSeconds: 10
+        successThreshold: 1
+        failureThreshold: 3
+      readinessProbe:
+        exec:
+          command:
+            - /bin/sh
+            - -c
+            - test -S /run/munge/munge.socket.2
+        timeoutSeconds: 1
+        periodSeconds: 10
+        successThreshold: 1
+        failureThreshold: 3
+      resources:
+        cpu: "500m"
+        memory: "500Mi"
+        ephemeralStorage: "5Gi"
+    customInitContainers: []
+    volumes:
+      jail:
+        volumeSourceName: "jail"
+      jailSubMounts: []
+      # jailSubMounts:
+      #   - name: "mlcommons-sd-bench-data"
+      #     mountPath: "/mlperf-sd"
+      #     volumeSourceName: "mlperf-sd"
+      customMounts: []
+  exporter:
+    enabled: true
+    size: 1
+    k8sNodeFilterName: "no-gpu"
+    # Uncomment to control whether pod containers use the host user namespace.
+    # hostUsers: false
+    podMonitorConfig:
+      jobLabel: "slurm-exporter"
+      interval: "30s"
+      scrapeTimeout: "20s"
+    # RBAC settings for the Slurm exporter.
+    rbac:
+      # Create Role and RoleBinding resources.
+      create: true
+    # ServiceAccount used by the Slurm exporter.
+    serviceAccount:
+      # Create a ServiceAccount.
+      create: true
+      # - If empty and create=true, the chart uses
+      #   <clusterName>-slurm-exporter.
+      # - If empty and create=false, the chart uses default. Ensure that
+      #   ServiceAccount already has the required RBAC.
+      name: ""
+    collectionInterval: "30s"
+    # EXPERIMENTAL: Slurm job source: controller (Slurm controller API) or
+    # accounting (Slurm accounting API / slurmdbd).
+    # Use "accounting" when the controller endpoint is overloaded on large clusters.
+    jobSource: "controller"
+    # EXPERIMENTAL: when jobSource=accounting, these Slurm job-state strings are
+    # forwarded verbatim to the accounting API state filter. Empty list means no
+    # state filter. slurmdbd applies this filter to historical states held
+    # during the lookback window, not only the current state.
+    accountingJobStates: []
+    # EXPERIMENTAL: when jobSource=accounting, this is the time window queried
+    # from the accounting API ([now - lookback, now + 5m]). The +5m skew
+    # tolerates clock drift between slurmrestd, slurmctld, and slurmdbd. Use a
+    # duration such as 30m, 1h, 1d, 1.5h, or 2h45m30.5s.
+    accountingJobsLookback: "1h"
+    exporterContainer:
+      imagePullPolicy: "IfNotPresent"
+      appArmorProfile: "unconfined"
+      resources:
+        cpu: "250m"
+        memory: "256Mi"
+        ephemeralStorage: "500Mi"
+      # command: []
+      # args: []
+      # customEnv: []
+      # livenessProbe:
+      #   httpGet:
+      #     path: /healthz
+      #     port: 8081
+      # readinessProbe:
+      #   httpGet:
+      #     path: /readyz
+      #     port: 8081
+    munge:
+      imagePullPolicy: "IfNotPresent"
+      appArmorProfile: "unconfined"
+      command: []
+      args: []
+      resources:
+        cpu: "1000m"
+        memory: "1Gi"
+        ephemeralStorage: "5Gi"
+    customInitContainers: []
+    volumes:
+      jail:
+        volumeSourceName: "jail"
+  rest:
+    enabled: true
+    size: 1
+    k8sNodeFilterName: "controller"
+    # Uncomment to control whether pod containers use the host user namespace.
+    # hostUsers: false
+    threadCount: 3
+    maxConnections: 10
+    rest:
+      imagePullPolicy: "IfNotPresent"
+      appArmorProfile: "unconfined"
+      command: []
+      args: []
+      livenessProbe:
+        tcpSocket:
+          port: 6820
+        failureThreshold: 5
+        initialDelaySeconds: 15
+        periodSeconds: 10
+        successThreshold: 1
+        timeoutSeconds: 1
+      resources:
+        cpu: "2000m"
+        memory: "8Gi"
+        ephemeralStorage: "500Mi"
+    customInitContainers: []
+sConfigController:
+  # Uncomment to control whether pod containers use the host user namespace.
+  # hostUsers: false
+  node:
+    k8sNodeFilterName: "controller"
+    size: 1
+  container:
+    imagePullPolicy: "IfNotPresent"
+    # livenessProbe: {}
+    # readinessProbe: {}
+    resources:
+      cpu: "250m"
+      memory: "256Mi"
+      ephemeralStorage: "500Mi"
+  # These should match UID and GID in sconfigcontroller image
+  runAsUid: 1001
+  runAsGid: 1001
+  reconfigurePollInterval: "20s"
+  reconfigureWaitTimeout: "5m"
+  serviceMonitor:
+    enabled: false
+    jobLabel: "sconfigcontroller"
+    interval: "30s"
+    scrapeTimeout: "20s"
+  # RBAC settings for SConfigController.
+  rbac:
+    # Create Role and RoleBinding resources.
+    create: true
+  # ServiceAccount used by SConfigController.
+  serviceAccount:
+    # Create a ServiceAccount for SConfigController.
+    create: true
+    # If empty and create=true, the chart uses <clusterName>-sconfigcontroller.
+    # This field is required in the SlurmCluster CR.
+    name: ""
+
+# ---------------------------------------------------------------------------
+# Images and Slurm script ConfigMap content
+# ---------------------------------------------------------------------------
+
+images:
+  # Flat image references used by SlurmCluster components and as NodeSet image
+  # fallbacks when a NodeSet omits its own image.repository/image.tag.
+  slurmctld: "cr.eu-north1.nebius.cloud/soperator/controller_slurmctld:3.0.3-slurm25.11.3"
+  slurmrestd: "cr.eu-north1.nebius.cloud/soperator/slurmrestd:3.0.3-slurm25.11.3"
+  slurmd: "cr.eu-north1.nebius.cloud/soperator/worker_slurmd:3.0.3-slurm25.11.3"
+  sshd: "cr.eu-north1.nebius.cloud/soperator/login_sshd:3.0.3-slurm25.11.3"
+  munge: "cr.eu-north1.nebius.cloud/soperator/munge:3.0.3-slurm25.11.3"
+  sssd: "cr.eu-north1.nebius.cloud/soperator/sssd:2.9.4-1-63"
+  populateJail: ""
+  populateJailRepository: "cr.eu-north1.nebius.cloud/soperator/populate_jail"
+  populateJailTag: "3.0.3-slurm25.11.3"
+  slurmdbd: "cr.eu-north1.nebius.cloud/soperator/controller_slurmdbd:3.0.3-slurm25.11.3"
+  soperatorExporter: "cr.eu-north1.nebius.cloud/soperator/soperator-exporter:3.0.3-slurm25.11.3"
+  sConfigController: "cr.eu-north1.nebius.cloud/soperator/sconfigcontroller:3.0.3"
+  mariaDB: "docker-registry1.mariadb.com/library/mariadb:12.1.2"
+
+# Slurm script ConfigMap content.
+slurmScripts:
+  # Base scripts can be overridden here. Null keeps the chart/upstream content.
+  check_runner.py: null
+  prolog.sh: null
+  epilog.sh: null
+  hc_program.sh: null
+  # Built-in scripts can be overridden or disabled here. Keys must match file
+  # names in slurm_scripts/.
+  builtIn:
+    alloc_gpus_busy.drain.sh:
+      enabled: true
+      customContent: null
+      customConfig: null
+    alloc_gpus_busy.undrain.sh:
+      enabled: true
+      customContent: null
+      customConfig: null
+    alloc_mem_used.drain.sh:
+      enabled: true
+      customContent: null
+      customConfig: null
+    alloc_mem_used.undrain.sh:
+      enabled: true
+      customContent: null
+      customConfig: null
+    boot_disk_full.sh:
+      enabled: true
+      customContent: null
+      customConfig: null
+    chmod_enroot_layers.sh:
+      enabled: true
+      customContent: null
+      customConfig: null
+    cleanup_enroot.sh:
+      enabled: true
+      customContent: null
+      customConfig: null
+    cleanup_scratch_data.sh:
+      enabled: true
+      customContent: null
+      customConfig: null
+    drop_page_cache.sh:
+      enabled: true
+      customContent: null
+      customConfig: null
+    drop_posix_shmem.sh:
+      enabled: true
+      customContent: null
+      customConfig: null
+    gpu_health_check.py:
+      enabled: true
+      customContent: null
+      customConfig: null
+    job_tmpfs_delete.sh:
+      enabled: true
+      customContent: null
+      customConfig: null
+    job_tmpfs_delete_leftover.sh:
+      enabled: true
+      customContent: null
+      customConfig: null
+    job_tmpfs_recreate.sh:
+      enabled: true
+      customContent: null
+      customConfig: null
+    map_job_dcgm.sh:
+      enabled: true
+      customContent: null
+      customConfig: null
+    nvme_raid_health.sh:
+      enabled: false
+      customContent: null
+      customConfig: null
+    unmap_job_dcgm.sh:
+      enabled: true
+      customContent: null
+      customConfig: null
+  extra: null
+  # extra:
+  #   example.sh:
+  #     config: |-
+  #     {
+  #       "name": "example",
+  #       "command": "./example.sh",
+  #       "platforms": ["any"],
+  #       "skip_for_cpu_jobs": false,
+  #       "skip_for_partial_gpu_jobs": false,
+  #       "skip_for_reservation_prefixes": [],
+  #       "contexts": ["prolog"],
+  #       "node_states": ["any"],
+  #       "on_fail": "drain",
+  #       "on_ok": "undrain",
+  #       "reason_base": "[some tag] $name",
+  #       "reason_append_details": true,
+  #       "run_in_jail": false,
+  #       "log": "slurm_scripts/$worker.$name.$context.out",
+  #       "need_env": []
+  #     }
+  #     content: |-
+  #     #!/bin/bash
+  #     echo "Cluster: {{ $.Values.clusterName }}"
+
+# ---------------------------------------------------------------------------
+# Soperator operator deployment and webhooks
+# ---------------------------------------------------------------------------
+
+# Soperator operator defaults imported from upstream 3.0.3. DCGM Exporter is
+# intentionally not deployed by this chart; nebius-cxcli manages DCGM through
+# NVIDIA GPU Operator for GPU MK8s targets.
+nameOverride: ""
+fullnameOverride: ""
+
+controllerManager:
+  replicas: 1
+  serviceAccount:
+    annotations: {}
+  kubeRbacProxy:
+    args:
+      - --secure-listen-address=0.0.0.0:8443
+      - --upstream=http://127.0.0.1:8080/
+      - --logtostderr=true
+      - --v=0
+    containerSecurityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+          - ALL
+    image:
+      repository: registry.k8s.io/kubebuilder/kube-rbac-proxy
+      tag: v0.15.0
+    resources:
+      limits:
+        memory: 128Mi
+      requests:
+        cpu: 50m
+        memory: 64Mi
+  manager:
+    args:
+      - --health-probe-bind-address=:8081
+      - --metrics-bind-address=127.0.0.1:8080
+      - --leader-elect
+    controllersEnabled:
+      cluster: true
+      nodeconfigurator: true
+      nodeset: true
+      topology: true
+    containerSecurityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+          - ALL
+    env:
+      isMariadbCrdInstalled: "true"
+      isOpentelemetryCollectorCrdInstalled: "false"
+      isApparmorCrdInstalled: "false"
+      isPrometheusCrdInstalled: "false"
+      slurmOperatorWatchNamespaces: "*"
+      topologyLabelPrefix: topology.nebius.com
+    image:
+      repository: cr.eu-north1.nebius.cloud/soperator/slurm-operator
+      tag: 3.0.3
+    imagePullPolicy: IfNotPresent
+    resources:
+      limits:
+        memory: 128Mi
+      requests:
+        cpu: 100m
+        memory: 64Mi
+  affinity: {}
+  nodeSelector: {}
+  tolerations: []
+
+kubernetesClusterDomain: cluster.local
+
+webhookService:
+  type: ClusterIP
+  ports:
+    - port: 443
+      protocol: TCP
+      targetPort: 9443
+
+serviceMonitor:
+  enabled: false
+  jobLabel: soperator
+  interval: 30s
+  scrapeTimeout: 20s
+  additionalLabels: {}
+  metricRelabelings: []
+  relabelings: []
+
+certManager:
+  # Requires cert-manager CRDs and controller to be installed before this chart.
+  # Set to false only for local/dev clusters where Soperator webhooks are not used.
+  enabled: true
+
+# ---------------------------------------------------------------------------
+# Helm subchart dependencies
+# ---------------------------------------------------------------------------
+
+mariadb-operator:
+  installOperator: true
+  crds:
+    enabled: true
+  webhook:
+    enabled: true
+    cert:
+      certManager:
+        enabled: true
+  metrics:
+    enabled: false
+
+kruise:
+  installOperator: true
+  crds:
+    managed: true
+  manager:
+    replicas: 2
+    image:
+      repository: cr.eu-north1.nebius.cloud/soperator/kruise-manager
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 1000m
+        memory: 2Gi
+  helmHooks:
+    image:
+      repository: cr.eu-north1.nebius.cloud/soperator/kruise-helm-hook
+  featureGates: "ImagePullJobGate=true,RecreatePodWhenChangeVCTInCloneSetGate=true,StatefulSetAutoResizePVCGate=true,StatefulSetAutoDeletePVC=true,PreDownloadImageForInPlaceUpdate=true,ResourceDistributionGate=true"
+
+# ---------------------------------------------------------------------------
+# Uninstall cleanup hook
+# ---------------------------------------------------------------------------
+
+uninstallCleanup:
+  # Deletes Soperator CRs before Helm runs the OpenKruise pre-delete finalizer.
+  # OpenKruise refuses to uninstall while Advanced StatefulSets exist, and those
+  # StatefulSets are children of the Soperator CRs rendered by this chart.
+  enabled: true
+  image:
+    # Override this with an internal kubectl-capable image in restricted-egress
+    # environments. The default is public and not mirrored by this chart.
+    repository: alpine/k8s
+    tag: 1.36.0
+    pullPolicy: IfNotPresent
+  timeoutSeconds: 600
+  pollIntervalSeconds: 5
+
+# ---------------------------------------------------------------------------
+# Storage glue
+# ---------------------------------------------------------------------------
+
+# Storage glue for Nebius SFS filesystems created and attached by Terraform.
+# The in-cluster PV/PVC and mount DaemonSet lifecycle stays Helm-owned.
+storageClass:
+  local:
+    name: slurm-local-pv
+
+volume:
+  jail:
+    name: jail
+    size: 2Ti
+    # filestore: Nebius SFS/Filestore mounted with virtiofs.
+    # glusterfs: external GlusterFS server.
+    # local: one-node local learning clusters; creates node-local PVs.
+    type: filestore
+    filestoreDeviceName: jail
+    glusterfsHostName: ""
+    localPath: /mnt/jail
+  controllerSpool:
+    name: controller-spool
+    size: 30Gi
+    type: filestore
+    filestoreDeviceName: controller-spool
+    localPath: /mnt/controller-spool
+  accounting:
+    enabled: false
+    name: accounting
+    size: 128Gi
+    type: filestore
+    filestoreDeviceName: accounting
+    localPath: /mnt/accounting
+  jailSubMounts: []
+
+storage:
+  mountImage:
+    repository: cr.eu-north1.nebius.cloud/soperator/busybox
+    tag: latest
+    pullPolicy: IfNotPresent
+  accounting:
+    matchExpressions:
+      - key: slurm.nebius.ai/nodeset-name
+        operator: In
+        values:
+          - accounting
+    tolerations:
+      - key: slurm.nebius.ai/nodeset-name
+        operator: Equal
+        value: accounting
+        effect: NoSchedule
+  controllerSpool:
+    matchExpressions:
+      - key: slurm.nebius.ai/nodeset-name
+        operator: In
+        values:
+          - controller
+    tolerations:
+      - key: slurm.nebius.ai/nodeset-name
+        operator: Equal
+        value: controller
+        effect: NoSchedule
+  jail:
+    matchExpressions:
+      - key: slurm.nebius.ai/jail
+        operator: In
+        values:
+          - "true"
+    tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+      - key: slurm.nebius.ai/nodeset-name
+        operator: Equal
+        value: controller
+        effect: NoSchedule
+      - key: slurm.nebius.ai/nodeset-name
+        operator: Equal
+        value: accounting
+        effect: NoSchedule
+
+# Optional Terraform-derived output bindings land here when nebius-cxcli has
+# Terraform state available. Explicit volume.* values remain usable for direct
+# Helm installation.
+sfs:
+  filesystems: {}
+
+# External VM-based NFS server details from platform-infra/modules/nfs.
+externalNfs:
+  enabled: false
+  server: ""
+  path: /srv/nfs/home
+  mountPath: /home
+  readOnly: false
+
+# ---------------------------------------------------------------------------
+# NodeConfigurator CR
+# ---------------------------------------------------------------------------
+
+# NodeConfigurator prepares Kubernetes hosts for Soperator worker behavior.
+hostNetwork: true
+customContainer:
+  enabled: false
+  env: []
+  image:
+    repository: cr.eu-north1.nebius.cloud/soperator/busybox
+    tag: latest
+    pullPolicy: IfNotPresent
+  nodeSelector: {}
+  resources: {}
+  livenessProbe: {}
+  readinessProbe: {}
+  tolerations: []
+  affinity: {}
+  priorityClassName: ""
+  serviceAccountName: ""
+rebooter:
+  enabled: true
+  generateRBAC: true
+  evictionMethod: evict
+  logLevel: info
+  logFormat: json
+  env: []
+  image:
+    repository: cr.eu-north1.nebius.cloud/soperator/rebooter
+    tag: 3.0.3
+    pullPolicy: IfNotPresent
+  nodeSelector: {}
+  resources: {}
+  livenessProbe: {}
+  readinessProbe: {}
+  tolerations: []
+  affinity: {}
+  priorityClassName: ""
+  serviceAccountName: ""
+initContainers:
+  # Host sysctl setup used by the default Slurm/GPU runtime path.
+  - name: node-sysctl-params
+    image: cr.eu-north1.nebius.cloud/soperator/busybox
+    securityContext:
+      privileged: true
+      runAsUser: 0
+      runAsGroup: 0
+      readOnlyRootFilesystem: false
+      allowPrivilegeEscalation: true
+    command:
+      - /bin/sh
+      - -c
+      - |
+        sysctl -w kernel.unprivileged_userns_clone=1
+        sysctl -w net.core.rmem_max=536870912
+        sysctl -w net.core.wmem_max=536870912
+        sysctl -w net.ipv4.tcp_rmem="4096 131072 536870912"
+        sysctl -w net.ipv4.tcp_wmem="4096 16384 536870912"
+
+# ---------------------------------------------------------------------------
+# Worker NodeSet defaults
+# ---------------------------------------------------------------------------
+
+priorityClasses:
+  - name: soperator-worker-high-priority
+    description: High priority class for Slurm workers
+    annotations: {}
+    labels: {}
+    value: 10000000
+    globalDefault: false
+    preemptionPolicy: PreemptLowerPriority
+
+nodesets:
+  # Each NodeSet should represent one homogeneous worker shape. Use separate
+  # NodeSets for CPU workers, GPU workers, or different GPU models.
+  # The default GPU worker is sized for 8-GPU production nodes. It requests a
+  # conservative Slurm worker slice instead of the full VM capacity so system
+  # daemons and sidecars still have scheduling headroom.
+  - name: worker-gpu
+    replicas: 1
+    maxUnavailable: 1
+    enableHostUserNamespace: true
+    gpu:
+      enabled: true
+      nvidia:
+        gdrCopyEnabled: true
+    nodeConfig:
+      features:
+        - gpu
+        - cuda
+      static: Boards=1 SocketsPerBoard=1 CoresPerSocket=64 ThreadsPerCore=1
+      dynamic: InstanceId={{ .PodName }}
+      gresConfig:
+        - AutoDetect=nvidia
+    slurmd:
+      image:
+        repository: cr.eu-north1.nebius.cloud/soperator/worker_slurmd
+        tag: 3.0.3-slurm25.11.3
+        pullPolicy: IfNotPresent
+      customEnv:
+        - name: NVIDIA_DRIVER_CAPABILITIES
+          value: compute,graphics,utility,video
+      resources:
+        cpu: "64"
+        memory: 512Gi
+        ephemeralStorage: 50Gi
+        gpu: 8
+      volumes:
+        spool:
+          emptyDir: {}
+        jail:
+          persistentVolumeClaim:
+            claimName: jail-pvc
+        jailSubMounts: []
+        sharedMemorySize: 64Gi
+        # Optional additional worker mounts. The chart injects and owns the
+        # slurm-scripts and slurm-scripts-jail mounts; those names are reserved.
+        customVolumeMounts: []
+      security:
+        appArmorProfile: unconfined
+        limitsConfig: ""
+        procMount: Default
+    munge:
+      image:
+        repository: cr.eu-north1.nebius.cloud/soperator/munge
+        tag: 3.0.3-slurm25.11.3
+        pullPolicy: IfNotPresent
+      resources:
+        cpu: 200m
+        memory: 512Mi
+        ephemeralStorage: 1Gi
+      security:
+        appArmorProfile: unconfined
+        limitsConfig: ""
+        procMount: Default
+    sssd:
+      enabled: false
+    priorityClass: soperator-worker-high-priority
+    nodeSelector:
+      slurm.nebius.ai/nodeset-name: worker-gpu
+    tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+    workerAnnotations: {}
+    customInitContainers: []

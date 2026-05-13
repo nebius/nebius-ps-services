@@ -1,0 +1,29 @@
+{
+  "charts": [
+    {
+      "chartDir": "helm-charts/nccl-test",
+      "chartName": "nccl-test",
+      "smokeTemplates": [
+        [
+          "--set",
+          "worker.replicas=2",
+          "--set",
+          "benchmark.transport.mode=socket"
+        ],
+        [
+          "--set",
+          "worker.replicas=2",
+          "--set",
+          "benchmark.transport.mode=rdma"
+        ]
+      ],
+      "tagPrefix": "nccl-test-chart"
+    },
+    {
+      "chartDir": "helm-charts/soperator",
+      "chartName": "soperator",
+      "smokeTemplates": [],
+      "tagPrefix": "soperator-chart"
+    }
+  ]
+}

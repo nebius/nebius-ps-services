@@ -31,6 +31,8 @@ default-branch handling and conservative branch-update guidance.
 
 - Deploy distributed ML training jobs (e.g., with Ray)
 - Schedule AI/ML workloads efficiently (e.g., with Kueue)
+- Deploy self-managed Slurm on Nebius MK8s with the Soperator Helm chart and
+  Terraform-owned MK8s/SFS/NFS infrastructure
 - Bootstrap cloud-native ML pipelines on Nebius with minimal effort
 - Implement best practices for infrastructure as code (IaC) using Terraform and Helm
 

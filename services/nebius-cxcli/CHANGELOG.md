@@ -6,6 +6,64 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Added optional Soperator companion apps for active checks, K8up-backed jail
+  backups, Soperator DCGM job-mapping telemetry, and in-cluster NFS. Backup
+  bucket values bind to Terraform Object Storage outputs, while access keys and
+  repository passwords are created or reused as deploy-time Kubernetes Secrets.
+- Soperator ActiveChecks now derive `slurmClusterRefName` and
+  `NUM_OF_LOGIN_NODES` from the matching Soperator app row instead of carrying
+  fixed companion defaults.
+- Added the `soperator-notifier` Slack job-notification app and deploy-time
+  runtime-secret bootstrap. The component installs a companion Helm chart that
+  references an existing Slack webhook Secret, supports `existing-webhook` and
+  advanced Slack OAuth `incoming-webhook` setup, rejects webhook URLs in
+  generated values, and fails fast when VictoriaMetrics Operator CRDs are
+  missing.
+- Made MK8s GPU workload deploy validations aware of live GPU allocations:
+  GPU Visibility and NCCL now skip with an explicit report when existing
+  workloads already reserve every GPU on every Ready GPU node, and NCCL caps
+  worker GPU requests to scheduler-free GPUs when only part of a node is free.
+- Updated the bundled GPU Visibility CUDA sample image to NVIDIA's CUDA 12.5
+  vectoradd sample tag for better fit with current Nebius GPU stacks.
+- Hardened local post-Flux apply for Soperator upgrades by replacing only
+  rendered PriorityClasses whose immutable numeric `value` differs from the
+  live object before reapplying the normal generated manifest, and by pruning
+  stale same-release NodeConfigurator CRs left behind by the Soperator
+  cluster-scoped rename.
+- Added `nfs` and target-scoped `soperator` catalog components. Soperator uses
+  the repo-local umbrella Helm chart, keeps DCGM on the existing NVIDIA GPU
+  Operator path, and orders after GPU/Network Operator releases when those GPU
+  platform apps are enabled for the target. Selecting Soperator now also seeds
+  the required sibling MK8s/SFS infra intent, and render binds matching NFS
+  Terraform outputs into Soperator `externalNfs` values.
+- Added the catalog-owned `soperator_nodesets_profile` for Soperator. Built-in
+  `nebius-cpu-v1`, `nebius-gpu-v1`, and `nebius-mixed-v1` profiles seed generic
+  MK8s node groups, SFS filesystems, and matching chart values. The mixed
+  profile creates separate `worker-cpu` and `worker-gpu` Slurm NodeSets plus
+  CPU/GPU partitions, while NFS remains an optional VM-based sibling infra
+  component.
+- Added the Soperator `values.partitionProfile` wizard option. `shape-default`
+  keeps the selected worker-shape partitions, while `with-debug-long` overlays
+  `debug` and `long` policy partitions into the rendered `SlurmCluster`; Slurm
+  hardware features remain NodeSet `nodeConfig.features`.
+- Soperator wizard profile choices now resolve from the Soperator profile
+  catalog instead of a duplicate static list, with labels for CPU-only,
+  GPU-only, and mixed worker scenarios. The mixed profile also exposes
+  `with-h100-infiniband-debug-long`, which adds `h100` / `infiniband`
+  partitions and matching worker-gpu `nodeConfig.features`.
+- Rendered Soperator deployments now default to structured Slurm partitions,
+  chart-managed MariaDB accounting, and Slurm REST so worker NodeSets register
+  cleanly through the Soperator SConfig reconciliation path.
+- The Soperator chart values mounted generated Slurm scripts into workers and
+  set the pinned-image Slurm plugin directory so live `srun` smoke tests can
+  load SPANK plugins and run prolog/epilog scripts.
+- Soperator GPU NodeSets now render Slurm `Gres=gpu:<count>` from
+  `slurmd.resources.gpu`, keeping cxcli profile values free of duplicated GPU
+  counts while allowing `srun --gres=gpu:*` jobs on GPU partitions.
+- The bundled Soperator GPU profile now sets
+  `NVIDIA_DRIVER_CAPABILITIES=compute,graphics,utility,video` on GPU worker
+  NodeSets, matching the chart default while keeping the value overrideable in
+  app values.
 - Suppressed retryable Nebius SDK token-refresh `DEADLINE_EXCEEDED` tracebacks
   during runtime-auth readiness checks and Terraform state-bucket bootstrap,
   while preserving cxcli's normal retry/error handling.

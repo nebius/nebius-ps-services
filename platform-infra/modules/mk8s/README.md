@@ -6,8 +6,9 @@ Reusable Terraform module that creates Nebius Managed Kubernetes infrastructure
 Resources managed:
 
 - `nebius_mk8s_v1_cluster`
-- `nebius_mk8s_v1_node_group` (CPU and optional GPU)
-- `nebius_compute_v1_gpu_cluster` (optional, when `infiniband_fabric` is set)
+- `nebius_mk8s_v1_node_group` (CPU, optional GPU, and optional named groups)
+- `nebius_compute_v1_gpu_cluster` (optional; built-in GPU node groups use
+  `infiniband_fabric`, while generic GPU node groups use `gpu_clusters`)
 
 Out of scope:
 
@@ -24,7 +25,12 @@ dynamically instead of hardcoding public access.
 
 - Creates one MK8s cluster with control-plane settings.
 - Creates one CPU node group when fixed count (`cpu_nodes_count > 0`) or autoscaling override is configured.
-- Creates `gpu_node_groups` GPU node groups when `gpu_enabled = true`.
+- Creates `gpu_node_groups` built-in GPU node groups when `gpu_enabled = true`
+  and `gpu_node_groups > 0`.
+- Creates generic named node groups from caller-provided `node_groups`.
+  Soperator profile names such as `system`, `controller`, `login`,
+  `accounting`, or `worker-gpu-0` are catalog defaults, not Terraform module
+  constants.
 - Supports provider-aligned override objects for cluster/CPU/GPU node groups.
 - Supports explicit Nebius-image vs operator-managed GPU stack selection through `gpu_stack_source`.
 
@@ -120,6 +126,8 @@ module "mk8s" {
   - `mk8s_cluster_overrides`
   - `mk8s_cpu_node_group_overrides`
   - `mk8s_gpu_node_group_overrides`
+  - `gpu_clusters`
+  - `node_groups`
 
 ## Outputs summary
 
@@ -127,6 +135,10 @@ module "mk8s" {
 - `cluster_name`
 - `cpu_node_group_ids`
 - `gpu_node_group_ids`
+- `generic_node_group_ids`
+- `node_group_ids`
+- `generic_gpu_cluster_ids`
+- `gpu_cluster_ids`
 - `control_plane_private_endpoint`
 - `control_plane_public_endpoint`
 - `cluster_ca_certificate` (sensitive)
@@ -151,8 +163,10 @@ used directly from the example directory.
 ## Validation and fail-fast behavior
 
 - `gpu_enabled = true` requires:
-  - `gpu_node_groups > 0`
-  - `gpu_nodes_count_per_group > 0` when autoscaling override is not set
+  - `gpu_node_groups > 0`, or at least one generic `node_groups` entry with
+    `gpu = true`
+  - `gpu_nodes_count_per_group > 0` when built-in GPU node-group shortcut is
+    enabled and autoscaling override is not set
   - non-empty effective `template.resources.platform` and
     `template.resources.preset` (from defaults or overrides)
   - non-empty `gpu_stack_preset` when `gpu_stack_source = "nebius_image"`
@@ -160,6 +174,67 @@ used directly from the example directory.
   `template.resources.platform` and `template.resources.preset` (from defaults
   or overrides).
 - Fixed-size and autoscaling settings are mutually exclusive per node group.
+- Generic `node_groups` entries also require an effective `platform` and
+  `preset`, either through the shortcut fields or
+  `template.resources.platform` / `template.resources.preset`.
+
+## Soperator node-group pattern
+
+`node_groups` is the preferred Terraform surface for Soperator-specific MK8s
+shape design. Terraform still creates only Nebius node groups; Helm creates the
+in-cluster `SlurmCluster` and `NodeSet` resources.
+
+The module does not hardcode Soperator node-group names. Any map key accepted
+by Terraform can be used as a logical node-group key. The bundled
+`nebius-cxcli` Soperator profile chooses `system`, `controller`, `login`,
+`accounting`, and sharded GPU worker names by default, but those names are
+profile data supplied to `inputs.node_groups`, not resources declared directly
+inside this module.
+
+Named node groups inherit the module-level CPU or GPU platform, preset, OS,
+boot disk, and preemptible defaults when their entry omits those fields. Set
+`gpu = true` on GPU worker NodeSet pools to inherit the GPU defaults; other
+entries inherit the CPU defaults.
+
+```hcl
+node_groups = {
+  controller = {
+    fixed_node_count = 1
+    platform         = "cpu-d3"
+    preset           = "4vcpu-16gb"
+    workload         = "cpu"
+    jail             = true
+    taints = [{
+      key    = "slurm.nebius.ai/nodeset-name"
+      value  = "controller"
+      effect = "NO_SCHEDULE"
+    }]
+  }
+  "worker-gpu" = {
+    fixed_node_count  = 2
+    platform          = "gpu-h100-sxm"
+    preset            = "8gpu-128vcpu-1600gb"
+    workload          = "gpu"
+    gpu               = true
+    jail              = true
+    gpu_cluster_key   = "workers"
+    node_labels = {
+      "slurm.nebius.ai/nodeset-name" = "worker-gpu"
+    }
+    taints = [{
+      key    = "nvidia.com/gpu"
+      value  = "8"
+      effect = "NO_SCHEDULE"
+    }]
+  }
+}
+
+gpu_clusters = {
+  workers = {
+    infiniband_fabric = "fabric-name"
+  }
+}
+```
 
 ## nebius-cxcli usage
 
@@ -189,6 +264,8 @@ used directly from the example directory.
 
 - `examples/minimal`: CPU-only baseline.
 - `examples/gpu`: GPU node group with explicit Nebius-managed stack preset selection.
+- `examples/generic-node-groups`: caller-owned arbitrary `node_groups` map
+  with CPU and GPU generic node groups.
 
 Example output usage after apply:
 

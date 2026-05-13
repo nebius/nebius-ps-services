@@ -5,11 +5,14 @@ from typing import Any
 import pytest
 
 from nebius_cxcli.cli import _resolve_apps_chart_dependencies
-from nebius_cxcli.components import ComponentEntry
+from nebius_cxcli.component_sources import SourceProfile
+from nebius_cxcli.components import ComponentEntry, component_entries
 
 
 def test_apps_dependency_resolution_uses_release_install_after(monkeypatch) -> None:
-    def _unexpected_chart_metadata(**kwargs: Any) -> tuple[str | None, str | None, set[str], str | None]:
+    def _unexpected_chart_metadata(
+        **kwargs: Any,
+    ) -> tuple[str | None, str | None, set[str], str | None]:
         _ = kwargs
         pytest.fail("release.install_after dependencies should not require Helm metadata lookup")
 
@@ -46,11 +49,60 @@ def test_apps_dependency_resolution_uses_release_install_after(monkeypatch) -> N
     )
 
     assert selected == {"cert-manager", "external-secrets", "sample-app"}
-    assert {
-        (item.dependency_app_id, item.dependency_kind) for item in adjustments
-    } == {
+    assert {(item.dependency_app_id, item.dependency_kind) for item in adjustments} == {
         ("cert-manager", "install_after"),
         ("external-secrets", "install_after"),
+    }
+    assert warnings == ()
+
+
+def test_soperator_notifier_selects_soperator_and_cert_manager_from_release_order() -> None:
+    selected, adjustments, warnings = _resolve_apps_chart_dependencies(
+        payload={},
+        selected_apps={"soperator-notifier"},
+        app_entries=component_entries("apps", source_profile=SourceProfile.LOCAL),
+        cache={},
+        collect_warnings=True,
+    )
+
+    assert {"soperator-notifier", "soperator", "cert-manager"}.issubset(selected)
+    assert {(item.dependency_app_id, item.dependency_kind) for item in adjustments} >= {
+        ("soperator", "install_after"),
+        ("cert-manager", "install_after"),
+    }
+    assert warnings == ()
+
+
+def test_soperator_activechecks_selects_checks_controller_from_release_order() -> None:
+    selected, adjustments, warnings = _resolve_apps_chart_dependencies(
+        payload={},
+        selected_apps={"soperator-activechecks"},
+        app_entries=component_entries("apps", source_profile=SourceProfile.LOCAL),
+        cache={},
+        collect_warnings=True,
+    )
+
+    assert {"soperator-activechecks", "soperator-checks", "soperator"}.issubset(selected)
+    assert {(item.dependency_app_id, item.dependency_kind) for item in adjustments} >= {
+        ("soperator-checks", "install_after"),
+        ("soperator", "install_after"),
+    }
+    assert warnings == ()
+
+
+def test_soperator_backup_selects_k8up_from_release_order() -> None:
+    selected, adjustments, warnings = _resolve_apps_chart_dependencies(
+        payload={},
+        selected_apps={"soperator-backup-config"},
+        app_entries=component_entries("apps", source_profile=SourceProfile.LOCAL),
+        cache={},
+        collect_warnings=True,
+    )
+
+    assert {"soperator-backup-config", "soperator", "k8up"}.issubset(selected)
+    assert {(item.dependency_app_id, item.dependency_kind) for item in adjustments} >= {
+        ("soperator", "install_after"),
+        ("k8up", "install_after"),
     }
     assert warnings == ()
 

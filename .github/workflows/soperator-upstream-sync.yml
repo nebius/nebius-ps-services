@@ -1,0 +1,57 @@
+name: soperator-upstream-sync
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/soperator-upstream-sync.yml"
+      - "helm-charts/soperator/**"
+      - "helm-charts/soperator-activechecks/**"
+      - "helm-charts/soperator-backup-config/**"
+      - "helm-charts/soperator-checks/**"
+      - "helm-charts/soperator-dcgm-exporter/**"
+      - "helm-charts/soperator-nfs-server/**"
+      - "helm-charts/soperator-notifier/**"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/soperator-upstream-sync.yml"
+      - "helm-charts/soperator/**"
+      - "helm-charts/soperator-activechecks/**"
+      - "helm-charts/soperator-backup-config/**"
+      - "helm-charts/soperator-checks/**"
+      - "helm-charts/soperator-dcgm-exporter/**"
+      - "helm-charts/soperator-nfs-server/**"
+      - "helm-charts/soperator-notifier/**"
+  schedule:
+    - cron: "17 8 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: soperator-upstream-sync-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  soperator-upstream-imports-verify:
+    name: soperator upstream imports verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Verify pinned upstream imports
+        run: helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --scope all --report
+
+  soperator-upstream-release-check:
+    name: soperator upstream release check
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Check latest upstream release
+        run: helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --check-latest --scope all --report

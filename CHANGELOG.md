@@ -4,6 +4,73 @@ All notable changes to this repository will be documented in this file.
 
 ## [Unreleased]
 
+- services/nccl-test: aligned the image publish workflow with the shared
+  `nb-image-chart-publish` GitHub environment used for Nebius Container
+  Registry push credentials.
+- helm-charts/nccl-test: aligned the chart publish workflow and release helper
+  with the shared `nb-image-chart-publish` GitHub environment, strict Helm
+  linting, catalog-driven chart registration, and the contract that only chart
+  pushes require authentication.
+- helm-charts/soperator: documented the shared `nb-image-chart-publish`
+  GitHub environment and clarified that only chart pushes require
+  authentication.
+- helm-charts/soperator: added `publish-helm.sh` and a tag-driven
+  shared `helm-chart-publish` workflow for Nebius OCI chart publication.
+- helm-charts/soperator: split the chart package SemVer from the upstream
+  Soperator release, keeping the upstream release in `Chart.yaml.appVersion`.
+- helm-charts/soperator: added fail-fast validation for duplicate NodeSet
+  names, bad partition NodeSet references, empty structured partition lists,
+  digest-pinned NodeSet image fallbacks, and malformed exporter accounting
+  lookback durations.
+- helm-charts/soperator: trimmed the minimal GPU example and hardened the
+  upstream-import verifier so image sync only writes to declared local-owned
+  files across the Soperator companion charts.
+- helm-charts/soperator: fixed the pre-delete cleanup hook to wait for
+  Soperator-created Kruise StatefulSets by `clusterName`, matching upstream
+  Soperator labels.
+- helm-charts/soperator: documented the cluster-unique Helm release-name
+  requirement for operator RBAC and webhook objects.
+- Added Soperator companion charts and cxcli catalog apps for active checks,
+  K8up jail backup schedules, optional Soperator DCGM job-mapping telemetry,
+  and in-cluster NFS, with the backup credentials kept in runtime Kubernetes
+  Secrets instead of config or generated manifests.
+- Changed the Soperator upstream release-drift workflow from weekly to daily
+  while keeping it read-only.
+- Expanded the Soperator upstream sync verifier into an upstream-import
+  contract that tracks exact script imports, image value imports, and
+  review-only upstream logic hashes across the core and companion charts.
+- Made the Soperator ActiveChecks scripts an exact upstream import by moving
+  local login-service hostname adaptation into the chart render helper.
+- Aligned the Soperator ActiveChecks companion so cxcli derives the target
+  SlurmCluster name and login-node check count from the matching Soperator app
+  row.
+- Added `helm-charts/soperator-notifier` and cxcli `soperator-notifier` app
+  wiring for Slack job-state notifications through VictoriaMetrics
+  Alertmanager, with Slack webhook URLs stored only in runtime Kubernetes
+  Secrets.
+- Added the initial `helm-charts/soperator` umbrella chart for Nebius Soperator
+  self-deployment on MK8s, plus Soperator-oriented MK8s/SFS Terraform module
+  surfaces, cxcli target-scoped app wiring, NFS output binding, and a VM-based
+  `platform-infra/modules/nfs` module.
+- Added catalog-driven Soperator nodesets profiles in `nebius-cxcli` so
+  Soperator can seed CPU-only, GPU-only, or mixed CPU/GPU Slurm worker shapes
+  through generic MK8s node groups instead of inline hardcoded defaults. The
+  mixed profile uses separate `worker-cpu` and `worker-gpu` NodeSets with
+  explicit CPU/GPU partitions. NFS remains an optional VM-based sibling infra
+  component.
+- Added direct Terraform examples and documentation clarifications that show
+  the MK8s `node_groups` and SFS `filesystems` surfaces are caller-owned maps;
+  Soperator names such as `system`, `controller`, `login`, `accounting`, and
+  `jail` are cxcli profile defaults rather than module hardcoding.
+- Soperator self-deployment defaults now use structured Slurm partitions plus
+  chart-managed MariaDB accounting and Slurm REST so static GPU NodeSets become
+  registered Slurm nodes during live cxcli deploys.
+- The Soperator chart now also mounts its generated Slurm scripts into worker
+  NodeSets and overrides the Slurm plugin directory to the pinned image path so
+  basic `srun` jobs can load SPANK plugins and run prolog/epilog scripts.
+- Soperator GPU NodeSets now derive Slurm `Gres=gpu:<count>` from
+  `slurmd.resources.gpu`, so CPU/GPU partition profiles can run GPU jobs with
+  `--gres=gpu:*` without duplicating GPU counts in profile values.
 - nebius-cxcli: replaced the old MysteryBox webhook bridge path with native
   External Secrets Operator `nebiusmysterybox` resources, including runtime
   Subject Credentials Secret creation and `mysterybox.payload-viewer`

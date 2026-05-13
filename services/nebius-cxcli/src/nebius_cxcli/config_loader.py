@@ -28,6 +28,7 @@ from .observability import (
 )
 from .runtime_config import AttrDict, to_plain_data, wrap_runtime_config
 from .runtime_validation import validate_dynamic_payload_structure, validate_runtime_payload
+from .soperator_companions import materialize_soperator_companion_app_values
 from .ssh_public_keys import normalize_runtime_ssh_public_key_inputs
 
 
@@ -46,6 +47,8 @@ def normalize_runtime_config_payload(
     if ensure_mk8s_gpu_app_rows(payload):
         changed = True
     if materialize_mk8s_gpu_app_values(payload):
+        changed = True
+    if materialize_soperator_companion_app_values(payload):
         changed = True
     if normalize_observability_project_settings(payload):
         changed = True

@@ -1,0 +1,9 @@
+dependencies:
+- name: kruise
+  repository: https://openkruise.github.io/charts/
+  version: 1.8.0
+- name: mariadb-operator
+  repository: https://helm.mariadb.com/mariadb-operator
+  version: 25.10.2
+digest: sha256:f0eea57830dfa5ea471eac6eef92944bea7d246b2248fe25951515d037c8c18f
+generated: "2026-05-07T04:50:46.738701-07:00"

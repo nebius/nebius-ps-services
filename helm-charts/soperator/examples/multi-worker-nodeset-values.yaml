@@ -1,0 +1,140 @@
+# Multiple GPU worker NodeSets behind one generic GPU partition. Use this shape
+# when one Slurm partition can schedule across several homogeneous GPU classes.
+clusterName: soperator-multi-worker
+clusterType: gpu
+
+slurmNodes:
+  login:
+    # Keep public keys out of example files; pass them with Helm --set-file.
+    sshRootPublicKeys: []
+
+partitionConfiguration:
+  configType: structured
+  partitions:
+    - name: gpu
+      nodeSetRefs:
+        - worker-h100
+        - worker-h200
+      config: Default=YES MaxTime=INFINITE State=UP
+
+nodesets:
+  - name: worker-h100
+    replicas: 2
+    maxUnavailable: 1
+    enableHostUserNamespace: true
+    gpu:
+      enabled: true
+      nvidia:
+        gdrCopyEnabled: true
+    nodeConfig:
+      features:
+        - gpu
+        - h100
+      static: Boards=1 SocketsPerBoard=1 CoresPerSocket=64 ThreadsPerCore=1
+      dynamic: InstanceId={{ .PodName }}
+      gresConfig:
+        - AutoDetect=nvidia
+    slurmd:
+      image:
+        repository: cr.eu-north1.nebius.cloud/soperator/worker_slurmd
+        tag: 3.0.3-slurm25.11.3
+        pullPolicy: IfNotPresent
+      customEnv:
+        - name: NVIDIA_DRIVER_CAPABILITIES
+          value: compute,graphics,utility,video
+      resources:
+        cpu: "64"
+        memory: 512Gi
+        ephemeralStorage: 50Gi
+        gpu: 8
+      volumes:
+        spool:
+          emptyDir: {}
+        jail:
+          persistentVolumeClaim:
+            claimName: jail-pvc
+        sharedMemorySize: 64Gi
+      security:
+        appArmorProfile: unconfined
+        limitsConfig: ""
+    munge:
+      image:
+        repository: cr.eu-north1.nebius.cloud/soperator/munge
+        tag: 3.0.3-slurm25.11.3
+        pullPolicy: IfNotPresent
+      resources:
+        cpu: 500m
+        memory: 1Gi
+        ephemeralStorage: 2Gi
+      security:
+        appArmorProfile: unconfined
+        limitsConfig: ""
+    sssd:
+      enabled: false
+    priorityClass: soperator-worker-high-priority
+    nodeSelector:
+      slurm.nebius.ai/nodeset-name: worker-h100
+    tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+  - name: worker-h200
+    replicas: 2
+    maxUnavailable: 1
+    enableHostUserNamespace: true
+    gpu:
+      enabled: true
+      nvidia:
+        gdrCopyEnabled: true
+    nodeConfig:
+      features:
+        - gpu
+        - h200
+      static: Boards=1 SocketsPerBoard=1 CoresPerSocket=64 ThreadsPerCore=1
+      dynamic: InstanceId={{ .PodName }}
+      gresConfig:
+        - AutoDetect=nvidia
+    slurmd:
+      image:
+        repository: cr.eu-north1.nebius.cloud/soperator/worker_slurmd
+        tag: 3.0.3-slurm25.11.3
+        pullPolicy: IfNotPresent
+      customEnv:
+        - name: NVIDIA_DRIVER_CAPABILITIES
+          value: compute,graphics,utility,video
+      resources:
+        cpu: "64"
+        memory: 512Gi
+        ephemeralStorage: 50Gi
+        gpu: 8
+      volumes:
+        spool:
+          emptyDir: {}
+        jail:
+          persistentVolumeClaim:
+            claimName: jail-pvc
+        sharedMemorySize: 64Gi
+      security:
+        appArmorProfile: unconfined
+        limitsConfig: ""
+    munge:
+      image:
+        repository: cr.eu-north1.nebius.cloud/soperator/munge
+        tag: 3.0.3-slurm25.11.3
+        pullPolicy: IfNotPresent
+      resources:
+        cpu: 500m
+        memory: 1Gi
+        ephemeralStorage: 2Gi
+      security:
+        appArmorProfile: unconfined
+        limitsConfig: ""
+    sssd:
+      enabled: false
+    priorityClass: soperator-worker-high-priority
+    nodeSelector:
+      slurm.nebius.ai/nodeset-name: worker-h200
+    tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
