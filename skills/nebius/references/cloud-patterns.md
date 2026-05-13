@@ -6,19 +6,19 @@ Use these patterns when recommending Nebius VPC console or API behavior.
 
 ## Address Space Modeling
 
-### AWS
+### AWS Address Space
 
 - A VPC can have multiple CIDR blocks.
 - Each subnet has its own explicit subnet CIDR from the VPC address space.
 - VPC address space and subnet address space are represented separately.
 
-### Azure
+### Azure Address Space
 
 - A VNet has an address space.
 - Each subnet has explicit prefixes inside that VNet address space.
 - Azure does not present the whole VNet space as if it were subnet-owned.
 
-### GCP
+### GCP Address Space
 
 - The VPC is the container.
 - Subnets own explicit primary and optional secondary ranges.
@@ -26,17 +26,17 @@ Use these patterns when recommending Nebius VPC console or API behavior.
 
 ## Gateway Placement Pattern
 
-### Azure
+### Azure Gateway Placement
 
 - Managed VPN gateway uses a dedicated `GatewaySubnet`.
 - It is explicitly separate from workload subnets.
 
-### AWS
+### AWS Gateway Placement
 
 - Site-to-Site VPN terminates on edge resources such as VGW or TGW.
 - It is not placed inside workload subnets.
 
-### GCP
+### GCP Gateway Placement
 
 - HA VPN is a VPC-attached regional resource, not a workload subnet VM.
 

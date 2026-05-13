@@ -1,20 +1,23 @@
 # Skills
 
-This repository contains public, reusable Codex skills for common engineering
-workflows. Each skill lives in its own folder and is discovered by the
-presence of `SKILL.md`.
+This folder contains public, reusable Codex skills for common engineering
+workflows. Each skill lives in its own folder and is discovered by the presence
+of `SKILL.md`.
+
+For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Included Skills
 
 - End-to-end project alignment: `align`
+- Skill folder alignment and validation: `align-skill`
 - Disposable Ubuntu project container setup: `attach-ubuntu`
-- Branch-safe GitHub pull request creation: `create-pr`
+- Branch-safe and conflict-free GitHub pull request creation: `create-pr`
 - GitHub Actions authoring and review: `github-workflows`
 - Stack-aware `.gitignore` generation and cleanup: `gitignore`
 - Helm chart hardening and validation: `helmchart`
 - Shell, Markdown, and Python linting: `linter`
 - Nebius cloud automation, quota, and MK8s GPU workflows: `nebius`
-- Nebius cxcli component onboarding: `onboard-nbs-cxcli`
+- Nebius cxcli component onboarding: `onboard-nebius-cxcli`
 - Helm chart release publishing: `publish-helm`
 - Container image release publishing: `publish-image`
 - Application release publishing: `publish-release`
@@ -33,18 +36,24 @@ review Terraform code.
 
 ### Prompt Examples
 
-Use short, direct prompts. These are the intended invocation style:
-
 ```text
 $create-pr Create a PR for the current local work, using a new prep branch if I am still on the default branch.
 
+$create-pr Resolve conflicts for the current branch against main, open or reuse its PR, and return the PR URL.
+
 $review-pr Review PR #110 against the base branch, fix safe issues on the branch, and tell me whether it is ready to merge.
+
+$review-pr Review https://github.com/example-org/example-repo/pull/42, resolve straightforward conflicts against main if the branch is writable, and report remaining blockers.
+
+$align-skill Review and standardize skills/foo against the canonical skill structure and official vendor docs.
 ```
 
 You can also be more specific when needed:
 
 ```text
 $create-pr Open or reuse the PR for this branch with title "Expose nccl-test 0.2.7 in the bundled catalog" and return the PR number and URL.
+
+$create-pr Create conflict-free PRs for branches feature-a and feature-b against main, and tell me the merge order.
 
 $review-pr Review this Helm chart PR, apply the relevant sibling skills, resolve straightforward conflicts if they exist, and rerun the focused validation.
 ```
@@ -60,6 +69,11 @@ that means:
 If those prerequisites are missing, the skill should stop and explain the
 blocker instead of guessing.
 
+Skill-bundled scripts are reference-only by default in this repository. Execute
+them only when the user explicitly starts the request with `Run` or `Execute`
+(or equivalent); otherwise read the script or report the command that would be
+used.
+
 ## Skill Details
 
 ### `align`
@@ -67,9 +81,15 @@ blocker instead of guessing.
 `align` is the end-to-end repair and consistency skill. Use it when a project
 needs code, module wiring, tests, CI, CLI behavior, config, examples, help
 output, README/design docs, workflows, and applicable project skills reviewed
-together as a cautious senior code-review style alignment pass, so verified
-low-risk gaps are fixed in one focused pass and unclear business logic is
-reported instead of changed silently.
+together as a cautious senior code-review style alignment pass.
+
+### `align-skill`
+
+`align-skill` reviews and improves one or more Codex or Agent Skill folders.
+Use it for named skills, local skill folders, multi-skill parent folders,
+GitHub skill repositories, or GitHub tree URLs when `SKILL.md`, trigger
+metadata, references, assets, scripts, safety guardrails, official vendor-doc
+verification, canonical structure, and validation evidence need to be aligned.
 
 ### `attach-ubuntu`
 
@@ -80,13 +100,10 @@ testing on macOS with Docker Desktop and the Dev Containers extension.
 
 ### `create-pr`
 
-`create-pr` turns local work into a GitHub pull request without leaving it on
-the default branch. It creates a feature branch only when needed, reuses an
-existing non-default branch, avoids duplicate PRs for the same head branch,
-expects reviewable commits instead of a dirty tree, treats an explicit
-user-supplied PR title/body as authoritative instead of inferring a generic
-preparation-style title from the branch name, and returns the PR number and
-URL.
+`create-pr` turns local work or named branches into GitHub pull requests
+without leaving new work on the default branch. It can prepare conflict-free
+PRs, avoid duplicate PRs for the same head branch, preserve one PR per branch,
+and report readiness plus manual merge order.
 
 ### `github-workflows`
 
@@ -98,97 +115,76 @@ monorepo-friendly workflow structure.
 ### `gitignore`
 
 `gitignore` creates or updates a project `.gitignore` with sensible macOS and
-VS Code defaults, then extends it for the detected stack. Use it when you want
-a clean ignore policy for languages and tools such as Python, Node, Go, Java,
-Rust, or Terraform.
+VS Code defaults, then extends it for the detected stack.
 
 ### `helmchart`
 
 `helmchart` applies Helm chart best practices across metadata, values,
-templates, schema, and validation. Use it to create or harden charts, improve
-default safety, add missing chart structure, resolve chart dependencies before
-strict lint/render checks, and keep security context plus RBAC changes aligned
-with workload runtime requirements.
+templates, schema, and validation.
 
 ### `linter`
 
 `linter` runs a fix-first linting workflow for shell scripts, Markdown, and
 Python. Use it when you want syntax checks, `shellcheck`, `markdownlint`, or
-`ruff` cleanup applied conservatively, with source fixes preferred over
-config-level suppressions.
+`ruff` cleanup applied conservatively.
 
 ### `nebius`
 
 `nebius` is the cloud automation skill for Nebius SDK-based workflows,
 including IAM bootstrap, object storage, VPC inspection, route analysis, quota
-checks, and live MK8s platform/preset/fabric compatibility plus GPU/operator
-decisions. Use it when the task depends on live Nebius service behavior rather
-than generic cloud assumptions.
+checks, observability, and MK8s GPU/operator decisions.
 
-### `onboard-nbs-cxcli`
+### `onboard-nebius-cxcli`
 
-`onboard-nbs-cxcli` is the repo-specific onboarding skill for adding Nebius
-Terraform-backed components into `nebius-cxcli`. It helps decide whether a
-change stays catalog-only or also needs wizard, validation, runtime handoff,
-status, and documentation updates.
+`onboard-nebius-cxcli` is the repo-specific onboarding skill for adding Nebius
+Terraform-backed components into `nebius-cxcli`.
 
 ### `publish-helm`
 
 `publish-helm` generates a Nebius OCI Helm chart publication flow with a
 chart-local `CHANGELOG.md`, `publish-helm.sh`, and a tag-driven GitHub Actions
-workflow. Use it when a chart needs a repeatable prep and publish process with
-version checks and public pull verification.
+workflow.
 
 ### `publish-image`
 
 `publish-image` generates the release assets for container images, including
 `CHANGELOG.md`, `publish-image.sh`, and a tag-driven image publication
-workflow. Use it when a project needs immutable image tagging and a standard
-release path for container artifacts.
+workflow.
 
 ### `publish-release`
 
 `publish-release` generates the default application release flow for this skill
 set: a `CHANGELOG.md`, `publish-release.sh`, and a tag-driven GitHub Release
-workflow. Use it when the preferred model is CI-backed release publication with
-artifact and version verification.
+workflow.
 
 ### `python-project`
 
 `python-project` scaffolds and hardens Python repositories with reusable modern
 defaults such as `pyproject.toml`, setuptools-scm, `src/` layout, Ruff, pytest,
-Typer, and Pydantic. Use it when you need a strong starting point for CLIs,
-services, APIs, automation tools, or AI-oriented Python projects.
+Typer, and Pydantic.
 
 ### `release-generator`
 
 `release-generator` is the manual-only fallback for projects that explicitly
-want a local `release.sh` workflow and no CI release pipeline. Use it only when
-that manual operating model is required; otherwise prefer `publish-release`.
+want a local `release.sh` workflow and no CI release pipeline.
 
 ### `review-pr`
 
 `review-pr` is the merge-readiness skill for pull requests. Use it to review a
-PR against its base branch, inspect GitHub checks and review state, fix safe
-issues on the branch, prefer non-destructive branch updates when ownership is
-unclear, route to the relevant sibling skills for workflow, Helm, Python,
-Nebius, shell, lint, Terraform, or release-helper changes, resolve
-straightforward conflicts when possible, and report whether the PR is ready to
-merge.
+PR by number, URL, or current branch against its base branch, inspect GitHub
+checks and review state, fix safe issues when the branch can be updated safely,
+resolve straightforward conflicts when possible, and report remaining blockers.
 
 ### `shell-scripting`
 
 `shell-scripting` is the Bash engineering skill for creating, reviewing, and
-hardening `.sh` automation. Use it for strict-mode scripts, safe argument
-parsing, idempotent behavior, readable usage output, and practical shell
-maintainability.
+hardening `.sh` automation.
 
 ### `terraform`
 
 `terraform` generates and improves Terraform modules and infrastructure
 repositories with reusable structure, state guidance, validation, security
-controls, examples, and CI expectations. Use it when the work is about module
-interfaces, environment layout, provider strategy, or Terraform quality gates.
+controls, examples, and CI expectations.
 
 ## Skills Installer
 
@@ -196,35 +192,44 @@ interfaces, environment layout, provider strategy, or Terraform quality gates.
 default. It accepts a local source directory or a supported GitHub URL, treats
 only folders containing `SKILL.md` as installable skills, keeps reruns
 idempotent with `rsync`, skips unmanaged or other-source-owned destinations,
+removes stale same-source skills when they disappear from the selected source,
 and can remove one installed skill by visible Codex skill name or folder name.
+After each install it also lists destination skills that are not present in the
+selected source, so renamed or intentionally removed skills are visible and can
+be removed with `--remove-skill` when they are not same-source managed.
 
-## Requirements
+### Requirements
 
 - `bash`
 - `rsync`
 - `git` for GitHub sources
 
-## Usage
+### Usage
 
 ```bash
-./install-skills.sh [options] [source] [destination_dir]
+./install-skills.sh [source] [destination_dir]
 ./install-skills.sh --remove-skill <skill_name> [destination_dir]
+./install-skills.sh --help
 ```
 
-## Supported Sources
+With no arguments, `./install-skills.sh` uses the directory containing the
+script as the source and installs every sibling skill folder that contains
+`SKILL.md` into the default Codex target, `~/.agents/skills`.
 
-- Local directory path. The default source is the script directory, and it can
-  be either a multi-skill folder or a single skill folder containing
+### Supported Sources
+
+- Local directory path. The default source is the script directory, and a local
+  source can be either a multi-skill folder or a single skill folder containing
   `SKILL.md`.
 - GitHub repository URL:
   `https://github.com/<owner>/<repo>`
 - GitHub tree URL:
   `https://github.com/<owner>/<repo>/tree/<ref>/<subpath>`
 
-## Examples
+### Examples
 
 ```bash
-# Install all skills from this repository into the default destination
+# Install all skills from this folder into the default destination
 ./install-skills.sh
 
 # Install from an explicit local source directory
@@ -243,24 +248,35 @@ and can remove one installed skill by visible Codex skill name or folder name.
 # Install to a custom destination
 ./install-skills.sh \
   "https://github.com/openai/skills/tree/main/skills" \
-  "~/.agents/skills"
+  "~/custom-skills"
 
 # Remove an installed skill by its visible Codex skill name
 ./install-skills.sh --remove-skill nebius
 
 # Remove an installed skill by its folder name
 ./install-skills.sh --remove-skill vendor-nebius
+
+# Remove from a custom destination
+./install-skills.sh --remove-skill vendor-nebius "~/custom-skills"
 ```
 
-## Notes
+### Notes
 
 - If newly installed skills are not visible, run `Developer: Restart Extension
   Host` in VS Code.
 - A valid skill folder must contain `SKILL.md`.
 - Existing unmanaged folders in the destination are never overwritten.
 - If a skill exists but belongs to another source, it is skipped.
+- Skills previously installed from the same source are removed when they no
+  longer exist in that source, so source-owned renames converge on reinstall.
+- Other destination skills that are not present in the selected source are
+  listed at the end with a `--remove-skill` hint.
 - `--remove-skill` accepts either the exact `name:` from `SKILL.md` or the
   installed folder name.
+- `--remove-skill <skill_name>` without an explicit destination removes from
+  the default Codex skills target, `~/.agents/skills`.
+- If you installed into a custom destination, pass that destination to
+  `--remove-skill`.
 - `--remove-skill` removes the destination skill folder and its local manifest
   entries.
 - Reinstalling from a source that still contains a removed skill will add it

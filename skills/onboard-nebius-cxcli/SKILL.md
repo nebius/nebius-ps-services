@@ -1,9 +1,9 @@
 ---
-name: onboard-nbs-cxcli
+name: onboard-nebius-cxcli
 description: Onboard a Nebius Terraform module into nebius-cxcli. Use when adding a new Terraform-based infra component to component_sources.yaml, deciding whether onboarding can stay catalog-only or must also touch wizard_profiles.py, provider_options.py, cli.py, validation_profiles.py, runtime_component_validation.py, cluster_handoffs.py, deployment_status.py, and the focused tests/docs that enforce this contract.
 ---
 
-# Onboard NBS CXCLI
+# Onboard Nebius CXCLI
 
 Use this skill when the task is to add or review a Nebius Terraform module as a
 `nebius-cxcli` infra component.
@@ -82,3 +82,14 @@ Start with `references/touchpoints.md`.
   available.
 
 Use the focused test map in `references/touchpoints.md`.
+
+## Output Contract
+
+When using this skill, report:
+
+- whether onboarding stayed catalog-only or required code-owned layers
+- component catalog changes made or reviewed
+- wizard, provider lookup, validation, status, or handoff touchpoints changed
+- tests and `validate-sources` checks run
+- docs and changelog surfaces updated
+- any unresolved live-provider, Terraform, or deploy-path uncertainty

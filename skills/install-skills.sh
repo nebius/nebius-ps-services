@@ -3,7 +3,12 @@ set -euo pipefail
 
 # Script helper to install Codex skills into ~/.agents/skills.
 #
-# Usage: ./install-skills.sh [options] [source] [destination_dir]
+# Usage: ./install-skills.sh [source] [destination_dir]
+#        ./install-skills.sh --remove-skill <skill_name> [destination_dir]
+#        ./install-skills.sh --help
+# No-argument install: source is this script's directory and destination is
+# ~/.agents/skills. --remove-skill without a destination removes from the same
+# default Codex skills directory.
 # Source: local directory (default: script directory) or GitHub URL:
 #   - https://github.com/<owner>/<repo>
 #   - https://github.com/<owner>/<repo>/tree/<ref>/<subpath>
@@ -17,6 +22,9 @@ set -euo pipefail
 #     owned by another source (or unmanaged) are skipped, never overwritten.
 #   - Scoped cleanup: per-source manifests remove stale skills only when the recorded
 #     owner matches the current SOURCE_ID.
+#   - Drift visibility: destination skills missing from the selected source are
+#     listed at the end with a --remove-skill hint instead of being removed unless
+#     they are still marked as owned by the same source.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_SRC_DIR="${SCRIPT_DIR}"
@@ -71,13 +79,19 @@ require_command() {
 
 show_usage() {
   printf '%b\n' "${S_BOLD}Usage:${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}[options] [source] [destination_dir]${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}[source] [destination_dir]${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}--remove-skill <skill_name> [destination_dir]${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}--help${S_RESET}"
+  printf '\n'
+
+  printf '%b\n' "${S_BOLD}Defaults:${S_RESET}"
+  printf '%b\n' "  - ${S_CYAN}./install-skills.sh${S_RESET} installs from this script's directory into ${S_CYAN}~/.agents/skills${S_RESET}."
+  printf '%b\n' "  - ${S_CYAN}--remove-skill${S_RESET} without ${S_CYAN}[destination_dir]${S_RESET} removes from ${S_CYAN}~/.agents/skills${S_RESET}."
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Source:${S_RESET}"
-  printf '%b\n' "  - Local directory path ${S_DIM}(default: script directory; supports multi-skill or single-skill folder)${S_RESET}"
-  printf '%b\n' "  - GitHub URL:"
+  printf '%b\n' "  - Local directory path ${S_DIM}(multi-skill folder or one skill folder containing SKILL.md)${S_RESET}"
+  printf '%b\n' "  - GitHub repository or tree URL:"
   printf '%b\n' "      ${S_CYAN}https://github.com/<owner>/<repo>${S_RESET}"
   printf '%b\n' "      ${S_CYAN}https://github.com/<owner>/<repo>/tree/<ref>/<subpath>${S_RESET}"
   printf '\n'
@@ -87,25 +101,28 @@ show_usage() {
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Options:${S_RESET}"
-  printf '%b\n' "  ${S_YELLOW}-h, --help${S_RESET}      Show this help"
-  printf '%b\n' "  ${S_YELLOW}--remove-skill${S_RESET}  Remove one skill by its visible Codex skill name or folder name"
+  printf '%b\n' "  ${S_YELLOW}-h, --help${S_RESET}       Show this help"
+  printf '%b\n' "  ${S_YELLOW}--remove-skill${S_RESET}   Remove one skill by its visible Codex skill name or folder name"
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Examples:${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./install-skills.sh /Users/example/test${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./install-skills.sh \"https://github.com/openai/skills/tree/main/skills\" \"~/.agents/skills\"${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./install-skills.sh \"https://github.com/openai/skills/tree/main/skills\"${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./install-skills.sh \"https://github.com/openai/skills/tree/main/skills\" \"~/custom-skills\"${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./install-skills.sh --remove-skill nebius${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./install-skills.sh --remove-skill nebius \"~/custom-skills\"${S_RESET}"
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Notes:${S_RESET}"
-  printf '%b\n' "  - If newly installed skills are not visible, restart extension host manually in VS Code ${S_DIM}(Developer: Restart Extension Host)${S_RESET}."
-  printf '%b\n' "  - Existing unmanaged folders in destination are never overwritten."
-  printf '%b\n' "  - If a skill exists but belongs to another source, it is skipped."
-  printf '%b\n' "  - A valid skill folder must contain ${S_CYAN}SKILL.md${S_RESET}."
+  printf '%b\n' "  - A valid skill is a directory containing ${S_CYAN}SKILL.md${S_RESET}."
+  printf '%b\n' "  - Existing unmanaged or other-source-owned destination folders are skipped, never overwritten."
+  printf '%b\n' "  - Source-owned skills missing from the selected source are removed, so source-owned renames converge on reinstall."
+  printf '%b\n' "  - Other extra destination skills are listed at the end with a ${S_CYAN}--remove-skill${S_RESET} hint."
   printf '%b\n' "  - ${S_CYAN}--remove-skill${S_RESET} accepts the exact skill name from ${S_CYAN}SKILL.md${S_RESET} ${S_DIM}(the name Codex shows in VS Code)${S_RESET} or the installed folder name."
-  printf '%b\n' "  - ${S_CYAN}--remove-skill${S_RESET} removes the destination skill folder and local manifest entries; after reloading the extension host, the skill is no longer discoverable from that directory."
+  printf '%b\n' "  - ${S_CYAN}--remove-skill${S_RESET} removes the skill folder and local manifest entries from the selected destination."
   printf '%b\n' "  - Reinstalling from a source that still contains the skill will add it back."
+  printf '%b\n' "  - If newly installed skills are not visible, restart the VS Code extension host ${S_DIM}(Developer: Restart Extension Host)${S_RESET}."
 }
 
 is_github_source() {
@@ -399,6 +416,69 @@ extract_meaningful_rsync_changes() {
   '
 }
 
+print_extra_destination_skills() {
+  local dest_dir="$1"
+  local source_skills_file="$2"
+  local extra_count=0
+  local d=""
+  local name=""
+  local declared_name=""
+  local target_owner=""
+  local ownership_note=""
+  local name_note=""
+  local default_dest_dir=""
+
+  [[ -d "${dest_dir}" ]] || return 0
+
+  shopt -s nullglob
+  for d in "${dest_dir}"/*; do
+    [[ -d "${d}" ]] || continue
+    [[ -f "${d}/SKILL.md" ]] || continue
+
+    name="$(basename "${d}")"
+    if grep -Fxq -- "${name}" "${source_skills_file}"; then
+      continue
+    fi
+
+    if [[ "${extra_count}" -eq 0 ]]; then
+      printf '\n%b\n' "${S_YELLOW}${S_BOLD}Extra destination skills not present in source:${S_RESET}"
+    fi
+
+    declared_name="$(read_skill_declared_name "${d}")"
+    target_owner="$(read_target_owner "${d}")"
+    name_note=""
+    ownership_note="unmanaged"
+
+    if [[ -n "${declared_name}" && "${declared_name}" != "${name}" ]]; then
+      name_note=" (name: ${declared_name})"
+    fi
+    if [[ -n "${target_owner}" ]]; then
+      if [[ "${target_owner}" == "${SOURCE_ID}" ]]; then
+        ownership_note="managed by this source"
+      else
+        ownership_note="managed by another source"
+      fi
+    fi
+
+    printf '%b\n' "  - ${name}${name_note} ${S_DIM}[${ownership_note}]${S_RESET}"
+    extra_count=$((extra_count + 1))
+  done
+  shopt -u nullglob
+
+  if [[ "${extra_count}" -gt 0 ]]; then
+    default_dest_dir="$(expand_home_path "${HOME}/.agents/skills")"
+    if [[ -d "${default_dest_dir}" ]]; then
+      default_dest_dir="$(cd "${default_dest_dir}" && pwd -P)"
+    fi
+
+    if [[ "${dest_dir}" == "${default_dest_dir}" ]]; then
+      printf '%b\n' "Remove one if it is obsolete: ${S_CYAN}./install-skills.sh --remove-skill <skill_name>${S_RESET}"
+    else
+      printf '%b\n' "Remove one if it is obsolete: ${S_CYAN}./install-skills.sh --remove-skill <skill_name> \"${dest_dir}\"${S_RESET}"
+    fi
+  fi
+}
+
 init_output_style
 
 REMOVE_SKILL=""
@@ -477,10 +557,12 @@ if is_github_source "${SOURCE_SPEC}"; then
 fi
 
 TMP_MANIFEST=""
+TMP_SOURCE_SKILLS=""
 TMP_CLONE_ROOT=""
 RSYNC_COMPARE_FLAGS=()
 cleanup() {
   rm -f "${TMP_MANIFEST:-}" >/dev/null 2>&1 || true
+  rm -f "${TMP_SOURCE_SKILLS:-}" >/dev/null 2>&1 || true
   if [[ -n "${TMP_CLONE_ROOT}" && -d "${TMP_CLONE_ROOT}" ]]; then
     rm -rf "${TMP_CLONE_ROOT}"
   fi
@@ -558,6 +640,7 @@ SOURCE_KEY="$(hash_string "${SOURCE_ID}")"
 STATE_DIR="${DEST_DIR}/.install-skills-state"
 SOURCE_MANIFEST="${STATE_DIR}/${SOURCE_KEY}.skills"
 TMP_MANIFEST="$(mktemp)"
+TMP_SOURCE_SKILLS="$(mktemp)"
 
 installed=0
 unchanged=0
@@ -586,6 +669,8 @@ for d in "${skill_dirs[@]}"; do
     skipped=$((skipped + 1))
     continue
   fi
+
+  printf '%s\n' "${name}" >> "${TMP_SOURCE_SKILLS}"
 
   target="${DEST_DIR}/${name}"
   marker="${target}/.install-source-id"
@@ -633,13 +718,14 @@ for d in "${skill_dirs[@]}"; do
   fi
 done
 
+sort -u "${TMP_SOURCE_SKILLS}" -o "${TMP_SOURCE_SKILLS}"
 sort -u "${TMP_MANIFEST}" -o "${TMP_MANIFEST}"
 
 # Remove previously installed skills from this source when they no longer exist.
 if [[ -f "${SOURCE_MANIFEST}" ]]; then
   while IFS= read -r old_name; do
     [[ -n "${old_name}" ]] || continue
-    if ! grep -Fxq -- "${old_name}" "${TMP_MANIFEST}"; then
+    if ! grep -Fxq -- "${old_name}" "${TMP_SOURCE_SKILLS}"; then
       old_target="${DEST_DIR}/${old_name}"
       if [[ -d "${old_target}" ]]; then
         old_owner="$(read_target_owner "${old_target}")"
@@ -653,6 +739,28 @@ if [[ -f "${SOURCE_MANIFEST}" ]]; then
   done < "${SOURCE_MANIFEST}"
 fi
 
+# Also clean up source-owned target folders that predate the manifest or were
+# missed by it. This lets a renamed source skill converge on reinstall while
+# still preserving unmanaged and other-source-owned destination skills.
+shopt -s nullglob
+for old_target in "${DEST_DIR}"/*; do
+  [[ -d "${old_target}" ]] || continue
+  [[ -f "${old_target}/SKILL.md" ]] || continue
+
+  old_name="$(basename "${old_target}")"
+  if grep -Fxq -- "${old_name}" "${TMP_SOURCE_SKILLS}"; then
+    continue
+  fi
+
+  old_owner="$(read_target_owner "${old_target}")"
+  if [[ "${old_owner}" == "${SOURCE_ID}" ]]; then
+    rm -rf "${old_target}"
+    log_success "Removed stale skill: ${old_name}"
+    removed=$((removed + 1))
+  fi
+done
+shopt -u nullglob
+
 mkdir -p "${STATE_DIR}"
 cp "${TMP_MANIFEST}" "${SOURCE_MANIFEST}"
 
@@ -664,3 +772,5 @@ elif [[ $((installed + removed)) -gt 0 ]]; then
 else
   log_note "No changes detected."
 fi
+
+print_extra_destination_skills "${DEST_DIR}" "${TMP_SOURCE_SKILLS}"

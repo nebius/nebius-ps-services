@@ -2122,7 +2122,7 @@ The component source model itself is Terraform-module + Helm-chart based, but th
 - `src/nebius_cxcli/infra_render.py`: Terraform render generation.
 - `src/nebius_cxcli/terraform_backend.py`: Terraform remote-state backend derivation/rendering + bucket bootstrap.
 - `src/nebius_cxcli/flux_render.py`: Flux render generation.
-- `../../skills/onboard-nbs-cxcli/SKILL.md`: central Codex skill for onboarding Nebius Terraform modules into `nebius-cxcli`, including when to stop at `component_sources.yaml` and when to touch code-owned onboarding layers.
+- `../../skills/onboard-nebius-cxcli/SKILL.md`: central Codex skill for onboarding Nebius Terraform modules into `nebius-cxcli`, including when to stop at `component_sources.yaml` and when to touch code-owned onboarding layers.
 - `src/nebius_cxcli/render.py`: combined render orchestration.
 - `src/nebius_cxcli/terraform_ops.py`: terraform command wrappers.
 - `src/nebius_cxcli/flux_ops.py`: flux bootstrap/reconcile wrappers.

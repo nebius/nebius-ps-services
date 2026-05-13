@@ -32,9 +32,9 @@ Recommended pattern in this repo:
 
 ## Current action majors used in the skill asset
 
-As of March 10, 2026:
+As of May 13, 2026:
 
-- `actions/github-script@v8`
+- `actions/github-script@v9`
 - `docker/setup-buildx-action@v4`
 - `docker/login-action@v4`
 - `docker/build-push-action@v7`

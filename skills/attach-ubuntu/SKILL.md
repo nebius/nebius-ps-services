@@ -10,7 +10,8 @@ project without adding a repo-local `.devcontainer/` as the primary path.
 
 ## Workflow
 
-1. Use `scripts/attach-ubuntu.sh` from the target project directory.
+1. Use `scripts/attach-ubuntu.sh` from the target project directory when
+   script execution is permitted by the current user and repository policy.
 2. Keep one container per project folder by deriving the container name from the
    current directory unless the user explicitly overrides it.
 3. For a standalone project, bind-mount the current host directory to
@@ -53,6 +54,13 @@ project without adding a repo-local `.devcontainer/` as the primary path.
   mount source, and working directory already match; otherwise it recreates it.
 - Optional cleanup is built in via `--stop` and `--remove`, and bootstrap can
   be skipped with `--no-bootstrap`.
+
+## Execution Mode
+
+Scripts in this skill are reference-only by default. Execute
+`scripts/attach-ubuntu.sh` only when the user explicitly starts the request
+with `Run` or `Execute` (or equivalent). If execution is not clearly requested,
+explain the relevant command instead of running it.
 
 ## Commands
 

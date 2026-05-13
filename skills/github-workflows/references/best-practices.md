@@ -34,12 +34,12 @@ Use these defaults unless the repository already has a stronger constraint.
 
 ## Action majors preferred in this repo pattern
 
-As of March 10, 2026:
+As of May 13, 2026:
 
 - `actions/checkout@v6`
 - `actions/setup-python@v6`
 - `actions/upload-artifact@v7`
-- `actions/github-script@v8`
+- `actions/github-script@v9`
 - `docker/setup-buildx-action@v4`
 - `docker/login-action@v4`
 - `docker/build-push-action@v7`
