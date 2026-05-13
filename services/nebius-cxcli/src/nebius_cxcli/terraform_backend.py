@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .runtime_config import to_plain_data
-from .sdk_auth import init_nebius_sdk
+from .sdk_auth import init_nebius_sdk, suppress_expected_refresh_logs
 
 DEFAULT_STATE_BUCKET_PREFIX = "tfstate"
 DEFAULT_STATE_OBJECT_KEY = "terraform.tfstate"
@@ -331,51 +331,55 @@ def ensure_state_bucket(settings: TerraformBackendSettings) -> bool:
 
         buckets = BucketServiceClient(sdk)
         lookup = GetBucketByNameRequest(parent_id=settings.project_id, name=settings.bucket)
-        try:
-            buckets.get_by_name(lookup).wait()
-            _wait_for_bucket_ready(
-                buckets=buckets,
-                lookup=lookup,
-                bucket_name=settings.bucket,
-            )
-            return False
-        except Exception as exc:
-            if not _is_not_found_error(exc):
-                raise RuntimeError(
-                    f"Failed to verify Terraform state bucket '{settings.bucket}': {exc}"
-                ) from exc
-
-        try:
-            buckets.create(
-                CreateBucketRequest(
-                    metadata=ResourceMetadata(parent_id=settings.project_id, name=settings.bucket),
-                    spec=BucketSpec(versioning_policy=VersioningPolicy.ENABLED),
+        with suppress_expected_refresh_logs():
+            try:
+                buckets.get_by_name(lookup).wait()
+                _wait_for_bucket_ready(
+                    buckets=buckets,
+                    lookup=lookup,
+                    bucket_name=settings.bucket,
                 )
-            ).wait()
-            _wait_for_bucket_ready(
-                buckets=buckets,
-                lookup=lookup,
-                bucket_name=settings.bucket,
-            )
-            return True
-        except Exception as exc:
-            if _is_already_exists_error(exc):
-                try:
-                    buckets.get_by_name(lookup).wait()
-                    _wait_for_bucket_ready(
-                        buckets=buckets,
-                        lookup=lookup,
-                        bucket_name=settings.bucket,
-                    )
-                    return False
-                except Exception as verify_exc:
+                return False
+            except Exception as exc:
+                if not _is_not_found_error(exc):
                     raise RuntimeError(
-                        "Terraform state bucket name is already taken and not accessible in this project: "
-                        f"{settings.bucket} ({verify_exc})"
-                    ) from verify_exc
-            raise RuntimeError(
-                f"Failed to create Terraform state bucket '{settings.bucket}': {exc}"
-            ) from exc
+                        f"Failed to verify Terraform state bucket '{settings.bucket}': {exc}"
+                    ) from exc
+
+            try:
+                buckets.create(
+                    CreateBucketRequest(
+                        metadata=ResourceMetadata(
+                            parent_id=settings.project_id,
+                            name=settings.bucket,
+                        ),
+                        spec=BucketSpec(versioning_policy=VersioningPolicy.ENABLED),
+                    )
+                ).wait()
+                _wait_for_bucket_ready(
+                    buckets=buckets,
+                    lookup=lookup,
+                    bucket_name=settings.bucket,
+                )
+                return True
+            except Exception as exc:
+                if _is_already_exists_error(exc):
+                    try:
+                        buckets.get_by_name(lookup).wait()
+                        _wait_for_bucket_ready(
+                            buckets=buckets,
+                            lookup=lookup,
+                            bucket_name=settings.bucket,
+                        )
+                        return False
+                    except Exception as verify_exc:
+                        raise RuntimeError(
+                            "Terraform state bucket name is already taken and not accessible "
+                            f"in this project: {settings.bucket} ({verify_exc})"
+                        ) from verify_exc
+                raise RuntimeError(
+                    f"Failed to create Terraform state bucket '{settings.bucket}': {exc}"
+                ) from exc
     finally:
         with suppress(Exception):
             sdk.sync_close()

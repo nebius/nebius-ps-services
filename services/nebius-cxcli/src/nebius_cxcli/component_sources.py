@@ -220,6 +220,7 @@ class Mk8sGpuValidationSettings:
 
 @dataclass(frozen=True)
 class Mk8sGpuSettings:
+    default_stack_source: str = ""
     image_preferences: Mk8sGpuImagePreferenceSettings = Mk8sGpuImagePreferenceSettings()
     validations: Mk8sGpuValidationSettings = Mk8sGpuValidationSettings()
 
@@ -1659,11 +1660,15 @@ def _parse_mk8s_gpu_settings(
         return Mk8sGpuSettings()
     if not isinstance(raw, dict):
         raise ValueError(f"{field_label} must be a mapping")
-    supported_keys = {"image_preferences", "validations"}
+    supported_keys = {"default_stack_source", "image_preferences", "validations"}
     unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
     if unknown:
         raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
     return Mk8sGpuSettings(
+        default_stack_source=_parse_mk8s_gpu_stack_source(
+            raw.get("default_stack_source"),
+            field_label=f"{field_label}.default_stack_source",
+        ),
         image_preferences=_parse_mk8s_gpu_image_preference_settings(
             raw.get("image_preferences"),
             field_label=f"{field_label}.image_preferences",

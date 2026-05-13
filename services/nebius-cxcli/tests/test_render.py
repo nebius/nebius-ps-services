@@ -197,6 +197,9 @@ def test_render_creates_source_only_module_and_flux_outputs(
     mk8s_inputs = mk8s.setdefault("inputs", {})
     if isinstance(mk8s_inputs, dict):
         mk8s_inputs["subnet_id"] = "subnet-abc123"
+        mk8s_inputs["gpu_enabled"] = False
+        mk8s_inputs["gpu_stack_source"] = "nebius_image"
+        mk8s_inputs["gpu_nodes_boot_disk_type"] = "NETWORK_SSD"
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     monkeypatch.setattr(
@@ -210,6 +213,7 @@ def test_render_creates_source_only_module_and_flux_outputs(
             ModuleVariable(name="subnet_id", required=False, type_hint="string"),
             ModuleVariable(name="gpu_enabled", required=False, type_hint="bool"),
             ModuleVariable(name="gpu_stack_source", required=False, type_hint="string"),
+            ModuleVariable(name="gpu_nodes_boot_disk_type", required=False, type_hint="string"),
             ModuleVariable(
                 name="mk8s_cluster_public_endpoint",
                 required=False,
@@ -261,6 +265,8 @@ def test_render_creates_source_only_module_and_flux_outputs(
     assert "sensitive   = true" in outputs_tf
     assert 'variable "mk8s_subnet_id" {' in variables_tf
     assert '"mk8s_subnet_id": "subnet-abc123"' in tfvars
+    assert "mk8s_gpu_stack_source" not in tfvars
+    assert "mk8s_gpu_nodes_boot_disk_type" not in tfvars
     assert '"mk8s_kube_network_service_cidrs": [' in tfvars
     assert '"/20"' in tfvars
     assert (
@@ -962,6 +968,7 @@ def test_render_native_mysterybox_eso_objects_in_external_secrets_release(
             {
                 "name": "app-config",
                 "version_id": "mbsecver-e00app",
+                "eso_version_policy": "manual-version-pinning",
                 "payload": {
                     "DB_USERNAME": {"type": "text"},
                     "DB_PASSWORD": {"type": "text"},
@@ -974,6 +981,7 @@ def test_render_native_mysterybox_eso_objects_in_external_secrets_release(
             "enabled": True,
             "allow_all_namespaces": False,
             "sync_namespaces": ["ns-1", "ns-2"],
+            "refresh_interval": "1m",
         }
     }
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
@@ -1038,12 +1046,46 @@ def test_render_native_mysterybox_eso_objects_in_external_secrets_release(
     )
     assert worker_secret["metadata"]["namespace"] == "ns-2"
     assert worker_secret["metadata"]["name"] == "app-config"
-    assert app_secret["spec"]["dataFrom"] == [
-        {"extract": {"key": "mbsec-e00app", "version": "mbsecver-e00app"}}
+    assert app_secret["spec"]["refreshInterval"] == "1m"
+    assert app_secret["spec"]["data"] == [
+        {
+            "secretKey": "DB_USERNAME",
+            "remoteRef": {
+                "key": "mbsec-e00app",
+                "property": "DB_USERNAME",
+                "version": "mbsecver-e00app",
+            },
+        },
+        {
+            "secretKey": "DB_PASSWORD",
+            "remoteRef": {
+                "key": "mbsec-e00app",
+                "property": "DB_PASSWORD",
+                "version": "mbsecver-e00app",
+            },
+        },
     ]
-    assert worker_secret["spec"]["dataFrom"] == [
-        {"extract": {"key": "mbsec-e00app", "version": "mbsecver-e00app"}}
+    assert "dataFrom" not in app_secret["spec"]
+    assert worker_secret["spec"]["refreshInterval"] == "1m"
+    assert worker_secret["spec"]["data"] == [
+        {
+            "secretKey": "DB_USERNAME",
+            "remoteRef": {
+                "key": "mbsec-e00app",
+                "property": "DB_USERNAME",
+                "version": "mbsecver-e00app",
+            },
+        },
+        {
+            "secretKey": "DB_PASSWORD",
+            "remoteRef": {
+                "key": "mbsec-e00app",
+                "property": "DB_PASSWORD",
+                "version": "mbsecver-e00app",
+            },
+        },
     ]
+    assert "dataFrom" not in worker_secret["spec"]
 
 
 def test_render_native_mysterybox_eso_defaults_to_cluster_wide_store(

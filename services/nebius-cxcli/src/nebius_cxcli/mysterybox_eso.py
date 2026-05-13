@@ -38,6 +38,15 @@ DEFAULT_CREDENTIAL_SECRET_NAME = "nebius-mysterybox-shared-creds"
 DEFAULT_CREDENTIAL_SECRET_NAMESPACE = "external-secrets"
 DEFAULT_CREDENTIAL_SECRET_KEY = "credentials.json"
 DEFAULT_SYNC_NAMESPACE = "default"
+DEFAULT_REFRESH_INTERVAL = "15m"
+MYSTERYBOX_ESO_AUTO_PRIMARY_VERSION_POLICY = "auto-primary-version-pinning"
+MYSTERYBOX_ESO_MANUAL_VERSION_POLICY = "manual-version-pinning"
+MYSTERYBOX_ESO_VERSION_POLICIES = frozenset(
+    {
+        MYSTERYBOX_ESO_AUTO_PRIMARY_VERSION_POLICY,
+        MYSTERYBOX_ESO_MANUAL_VERSION_POLICY,
+    }
+)
 BUILT_IN_KUBERNETES_NAMESPACES = frozenset(
     {"default", "kube-node-lease", "kube-public", "kube-system"}
 )
@@ -152,12 +161,19 @@ def _mysterybox_backend_enabled(payload: Mapping[str, Any]) -> bool:
     )
 
 
-def _enabled_mysterybox_secret_refs(payload: Mapping[str, Any]) -> list[dict[str, str]]:
+def _mysterybox_secret_eso_version_policy(secret: Mapping[str, Any]) -> str:
+    policy = _as_text(secret.get("eso_version_policy")).lower()
+    if not policy:
+        return MYSTERYBOX_ESO_AUTO_PRIMARY_VERSION_POLICY
+    return policy
+
+
+def _enabled_mysterybox_secret_refs(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
     infra = payload.get("infra")
     components = infra.get("components") if isinstance(infra, Mapping) else None
     if not isinstance(components, list):
         return []
-    refs: list[dict[str, str]] = []
+    refs: list[dict[str, Any]] = []
     for row in components:
         if (
             not isinstance(row, Mapping)
@@ -180,9 +196,17 @@ def _enabled_mysterybox_secret_refs(payload: Mapping[str, Any]) -> list[dict[str
                 "mysterybox_instance_id": instance_id,
                 "secret_name": secret_name,
             }
+            secret_payload = secret.get("payload")
+            if isinstance(secret_payload, Mapping):
+                ref["payload_keys"] = [
+                    _as_text(payload_key)
+                    for payload_key in secret_payload
+                    if _as_text(payload_key)
+                ]
             kubernetes_secret_name = _as_text(secret.get("kubernetes_secret_name"))
             if kubernetes_secret_name:
                 ref["kubernetes_secret_name"] = kubernetes_secret_name
+            ref["eso_version_policy"] = _mysterybox_secret_eso_version_policy(secret)
             version_id = _mysterybox_secret_version_id(secret)
             if version_id:
                 ref["version"] = version_id
@@ -257,19 +281,35 @@ def _generated_external_secrets(
                 _as_text(ref.get("kubernetes_secret_name")) or source_name
             )
             name = _unique_kubernetes_name(target_secret_name, seen=seen_names)
-            data_from_ref = {
+            remote_ref_base = {
                 "mysterybox_instance_id": ref["mysterybox_instance_id"],
                 "secret_name": ref["secret_name"],
             }
             version = _as_text(ref.get("version"))
-            if version:
-                data_from_ref["version"] = version
+            if (
+                _as_text(ref.get("eso_version_policy"))
+                == MYSTERYBOX_ESO_MANUAL_VERSION_POLICY
+                and version
+            ):
+                remote_ref_base["version"] = version
+            data = []
+            for payload_key in ref.get("payload_keys", []):
+                if not _as_text(payload_key):
+                    continue
+                data_item = {
+                    **remote_ref_base,
+                    "secret_key": _as_text(payload_key),
+                    "property": _as_text(payload_key),
+                }
+                data.append(data_item)
+            if not data:
+                continue
             external_secrets.append(
                 {
                     "name": name,
                     "namespace": namespace,
                     "target": {"name": name},
-                    "data_from": [data_from_ref],
+                    "data": data,
                 }
             )
     return external_secrets
@@ -316,6 +356,7 @@ def normalize_mysterybox_eso_project_settings(payload_or_config: Any) -> bool:
             "store_name": DEFAULT_STORE_NAME,
             "api_domain": DEFAULT_API_DOMAIN,
             "allow_all_namespaces": True,
+            "refresh_interval": DEFAULT_REFRESH_INTERVAL,
         }
         for key, value in defaults.items():
             if key not in mysterybox:
@@ -761,7 +802,11 @@ def _external_secret_doc(
     store_name = _as_text(config.get("store_name")) or DEFAULT_STORE_NAME
     spec: dict[str, Any] = {
         "refreshPolicy": _as_text(item.get("refresh_policy")) or "Periodic",
-        "refreshInterval": _as_text(item.get("refresh_interval")) or "1h",
+        "refreshInterval": (
+            _as_text(item.get("refresh_interval"))
+            or _as_text(config.get("refresh_interval"))
+            or DEFAULT_REFRESH_INTERVAL
+        ),
         "secretStoreRef": {
             "kind": "ClusterSecretStore",
             "name": store_name,

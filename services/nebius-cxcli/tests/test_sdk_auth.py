@@ -60,6 +60,30 @@ def test_deleted_key_refresh_log_filter_only_suppresses_expected_traceback() -> 
     assert not sdk_auth.deleted_key_refresh_log(unrelated_record)
 
 
+def test_retryable_refresh_log_filter_suppresses_deadline_exceeded_traceback() -> None:
+    expected_record = logging.LogRecord(
+        "nebius.aio.token.renewable",
+        logging.ERROR,
+        __file__,
+        1,
+        "Failed refresh token, attempt: 1, error: Request error DEADLINE_EXCEEDED: Deadline Exceeded",
+        (),
+        None,
+    )
+    unrelated_record = logging.LogRecord(
+        "nebius.aio.token.renewable",
+        logging.ERROR,
+        __file__,
+        1,
+        "Failed refresh token, attempt: 1, error: invalid credentials",
+        (),
+        None,
+    )
+
+    assert sdk_auth.retryable_refresh_log(expected_record)
+    assert not sdk_auth.retryable_refresh_log(unrelated_record)
+
+
 def test_init_nebius_sdk_prefers_credentials_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

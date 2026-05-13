@@ -26,7 +26,7 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
     assert "nebius-cxcli quota-request /path/to/config.yaml" in supporting
     assert (
         "`component`, `validate`, `validate-dashboards`, `quota-check`, "
-        "`quota-request`, `render`, `bootstrap-ci`, `deploy`, `destroy`, `email`"
+        "`quota-request`, `render`, `deploy`, `bootstrap-ci`, `destroy`, `email`"
     ) in supporting
     assert "- `quota-request <config.yaml>`" in supporting
 
@@ -213,6 +213,11 @@ def test_docs_define_mysterybox_eso_name_resolution_contract() -> None:
         assert "secret names are rejected" not in text
         assert "`secret_name`" in text
         assert "Terraform-created `mbsec-...` ID" in text or "Terraform `secret_ids` output" in text
+        assert "auto-primary-version-pinning" in text
+        assert "manual-version-pinning" in text
+        assert "remoteRef.version" in text
+        assert "refreshInterval: 15m" in text
+        assert "spec.data[].remoteRef" in text
         assert "`mysterybox_instance_id`" in text
         assert "externally managed MysteryBox Secrets" in text
 

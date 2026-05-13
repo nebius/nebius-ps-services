@@ -270,7 +270,7 @@ from .runtime_introspection import (
     module_variable_names,
     module_variables,
 )
-from .sdk_auth import init_nebius_sdk, suppress_deleted_key_refresh_logs
+from .sdk_auth import init_nebius_sdk, suppress_expected_refresh_logs
 from .templates import customer_workflow_yaml, default_cli_ref
 from .terminal_styles import error_markup, warning_markup
 from .terraform_backend import (
@@ -968,7 +968,7 @@ app = typer.Typer(
         "resolved project folders only with confirmation; component list/add/remove are "
         "the day-2 config.yaml editing surface; "
         "discover uses a deployment-scope directory; validate, validate-dashboards, "
-        "quota-check, quota-request, render, bootstrap-ci, and deploy use config.yaml; "
+        "quota-check, quota-request, render, deploy, and bootstrap-ci use config.yaml; "
         "destroy uses config.yaml to tear down all rendered project resources from sibling generated/; "
         "email also uses config.yaml and resolves sibling generated/ automatically; "
         "validate-generated uses generated/, terraform uses generated/infra, flux uses generated/flux, "
@@ -1754,8 +1754,8 @@ def _print_create_next_steps(config_path: Path) -> None:
     for command, suffix in (
         (f"nebius-cxcli validate {config_arg}", ""),
         (f"nebius-cxcli render {config_arg}", ""),
-        (f"nebius-cxcli bootstrap-ci {config_arg}", " (optional)"),
         (f"nebius-cxcli deploy {config_arg}", ""),
+        (f"nebius-cxcli bootstrap-ci {config_arg}", " (optional)"),
     ):
         console.print(f"  `{command}`{suffix}", soft_wrap=True)
 
@@ -1767,6 +1767,27 @@ def _print_component_edit_config_only_note() -> None:
     )
 
 
+def _component_source_validation_failure_message(
+    source_path: Path,
+    source_issues: Sequence[str],
+    *,
+    include_skip_guidance: bool = False,
+) -> str:
+    message = (
+        f"Component catalog/settings validation failed for {source_path}:\n  - "
+        + "\n  - ".join(source_issues)
+        + "\n\nThis validation checks the full component catalog, including optional app charts. "
+        "If the failure is a transient Helm repository, OCI registry, or network timeout, "
+        "retry or increase NEBIUS_CXCLI_HELM_TIMEOUT_SECONDS."
+    )
+    if include_skip_guidance:
+        message += (
+            " During create/component add, rerun with --no-validate-sources "
+            "to skip this source check."
+        )
+    return message
+
+
 def _validate_component_sources_or_raise() -> None:
     with console.status("[cyan]Validating component catalog/settings...[/cyan]"):
         source_path, source_issues, source_warnings = _validate_component_sources_registry()
@@ -1774,8 +1795,11 @@ def _validate_component_sources_or_raise() -> None:
         console.print(f"{warning_markup('Source validation warning:')} {warning}")
     if source_issues:
         raise RuntimeError(
-            f"Component catalog/settings validation failed for {source_path}:\n  - "
-            + "\n  - ".join(source_issues)
+            _component_source_validation_failure_message(
+                source_path,
+                source_issues,
+                include_skip_guidance=True,
+            )
         )
 
 
@@ -4768,10 +4792,11 @@ def _maybe_print_mk8s_boot_disk_prompt_guidance(
     if "mk8s_boot_disk" in emitted_guidance:
         return
     console.print(
-        "[dim]MK8s boot disk guidance: SSD is the balanced reliable default and is "
+        "[dim]MK8s boot disk guidance: SSD is the balanced default; it is "
+        "erasure-coded, tolerates up to two concurrent hardware failures, and is "
         "always encrypted. SSD Non-replicated is the lowest-cost high-performance "
         "choice for ephemeral worker nodes but has no redundancy. SSD IO M3 keeps "
-        "that high performance with replication at the highest price.[/dim]"
+        "that high performance with three-drive replication at the highest price.[/dim]"
     )
     emitted_guidance.add("mk8s_boot_disk")
 
@@ -5270,6 +5295,7 @@ def _wizard_field_is_sensitive(path_label: str) -> bool:
         "deploy.targets[].secrets.mysterybox.store_name",
         "deploy.targets[].secrets.mysterybox.api_domain",
         "deploy.targets[].secrets.mysterybox.allow_all_namespaces",
+        "deploy.targets[].secrets.mysterybox.refresh_interval",
         "deploy.targets[].secrets.mysterybox.sync_namespaces",
     }
     if normalized_label in public_mysterybox_sync_fields:
@@ -5438,6 +5464,7 @@ def _prompt_choice_override(
     prompt_suffix = _wizard_field_prompt_suffix(rendered_label)
     default_value = str(current).strip() if current is not None else ""
     option_values = [choice.value for choice in choices]
+    option_values_by_text = {str(choice.value).strip(): choice.value for choice in choices}
     has_explicit_current = default_value in option_values
     recommended_default = next(
         (
@@ -5464,7 +5491,6 @@ def _prompt_choice_override(
                     0,
                     questionary.Choice(title="<skip / keep unset>", value="__skip__"),
                 )
-            rendered_choices.append(questionary.Choice(title="<manual input>", value="__manual__"))
             selected = _ask_questionary_with_wizard_navigation(
                 questionary.select(
                     rendered_label,
@@ -5483,8 +5509,7 @@ def _prompt_choice_override(
                 return _WIZARD_BACKTRACK, False
             if selected == "__skip__":
                 return current, False
-            if selected != "__manual__":
-                return str(selected).strip(), False
+            return str(selected).strip(), False
         except (KeyboardInterrupt, EOFError, typer.Abort):
             return current, True
         except Exception:
@@ -5524,7 +5549,13 @@ def _prompt_choice_override(
                 f"{error_markup('Invalid option index')}. Use a value between 1 and {len(choices)}."
             )
             continue
-        return raw, False
+        if raw in option_values_by_text:
+            return option_values_by_text[raw], False
+        allowed = ", ".join(str(value) for value in option_values)
+        console.print(
+            f"{error_markup('Invalid option value')}. "
+            f"Use an option index or one of: {allowed}."
+        )
 
 
 def _is_mysterybox_secrets_guided_prompt(path_label: str, type_hint: str | None) -> bool:
@@ -5537,36 +5568,35 @@ def _is_mysterybox_secrets_guided_prompt(path_label: str, type_hint: str | None)
 
 
 def _prompt_mysterybox_payload_type(payload_key: str) -> tuple[str | object, bool]:
-    while True:
-        try:
-            raw = typer.prompt(
-                f"Payload type for {payload_key} [text/file]",
-                default="text",
-            ).strip()
-        except (KeyboardInterrupt, EOFError, typer.Abort):
-            return "text", True
-        lowered = raw.lower()
-        if lowered == WIZARD_ABORT_TOKEN:
-            return "text", True
-        if lowered == WIZARD_EXIT_TOKEN:
-            return _WIZARD_BACKTRACK, False
-        if not lowered:
-            lowered = "text"
-        if lowered in {"text", "file"}:
-            return lowered, False
-        console.print(f"{error_markup('Invalid value')}. Enter text or file.")
+    return _prompt_choice_override(
+        path_label=f"Payload type for {payload_key}",
+        current="text",
+        choices=[
+            OptionChoice(value="text", label="text"),
+            OptionChoice(value="file", label="file"),
+        ],
+        required=True,
+    )
 
 
 def _last_mysterybox_payload_key(payload: Mapping[str, object]) -> str:
     return next(reversed(payload), "")
 
 
+def _default_mysterybox_kubernetes_secret_name(secret_name: str) -> str:
+    normalized = re.sub(r"[^a-z0-9-]+", "-", secret_name.strip().lower())
+    normalized = re.sub(r"-+", "-", normalized).strip("-")
+    normalized = normalized[:63].strip("-")
+    return normalized or "mysterybox-secret"
+
+
 def _prompt_mysterybox_kubernetes_secret_name(secret_name: str) -> tuple[str, bool]:
+    default_name = _default_mysterybox_kubernetes_secret_name(secret_name)
     while True:
         try:
             raw = typer.prompt(
                 f"Kubernetes Secret name for {secret_name} (q=back, qq=quit wizard)",
-                default=secret_name,
+                default=default_name,
             ).strip()
         except (KeyboardInterrupt, EOFError, typer.Abort):
             return "", True
@@ -5575,12 +5605,36 @@ def _prompt_mysterybox_kubernetes_secret_name(secret_name: str) -> tuple[str, bo
         if raw == WIZARD_EXIT_TOKEN:
             return _WIZARD_BACKTRACK, False
         if not raw:
-            raw = secret_name
+            raw = default_name
         if INSTANCE_ID_PATTERN.fullmatch(raw):
             return raw, False
         console.print(
             f"{error_markup('Invalid value')}. Enter a valid Kubernetes Secret name."
         )
+
+
+def _prompt_mysterybox_eso_version_policy(secret_name: str) -> tuple[str | object, bool]:
+    from .mysterybox_eso import (
+        MYSTERYBOX_ESO_AUTO_PRIMARY_VERSION_POLICY,
+        MYSTERYBOX_ESO_MANUAL_VERSION_POLICY,
+    )
+
+    return _prompt_choice_override(
+        path_label=f"ESO version policy for {secret_name}",
+        current=MYSTERYBOX_ESO_AUTO_PRIMARY_VERSION_POLICY,
+        choices=[
+            OptionChoice(
+                value=MYSTERYBOX_ESO_AUTO_PRIMARY_VERSION_POLICY,
+                label="auto-primary-version-pinning",
+                recommended=True,
+            ),
+            OptionChoice(
+                value=MYSTERYBOX_ESO_MANUAL_VERSION_POLICY,
+                label="manual-version-pinning",
+            ),
+        ],
+        required=True,
+    )
 
 
 def _prompt_mysterybox_secrets_override(
@@ -5639,6 +5693,12 @@ def _prompt_mysterybox_secrets_override(
         if _wizard_backtrack_requested(kubernetes_secret_name):
             continue
 
+        eso_version_policy, should_stop = _prompt_mysterybox_eso_version_policy(secret_name)
+        if should_stop:
+            return current, True
+        if _wizard_backtrack_requested(eso_version_policy):
+            continue
+
         payload: dict[str, dict[str, str]] = {}
         restart_secret_prompt = False
         while True:
@@ -5692,6 +5752,7 @@ def _prompt_mysterybox_secrets_override(
             {
                 "name": secret_name,
                 "version_id": "n/a",
+                "eso_version_policy": str(eso_version_policy),
                 "kubernetes_secret_name": kubernetes_secret_name,
                 "payload": payload,
             }
@@ -9473,7 +9534,7 @@ def _wait_for_runtime_auth_token_ready(material: RuntimeAuthCacheMaterial) -> No
         sdk = _runtime_auth_token_sdk(material)
         try:
             remaining = max(1.0, deadline - time.monotonic())
-            with suppress_deleted_key_refresh_logs():
+            with suppress_expected_refresh_logs():
                 sdk.get_token_sync(timeout=min(10.0, remaining))
             return
         except Exception as exc:
@@ -14846,7 +14907,10 @@ def create_command(
         bool,
         typer.Option(
             "--validate-sources/--no-validate-sources",
-            help=("Validate component_sources.yaml before create runs (enabled by default)."),
+            help=(
+                "Validate the full component catalog and source settings before create "
+                "continues (enabled by default)."
+            ),
         ),
     ] = True,
     validate_config: Annotated[
@@ -14931,6 +14995,7 @@ def create_command(
             project_folder=resolved_project_folder,
         )
         had_existing_config = existing_config_path.exists()
+        source_validation_ran = False
         if had_existing_config:
             with existing_config_path.open("r", encoding="utf-8") as handle:
                 loaded_payload = yaml.safe_load(handle) or {}
@@ -14954,24 +15019,27 @@ def create_command(
                     f"'{resolved_tenant_id}'/'{resolved_project_id}'. "
                     "Move the existing folder or rename one of the Nebius resources before rerunning `create`."
                 )
-            if interactive_mode:
-                if not _confirm_existing_project_overwrite(config_path=existing_config_path):
-                    console.print("No changes applied.")
-                    return
-            elif not force:
+            if not interactive_mode and not force:
                 raise RuntimeError(
                     "Existing project found: "
                     f"{existing_config_path.parent}. `create` no longer reconciles existing configs. "
                     "Use `component list/add/remove` for day-2 component edits, or rerun with "
                     "`--force` to overwrite this one project folder from scratch."
                 )
+            if validate_sources:
+                _validate_component_sources_or_raise()
+                source_validation_ran = True
+            if interactive_mode:
+                if not _confirm_existing_project_overwrite(config_path=existing_config_path):
+                    console.print("No changes applied.")
+                    return
             else:
                 _warn_existing_project_overwrite(config_path=existing_config_path)
                 console.print(
                     "[dim]`--force` confirms the overwrite in non-interactive mode. "
                     "This only affects that one resolved project folder.[/dim]"
                 )
-        if validate_sources:
+        if validate_sources and not source_validation_ran:
             _validate_component_sources_or_raise()
 
         resolved_client_name = _client_name_or_prompt(
@@ -15511,7 +15579,8 @@ def component_add_command(
         typer.Option(
             "--validate-sources/--no-validate-sources",
             help=(
-                "Validate component_sources.yaml before component add runs (enabled by default)."
+                "Validate the full component catalog and source settings before "
+                "component add continues (enabled by default)."
             ),
         ),
     ] = True,
@@ -17230,10 +17299,7 @@ def validate_sources_command(
         for warning in warnings:
             console.print(f"{warning_markup('Warning:')} {warning}")
         if issues:
-            raise RuntimeError(
-                f"Component catalog/settings validation failed for {source_path}:\n  - "
-                + "\n  - ".join(issues)
-            )
+            raise RuntimeError(_component_source_validation_failure_message(source_path, issues))
         console.print(f"[green]Component catalog/settings valid:[/green] {source_path}")
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)

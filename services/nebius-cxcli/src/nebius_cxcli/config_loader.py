@@ -12,6 +12,7 @@ from .deploy_targets import materialize_app_chart_target_refs, strip_app_chart_t
 from .mk8s_gpu import (
     ensure_mk8s_gpu_app_rows,
     materialize_mk8s_gpu_app_values,
+    normalize_inactive_mk8s_gpu_inputs,
     normalize_mk8s_gpu_project_validation_settings,
 )
 from .mysterybox_eso import (
@@ -37,6 +38,8 @@ def normalize_runtime_config_payload(
 ) -> bool:
     changed = normalize_runtime_ssh_public_key_inputs(payload, base_dir=base_dir)
     if materialize_app_chart_target_refs(payload):
+        changed = True
+    if normalize_inactive_mk8s_gpu_inputs(payload):
         changed = True
     if normalize_mk8s_gpu_project_validation_settings(payload):
         changed = True

@@ -234,6 +234,10 @@ def test_components_discovered_from_source_file(monkeypatch, tmp_path: Path) -> 
             "default": True,
             "materialize_default": True,
         },
+        "deploy.targets[].secrets.mysterybox.refresh_interval": {
+            "default": "15m",
+            "materialize_default": True,
+        },
         "deploy.targets[].secrets.mysterybox.sync_namespaces": {
             "default": ["default"],
             "type_hint": "list(string)",

@@ -75,6 +75,25 @@ _DECIMAL_QUANTITY_UNITS: dict[str, Decimal] = {
     "P": Decimal("1e15"),
     "E": Decimal("1e18"),
 }
+_INACTIVE_MK8S_GPU_INPUT_KEYS: tuple[str, ...] = (
+    "gpu_node_groups",
+    "gpu_nodes_boot_disk_size_gib",
+    "gpu_nodes_boot_disk_type",
+    "gpu_nodes_count_per_group",
+    "gpu_nodes_os",
+    "gpu_nodes_platform",
+    "gpu_nodes_preemptible",
+    "gpu_nodes_preset",
+    "gpu_nodes_public_ips",
+    "gpu_stack_preset",
+    "gpu_stack_source",
+    "infiniband_fabric",
+    "mig_parted_config",
+    "mig_strategy",
+    "mk8s_gpu_node_group_overrides",
+)
+
+_FALLBACK_GPU_STACK_SOURCE = "nebius_image"
 
 
 @dataclass(frozen=True)
@@ -274,6 +293,34 @@ def _prune_unavailable_health_checker_setting(settings: dict[str, Any]) -> bool:
     return True
 
 
+def normalize_inactive_mk8s_gpu_inputs(payload: dict[str, Any]) -> bool:
+    payload_map = _as_payload(payload)
+    if not payload_map:
+        return False
+
+    infra = payload_map.get("infra")
+    components = infra.get("components") if isinstance(infra, Mapping) else None
+    if not isinstance(components, list):
+        return False
+
+    changed = False
+    for item in components:
+        if not isinstance(item, dict):
+            continue
+        if component_type_id(item) != "mk8s":
+            continue
+        if item.get("enabled") is False:
+            continue
+        inputs = item.get("inputs")
+        if not isinstance(inputs, dict) or bool(inputs.get("gpu_enabled", False)):
+            continue
+        for key in _INACTIVE_MK8S_GPU_INPUT_KEYS:
+            if key in inputs:
+                inputs.pop(key, None)
+                changed = True
+    return changed
+
+
 def normalize_mk8s_gpu_project_validation_settings(payload: dict[str, Any]) -> bool:
     payload_map = _as_payload(payload)
     if not payload_map:
@@ -412,7 +459,17 @@ def _coerce_optional_positive_float(value: Any) -> float | None:
 
 def _gpu_stack_source(inputs: dict[str, Any]) -> str:
     stack_source = _as_text(inputs.get("gpu_stack_source")).lower()
-    return stack_source if stack_source in {"nebius_image", "operator_managed"} else "nebius_image"
+    if stack_source in {"nebius_image", "operator_managed"}:
+        return stack_source
+    mk8s_module = tf_module_source_by_id("mk8s")
+    catalog_default = (
+        _as_text(mk8s_module.mk8s_gpu.default_stack_source).lower()
+        if mk8s_module is not None
+        else ""
+    )
+    if catalog_default in {"nebius_image", "operator_managed"}:
+        return catalog_default
+    return _FALLBACK_GPU_STACK_SOURCE
 
 
 def _rule_matches_context(
@@ -3507,6 +3564,7 @@ __all__ = [
     "mk8s_gpu_flux_release_post_render_patches",
     "mk8s_gpu_validation_specs",
     "mk8s_gpu_validation_warnings",
+    "normalize_inactive_mk8s_gpu_inputs",
     "resolve_mk8s_gpu_app_selection",
     "run_mk8s_gpu_validations",
 ]

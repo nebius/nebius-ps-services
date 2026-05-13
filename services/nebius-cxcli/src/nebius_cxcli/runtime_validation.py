@@ -34,6 +34,9 @@ _ID_PATTERN = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 _SECTION_PATTERN = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 _ENV_VAR_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 _CLIENT_NAME_PATTERN = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
+_REFRESH_INTERVAL_PATTERN = re.compile(
+    r"^(?:0|[1-9][0-9]*)(?:s|m|h)(?:(?:0|[1-9][0-9]*)(?:s|m|h))*$"
+)
 
 
 def _get_path(payload: Mapping[str, Any], dotted_path: str, default: Any = None) -> Any:
@@ -196,6 +199,7 @@ def _validate_deploy_target_secrets(secrets: Any, *, field_label: str) -> None:
         "credentials_secret",
         "allow_all_namespaces",
         "sync_namespaces",
+        "refresh_interval",
     }
     unknown_mysterybox_keys = sorted(
         str(key) for key in mysterybox if str(key) not in supported_keys
@@ -219,6 +223,13 @@ def _validate_deploy_target_secrets(secrets: Any, *, field_label: str) -> None:
         value = _as_text(mysterybox.get(key))
         if not value:
             raise ValueError(f"{field_label}.mysterybox.{key} is required when enabled")
+
+    refresh_interval = _as_text(mysterybox.get("refresh_interval"))
+    if refresh_interval and not _REFRESH_INTERVAL_PATTERN.fullmatch(refresh_interval):
+        raise ValueError(
+            f"{field_label}.mysterybox.refresh_interval must use s, m, or h units "
+            "(for example 30s, 15m, or 1h)"
+        )
 
     _validate_mysterybox_credentials_secret(
         mysterybox.get("credentials_secret"),

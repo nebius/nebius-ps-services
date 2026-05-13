@@ -160,6 +160,14 @@ def test_write_inventory_lists_selected_security_and_platform_components(
             },
         ],
     }
+    payload["deploy"]["targets"][0]["secrets"] = {
+        "mysterybox": {
+            "enabled": True,
+            "sync_namespaces": ["ns1", "ns2"],
+            "refresh_interval": "1m",
+            "store_name": "nebius-mysterybox-shared",
+        }
+    }
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     config = load_config(config_path)
@@ -172,6 +180,11 @@ def test_write_inventory_lists_selected_security_and_platform_components(
     assert "- `mysterybox` (MysteryBox secrets): `enabled`" in markdown
     assert "### MysteryBox Secrets" in markdown
     assert "- `mysterybox`: `db-username-password`, `secret2`" in markdown
+    assert "### MysteryBox Kubernetes Sync" in markdown
+    assert (
+        "- `mk8s`: namespaces `ns1`, `ns2`; refresh interval `1m`; "
+        "store `nebius-mysterybox-shared`"
+    ) in markdown
     assert "- Envoy Gateway: `enabled`" in markdown
     assert "- External Secrets Operator: `enabled`" in markdown
     assert "- NVIDIA GPU Operator: `enabled`" in markdown

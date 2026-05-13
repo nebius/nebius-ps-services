@@ -875,7 +875,7 @@ def test_mk8s_boot_disk_types_labels_match_guided_contract() -> None:
     assert [(choice.value, choice.label) for choice in resolved] == [
         (
             "NETWORK_SSD",
-            "NETWORK_SSD  (1-8192 GiB, 450 MiB/s, 20k/40k IOPS, reliable, encryption always on)",
+            "NETWORK_SSD  (1-8192 GiB, 450 MiB/s, 20k/40k IOPS, erasure-coded, tolerates 2 hardware failures, encryption always on)",
         ),
         (
             "NETWORK_SSD_NON_REPLICATED",
@@ -883,7 +883,7 @@ def test_mk8s_boot_disk_types_labels_match_guided_contract() -> None:
         ),
         (
             "NETWORK_SSD_IO_M3",
-            "NETWORK_SSD_IO_M3  (93 GiB units, 1 GiB/s, 75k/75k IOPS, replicated, most expensive)",
+            "NETWORK_SSD_IO_M3  (93 GiB units, 1 GiB/s, 75k/75k IOPS, replicated, mirrored to 3 drives, most expensive)",
         ),
     ]
 
