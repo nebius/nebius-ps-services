@@ -40,7 +40,7 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
-from . import __version__, native_logs
+from . import __version__, native_logs, runtime_introspection
 from .component_defaults import (
     default_target_paths,
     literal_default_input_leaf_names,
@@ -2462,10 +2462,8 @@ def _resolve_component_remove_targets(
 def _runtime_required_input_leaf_names(entry: ComponentEntry) -> set[str]:
     if entry.scope != "infra" or not entry.source:
         return set()
-    from .runtime_introspection import module_required_variables
-
     try:
-        return set(module_required_variables(entry.source))
+        return set(runtime_introspection.module_required_variables(entry.source))
     except Exception:
         return set()
 
@@ -4797,7 +4795,7 @@ def _normalize_leaf_name(token: str) -> str:
 def _required_leaf_names_for_entry(entry: ComponentEntry) -> set[str]:
     if entry.scope != "infra":
         return set()
-    required_names = set(_runtime_required_input_leaf_names(entry))
+    required_names: set[str] = set()
     metadata_source = _entry_module_metadata_source(
         entry,
         fallback_source=str(entry.source or ""),
